@@ -3,8 +3,8 @@
 //! when one fails — before its rename, or after its base landed — and when
 //! the kernel's backstop ran one inline on a writer; and what FOLLOWS each
 //! landing, the thread's own or not: the cadence's byte bound and the media
-//! floor re-read off the newest checkpoint, the change feed's files
-//! compacted to the journal's reclaim floor.
+//! floor re-read off the newest checkpoint, what the change feed holds read
+//! for the line — its files kept whole, a landing moving nothing of them.
 //!
 //! Every daemon here is `common::spawn`'s. No suite captures the operator
 //! stream in-process, so every line is read back through
@@ -84,6 +84,29 @@ fn rotate_the_segment(port: u16, session: &str, dir: &Path) {
 fn attest_figures(dir: &Path) -> String {
     let bytes = fs::metadata(dir.join("feed-attest.log")).expect("the attest store").len();
     format!("; feed-attest.log {bytes} bytes, 0 slots resident")
+}
+
+/// Returns the feed's clause of `line` as the data directory and the line's
+/// own resident figures bear it out: the feed holds every line from
+/// position 1 — nothing is ever dropped — `commits.log`'s size the file's,
+/// and the entries resident no more than the window's span and no more than
+/// the most held this uptime, both read off the line itself.
+fn feed_figures(line: &str, dir: &Path) -> String {
+    let bytes = fs::metadata(dir.join("commits.log")).expect("commits.log").len();
+    let head = "; the change feed holds every line from position 1: commits.log ";
+    let clause =
+        &line[line.find(head).unwrap_or_else(|| panic!("{head:?} in {line}")) + head.len()..];
+    let resident = figure_after(clause, " bytes, ");
+    let most = figure_after(clause, " entries resident, the most this uptime ");
+    assert!(resident > 0 && resident <= most, "resident {resident}, the most {most}: {line}");
+    assert!(
+        most <= skep_core::limits::FEED_RESIDENT_WINDOW,
+        "the window bounds the entries resident: {line}"
+    );
+    format!(
+        "; the change feed holds every line from position 1: commits.log {bytes} bytes, \
+         {resident} entries resident, the most this uptime {most}"
+    )
 }
 
 /// The decimal figure a line carries right after `key`.
@@ -170,8 +193,9 @@ fn newest_clause(line: &str) -> (&str, &str) {
 /// held above it; the resident set's reading is above zero and never above
 /// the largest of the uptime's readings beside it, that one is the daemon's
 /// high-water and never decreases across two landings; both bounds are the
-/// small board's, and the compaction fence is the reclaim floor, its
-/// duration whole milliseconds; and the write guard's takes are the writes
+/// small board's, and the feed's clause says it holds every line from
+/// position 1, `commits.log`'s size the file's own, the entries resident
+/// no more than the window's span and no more than the most held; and the write guard's takes are the writes
 /// since the line before, none of them waiting — one client writes in turn —
 /// so a second landing with nothing committed between counts none, from the
 /// first landing's position.
@@ -242,30 +266,22 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     assert!(
         line.contains(&format!(
             "; the write guard taken {taken} times since position {since}, 0 of them after a \
-             wait; the change feed's files "
+             wait; the change feed holds every line from position 1: commits.log "
         )),
         "one client writing in turn waits on no other writer: {line}"
     );
-    let compacted = ms_read_out(
-        line,
-        &format!("; the change feed's files compacted below position {} in ", landed.seq.0),
-        " ms",
-    );
+    let feed = feed_figures(line, dir.path());
     assert!(
-        compacted.ends_with(&format!(
-            "; the change feed's files compacted below position {} in N ms{}",
-            landed.seq.0,
-            attest_figures(dir.path())
-        )),
-        "the fence is the reclaim floor — the oldest kept base — the hold in whole milliseconds, \
-         no file stood, then what the attest store holds, and no inline run moved: {line}"
+        line.ends_with(&format!("{feed}{}", attest_figures(dir.path()))),
+        "the feed holds every line from position 1, commits.log's size the file's own, then what \
+         the attest store holds, and no inline run moved: {line}"
     );
 
     // THE SECOND LANDING, at the same head with nothing committed between:
     // the one surviving segment is the active one, so nothing is reclaimed
     // and the kernel says so; the host's own free space with the pin lifted;
-    // the peak not below the first; the feed holding nothing below a floor
-    // that did not move. (A commit between would rotate the segment the bulk
+    // the peak not below the first; the feed holding what it held. (A
+    // commit between would rotate the segment the bulk
     // insert filled past the threshold, and the landing would reclaim it.)
     sd.daemon().set_media_free_space(None);
     sd.daemon().service_the_checkpoint_now();
@@ -299,10 +315,11 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     );
     assert!(
         line.ends_with(&format!(
-            "; the change feed's files hold nothing below the reclaim floor{}",
+            "{}{}",
+            feed_figures(line, dir.path()),
             attest_figures(dir.path())
         )),
-        "{line}"
+        "the feed's clause again, the floor having moved past nothing of it: {line}"
     );
     assert!(!line.contains("ran inline"), "no inline run: no clause: {line}");
     sd.shutdown();
@@ -346,62 +363,6 @@ fn a_landing_line_names_each_checkpoint_its_retention_removed() {
         )),
         "the removed base by its name and its length, after the reclaimed clause: {line}"
     );
-    sd.shutdown();
-}
-
-/// ROW 25 — A FILE THAT STOOD IS NAMED: a derived file whose compaction
-/// rewrite fails BEFORE its rename — a directory squatting on its `.compact`
-/// twin's name, so the temp file cannot be created — stands as it was, and
-/// the landing line names it beside the fence; the four files whose rewrite
-/// the seam fails PAST its rename were compacted (the new file is in place)
-/// and are stopped for the uptime, said by each file in its own words (lines
-/// 27 and 28, untouched here), and the landing line does not call them
-/// standing. The seam's arm on the standing file is not spent — its rewrite
-/// never reached the reopen — so it is the one file not stopped.
-#[test]
-fn a_landing_line_names_the_file_that_stood_beside_the_fence() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
-    let port = sd.port();
-    let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    rotate_the_segment(port, &owner, dir.path());
-    let squat = dir.path().join("feed-index.log.compact");
-    fs::create_dir(&squat).expect("a directory on the temp name");
-    sd.daemon().fail_the_feeds_next_rewrite_past_rename();
-
-    sd.daemon().service_the_checkpoint_now();
-    let said = lines(&sd);
-    assert_eq!(said.len(), 1, "{said:?}");
-    let line = &said[0];
-    let landed = sd.daemon().newest_checkpoint().expect("the landing").seq.0;
-    let compacted = ms_read_out(
-        line,
-        &format!("; the change feed's files compacted below position {landed} in "),
-        " ms, ",
-    );
-    assert!(
-        compacted.ends_with(&format!(
-            "; the change feed's files compacted below position {landed} in N ms, \
-             feed-index.log standing as it was{}",
-            attest_figures(dir.path())
-        )),
-        "the one file that stood is named, and no other: {line}"
-    );
-    let stopped = sd.daemon().stopped_feed_files();
-    assert!(
-        !stopped.contains(&"feed-index.log"),
-        "the file that stood is not stopped: {stopped:?}"
-    );
-    for compacted_then_stopped in
-        ["commits.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"]
-    {
-        assert!(stopped.contains(&compacted_then_stopped), "{compacted_then_stopped}: {stopped:?}");
-        assert!(
-            !line.contains(&format!("{compacted_then_stopped} standing")),
-            "a file compacted past its rename did not stand: {line}"
-        );
-    }
-    fs::remove_dir(&squat).expect("the squat removed");
     sd.shutdown();
 }
 

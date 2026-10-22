@@ -1,10 +1,10 @@
 //! The bounds the daemon's core reads.
 //!
 //! They are the request-body cap of the two frame-carrying routes (wire.md
-//! §Transport), the change feed's page byte budget (wire.md §The change
-//! feed) and the operator stream's cadences — the standing line's, the feed
-//! walk's progress and the hold-down the edge pairs judge their second line
-//! by (`operations.md` §1.1 m11, m12, m15).
+//! §Transport), the change feed's page byte budget and its resident window
+//! (wire.md §The change feed) and the operator stream's cadences — the
+//! standing line's, the feed walk's progress and the hold-down the edge
+//! pairs judge their second line by (`operations.md` §1.1 m11, m12, m15).
 //!
 //! Each is `pub`, the daemon reading three from here: the request-body cap,
 //! the hold-down and the standing line's cadence. The daemon's own bounds —
@@ -188,3 +188,32 @@ pub const EDGE_HOLD_DOWN: Duration = Duration::from_secs(15);
 /// pathological depth — is counted by the same measure, and a page it
 /// carries past the budget is refused, never served.
 pub const MAX_CHANGES_PAGE_BYTES: usize = 256 * 8 * 1024;
+
+/// The change feed's resident window: 2,048 positions, interim (D1).
+///
+/// It is how many of the newest committed positions the daemon holds in
+/// memory for the change feed — `commits.log`'s entries and the four derived
+/// twins over them — the rest read from the feed's files by position
+/// (`commits/feed/window.rs`), so a page's bytes never depend on which side
+/// of the window its positions lie. The feed's files are kept whole from
+/// genesis (wire.md §The change feed, Retention), so without a window the
+/// daemon's memory for the feed would grow with every commit ever made; with
+/// it the feed costs the memory of a window's entries, about 200 bytes each,
+/// plus one marker slot (~3.4 KB) per attested position inside it. Counted
+/// in positions, not in entries: a position is a committed seq, and a commit
+/// of several records takes several, so a window holds at most this many
+/// entries and usually fewer.
+///
+/// **Why two thousand and forty-eight.** It is the journal's retained
+/// window as the daemon sets it — a checkpoint every 1,024 commits, two
+/// kept (`skepd`'s `CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`) —
+/// which is what the feed held resident before it was kept whole, so the
+/// daemon's memory for a board of any age is what it was for a board that
+/// had just reclaimed. Every position a live client re-reads after a
+/// `/events` tick, and every page the head writer's resume reads, lies
+/// inside it on a board at the cadence; a mirror beginning from genesis, or
+/// a history pane, reads below it from disk, by one seek and one sequential
+/// read per page.
+///
+/// A test build moves it through `commits::set_feed_resident_window`.
+pub const FEED_RESIDENT_WINDOW: u64 = 2 * 1024;

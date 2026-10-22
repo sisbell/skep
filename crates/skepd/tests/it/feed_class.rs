@@ -917,8 +917,8 @@ const DERIVED_FILES: [&str; 4] = ["feed-index.log", "feed-offsets.log", "feed-ma
 
 /// The attest store — the fifth file in the four's shape, rebuilt from the
 /// journal's markers above the reclaim floor as the four are from
-/// `commits.log` and the journal (its class below the floor is
-/// `changes.rs`'s to pin).
+/// `commits.log` and the journal, and kept whole from genesis as the five
+/// now are (`changes.rs` pins it).
 const ATTEST_STORE: &str = "feed-attest.log";
 
 /// The four derived files and the attest store.

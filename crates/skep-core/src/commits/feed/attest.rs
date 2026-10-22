@@ -20,9 +20,10 @@
 //! ([`rebuilt_tail`]). Below the floor the checkpoint body holds no marker,
 //! so a line here is an entry signature's *only* copy at the origin: there
 //! the store is primary state and not a projection — never compacted to the
-//! journal's retention (where `commits.log` and the four derived sidecars
-//! drop their entries below the floor at open, this file *keeps* them),
-//! neither prunable nor rebuildable, backed up by location with the board
+//! journal's retention, the precedent the other five feed files now follow
+//! (`commits.log` and the four derived sidecars are kept whole from genesis
+//! too, wire.md §The change feed, Retention; this file was the first kept)
+//! — neither prunable nor rebuildable, backed up by location with the board
 //! directory as `blobs/` is, its loss served as `null`. The coverage fence,
 //! the foreign-line purge and the stop on a failed append apply as in the
 //! four, and so does the truncation, which does not stop at the floor:
@@ -42,10 +43,11 @@
 //! `at` stands whole; and the board term's, at or below which no write is
 //! attested ([`Attested`]). So a crash's tear reads as rebuilt wherever a
 //! witness names its side, and the board directory's backup is restored on
-//! a lost cut alone. No read serves a below-floor slot (`/changes` answers
-//! `410 history_reclaimed` below the feed's floor): the lines below it are
-//! kept for a read no route of this build serves, the class being the design
-//! record's and not this build's to narrow.
+//! a lost cut alone. A below-floor slot is served: `/changes` answers every
+//! position `commits.log` holds, the journal's reclamation moving no fence
+//! of the feed's, and a row below the resident window takes its `attest`
+//! off this file's line, read by position (`feed.rs`'s reader; `window.rs`)
+//! — the lines below the floor are the only copy, and the feed serves them.
 //!
 //! **Durable before the next commit, and a failed line halts writes**
 //! (SO-I5 (d): no signature the board keeps is lost by a crash, a power loss or
@@ -107,24 +109,28 @@ use crate::codec::parse_lower_hex_bytes;
 // read site would write lines that replay as no slot.
 
 /// The store's file.
-const ATTEST_FILE: &str = "feed-attest.log";
+///
+/// The feed's reader below the resident window opens it by this name
+/// (`feed.rs`), reading its lines through [`attest_of_record`].
+pub(super) const ATTEST_FILE: &str = "feed-attest.log";
 /// Its records' first field: the marker's `sig_alg` tag, a number.
 const ATTEST_ALG: &str = "alg";
 /// Its records' second field: the signature blob, lowercase hex.
 const ATTEST_SIG: &str = "sig";
 
-/// The attest store: its file, and the slots of the positions the feed serves.
+/// The attest store: its file, and the slots of the resident window's positions.
 ///
 /// The slots are resident at one blob (~3.4 KB under tag 1) per attested
-/// position `commits.log` serves, the window above the reclaim floor, trimmed
-/// with the log at every compaction ([`AttestStore::drop_at_or_below`]), so the
-/// journal's retained window bounds them. The file holds more: every line
-/// appended that no cut or purge has taken, the positions the log compacted
-/// away included, where the store is primary state.
+/// position inside the feed's resident window (`CommitsLog::resident_from`),
+/// trimmed with the feed's twins as the window rises
+/// ([`AttestStore::drop_at_or_below`]), so the window bounds them. The file
+/// holds more: every line appended that no cut or purge has taken, which a
+/// page below the window reads by position (`feed.rs`), where the store is
+/// primary state.
 pub(super) struct AttestStore {
     /// `feed-attest.log`: appended, replayed and fenced, and never compacted.
     file: LineFile,
-    /// Position → the marker slot, for the served positions.
+    /// Position → the marker slot, for the resident window's positions.
     ///
     /// Each slot sits behind an `Arc`, so a page rendered after the feed's
     /// lock is released ([`super::Feed::page`]) clones a pointer, never a
@@ -141,13 +147,15 @@ impl AttestStore {
     /// Opens the store beside the replayed `log`, and its file's sync handle.
     ///
     /// It replays every line at or below the head, a line at a time, holding
-    /// resident the served window alone — the lines below the log's fence are
-    /// read past and stay in the file, untouched — then rebuilds the missing
-    /// tail from the journal's markers in one scan, then fences at the head and
-    /// syncs, so every line the open rebuilt is on disk before the first commit
-    /// can begin (SO-I5 (d)). Beside the store it answers the file's
-    /// [`SyncHandle`], duplicated once the replay is done: what the record step
-    /// makes each line durable through, off the feed's lock.
+    /// resident the window's slots alone — the lines below the feed's
+    /// resident window are read past and stay in the file, untouched, read
+    /// by position when a page reaches them — then rebuilds the missing tail
+    /// from the journal's markers in one scan, writing back every slot of a
+    /// position the log holds above its fence, then fences at the head and
+    /// syncs, so every line the open rebuilt is on disk before the first
+    /// commit can begin (SO-I5 (d)). Beside the store it answers the file's
+    /// [`SyncHandle`], duplicated once the replay is done: what the record
+    /// step makes each line durable through, off the feed's lock.
     ///
     /// A served position's line this daemon cannot read (a tag of no
     /// signature, a blob of none, hex it did not write) is counted and not
@@ -213,20 +221,21 @@ impl AttestStore {
         let started = Instant::now();
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{ATTEST_FILE}: {e}"));
         let head = log.open_head();
-        // Served: a position the log holds, or one in the region the walk
-        // behind the listener has yet to land — the log's `(low, head]`,
-        // whose rows this store's slots ride once the landing writes them;
-        // the rebuild's positions are the kernel's markers' either way.
-        let served_only = |at: u64| {
-            log.entries().contains_key(&at)
-                || log.pending_region().is_some_and(|(low, head)| at > low && at <= head)
-        };
+        // Resident: a position inside the feed's window — the log's own
+        // resident entries, and the region the walk behind the listener has
+        // yet to land where it reaches into the window, whose rows this
+        // store's slots ride once the landing writes them. Held: a position
+        // the log holds a line for above its fence, or will once the walk
+        // lands it — what a rebuilt slot is written back for; the rebuild's
+        // positions are the kernel's markers' either way.
+        let resident = |at: u64| at >= log.resident_from() && at <= head;
+        let held = |at: u64| at > log.fence() && at <= head;
         // Absent before the replay creates it: begun afresh. A look that
         // cannot answer counts as present, so it never says a loss it has
         // not seen.
         let absent = !dir.join(ATTEST_FILE).try_exists().unwrap_or(true);
         let (mut file, entries, replayed) =
-            LineFile::open(dir, ATTEST_FILE, head, served_only, lines)?;
+            LineFile::open(dir, ATTEST_FILE, head, resident, lines)?;
         if let (Some(foreign), Some(kept)) = (replayed.foreign, replayed.foreign_kept) {
             // The second copy: a line here is a marker's slot mirrored, so
             // after a journal tail cut the cut commits' markers hold these
@@ -266,9 +275,11 @@ impl AttestStore {
         let (tail, refused) = rebuilt_tail(engine, coverage);
         let mut rebuilt = Rebuilt::default();
         for (at, slot) in tail {
-            if served_only(at) {
+            if held(at) {
                 file.append(at, attest_fields(&slot)).map_err(with_file)?;
-                served.insert(at, Arc::new(slot));
+                if resident(at) {
+                    served.insert(at, Arc::new(slot));
+                }
                 rebuilt.note(at);
             }
         }
@@ -308,20 +319,23 @@ impl AttestStore {
     ///
     /// The file is never compacted, so it grows by one line (~6.9 KB under
     /// tag 1) per attested commit for the life of the board; the slots
-    /// resident are one blob (~3.4 KB) per attested position the feed serves,
-    /// trimmed at every compaction ([`AttestStore::drop_at_or_below`]). The
-    /// size is `None` where the handle's metadata could not be read.
+    /// resident are one blob (~3.4 KB) per attested position inside the
+    /// feed's resident window, trimmed as the window rises
+    /// ([`AttestStore::drop_at_or_below`]). The size is `None` where the
+    /// handle's metadata could not be read.
     pub(super) fn figures(&self) -> AttestStoreFigures {
         AttestStoreFigures { bytes: self.file.len().ok(), slots: self.served.len() }
     }
 
-    /// Drops the served slots at or below `fence`.
+    /// Drops the resident slots at or below `fence`.
     ///
-    /// The positions are the ones the feed's compaction has just dropped from
-    /// its twins (`Inner::drop_at_or_below`), at or below the fence one under
-    /// the reclaim floor, where `/changes` answers `410 history_reclaimed` and
-    /// no page renders a slot. The file keeps every line: below the floor it
-    /// is primary state, and nothing here touches it.
+    /// The positions are the ones the feed has just dropped from its twins
+    /// (`Inner::drop_at_or_below`, `Inner::drop_below_the_window`): those
+    /// below the resident window's edge as it rises, whose rows a page
+    /// renders off this file's lines by position from here on, and those at
+    /// or below a hole's fence, which no page renders. The file keeps every
+    /// line: below the floor it is primary state, and nothing here touches
+    /// it.
     pub(super) fn drop_at_or_below(&mut self, fence: u64) {
         self.served = self.served.split_off(&fence.saturating_add(1));
     }
@@ -804,8 +818,10 @@ fn attest_fields(a: &Attestation) -> Vec<(&'static str, Value)> {
 /// *every* slot `Attestation::new` admits — a tag no `SIG_ALGS` row names
 /// included, as a slot rebuilt from a marker another build wrote may carry
 /// one — so a consumer asks the slot's row of the table and owns the answer
-/// for a tag with none, as the codec's `j_attest` does.
-fn attest_of_record(m: &Map<String, Value>) -> Option<Attestation> {
+/// for a tag with none, as the codec's `j_attest` does. The file's one
+/// reader: the open's replay and the feed's read below the resident window
+/// (`feed.rs`) both hand it the records they read.
+pub(super) fn attest_of_record(m: &Map<String, Value>) -> Option<Attestation> {
     let tag = u8::try_from(m.get(ATTEST_ALG)?.as_u64()?).ok()?;
     let sig = parse_lower_hex_bytes(m.get(ATTEST_SIG)?.as_str()?)?;
     Attestation::new(tag, sig).ok()

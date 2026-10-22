@@ -903,6 +903,37 @@ fn runbook_names_the_cadences_the_cores_constants_set() {
     }
 }
 
+/// Checks that §8 begins a mirror at any age and names the one refusal.
+///
+/// The change feed is kept whole from genesis, so §8 tells an operator a
+/// mirror reads `GET /changes` from position 0 on a board of any age, and
+/// holds no sentence that tells them to begin one before the board first
+/// reclaims — the two retired sentences gone — naming instead the one
+/// board that refuses a mirror from genesis, whose feed opened with a hole,
+/// and the act: begin at `floor − 1`.
+#[test]
+fn runbook_begins_a_mirror_at_any_age() {
+    let mirror = collapsed(&passage("\n## 8. The cold mirror", "", &["\n## 9."]));
+    for fact in [
+        "Begin a mirror at any age.",
+        "reads `GET /changes` from position 0 and nothing else",
+        "kept whole from genesis",
+        "a mirror begun today reads the rows a mirror begun on the board's first day read",
+        "The one board that refuses a mirror from genesis",
+        "begin the mirror at `floor − 1`",
+    ] {
+        assert!(mirror.contains(fact), "§8 says {fact:?}: {mirror}");
+    }
+    for retired in [
+        "Begin any mirror before",
+        "no act makes a cold mirror possible",
+        "before the board first reclaims",
+        "marks the moment",
+    ] {
+        assert!(!mirror.contains(retired), "§8 no longer says {retired:?}: {mirror}");
+    }
+}
+
 /// Checks that Back up and Restore carry the settings a copy does not.
 ///
 /// §7 step 1 says the directory holds the board's state and none of its

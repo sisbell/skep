@@ -38,12 +38,14 @@
 //! Crash honesty is the contract:
 //!
 //! * A torn tail is truncated at the last whole record on open — trust ends
-//!   at the first unparseable line; the daemon never wedges on its own
-//!   testimony. The cut is said on the operator stream once, with the last
-//!   trusted position and the bytes ([`Cut`]), and its case: the cut part
-//!   is re-derived as bare entries by the walk below, and past a damaged
-//!   line the whole lines the cut took are counted, their keys and times
-//!   lost unless a copy holds them.
+//!   at the first unparseable line, or at a line that lies below the line
+//!   before it (the file is position-ordered, and the reads below the
+//!   resident window seek by that order; `feed/window.rs`); the daemon
+//!   never wedges on its own testimony. The cut is said on the operator
+//!   stream once, with the last trusted position and the bytes ([`Cut`]),
+//!   and its case: the cut part is re-derived as bare entries by the walk
+//!   below, and past a damaged line the whole lines the cut took are
+//!   counted, their keys and times lost unless a copy holds them.
 //! * Positions whose record was lost, or that predate the feature, are
 //!   reconstructed as bare positions and answer `docs`/`key`/`time` as
 //!   `null`. Never an invented value. The op's own terms, and the op where
@@ -98,17 +100,23 @@
 //!   accepted residue), and of what it wrote nothing but the `attest`
 //!   member, where the attest store holds the position's slot.
 //!
-//! The file — and the entries replayed from it — are bounded by the
-//! journal's own retention, not by the world's age. Positions the journal has
-//! reclaimed are unanswerable across the whole history surface, so the
-//! sidecar drops its entries below that floor and rewrites itself around
-//! them — at open (see [`CommitsLog::open`]) and, the floor moving at a
-//! checkpoint and at no other moment, after each checkpoint the daemon's
-//! checkpoint thread lands ([`CommitsLog::compact_to`], under the feed's
-//! lock), the rewrite left to the walk's landing while its region is
-//! pending. Without that the feed's memory would be the only structure in the
-//! daemon that grows with total commits ever made rather than with commits
-//! still reachable, and it is fully resident. A rewrite that fails past its
+//! **The file is kept whole from genesis** (wire.md §The change feed,
+//! Retention; DOCTRINE: the record of events is kept forever). The journal
+//! reclaims old STATES — below its reclaim floor `/op-at` answers `410
+//! history_reclaimed` — but a commit's position, time, hand, op, documents
+//! and terms are this file's and nothing drops a line of it: no rewrite
+//! writes fewer lines than the file held, and the one fence it keeps,
+//! `min_since` ([`CommitsLog::min_since`]), marks a hole and never the
+//! journal's floor — a region a lost or torn file left that the journal
+//! could not re-cover, or a line an earlier build's compaction wrote, under
+//! which `/changes` answers the same `410` as `/op-at`. What bounds the
+//! daemon's memory is the resident window ([`CommitsLog::resident_from`];
+//! `limits::FEED_RESIDENT_WINDOW`): the newest positions' entries stay
+//! resident, as every entry once did, and below the window the file itself
+//! answers, read by position (`feed/window.rs`), so a page's bytes never
+//! depend on which side of the window its positions lie. A rewrite — the
+//! walk's landing, or the open's purge of another journal's lines — copies
+//! every line the file holds and adds the new ones; one that fails past its
 //! rename while serving leaves the append handle naming the replaced file,
 //! so it stops this file for the uptime as a failed append does — said once,
 //! the next open re-deriving — and never fails an op (P22).
@@ -123,7 +131,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -140,14 +148,17 @@ use skep_util::notice::Class;
 use super::classify::{derived_journal, parse_dotted};
 use super::Lines;
 use crate::codec::{j_attest, to_bytes};
-use crate::limits::{FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL};
+use crate::limits::{
+    FEED_RESIDENT_WINDOW, FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL,
+};
 use crate::serial::SerialGuard;
 
 /// The sidecar's file name inside the data dir.
 ///
 /// It lies beside the kernel's own journal/checkpoint files, which this
-/// crate never touches.
-const SIDECAR_FILE: &str = "commits.log";
+/// crate never touches. The feed's reader below the resident window opens
+/// it by this name (`feed.rs`).
+pub(super) const SIDECAR_FILE: &str = "commits.log";
 
 /// Returns the wall-clock reading a commit's `time` is stamped with.
 ///
@@ -557,8 +568,12 @@ pub(super) enum Recorded {
 }
 
 /// One replayed file record.
+///
+/// Read by [`parse_line`] off a line of the file: at the open's scan, and
+/// by the feed's reader below the resident window (`feed.rs`), which hands
+/// each line a cursor reads to the same parser.
 #[derive(Debug)]
-enum Record {
+pub(super) enum Record {
     Entry(u64, CommitMeta),
     /// The smallest `since` this feed can honor.
     ///
@@ -583,56 +598,95 @@ pub(super) struct Walked {
 
 /// The replayed `commits.log`.
 ///
-/// It holds the file handle, every enumerable entry above the fence, and the
-/// bookkeeping the feed's derived structures key on.
+/// It holds the file handle, the resident window's entries, and the
+/// bookkeeping the feed's derived structures key on; the file holds every
+/// line, and the feed reads the ones below the window from it.
 pub(super) struct CommitsLog {
     file: File,
     /// The data dir the file lives in — what a rewrite re-creates it under.
     dir: PathBuf,
-    /// Every enumerable position above `min_since`, in order.
+    /// The resident window: every enumerable position at or above
+    /// `resident_from`, in order.
     ///
     /// And every one of them is one this file stands behind: `Recorded` means
     /// testimony whose document names all parse — rendered from validated
-    /// addresses at the record, read back at the open, where
-    /// [`demote_malformed_names`] demoted the rest. So a consumer that
-    /// renders a `Recorded` entry, or classifies by its names, needs no
-    /// second check of its own.
+    /// addresses at the record, read back at the open, where the scan
+    /// demoted the rest ([`demoted`]). So a consumer that renders a
+    /// `Recorded` entry, or classifies by its names, needs no second check
+    /// of its own; the feed's reader below the window demotes each line it
+    /// reads the same way.
     ///
     /// Read outside this file through `entries()` and `entries_above()`
     /// alone, as `min_since` is through its two: no file but this one can
-    /// add an entry this card does not stand behind.
+    /// add an entry this card does not stand behind. While the walk's region
+    /// is pending the window holds, beside the file's newest lines, every
+    /// position recorded since the open ([`Recorded::Held`]), which the file
+    /// takes at the landing; the eviction never reaches a held position
+    /// ([`CommitsLog::evict`]).
     entries: BTreeMap<u64, CommitMeta>,
-    /// Each entry's line's byte offset in the file.
+    /// Each resident entry's line's byte offset in the file.
     ///
-    /// It is the offset array's in-memory twin (PUB-7.19), learned from the
-    /// replay itself and advanced by every append; a rewrite recomputes it
-    /// whole.
-    ///
-    /// **Nothing in this build seeks by it.** `commits.log`'s reader is the
-    /// resident `entries` map above, so a position is answered from memory
-    /// and no read takes an offset; this map's one consumer is
-    /// `feed-offsets.log` (`feed/derived.rs`), whose own consumer is the
-    /// non-resident reader that file exists for. It is kept because that
-    /// file must be right the day one appears, and it costs one `u64` per
-    /// retained commit plus maintenance at four sites: the replay, the
-    /// head clamp, a rewrite — the walk's landing among them, which assigns
-    /// every offset at once — and the record paths' one tail
-    /// ([`CommitsLog::admit`]), which [`CommitsLog::record`] and
-    /// [`CommitsLog::record_bare`] share. A reader looking for the lookup will
-    /// not find one.
+    /// It is the offset array's in-memory twin (PUB-7.19) over the window,
+    /// learned from the open's scan and advanced by every append; a rewrite
+    /// assigns the new lines' offsets and moves none of the old, since it
+    /// copies the file's lines verbatim ahead of them. Its one consumer is
+    /// `feed-offsets.log` (`feed/derived.rs`), whose lines the feed appends
+    /// from it and checks against it over the window at the open; the reads
+    /// below the window seek by position, not by offset (`feed/window.rs`).
     ///
     /// Position → [`LineOffset`], which is what keeps the two apart: they
     /// are the same width and mean opposite things, and the map's own key
     /// and value are the pair a transposition swaps.
     offsets: BTreeMap<u64, LineOffset>,
-    /// The smallest admissible `since`.
+    /// The lowest position the resident window holds.
+    ///
+    /// Every entry the file holds at or above it is in `entries`; below it
+    /// the file alone answers. It is the greater of the fence and the
+    /// window's span below the head at the open
+    /// (`limits::FEED_RESIDENT_WINDOW` positions, or the test seam's), and
+    /// it rises with every record ([`CommitsLog::evict`]) so the window
+    /// never holds more than that many positions — save the positions held
+    /// in memory alone while the walk's region pends, which no eviction
+    /// drops. Read outside this file through [`CommitsLog::resident_from`].
+    resident_from: u64,
+    /// The window's span in positions.
+    ///
+    /// It is `limits::FEED_RESIDENT_WINDOW`, or the figure the test seam set
+    /// (`set_feed_resident_window`, the test seam), read once at the open.
+    window: u64,
+    /// The most entries the window has held this uptime.
+    ///
+    /// It is read for the checkpoint thread's landing line beside the count
+    /// now resident, so a window that outgrows its span is told.
+    resident_most: usize,
+    /// The entries the file holds above the fence, at or below the head.
+    ///
+    /// They are the lines the open's scan counted and every record since —
+    /// the walk's landed boundaries among them — resident or not; what the
+    /// open's line reports as `commits.log {n} entries`.
+    count: u64,
+    /// How many of `count` are bare.
+    bare: u64,
+    /// The first position the file holds a line for above the fence.
+    ///
+    /// It is the wire's `floor` on a board whose walk has nothing pending
+    /// ([`CommitsLog::floor`]): the oldest position `/changes` answers —
+    /// `1` on a board that never compacted and never lost a line. `None`
+    /// where no line stands above the fence.
+    first_held: Option<u64>,
+    /// The smallest admissible `since`: the fence of a hole.
     ///
     /// Coverage is complete over `(min_since, head]` — the region pending
-    /// aside, until the walk lands it; below it the walk was stopped
-    /// (reclaimed or unreadable journal) and `/changes` answers 410.
-    /// Deliberately not called a floor — the wire's `floor` is the oldest
-    /// position still answerable, whereas this is the highest one that is
-    /// not.
+    /// aside, until the walk lands it; at or below it the file holds no
+    /// line this build serves: a region a lost or torn file left that the
+    /// walk could not re-cover (the journal reclaimed or refused it), or
+    /// the fence an earlier build's compaction wrote, which this build
+    /// keeps as it found it — never the journal's reclaim floor, which
+    /// moves no fence here. Below it `/changes` answers 410. Deliberately
+    /// not called a floor — the wire's `floor` is the oldest position still
+    /// answerable, whereas this is the highest one that is not. Lines the
+    /// file holds at or below the fence — a walk's refusal moved the fence
+    /// past them — stay in the file and are served by no route.
     ///
     /// **Invariant.** `min_since <= head` always. A fence above the head is
     /// not a fact about this journal and is discarded at open, exactly as an
@@ -644,6 +698,12 @@ pub(super) struct CommitsLog {
     /// answers: the distinction from the wire's `floor` is this file's to
     /// keep, and so is every comparison against it.
     min_since: u64,
+    /// The fence line the next landing writes, where the walk moved it.
+    ///
+    /// It is set by [`CommitsLog::fold_the_walk`] where the walk's own fence
+    /// stands above the one in force, and written ahead of the landed lines
+    /// by [`CommitsLog::write_the_landing`]'s rewrite, which clears it.
+    fence_owed: Option<u64>,
     /// The journal head at open.
     ///
     /// It is the fence between replayed history and this uptime's commits.
@@ -651,25 +711,22 @@ pub(super) struct CommitsLog {
     /// replay, `emit`'s incumbent ack) is never a new commit and is never
     /// re-recorded.
     open_head: u64,
-    /// Whether a rewrite has run, which the feed's open reads as its own.
+    /// Whether this open's purge rewrote the file, moving every offset.
     ///
-    /// Every rewrite sets it ([`CommitsLog::rewrite_whole`]), and it is read
-    /// at the feed's open alone, where the rewrite is this open's: the
-    /// compaction to the journal's retention, or the purge of a foreign fence
-    /// or of entries past the head — so every offset moved and the derived
-    /// offset array must be rewritten with it.
+    /// It is set where the open found a fence describing another journal
+    /// and rewrote the file without it ([`CommitsLog::open`]), and read at
+    /// the feed's open alone: every line's offset moved, so the derived
+    /// offset array is re-derived from the file. The walk's landing rewrite
+    /// moves no offset — it copies the file's lines verbatim ahead of the
+    /// new ones — and sets nothing here.
     rewritten: bool,
-    /// What this open's compaction dropped below the reclaim floor.
-    ///
-    /// It is the floor and the count of entries, or `None` where it dropped
-    /// none — what the feed's open says once its derived files follow.
-    compacted_at_open: Option<(u64, usize)>,
     /// The reclaim floor this open probed ([`reclaim_floor`]).
     ///
     /// It is `None` where the journal still answered genesis, or refused the
     /// probe other than as reclaimed — the one probe the feed's open pays,
-    /// read again by the attest store's open, which runs before the listener
-    /// and the checkpoint thread, so the floor cannot move between the two.
+    /// read by the attest store's open for its cut line, which runs before
+    /// the listener and the checkpoint thread, so the floor cannot move
+    /// between the two. It moves no fence of this file's.
     floor_at_open: Option<u64>,
     /// The region pending: the positions the file did not cover at open.
     ///
@@ -684,17 +741,6 @@ pub(super) struct CommitsLog {
     /// page whose rows would have to come from it. Read outside this file
     /// through [`CommitsLog::pending_region`].
     pending: Option<(u64, u64)>,
-    /// Whether a compaction moved the fence in memory and left the file.
-    ///
-    /// It is set where a compaction dropped entries with its rewrite
-    /// deferred — the region pending ([`CommitsLog::compact_inner`]), or the
-    /// bare positions the index lost pending, which the feed tells this log
-    /// by calling [`CommitsLog::compact_in_memory`] — and cleared by the
-    /// next rewrite that reaches its rename, the walk's landing's among them
-    /// ([`CommitsLog::rewrite_the_owed`]); until then the file holds lines
-    /// the fence has passed, which the next open's own compaction would drop
-    /// again.
-    rewrite_owed: bool,
     /// Monotone clamp for recorded wall-clock times.
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
@@ -707,11 +753,10 @@ pub(super) struct CommitsLog {
     lines: Lines,
     /// Set by the first failed append of this uptime, or by a failed rewrite.
     ///
-    /// The rewrite is one failed past its rename — a compaction's
-    /// ([`CommitsLog::compact_to`]) or the walk's landing's — after which the
-    /// handle names a file no open reads, or the walk's landing failed before
-    /// its rename ([`CommitsLog::write_the_landing`]); after any of the three
-    /// this file takes no further line.
+    /// The rewrite is the walk's landing's, failed past its rename — after
+    /// which the handle names a file no open reads — or before it
+    /// ([`CommitsLog::write_the_landing`]); after any of the three this file
+    /// takes no further line.
     ///
     /// **The reopen walk cannot reach an interior loss.** [`CommitsLog::open`]
     /// records `(low, head]` for the walk behind the listener, where `low` is
@@ -746,62 +791,60 @@ pub(super) struct CommitsLog {
 }
 
 impl CommitsLog {
-    /// Replays the file and records any uncovered region as pending.
+    /// Replays the file in one scan and records any uncovered region as pending.
     ///
-    /// The replay truncates a torn tail and drops everything the file says
-    /// about a journal other than this one — entries beyond the head and a
-    /// fence above it — and any uncovered `(low, head]` region, `low` the last
-    /// recorded position or the fence above it, is recorded as pending, to be
+    /// The scan reads the file a line at a time, holding resident the
+    /// window alone (`limits::FEED_RESIDENT_WINDOW` positions below the
+    /// head, or the test seam's figure), and counts the rest: how many
+    /// entries the file holds above its fence, how many of them are bare,
+    /// the first position held and the last. It truncates a torn tail and
+    /// drops everything the file says about a journal other than this one
+    /// — entries beyond the head, by one truncation, since they lie at the
+    /// file's end, and a fence above it, by one rewrite of the file without
+    /// it — and any uncovered `(low, head]` region, `low` the last recorded
+    /// position or the fence above it, is recorded as pending, to be
     /// reconstructed as bare positions by the walk behind the listener
     /// ([`reconstruct`]) and written by its landing
     /// ([`CommitsLog::write_the_landing`]). Returns the replayed log with
     /// nothing written for the region: no bare line appended, no fence line
-    /// written for it — the compaction below aside, which rewrites the file
-    /// where it drops an entry or a fence.
+    /// written for it.
     ///
-    /// **Cost** — the open's own: O(the file) to replay it, and the floor
-    /// probe. The walk is not the open's (`operations.md` §3.3 step 2; §4
-    /// row 16): reconstruction spends one whole-world `Kernel::world_at` per
-    /// uncovered boundary — a checkpoint deserialize plus a journal fold
-    /// each — plus one world diff per boundary for its classification and
-    /// its terms (`derived_docs` and `derived_terms_over` state that cost), so
-    /// a dir with no coverage (a sidecar deleted, arrived corrupt, or written
-    /// before this feature) pays that for every boundary the journal still
-    /// holds; paid inside the open it would hold the listener unbound for the
-    /// walk's length, so a supervisor that killed a slow start would restart
-    /// the walk from zero. It is paid on a thread of the write path's instead,
-    /// the board serving meanwhile — at the daemon's open after all where the
-    /// OS refuses that thread — and lands by one rewrite, so a covered region
+    /// **Cost** — the open's own: O(the file) to scan it, the window's
+    /// entries held and no more, and the floor probe. The walk is not the
+    /// open's (`operations.md` §3.3 step 2; §4 row 16): reconstruction
+    /// spends one whole-world `Kernel::world_at` per uncovered boundary — a
+    /// checkpoint deserialize plus a journal fold each — plus one world diff
+    /// per boundary for its classification and its terms (`derived_docs` and
+    /// `derived_terms_over` state that cost), so a dir with no coverage (a
+    /// sidecar deleted, arrived corrupt, or written before this feature)
+    /// pays that for every boundary the journal still holds; paid inside the
+    /// open it would hold the listener unbound for the walk's length, so a
+    /// supervisor that killed a slow start would restart the walk from
+    /// zero. It is paid on a thread of the write path's instead, the board
+    /// serving meanwhile — at the daemon's open after all where the OS
+    /// refuses that thread — and lands by one rewrite, so a covered region
     /// is walked once ever rather than once per open. The region is bounded
     /// below by journal reclamation, so the ceiling is the retained window,
     /// which skepd's `server.rs` sets through `CHECKPOINT_EVERY_COMMITS` and
     /// `RETAINED_CHECKPOINTS`: about their product in commits, fewer where
     /// the cadence's byte bound crosses first.
     ///
-    /// **Compaction** runs at the other end, and is what bounds the file and
-    /// the resident entries: positions the journal has reclaimed are refused
-    /// by `/op-at` and `/dump?at` alike, so an entry naming one describes a
-    /// commit no client can reach by any route. Those entries are dropped
-    /// and the file rewritten around them, leaving retention exactly where
-    /// wire.md puts it — the feed's memory is the sidecar plus what the
-    /// journal can still reconstruct, and below that the same `410
-    /// history_reclaimed` discipline `/op-at` answers with. A region whose
-    /// lower edge the open's compaction passes is narrowed to the fence in
-    /// force, and dropped where the fence passes its head.
-    ///
-    /// The floor is learned by probing position 0, which costs nothing:
-    /// genesis is its own base, so a healthy store folds no journal to
-    /// answer, and a reclaimed one refuses from the checkpoint listing
-    /// alone. The rewrite goes to a temp file and is renamed over the
-    /// original, so a crash mid-compaction leaves the whole old file or
-    /// the whole new one — never a half of either.
+    /// **Nothing is dropped for the journal's retention.** The file is kept
+    /// whole from genesis (the module doc): the reclaim floor is probed
+    /// once, for the attest store's cut line alone ([`reclaim_floor`]), and
+    /// moves no fence; the fence the file holds is the one it found, a hole
+    /// an earlier build or a refused walk left, said once by the feed's open
+    /// where one stands. The purge of another journal's lines goes to a
+    /// temp file and is renamed over the original, so a crash mid-rewrite
+    /// leaves the whole old file or the whole new one — never a half of
+    /// either.
     ///
     /// `lines` is the classed door: a torn tail is said through it once
     /// ([`LogCutLine`]) — at the open, before the walk, with the walk's own
     /// fence `low` as the last trusted position — the entries past the head
     /// once with their count and positions ([`ForeignLinesLine`]), the file
-    /// rewritten without them, the malformed names once with their count
-    /// ([`demote_malformed_names`]), a file absent on a journal that holds
+    /// cut or rewritten without them, the malformed names once with their
+    /// count ([`MalformedNamesLine`]), a file absent on a journal that holds
     /// commits once with the region the walk re-covers
     /// ([`LogBegunAfreshLine`]), and a rewrite's temp file found beside it
     /// (`operations.md` §1.1 m8; [`say_a_compact_twin`]); the log keeps a
@@ -830,105 +873,89 @@ impl CommitsLog {
         // counts as present, so it never says a loss it has not seen.
         let absent = !path.try_exists().unwrap_or(true);
         let mut file = open_sidecar(&path).map_err(with_file)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(with_file)?;
-        let (records, valid_end) = parse_records(&bytes);
+        let head = engine.kernel().current_seq().0;
+        let window = resident_window(dir);
+        let mut scanned = scan(&mut file, head, window).map_err(with_file)?;
         // The cut's class, judged before the cut: a crash tears the last
         // line, its newline unwritten, and that line is cut and gone; a
-        // whole line that does not parse is damage, and it and every line
-        // after it — testimony this file alone holds — are kept beside the
-        // file, durably, before the cut.
-        let cut_kept = if valid_end < bytes.len() && bytes[valid_end..].contains(&b'\n') {
-            let kept = keep_dropped_lines(dir, SIDECAR_FILE, valid_end as u64, &bytes[valid_end..])
-                .map_err(with_file)?;
-            Some(kept)
+        // whole line that does not parse, or lies below the line before it,
+        // is damage, and it and every line after it — testimony this file
+        // alone holds — are kept beside the file, durably, before the cut.
+        let cut_kept = if scanned.damaged {
+            file.seek(SeekFrom::Start(scanned.valid_end)).map_err(with_file)?;
+            let dropped = (&file).take(scanned.len - scanned.valid_end);
+            Some(
+                keep_dropped_lines(dir, SIDECAR_FILE, scanned.valid_end, dropped)
+                    .map_err(with_file)?,
+            )
         } else {
             None
         };
-        let cut = if valid_end < bytes.len() {
+        let cut = if scanned.valid_end < scanned.len {
             // The torn (or corrupt) tail: truncate at the last whole record.
             // Anything the dropped lines described is re-covered as bare
             // positions by the walk below — said once the walk's own fence
             // `low` is known, which is the position trust ends at.
-            file.set_len(valid_end as u64).map_err(with_file)?;
-            Some(valid_end)
+            file.set_len(scanned.valid_end).map_err(with_file)?;
+            Some((scanned.valid_end, scanned.len, scanned.whole_after))
         } else {
             None
         };
-        let len = valid_end as u64;
-        let head = engine.kernel().current_seq().0;
-        // The entry lines above the head, kept before the rewrite below
-        // drops them: each by the offsets the parse answered, the last one
-        // reaching the trusted end. Named by the first's byte.
-        let mut above_the_head: Vec<u8> = Vec::new();
-        let mut first_above: Option<usize> = None;
-        for (i, (offset, record)) in records.iter().enumerate() {
-            if let Record::Entry(at, _) = record {
-                if *at > head {
-                    let end = records.get(i + 1).map_or(valid_end, |(next, _)| *next);
-                    first_above.get_or_insert(*offset);
-                    above_the_head.extend_from_slice(&bytes[*offset..end]);
-                }
-            }
-        }
-        let foreign_kept = match first_above {
-            Some(byte) => {
-                let kept =
-                    keep_dropped_lines(dir, SIDECAR_FILE, byte as u64, above_the_head.as_slice())
-                        .map_err(with_file)?;
-                Some(kept)
-            }
-            None => None,
-        };
-        let mut entries = BTreeMap::new();
-        let mut offsets = BTreeMap::new();
-        let mut min_since = 0u64;
-        for (offset, record) in records {
-            match record {
-                Record::Entry(at, meta) => {
-                    entries.insert(at, meta);
-                    offsets.insert(at, LineOffset(offset as u64));
-                }
-                Record::MinSince(s) => min_since = min_since.max(s),
-            }
-        }
         // Entries beyond this journal's head describe a different journal —
         // a live copy taken after its journal, an operator's swap, or the
         // testimony of commits a journal tail cut took — and are never
-        // served. They leave the file too (the rewrite below is forced by
-        // them), or a later commit at one of their positions whose own line
-        // a crash ate would replay as theirs.
-        let foreign = if head < u64::MAX {
-            let dropped = entries.split_off(&(head + 1));
-            for at in dropped.keys() {
-                offsets.remove(at);
-            }
-            dropped.keys().fold(None, |held, &at| Some(EntryLines::with(held, at)))
-        } else {
-            None
-        };
-        // A fence above the head describes that other journal too, and is
-        // the half the entry clamp above does not reach. Left standing it
-        // makes `(min_since, head]` empty, so `changes` refuses every
-        // position this journal has — permanently, since nothing re-derives
-        // a fence the file already holds — while `/events` announces them
-        // and `/op-at` serves them. Discarded, the walk below covers
-        // `(last entry, head]` from scratch and the retention probe
-        // re-derives the true fence for this journal, which is what keeps
-        // `min_since <= head`.
-        let stale_fence = min_since > head;
-        if stale_fence {
-            min_since = 0;
+        // served. They lie at the file's end, the file being position-
+        // ordered, and leave it by one truncation, kept beside it first; a
+        // fence above the head describes that other journal too, and is the
+        // half the truncation does not reach: left standing it makes
+        // `(min_since, head]` empty, so `changes` refuses every position
+        // this journal has — permanently, since nothing re-derives a fence
+        // the file already holds — while `/events` announces them and
+        // `/op-at` serves them. The file is rewritten without it, every
+        // offset moving, and scanned again.
+        let mut foreign_kept = None;
+        let mut rewritten = false;
+        let foreign_lines = scanned.foreign.as_ref().map(|f| f.lines);
+        if let Some(foreign) = &scanned.foreign {
+            let kept =
+                keep_dropped_lines(dir, SIDECAR_FILE, foreign.first, foreign.bytes.as_slice())
+                    .map_err(with_file)?;
+            foreign_kept = Some(kept);
         }
-        let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
-        if let Some(valid_end) = cut {
+        if scanned.stale_fence {
+            file = purge_the_other_journals(dir, head).map_err(with_file)?;
+            rewritten = true;
+            scanned = scan(&mut file, head, window).map_err(with_file)?;
+        } else if let Some(foreign) = &scanned.foreign {
+            file.set_len(foreign.first).map_err(with_file)?;
+        }
+        let Scanned {
+            len,
+            window: entries,
+            offsets,
+            last_entry,
+            count,
+            bare,
+            first_held,
+            min_since,
+            foreign,
+            malformed,
+            last_time,
+            ..
+        } = scanned;
+        // The file's length as it stands: cut back to the first line past
+        // the head where any stood and no rewrite ran.
+        let len = match (&foreign, rewritten) {
+            (Some(f), false) => f.first,
+            _ => len,
+        };
+        let low = last_entry.unwrap_or(0).max(min_since);
+        if let Some((valid_end, len, whole_after)) = cut {
             // Row 9 for this file: the last trusted position is the walk's
             // own fence, the highest surviving record at or below the head
             // (or the fence record), from which the cut part is re-derived —
             // whatever a torn line named; the whole lines past a damaged one
             // are counted, since their testimony no walk brings back.
-            let whole_after = whole_lines_past(&bytes[valid_end..], head);
-            let (valid_end, len) = (valid_end as u64, bytes.len() as u64);
             let cut = Cut { valid_end, len, trusted: low, first: None, whole_after };
             lines.say(Class::Failure, LogCutLine { cut, kept: cut_kept });
         }
@@ -936,54 +963,41 @@ impl CommitsLog {
         // is the walk thread's to re-cover and its landing's to write — the
         // file takes no line here. `None` where the file covers the head.
         let pending = (head > low).then_some((low, head));
-        // Compaction: everything the journal has reclaimed leaves the feed
-        // with it. The probe answers the oldest position still answerable,
-        // so the smallest admissible `since` is the fence just under it —
-        // asking `since = F - 1` still yields the whole surviving feed. A
-        // reclaimed journal that can name no floor at all leaves this at 0
-        // and prunes nothing: the sidecar's own testimony is the half of
-        // the feed's memory that does not depend on the journal, and
-        // discarding it over a floor nobody can locate would lose the only
-        // record of those commits that still exists.
+        // The floor, probed once for the attest store's cut line: it moves
+        // nothing here.
         let floor_at_open = reclaim_floor(engine);
-        let floor_fence = floor_at_open.map(|floor| floor.saturating_sub(1));
-        // Built with no region, so the open's own compaction below rewrites
-        // the file — it is the open's to write, before the listener — where
-        // the same method defers its rewrite while a region is pending.
+        // The window's lower edge: the fence's far side, or the span below
+        // the head, whichever is higher.
+        let resident_from =
+            min_since.saturating_add(1).max(head.saturating_sub(window).saturating_add(1));
         let mut log = CommitsLog {
             file,
             dir: dir.to_path_buf(),
             entries,
             offsets,
+            resident_from,
+            window,
+            resident_most: 0,
+            count,
+            bare,
+            first_held,
             min_since,
+            fence_owed: None,
             open_head: head,
-            rewritten: false,
-            compacted_at_open: None,
+            rewritten,
             floor_at_open,
-            pending: None,
-            rewrite_owed: false,
-            last_time: 0,
+            pending,
+            last_time,
             len,
             lines: lines.clone(),
             stopped: None,
             #[cfg(any(test, feature = "test-hooks"))]
             fail_next_rewrite_past_rename: false,
         };
-        // The compaction is the same rewrite the thread runs after each
-        // checkpoint, through the same method; at open a failure is fatal
-        // either side of the rename — the bare I/O error either side
-        // (`RewriteFail::into_io` names no file), wrapped here with this
-        // file's name as every other failure of the open is. The rewrite is
-        // unconditional under a discarded fence, so a journal that later
-        // grows past that number cannot resurrect it from the file — the one
-        // forcing the thread's compaction never makes, since a fence above
-        // the head is a thing only an open meets — and so is it under the
-        // entries dropped past the head. It writes the file without the
-        // region, which is what the file held: the region is the walk's.
-        let held = log.entries.len();
-        log.compact_inner(floor_fence.unwrap_or(0), stale_fence || foreign.is_some())
-            .map_err(|failed| with_file(failed.into_io()))?;
-        if let (Some(foreign), Some(kept)) = (foreign, foreign_kept) {
+        log.entries = log.entries.split_off(&resident_from);
+        log.offsets = log.offsets.split_off(&resident_from);
+        log.resident_most = log.entries.len();
+        if let (Some(foreign), Some(kept)) = (foreign_lines, foreign_kept) {
             // No marker holds this file's testimony, so no journal file is a
             // second copy of it: the kept file alone.
             let line = ForeignLinesLine {
@@ -996,17 +1010,6 @@ impl CommitsLog {
             };
             lines.say(Class::Open, line);
         }
-        let dropped = held - log.entries.len();
-        if let (Some(fence), true) = (floor_fence, dropped > 0) {
-            log.compacted_at_open = Some((fence.saturating_add(1), dropped));
-        }
-        // The region's lower edge is the fence in force where the compaction
-        // passed it — a position at or below the fence answers 410 before
-        // any page reaches it — and a fence past the head leaves no region.
-        if let Some((low, head)) = pending {
-            let low = low.max(log.min_since);
-            log.pending = (head > low).then_some((low, head));
-        }
         // A file absent on a journal that holds commits: every retained
         // position comes back bare, its key and time lost — said, so a copy
         // that still holds them is known to be worth restoring. A fresh
@@ -1014,13 +1017,18 @@ impl CommitsLog {
         if let (true, Some((low, head))) = (absent, log.pending) {
             lines.say(Class::Failure, LogBegunAfreshLine { low, head });
         }
-        // The entries are final here, and this is where they become ones this
-        // file stands behind: a line whose document names are malformed is
-        // testimony this daemon cannot repeat, and it answers bare — in
-        // memory alone, after any rewrite above, which writes the line as it
-        // was read: this file is the sole surviving record of those commits.
-        demote_malformed_names(&mut log.entries, lines);
-        log.last_time = log.entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
+        // The malformed names, said once per open (`operations.md` §1.1 row
+        // 11): the scan demoted each such line to a bare entry as it read it
+        // — in memory where resident, and the feed's reader below the window
+        // demotes the same lines the same way — and the file keeps the line
+        // as it was read: this file is the sole surviving record of those
+        // commits, and the open never rewrites a name away over what may be
+        // one build's rendering.
+        if let Some((positions, first)) = malformed {
+            let case = MalformedCase::Demoted;
+            let line = MalformedNamesLine { file: SIDECAR_FILE, positions, first, case };
+            lines.say(Class::Failure, line);
+        }
         Ok(log)
     }
 
@@ -1040,42 +1048,69 @@ impl CommitsLog {
     /// rewrite of `commits.log` under the feed's lock"): the walk's
     /// boundaries enter the resident entries as bare positions carrying the
     /// journal's answer, beside every position recorded in memory while the
-    /// region was pending, and the fence moves to the greatest of the fence
-    /// in force, the walk's own (`walk_min_since`, where the journal stopped
-    /// answering) and the reclaim floor's as read at the landing
-    /// (`floor_fence`, a checkpoint having landed meanwhile), what lies at or
-    /// below it dropped. The region is cleared: the resident entries are
-    /// complete from here, and this uptime serves them. Answers the region
-    /// taken, `(low, head]`, and the fence, which the feed trims its twins
-    /// to; `None` where no region was pending, nothing folded. The file is
+    /// region was pending, and the fence moves to the greater of the fence
+    /// in force and the walk's own (`walk_min_since`, where the journal
+    /// stopped answering), what lies at or below it dropped from the
+    /// resident entries — never from the file, which keeps every line it
+    /// holds: a line at or below the fence is served by no route from here
+    /// on. The region is cleared: the resident entries are complete from
+    /// here, and this uptime serves them. Answers the region taken,
+    /// `(low, head]`, and the fence, which the feed trims its twins to;
+    /// `None` where no region was pending, nothing folded. The file is
     /// [`CommitsLog::write_the_landing`]'s to write, which the feed calls
     /// once the files classified from it are written (`Feed::land` gives the
-    /// order).
+    /// order); the fence, where it moved, is written there ahead of the
+    /// landed lines.
     pub(super) fn fold_the_walk(
         &mut self,
         walked: &[Walked],
         walk_min_since: Option<u64>,
-        floor_fence: Option<u64>,
     ) -> Option<((u64, u64), u64)> {
         let region = self.pending.take()?;
-        for w in walked {
+        let fence = self.min_since.max(walk_min_since.unwrap_or(0));
+        if fence > self.min_since {
+            // The walk's own fence stands at or above the region's lower
+            // edge, which every line of the file lies at or below: the file's
+            // lines are below the hole from here on, and what the file holds
+            // above the fence is the positions recorded since the open.
+            self.min_since = fence;
+            self.fence_owed = Some(fence);
+            let keep_from = fence.saturating_add(1);
+            self.entries = self.entries.split_off(&keep_from);
+            self.offsets = self.offsets.split_off(&keep_from);
+            self.first_held = None;
+            let held = self.entries.range(self.open_head.saturating_add(1)..);
+            let (count, bare) = held.fold((0u64, 0u64), |(c, b), (_, meta)| {
+                (c + 1, b + u64::from(matches!(meta, CommitMeta::Bare { .. })))
+            });
+            self.count = count;
+            self.bare = bare;
+        }
+        for w in walked.iter().filter(|w| w.at > fence) {
             // A position the walk proved; never over one recorded meanwhile,
             // which cannot share it — the region lies at or below the head
             // at open, a record above it.
-            self.entries.entry(w.at).or_insert_with(|| CommitMeta::Bare { journal: w.journal.clone() });
+            if let std::collections::btree_map::Entry::Vacant(slot) = self.entries.entry(w.at) {
+                slot.insert(CommitMeta::Bare { journal: w.journal.clone() });
+                self.count += 1;
+                self.bare += 1;
+            }
         }
-        let fence = self.min_since.max(walk_min_since.unwrap_or(0)).max(floor_fence.unwrap_or(0));
-        self.min_since = fence;
-        self.entries = self.entries.split_off(&fence.saturating_add(1));
+        if self.first_held.is_none() {
+            self.first_held = self.entries.range(fence.saturating_add(1)..).next().map(|(k, _)| *k);
+        }
+        self.resident_most = self.resident_most.max(self.entries.len());
         Some((region, fence))
     }
 
-    /// Writes the landing: the file rewritten whole from the resident entries.
+    /// Writes the landing: the file rewritten with every line it holds and the landed ones.
     ///
-    /// It is the landing's second half, through [`rewrite`]'s path: one
-    /// `min_since` line, then every entry in position order, so file order
-    /// is position order and every offset, the held positions' among them,
-    /// is assigned here. `low` is the lower edge of the region
+    /// It is the landing's second half, through [`rewrite`]'s path: the
+    /// file's lines copied verbatim, the fence line where the walk moved
+    /// the fence, then every resident entry above `low` in position order —
+    /// the walked boundaries and the positions held since the open — so file
+    /// order is position order and every landed line's offset is assigned
+    /// here. `low` is the lower edge of the region
     /// [`CommitsLog::fold_the_walk`] took.
     ///
     /// # Errors
@@ -1089,7 +1124,7 @@ impl CommitsLog {
     /// keeps `low` where it was and the next open walks again from it. Past
     /// its rename the stop is [`CommitsLog::rewrite_whole`]'s, said there.
     pub(super) fn write_the_landing(&mut self, low: u64) -> Result<(), RewriteFail> {
-        match self.rewrite_whole() {
+        match self.rewrite_whole(low.saturating_add(1)) {
             Err(RewriteFail::BeforeRename(e)) => {
                 let first = self.stopped.is_none();
                 self.stopped = Some(low);
@@ -1102,133 +1137,23 @@ impl CommitsLog {
         }
     }
 
-    /// Compacts the log to the reclaim floor's fence.
+    /// Settles the resident window once a landing has written the file.
     ///
-    /// It drops every entry at or below `min_since` and rewrites the file
-    /// around the survivors behind that fence, the rewrite left to the walk's
-    /// landing while its region is pending ([`CommitsLog::compact_inner`]) —
-    /// `true` when anything was dropped, `false` when the file already stood
-    /// above the fence and nothing was written. The one rewrite the log has
-    /// ([`CommitsLog::rewrite_whole`]), run at two moments by one method: at
-    /// [`CommitsLog::open`], where the reclaim floor is probed once and a
-    /// failure is fatal, and after each checkpoint the daemon's checkpoint
-    /// thread lands, under the feed's lock, where the floor has just moved
-    /// and a failure is the thread's to report — and at a third by the walk's
-    /// landing ([`CommitsLog::write_the_landing`]). The fence never recedes:
-    /// a `min_since` below the one in force is the floor as it was, and drops
-    /// nothing.
-    ///
-    /// # Errors
-    ///
-    /// The rewrite's failure ([`RewriteFail`]).
-    ///
-    /// **The stop**, moot at the open: a rewrite that fails before its rename
-    /// leaves the old file whole and this handle naming it — nothing lost,
-    /// the next checkpoint's compaction tries again; one that fails past its
-    /// rename leaves this handle naming the replaced file, which no open
-    /// reads, so the file is stopped for the uptime as a failed append stops
-    /// it — the resident entries are trimmed all the same and serve this
-    /// uptime, and the next open re-derives above the rewritten file's last
-    /// entry, every write since held in memory alone. Said once per uptime
-    /// (`operations.md` §1.1 row 29): this method has no stop guard, so a
-    /// stopped log is rewritten at every compacting landing — each rewrite
-    /// running, one that fails past its rename again moving the stop to its
-    /// own last entry — and the line is said at the stop's transition alone,
-    /// the standing line re-saying it while it stands.
-    pub(super) fn compact_to(&mut self, min_since: u64) -> Result<bool, RewriteFail> {
-        self.compact_inner(min_since, false)
+    /// Every position is on disk from here, so the window falls back to
+    /// its span below the newest position ([`CommitsLog::evict`]), which
+    /// the positions held while the region pended had kept it above.
+    pub(super) fn settle_the_window(&mut self) {
+        let newest = self.entries.keys().next_back().copied().unwrap_or(self.open_head);
+        self.evict(newest.saturating_sub(self.window).saturating_add(1));
     }
 
-    /// Compacts to the fence in memory alone, the file left to the landing.
+    /// Rewrites the whole file: its lines copied, then the entries from `from` up.
     ///
-    /// It is [`CommitsLog::compact_to`] with its rewrite deferred whatever
-    /// this log has pending: the feed calls it while the bare positions the
-    /// index lost are pending, a state this log does not hold
-    /// (`Feed::compact_below_reclaim_floor`), so that compaction writes no
-    /// feed file at all; the walk's landing then rewrites the file where any
-    /// entry was dropped ([`CommitsLog::rewrite_the_owed`]). `true` when
-    /// anything was dropped.
-    pub(super) fn compact_in_memory(&mut self, min_since: u64) -> bool {
-        let dropped = self.trim_to(min_since, false);
-        if dropped {
-            self.rewrite_owed = true;
-        }
-        dropped
-    }
-
-    /// Rewrites the file where a compaction left its rewrite to a landing.
-    ///
-    /// It is the walk's landing's call where no region pended — the sort of
-    /// the bare positions the index lost alone — so a compaction deferred
-    /// while the set pended ([`CommitsLog::compact_in_memory`]) reaches the
-    /// file; `Ok(false)` where none is owed, nothing written.
-    ///
-    /// # Errors
-    ///
-    /// The rewrite's failure ([`RewriteFail`]): before its rename the file
-    /// stands whole as it was and the rewrite stays owed, the next
-    /// compacting landing trying again; past its rename the file's own stop
-    /// ([`CommitsLog::rewrite_whole`]), the new file in place.
-    pub(super) fn rewrite_the_owed(&mut self) -> Result<bool, RewriteFail> {
-        if !self.rewrite_owed {
-            return Ok(false);
-        }
-        self.rewrite_whole()?;
-        Ok(true)
-    }
-
-    /// Compacts as [`CommitsLog::compact_to`] does, with the open's one extra.
-    ///
-    /// `force` writes the file even where nothing is dropped — a fence that
-    /// described another journal, or entries past the head, discarded from
-    /// memory, must leave the file too. The fence in force never recedes, and
-    /// may advance past a run of positions nobody recorded: a fence below the
-    /// oldest entry drops nothing, writes nothing unforced, and is kept as the
-    /// smallest `since` the feed honors.
-    ///
-    /// **While the walk's region is pending** the rewrite is deferred to the
-    /// landing ([`CommitsLog::write_the_landing`]): the fence moves and the
-    /// entries at or below it are dropped, in memory ([`CommitsLog::trim_to`]),
-    /// and the file — which the landing rewrites whole behind the fence as it
-    /// then stands — takes nothing. The open's own compaction runs before the
-    /// region is recorded, so it writes.
-    ///
-    /// # Errors
-    ///
-    /// The rewrite's failure ([`RewriteFail`]), as [`CommitsLog::compact_to`]
-    /// answers it; none while the region is pending, the rewrite deferred.
-    fn compact_inner(&mut self, min_since: u64, force: bool) -> Result<bool, RewriteFail> {
-        if !self.trim_to(min_since, force) {
-            return Ok(false);
-        }
-        if self.pending.is_some() {
-            self.rewrite_owed = true;
-            return Ok(true);
-        }
-        self.rewrite_whole()?;
-        Ok(true)
-    }
-
-    /// Moves the fence and drops the entries at or below it, in memory.
-    ///
-    /// It is every compaction's first half: the fence advances to the greater
-    /// of `min_since` and the one in force, never receding, and answers
-    /// whether the file is owed a rewrite — an entry dropped, or `force`.
-    fn trim_to(&mut self, min_since: u64, force: bool) -> bool {
-        let fence = min_since.max(self.min_since);
-        let drops = self.entries.keys().next().is_some_and(|&oldest| oldest <= fence);
-        self.min_since = fence;
-        if !force && !drops {
-            return false;
-        }
-        self.entries = self.entries.split_off(&fence.saturating_add(1));
-        true
-    }
-
-    /// Rewrites the whole file from the resident entries ([`rewrite`]).
-    ///
-    /// They stand behind the fence in force; the handle, the offsets and the
-    /// length move with the file.
+    /// They are the file's own lines verbatim — every one it holds, the
+    /// fence lines among them — then the fence line the walk owes, where
+    /// one does, then the resident entries at or above `from`, each new to
+    /// the file ([`rewrite`]). The handle, the new lines' offsets and the
+    /// length move with the file; no copied line's offset moves.
     ///
     /// # Errors
     ///
@@ -1237,29 +1162,29 @@ impl CommitsLog {
     /// stop then set at the last entry the new file holds (its fence, where it
     /// holds none), the position the next open's walk starts above, and so
     /// the one the stop's line and the standing line name.
-    fn rewrite_whole(&mut self) -> Result<(), RewriteFail> {
+    fn rewrite_whole(&mut self, from: u64) -> Result<(), RewriteFail> {
         #[cfg(any(test, feature = "test-hooks"))]
         let fail_past_rename = std::mem::take(&mut self.fail_next_rewrite_past_rename);
         #[cfg(not(any(test, feature = "test-hooks")))]
         let fail_past_rename = false;
-        match rewrite(&self.dir, &self.entries, self.min_since, fail_past_rename) {
+        let new: Vec<(u64, Vec<u8>)> =
+            self.entries.range(from..).map(|(at, meta)| (*at, entry_line(*at, meta))).collect();
+        match rewrite(&self.dir, self.fence_owed, &new, fail_past_rename) {
             Ok((file, offsets, len)) => {
                 self.file = file;
-                self.offsets = offsets;
+                self.offsets.extend(offsets);
                 self.len = len;
-                self.rewritten = true;
-                self.rewrite_owed = false;
+                self.fence_owed = None;
             }
             Err(RewriteFail::PastRename(e)) => {
                 // Said where the stop is set, not where it is set again: a
-                // stopped log is rewritten at the next compacting landing,
-                // its stop moving to that rewrite's last entry in silence.
-                // The new file is in place, so no rewrite is owed.
+                // stopped log is rewritten at the next landing, its stop
+                // moving to that rewrite's last entry in silence. The new
+                // file is in place, so no fence is owed.
                 let first = self.stopped.is_none();
                 let last = self.entries.keys().next_back().copied().unwrap_or(self.min_since);
                 self.stopped = Some(last);
-                self.rewritten = true;
-                self.rewrite_owed = false;
+                self.fence_owed = None;
                 if first {
                     self.lines.say(
                         Class::Failure,
@@ -1277,6 +1202,31 @@ impl CommitsLog {
             Err(before) => return Err(before),
         }
         Ok(())
+    }
+
+    /// Moves the window's lower edge up to `target`, dropping what lies below.
+    ///
+    /// It is every record's tail and the landing's settling: the window
+    /// holds its span below the newest position and no more. While the
+    /// walk's region pends the edge never passes the lowest position held
+    /// in memory alone ([`Recorded::Held`]) — such a line lives nowhere else
+    /// until the landing writes it — so the window may outgrow its span by
+    /// the writes a long walk admits, which the landing settles. The edge
+    /// never recedes.
+    fn evict(&mut self, target: u64) {
+        let target = match self.pending {
+            Some(_) => self
+                .entries
+                .range(self.open_head.saturating_add(1)..)
+                .next()
+                .map_or(target, |(held, _)| target.min(*held)),
+            None => target,
+        };
+        if target > self.resident_from {
+            self.resident_from = target;
+            self.entries = self.entries.split_off(&target);
+            self.offsets = self.offsets.split_off(&target);
+        }
     }
 
     /// Records one committed write at ack time.
@@ -1323,12 +1273,12 @@ impl CommitsLog {
     ///
     /// The offset returned is the one the line landed at, except past a
     /// failed append: [`CommitsLog::stopped`] freezes `len`, so every later
-    /// offset names a line this file does not hold. Nothing in this build
-    /// seeks by an offset (the `offsets` field's card), and the next open
-    /// replays `commits.log` from disk and rebuilds them, so
-    /// `feed-offsets.log` fails its agreement test and is rewritten whole —
-    /// the wrong offsets are latent for the uptime and self-healing after
-    /// it.
+    /// offset names a line this file does not hold. No read of this build
+    /// seeks by an offset — the reads below the window seek by position
+    /// (`feed/window.rs`) — and the next open scans `commits.log` from disk
+    /// and learns the offsets afresh, so `feed-offsets.log` fails its
+    /// agreement test and is re-derived whole: the wrong offsets are latent
+    /// for the uptime and self-healing after it.
     // Six fields of one line beside the guard, each the write path's own
     // reading — bundling them would put a struct between the door and the
     // line it records.
@@ -1386,14 +1336,21 @@ impl CommitsLog {
 
     /// Admits an entry: the two record paths' one tail.
     ///
-    /// The entry goes into the resident map and, the region pending, nowhere
-    /// else ([`Recorded::Held`]); otherwise its line is appended at the
-    /// offset the file's length names, under the stop's rule.
+    /// The entry goes into the resident window and, the region pending,
+    /// nowhere else ([`Recorded::Held`]); otherwise its line is appended at
+    /// the offset the file's length names, under the stop's rule. Either way
+    /// it is counted, it is the first line held where none was, and the
+    /// window's edge moves up behind it ([`CommitsLog::evict`]).
     fn admit(&mut self, at: u64, meta: CommitMeta) -> Recorded {
+        self.count += 1;
+        self.bare += u64::from(matches!(meta, CommitMeta::Bare { .. }));
+        self.first_held.get_or_insert(at);
         if self.pending.is_some() {
             // The region pending: the entry alone, the file untouched until
             // the landing's one rewrite writes this line at its offset.
             self.entries.insert(at, meta);
+            self.resident_most = self.resident_most.max(self.entries.len());
+            self.evict(at.saturating_sub(self.window).saturating_add(1));
             return Recorded::Held;
         }
         let offset = LineOffset(self.len);
@@ -1428,6 +1385,8 @@ impl CommitsLog {
         }
         self.entries.insert(at, meta);
         self.offsets.insert(at, offset);
+        self.resident_most = self.resident_most.max(self.entries.len());
+        self.evict(at.saturating_sub(self.window).saturating_add(1));
         Recorded::Appended(offset)
     }
 
@@ -1486,20 +1445,21 @@ impl CommitsLog {
     /// Returns the oldest position still answerable.
     ///
     /// It is the wire's `floor` (wire.md §Reading history), which is the
-    /// first entry above the fence [`CommitsLog::admits_since`] tests and not
-    /// that number itself. The two are one apart by definition, keeping them
-    /// apart is this file's job, and so is the step between them: a caller
-    /// rendering `floor` asks rather than deriving it from this type's own
-    /// state. `None` where nothing above the fence survives.
+    /// first line the file holds above the fence [`CommitsLog::admits_since`]
+    /// tests and not that number itself — `1` on a board that never
+    /// compacted and never lost a line. The two are one apart by
+    /// definition, keeping them apart is this file's job, and so is the step
+    /// between them: a caller rendering `floor` asks rather than deriving it
+    /// from this type's own state. `None` where nothing above the fence
+    /// survives.
     ///
     /// **While the walk's region is pending**, the region's first position
-    /// above the fence — `max(low, min_since) + 1`, the reclaim floor itself
-    /// where the floor passed the region's lower edge — is the floor where it
-    /// lies below the first entry: the region's boundaries are not yet known,
-    /// and a floor named above them would send a reader re-asking from it
-    /// past the region, which the landing then serves to nobody.
+    /// above the fence — `max(low, min_since) + 1` — is the floor where it
+    /// lies below the first line held: the region's boundaries are not yet
+    /// known, and a floor named above them would send a reader re-asking
+    /// from it past the region, which the landing then serves to nobody.
     pub(crate) fn floor(&self) -> Option<u64> {
-        let covered = self.entries.range(self.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
+        let covered = self.first_held.filter(|&first| first > self.min_since);
         let region = self
             .pending
             .filter(|&(_, head)| head > self.min_since)
@@ -1510,16 +1470,28 @@ impl CommitsLog {
         }
     }
 
-    /// Returns every entry above `position`, in position order.
+    /// Returns the hole the file opened with, where one stands.
     ///
-    /// It is what the published head writer's resume reads
-    /// (`crate::commits::head`): the commits landed since the head that named
-    /// `position`, and among them the head's own commits, testifying
-    /// `"system"`, whose recorded `time` is the head's. Testimony read at a
-    /// gate to decide when, never a fold input (D1): a bare entry answers no
-    /// time and no key, and a rewritten one moves a head's timing within the
-    /// bounds the triggers already allow. Cloned, once at open — at most the
-    /// retained window — so the writer holds no borrow of this file.
+    /// It is the fence and the floor above it ([`CommitsLog::floor`]) where
+    /// the fence stands above genesis: the lines at or below it an earlier
+    /// build's compaction dropped, or a walk the journal refused could not
+    /// re-cover — what the feed's open says once (`OpenHoleLine`). `None` on
+    /// a board whose fence is genesis, which holds every line from its first.
+    pub(crate) fn hole(&self) -> Option<(u64, Option<u64>)> {
+        (self.min_since > 0).then(|| (self.min_since, self.floor()))
+    }
+
+    /// Returns every resident entry above `position`, in position order.
+    ///
+    /// It is the window's half of what the published head writer's resume
+    /// reads (`crate::commits::head`; `Feed::entries_above` adds the lines
+    /// below the window from the file): the commits landed since the head
+    /// that named `position`, and among them the head's own commits,
+    /// testifying `"system"`, whose recorded `time` is the head's. Testimony
+    /// read at a gate to decide when, never a fold input (D1): a bare entry
+    /// answers no time and no key, and a rewritten one moves a head's timing
+    /// within the bounds the triggers already allow. Cloned, once at open —
+    /// at most the window — so the writer holds no borrow of this file.
     pub(crate) fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.entries
             .range(position.saturating_add(1)..)
@@ -1527,24 +1499,63 @@ impl CommitsLog {
             .collect()
     }
 
-    /// Returns every enumerable entry above the fence, in position order.
+    /// Returns the resident window's entries, in position order.
     ///
-    /// They are read-only outside this file, because the invariant the
-    /// `entries` field's card states (a `Recorded` entry's document names all
-    /// parse, [`demote_malformed_names`] having demoted the rest at open) is
+    /// They are every enumerable position at or above
+    /// [`CommitsLog::resident_from`] — read-only outside this file, because
+    /// the invariant the `entries` field's card states (a `Recorded` entry's
+    /// document names all parse, the open's scan having demoted the rest) is
     /// this file's to keep and the feed's to rely on: it classifies by those
-    /// names with no second check of its own.
+    /// names with no second check of its own. The lines below the window the
+    /// feed reads from the file ([`parse_line`] and [`demoted`] are its
+    /// parser there).
     pub(crate) fn entries(&self) -> &BTreeMap<u64, CommitMeta> {
         &self.entries
     }
 
-    /// Returns each entry's line's byte offset.
+    /// Returns the lowest position the resident window holds.
     ///
-    /// They are read-only outside this file for `entries()`'s reason — the
-    /// offset array's twin, which the `offsets` field's card says nothing in
-    /// this build seeks by.
-    pub(crate) fn offsets(&self) -> &BTreeMap<u64, LineOffset> {
-        &self.offsets
+    /// Every entry the file holds at or above it is resident
+    /// ([`CommitsLog::entries`]); the feed reads the rest from the file, and
+    /// trims its twins to it as it rises (`resident_from`'s card).
+    pub(crate) fn resident_from(&self) -> u64 {
+        self.resident_from
+    }
+
+    /// Returns how many entries the window holds, and the most it has held.
+    ///
+    /// The checkpoint thread's landing line carries both beside the window's
+    /// span, so a window that outgrows it — the writes a long walk held — is
+    /// told from one that holds its span.
+    pub(crate) fn resident_figures(&self) -> (usize, usize) {
+        (self.entries.len(), self.resident_most)
+    }
+
+    /// Returns the fence: the smallest admissible `since`.
+    ///
+    /// It is [`CommitsLog::min_since`]'s number, for the attest store's open,
+    /// which writes back a rebuilt slot for every position above it the
+    /// journal lists; a caller refusing a query asks
+    /// [`CommitsLog::admits_since`] instead.
+    pub(crate) fn fence(&self) -> u64 {
+        self.min_since
+    }
+
+    /// Returns how many entries the file holds above the fence, and the bare among them.
+    ///
+    /// They are the open's scan's counts and every record since, resident or
+    /// not — the figures the feed's open line carries.
+    pub(crate) fn counts(&self) -> (u64, u64) {
+        (self.count, self.bare)
+    }
+
+    /// Returns the file's length in bytes, as this log last wrote it.
+    ///
+    /// It is the offset the next appended line lands at — read for the
+    /// checkpoint thread's landing line, where the file's growth is the
+    /// operator's sizing figure.
+    pub(crate) fn len(&self) -> u64 {
+        self.len
     }
 
     /// Returns the journal head at open.
@@ -1555,21 +1566,12 @@ impl CommitsLog {
         self.open_head
     }
 
-    /// Returns whether a rewrite has run, the open's own among them.
+    /// Returns whether this open's purge rewrote the file.
     ///
-    /// Read at the feed's open, it is whether this open rewrote the file:
-    /// then every offset moved and the derived offset array is rewritten
-    /// with it.
+    /// Read at the feed's open: then every offset moved and the derived
+    /// offset array is re-derived from the file.
     pub(crate) fn rewritten(&self) -> bool {
         self.rewritten
-    }
-
-    /// Returns what this open's compaction dropped below the reclaim floor.
-    ///
-    /// It is the floor and the count of entries, or `None` where the
-    /// compaction dropped none.
-    pub(crate) fn compacted_at_open(&self) -> Option<(u64, usize)> {
-        self.compacted_at_open
     }
 
     /// Returns the reclaim floor this open probed.
@@ -1584,30 +1586,62 @@ impl CommitsLog {
 /// Returns the reclaim floor: the oldest position the journal can still answer.
 ///
 /// It is `None` when the journal can still answer genesis (nothing has been
-/// reclaimed): the bound the feed's retention follows, at open and after
-/// each checkpoint alike. A floor and never a fence: the feed compacts to the
-/// fence one below it, `CommitsLog`'s `min_since`.
+/// reclaimed). The feed's one probe of it, at the open, for the attest
+/// store's cut line — which side of the floor a cut reached — and for
+/// nothing else: the floor bounds the journal's STATES, which `/op-at`
+/// rebuilds, and moves no fence of the feed's, whose files are kept whole
+/// (the module doc).
 ///
 /// Asked by probing position 0 through the same public replay everything
 /// else here uses. The probe is free either way: genesis is the base a
 /// position-0 question selects, so a healthy store folds no journal to
 /// answer it, and a reclaimed store refuses from the checkpoint listing
 /// before touching a segment. Every other refusal — corrupt, I/O,
-/// unjournaled — reports no floor, so the feed keeps what it has rather
-/// than discarding entries over a fault that may be transient.
+/// unjournaled — reports no floor.
 pub(super) fn reclaim_floor(engine: &Engine) -> Option<u64> {
-    reclaim_floor_of(engine.kernel())
-}
-
-/// Returns [`reclaim_floor`] off the kernel alone.
-///
-/// It is the walk thread's probe at its landing, which holds the kernel's
-/// handle and no engine.
-pub(super) fn reclaim_floor_of(kernel: &Kernel<World>) -> Option<u64> {
-    match kernel.world_at(Seq(0)) {
+    match engine.kernel().world_at(Seq(0)) {
         Err(HistoryError::Reclaimed { floor, .. }) => Some(floor.map(|f| f.0).unwrap_or(0)),
         _ => None,
     }
+}
+
+/// Returns the resident window's span in positions for the board at `dir`.
+///
+/// It is `limits::FEED_RESIDENT_WINDOW`, or the figure the test seam set
+/// for this directory (`set_feed_resident_window`, the test seam) where one stands —
+/// read once at each open.
+fn resident_window(dir: &Path) -> u64 {
+    #[cfg(any(test, feature = "test-hooks"))]
+    {
+        if let Some(&set) = FEED_RESIDENT_WINDOW_SEAM.lock().get(dir) {
+            if set > 0 {
+                return set;
+            }
+        }
+    }
+    #[cfg(not(any(test, feature = "test-hooks")))]
+    let _ = dir;
+    FEED_RESIDENT_WINDOW
+}
+
+/// The test seam: the resident window's span, keyed by the board's directory.
+///
+/// Keyed by directory as the registry seed's seams are (`registry.rs`):
+/// the window is read inside the open, before any daemon exists to be
+/// asked, and one test process opens many boards at once, so a window set
+/// for one board touches no other board's feed.
+#[cfg(any(test, feature = "test-hooks"))]
+static FEED_RESIDENT_WINDOW_SEAM: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+
+/// The test seam: moves the resident window to `positions` for the board at `dir`.
+///
+/// A suite sets it small before it opens the board, so the pages below the
+/// window are reached on a board of a few thousand positions; zero restores
+/// the constant. The path is matched as given to the open. Not a stable API.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub fn set_feed_resident_window(dir: &Path, positions: u64) {
+    FEED_RESIDENT_WINDOW_SEAM.lock().insert(dir.to_path_buf(), positions);
 }
 
 /// The cut a feed file's replay made (`operations.md` §1.1 row 9).
@@ -2357,8 +2391,8 @@ impl WalkOutcome {
 ///
 /// It is at-rest damage, an I/O failure, or a base that would not load —
 /// never the reclamation a checkpoint landing behind the listener makes,
-/// which moves the fence the compaction would. The walk says its first one
-/// where it meets it ([`WalkRefusedLine`]).
+/// which moves the walk's fence in silence ([`reconstruct`]). The walk says
+/// its first one where it meets it ([`WalkRefusedLine`]).
 pub(super) struct WalkRefusal {
     /// The position refused, or the one above which the list was refused.
     pub at: u64,
@@ -2488,14 +2522,14 @@ pub(super) fn fire_the_feed_walks_fault() {
 ///
 /// That is the whole of what the caller acts on. The rename is the one
 /// atomic step: before it the old file stands whole and the handle still
-/// names it, so nothing is lost and the next compaction tries again — the
-/// walk's landing aside, which stops the file at the region's lower edge
-/// ([`CommitsLog::write_the_landing`]); past it the new file is in place and
-/// the handle names the replaced one, which no open reads, so the file is
-/// stopped for the uptime ([`CommitsLog::compact_to`], `LineFile::rewrite`).
-/// At open either side is fatal, through [`RewriteFail::into_io`] — the bare
-/// I/O error, which the open wraps with the file's name; while serving the
-/// thread reports and moves on.
+/// names it, so nothing is lost — the walk's landing stops the file at the
+/// region's lower edge there ([`CommitsLog::write_the_landing`]); past it
+/// the new file is in place and the handle names the replaced one, which no
+/// open reads, so the file is stopped for the uptime
+/// ([`CommitsLog::rewrite_whole`], `LineFile::rewrite`). At open either side
+/// is fatal, through [`RewriteFail::into_io`] — the bare I/O error, which
+/// the open wraps with the file's name; while serving the walk's landing
+/// reports and moves on.
 #[derive(Debug)]
 pub(super) enum RewriteFail {
     /// The temp file's creation, write or sync failed, or the rename itself.
@@ -2567,18 +2601,25 @@ fn create_rewrite_temp(path: &Path) -> io::Result<File> {
     opts.open(path)
 }
 
-/// Rewrites `commits.log` as the survivors behind one `min_since` record.
+/// What a rewrite hands back ([`rewrite`]).
 ///
-/// It hands back the reopened append handle, the offsets every surviving
-/// entry now sits at, and the new length.
+/// It is the reopened append handle, the offset each new line now sits at,
+/// and the file's new length.
+type Rewritten = (File, Vec<(u64, LineOffset)>, u64);
+
+/// Rewrites `commits.log` as every line it holds, then a fence and the new lines.
+///
+/// The file's own lines are copied verbatim — nothing it holds is dropped,
+/// so no copied line's offset moves — then the `min_since` line where the
+/// landing owes one, then each of `new` in the order given, every one a
+/// line the file did not hold. It hands back the reopened append handle,
+/// the offset each new line now sits at, and the new length.
 ///
 /// Written to a temp file and renamed over the original, which is what
-/// makes compaction crash-honest in the same sense the rest of this file
-/// is: a reader only ever sees the whole old file or the whole new one.
-/// The alternative — truncating in place — has a window in which the file
-/// says the feed remembers nothing, and a crash there would cost the
-/// surviving metadata for no reason, since it is exactly the metadata the
-/// journal can no longer reconstruct.
+/// makes the landing crash-honest in the same sense the rest of this file
+/// is: a reader only ever sees the whole old file or the whole new one,
+/// and a kill between the two leaves the region to a walk behind the
+/// listener again.
 ///
 /// The temp is `commits.log.compact`, a fixed name — safe because
 /// `skepd::Daemon::open`'s precondition admits one live kernel per data
@@ -2594,105 +2635,361 @@ fn create_rewrite_temp(path: &Path) -> io::Result<File> {
 ///
 /// Which side of the rename a failure fell on travels as [`RewriteFail`],
 /// since the two leave different files behind:
-/// [`RewriteFail::BeforeRename`] where the temp file's creation, write or
-/// sync, or the rename itself failed; [`RewriteFail::PastRename`] where the
-/// renamed file's reopen failed, or `fail_past_rename` refused it.
+/// [`RewriteFail::BeforeRename`] where the temp file's creation, the copy,
+/// a write or the sync, or the rename itself failed;
+/// [`RewriteFail::PastRename`] where the renamed file's reopen failed, or
+/// `fail_past_rename` refused it.
 fn rewrite(
     dir: &Path,
-    entries: &BTreeMap<u64, CommitMeta>,
-    min_since: u64,
+    fence: Option<u64>,
+    new: &[(u64, Vec<u8>)],
     fail_past_rename: bool,
-) -> Result<(File, BTreeMap<u64, LineOffset>, u64), RewriteFail> {
+) -> Result<Rewritten, RewriteFail> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
-    let mut out = Vec::new();
-    let mut offsets = BTreeMap::new();
-    out.extend_from_slice(&min_since_line(min_since));
-    for (at, meta) in entries {
-        offsets.insert(*at, LineOffset(out.len() as u64));
-        out.extend_from_slice(&entry_line(*at, meta));
-    }
-    let renamed = (|| -> io::Result<()> {
-        let mut f = create_rewrite_temp(&tmp)?;
-        f.write_all(&out)?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, &path)
+    let mut offsets = Vec::with_capacity(new.len());
+    let renamed = (|| -> io::Result<u64> {
+        let mut out = create_rewrite_temp(&tmp)?;
+        let mut len = io::copy(&mut File::open(&path)?, &mut out)?;
+        if let Some(fence) = fence {
+            let line = min_since_line(fence);
+            out.write_all(&line)?;
+            len += line.len() as u64;
+        }
+        for (at, line) in new {
+            offsets.push((*at, LineOffset(len)));
+            out.write_all(line)?;
+            len += line.len() as u64;
+        }
+        out.sync_all()?;
+        drop(out);
+        std::fs::rename(&tmp, &path)?;
+        Ok(len)
     })();
-    renamed.map_err(RewriteFail::BeforeRename)?;
+    let len = renamed.map_err(RewriteFail::BeforeRename)?;
     if fail_past_rename {
         return Err(RewriteFail::PastRename(io::Error::other(
             "test seam: the rewritten file's reopen refused",
         )));
     }
     let file = open_sidecar(&path).map_err(RewriteFail::PastRename)?;
-    Ok((file, offsets, out.len() as u64))
+    Ok((file, offsets, len))
 }
 
-/// Demotes every recorded position whose document names are malformed.
+/// Rewrites `commits.log` without the lines of another journal.
+///
+/// It is the open's purge where a fence above the head stood
+/// ([`CommitsLog::open`]): every entry line at or below `head` and every
+/// fence at or below it copied verbatim, in file order, the rest left out
+/// — through `commits.log.compact` renamed over the original. The file is
+/// already cut at its trusted end, so every line read here is whole; the
+/// entry lines above the head were kept beside the file before this runs.
+/// Answers the reopened append handle; every offset moved.
+///
+/// # Errors
+///
+/// The OS refused the temp file's creation, a read, a write, the sync, the
+/// rename or the reopen.
+fn purge_the_other_journals(dir: &Path, head: u64) -> io::Result<File> {
+    let path = dir.join(SIDECAR_FILE);
+    let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
+    let mut out = io::BufWriter::new(create_rewrite_temp(&tmp)?);
+    let mut reader = BufReader::new(File::open(&path)?);
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line)? > 0 {
+        let kept = match line.strip_suffix(b"\n").and_then(parse_line) {
+            Some(Record::Entry(at, _)) => at <= head,
+            Some(Record::MinSince(n)) => n <= head,
+            None => false,
+        };
+        if kept {
+            out.write_all(&line)?;
+        }
+        line.clear();
+    }
+    let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, &path)?;
+    open_sidecar(&path)
+}
+
+/// What one scan of `commits.log` read ([`scan`]).
+struct Scanned {
+    /// The byte trust ends at.
+    valid_end: u64,
+    /// The file's length.
+    len: u64,
+    /// Whether trust ended at a whole line — damage — rather than a torn one.
+    damaged: bool,
+    /// The whole entry lines at or below the head past a damaged one.
+    whole_after: Option<EntryLines>,
+    /// The window's entries: the newest positions at or below the head,
+    /// above the fence, no more than the window's span.
+    window: BTreeMap<u64, CommitMeta>,
+    /// The window's entries' offsets.
+    offsets: BTreeMap<u64, LineOffset>,
+    /// The highest entry at or below the head above the fence.
+    last_entry: Option<u64>,
+    /// The entries at or below the head above the fence.
+    count: u64,
+    /// How many of them are bare.
+    bare: u64,
+    /// The first entry above the fence.
+    first_held: Option<u64>,
+    /// The greatest fence at or below the head.
+    min_since: u64,
+    /// Whether the file is rewritten without another journal's lines.
+    ///
+    /// It is where a fence above the head stood, or a line of this journal
+    /// stood past another journal's — neither leaves by the truncation that
+    /// drops the lines at the file's end.
+    stale_fence: bool,
+    /// The entry lines above the head, where any stood.
+    foreign: Option<Foreign>,
+    /// The entries with malformed names: how many, and the first.
+    malformed: Option<(usize, u64)>,
+    /// The greatest recorded time.
+    last_time: u64,
+}
+
+/// The entry lines above the head one scan met.
+struct Foreign {
+    /// The byte the first of them begins at.
+    first: u64,
+    /// Their bytes, whole, for the keep.
+    bytes: Vec<u8>,
+    /// Their count and positions.
+    lines: EntryLines,
+}
+
+/// Scans the file whole, a line at a time, keeping the window.
+///
+/// It is the open's one pass ([`CommitsLog::open`]): trust ends at the
+/// first line that is torn, does not parse, or lies below the line of this
+/// journal before it — an entry at or below the last entry, or a fence
+/// below the last position — the file being position-ordered
+/// (`feed/window.rs`). An entry above `head` is another journal's whatever
+/// its order, counted and kept for the keep and held in no count; a fence
+/// above the head, or a line of this journal past another journal's, calls
+/// for the rewrite that drops the other's lines. A fence at or below
+/// the head makes every entry before it dead to this build — a fence
+/// stands at or above every line before it — so the counts, the window and
+/// the first line held start afresh past it. Each entry with a malformed
+/// name is demoted as it is read ([`demoted`]) and counted. The window is
+/// trimmed as the scan climbs, so it holds the window's span and no more
+/// at any moment.
+///
+/// # Errors
+///
+/// The OS refused a read or a seek.
+fn scan(file: &mut File, head: u64, window: u64) -> io::Result<Scanned> {
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(0))?;
+    let mut reader = BufReader::with_capacity(64 * 1024, &*file);
+    let mut s = Scanned {
+        valid_end: 0,
+        len,
+        damaged: false,
+        whole_after: None,
+        window: BTreeMap::new(),
+        offsets: BTreeMap::new(),
+        last_entry: None,
+        count: 0,
+        bare: 0,
+        first_held: None,
+        min_since: 0,
+        stale_fence: false,
+        foreign: None,
+        malformed: None,
+        last_time: 0,
+    };
+    let mut offset = 0u64;
+    let mut last_position: Option<u64> = None;
+    let mut keep_from = 0u64;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 || !line.ends_with(b"\n") {
+            break;
+        }
+        let Some(record) = parse_line(&line[..line.len() - 1]) else {
+            s.damaged = true;
+            break;
+        };
+        // The order, judged over this journal's lines alone: a line past
+        // the head is another journal's whatever its order, dropped below.
+        let (position, backwards) = match (&record, last_position) {
+            (Record::Entry(at, _), last) if *at <= head => (*at, last.is_some_and(|l| *at <= l)),
+            (Record::MinSince(n), last) if *n <= head => (*n, last.is_some_and(|l| *n < l)),
+            _ => (u64::MAX, false),
+        };
+        if backwards {
+            s.damaged = true;
+            break;
+        }
+        match record {
+            Record::MinSince(n) if n > head => s.stale_fence = true,
+            Record::MinSince(n) => {
+                s.min_since = s.min_since.max(n);
+                s.window.clear();
+                s.offsets.clear();
+                s.last_entry = None;
+                s.count = 0;
+                s.bare = 0;
+                s.first_held = None;
+            }
+            Record::Entry(at, _) if at > head => {
+                let foreign = s.foreign.get_or_insert_with(|| Foreign {
+                    first: offset,
+                    bytes: Vec::new(),
+                    lines: EntryLines { lines: 0, first: at, last: at },
+                });
+                foreign.bytes.extend_from_slice(&line);
+                foreign.lines = EntryLines::with(Some(foreign.lines), at);
+            }
+            Record::Entry(at, meta) => {
+                // This journal's line after another journal's: the file is
+                // rewritten without the other's, and scanned again.
+                if s.foreign.is_some() {
+                    s.stale_fence = true;
+                    continue;
+                }
+                let (meta, malformed) = demoted(meta);
+                if malformed {
+                    let (count, first) = s.malformed.unwrap_or((0, at));
+                    s.malformed = Some((count + 1, first.min(at)));
+                }
+                s.count += 1;
+                s.bare += u64::from(matches!(meta, CommitMeta::Bare { .. }));
+                s.first_held.get_or_insert(at);
+                s.last_entry = Some(at);
+                if let Some(time) = meta.time() {
+                    s.last_time = s.last_time.max(time);
+                }
+                s.window.insert(at, meta);
+                s.offsets.insert(at, LineOffset(offset));
+                let edge = at.saturating_sub(window).saturating_add(1);
+                if edge > keep_from {
+                    keep_from = edge;
+                    while s.window.first_key_value().is_some_and(|(k, _)| *k < keep_from) {
+                        s.window.pop_first();
+                        s.offsets.pop_first();
+                    }
+                }
+            }
+        }
+        if position != u64::MAX {
+            last_position = Some(position);
+        }
+        offset += read as u64;
+    }
+    s.valid_end = offset;
+    if s.damaged {
+        // The whole entry lines past the damaged one, at or below the head:
+        // the testimony the cut takes, which no walk brings back.
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line)? == 0 {
+                break;
+            }
+            if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line) {
+                if at <= head {
+                    s.whole_after = Some(EntryLines::with(s.whole_after, at));
+                }
+            }
+        }
+    }
+    Ok(s)
+}
+
+/// Returns the first position `commits.log` in `dir` holds a line for above its fence.
+///
+/// It is the feed's coverage as the operator's inventory reports it
+/// (`journal.feed_from`): one scan of the file's lines, the first entry
+/// above the greatest fence line — `None` where the file is absent, holds
+/// no entry, or holds none above its fence. Trust ends where the open's
+/// scan ends it, at a torn or unparseable line, and what stands before it
+/// answers; nothing is cut or written.
+///
+/// # Errors
+///
+/// The OS refused the open or a read, an absent file aside.
+pub(crate) fn first_held_in(dir: &Path) -> io::Result<Option<u64>> {
+    let file = match File::open(dir.join(SIDECAR_FILE)) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut fence = 0u64;
+    let mut first: Option<u64> = None;
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 || !line.ends_with(b"\n") {
+            break;
+        }
+        match parse_line(&line[..line.len() - 1]) {
+            Some(Record::MinSince(n)) => {
+                fence = fence.max(n);
+                if first.is_some_and(|f| f <= fence) {
+                    first = None;
+                }
+            }
+            Some(Record::Entry(at, _)) => {
+                if at > fence {
+                    first.get_or_insert(at);
+                }
+            }
+            None => break,
+        }
+    }
+    Ok(first)
+}
+
+/// Demotes an entry whose document names are malformed to a bare one.
 ///
 /// A malformed name is not a dotted-decimal address this daemon can parse;
-/// its position is demoted to a bare one, before any of them leaves this
-/// file.
+/// the entry answers bare, and the second answer says whether it was
+/// demoted. The open's scan runs it on every line it reads, counting the
+/// demoted for one line said once per open (`operations.md` §1.1 row 11),
+/// and the feed's reader below the window runs it on each line it reads,
+/// so a position answers the same bare entry whichever side of the window
+/// it lies on; the file keeps the line as written, this file being the sole
+/// surviving record of the commit, so the open never rewrites a name away
+/// over what may be one build's rendering.
 ///
 /// A half-parsing name list is a half-recorded position, and [`CommitMeta`]
 /// has no meaning for one: its two states are the whole vocabulary, and
 /// [`parse_line`] already ends trust at a line carrying some of
 /// `op`/`docs`/`time` and not the others. This is that discipline one level
 /// down — testimony this daemon cannot parse is testimony it does not stand
-/// behind — and it belongs here for the same reason it is stable: it is
-/// driven by this file, which is re-read whole at every open, rather than by
-/// a derived file whose coverage fence would carry the position past the
-/// check on the second open.
-///
-/// What the demotion buys is the disclosure, and only that. A name list none
-/// of whose names parse classifies the position empty, and an empty class is
-/// a `[]`-docs entry, which the feed's mask never masks — so left recorded, a
-/// write into a document whose name this build cannot parse is served to
-/// every class carrying its op, its wall-clock time, and the fingerprint of
-/// the key whose session committed it. Demoted, it discloses its position,
-/// which is the residue this file already accepts for a position the
-/// journal cannot classify (PUB-6.52), and nothing more but the `attest`
-/// member where the attest store holds the position's slot; its wire entry
-/// is the reserved all-nulls rendering, that member aside. A partly-parsing
-/// list is the same species one step less visible: the mask would be
-/// computed over fewer documents than the write touched.
-///
-/// **In memory at the open.** This file is the sole surviving record of
-/// those commits, so the open never rewrites a malformed name away over what
-/// may be one build's rendering: its own rewrite runs before the demotion. A
-/// later rewrite this uptime — a compaction's, or the walk's landing —
-/// writes each demoted position as the bare entry it now is.
-///
-/// **Said once per open** (`operations.md` §1.1 row 11): the positions
-/// demoted are counted and one line names the count and the first of them
-/// ([`MalformedNamesLine`], its case [`MalformedCase::Demoted`]) — the file
-/// is re-read whole at every open, so each open that still reads them says
-/// it once.
+/// behind. What the demotion buys is the disclosure, and only that. A name
+/// list none of whose names parse classifies the position empty, and an
+/// empty class is a `[]`-docs entry, which the feed's mask never masks — so
+/// left recorded, a write into a document whose name this build cannot
+/// parse is served to every class carrying its op, its wall-clock time, and
+/// the fingerprint of the key whose session committed it. Demoted, it
+/// discloses its position, which is the residue this file already accepts
+/// for a position the journal cannot classify (PUB-6.52), and nothing more
+/// but the `attest` member where the attest store holds the position's
+/// slot; its wire entry is the reserved all-nulls rendering, that member
+/// aside. A partly-parsing list is the same species one step less visible:
+/// the mask would be computed over fewer documents than the write touched.
 ///
 /// **Unreachable as built** — the names are rendered from validated
 /// `Address`es by [`super::feed::Feed::record`] and read back by
 /// [`parse_dotted`], which is that rendering's inverse — and the obligation
 /// keeping it so is held by nobody: the write path renders, this file
 /// stores, the feed's open parses.
-fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines) {
-    let half_recorded: Vec<u64> = entries
-        .iter()
-        .filter_map(|(at, meta)| match meta {
-            CommitMeta::Recorded { docs, .. } => {
-                docs.iter().any(|s| parse_dotted(s).is_none()).then_some(*at)
-            }
-            CommitMeta::Bare { .. } => None,
-        })
-        .collect();
-    if let Some(&first) = half_recorded.first() {
-        let positions = half_recorded.len();
-        let case = MalformedCase::Demoted;
-        let line = MalformedNamesLine { file: SIDECAR_FILE, positions, first, case };
-        lines.say(Class::Failure, line);
-    }
-    for at in half_recorded {
-        entries.insert(at, CommitMeta::bare());
+pub(super) fn demoted(meta: CommitMeta) -> (CommitMeta, bool) {
+    match &meta {
+        CommitMeta::Recorded { docs, .. } if docs.iter().any(|s| parse_dotted(s).is_none()) => {
+            (CommitMeta::bare(), true)
+        }
+        _ => (meta, false),
     }
 }
 
@@ -2726,8 +3023,8 @@ pub(super) struct Listing {
 /// its row can answer. Ascending, so the `progress:` line's `{p}` climbs to
 /// `{h}`: the lowest boundary's predecessor is `low` itself where `low` is a
 /// boundary — genesis, or the last recorded position — and where it is a
-/// fence (a previous walk's stopping point, or a compaction's below the
-/// reclaim floor) its world refuses and the boundary above it is
+/// fence (a previous walk's stopping point, or one an earlier build's
+/// compaction wrote) its world refuses and the boundary above it is
 /// unclassifiable (`docs: None`); the head's world is `head_world`, the
 /// open's own snapshot (no replay), since the live root moves past the head
 /// while the board serves. `started` is the walk thread's start, which the
@@ -2742,8 +3039,8 @@ pub(super) struct Listing {
 /// unclassifiable, and the fence one below it; a boundary refused
 /// `Reclaimed` mid-walk (a checkpoint landing behind the listener took its
 /// base) — the fence one below the floor named, the boundaries below it
-/// skipped, those the walk had proved below it dropped by the landing's
-/// compaction; any other refusal (corrupt, I/O, a listed boundary the
+/// skipped, those the walk had proved below it left out by the landing's
+/// fold; any other refusal (corrupt, I/O, a listed boundary the
 /// replay will not prove) — the feed reaches down to the boundary above
 /// it and no further, the first such refusal said where it is met, in the
 /// kernel's words, with the fence as it then stands ([`WalkRefusedLine`]),
@@ -2880,11 +3177,13 @@ pub(super) fn list_boundaries(kernel: &Kernel<World>, low: u64, head: u64) -> Li
     }
 }
 
-/// Parses whole newline-terminated records.
+/// Parses whole newline-terminated records: the unit suite's reading of a file.
 ///
-/// Trust ends at the first line that is torn (no `\n`) or does not parse.
-/// Returns each record with the byte offset its line starts at, and the
-/// byte offset after the last whole one.
+/// Trust ends at the first line that is torn (no `\n`) or does not parse —
+/// the order check is the open's scan's alone ([`scan`]). Returns each
+/// record with the byte offset its line starts at, and the byte offset after
+/// the last whole one.
+#[cfg(test)]
 fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
     let mut out = Vec::new();
     let mut pos = 0;
@@ -2899,32 +3198,15 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
     (out, pos)
 }
 
-/// Returns the whole entry lines past the line a replay stopped on.
-///
-/// `tail` opens at that line. A torn line — no newline, the file's end —
-/// takes none with it; a whole line that does not parse is damage, and the
-/// entry lines at or below `head` after it are the testimony the cut takes.
-fn whole_lines_past(tail: &[u8], head: u64) -> Option<EntryLines> {
-    let mut lines = tail.split_inclusive(|&b| b == b'\n');
-    if !lines.next()?.ends_with(b"\n") {
-        return None;
-    }
-    lines
-        .filter_map(|line| line.strip_suffix(b"\n").and_then(parse_line))
-        .filter_map(|record| match record {
-            Record::Entry(at, _) if at <= head => Some(at),
-            Record::Entry(..) | Record::MinSince(_) => None,
-        })
-        .fold(None, |held, at| Some(EntryLines::with(held, at)))
-}
-
 /// Parses one file line.
 ///
 /// The file is daemon-private; unknown keys are ignored (a newer daemon's
 /// extension), malformed known fields are torn-treatment. The min-since
 /// record has two spellings in the field — `min_since` and `floor` — and
 /// both read, because an unparseable line ends trust in everything after
-/// it.
+/// it. The one parser of the file: the open's scan reads every line through
+/// it, and the feed's reader below the window reads each line a cursor
+/// hands it through it, demoting the entry after ([`demoted`]).
 ///
 /// The three entry fields are read together, because [`CommitMeta`] has only
 /// two states: all three present is a recorded position, all three absent
@@ -2944,7 +3226,7 @@ fn whole_lines_past(tail: &[u8], head: u64) -> Option<EntryLines> {
 /// member is the journal's answer ([`JournalTerms::parse`]): absent on a
 /// line written before it was derived, or where the journal answered
 /// nothing; an object otherwise, and anything else is torn.
-fn parse_line(line: &[u8]) -> Option<Record> {
+pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let m = v.as_object()?;
     if let Some(s) = m.get("min_since").or_else(|| m.get("floor")) {
@@ -3079,7 +3361,7 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
 /// first at position {p}`, then what still serves, the line's case
 /// ([`MalformedCase`]). The names are said once per open with a count
 /// (`operations.md` §1.1 row 11), by both halves of the feed's
-/// name-parsing: this file's own [`demote_malformed_names`] and the derived
+/// name-parsing: this file's own [`demoted`] and the derived
 /// index's read of the same names, each counting the positions it met and
 /// saying the count, the first of them and its case through `lines`, the
 /// classed door, under `Class::Failure`. Nothing per position. A pure
@@ -3161,13 +3443,18 @@ impl CommitsLog {
             dir: dir.to_path_buf(),
             entries: BTreeMap::new(),
             offsets: BTreeMap::new(),
+            resident_from: 0,
+            window: FEED_RESIDENT_WINDOW,
+            resident_most: 0,
+            count: 0,
+            bare: 0,
+            first_held: None,
             min_since: 0,
+            fence_owed: None,
             open_head,
             rewritten: false,
-            compacted_at_open: None,
             floor_at_open: None,
             pending: None,
-            rewrite_owed: false,
             last_time: 0,
             len: 0,
             lines: Lines::new(),
@@ -3193,18 +3480,26 @@ impl CommitsLog {
             .open(dir.join(SIDECAR_FILE))
             .expect("a writable handle on the file");
         let len = file.metadata().expect("the file's length").len();
+        let count = entries.len() as u64;
+        let bare = entries.values().filter(|m| matches!(m, CommitMeta::Bare { .. })).count() as u64;
+        let first_held = entries.keys().next().copied();
         CommitsLog {
             file,
             dir: dir.to_path_buf(),
             entries,
             offsets: BTreeMap::new(),
+            resident_from: 0,
+            window: FEED_RESIDENT_WINDOW,
+            resident_most: 0,
+            count,
+            bare,
+            first_held,
             min_since: 0,
+            fence_owed: None,
             open_head: head,
             rewritten: false,
-            compacted_at_open: None,
             floor_at_open: None,
             pending: Some((low, head)),
-            rewrite_owed: false,
             last_time: 0,
             len,
             lines: Lines::new(),

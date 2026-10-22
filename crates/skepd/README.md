@@ -85,9 +85,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   1024 commits or a byte bound — a quarter of the newest checkpoint's
   size, never below 24 MiB, re-read as each lands — whichever first, run
   by the daemon's own checkpoint thread off the write path's guard so no
-  write waits for it, a failure said once on the operator stream, and the
-  change feed's files compacted to the journal's reclaim floor after each
-  landing. So is the start's word: the binary begins a board only under
+  write waits for it, a failure said once on the operator stream, and what
+  the change feed holds read after each landing for its line — the feed's
+  files are kept whole from genesis, the daemon holding a window of recent
+  positions in memory and reading the rest from disk by position, so no
+  landing rewrites one. So is the start's word: the binary begins a board only under
   `--create` and refuses a directory holding none without it, and a
   journal tail that is not a crash's halts the open — the kernel's
   refusal, with the flag's spelling after it — until one start passes

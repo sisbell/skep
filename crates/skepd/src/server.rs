@@ -38,18 +38,22 @@
 //! the start point's at open, and never below 24 MiB, re-read as each
 //! checkpoint lands — deferred to the daemon's own checkpoint thread
 //! (`server/listen.rs`), which runs the checkpoint off the write path's
-//! guard, says a failure once on the operator stream, and compacts the
-//! change feed's files to the journal's reclaim floor after each landing;
-//! and two retained checkpoints — genesis on a fresh store, recovery on an
-//! existing one, both inside `Engine::open`. Beside the kernel's files and
-//! the blob store's (under `blobs/`, opened through `MediaGate::open_with`),
-//! the only files the daemon writes are the change feed's: the
-//! commit-metadata sidecar `commits.log`, its four derived sidecars
-//! (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
-//! `feed-streams.log`), the attest store `feed-attest.log` — the marker slot
-//! mirrored per attested commit, the one daemon file that is primary state
-//! below the reclaim floor — and, transiently while any is compacted, its
-//! `.compact` twin — all opened here through `Commits::open` and owned by
+//! guard, says a failure once on the operator stream, and after each
+//! landing reads what the change feed holds for its line; and two retained
+//! checkpoints — genesis on a fresh store, recovery on an existing one,
+//! both inside `Engine::open`. The journal's reclamation bounds the board's
+//! STATES alone: the change feed's files are kept whole from genesis
+//! (wire.md §The change feed, Retention), the daemon holding a window of
+//! recent positions in memory and reading the rest from disk by position,
+//! so no landing rewrites a feed file. Beside the kernel's files and the
+//! blob store's (under `blobs/`, opened through `MediaGate::open_with`), the
+//! only files the daemon writes are the change feed's: the commit-metadata
+//! sidecar `commits.log`, its four derived sidecars (`feed-index.log`,
+//! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`), the attest
+//! store `feed-attest.log` — the marker slot mirrored per attested commit,
+//! primary state below the reclaim floor as the five beside it now are —
+//! and, transiently while the walk's landing rewrites any, its `.compact`
+//! twin — all opened here through `Commits::open` and owned by
 //! `skep-core`'s `commits/sidecar.rs` and `commits/feed/`; nothing here
 //! writes any file of the world's, which is why two daemons replaying one
 //! journal still converge byte-identically.
@@ -248,7 +252,7 @@ use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
 use skep_core::commits::{
-    AttestStoreFigures, Commits, FeedCompaction, FeedPending, FirstHead, Seeded, StoppedFile,
+    AttestStoreFigures, Commits, FeedFigures, FeedPending, FirstHead, Seeded, StoppedFile,
 };
 use skep_namespace::ghost_home_document;
 use skep_core::serial::SerialFigures;
@@ -885,10 +889,10 @@ impl Daemon {
     /// `CommitsLog::open` states that bound; `Feed::open` the derived
     /// sidecars' own, O(their files) plus O(any missing tail); and the
     /// attest store's open inside it (`skep-core`'s `commits/feed/attest.rs`'s
-    /// `AttestStore::open`) is O(its file) — the one feed file the journal's
-    /// retention does not bound, a line for every attested commit the board
-    /// has ever made, never compacted — plus one base loaded and one journal
-    /// scan for its whole uncovered tail. The identity table costs nothing
+    /// `AttestStore::open`) is O(its file) — a line for every attested
+    /// commit the board has ever made, never compacted, as none of the
+    /// feed's six files is — plus one base loaded and one journal scan for
+    /// its whole uncovered tail. The identity table costs nothing
     /// here: it rides in the World the engine recovered, checkpointed with
     /// it and stepped by the replay (AUTH-2.79, AUTH-2.80). What the
     /// engine's recovery can cost over it is a base written without the
@@ -2085,9 +2089,9 @@ impl Daemon {
 //
 // What the thread `listen.rs` spawns runs, as `Daemon` methods at the routes'
 // layer: the kernel's flag read; the checkpoint with its consequences — the
-// byte bound and the floor re-read, the feed compacted, the landing or the
-// failure said; and, on a wake with no flag, the backstop's landing followed
-// the same way. The three lines are rendered by the pure types below this
+// byte bound and the floor re-read, the feed's figures read, the landing or
+// the failure said; and, on a wake with no flag, the backstop's landing
+// followed the same way. The three lines are rendered by the pure types below this
 // block — `LandingLine`, `FailureLine`, `BackstopLine`, each saying what a
 // landing moved wherever one moved (`AfterLanding`) — which the unit suite
 // pins by `to_string()`, and every one goes to the operator stream through
@@ -2264,29 +2268,24 @@ impl Daemon {
     /// failed, or a backstop's found on a wake with no flag. The re-reads
     /// are the cadence's byte bound ([`cadence_bytes_for`]) and the media
     /// floor, kept by the gate from the newest checkpoint's size as it is
-    /// noted (`MediaGate::note_checkpoint`), then the change feed's five
-    /// files compacted to the journal's reclaim floor
-    /// (`Commits::compact_feed_below_reclaim_floor`) — the fence below which
-    /// `/changes` answers `410` — timed by the daemon's own `Instant`, the
-    /// one span of a landing that holds a lock every write takes, and beside
-    /// them the volume's free space as the floor's refusal reads it, through
-    /// the gate's one door, a reading of the resident set, and the write
-    /// guard's takes since the line before (`Commits::serial_figures`), its
-    /// baseline moved to this reading — each call's answer is said on a
-    /// line, so the baseline is the last line's. One function, so the three
-    /// arms cannot disagree about what follows a landing, and the answer is
-    /// what each arm's line says of it ([`AfterLanding`]): no figure a
-    /// landing moves moves unsaid. The newest header is the caller's one read
-    /// of it, its length handed in. Where the floor has not moved — a
-    /// reclamation that failed, a landing below the retained window — the
-    /// compaction finds nothing below the floor and writes nothing.
+    /// noted (`MediaGate::note_checkpoint`), then what the change feed holds
+    /// (`Commits::feed_figures`: the first position its files hold a line
+    /// for, `commits.log`'s size and the resident window's count beside the
+    /// most it has held — the feed's files are kept whole from genesis, so
+    /// a landing moves nothing of them and the line says what they hold),
+    /// and beside them the volume's free space as the floor's refusal reads
+    /// it, through the gate's one door, a reading of the resident set, and
+    /// the write guard's takes since the line before
+    /// (`Commits::serial_figures`), its baseline moved to this reading —
+    /// each call's answer is said on a line, so the baseline is the last
+    /// line's. One function, so the three arms cannot disagree about what
+    /// follows a landing, and the answer is what each arm's line says of it
+    /// ([`AfterLanding`]): no figure a landing moves moves unsaid. The newest
+    /// header is the caller's one read of it, its length handed in.
     fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> AfterLanding {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
         let floor = self.media.note_checkpoint(newest_len);
-        let began = Instant::now();
-        let compaction = self.commits.compact_feed_below_reclaim_floor(&self.engine);
-        let compaction_ms = began.elapsed().as_millis();
         let guard = {
             let now = (self.commits.serial_figures(), self.engine.kernel().current_seq());
             let (said, since) = std::mem::replace(&mut *self.checkpointer.guard_said.lock(), now);
@@ -2298,8 +2297,7 @@ impl Daemon {
             free_space: self.media.free_space().ok(),
             resident: self.resident.read(),
             guard,
-            compaction,
-            compaction_ms,
+            feed: self.commits.feed_figures(),
             attest: self.commits.attest_store_figures(),
         }
     }
@@ -2346,8 +2344,8 @@ impl Daemon {
     /// `Kernel::last_removed_checkpoints`, read after the `Ok`), what the
     /// re-reads answered — both bounds in force, the volume's free space as
     /// the media floor reads it (the gate's one door, so the floor's refusal
-    /// and this line never disagree), the resident set, the feed's
-    /// compaction per file — and the inline count where it moved since the
+    /// and this line never disagree), the resident set, what the feed holds
+    /// — and the inline count where it moved since the
     /// thread last said it. On a failure: one line per attempt —
     /// [`FailureLine`]: the run's duration, the head's position when the run
     /// began as an ordering, the cause (a full volume in the operator's
@@ -2558,31 +2556,28 @@ impl fmt::Display for Reclaimed {
 /// ([`Daemon::re_read_after_a_landing`]): the cadence's byte bound and the
 /// media floor in force, the volume's free space as the floor reads it, a
 /// reading of the resident set, the write guard's takes since the line
-/// before ([`GuardTakes`]), the change feed's compaction — the fence below
-/// which `/changes` answers `410 history_reclaimed`, how long the compaction
-/// held the change feed's lock, with each file that stood named — and what
-/// the never compacted `feed-attest.log` holds, on disk and resident
+/// before ([`GuardTakes`]), what the change feed holds
+/// (`Commits::feed_figures`: the first position its files hold a line for
+/// — the `floor` a `410 history_reclaimed` on `/changes` names, `1` on a
+/// board that never compacted — `commits.log`'s size, the operator's sizing
+/// figure for files kept whole from genesis, and the resident window's
+/// count beside the most it has held this uptime, so a window that outgrew
+/// its span is told from one that holds it) — and what the never compacted
+/// `feed-attest.log` holds, on disk and resident
 /// (`Commits::attest_store_figures`): the file grows with every attested
-/// commit, and its slots resident with the journal's retained window, so a
-/// resident set that climbs is told apart. Line 25 carries them, and so do
-/// the backstop's line where its wake took the re-reads and a failure after
-/// a base landed (`operations.md` §1.1 rows 25 and 26; m13; §6), so no
-/// figure a landing moves — the floor a deposit is refused at, the fence a
-/// mirror is refused below — moves with no line naming it, and the one span
-/// of a landing that holds a lock every write takes is timed where it
-/// happens. It renders `the cadence's byte bound {b}, the media floor in
-/// force {F}, the volume's free space {f}; {resident}; {guard}; the change
-/// feed's files {compacted below position {p} in {d} ms | wait on the walk's
-/// landing over {what} for their rewrite, the resident entries trimmed
-/// below position {p} in {d} ms | hold nothing below the reclaim floor};
-/// feed-attest.log {bytes} bytes, {s} slots resident` — the middle arm while
-/// the walk behind the listener has anything pending, when the fence moved
-/// in memory alone and no file was written, `{what}` the region, the bare
-/// positions the index lost, or both (`FeedPending`'s words: `positions
-/// ({low}, {head}]`, `{n} bare positions the index lost`, the two joined by
-/// `and`); `unread` for the free space where the host refused the read, its
-/// cause said by the floor's own line and the standing line; `size unread`
-/// for the bytes where the file's metadata did not answer.
+/// commit, and its slots resident with the window, so a resident set that
+/// climbs is told apart. Line 25 carries them, and so do the backstop's
+/// line where its wake took the re-reads and a failure after a base landed
+/// (`operations.md` §1.1 rows 25 and 26; m13; §6), so no figure a landing
+/// moves — the floor a deposit is refused at — moves with no line naming
+/// it. It renders `the cadence's byte bound {b}, the media floor in force
+/// {F}, the volume's free space {f}; {resident}; {guard}; the change feed
+/// {holds every line from position {p} | holds no line yet}: commits.log
+/// {bytes} bytes, {n} entries resident, the most this uptime {m};
+/// feed-attest.log {bytes} bytes, {s} slots resident` — `unread` for the
+/// free space where the host refused the read, its cause said by the
+/// floor's own line and the standing line; `size unread` for the attest
+/// store's bytes where the file's metadata did not answer.
 struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
@@ -2597,18 +2592,8 @@ struct AfterLanding {
     resident: ResidentRead,
     /// The write guard's takes since the line before, and its waits.
     guard: GuardTakes,
-    /// The feed's compaction: the fence, and the files that stood.
-    compaction: FeedCompaction,
-    /// The compaction's duration, whole milliseconds, the daemon's own
-    /// `Instant` around `Commits::compact_feed_below_reclaim_floor`.
-    ///
-    /// It spans the reclaim floor's probe, the wait to take the change
-    /// feed's lock and the rewrites under it — five files rendered whole,
-    /// each made durable by one `sync_all` — so it is an upper bound on how
-    /// long a write's record step, a `/health` probe or a `/changes` page
-    /// waited on that lock at this landing. Said beside the fence alone:
-    /// where nothing lay below the floor, nothing was rewritten.
-    compaction_ms: u128,
+    /// What the change feed holds: its first position, its size, its window.
+    feed: FeedFigures,
     /// What `feed-attest.log` holds: its size and the slots resident.
     attest: AttestStoreFigures,
 }
@@ -2624,24 +2609,16 @@ impl fmt::Display for AfterLanding {
             Some(free_space) => write!(f, "{free_space}")?,
             None => f.write_str("unread")?,
         }
-        write!(f, "; {}; {}; the change feed's files ", self.resident, self.guard)?;
-        let below = |fence: u64| fence.saturating_add(1);
-        match (self.compaction.fence, self.compaction.deferred) {
-            (Some(fence), Some(pending)) => write!(
-                f,
-                "wait on the walk's landing over {pending} for their rewrite, the resident \
-                 entries trimmed below position {} in {} ms",
-                below(fence),
-                self.compaction_ms
-            )?,
-            (Some(fence), None) => {
-                write!(f, "compacted below position {} in {} ms", below(fence), self.compaction_ms)?
-            }
-            (None, _) => f.write_str("hold nothing below the reclaim floor")?,
+        write!(f, "; {}; {}; the change feed ", self.resident, self.guard)?;
+        match self.feed.first {
+            Some(first) => write!(f, "holds every line from position {first}")?,
+            None => f.write_str("holds no line yet")?,
         }
-        for file in &self.compaction.standing {
-            write!(f, ", {file} standing as it was")?;
-        }
+        write!(
+            f,
+            ": commits.log {} bytes, {} entries resident, the most this uptime {}",
+            self.feed.bytes, self.feed.resident, self.feed.resident_most
+        )?;
         f.write_str("; feed-attest.log ")?;
         match self.attest.bytes {
             Some(bytes) => write!(f, "{bytes} bytes")?,
@@ -3717,11 +3694,11 @@ impl fmt::Display for ReissueRefusedLine<'_> {
 /// It says, in the operator stream's words, the cause, what still serves —
 /// the kernel's backstop — the act (a restart; nothing else re-spawns the
 /// thread) and what is lost with it: every checkpoint is the backstop's and
-/// says nothing, the change feed's files are not compacted, the cadence's
-/// byte bound and the media floor stay at the open's figures (the re-reads
-/// are the thread's, on its wake), and no standing line will come. A pure
-/// value the unit suite pins by `to_string()`; emitted under
-/// `Class::Failure` at `serve_bound`'s one site.
+/// says nothing, the cadence's byte bound and the media floor stay at the
+/// open's figures (the re-reads are the thread's, on its wake), and no
+/// standing line will come. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Failure` at `serve_bound`'s one
+/// site.
 pub(super) struct CheckpointThreadRefusedLine<'a>(pub(super) &'a std::io::Error);
 
 impl fmt::Display for CheckpointThreadRefusedLine<'_> {
@@ -3731,9 +3708,9 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
             "checkpoint thread: the OS refused it ({}); the kernel's backstop runs each second \
              crossing's checkpoint inline on the committing thread instead; until a restart \
              re-spawns it, every checkpoint is the backstop's and says nothing — no landing \
-             line and no failure line — and the change feed's files are not compacted, and the \
-             cadence's byte bound and the media floor stay at the open's figures; and no \
-             standing line will come: each state is said at its transition alone",
+             line and no failure line — and the cadence's byte bound and the media floor stay \
+             at the open's figures; and no standing line will come: each state is said at its \
+             transition alone",
             self.0
         )
     }
@@ -3990,8 +3967,8 @@ impl fmt::Display for StandingLine {
 /// re-reads are the thread's) — and goes on with the rest of what the board
 /// lost with the thread, as row 22's line says it for the thread refused at
 /// start ([`CheckpointThreadRefusedLine`]), and with the act (§4 row 25's,
-/// a restart): the change feed's files are compacted by the thread alone,
-/// and the standing line rides its timed wait, so from here each standing
+/// a restart): the landing line, the change feed's figures on it, is the
+/// thread's alone, and the standing line rides its timed wait, so from here each standing
 /// state is said at its transition and never again, and a stream with no
 /// `standing:` line says nothing of the board's health. A pure value pinned
 /// by `to_string()`; emitted under `Class::Failure` by
@@ -4003,9 +3980,8 @@ impl fmt::Display for CheckpointThreadEndedLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
             "checkpoint thread ended: every checkpoint from here is the backstop's, unsaid; the \
-             byte bound and the floor stay where they were; until a restart re-spawns it, the \
-             change feed's files are not compacted and no standing line will come: each state \
-             is said at its transition alone",
+             byte bound and the floor stay where they were; until a restart re-spawns it, no \
+             standing line will come: each state is said at its transition alone",
         )
     }
 }

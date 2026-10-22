@@ -312,9 +312,10 @@ apart.
    store's two logs where they hold superseded lines, and proves the
    volume makes hard links by making, and removing, a directory and
    two names under `blobs/` at every open — room is inodes as well
-   as bytes; it compacts the change feed's files where the
-   journal's reclaim floor has passed their oldest entries, and
-   writes back, and syncs, any lines `feed-attest.log` is missing.
+   as bytes; it writes back, and syncs, any lines `feed-attest.log`
+   is missing, and where a lost or torn `commits.log` left a region
+   the walk re-covers, the walk's landing rewrites the change feed's
+   files once, keeping every line they hold (item 11).
    Where the journal's tail is damage rather than a crash's, the
    open halts until a start accepts the cut by name, and that start
    first keeps every byte it will cut beside the journal (Start,
@@ -338,10 +339,10 @@ apart.
    waits for the pruner's pass, which runs only once the open is
    done. Each rewrite needs room for a second copy of the file it
    rewrites. The pruner's last line gives the blob store's two
-   logs' sizes (`blobs/uploads.log {n} lines ({n} bytes)`); the open's
-   report gives `feed-attest.log`'s, the one change-feed file never
-   compacted (Start, step 3, item 11), and no line gives the other
-   five's.
+   logs' sizes (`blobs/uploads.log {n} lines ({n} bytes)`); each
+   checkpoint's landing line gives `commits.log`'s size and
+   `feed-attest.log`'s (step 6), the open's report `feed-attest.log`'s
+   (Start, step 3, item 11), and no line gives the four index files'.
 
 5. **Then act on the line you saw.**
 
@@ -450,27 +451,36 @@ apart.
    before, and those that found another write holding it: the share
    that waited is how busy writing is, and a share that climbs from
    landing to landing is writing nearing the load at which writes are
-   refused `503 write_busy`. After it, the line's `the change feed's
-   files compacted below position {position} in {ms} ms` is how long
-   that landing held the change feed's lock: every write, `/health`
-   probe and `/changes` page that came meanwhile waited behind it, so
-   a figure that grows from landing to landing is the volume's syncs
-   slowing (Start, step 6). While the walk behind the listener has
-   positions to re-cover (Start, step 3, item 11), the files are not
-   rewritten and the clause says so: `the change feed's files wait on
-   the walk's landing over positions ({covered}, {head}] for their
-   rewrite, the resident entries trimmed below position {position}
-   in {ms} ms`. The line ends with what `feed-attest.log` holds: `;
-   feed-attest.log {bytes} bytes, {n} slots resident`.
+   refused `503 write_busy`. After it, the line's `the change feed
+   holds every line from position {position}: commits.log {bytes}
+   bytes, {n} entries resident, the most this uptime {n}` is what the
+   change feed holds: the first position its files hold a line for —
+   `1` on a board that never compacted and never lost a line, the
+   `floor` a `410 history_reclaimed` on `/changes` names otherwise —
+   `commits.log`'s size, which grows with every commit for the life of
+   the board (step 7), and the entries the daemon holds in memory for
+   the feed, bounded by its window of 2,048 positions, beside the most
+   it has held this uptime; a figure above the window is the writes a
+   walk behind the listener held in memory until its landing (Start,
+   step 3, item 11). A landing rewrites no change-feed file: the feed
+   is kept whole from genesis, and the line says what it holds. The
+   line ends with what `feed-attest.log` holds: `; feed-attest.log
+   {bytes} bytes, {n} slots resident`.
 
-7. **Know what no act clears.** `feed-attest.log` gains a line for
-   every attested commit and is never compacted; nothing the daemon
-   does shrinks it. Size the volume for the board's signed history.
-   Its slots resident — one signature, about 3.4 KB, per attested
-   commit the change feed serves — are held for the positions above
-   the reclaim floor alone, and fall back at each landing that
-   compacts the change feed's files; each landing line names both, so
-   a resident set that climbs from landing to landing is told apart
+7. **Know what no act clears.** The change feed's six files are the
+   board's record of events, kept whole from genesis: `commits.log`
+   and its four index files gain a line each per commit — about 210
+   bytes a commit in all, 98 of them `commits.log`'s, measured over
+   20,000 positions of single-document mints; a commit naming more
+   documents writes a longer line — and `feed-attest.log` a line for
+   every attested commit, about 6.9 KB;
+   nothing the daemon does shrinks any of them. Size the volume for
+   the board's whole history of events and its signed history. What
+   the daemon holds in memory for the feed is bounded by its window of
+   2,048 positions — one entry each, and one signature, about 3.4 KB,
+   per attested commit inside it — whatever the files' size; each
+   landing line names the files' size and the entries resident, so a
+   resident set that climbs from landing to landing is told apart
    from a leak.
 
 8. **Watch between the lines.** `GET /health` answers
@@ -1338,13 +1348,19 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        from commits.log's testimony, and {b} bare ones stay
        unclassified, each shown to any class that reaches it`. Lines a
        file holds past the journal's head are dropped, `commits.log`'s
-       and `feed-attest.log`'s said (Restore, step 5). Where the
-       open's compaction dropped entries below the journal's reclaim
-       floor:
+       and `feed-attest.log`'s said (Restore, step 5). The change
+       feed's files are kept whole from genesis — no line is dropped
+       for the journal's reclamation, at the open or at any landing —
+       and where they open with a hole instead, a fence an earlier
+       build's compaction wrote below its oldest line or one a walk the
+       journal refused left (Restart, step 3), the open says so once:
 
        ```
-       open: the change feed's files compacted below the reclaim floor at position {floor}: {n} entries dropped
+       open: the change feed's files hold no line at or below position {fence}: an earlier build's compaction, or a walk the journal refused, left the fence there; /changes answers 410 history_reclaimed for every since below position {floor}, the first line held
        ```
+
+       The fence is kept as found: nothing below it comes back, and
+       nothing above it is ever dropped.
 
        The bare positions `feed-index.log` lost — the positions
        `commits.log` holds bare above the index's coverage, a world
@@ -1368,10 +1384,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        failure: feed-attest.log: the journal refused the rebuild above position {covered} ({account}): …
        ```
 
-       Then `feed-attest.log`'s size — the one change-feed file never
-       compacted, a line per attested commit for the life of the board
-       — its slots resident, a signature for each attested commit the
-       change feed serves, and what the open wrote back to it:
+       Then `feed-attest.log`'s size — a line per attested commit for
+       the life of the board, never compacted, as none of the change
+       feed's files is — its slots resident, a signature for each
+       attested commit inside the feed's window of 2,048 positions,
+       and what the open wrote back to it:
 
        ```
        open: feed-attest.log: {bytes} bytes, never compacted, {n} slots resident; {n} lines rebuilt from the journal's markers (positions {first}–{last}), in {ms} ms
@@ -1629,8 +1646,8 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
    A `/health` that does not answer once the open is done points to
    the volume. Its `head_time` is read behind the change feed's lock,
-   which a write holds across the attest store's sync and the
-   checkpoint thread holds across the feed's compaction; so a device
+   which a write holds across the attest store's sync and a `/changes`
+   page below the feed's window holds across its read of the files; so a device
    that stops answering mid-sync holds every probe and every
    `/changes` page, each on a worker of its own, until no worker is
    left for the reads at the head, which read no file; the stream then
@@ -1824,11 +1841,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 ## 5. Restart
 
 1. **Stop, then start** (Stop; Start). A restart runs the open's
-   housekeeping once: it compacts the change feed's files to the
-   journal's reclaim floor and the blob store's logs, and reconciles
+   housekeeping once: it compacts the blob store's logs and reconciles
    the blob store's partial uploads; once the cell index is rebuilt,
    the pruner's pass runs. That is why a restart is how to run the
-   pass early (The full volume, step 3).
+   pass early (The full volume, step 3). The change feed's files it
+   leaves whole: nothing compacts them.
 
 2. **Expect the open's cost.** The board answers nothing until the
    open is done. The open loads the newest checkpoint and replays
@@ -2075,10 +2092,15 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    `feed-attest.log` syncs each line before the next write can
    begin: taken after the journal, it holds a line for every
    position the journal copy holds, where taken before, it can miss
-   the only copy of a signature. The four index files are rebuilt
-   at the next open whenever they were taken; a position
-   `commits.log` lacks comes back as a bare entry, without its
-   operation or key.
+   the only copy of a signature. The change feed's six files are the
+   board's permanent record of events, kept whole from genesis —
+   `feed-attest.log` was the first kept, and `commits.log` and the
+   four index files are kept the same way now — so a copy that lacks a
+   line of `commits.log` loses that commit's time and hand for good:
+   the position comes back as a bare entry, without its operation or
+   key, the walk re-deriving it from the journal where the journal
+   still reaches it and from nowhere else. The four index files are
+   rebuilt at the next open whenever they were taken.
 
    A copy taken while a checkpoint lands may hold a
    `checkpoint.tmp`, and a `feed-attest.log` with lines past the
@@ -2116,7 +2138,9 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    cut the open would make, its `damage` saying whether the first
    untrusted line was whole (Start, step 3, item 9); and under
    `journal`, its `log_position`, `start_point`,
-   `skipped_checkpoints`, `runs_passed_over`, `tail_cut` with
+   `skipped_checkpoints`, `runs_passed_over`, `feed_from` — the first
+   position the change feed's `commits.log` holds a line for, `null`
+   where it holds none — `tail_cut` with
    `tail_cut_from`, `tail_cut_intact`, `tail_cut_claimed` and
    `tail_cut_kept` beside it, `stray_checkpoint_removed`, and
    `kept_files`, every kept file the copy holds beside the journal
@@ -2155,9 +2179,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    ```
 
    A snapshot mounted read-only is proved only once copied to
-   storage that can be written. The inventory reads no change-feed
-   file, so a copy that lacks `feed-attest.log`, or holds it torn,
-   still proves clean (Restore, step 5). It refuses, exit 1, a copy
+   storage that can be written. The inventory reads one change-feed
+   file, `commits.log`, for `journal.feed_from` alone — the first
+   position the change feed holds a line for, `null` where the copy
+   holds none, and the failure's words, `unread: {error}`, where the
+   file could not be read — and no other, so a copy that lacks
+   `feed-attest.log`, or holds it torn, still proves clean (Restore,
+   step 5). It refuses, exit 1, a copy
    whose `blobs/` holds a link or a special file the store never
    makes, counting and naming them as the open's refusal does
    (Start, step 3):
@@ -2181,21 +2209,27 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
 ## 8. The cold mirror
 
-1. **Begin any mirror before the board first reclaims its
-   journal.** A mirror, the verifying resolver's (`skep-resolve`)
-   or any client that copies the board's change feed, reads
-   `GET /changes` from position 0. Once a checkpoint lands with
-   whole journal segments below the oldest checkpoint kept, the
-   daemon deletes them; from then on a page from position 0 is
-   answered `410 history_reclaimed`, naming as `floor` the oldest
-   position the board still serves. A mirror begun from genesis
-   meets that refusal at its first page, and the resolver's mirror
-   cannot begin anywhere else. The first checkpoint landing line
-   that reports `{bytes} journal bytes reclaimed`, where every
-   earlier one said `nothing reclaimed`, marks the moment.
+1. **Begin a mirror at any age.** A mirror, the verifying resolver's
+   (`skep-resolve`) or any client that copies the board's change
+   feed, reads `GET /changes` from position 0 and nothing else. The
+   change feed's files are kept whole from genesis: no checkpoint
+   landing drops a line of them, so a page from position 0 serves the
+   board's first commit on a board of any age, and a mirror begun
+   today reads the rows a mirror begun on the board's first day read.
+   The journal's reclamation bounds `/op-at` alone, which the mirror
+   never reads; the landing line's `{bytes} journal bytes reclaimed`
+   marks nothing for a mirror.
 
-2. **After that, no act makes a cold mirror possible.** The daemon
-   offers none.
+2. **The one board that refuses a mirror from genesis** is one whose
+   change feed opened with a hole: a `commits.log` an earlier build
+   compacted to the journal's reclaim floor, or a region a lost or
+   torn `commits.log` left that the journal could no longer re-cover
+   (Start, step 3, item 11; Restart, step 3). Its open says so once,
+   and a page from position 0 is answered `410 history_reclaimed`,
+   naming as `floor` the first position the feed holds; begin the
+   mirror at `floor − 1`. The rows below the hole are gone from the
+   board for good — a copy taken before the compaction or the loss
+   holds them (Restore).
 
 ## 9. Running it as a service
 

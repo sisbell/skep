@@ -157,7 +157,7 @@ impl Daemon {
         // One read does wait: `head_time` takes the change feed's own lock,
         // which the write path's record step holds across a commit's lines —
         // through the attest store's `sync_data` on every attested commit —
-        // and the checkpoint thread across the feed's compaction after a
+        // and the checkpoint thread across the feed's figures after a
         // landing. A millisecond on a healthy volume; on one that stops
         // answering mid-sync, this probe waits with it, holding its worker,
         // as every `/changes` page does, while a read at the head, which
@@ -294,6 +294,13 @@ impl Daemon {
                     None => FeedWalk::Walking,
                 };
                 refuse_feed_rebuilding_over(pending, walk)
+            }
+            // The feed's files below the resident window could not be read:
+            // the daemon's own files for positions it holds, refused by the
+            // OS — the history surface's refusal for a journal it cannot
+            // read, with the cause (wire.md §The change feed, Retention).
+            ChangesAnswer::Unreadable { detail } => {
+                refuse(TransportError::HistoryIo, Some(&detail))
             }
             // The page object as the feed marshaled it, sent as it stands.
             ChangesAnswer::Page { body } => Reply::bodied(200, "application/json", body),

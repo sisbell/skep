@@ -58,17 +58,30 @@
 //!   ([`LineFile::append_owing_sync`], through the file's [`SyncHandle`];
 //!   SO-I5 (d), which `attest.rs` states); a rewrite goes to
 //!   `<file>.compact` and is renamed over the original — whole old file or
-//!   whole new one, never half of either. A rewrite runs at open and, since
-//!   the reclaim floor moves at a checkpoint and at no other moment, after
-//!   each checkpoint the daemon's checkpoint thread lands; one that fails
-//!   past its rename while serving leaves the handle naming the replaced
-//!   file, so it stops the file as a failed append does, said once per
-//!   uptime — the later landings' rewrites still run, the stop moving in
-//!   silence to the newest fence of each that fails past its rename again
-//!   (P22: a slower answer at the next open, never an outage). The walk's
-//!   landing rewrites too, over files fenced below its region, so one that
-//!   fails there before its rename leaves a file short of the region, which
-//!   the landing stops at the region's lower edge as the gap rule above asks.
+//!   whole new one, never half of either — and keeps every record the file
+//!   held ([`LineFile::rewrite_keeping`]): the files are kept whole from
+//!   genesis, as `commits.log` is (wire.md §The change feed, Retention), and
+//!   no rewrite writes fewer records than it found. A rewrite runs at the
+//!   walk's landing — over files cut back below its region at the open
+//!   ([`LineFile::cut_back_to`]), so one that fails there before its rename
+//!   leaves a file short of the region, which the landing stops at the
+//!   region's lower edge as the gap rule above asks — and at the open for
+//!   the offset array alone, re-derived whole where `commits.log`'s own
+//!   offsets moved; one that fails past its rename while serving leaves the
+//!   handle naming the replaced file, so it stops the file as a failed
+//!   append does, said once per uptime (P22: a slower answer at the next
+//!   open, never an outage).
+//! * a file is read below the resident window by position, never by
+//!   offset: [`Records`] places a cursor at the first record above a
+//!   position (`window.rs`'s search over the file's bytes, which the order
+//!   above holds) and reads forward, so a page below the window, the open's
+//!   derivation of a file's missing tail and the landing's rewrite of the
+//!   two files derived from the index read the files themselves and hold
+//!   nothing of them resident. The search rests on position order, which
+//!   every line this daemon writes keeps; a file found out of order at an
+//!   open is rewritten sorted before anything reads it by position
+//!   ([`LineFile::sort_in_place`]), so no page depends on the order a
+//!   file's lines happen to sit in.
 //!
 //! Loss unmasks nothing: no derived file is consulted for *what* an entry
 //! says (that is `commits.log`'s) or for *whether* a class may see it (that
@@ -76,6 +89,7 @@
 //! only *which* positions are candidates, and a candidate the mask refuses
 //! is omitted whatever put it forward.
 
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -89,6 +103,7 @@ use super::super::sidecar::{
     RewriteFail,
 };
 use super::super::Lines;
+use super::window::Cursor;
 
 // Each file below is named beside the field its records carry, because this
 // module owns the line and would otherwise own only half of what a line is:
@@ -122,8 +137,10 @@ pub(super) const STREAMS_OWNERS: &str = "owners";
 ///
 /// It speaks `sidecar.rs`'s vocabulary, which this file shares its whole
 /// discipline with: a line is the bytes on disk, a record is the parsed
-/// value, and an entry is a record carrying a position.
-enum Record {
+/// value, and an entry is a record carrying a position. Read by
+/// [`parse_line`], the file's one parser: at the replay, and by [`Records`]
+/// below the resident window.
+pub(super) enum Record {
     /// `{"covered":N}` — every position ≤ N is processed.
     Fence(u64),
     /// One position's own record, with its whole object.
@@ -164,18 +181,19 @@ pub(super) struct LineFile {
     /// file fenced at, which is what the next open re-derives from.
     ///
     /// [`LineFile::rewrite`] is not guarded by it: it writes the file whole
-    /// from the resident twin and fences at the coverage it has just made true,
-    /// so it closes a gap rather than claiming over one — the opposite of what
-    /// this flag guards against — and a stopped file rewritten whole is right
-    /// on disk again while the flag stands for the uptime. What a rewrite can
-    /// do is set it, and a rewrite past its rename on a file already stopped
-    /// moves it to the newest fence. At open every rewrite's failure is fatal —
-    /// `?`-propagated into `DaemonError::Sidecar` before any append — so the
-    /// flag is moot there; but the checkpoint thread's compaction runs the same
-    /// rewrite while serving, and one that fails past its rename leaves this
-    /// handle naming the replaced file, which no open reads: the file stops,
-    /// said once per uptime at the transition, and the next open re-derives
-    /// from the rewritten file's own fence.
+    /// — every record it held and the new ones — and fences at the coverage
+    /// it has just made true, so it closes a gap rather than claiming over
+    /// one — the opposite of what this flag guards against — and a stopped
+    /// file rewritten whole is right on disk again while the flag stands for
+    /// the uptime. What a rewrite can do is set it, and a rewrite past its
+    /// rename on a file already stopped moves it to the newest fence. At
+    /// open every rewrite's failure is fatal — `?`-propagated into
+    /// `DaemonError::Sidecar` before any append — so the flag is moot there;
+    /// but the walk's landing runs the same rewrite while serving, and one
+    /// that fails past its rename leaves this handle naming the replaced
+    /// file, which no open reads: the file stops, said once per uptime at
+    /// the transition, and the next open re-derives from the rewritten
+    /// file's own fence.
     ///
     /// **Coverage is a claim**, and a gap beneath it is the one loss the check
     /// cannot close: a position at or below coverage with no record reads as
@@ -264,6 +282,11 @@ pub(super) struct Replayed {
     pub kept: Option<KeptName>,
     /// The entry lines past the head, or `None` where the file named none.
     pub foreign: Option<EntryLines>,
+    /// Whether an entry line at or below the head carried a position below
+    /// the entry line before it — a file not in position order, which the
+    /// caller rewrites sorted before reading it by position
+    /// ([`LineFile::sort_in_place`]).
+    pub disordered: bool,
     /// The file the entry lines past the head were kept in, where it named
     /// any.
     pub foreign_kept: Option<KeptName>,
@@ -330,6 +353,8 @@ impl LineFile {
         // purge's keep is named from.
         let mut first_foreign: Option<u64> = None;
         let mut valid_end = 0u64;
+        let mut last_at: Option<u64> = None;
+        let mut disordered = false;
         let mut reader = BufReader::new(&file);
         let mut line = Vec::new();
         loop {
@@ -344,6 +369,8 @@ impl LineFile {
                 Record::Fence(n) if n <= head => coverage = coverage.max(n),
                 Record::Entry(at, m) if at <= head => {
                     coverage = coverage.max(at);
+                    disordered |= last_at.is_some_and(|last| at < last);
+                    last_at = Some(at);
                     if keep(at) {
                         entries.push((at, m));
                     }
@@ -418,7 +445,8 @@ impl LineFile {
             // — its entry lines kept beside the file first.
             foreign_kept = this.purge_foreign(head, first_foreign).map_err(with_file)?;
         }
-        Ok((this, entries, Replayed { cut, kept, foreign: foreign_entries, foreign_kept }))
+        let replayed = Replayed { cut, kept, foreign: foreign_entries, foreign_kept, disordered };
+        Ok((this, entries, replayed))
     }
 
     /// Returns the file's length in bytes, as its handle reads it.
@@ -652,6 +680,34 @@ impl LineFile {
         self.stopped.get_or_insert(at);
     }
 
+    /// Stops the file where a read it needed for its lines was refused, said once.
+    ///
+    /// It is the sort's disposition where `commits.log` could not be read
+    /// for the recorded positions below the one just sorted, at `at`
+    /// (`Inner::append_the_index_through`): the file's claim must not pass
+    /// those positions, so it stops at its coverage, and the next open
+    /// re-derives above it. Said through the classed door in the failed
+    /// append's words with the cause and the act owed before the restart
+    /// ([`IoCause::before_the_restart`]); a file already stopped keeps its
+    /// stop and says nothing.
+    pub(crate) fn stop_reading_refused(&mut self, at: u64, error: &io::Error) {
+        if self.stopped.is_some() {
+            return;
+        }
+        self.stopped = Some(self.coverage);
+        let cause = IoCause(error);
+        self.lines.say(
+            Class::Failure,
+            format_args!(
+                "{} could not read commits.log for the positions below {at}: {cause}; this file \
+                 takes no further line until a restart, whose open re-derives it — the board \
+                 serves from memory, and nothing is lost{}",
+                self.name,
+                cause.before_the_restart()
+            ),
+        );
+    }
+
     /// Returns whether this file takes no further line.
     ///
     /// It is the unit suite's reading of the stop. Not a stable API.
@@ -708,40 +764,164 @@ impl LineFile {
 
     /// Rewrites the whole file as `records` behind a fence at `covered`.
     ///
-    /// It goes through a temp file renamed over the original — the compaction
-    /// from the twins, at open and after each checkpoint the daemon's thread
-    /// lands. `records` are whole record objects already carrying their
-    /// `at`; [`super::super::sidecar::line_bytes`] is what makes each a
-    /// line.
+    /// It goes through a temp file renamed over the original — the offset
+    /// array re-derived whole at the open where `commits.log`'s offsets
+    /// moved, and the unit suite's rewrite. `records` are whole record
+    /// objects already carrying their `at`;
+    /// [`super::super::sidecar::line_bytes`] is what makes each a line. A
+    /// rewrite that keeps the file's records and adds to them is
+    /// [`LineFile::rewrite_keeping`].
     ///
     /// # Errors
     ///
     /// [`RewriteFail`], which carries the side of the rename a failure fell
     /// on, since the two leave different files behind: *before* it the old
-    /// file stands whole and this handle still names it, nothing lost, the
-    /// next checkpoint's compaction trying again — save at the walk's
-    /// landing, where the old file is short of the region and the landing
-    /// stops it ([`LineFile::stop_at`]); *past* it the new file is in place
-    /// and this handle names the *replaced* one, which no open reads, so the
-    /// file is stopped for the uptime as a failed append stops it — said once
-    /// per uptime, here, at the stop's transition (`operations.md` §1.1 row
-    /// 30): a stopped file is rewritten again at every compacting landing, its
-    /// stop moving in silence to the newest fence where that rewrite fails
-    /// past its rename again, the standing line re-saying it — its coverage
-    /// the fence the new file carries, which the next open re-derives from.
-    /// At open either side is fatal; while serving the caller reports the
+    /// file stands whole and this handle still names it, nothing lost — save
+    /// at the walk's landing, where the old file is short of the region and
+    /// the landing stops it ([`LineFile::stop_at`]); *past* it the new file
+    /// is in place and this handle names the *replaced* one, which no open
+    /// reads, so the file is stopped for the uptime as a failed append stops
+    /// it — said once per uptime, here, at the stop's transition
+    /// (`operations.md` §1.1 row 30): a stopped file rewritten again moves
+    /// its stop in silence to the newest fence where that rewrite fails past
+    /// its rename again, the standing line re-saying it — its coverage the
+    /// fence the new file carries, which the next open re-derives from. At
+    /// open either side is fatal; while serving the caller reports the
     /// before-rename arm and moves on.
     pub(crate) fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> Result<(), RewriteFail> {
+        let lines = records.iter().map(line_bytes);
+        self.rewrite_with(
+            |out| {
+                for line in lines {
+                    out.write_all(&line)?;
+                }
+                Ok(())
+            },
+            covered,
+        )
+    }
+
+    /// Rewrites the file as every record it holds, then `new`, behind a fence at `covered`.
+    ///
+    /// It is the walk's landing's rewrite: the file's entry lines copied
+    /// verbatim, in file order — its fence lines left out, the one fence
+    /// written last standing for them — then each line of `new`, every one
+    /// a record above the file's coverage, in position order. Through
+    /// `<file>.compact` renamed over the original, as [`LineFile::rewrite`]
+    /// goes, with the same stop on either side of the rename.
+    ///
+    /// # Errors
+    ///
+    /// [`RewriteFail`], as [`LineFile::rewrite`] answers it; the copy's read
+    /// among the before-rename failures.
+    pub(crate) fn rewrite_keeping(
+        &mut self,
+        new: impl Iterator<Item = Vec<u8>>,
+        covered: u64,
+    ) -> Result<(), RewriteFail> {
+        let path = self.dir.join(self.name);
+        self.rewrite_with(
+            |out| {
+                let mut reader = BufReader::new(File::open(&path)?);
+                let mut line = Vec::new();
+                while reader.read_until(b'\n', &mut line)? > 0 {
+                    if let Some(Record::Entry(..)) = line.strip_suffix(b"\n").and_then(parse_line) {
+                        out.write_all(&line)?;
+                    }
+                    line.clear();
+                }
+                for line in new {
+                    out.write_all(&line)?;
+                }
+                Ok(())
+            },
+            covered,
+        )
+    }
+
+    /// Cuts the file back to the records at or below `covered`.
+    ///
+    /// It is the open's act on a file fenced over positions the walk has
+    /// yet to land — the region a torn `commits.log` left, or the bare
+    /// positions a lost index left unsorted — whose claim must not pass
+    /// them (the module doc's gap rule): every line above `covered` is
+    /// truncated off the file's end, the file being position-ordered, and
+    /// the coverage falls to the highest position a remaining line names,
+    /// which may lie below `covered` — the tail the open then derives from
+    /// there. A file covering no more than `covered` is left as it is.
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the search, the truncation or the read of the line
+    /// before the cut.
+    /// Rewrites the file in position order, every entry line kept.
+    ///
+    /// A file this daemon wrote is in position order — each append takes
+    /// the next position and each rewrite copies the file and appends above
+    /// it — and the read by position ([`Records`]; `window.rs`'s search)
+    /// rests on that order. A file found otherwise at an open (an operator's
+    /// edit, or another writer's) is read whole here, once — the one read
+    /// that holds a derived file whole, and only of a file no daemon wrote
+    /// so — and written back sorted, through `<file>.compact` renamed over
+    /// the original, its fence at its coverage. Every record it held it
+    /// holds, so a page reads what it would have read from the file in
+    /// order; the open says nothing of it, as the replay that held the file
+    /// whole said nothing.
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the read or the rewrite, either side of its rename;
+    /// the open fails, naming the file.
+    pub(crate) fn sort_in_place(&mut self) -> io::Result<()> {
+        let mut records = Records::above(&self.dir, self.name, 0)?;
+        let mut sorted = BTreeMap::new();
+        while let Some((at, m)) = records.next()? {
+            sorted.insert(at, Value::Object(m));
+        }
+        self.rewrite(sorted.into_values().collect(), self.coverage).map_err(RewriteFail::into_io)
+    }
+
+    pub(crate) fn cut_back_to(&mut self, covered: u64) -> io::Result<()> {
+        if self.coverage <= covered {
+            return Ok(());
+        }
+        let path = self.dir.join(self.name);
+        let (cut_at, len) = {
+            let cursor = Cursor::open_above(&path, covered)?;
+            (cursor.offset(), self.file.metadata()?.len())
+        };
+        if cut_at < len {
+            self.file.set_len(cut_at)?;
+        }
+        self.coverage = match Cursor::line_before(&path, cut_at)? {
+            Some(line) => super::window::position_of(&line).unwrap_or(0).min(covered),
+            None => 0,
+        };
+        Ok(())
+    }
+
+    /// Writes the file anew through `body`, fenced at `covered`, and reopens it.
+    ///
+    /// It is the one rewrite path: the temp file created, `body` writing
+    /// the records into it, the fence last, the sync, the rename, then the
+    /// reopen — and the stop on a failure past the rename, said once
+    /// ([`LineFile::rewrite`] states both sides).
+    ///
+    /// # Errors
+    ///
+    /// [`RewriteFail`], the side of the rename the failure fell on.
+    fn rewrite_with(
+        &mut self,
+        body: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+        covered: u64,
+    ) -> Result<(), RewriteFail> {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
-        let mut out = Vec::new();
-        for record in &records {
-            out.extend_from_slice(&line_bytes(record));
-        }
-        out.extend_from_slice(&fence_line(covered));
         let renamed = (|| -> io::Result<()> {
-            let mut f = create_rewrite_temp(&tmp)?;
-            f.write_all(&out)?;
+            let mut out = BufWriter::new(create_rewrite_temp(&tmp)?);
+            body(&mut out)?;
+            out.write_all(&fence_line(covered))?;
+            let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
             f.sync_all()?;
             drop(f);
             std::fs::rename(&tmp, &path)
@@ -893,7 +1073,7 @@ fn create_rewrite_temp(path: &Path) -> io::Result<File> {
 ///
 /// It is *the* shape every entry line of a [`LineFile`] takes, in both
 /// directions: [`LineFile::append`] writes it and a rewrite reproduces it,
-/// so each file's field name is spelled once and a compacted file's lines
+/// so each file's field name is spelled once and a rewritten file's lines
 /// are byte-identical to appended ones. The `at` key is added here, so a
 /// record cannot omit it.
 pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Value {
@@ -925,11 +1105,54 @@ fn torn_position(fragment: &[u8]) -> Option<u64> {
     std::str::from_utf8(&rest[..digits]).ok()?.parse().ok()
 }
 
+/// A cursor over one derived file's records above a position.
+///
+/// It is the read below the resident window ([`super::window`]): placed at
+/// the first line above `since` by the search over the file's bytes, it
+/// hands back each entry record in position order and skips the fences,
+/// ending where the file ends, at a torn last line, or at a line that does
+/// not parse — where the next open's cut would end it. The attest store's
+/// file is read through it too (`attest.rs`), its lines being this file's
+/// shape.
+pub(super) struct Records {
+    cursor: Cursor,
+}
+
+impl Records {
+    /// Opens `name` in `dir` at the first record above `since`.
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the open, the search's seeks or reads.
+    pub(super) fn above(dir: &Path, name: &str, since: u64) -> io::Result<Records> {
+        Ok(Records { cursor: Cursor::open_above(&dir.join(name), since)? })
+    }
+
+    /// Returns the next entry record: its position and its object.
+    ///
+    /// `None` at the end, as the type's card says.
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the read.
+    pub(super) fn next(&mut self) -> io::Result<Option<(u64, Map<String, Value>)>> {
+        while let Some((_, line)) = self.cursor.next_line()? {
+            match parse_line(&line) {
+                Some(Record::Entry(at, m)) => return Ok(Some((at, m))),
+                Some(Record::Fence(_)) => continue,
+                None => return Ok(None),
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// Parses one line's record, the line without its newline.
 ///
 /// The record is a fence, or an entry with a position. Anything else answers
-/// `None`: a line that does not parse.
-fn parse_line(line: &[u8]) -> Option<Record> {
+/// `None`: a line that does not parse. The file's one parser: the replay's
+/// and [`Records`]'s.
+pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let Value::Object(m) = v else { return None };
     if let Some(c) = m.get("covered") {

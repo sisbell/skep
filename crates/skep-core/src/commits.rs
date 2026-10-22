@@ -102,20 +102,21 @@
 //! `None` for precisely those — an equivalence it asserts against the
 //! partition rather than assumes.
 //!
-//! **And the checkpoint thread's signal and compaction.** The kernel's
-//! cadence is deferred: a commit that crosses it sets the kernel's due flag
-//! and runs no checkpoint on the committing thread — unless the flag already
-//! stood, the last crossing unserviced, when the kernel's backstop runs one
-//! inline — and the daemon's checkpoint thread (`server/listen.rs`) runs it
-//! off the guard. This card is where the two meet: after each commit's
-//! record step (`Commits::commit_recorded`) the flag is read and, where it
-//! stands, the thread is woken through [`CheckpointSignal`] — after the
-//! record step and never before it, so a checkpoint the thread begins never
-//! runs beside the attest line of the commit that triggered it
-//! (`feed/attest.rs`'s premise). And after a checkpoint lands the thread
-//! compacts the feed's five files to the journal's reclaim floor through
-//! [`Commits::compact_feed_below_reclaim_floor`] — the feed's own rewrite,
-//! the one the open runs, under the feed's lock and no guard.
+//! **And the checkpoint thread's signal.** The kernel's cadence is
+//! deferred: a commit that crosses it sets the kernel's due flag and runs no
+//! checkpoint on the committing thread — unless the flag already stood, the
+//! last crossing unserviced, when the kernel's backstop runs one inline —
+//! and the daemon's checkpoint thread (`server/listen.rs`) runs it off the
+//! guard. This card is where the two meet: after each commit's record step
+//! (`Commits::commit_recorded`) the flag is read and, where it stands, the
+//! thread is woken through [`CheckpointSignal`] — after the record step and
+//! never before it, so a checkpoint the thread begins never runs beside the
+//! attest line of the commit that triggered it (`feed/attest.rs`'s
+//! premise). A landing moves nothing of the feed: its six files are kept
+//! whole from genesis (wire.md §The change feed, Retention), the journal's
+//! reclamation bounding the board's STATES and never its record of events,
+//! so after a landing the thread reads what the feed holds for its line
+//! ([`Commits::feed_figures`]) and rewrites nothing.
 //!
 //! **And the walk behind the listener** (`operations.md` §3.3 step 2; §4
 //! row 16; §1.1 m15). Where `commits.log` was lost or torn, the feed's open
@@ -189,7 +190,7 @@ mod head;
 mod registry;
 
 pub use feed::{
-    AttestStoreFigures, ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction, StoppedFile,
+    AttestStoreFigures, ChangesAnswer, ChangesQuery, FeedClass, FeedFigures, StoppedFile,
 };
 pub(crate) use head::board_term;
 pub use registry::Seeded;
@@ -240,10 +241,13 @@ use crate::serial::{Serial, SerialFigures, SerialGuard};
 use feed::Feed;
 
 // The feed walk's test seams, for the daemon's hooks: the hold the walk
-// parks at, the notice it writes as it parks, and its panic arm.
+// parks at, the notice it writes as it parks, and its panic arm — and the
+// feed's resident window, moved before an open.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
-pub use self::sidecar::{arm_the_feed_walks_fault, FEED_WALK_HOLD, FEED_WALK_HOLD_NOTICE};
+pub use self::sidecar::{
+    arm_the_feed_walks_fault, set_feed_resident_window, FEED_WALK_HOLD, FEED_WALK_HOLD_NOTICE,
+};
 
 /// The walk thread's name, as `ps` and the hook's line show it.
 const FEED_WALK_THREAD: &str = "skepd-feed-walk";
@@ -376,8 +380,9 @@ pub struct Commits {
     /// Every line said from this card and the feed beneath it goes through
     /// it, the feed walk hold's notice aside (a test seam's, which goes to
     /// `notice::emit` directly) — the feed files' open-time lines (a cut, the
-    /// unreadable slots, the malformed names), the files' once-per-uptime
-    /// stops and their failed appends, the compaction's per-attempt failures,
+    /// unreadable slots, the malformed names, a hole the files opened with),
+    /// the files' once-per-uptime stops and their failed appends, the walk's
+    /// landing's refused rewrites,
     /// the head writer's refused head and its clearing, the kernel's halt and
     /// the durability refusals with their close — and, under the test seam,
     /// into the one record the daemon above shares (`LinesSaid`), in order
@@ -671,22 +676,31 @@ impl Commits {
         &self.checkpoint_signal
     }
 
-    /// Compacts the feed's five files to the journal's reclaim floor.
+    /// Returns what the change feed holds, for a line of the daemon's.
     ///
-    /// It is what the checkpoint thread runs after any checkpoint lands, its
-    /// own or a backstop's: where the floor has moved, `commits.log` and the
-    /// four derived files rewritten around the positions the journal
-    /// reclaimed — in memory alone, the files left to the walk's landing,
-    /// while its region is pending — under the feed's lock and no guard, the
-    /// attest store's file untouched and its resident slots trimmed. The
-    /// feed's own rewrite, the one its open runs
-    /// (`Feed::compact_below_reclaim_floor` states the disposition, which
-    /// fails no op). Answers what it did ([`FeedCompaction`]): the fence
-    /// compacted to, or none where nothing lay below the floor, the files
-    /// that stood beside it, by name, and the region a deferred rewrite waits
-    /// on — what the thread's landing line says of each file.
-    pub fn compact_feed_below_reclaim_floor(&self, engine: &Engine) -> FeedCompaction {
-        self.feed.compact_below_reclaim_floor(engine, &self.said)
+    /// It is what the checkpoint thread reads after any checkpoint lands, its
+    /// own or a backstop's, for its landing line ([`FeedFigures`]): the first
+    /// position the feed's files hold a line for, `commits.log`'s size and
+    /// the resident window's count beside the most it has held — the feed's
+    /// files being kept whole from genesis, a landing moves nothing of them,
+    /// and the line says what they hold. Under the feed's lock and no guard.
+    pub fn feed_figures(&self) -> FeedFigures {
+        self.feed.figures()
+    }
+
+    /// Returns the first position `commits.log` in `data_dir` holds a line for.
+    ///
+    /// It is the feed's coverage as the operator's inventory reports it
+    /// under `journal.feed_from` (`skepd inventory`), read off the file
+    /// alone with no feed opened — the first entry line above the file's
+    /// fence, `None` where the file is absent or holds no such line. A torn
+    /// or damaged line ends the read where the open's scan would end it.
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the open or a read, an absent file aside.
+    pub fn feed_first_held(data_dir: &Path) -> io::Result<Option<u64>> {
+        sidecar::first_held_in(data_dir)
     }
 
     /// The test seam that fails the next rewrite past its rename.
@@ -705,10 +719,11 @@ impl Commits {
     /// The attest store's file is never compacted — below the reclaim floor
     /// its lines are an entry signature's only copy — so it grows by one line
     /// (~6.9 KB under tag 1) per attested commit for the life of the board;
-    /// its slots resident are one blob per attested position the feed serves,
-    /// trimmed at every compaction ([`AttestStoreFigures`]). The open says
-    /// both once, and the checkpoint thread reads them at each landing for
-    /// its line. Under the feed's lock and no guard.
+    /// its slots resident are one blob per attested position inside the
+    /// feed's resident window, trimmed as the window rises
+    /// ([`AttestStoreFigures`]). The open says both once, and the checkpoint
+    /// thread reads them at each landing for its line. Under the feed's lock
+    /// and no guard.
     pub fn attest_store_figures(&self) -> AttestStoreFigures {
         self.feed.attest_store_figures()
     }

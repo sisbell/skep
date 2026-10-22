@@ -50,9 +50,8 @@ use common::{
 const CHECKPOINT_THREAD_ENDED: &str = "failure: checkpoint thread ended: every checkpoint from \
                                        here is the backstop's, unsaid; the byte bound and the \
                                        floor stay where they were; until a restart re-spawns \
-                                       it, the change feed's files are not compacted and no \
-                                       standing line will come: each state is said at its \
-                                       transition alone";
+                                       it, no standing line will come: each state is said at \
+                                       its transition alone";
 
 /// ROW 41's consequence line for the pruner, with its class word.
 const PRUNER_THREAD_ENDED: &str = "failure: pruner thread ended: no pass runs until a restart; \

@@ -1358,12 +1358,14 @@ fn figure_after(text: &str, marker: &str) -> usize {
 /// room, the operator stream names it, the person's act is to tell the
 /// operator — and §Rejection codes' `durability` entry says the same of the
 /// code, the disposition staying `retry`; the old "durability hiccup" is
-/// gone from both. §The change feed says the five feed files are compacted
-/// after each checkpoint the daemon's thread lands, while serving, with the
-/// stop a rewrite failed past its rename carries. The daemon's words are
-/// pinned in `changes.rs`; this pins that the contract says so.
+/// gone from both. §The change feed says the feed is kept whole from
+/// genesis — never compacted to the journal's reclaim floor, `/changes`
+/// from 0 at any age, `410` on `/changes` for a hole alone and never for a
+/// position the journal reclaimed — with the stop a rewrite failed past
+/// its rename carries. The daemon's words are pinned in `changes.rs` and
+/// `feed_retained.rs`; this pins that the contract says so.
 #[test]
-fn doc_states_the_durability_faces_words_and_the_compaction_at_the_checkpoint() {
+fn doc_states_the_durability_faces_words_and_the_feed_kept_whole() {
     let rejections = prose("\n## Rejections", &["\n### Rejection codes"]);
     for fact in [
         "`\"retry\"` — the operation did nothing",
@@ -1387,14 +1389,17 @@ fn doc_states_the_durability_faces_words_and_the_compaction_at_the_checkpoint() 
     assert!(!codes.contains("hiccup"));
     let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
     for fact in [
-        "COMPACTED to the journal's reclaim floor",
-        "after each checkpoint the daemon's own",
-        "checkpoint thread lands, while serving",
+        "The feed is kept whole from genesis",
+        "never compacted to the journal's reclaim floor",
+        "`GET /changes?since=0` reads a board's whole record of events from its first commit",
+        "never for a position the journal has reclaimed but the feed still holds",
+        "The five are KEPT WHOLE from genesis",
         "STOPS that file for the uptime",
         "fails no write",
     ] {
         assert!(feed.contains(fact), "§The change feed says {fact:?}");
     }
+    assert!(!feed.contains("COMPACTED to the journal's reclaim floor"), "no feed file compacts");
 }
 
 /// THE UPLOAD SETTING, THE DEFAULT LIMIT, THE CREATION's GATE, THE REBUILD

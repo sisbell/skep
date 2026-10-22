@@ -601,57 +601,60 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     assert_eq!(claimed, Vec::<u64>::new(), "the file claims no position above the gap");
 }
 
-/// THE LANDING IS ONE REWRITE AND FILE ORDER IS POSITION ORDER (the
-/// operations design §3.3 step 2; "file order is position order"): a log
-/// whose region `(24, 30]` is pending over a file holding entries 20 and
-/// 24 — the state a torn open leaves — takes a write at 31 in memory alone
-/// (HELD, no line appended, no offset, `head_time` answering for the head
-/// in the region: none), takes a checkpoint's compaction to 20 in memory
-/// alone (the fence moved, the file untouched), and LANDS three walked
-/// boundaries with the walk's own fence at 25: one rewrite, a `min_since`
-/// line first at the greatest of the fences, then every entry ascending —
-/// the walked three bare with the journal's answer where it had one, the
-/// held write whole — the entries at or below the fence dropped, every
-/// offset the rewrite assigned naming the byte its line begins at, the
-/// region cleared.
+/// THE LANDING IS ONE REWRITE THAT KEEPS EVERY LINE, AND FILE ORDER IS
+/// POSITION ORDER (the operations design §3.3 step 2; "file order is
+/// position order"; the record of events kept forever): a log whose region
+/// `(24, 30]` is pending over a file holding entries 20 and 24 — the state a
+/// torn open leaves — takes a write at 31 in memory alone (HELD, no line
+/// appended, `head_time` answering for the head in the region: none), and
+/// LANDS three walked boundaries with the walk's own fence at 25 — the
+/// journal refused below it: one rewrite, the file's two lines copied
+/// verbatim first, then the `min_since` line at the walk's fence, then
+/// every landed entry ascending — the walked three bare with the journal's
+/// answer where it had one, the held write whole. No line is dropped: the
+/// two below the fence stay in the file, served by no route, and the
+/// resident entries hold what stands above the fence; the region cleared,
+/// the first line held the first walked boundary above the fence.
 #[test]
-fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_offset() {
+fn the_landing_is_one_rewrite_in_position_order_keeping_every_line() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(SIDECAR_FILE);
     let e20 = recorded("insert", &["1.0.1.0.1"], 1, Some("bare"));
     let e24 = recorded("insert", &["1.0.1.0.1"], 2, Some("bare"));
-    std::fs::write(&path, [entry_line(20, &e20), entry_line(24, &e24)].concat()).expect("the torn file");
-    let parsed = std::fs::read(&path).expect("read");
+    let old = [entry_line(20, &e20), entry_line(24, &e24)].concat();
+    std::fs::write(&path, &old).expect("the torn file");
     let entries = [(20, e20), (24, e24)].into_iter().collect();
     let mut log = CommitsLog::pending_over(dir.path(), entries, 24, 30);
     assert_eq!(log.pending_region(), Some((24, 30)));
     assert_eq!(log.head_time(), None, "the head's record lies in the region");
+    assert_eq!(log.floor(), Some(20), "the first line held");
     let serial = crate::serial::Serial::new();
     let serial = serial.lock();
 
     let held = log.record(&serial, 31, "insert", vec!["1.0.1.0.2".into()], "bare".into(), None, None);
     assert_eq!(held, Some(Recorded::Held), "a write while the region pends is held");
-    assert_eq!(std::fs::read(&path).expect("read"), parsed, "no line appended");
-    assert!(log.entries.contains_key(&31) && !log.offsets.contains_key(&31), "in memory, no offset");
+    assert_eq!(std::fs::read(&path).expect("read"), old, "no line appended");
+    assert!(log.entries.contains_key(&31), "in memory");
     assert!(log.head_time().is_some(), "the held write is above the head: head_time is its");
-
-    assert!(log.compact_to(20).expect("deferred"), "the fence moves");
-    assert_eq!((log.min_since, log.entries.contains_key(&20)), (20, false));
-    assert_eq!(std::fs::read(&path).expect("read"), parsed, "the compaction's rewrite is deferred");
+    assert_eq!(log.counts(), (3, 0), "counted as held");
 
     let walked = vec![
         Walked { at: 26, docs: Some(vec![]), journal: JournalTerms { op: Some("version".into()), terms: None } },
         Walked { at: 28, docs: None, journal: JournalTerms::default() },
         Walked { at: 30, docs: Some(vec![]), journal: JournalTerms::default() },
     ];
-    let folded = log.fold_the_walk(&walked, Some(25), None);
+    let folded = log.fold_the_walk(&walked, Some(25));
     assert_eq!((folded, log.pending_region()), (Some(((24, 30), 25)), None));
-    assert_eq!(std::fs::read(&path).expect("read"), parsed, "the fold writes nothing");
+    assert_eq!(std::fs::read(&path).expect("read"), old, "the fold writes nothing");
+    assert_eq!((log.min_since, log.entries.contains_key(&20)), (25, false), "the fence moved");
+    assert_eq!(log.floor(), Some(26), "the first line held above the fence");
+    assert_eq!(log.counts(), (4, 3), "the three walked and the held write");
     log.write_the_landing(24).expect("the landing's one rewrite");
     let bytes = std::fs::read(&path).expect("read");
+    assert!(bytes.starts_with(&old), "the file's own lines first, verbatim");
     let (records, valid_end) = parse_records(&bytes);
     assert_eq!(valid_end, bytes.len(), "every line whole");
-    assert!(matches!(records[0].1, Record::MinSince(25)), "the fence first: {:?}", records[0]);
+    assert!(matches!(records[2].1, Record::MinSince(25)), "the fence after them: {:?}", records[2]);
     let ats: Vec<u64> = records
         .iter()
         .filter_map(|(_, r)| match r {
@@ -659,15 +662,16 @@ fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_
             Record::MinSince(_) => None,
         })
         .collect();
-    assert_eq!(ats, [26, 28, 30, 31], "position order; 24 dropped at the fence");
-    assert!(matches!(&records[1].1, Record::Entry(26, CommitMeta::Bare { journal }) if journal.op.as_deref() == Some("version")));
-    assert!(matches!(&records[4].1, Record::Entry(31, CommitMeta::Recorded { .. })), "the held write whole");
-    for (offset, record) in &records {
-        if let Record::Entry(at, _) = record {
-            assert_eq!(log.offsets()[at], LineOffset(*offset as u64), "the offset of {at}");
-        }
-    }
-    assert!(log.entries().keys().eq([26, 28, 30, 31].iter()));
+    assert_eq!(ats, [20, 24, 26, 28, 30, 31], "position order; nothing dropped");
+    assert!(
+        matches!(&records[3].1, Record::Entry(26, CommitMeta::Bare { journal }) if journal.op.as_deref() == Some("version"))
+    );
+    assert!(
+        matches!(&records[6].1, Record::Entry(31, CommitMeta::Recorded { .. })),
+        "the held write whole"
+    );
+    assert!(log.entries().keys().eq([26, 28, 30, 31].iter()), "resident: above the fence");
+    assert_eq!(log.len(), bytes.len() as u64, "the length the next append lands at");
 }
 
 /// Checks the words of the walk's three lines, its refusal and the landing's.
@@ -1126,44 +1130,69 @@ fn an_absent_log_and_a_compact_twin_are_said_at_the_open() {
     );
 }
 
-/// The malformed names are demoted in memory as before and SAID ONCE with
-/// their count and the first position (`operations.md` §1.1 row 11), under
-/// `failure:` — three half-recorded positions among five entries, one line;
-/// no malformed name, no line.
+/// The malformed names are demoted as the open's scan reads them and SAID
+/// ONCE with their count and the first position (`operations.md` §1.1 row
+/// 11), under `failure:` — three half-recorded positions among five lines,
+/// one line said, the file kept as written; no malformed name, no line. The
+/// scan's demotion is [`demoted`]'s, which the feed's reader below the window
+/// runs on each line it reads, so the two agree on every entry.
 #[test]
 fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
-    let mut entries: BTreeMap<u64, CommitMeta> = [
+    let entries = [
         (20, recorded("insert", &["1.0.1.0.1"], 1, Some("bare"))),
         (24, recorded("insert", &["1.0"], 2, Some("bare"))),
         (29, recorded("make_link", &["1.0.2.0.2", "not an address"], 3, Some("bare"))),
         (31, CommitMeta::bare()),
         (32, recorded("insert", &["1.0"], 4, Some("bare"))),
-    ]
-    .into_iter()
-    .collect();
-    let lines = Lines::new();
-    demote_malformed_names(&mut entries, &lines);
-    assert_eq!(
-        lines.said().lock().as_slice(),
-        ["failure: commits.log: 3 positions carry malformed document names, the first at \
-          position 24; those positions serve as bare entries"],
-        "one line for the three"
-    );
-    for at in [24, 29, 32] {
-        assert!(matches!(entries[&at], CommitMeta::Bare { .. }), "{at} is demoted");
+    ];
+    for (at, meta) in &entries {
+        let (demoted_meta, was) = demoted(meta.clone());
+        let malformed = [24, 29, 32].contains(at);
+        assert_eq!(was, malformed, "{at}: demoted iff a name is malformed");
+        assert_eq!(matches!(demoted_meta, CommitMeta::Bare { .. }), malformed || *at == 31, "{at}");
     }
-    assert!(matches!(entries[&20], CommitMeta::Recorded { .. }), "a good record stands");
-    let lines = Lines::new();
-    demote_malformed_names(&mut entries, &lines);
-    assert!(lines.said().lock().is_empty(), "nothing malformed left: no line");
+    // The same lines as a file at or below a head of 40, scanned as the open
+    // scans it: the three counted with the first, every line counted, the
+    // demoted held bare, the file untouched.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file: Vec<u8> = entries.iter().flat_map(|(at, meta)| entry_line(*at, meta)).collect();
+    std::fs::write(dir.path().join(SIDECAR_FILE), &file).expect("the file");
+    let said_by_scan = {
+        let mut f = File::open(dir.path().join(SIDECAR_FILE)).expect("open");
+        let scanned = scan(&mut f, 40, 40).expect("the scan");
+        assert_eq!(scanned.malformed, Some((3, 24)), "three demoted, the first at 24");
+        assert_eq!((scanned.count, scanned.bare), (5, 4), "every line counted, the demoted bare");
+        scanned
+            .window
+            .iter()
+            .map(|(at, m)| (*at, matches!(m, CommitMeta::Bare { .. })))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(said_by_scan, [(20, false), (24, true), (29, true), (31, true), (32, true)]);
+    assert_eq!(
+        std::fs::read(dir.path().join(SIDECAR_FILE)).expect("read"),
+        file,
+        "the file keeps the lines as written"
+    );
+    let line = MalformedNamesLine {
+        file: SIDECAR_FILE,
+        positions: 3,
+        first: 24,
+        case: MalformedCase::Demoted,
+    };
+    assert_eq!(
+        line.to_string(),
+        "commits.log: 3 positions carry malformed document names, the first at position 24; \
+         those positions serve as bare entries"
+    );
 }
 
 /// Checks that a rewrite failed past its rename stops the log, said once.
 ///
 /// The line (`operations.md` §1.1 row 29) names the last entry the
 /// rewritten file holds — the position the next open's walk starts above —
-/// and what the stop costs until the restart. A second compacting rewrite
-/// on the stopped log still runs: the file rewritten behind the new fence,
+/// and what the stop costs until the restart. A second rewrite on the
+/// stopped log still runs: the file rewritten keeping every line it held,
 /// the write held in memory since the stop written whole into it, the
 /// stop's position moved to its last entry, and no line added.
 #[test]
@@ -1174,7 +1203,7 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
         log.entries.insert(at, CommitMeta::bare());
     }
     log.fail_next_rewrite_past_rename();
-    let refused = log.compact_to(1).expect_err("the reopen is refused");
+    let refused = log.rewrite_whole(1).expect_err("the reopen is refused");
     assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
     assert_eq!(log.stopped_since(), Some(4), "stopped at the rewritten file's last entry");
     let stop_line = "failure: commits.log rewrite failed past its rename: test seam: the rewritten \
@@ -1184,7 +1213,7 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
     assert_eq!(log.lines.said().lock().as_slice(), [stop_line]);
     assert_eq!(
         std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read"),
-        "{\"min_since\":1}\n{\"at\":2}\n{\"at\":3}\n{\"at\":4}\n",
+        "{\"at\":1}\n{\"at\":2}\n{\"at\":3}\n{\"at\":4}\n",
         "the first rewrite is in place"
     );
 
@@ -1193,13 +1222,16 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
     let held = log.record(&serial.lock(), 10, "insert", vec![], "bare".into(), None, None);
     assert!(matches!(held, Some(Recorded::Appended(_))), "recorded, its line not written");
     log.fail_next_rewrite_past_rename();
-    let refused = log.compact_to(2).expect_err("refused again");
+    let refused = log.rewrite_whole(10).expect_err("refused again");
     assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
     assert_eq!(log.stopped_since(), Some(10), "the stop moved to the second rewrite's last entry");
     let rewritten = std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read");
     let at = rewritten.find("{\"at\":10,").expect("the held write is in the rewritten file");
     let (kept, held) = rewritten.split_at(at);
-    assert_eq!(kept, "{\"min_since\":2}\n{\"at\":3}\n{\"at\":4}\n", "the second rewrite ran");
+    assert_eq!(
+        kept, "{\"at\":1}\n{\"at\":2}\n{\"at\":3}\n{\"at\":4}\n",
+        "the second rewrite kept every line"
+    );
     let held: serde_json::Value = serde_json::from_str(held).expect("the file's one last line");
     assert_eq!(
         (held["op"].as_str(), held["key"].as_str()),

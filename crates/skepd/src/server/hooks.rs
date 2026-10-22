@@ -1112,7 +1112,7 @@ impl Daemon {
     /// consequence a checkpoint has (`Kernel::checkpoint`), off the write
     /// path's guard, which is exactly what the daemon's checkpoint thread
     /// does when the cadence's flag is due (that thread adds the byte bound's
-    /// and the floor's re-read and the feed's compaction, which
+    /// and the floor's re-read and the feed's figures, which
     /// [`Daemon::service_the_checkpoint_now`] runs). It becomes the newest
     /// retained checkpoint, which is what the head suite drives the head's
     /// trigger (b) with, without committing a whole
@@ -1135,9 +1135,9 @@ impl Daemon {
     ///
     /// **Test hook** (the same standing). It runs on the calling thread: the
     /// checkpoint, and on a landing the byte bound and the media floor
-    /// re-read from it and the change feed's five files compacted to the
-    /// reclaim floor; on a failure the operator's one line — so a suite
-    /// drives the thread's whole act without waiting on the thread.
+    /// re-read from it and the change feed's figures read for the line; on
+    /// a failure the operator's one line — so a suite drives the thread's
+    /// whole act without waiting on the thread.
     #[doc(hidden)]
     pub fn service_the_checkpoint_now(&self) {
         self.service_the_checkpoint();
@@ -1175,11 +1175,11 @@ impl Daemon {
     ///
     /// **Test hook** (the same standing). The bounds are the commit count and
     /// the bytes (`Kernel::set_cadence_commits`, `Kernel::set_cadence_bytes`),
-    /// so no checkpoint lands on this daemon's own trigger for its life, the
-    /// journal reclaims nothing and the feed's files compact nothing. For a
-    /// suite whose subject is a board that must stay *whole* from genesis —
-    /// a cold mirror opened over it, a measure of the open's cost — and
-    /// nothing else: `checkpoint_now` still takes a checkpoint on demand.
+    /// so no checkpoint lands on this daemon's own trigger for its life and
+    /// the journal reclaims nothing. For a suite whose subject is a board
+    /// whose STATES must stay whole from genesis — a measure of the open's
+    /// cost, a history read at any position — and nothing else:
+    /// `checkpoint_now` still takes a checkpoint on demand.
     /// The checkpoint thread re-reads the byte bound only after a landing,
     /// and none lands, so the parked bounds hold.
     #[doc(hidden)]
@@ -1215,7 +1215,7 @@ impl Daemon {
     /// Fails the feed's next rewrite past its rename, in each of its files.
     ///
     /// **Test hook** (the same standing). Each of the five files' next
-    /// compaction rewrite is refused at the reopen of the file it has just
+    /// rewrite — a landing's — is refused at the reopen of the file it has just
     /// renamed into place — so a suite reaches the stop that arm carries: the
     /// file takes no further line this uptime, said once, the next open
     /// re-deriving. Each file's arm disarms itself at the one rewrite it

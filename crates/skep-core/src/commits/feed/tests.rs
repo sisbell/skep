@@ -104,10 +104,11 @@ fn a_derived_cut_says_it_is_re_derived_and_a_failure_names_its_file() {
 /// They are the walk thread's three for the bare positions the index lost
 /// (m15) — the `open:` line ahead of the cost, the `progress:` line while
 /// it sorts and the `landing:` line once done, with the lock's span — the
-/// journal's refusal of that classification in the kernel's words, what the
-/// open's compaction dropped below the reclaim floor, and, last, how far
-/// back `/changes` answers, what waits on the walk where anything pends —
-/// the region, the set, or both — and how long the open took.
+/// journal's refusal of that classification in the kernel's words, the hole
+/// the files opened with, where one stands, with and without a line held
+/// above it, and, last, how far back `/changes` answers, what waits on the
+/// walk where anything pends — the region, the set, or both — and how long
+/// the open took.
 #[test]
 fn the_walks_sort_lines_and_the_opens_lines_render_the_ruled_words() {
     assert_eq!(
@@ -187,9 +188,16 @@ fn the_walks_sort_lines_and_the_opens_lines_render_the_ruled_words() {
          alone"
     );
     assert_eq!(
-        OpenCompactionLine { floor: 2049, dropped: 7 }.to_string(),
-        "the change feed's files compacted below the reclaim floor at position 2049: 7 \
-         entries dropped"
+        OpenHoleLine { fence: 2048, floor: Some(2049) }.to_string(),
+        "the change feed's files hold no line at or below position 2048: an earlier build's \
+         compaction, or a walk the journal refused, left the fence there; /changes answers 410 \
+         history_reclaimed for every since below position 2049, the first line held"
+    );
+    assert_eq!(
+        OpenHoleLine { fence: 2048, floor: None }.to_string(),
+        "the change feed's files hold no line at or below position 2048: an earlier build's \
+         compaction, or a walk the journal refused, left the fence there; no line is held above \
+         it"
     );
 }
 

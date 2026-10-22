@@ -871,7 +871,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 404    | `blob_damaged`              | the fetch's file is not the deposit the cell names — the wrong length, or the wrong bytes under the right name; carries `hash` and `size` (§Media, THE FETCH) |
 | 503    | `fetch_busy`                | all fetch permits are in use; retry shortly (§Media, THE FETCH) |
 | 503    | `upload_busy`               | all upload permits are in use — the blob upload's creation or resume past the upload pool, before any body byte; retry shortly (§Media, THE PERMIT) |
-| 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
+| 410    | `history_reclaimed`         | the position (`/op-at`) predates retained history, or the `since` fence (`/changes`) lies below the first line the change feed's files hold — a hole an earlier build's compaction or an un-re-coverable lost region left, never the journal's reclamation, which the feed outlives (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
 | 503    | `write_busy`                | all write permits are in use — a write on `/op` past the write permit pool, refused before the credential lock and the guard are taken, nothing committed (§The model); carries `op`; retry shortly |
@@ -4211,9 +4211,12 @@ Every response names where it sits in the one committed log — `at` on a
 write acknowledgment, `as_of` on a read. Those numbers are **positions**:
 durable coordinates of committed states, stable across daemon restarts.
 `0` is the empty genesis state. A client that keeps the positions from its
-own history can ask for any read to be answered as of any of them; history
-comes from the substrate's journal itself, never from a client-side
-reconstruction.
+own history can ask for any read to be answered as of any of them; a past
+STATE comes from the substrate's journal itself, never from a client-side
+reconstruction, and is bounded by the journal's retention (below), while
+the record of EVENTS — what changed at each position, when and by whose
+hand — is the change feed's (§The change feed), kept whole from genesis
+whatever the journal reclaims.
 
 **`POST /op-at`** — body `{"at": <position>, "frame": {…}}`, where `frame`
 is an ordinary `/op` frame (§Operations, same codec; the session token is
@@ -4750,17 +4753,36 @@ byte-exact, `more` true for the seed's rows past it:
 {"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":true}
 ```
 
-**Retention.** The feed's memory is the daemon's `commits.log` sidecar
-plus what the journal can still reconstruct. When `since` reaches below
-that — reclaimed or unreadable journal regions — the answer is the same
-discipline as `/op-at`: `410 {"error": "history_reclaimed", "floor": F?}`,
-`F` the oldest position that still has an entry, the same for every class
-(positions are class-invariant). A malformed query
-(missing `since`, a non-integer, an out-of-range `limit`, an `under` that
-is not a dotted-decimal tumbler, a `drafts` that is neither `true` nor
-`false`, a repeated or unknown parameter) is `400 {"error":
-"malformed_changes", "detail": …}` — as is a `limit` whose page would pass
-the byte budget (Paging, above), that body carrying `budget` and `fits`.
+**Retention.** The feed is kept whole from genesis: the daemon's
+`commits.log` sidecar and its four derived files are never compacted to
+the journal's reclaim floor, so every position that ever had an entry —
+its time, its hand, its op, its documents, its link address and its
+publish terms — answers at any age, and `GET /changes?since=0` reads a
+board's whole record of events from its first commit however many
+checkpoints have landed. The journal's reclamation bounds the board's
+STATES alone: `/op-at` below the floor answers `410 history_reclaimed` as
+§Reading history says, while `/changes` at the same positions serves
+their rows. The daemon holds a window of the newest positions' entries in
+memory (`FEED_RESIDENT_WINDOW` = 2,048 positions, a daemon constant) and
+reads the rest from its files by position, so a page's bytes never depend
+on which side of the window its positions lie, and the files grow by
+about one line per file per commit for the life of the board (RUNBOOK §1
+gives the figure to size a volume by). `410 {"error":
+"history_reclaimed", "floor": F?}` is answered on `/changes` for one
+condition alone: a `since` below the first line the feed's files hold —
+a hole an earlier build's compaction left, which this build keeps as it
+found it, or a region a lost or torn `commits.log` left that the journal
+could not re-cover (Rebuilding, below) — `F` the first position held,
+the same for every class (positions are class-invariant); never for a
+position the journal has reclaimed but the feed still holds. A page below
+the window whose files the OS will not read is `500 {"error":
+"history_io", "detail": …}`, the history surface's own refusal for a
+record it cannot read. A malformed query (missing `since`, a non-integer,
+an out-of-range `limit`, an `under` that is not a dotted-decimal tumbler,
+a `drafts` that is neither `true` nor `false`, a repeated or unknown
+parameter) is `400 {"error": "malformed_changes", "detail": …}` — as is
+a `limit` whose page would pass the byte budget (Paging, above), that
+body carrying `budget` and `fits`.
 
 **Rebuilding.** A lost or torn `commits.log` is re-covered behind the
 listener: the open records the positions the file does not cover and
@@ -4795,23 +4817,24 @@ sidecars in the data dir — `feed-index.log` (document → positions),
 (position → the owner accounts whose drafts it names) — appended at
 commit outside the journal transaction, tail-checked against the head at
 open and rebuilt from `commits.log` and the journal on loss. The five are
-COMPACTED to the journal's reclaim floor — their entries below it dropped
-and each file rewritten whole — at open and, the floor moving at a
-checkpoint and at no other moment, after each checkpoint the daemon's own
-checkpoint thread lands, while serving; a rewrite that fails past its
-rename there STOPS that file for the uptime, said once on the operator
-stream, the next open re-deriving it, and fails no write. They persist
-nothing about the world and decide nothing about what you may see: an
-entry's class is the read predicate's, re-applied per rendered entry. A
-fifth file in their shape has a class of its own: `feed-attest.log`, THE
-ATTEST STORE (position → the marker slot's `alg` tag and `sig` hex, one
-line per attested commit), appended at commit from the very value the
-write-path check admitted and rebuilt from the journal's markers above
-the reclaim floor. Below the floor — where `commits.log` and the four
-drop their entries (Retention, above) — it KEEPS its lines: the
+KEPT WHOLE from genesis (Retention, above): no line is dropped for the
+journal's reclamation, and the one rewrite any of them takes — the walk's
+landing after a lost or torn `commits.log` (Rebuilding, above) — writes
+every line the file held and adds the landed ones; a rewrite that fails
+past its rename there STOPS that file for the uptime, said once on the
+operator stream, the next open re-deriving it, and fails no write. The
+four persist nothing about the world and decide nothing about what you
+may see: an entry's class is the read predicate's, re-applied per
+rendered entry. A fifth file in their shape has a class of its own:
+`feed-attest.log`, THE ATTEST STORE (position → the marker slot's `alg`
+tag and `sig` hex, one line per attested commit), appended at commit from
+the very value the write-path check admitted and rebuilt from the
+journal's markers above the reclaim floor. Below the floor the
 checkpoint holds no marker, so a line there is an entry signature's only
 copy at the origin, primary state and not a projection, backed up with
-the board directory as `blobs/` is; a line lost there is served as
+the board directory as `blobs/` is — the class the other five now share,
+the attest store having been the first kept — and a row below the floor
+takes its `attest` off that line; a line lost there is served as
 `attest: null`. `commits.log` records only THAT an entry was signed and
 by which carrier, never the signature itself; a bare line of it carries
 the journal's answer for its row under one `journal` member, written by

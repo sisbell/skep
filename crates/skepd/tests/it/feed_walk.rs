@@ -26,9 +26,10 @@
 //! * T9 — the walk's death: the catch's line once, the board serving, the
 //!   region refused, a write admitted, the standing line's clause, and a
 //!   reopen walking again.
-//! * T10 — a checkpoint during the walk: the fence moves in memory and no
-//!   file is written, line 25 saying the files wait on the walk's landing;
-//!   the landing's fence is the floor as it then stands, positions below it
+//! * T10 — a checkpoint during the walk: no file is written and no fence
+//!   moves, line 25 saying what the feed holds; the landing's fence is the
+//!   walk's own, the journal having refused the boundaries the checkpoint
+//!   reclaimed, written after every line the file held, positions below it
 //!   `410 history_reclaimed` with the floor, those above served.
 //! * T11 — a derived file's landing rewrite refused before its rename: said
 //!   once with the fence the file stands at, the file stopped there, the
@@ -55,8 +56,9 @@
 //!   pends the rest, serves at once, and lands them once each.
 //! * T16 — a supervisor restarting before the sort finishes sees `/health`
 //!   each time, and the sort completes across the restarts.
-//! * T17 — a checkpoint during the sort moves the fence in memory and
-//!   rewrites nothing; the landing writes the compaction it owed.
+//! * T17 — a checkpoint during the sort rewrites nothing and moves no
+//!   fence; the positions it reclaimed land unclassified, served to every
+//!   class.
 //! * T18 — a torn log and a lost index pend together: one walk, one landing
 //!   with a line per file, the pages as never lost.
 //!
@@ -860,10 +862,12 @@ fn rotate_a_segment(port: u16, session: &str, doc: &str) {
 /// `walk_min_since` drops what the journal reclaimed"). A board with two
 /// checkpoints, A then B, inside what becomes the region; the walk held, a
 /// third checkpoint serviced as the checkpoint thread services one — the
-/// floor moves to B — and the file's bytes do not change; the landing's
-/// fence is the floor as it then stands: positions below B answer `410
-/// history_reclaimed` naming B as the floor, B itself and everything above
-/// serve.
+/// floor moves to B — and the file's bytes do not change, no fence moves
+/// at the checkpoint, and a page into the region stays refused
+/// retry-class; the landing's fence is the walk's own, the journal having
+/// refused the boundaries below B: written after the lines the file held,
+/// every one kept, positions below B answer `410 history_reclaimed` naming
+/// B as the floor, B itself and everything above serve.
 #[test]
 fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
     let _held = hold();
@@ -917,9 +921,9 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
         "FINDING: the checkpoint's compaction rewrote the file under the pending region"
     );
     assert!(sd.daemon().feed_pending_region().is_some(), "still pending");
-    // Line 25 says what the compaction did: the resident entries trimmed
-    // below B, the files' rewrite waiting on the walk's landing over the
-    // region — never that the files compacted, since no file was written.
+    // Line 25 says what the feed holds — every line from position 1 — and
+    // never that anything compacted or waits on the landing: the feed's
+    // files are kept whole, and a landing moves nothing of them.
     let landed = format!("landing: checkpoint at position {} landed", floor.0);
     let line_25 = sd
         .daemon()
@@ -928,20 +932,16 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
         .rfind(|line| line.starts_with(&landed))
         .expect("the third checkpoint's landing line");
     assert!(
-        line_25.contains(&format!(
-            "; the change feed's files wait on the walk's landing over positions \
-             ({region_low}, {region_head}] for their rewrite, the resident entries trimmed below \
-             position {b} in "
-        )),
-        "line 25 names the region and the fence it trimmed to: {line_25}"
+        line_25.contains("; the change feed holds every line from position 1: commits.log "),
+        "line 25 says what the feed holds: {line_25}"
     );
     assert!(!line_25.contains("compacted below"), "no file was compacted: {line_25}");
-    // The fence moved in memory: below B is reclaimed at once, as /op-at
-    // answers it, the floor named B — the region's first position above
-    // the fence, which the landing has yet to prove — never a position
-    // above the region.
+    assert!(!line_25.contains("wait on the walk"), "no file waits on the landing: {line_25}");
+    // No fence moves at a checkpoint: a page from A reaches the pending
+    // region and is refused retry-class, as every page into it is, and the
+    // feed holds its lines below A as ever.
     let (st, v) = changes(port, Some(&owner), &format!("since={}", a));
-    assert_eq!((st, v["error"].as_str(), v["floor"].as_u64()), (410, Some("history_reclaimed"), Some(b)), "{v}");
+    assert_eq!((st, v["error"].as_str()), (503, Some("feed_rebuilding")), "into the region: {v}");
     let (st, v) = changes(port, Some(&owner), &format!("since={}", b - 1));
     assert_eq!((st, v["error"].as_str()), (503, Some("feed_rebuilding")), "from the floor, into the region: {v}");
 
@@ -968,8 +968,16 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
     // more than the positions from B to the head.
     assert!((4..=head - b + 1).contains(&walked), "B and every boundary above it to the head: {landing:?}");
     println!("feed walk over a bulk-written world: {walked} boundaries in {ms} ms ({:.0} ms per boundary)", ms as f64 / walked as f64);
-    let text = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
-    assert!(text.starts_with(&format!("{{\"min_since\":{}}}\n", b - 1)), "the landing's fence is the floor's: {text}");
+    // The landing keeps every line the file held and writes the walk's
+    // fence after them — the journal refused the boundaries below B once
+    // the third checkpoint reclaimed them — then the landed lines.
+    let text = std::fs::read(dir.path().join("commits.log")).expect("commits.log");
+    assert!(text.starts_with(&as_opened), "the torn file's own lines first, verbatim");
+    assert!(
+        text[as_opened.len()..].starts_with(format!("{{\"min_since\":{}}}\n", b - 1).as_bytes()),
+        "the landing's fence is the walk's own, after the kept lines: {}",
+        String::from_utf8_lossy(&text)
+    );
     let (st, v) = changes(port, Some(&owner), &format!("since={}", b - 2));
     assert_eq!((st, v["error"].as_str(), v["floor"].as_u64()), (410, Some("history_reclaimed"), Some(b)), "{v}");
     let (st, v) = changes(port, Some(&owner), &format!("since={}", b - 1));
@@ -1401,19 +1409,18 @@ fn a_supervisor_restarting_before_the_sort_finishes_sees_health_each_time_and_th
     sd.shutdown();
 }
 
-/// T17 — A CHECKPOINT DURING THE SORT DEFERS ITS REWRITE TO THE LANDING
-/// (the ruling: "`compact_below_reclaim_floor` moves the fence in memory
-/// and writes nothing while the set pends"). T10's board — two checkpoints,
-/// A then B, inside what becomes the set — its tail above A bared and its
-/// index lost; the walk held, a third checkpoint serviced as the checkpoint
-/// thread services one: the floor moves to B, and `commits.log` and the four
-/// derived files do not change by a byte; line 25 says the files wait on
-/// the walk's landing over the set, the resident entries trimmed below B;
-/// positions below B answer `410 history_reclaimed` naming B at once, and
-/// the set drops them. Released, the landing writes what the compaction
-/// owed, as a never-lost board's compaction would have: `commits.log`
-/// behind the fence B − 1, no index record below B — B itself unclassifiable,
-/// the base embodying it the floor, said once — and the feed serving from B.
+/// T17 — A CHECKPOINT DURING THE SORT MOVES NOTHING OF THE FEED. T10's
+/// board — two checkpoints, A then B, inside what becomes the set — its
+/// tail above A bared and its index lost; the walk held, a third checkpoint
+/// serviced as the checkpoint thread services one: the floor moves to B,
+/// and `commits.log` and the four derived files do not change by a byte;
+/// line 25 says what the feed holds; no fence moves, the set stays whole,
+/// and a page into it stays refused retry-class. Released, the sort lands
+/// every position: those the reclamation put below B, and B itself, proved
+/// from the base embodying it, the journal refuses to classify — said once
+/// with their count — and each is served to every class, its position
+/// alone, no index record naming it; the log as the open found it, appended
+/// to, no fence written.
 #[test]
 fn a_checkpoint_during_the_sort_defers_its_rewrite_to_the_landing() {
     let _held = hold();
@@ -1493,24 +1500,17 @@ fn a_checkpoint_during_the_sort_defers_its_rewrite_to_the_landing() {
         .rfind(|line| line.starts_with(&landed))
         .expect("the third checkpoint's landing line");
     assert!(
-        line_25.contains("; the change feed's files wait on the walk's landing over ")
-            && line_25.contains(&format!(
-                " bare positions the index lost for their rewrite, the resident entries trimmed \
-                 below position {b} in "
-            )),
-        "line 25 names the set and the fence it trimmed to: {line_25}"
+        line_25.contains("; the change feed holds every line from position 1: commits.log "),
+        "line 25 says what the feed holds: {line_25}"
     );
     assert!(!line_25.contains("compacted below"), "no file was compacted: {line_25}");
+    assert!(!line_25.contains("wait on the walk"), "no file waits on the landing: {line_25}");
+    // No fence moves at a checkpoint, and the set stays whole: a page from
+    // A reaches the set and is refused retry-class.
     let (st, v) = changes(port, Some(&owner), &format!("since={a}"));
-    assert_eq!(
-        (st, v["error"].as_str(), v["floor"].as_u64()),
-        (410, Some("history_reclaimed"), Some(b)),
-        "{v}"
-    );
-    assert!(
-        sd.daemon().feed_pending_set().iter().all(|&at| at >= b),
-        "the set drops what the journal reclaimed"
-    );
+    assert_eq!((st, v["error"].as_str()), (503, Some("feed_rebuilding")), "into the set: {v}");
+    assert_eq!(sd.daemon().feed_pending_set(), set, "the set is whole: nothing drops it");
+    let below_the_floor: Vec<u64> = set.iter().copied().filter(|&at| at <= b).collect();
     let (st, v) = changes(port, Some(&owner), &format!("since={}", b - 1));
     assert_eq!(
         (st, v["error"].as_str()),
@@ -1519,28 +1519,45 @@ fn a_checkpoint_during_the_sort_defers_its_rewrite_to_the_landing() {
     );
 
     release_and_land(&sd);
-    let text = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
-    assert!(
-        text.starts_with(&format!("{{\"min_since\":{}}}\n", b - 1)),
-        "the compaction the landing owed, written: {text}"
-    );
+    // No region pended, so no fence is written and the log is as it stood,
+    // appended to: the positions the journal refused to classify — those
+    // the third checkpoint reclaimed below B, and B itself, proved from the
+    // base embodying it — are landed unclassified, served to every class,
+    // and no index record names them; the refusal is said once with their
+    // count and the first of them.
+    let text = std::fs::read(dir.path().join("commits.log")).expect("commits.log");
+    assert!(text.starts_with(&log_as_opened), "the log as the open found it, appended to");
+    assert!(!text.windows(9).any(|w| w == b"min_since"), "no fence: no region pended");
     let records = index_records(dir.path());
     assert!(
-        records.iter().all(|&at| at > b),
-        "no index record at or below the floor's own boundary: {records:?}"
+        records.iter().all(|at| !below_the_floor.contains(at)),
+        "no index record names a refused position: {records:?} against {below_the_floor:?}"
+    );
+    assert!(
+        records.iter().any(|&at| at < a) && records.iter().any(|&at| at > b),
+        "the records below A, re-derived from their lines, and those sorted above B: {records:?}"
     );
     let refused = lines_with(&sd, "failure: feed-index.log: the journal refused to classify ");
-    assert_eq!(
-        refused.len(),
-        1,
-        "B, proved from the base embodying it, is unclassifiable, said once: {refused:?}"
+    assert_eq!(refused.len(), 1, "the refusal, said once: {refused:?}");
+    assert!(
+        refused[0].contains(&format!(
+            "the journal refused to classify {} bare positions, the first at position {} (",
+            below_the_floor.len(),
+            below_the_floor[0]
+        )),
+        "every position the reclamation put below B, and B itself: {refused:?}"
     );
-    assert!(refused[0].contains(&format!("the first at position {b} (")), "{refused:?}");
-    let (st, v) = changes(port, Some(&owner), &format!("since={}", b - 1));
+    let (st, v) = changes(port, Some(&owner), &format!("since={a}"));
     assert_eq!(st, 200, "{v}");
     let served = positions(&v);
-    assert_eq!(served.first(), Some(&b), "the floor itself serves: {served:?}");
-    assert!(served.contains(&head), "and the feed runs to the head: {served:?}");
+    assert!(
+        below_the_floor.iter().all(|at| served.contains(at)),
+        "every refused position serves, bare: {served:?} against {below_the_floor:?}"
+    );
+    assert!(
+        served.contains(&b) && served.contains(&head),
+        "and the feed runs to the head: {served:?}"
+    );
     sd.shutdown();
 }
 

@@ -65,8 +65,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `feed_walk_gone` (`FeedPending` with `is_empty`, what the walk behind the
   listener has yet to land: the region a lost or torn `commits.log` left
   uncovered, and the bare positions a lost `feed-index.log` left unsorted,
-  counted as `Unsorted`), `compact_feed_below_reclaim_floor`
-  (`FeedCompaction`),
+  counted as `Unsorted`), `feed_figures` (`FeedFigures`: what the change
+  feed holds — the first position its files hold a line for, `commits.log`'s
+  size, the resident window's count and the most it has held — the files
+  being kept whole from genesis, a resident window of
+  `FEED_RESIDENT_WINDOW` positions over them and the rest read from disk by
+  position), `feed_first_held`, the same first position read off a data
+  directory's `commits.log` with no feed opened, for the inventory,
   `stopped_feed_files` (`StoppedFile`), `attest_store_figures`
   (`AttestStoreFigures`), what the never compacted `feed-attest.log` holds
   on disk and in memory, `checkpoint_signal`
@@ -84,8 +89,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The bounds**, `limits` — `MAX_REQUEST_BODY`, `EDGE_HOLD_DOWN` and
   `STANDING_INTERVAL`, the three the daemon reads too, the last its panic
   hook's rate beside the standing line's cadence;
-  `FEED_WALK_PROGRESS_BOUNDARIES`, `FEED_WALK_PROGRESS_INTERVAL` and
-  `MAX_CHANGES_PAGE_BYTES`, the core's own.
+  `FEED_WALK_PROGRESS_BOUNDARIES`, `FEED_WALK_PROGRESS_INTERVAL`,
+  `MAX_CHANGES_PAGE_BYTES` and `FEED_RESIDENT_WINDOW`, the change feed's
+  resident window in positions, the core's own.
 - **The lock**, `serial` — `SerialGuard`, the write-serialization guard
   the routes hold across the door, and `SerialFigures` (`since`), its
   takes and waits, which the daemon's landing line says.
@@ -93,11 +99,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `#[doc(hidden)]`) — the feed walk's hold (before its first position, or
   after so many of a lost index's positions sorted), its notice and its
   panic arm, the walk's pending region and pending set, whether it has
-  landed, and its progress cadence, the head writer's clock and its one
-  refusal, the registry seed's three (a type hidden from a board's seed,
-  every type lifted, a refusal of the seed's n-th commit), the feed's and
-  the attest store's failure arms and the attest store's sync mark, the
-  lines said, the checkpoint signal's tick. Forwards nothing.
+  landed, and its progress cadence, the feed's resident window moved for
+  a board before its open (`set_feed_resident_window`), the head writer's
+  clock and its one refusal, the registry seed's three (a type hidden from
+  a board's seed, every type lifted, a refusal of the seed's n-th commit),
+  the feed's and the attest store's failure arms and the attest store's
+  sync mark, the lines said, the checkpoint signal's tick. Forwards
+  nothing.
 
 Its modules, each with a line saying what it holds, are declared in
 `src/lib.rs`; the rules that hold across its files, in the workspace's

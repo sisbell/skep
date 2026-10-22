@@ -1949,3 +1949,41 @@ pub fn close_session(port: u16, token: &str) {
 pub fn revoke_grant(port: u16, signed: &str, grant: &str) -> String {
     acked_addr(&op(port, Some(signed), &typed_link_frame(CLAIMANT_DOC1, &[grant], &[], T_GRANT)))
 }
+
+/// Tears `commits.log` in `dir` back to the entry at `low`: every line
+/// whose `at` lies above `low` dropped, so the next open's region is
+/// `(low, head]`, which the walk behind the listener re-covers. The shape a
+/// crash's torn tail leaves, written by hand; the retention suite
+/// (`feed_retained.rs`), the change-feed suite's stop case and the standing
+/// line's share it (the walk suite keeps its own, whose answer it reads).
+pub fn tear_commits_log_to(dir: &Path, low: u64) {
+    let path = dir.join("commits.log");
+    let text = std::fs::read_to_string(&path).expect("commits.log");
+    let kept: String = text
+        .lines()
+        .filter(|line| {
+            let v: Value = serde_json::from_str(line).expect("a line is JSON");
+            v.get("at").and_then(Value::as_u64).is_none_or(|at| at <= low)
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&path, kept).expect("tear the file");
+}
+
+/// Copies the board at `src` — every file and directory under it — to `dst`.
+///
+/// A copy taken with the board stopped (RUNBOOK §7 step 1's second way),
+/// over which a second daemon is opened beside the first's: the retention
+/// suite judges two daemons over one board's files against each other.
+pub fn copy_board(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("create the copy");
+    for entry in std::fs::read_dir(src).expect("read the board") {
+        let entry = entry.expect("a directory entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_board(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).expect("copy a file");
+        }
+    }
+}

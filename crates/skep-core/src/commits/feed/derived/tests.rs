@@ -470,3 +470,36 @@ fn a_refused_open_names_its_file_and_keeps_the_kind() {
     assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "the kind is kept");
     assert_eq!(refused.to_string(), "feed-streams.log: Permission denied (os error 13)");
 }
+
+/// A file out of position order is seen at the replay — the flag, the
+/// entries in file order — and rewritten sorted on demand, every record
+/// kept and the fence at its coverage; the reopen sees it in order. The
+/// read by position rests on the order, so no page depends on the order a
+/// file's lines happen to sit in.
+#[test]
+fn a_file_out_of_order_is_seen_and_rewritten_sorted_keeping_every_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(STREAMS_FILE);
+    std::fs::write(
+        &path,
+        "{\"at\":9,\"owners\":[\"1.0.2\"]}\n{\"at\":3,\"owners\":[\"1.0.3\"]}\n{\"covered\":6}\n\
+         {\"at\":12,\"owners\":[\"1.0.2\"]}\n",
+    )
+    .expect("the file");
+    let (mut f, entries, replayed) = open(dir.path(), STREAMS_FILE, 20, |_| true).expect("open");
+    assert!(replayed.disordered, "position 3 after 9");
+    let ats = |entries: &Entries| entries.iter().map(|(at, _)| *at).collect::<Vec<_>>();
+    assert_eq!(ats(&entries), vec![9, 3, 12], "replayed in file order");
+    assert_eq!(f.coverage(), 12);
+    f.sort_in_place().expect("sorted");
+    let text = std::fs::read_to_string(&path).expect("the file");
+    assert_eq!(
+        text,
+        "{\"at\":3,\"owners\":[\"1.0.3\"]}\n{\"at\":9,\"owners\":[\"1.0.2\"]}\n\
+         {\"at\":12,\"owners\":[\"1.0.2\"]}\n{\"covered\":12}\n",
+        "every record, sorted, the fence at the coverage"
+    );
+    let (_, entries, replayed) = open(dir.path(), STREAMS_FILE, 20, |_| true).expect("reopen");
+    assert!(!replayed.disordered, "in order now");
+    assert_eq!(ats(&entries), vec![3, 9, 12]);
+}

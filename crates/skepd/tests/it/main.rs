@@ -24,6 +24,7 @@ mod effective_owner;
 mod embed;
 mod events;
 mod feed_class;
+mod feed_retained;
 mod feed_walk;
 mod fuzz_codec;
 // Shared plumbing, not a suite: each fuzz suite uses a subset, so the allow

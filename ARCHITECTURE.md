@@ -2882,10 +2882,17 @@ it:
    going on). The head writer and the seed are the only writers under the
    system account, and the staging draft `1.1.0.1.0.3` the one document
    either mints. Beneath them, and reachable only from them:
-   - `commits/feed.rs` — the change feed, and the one compaction of its
-     five files to the journal's reclaim floor, run at open and by the
-     daemon's checkpoint thread after any landing, its own or a backstop's,
-     its answer naming each file that stood; beneath it,
+   - `commits/feed.rs` — the change feed over its six files, kept whole
+     from genesis (wire.md §The change feed, Retention): a resident window
+     of the newest positions' entries and twins, `limits.rs`'s
+     `FEED_RESIDENT_WINDOW`, trimmed as each record moves its edge, and
+     below it the files read by position — `commits/feed/window.rs`, the
+     one on-disk read, a cursor placed by a binary search over a
+     position-ordered line file, which the page, the head writer's resume,
+     the walk's sort and the open's derivation of a file's missing tail
+     share — so a page's bytes never depend on which side of the window its
+     positions lie, and `410 history_reclaimed` on `/changes` names a hole
+     the files opened with and never the journal's floor; beneath it,
      `commits/feed/derived.rs` keeps the feed's derived index files — a
      torn tail is cut at open and said with the last trusted position, the
      bytes and that the cut part is re-derived: a recorded position's
@@ -2917,10 +2924,10 @@ it:
    format: parse, and marshal — its key-sorting `obj` and the lowercase
    hex pair are `skep-util`'s, taken as every other file takes them),
    `serial.rs` (the write-serialization lock and its guard) and
-   `limits.rs` (the six bounds the core reads: the request-body cap, the
+   `limits.rs` (the seven bounds the core reads: the request-body cap, the
    edge pairs' hold-down and the standing line's cadence, which the daemon
-   reads too, the feed walk's progress cadence and the feed's page byte
-   budget; the daemon's own seven are `skepd`'s `limits.rs`, the
+   reads too, the feed walk's progress cadence, the feed's page byte
+   budget and its resident window; the daemon's own seven are `skepd`'s `limits.rs`, the
    media resource's numbers `skep_media::limits`'s, each `pub` for its
    reader). None of these knows anything of the session layer or the
    commits; a leaf imports only leaves — and a leaf in another crate is a
@@ -2971,8 +2978,8 @@ Rules that hold across its files:
 Its unit suites sit beside their code: `auth/blocked/tests.rs`,
 `auth/session/tests.rs` (which opens a real engine), the inline suites of
 `auth/policy/*`, `commits/tests.rs` (which opens one too),
-`commits/sidecar/tests.rs`, `commits/feed/derived/tests.rs` and
-`codec/tests.rs`. Its integration suites — the session layer, the commits
+`commits/sidecar/tests.rs`, `commits/feed/derived/tests.rs`,
+`commits/feed/window/tests.rs` and `codec/tests.rs`. Its integration suites — the session layer, the commits
 and the head over a served daemon — are `skepd`'s (`tests/it`), which spawn
 the daemon they drive; its own `tests/it/` is `codec_roundtrip`, the wire
 grammar's round trips, and `tidy`.
@@ -3023,7 +3030,7 @@ down through them in this order:
 │                    any landing — its own or a           │
 │                    backstop's — the byte bound and the  │
 │                    floor re-read off the newest base,   │
-│                    the feed compacted, each landing and │
+│                    the feed's figures, each landing and │
 │                    each failure said, and once an hour  │
 │                    the standing line while a bad state  │
 │                    stands · a replace's deferred unlink │
@@ -3137,8 +3144,9 @@ the store's install — nothing above their own layer.
    inline on a writer (the write path raising the thread's signal where
    the kernel's inline count moved, the thread reading the newest
    checkpoint once on its wake and saying the backstop's line), the byte
-   bound and the media floor re-read from that checkpoint's size and the
-   change feed's five files compacted to the journal's reclaim floor; its
+   bound and the media floor re-read from that checkpoint's size and what
+   the change feed holds read for the line — its files kept whole from
+   genesis, a landing moving nothing of them; its
    wait on the signal TIMED, so that once an hour, while any standing bad
    state stands — the ten, in the order the line says them: the write
    path's halt, the kernel's poison, the journal damage a history read
@@ -3148,8 +3156,8 @@ the store's install — nothing above their own layer.
    `standing:` line naming each with its position or file, and nothing
    on a healthy board; its loop under the
    same catch, which says what is lost with it (every checkpoint the
-   backstop's, unsaid; the bound and the floor frozen; the feed's files
-   uncompacted and no standing line, until a restart); and the kernel's
+   backstop's, unsaid; the bound and the floor frozen; no standing line,
+   until a restart); and the kernel's
    own halt said once, at the write path's door where a write answers
    `poisoned` or at the handler's catch after a panic on a write (a write
    that committed before it panicked already recorded and announced by
@@ -3397,20 +3405,22 @@ imports it.
   by one rewrite, and the bare positions a lost `feed-index.log` left
   unclassified sorted by the same thread, each landed as it is sorted,
   pages reaching either refused `feed_rebuilding` meanwhile —
-  `commits.log` and the four
-  compact to the journal's reclaim floor at open and after each checkpoint
-  the checkpoint thread lands, the floor moving then and at no other
-  moment — and `feed-attest.log`, the attest store: each attested commit's
+  `commits.log` and the four KEPT WHOLE from genesis, never compacted to
+  the journal's reclaim floor, which bounds the board's states and not its
+  record of events: a window of the newest positions resident
+  (`skep-core`'s `FEED_RESIDENT_WINDOW`) and the rest read by position,
+  so the daemon's memory for the feed is bounded whatever the files'
+  size — and `feed-attest.log`, the attest store: each attested commit's
   marker slot, mirrored at commit from the value the write path admitted,
   rebuilt from the journal above the reclaim floor in one scan of the
   kernel's markers above the store's fence — a cut at open said with the
   floor and the side it reached, REBUILT where every cut line lies above
   the floor and LOST where the lines between the last trusted position
-  and the floor were taken — and the one daemon
-  file that is not a projection — below the floor the checkpoint holds no
-  marker, so its line there is the entry signature's only copy at the
-  origin, kept and never compacted, its one cut the open's tail check,
-  backed up with the board directory as the kernel's own files are. And,
+  and the floor were taken — and the first daemon file kept so — below the
+  floor the checkpoint holds no marker, so its line there is the entry
+  signature's only copy at the origin, kept and never compacted, its one
+  cut the open's tail check, backed up with the board directory as the
+  kernel's own files are. And,
   through `skep-blobs`, the media stores under `blobs/`: the deposited
   files (PRIMARY — neither prunable nor rebuildable beyond the unreferenced
   tail, restored by the exact bytes), the partials, `uploads.log` and

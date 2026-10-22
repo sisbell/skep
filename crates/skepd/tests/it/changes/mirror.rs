@@ -500,11 +500,11 @@ fn three_unreadable_slots_are_said_once_with_the_count_and_the_rows_render_null(
 }
 
 /// ABSENCE IS A VERDICT — at and below the floor (BW-01; D11's floor arm):
-/// after a reclamation drops `commits.log`'s entries below the floor,
-/// `feed-attest.log` still holds its line there (the file read directly:
-/// no route serves a below-floor position, e-Q1), and the row AT the floor
-/// — whose marker the journal refuses `Reclaimed`, the segment holding it
-/// gone — serves its slot off the kept line; with the line lost, that row
+/// after a reclamation puts `commits.log`'s entries below the floor — kept,
+/// the feed being whole from genesis — `feed-attest.log` holds its line
+/// there, the row BELOW the floor serves its slot off that line, and the
+/// row AT the floor — whose marker the journal refuses `Reclaimed`, the
+/// segment holding it gone — serves its slot off the kept line; with the line lost, that row
 /// renders `attest: null`, LOST, never absent, and still no `key`: the
 /// rebuild's one scan, asked above the fence, meets the same refusal — the
 /// fence's base is gone — and asks again AT the floor the refusal names,
@@ -535,36 +535,36 @@ fn three_unreadable_slots_are_said_once_with_the_count_and_the_rows_render_null(
 fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as_null() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = dir.path().join("feed-attest.log");
-    let (early_at, last_at, last_attest, doc) = {
+    let (early_at, early_attest, last_at, last_attest, doc) = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let doc = seed_flow(port);
         let s1 = open_session(port, 1);
         let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-        let (early_at, _) = signed_ghost_link(port, &signed, 1);
+        let (early_at, early_attest) = signed_ghost_link(port, &signed, 1);
         rotate_a_segment(port, &s1, &doc);
         let (last_at, last_attest) = signed_ghost_link(port, &signed, 2);
         assert_eq!(last_at, head(port), "the signed write is the head");
         sd.shutdown();
-        (early_at, last_at, last_attest, doc)
+        (early_at, early_attest, last_at, last_attest, doc)
     };
     reclaim_below_the_head(dir.path(), last_at);
 
-    // The store kept: the line below the floor survives in the file, and
-    // the row at the floor serves its slot off the kept line.
+    // The store kept: the line below the floor survives in the file, the
+    // row at the floor serves its slot off the kept line, and so does the
+    // row below the floor — `commits.log` keeps its entry, and the feed
+    // serves it.
     {
         let sd = spawn(dir.path());
         let port = sd.port();
         let bare = open_session(port, CLAIMANT_PRINCIPAL);
-        let (st, body) = changes_raw(port, Some(&bare), "since=0");
-        assert_eq!(st, 410, "{}", text(&body));
-        let floor = json(&body)["floor"].as_u64().expect("floor");
+        let floor = op_at_floor(port);
         assert_eq!(floor, last_at, "the floor is the checkpoint's own position, the head");
         assert!(early_at < floor);
         let commits = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
         assert!(
-            !commits.contains(&format!("{{\"at\":{early_at},")),
-            "commits.log dropped the early signed write's entry: {commits}"
+            commits.contains(&format!("{{\"at\":{early_at},")),
+            "commits.log keeps the early signed write's entry below the floor: {commits}"
         );
         let lines = attest_store_lines(dir.path());
         assert!(lines.contains_key(&early_at), "the store KEEPS its line below the floor: {lines:?}");
@@ -573,9 +573,13 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
             matches!(sd.daemon().attestation_at(Seq(last_at)), Err(skepd::HistoryError::Reclaimed { .. })),
             "the journal refuses the marker at the floor: its segment is reclaimed"
         );
-        let page = changes_ok(port, Some(&bare), &format!("since={}", floor - 1));
-        let e = entry_at(page["changes"].as_array().expect("changes"), last_at);
+        let page = changes_ok(port, Some(&bare), "since=0");
+        let rows = page["changes"].as_array().expect("changes");
+        let e = entry_at(rows, last_at);
         assert_eq!(e["attest"], last_attest, "the row at the floor serves its slot off the kept line: {e}");
+        assert_absent(e, &["key"], "a signed row");
+        let e = entry_at(rows, early_at);
+        assert_eq!(e["attest"], early_attest, "the row below the floor serves its slot too: {e}");
         assert_absent(e, &["key"], "a signed row");
         assert!(
             !sd.daemon().lines_said().iter().any(|l| l.contains("trust ends at")),
@@ -595,9 +599,7 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         let sd = spawn(dir.path());
         let port = sd.port();
         let bare = open_session(port, CLAIMANT_PRINCIPAL);
-        let (st, body) = changes_raw(port, Some(&bare), "since=0");
-        assert_eq!(st, 410, "{}", text(&body));
-        let floor = json(&body)["floor"].as_u64().expect("floor");
+        let floor = op_at_floor(port);
         assert_eq!(floor, last_at);
         let lost = format!(
             "failure: feed-attest.log: trust ends at position {trusted} (byte {valid_end} of \
@@ -784,9 +786,7 @@ fn a_line_torn_above_the_floor_is_rebuilt_though_the_last_trusted_lies_below_it(
     let sd = spawn(dir.path());
     let port = sd.port();
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    let (st, body) = changes_raw(port, Some(&bare), "since=0");
-    assert_eq!(st, 410, "{}", text(&body));
-    let floor = json(&body)["floor"].as_u64().expect("floor");
+    let floor = op_at_floor(port);
     assert!(
         trusted < floor && floor < torn_at,
         "the premise: the last trusted {trusted} below the floor {floor}, the torn {torn_at} above"

@@ -33,18 +33,15 @@
 //! the figures are read here. Every daemon is shut down before the claim
 //! returns, so no checkpoint thread outlives its test.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use skepd::Skepd;
 
 use crate::common;
 use common::{
-    acked_addr, acked_at, claim_board, device_key, get, json, op, open_session,
-    open_signed_session, spawn, spawn_configured, spawn_unclaimed, spawn_walk_failed,
-    CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
+    acked_at, claim_board, device_key, get, json, op, open_session, open_signed_session, spawn,
+    spawn_configured, spawn_unclaimed, spawn_walk_failed, tear_commits_log_to, CLAIMANT_ACCOUNT,
+    CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
 };
 
 /// The `standing:` lines the daemon has said, oldest first, as its record
@@ -105,54 +102,6 @@ fn no_line_comes(sd: &Skepd, what: &str) {
             standing_lines(sd)
         );
     }
-}
-
-/// The journal's segment files under `dir`, by name with their lengths.
-fn segments(dir: &Path) -> BTreeMap<String, u64> {
-    fs::read_dir(dir)
-        .expect("the data dir")
-        .map(|e| e.expect("an entry"))
-        .filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
-            (name.starts_with("seg-") && name.ends_with(".wal"))
-                .then(|| (name, e.metadata().expect("metadata").len()))
-        })
-        .collect()
-}
-
-/// Bulk inserts into a fresh draft until the journal has rotated its
-/// segment — a closed segment below the head, which the next landing
-/// reclaims and so compacts the feed's files (the checkpoint suite's
-/// recipe). Asserted, so a landing this suite expects to compact has
-/// something to compact.
-fn rotate_the_segment(port: u16, session: &str, dir: &Path) {
-    let draft = acked_addr(&op(
-        port,
-        Some(session),
-        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
-    ));
-    let bulk = "z".repeat(262_144);
-    for _ in 0..64 {
-        if segments(dir).len() >= 2 {
-            return;
-        }
-        acked_at(&op(
-            port,
-            Some(session),
-            &format!(
-                r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["{bulk}"]}}"#
-            ),
-        ));
-    }
-    panic!("the fixture must rotate the journal's segment: {:?}", segments(dir));
-}
-
-/// The decimal figure a line carries right after `key`.
-fn figure_after(line: &str, key: &str) -> u64 {
-    let at = line.find(key).unwrap_or_else(|| panic!("{key:?} missing from {line:?}"));
-    let digits: String =
-        line[at + key.len()..].chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().unwrap_or_else(|_| panic!("no figure after {key:?} in {line:?}"))
 }
 
 /// THE RATES — NOTHING ON A HEALTHY BOARD: an unclaimed board with nothing
@@ -365,36 +314,44 @@ fn the_write_paths_halt_is_re_said_with_its_position_and_health_says_halted_unti
 }
 
 /// m11 — A STOPPED FILE, RE-SAID WITH THE POSITION ITS STOP NAMES: each of
-/// the five files' next compaction rewrite failed past its rename (the
-/// existing drive), on a landing that compacts; the next tick names each
-/// file with its position — `commits.log` the last entry its rewritten file
-/// holds, the head, which the next open re-derives above and not the fence
-/// it rewrote behind (the landing line's "compacted below position" less
-/// one), the four derived files the coverage they fenced at, the head too —
-/// beside the board's permissive clause.
+/// the five files' landing rewrite failed past its rename (the existing
+/// drive, at the one rewrite a serving daemon makes: the walk's landing
+/// after a torn `commits.log`); the next tick names each file with its
+/// position — `commits.log` the last entry its rewritten file holds, the
+/// head, which the next open re-derives above, the four derived files the
+/// coverage they fenced at, the head too — beside the board's permissive
+/// clause.
 #[test]
 fn a_stopped_feed_file_is_re_said_with_the_position_its_stop_names() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
-    let port = sd.port();
-    let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    rotate_the_segment(port, &owner, dir.path());
-    let head = head(port);
+    let (low, top) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        let low = commit(port, &owner);
+        let mut top = low;
+        for _ in 0..3 {
+            top = commit(port, &owner);
+        }
+        sd.shutdown();
+        (low, top)
+    };
+    tear_commits_log_to(dir.path(), low);
+    let sd = crate::feed_walk::spawn_holding_the_walk(dir.path());
     sd.daemon().fail_the_feeds_next_rewrite_past_rename();
-    sd.daemon().service_the_checkpoint_now();
-    let landing = sd.daemon().checkpoint_lines().last().cloned().expect("the landing's line");
-    let fence = figure_after(&landing, "compacted below position ") - 1;
-    assert!(fence < head, "the compaction's fence lies below the head: {landing}");
-    assert_eq!(sd.daemon().stopped_feed_files().len(), 5, "every file stopped: {landing}");
+    skepd::Daemon::release_the_feed_walk();
+    wait_until("the walk's landing", || !sd.daemon().feed_walk_pending());
+    assert_eq!(sd.daemon().stopped_feed_files().len(), 5, "every file stopped");
+    assert_eq!(head(sd.port()), top, "the landing wrote the region to the head");
     sd.daemon().set_standing_interval_millis(50);
     wait_until("the stopped files' clauses", || !standing_lines(&sd).is_empty());
     assert_eq!(
         standing_lines(&sd)[0],
         format!(
-            "standing: commits.log stopped since position {head}; feed-index.log stopped \
-             since position {head}; feed-offsets.log stopped since position {head}; \
-             feed-masked.log stopped since position {head}; feed-streams.log stopped since \
-             position {head}; CLAIMED-PERMISSIVE"
+            "standing: commits.log stopped since position {top}; feed-index.log stopped \
+             since position {top}; feed-offsets.log stopped since position {top}; \
+             feed-masked.log stopped since position {top}; feed-streams.log stopped since \
+             position {top}; CLAIMED-PERMISSIVE"
         ),
         "FINDING (m11): the five files, each with the position its stop names"
     );

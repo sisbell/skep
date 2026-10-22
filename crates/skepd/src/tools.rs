@@ -385,6 +385,16 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
     let strings = |names: &[String]| {
         Value::Array(names.iter().map(|name| Value::String(name.clone())).collect())
     };
+    // The change feed's coverage: the first position `commits.log` holds a
+    // line for, read off the file alone — the one change-feed file the
+    // inventory reads, and for this member alone — `null` where the copy
+    // holds no such line, and the failure's words where the OS refused the
+    // read, so a copy whose feed file is unreadable still proves its journal.
+    let feed_from = match skep_core::commits::Commits::feed_first_held(data_dir) {
+        Ok(Some(first)) => Value::Number(first.into()),
+        Ok(None) => Value::Null,
+        Err(e) => Value::String(format!("unread: {e}")),
+    };
     Ok(obj(vec![
         ("accounts", Value::Array(accounts)),
         ("asides", Value::Number((asides as u64).into())),
@@ -397,6 +407,7 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
         (
             "journal",
             obj(vec![
+                ("feed_from", feed_from),
                 ("kept_files", Value::Array(kept_files)),
                 ("log_position", Value::Number(engine.kernel().current_seq().0.into())),
                 // The corrupt runs below the start point the open read and

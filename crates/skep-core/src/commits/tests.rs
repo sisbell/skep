@@ -512,203 +512,6 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
     );
 }
 
-/// Checks rows 27 and 28 on the door, said at every attempt.
-///
-/// A compaction rewrite that fails before its rename — a directory standing
-/// on the temp file's name, `commits.log.compact` and
-/// `feed-index.log.compact`, which no create passes — is said through the
-/// classed door under `failure:`, in the ruled words, one line per file
-/// that stood (`operations.md` §1.1 rows 27 and 28; §4 row 27's line cell;
-/// L12's door); and said again at the next landing that compacts while the
-/// cause stands — per attempt, the rule's named exception, each landing a
-/// fresh act — where every other line of the feed's is said once. Driven
-/// one layer below the daemon, whose pre-claim gate admits no bulk write:
-/// an engine over a temp dir under this suite's own kernel config
-/// ([`fsync_engine`]), the write path over it, six bulk inserts as the
-/// system principal through the session door — each recorded in the feed —
-/// rotating the journal's segment so the first checkpoint reclaims below it
-/// and the compaction has a floor; the checkpoint, taken by hand, and the
-/// compaction run here as the checkpoint thread runs them. The next open,
-/// the obstacle gone, compacts what the landings could not and says what
-/// it dropped.
-#[test]
-fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attempt() {
-    use skep_address::Nat;
-    use skep_arrangement::Caller;
-    use skep_febe::{Deposit, VPos};
-    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let engine = fsync_engine(dir.path());
-    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
-    let stores = engine.stores();
-    // One write through the session door, as the daemon's sequences commit:
-    // the meta derived from the op, the driver run inside the lock.
-    let commit = |op: Op, run: &dyn Fn() -> (Address, Seq)| {
-        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
-        let serial = wp.serial_lock();
-        let resp = wp.commit_under(&serial, meta, || {
-            let (addr, at) = run();
-            Response::AckAddr { addr, at }
-        });
-        assert!(matches!(resp, Response::AckAddr { .. }), "the write is acked through the door");
-    };
-    // Two mints under the system account: doc 3 is the head writer's own
-    // staging draft, so the second, doc 4, is the private draft the inserts
-    // go into.
-    let account = system_account();
-    let mut minted = Vec::new();
-    for _ in 0..2 {
-        let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
-        let mint = || {
-            stores
-                .namespace()
-                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
-                .expect("the mint commits")
-        };
-        commit(op, &mint);
-        minted.push(mint_address(&stores, minted.len() + 3));
-    }
-    let doc = minted[1].clone();
-    // A text value as the wire's codec hands it to the store: one value per
-    // character, which the store writes as ONE stretch — so an insert costs
-    // the journal its bytes and two records, and the segment rotates only
-    // under inserts of the codec's whole cap.
-    let insert = |value: &str| {
-        let values: Vec<Val> = value.bytes().map(|b| Val::new([b])).collect();
-        let op = Op::Insert {
-            doc: doc.clone(),
-            at: VPos::content(Nat::from(1u32)),
-            values: values.clone(),
-            deposit: Deposit::Undeclared,
-        };
-        let run = || {
-            stores
-                .vstream()
-                .insert(
-                    Caller::Principal(SYSTEM_PRINCIPAL),
-                    &doc,
-                    VPos::content(Nat::from(1u32)),
-                    values.clone(),
-                    Deposit::Undeclared,
-                )
-                .expect("the insert commits")
-        };
-        commit(op, &run);
-    };
-    let bulk = "z".repeat(262_144);
-    for _ in 0..6 {
-        insert(&bulk);
-    }
-    // THE OBSTACLE: a directory on each temp file's name, so the rewrite's
-    // create fails and nothing is renamed.
-    std::fs::create_dir(dir.path().join("commits.log.compact")).expect("the obstacle");
-    std::fs::create_dir(dir.path().join("feed-index.log.compact")).expect("the obstacle");
-    let compaction_lines = || -> Vec<String> {
-        wp.lines_said()
-            .lock()
-            .iter()
-            .filter(|l| l.contains(" compaction below the reclaim floor at position "))
-            .cloned()
-            .collect()
-    };
-    // Rows 27 and 28 as a compaction to `fence` says them: the file, the
-    // reclaim floor the compaction ran to, the side of the rename, then the
-    // cause and the act.
-    let stood = |line: &str, file: &str, fence: u64| {
-        let floor = fence + 1;
-        let head = format!(
-            "failure: {file} compaction below the reclaim floor at position {floor} failed before \
-             its rename: "
-        );
-        let tail = "; the file stands as it was, and the next checkpoint's compaction tries again";
-        line.starts_with(&head) && line.ends_with(tail)
-    };
-
-    // The checkpoint thread's act: the checkpoint, then the compaction.
-    engine.kernel().checkpoint().expect("the first checkpoint lands");
-    let compacted = wp.compact_feed_below_reclaim_floor(&engine);
-    let fence = compacted.fence.expect("the floor moved: a fence to compact to");
-    assert_eq!(compacted.deferred, None, "no walk pending: the rewrite is not deferred");
-    assert_eq!(
-        compacted.standing,
-        ["commits.log", "feed-index.log"],
-        "the two files whose rewrite failed before its rename stood"
-    );
-    let first = compaction_lines();
-    assert_eq!(
-        first.len(),
-        2,
-        "one line per file that stood, through the door:\n{}",
-        wp.lines_said().lock().join("\n")
-    );
-    assert!(stood(&first[0], "commits.log", fence), "row 27: {}", first[0]);
-    assert!(stood(&first[1], "feed-index.log", fence), "row 28: {}", first[1]);
-
-    // A SECOND LANDING THAT COMPACTS, the obstacle standing: two more
-    // checkpoints move the floor past the surviving entries, and each line
-    // is said AGAIN — per attempt, naming the floor this landing ran to.
-    insert("q");
-    engine.kernel().checkpoint().expect("the second checkpoint lands");
-    insert("q");
-    engine.kernel().checkpoint().expect("the third checkpoint lands");
-    let compacted = wp.compact_feed_below_reclaim_floor(&engine);
-    let fence = compacted.fence.expect("the floor moved again: a fence to compact to");
-    assert_eq!(compacted.standing, ["commits.log", "feed-index.log"], "stood again");
-    let again = compaction_lines();
-    assert_eq!(
-        again.len(),
-        4,
-        "FINDING (rows 27/28): per attempt — two landings, two lines each:\n{}",
-        again.join("\n")
-    );
-    assert!(
-        stood(&again[2], "commits.log", fence) && stood(&again[3], "feed-index.log", fence),
-        "the same two lines again, at the floor this landing ran to:\n{}",
-        again[2..].join("\n")
-    );
-
-    // THE NEXT OPEN, the obstacle gone, compacts what the two landings
-    // could not, and says the floor and the entries the file still held
-    // below it.
-    let below = std::fs::read_to_string(dir.path().join("commits.log"))
-        .expect("the log")
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter_map(|v| v.get("at").and_then(serde_json::Value::as_u64))
-        .filter(|&at| at <= fence)
-        .count();
-    assert!(below > 0, "the premise: the file still holds entries below the floor");
-    std::fs::remove_dir(dir.path().join("commits.log.compact")).expect("the obstacle goes");
-    std::fs::remove_dir(dir.path().join("feed-index.log.compact")).expect("the obstacle goes");
-    drop(wp);
-    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("reopen");
-    let floor = fence + 1;
-    let line = format!(
-        "open: the change feed's files compacted below the reclaim floor at position {floor}: \
-         {below} entries dropped"
-    );
-    let said = wp.lines_said().lock().clone();
-    assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{}", said.join("\n"));
-}
-
-/// The address of the system account's `n`th document, as the mint lands
-/// it — read off the world, so the test names what the store minted and
-/// not a transcription.
-fn mint_address(stores: &EngineStores, n: usize) -> Address {
-    use skep_address::{validate, Nat, Tumbler};
-    use skep_namespace::HasM3;
-    let t = Tumbler::new([1u32, 1, 0, 1, 0, n as u32].into_iter().map(Nat::from))
-        .expect("a six-component sequence is nonempty");
-    let addr = validate(t).expect("the system account's documents are T4-valid");
-    let snap = stores.kernel().snapshot();
-    assert!(
-        snap.world().m3().is_registered_document(&addr),
-        "doc {n} of the system account is registered: {addr}"
-    );
-    addr
-}
-
 /// A raise WAKES a wait already parked — the thread asleep on the signal
 /// between two crossings runs the checkpoint the next crossing calls for.
 #[test]
@@ -963,8 +766,19 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     assert_eq!(wp.feed_pending_region(), None, "the log covers the head");
     let said = wp.lines_said().lock().clone();
     let all = said.join("\n");
+    // The hole the walk's fence left is said once at the reopen, and no
+    // refusal is: nothing is uncovered, nothing asked of the journal.
+    let hole = format!(
+        "open: the change feed's files hold no line at or below position {fence}: an earlier \
+         build's compaction, or a walk the journal refused, left the fence there; /changes \
+         answers 410 history_reclaimed for every since below position {head}, the first line held"
+    );
+    assert_eq!(said.iter().filter(|l| **l == hole).count(), 1, "the hole, said once:\n{all}");
     assert!(
-        !said.iter().any(|l| l.contains("the journal refused") || l.contains("bare positions")),
+        !said
+            .iter()
+            .filter(|l| **l != hole)
+            .any(|l| l.contains("the journal refused") || l.contains("bare positions")),
         "nothing uncovered, nothing asked:\n{all}"
     );
     let figures = wp.attest_store_figures();
@@ -1544,9 +1358,16 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
         "410 below the fence: {answer:?}"
     );
     drop(wp);
-    let first_line = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
-    let first_line = first_line.lines().next().map(str::to_string);
-    assert_eq!(first_line, Some(format!("{{\"min_since\":{fence}}}")), "the fence is written");
+    // The fence is written after the lines the file held — none dropped,
+    // the record of events kept whole — and ahead of what the walk landed.
+    let text = std::fs::read(dir.path().join("commits.log")).expect("commits.log");
+    assert!(text.starts_with(&torn), "the torn file's own lines first, verbatim");
+    let fence_line = format!("{{\"min_since\":{fence}}}\n");
+    assert!(
+        text[torn.len()..].starts_with(fence_line.as_bytes()),
+        "the fence is written right after them: {}",
+        String::from_utf8_lossy(&text[torn.len()..])
+    );
 
     // The segment restored alone: the fence the file holds stands.
     std::fs::write(closed, &whole).expect("restore the segment");
@@ -1570,26 +1391,29 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
     assert_eq!(after, before, "the feed answers every position it answered before");
 }
 
-/// Checks that the attest store's served window is trimmed with the feed.
+/// Checks that the attest store's resident slots are bounded by the window.
 ///
-/// The slots resident are one per attested position the feed serves, so a
-/// compaction that drops positions below the reclaim floor drops their
-/// slots with the twins (`Inner::drop_at_or_below`), and the store's file,
-/// primary state below the floor (BW-01), keeps every line. Over this
-/// suite's own kernel config ([`fsync_engine`]): six attested bulk inserts
-/// into one draft rotate the journal's segment, a checkpoint taken by hand
-/// moves the reclaim floor past some of them, and the compaction leaves a
-/// slot for each attested position above its fence alone, the file's bytes
-/// and lines unchanged. One more attested write adds its slot, and the
-/// system principal's page from the fence serves that row's `attest`.
+/// The slots resident are one per attested position inside the feed's
+/// resident window, so as the window rises with each record the slots
+/// below it leave the twins (`Inner::drop_below_the_window`), and the
+/// store's file, primary state (BW-01), keeps every line — each read back
+/// by position for a row below the window. Over this suite's own kernel
+/// config ([`fsync_engine`]), the window set to four positions for this
+/// board alone: six attested bulk inserts into one draft, a checkpoint
+/// taken by hand that moves the reclaim floor past some of them and trims
+/// nothing, the slots resident those of the window alone, the file's bytes
+/// and lines unchanged; the system principal's page from genesis serves
+/// every row's `attest`, the ones below the window off the file; one more
+/// attested write adds its slot, and the page serves that row's `attest`.
 #[test]
-fn the_attest_stores_served_window_is_trimmed_with_the_feed_and_its_file_kept() {
+fn the_attest_stores_resident_slots_are_bounded_by_the_window_and_its_file_kept() {
     use skep_address::Nat;
     use skep_arrangement::Caller;
     use skep_febe::{Deposit, VPos};
     use skep_namespace::SYSTEM_PRINCIPAL;
 
     let dir = tempfile::tempdir().expect("tempdir");
+    set_feed_resident_window(dir.path(), 4);
     let engine = fsync_engine(dir.path());
     let wp = open_the_write_path(dir.path(), &engine);
     let stores = engine.stores();
@@ -1629,26 +1453,54 @@ fn the_attest_stores_served_window_is_trimmed_with_the_feed_and_its_file_kept() 
             .count()
     };
     let held = wp.attest_store_figures();
-    assert_eq!((held.slots, lines_of_the_file()), (6, 6), "a slot and a line per attested insert");
+    let head = engine.kernel().current_seq().0;
+    let inside = |at: u64| at + 4 > head;
+    let resident = attested.iter().filter(|&&at| inside(at)).count();
+    assert!(resident < attested.len(), "the premise: the window passed an attested position");
+    assert_eq!(
+        (held.slots, lines_of_the_file()),
+        (resident, 6),
+        "a slot per attested insert inside the window, a line per insert"
+    );
+    let expect_attest = |page: &std::collections::BTreeMap<u64, serde_json::Value>| {
+        for at in &attested {
+            assert_eq!(
+                page[at]["attest"],
+                serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
+                "the page serves {at}'s slot, off the file below the window"
+            );
+        }
+    };
+    let snap = engine.kernel().snapshot();
+    expect_attest(&served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), 0)));
 
-    // The checkpoint thread's act: the checkpoint, then the compaction.
+    // The checkpoint thread's act: the checkpoint, then the feed's figures —
+    // the reclaim floor moves past attested positions and trims nothing.
     engine.kernel().checkpoint().expect("the checkpoint lands");
-    let fence = wp.compact_feed_below_reclaim_floor(&engine).fence.expect("a fence to compact to");
-    let above = attested.iter().filter(|&&at| at > fence).count();
-    assert!(above < attested.len(), "the premise: the floor passed an attested position");
-    let trimmed = wp.attest_store_figures();
-    assert_eq!(trimmed.slots, above, "a slot for each attested position above the fence alone");
-    assert_eq!(trimmed.bytes, held.bytes, "the file is never compacted");
-    assert_eq!(lines_of_the_file(), 6, "every line kept: below the floor it is primary state");
+    let figures = wp.feed_figures();
+    assert_eq!(figures.first, Some(1), "the feed holds every line from its first");
+    let after = wp.attest_store_figures();
+    assert_eq!(after.slots, held.slots, "the floor moved and no slot left: the window bounds them");
+    assert_eq!(after.bytes, held.bytes, "the file is never compacted");
+    assert_eq!(lines_of_the_file(), 6, "every line kept: primary state");
 
     let at = insert("q");
-    assert_eq!(wp.attest_store_figures().slots, above + 1, "the next attested write's slot");
+    // The head writer takes its turn after the write, so the window's edge
+    // is the head's as it then stands.
+    let head = engine.kernel().current_seq().0;
+    let expected = attested.iter().chain([&at]).filter(|&&p| p + 4 > head).count();
+    assert_eq!(
+        wp.attest_store_figures().slots,
+        expected,
+        "the slots inside the window as the head stands, the next attested write's among them"
+    );
     let snap = engine.kernel().snapshot();
-    let page = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), fence));
+    let page = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), 0));
+    expect_attest(&page);
     assert_eq!(
         page[&at]["attest"],
         serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
-        "the page from the fence serves the slot"
+        "the page from genesis serves the new slot"
     );
 }
 
@@ -1826,8 +1678,9 @@ fn the_walk_loads_one_base_per_boundary_it_proves() {
     wait_until("the walk's landing", || wp.feed_pending_region().is_none());
     assert_eq!(
         engine.kernel().bases_loaded() - before,
-        6 + 1,
-        "one base per boundary proved: the region's edge, five boundaries but the head, the floor"
+        6,
+        "one base per boundary proved: the region's edge, five boundaries but the head — the \
+         landing probes no floor, the feed's files being kept whole"
     );
 }
 
@@ -1884,9 +1737,9 @@ fn a_lost_feed_index_reconstructs_each_bare_position_once() {
     wait_until("the sort's landing", || !wp.feed_walk_pending());
     assert_eq!(
         engine.kernel().bases_loaded() - before,
-        1 + 6 + 1,
-        "the open's probe; the world below the run and one a bare position but the head; the \
-         landing's probe"
+        1 + 6,
+        "the open's probe; the world below the run and one a bare position but the head — the \
+         landing probes no floor, the feed's files being kept whole"
     );
     assert_eq!(index(), walked, "each position classified as the walk classified it");
     let said = wp.lines_said().lock().clone();

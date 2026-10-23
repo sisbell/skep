@@ -1,10 +1,11 @@
 //! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order —
 //! a run of single-byte positions as one `Bytes` item, an atom as its own
-//! `Content` item, the seams between them kept — each stored atom delivered
-//! itself and never a copy of its bytes, R6's silent degradations, the
-//! whole-request gate, the delivery and walk budgets, the masked form's
-//! per-origin consult, asked once per run, and the withheld item a run whose
-//! origin is not registered takes, asking nothing.
+//! `Content` item, the seams between them kept, a run whose I-extent holds a
+//! key off its chain delivered whole — each stored atom delivered itself and
+//! never a copy of its bytes, R6's silent degradations, the whole-request
+//! gate, the delivery and walk budgets, the masked form's per-origin consult,
+//! asked once per run, and the withheld item a run whose origin is not
+//! registered takes, asking nothing.
 
 use std::cell::RefCell;
 
@@ -100,6 +101,41 @@ fn retrieve_v_delivers_a_mixed_insert_as_bytes_content_bytes_across_the_seams() 
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 3, 3))])),
         Delivery(vec![text(b"c"), DeliveryItem::Content(val(b"XY")), text(b"d")])
+    );
+}
+
+#[test]
+fn retrieve_v_delivers_a_run_whose_extent_holds_a_key_off_its_chain() {
+    // M4's run read (`ContentStore::pieces`), driven: a key that extends a
+    // run's address — `D·0·1·4·7`, under the atom at ca4, stored by M4's
+    // test-only `write`, since no mint issues one — sorts inside the run's
+    // I-extent and holds none of its positions. RETRIEVEV walks the run's
+    // pieces and asks `covered` after; the walk passes over the key, so the
+    // mixed insert is delivered whole, `Bytes`, `Content`, `Bytes`, and the
+    // S3★ assertion holds.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    vs.insert(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        vec![val(b"a"), val(b"b"), val(b"c"), val(b"XY"), val(b"d"), val(b"e"), val(b"f")],
+        Deposit::Undeclared,
+    )
+    .expect("insert commits");
+    skep_content::write(&k, &a(&[1, 0, 1, 0, 1, 0, 1, 4, 7]), val(b"i"))
+        .expect("M4's test-only write commits: nothing covers the key");
+    let s = k.snapshot();
+    assert_eq!(
+        s.world().content().len(),
+        4,
+        "the premise: a stretch, an atom, the key off the chain, a stretch"
+    );
+    assert_eq!(s.world().m5().content_run_count(&doc1()), 1, "the premise: one run");
+    let q = Query::new(&s);
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 7))])),
+        Delivery(vec![text(b"abc"), DeliveryItem::Content(val(b"XY")), text(b"def")])
     );
 }
 

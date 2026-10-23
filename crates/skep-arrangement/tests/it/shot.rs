@@ -1,7 +1,7 @@
 //! The publish shot (PUB round 2, lane 3.2): the member it appends from the
 //! client's runs, the windows it keeps, the deposits it carries, the birth
 //! extent and terms it records, the values it re-inserts and where they land,
-//! and its address form on both sides.
+//! past a key off a draft run's chain, and its address form on both sides.
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
@@ -667,6 +667,40 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         "the content chain's last three addresses, in the order the shot names them"
     );
     assert_eq!(named, vec![b"b".to_vec(), b"c".to_vec(), b"b".to_vec()]);
+}
+
+#[test]
+fn a_shot_reinserts_a_draft_run_whose_extent_holds_a_key_off_its_chain() {
+    // The existence check and the re-insert both walk M4's run read, which
+    // passes over a key off a draft-native run's chain inside its I-extent —
+    // `D·0·1·1·7`, under the atom at ca(1), stored by M4's stage door alone
+    // since no mint issues one — for it holds none of the run's addresses.
+    // So the shot commits and re-inserts the run's two atoms, and only them,
+    // as the next two identities on the edition's content chain.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"XY"), val(b"UV")], Deposit::Undeclared)
+        .expect("the staging draft doc1: two atoms at ca(1..2)");
+    store_unminted(&k, &a(&[1, 0, 1, 0, 1, 0, 1, 1, 7]), b"i");
+    let shot = Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: Some(doc1()),
+        runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
+    };
+    let stored = k.snapshot().world().content().len();
+    let (member, _) = vs
+        .publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
+        .expect("every address of every run holds a value");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&member), n(5));
+    assert_eq!(read_v(&s, &member, 4), b"XY".to_vec());
+    assert_eq!(read_v(&s, &member, 5), b"UV".to_vec());
+    assert_eq!(
+        s.world().content().len() - stored,
+        2,
+        "the commit wrote the run's two atoms and not the key it passed over"
+    );
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(6)));
 }
 
 #[test]

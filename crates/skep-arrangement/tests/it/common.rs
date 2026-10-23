@@ -305,6 +305,22 @@ pub fn deposit_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     vs
 }
 
+/// Stores `b` at `addr` through M4's stage door alone.
+///
+/// It writes under the content lock key of `addr`'s document what no mint
+/// issues — such as a key that extends a minted address and so lies off its
+/// chain, which the door admits wherever nothing covers it.
+pub fn store_unminted(kernel: &Kernel<World>, addr: &Address, b: &[u8]) {
+    let home = skep_address::document_of(addr).expect("an element address has a document");
+    kernel
+        .transact(&[M3State::content_lock_key(&home)], |stg| {
+            let rec = skep_content::stage_write(stg.working().content(), addr.clone(), val(b))?;
+            stg.push(rec.into());
+            Ok::<(), skep_content::ContentError>(())
+        })
+        .expect("nothing covers the address");
+}
+
 /// One run of a shot: `width` positions from `start`, windowing `origin`.
 pub fn shot_run(origin: &Address, start: &Address, width: u32) -> ShotRun {
     ShotRun {

@@ -589,17 +589,33 @@ impl ContentStore {
     ///
     /// This is the one range read. The pieces come in I-order, each piece one
     /// stored entry clipped to the window, a run of single-byte values inside
-    /// one stretch or one value. Stops at the first address the walk's next
-    /// entry does not hold; [`Pieces::covered`] drains what remains and says
-    /// whether the width was reached. The shape every run-walking reader
-    /// needs — RETRIEVEV's delivery, the shot's existence check and
-    /// re-insert, the attested entry's body — and the only range read
-    /// offered: one predecessor lookup at `start`, then a forward walk from
-    /// that key while each entry begins where the last reached and lies
-    /// inside the window, O(log n + pieces), borrowing every byte. A caller
-    /// that wants the pieces walks them `by_ref()` and asks `covered` after;
-    /// an existence check asks it of the fresh walk. A zero `width` yields
-    /// nothing and is reached at once.
+    /// one stretch or one value. Stops at the first address of the window no
+    /// entry holds; [`Pieces::covered`] drains what remains and says whether
+    /// the width was reached, which it is exactly where
+    /// [`value_at`](ContentStore::value_at) answers `Some` at every
+    /// `start ⊕ k`, `k < width`. The shape every run-walking reader needs —
+    /// RETRIEVEV's delivery, the shot's existence check and re-insert,
+    /// REINSTATE's existence check, the attested entry's body — and the only
+    /// range read offered: one predecessor lookup at `start`, then a forward
+    /// walk from that key, each piece beginning where the last reached,
+    /// O(log n + pieces) and one step for each key it passes over (below),
+    /// borrowing every byte. A caller that wants the pieces walks them
+    /// `by_ref()` and asks `covered` after; an existence check asks it of the
+    /// fresh walk. A zero `width` yields nothing and is reached at once.
+    ///
+    /// **A key off the window's chain.** A key that extends an address of the
+    /// window by a component or more — `D·0·1·3·7` beside the value at
+    /// `D·0·1·3` — sorts between that address and the next,
+    /// `D·0·1·3 < D·0·1·3·7 < D·0·1·4`, and holds no address of the window.
+    /// Inside a stretch's reach no door, fold or decode admits one
+    /// ([`contains`](ContentStore::contains) is coverage); beside a value each
+    /// admits it, since it is T4-valid and a content-subspace element
+    /// address, the two things M4 holds a key to — that every content key lies
+    /// on its document's chain is ASN-0093 ChainMembershipForOrigin, kept by
+    /// M3's mint. So the walk passes over a key below its cursor that does not
+    /// hold the cursor, and stops only at a key past it; a slice built from
+    /// M3's mints alone holds no key to pass over but the predecessor of a
+    /// start nothing holds.
     pub fn pieces(&self, start: &Tumbler, width: &Nat) -> Pieces<'_> {
         let walk =
             self.at_or_below(start).map(|(key, _)| self.map.range::<_, Tumbler>(key.tumbler()..));
@@ -710,12 +726,13 @@ impl fmt::Debug for Piece<'_> {
 /// map behind the slice stays this crate's choice; neither `Clone` nor
 /// fused, and no walk from the far end.
 ///
-/// The walk ends at the window's reach or at the first address its next entry
-/// does not hold, whichever comes first, and [`covered`](Pieces::covered)
-/// says which. The seam between entry kinds inside one run — a value between
-/// two stretches — is where a stop condition's off-by-one would hide: each
-/// piece must begin exactly where the last reached, and a stretch's piece is
-/// clipped to what the window still wants.
+/// The walk ends at the window's reach or at the first address of the window
+/// no entry holds, whichever comes first, and [`covered`](Pieces::covered)
+/// says which; it passes over a key off the window's chain
+/// ([`ContentStore::pieces`]). The seam between entry kinds inside one run —
+/// a value between two stretches — is where a stop condition's off-by-one
+/// would hide: each piece must begin exactly where the last reached, and a
+/// stretch's piece is clipped to what the window still wants.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Pieces<'a> {
     // The forward walk from the predecessor of the window's start; `None`
@@ -731,9 +748,11 @@ pub struct Pieces<'a> {
 impl<'a> Pieces<'a> {
     /// Returns whether the walk lends every address of the window.
     ///
-    /// It drains the walk, and covered means the width reached, no address
-    /// met that the walk's next entry does not hold. It consumes the walk: a
-    /// caller that wants the pieces too walks them `by_ref()` first.
+    /// It drains the walk, and covered means the width reached: an entry
+    /// holds each of the window's addresses, so
+    /// [`value_at`](ContentStore::value_at) answers `Some` at each. It
+    /// consumes the walk: a caller that wants the pieces too walks them
+    /// `by_ref()` first.
     pub fn covered(mut self) -> bool {
         while self.next().is_some() {}
         self.remaining == Nat::default()
@@ -747,28 +766,44 @@ impl<'a> Iterator for Pieces<'a> {
         if self.remaining == Nat::default() {
             return None;
         }
-        let Some((key, stored)) = self.walk.as_mut().and_then(Iterator::next) else {
-            self.walk = None;
-            return None;
-        };
-        let covering = match stored {
-            Stored::Value(v) => (key.tumbler() == &self.cursor).then_some((Piece::Value(v), 1)),
-            Stored::Stretch(bytes) => offset_in(key.tumbler(), bytes.len(), &self.cursor).map(|k| {
-                let available = bytes.len() - k;
-                let take = usize::try_from(&self.remaining).map_or(available, |n| n.min(available));
-                (Piece::Bytes(&bytes[k..k + take]), take)
-            }),
-        };
-        let Some((piece, taken)) = covering else {
-            // An address this entry does not hold: the walk stops here, short
-            // of the width.
-            self.walk = None;
-            return None;
-        };
-        let taken = Nat::from(taken);
-        self.cursor = shift(&self.cursor, &taken);
-        self.remaining -= taken;
-        Some(piece)
+        loop {
+            let Some((key, stored)) = self.walk.as_mut().and_then(Iterator::next) else {
+                self.walk = None;
+                return None;
+            };
+            let covering = match stored {
+                Stored::Value(v) => (key.tumbler() == &self.cursor).then_some((Piece::Value(v), 1)),
+                Stored::Stretch(bytes) => {
+                    offset_in(key.tumbler(), bytes.len(), &self.cursor).map(|k| {
+                        let available = bytes.len() - k;
+                        let take = usize::try_from(&self.remaining)
+                            .map_or(available, |n| n.min(available));
+                        (Piece::Bytes(&bytes[k..k + take]), take)
+                    })
+                }
+            };
+            let Some((piece, taken)) = covering else {
+                if key.tumbler() < &self.cursor {
+                    // A key below the cursor that does not hold it holds no
+                    // address of the window: the start's predecessor where
+                    // nothing holds the start, or a key off the window's chain
+                    // that extends the address just lent — a longer key beside
+                    // a value, since no key lies inside a stretch's reach. The
+                    // walk passes over it.
+                    continue;
+                }
+                // Any other key lies past the cursor, since a key equal to it
+                // holds it, and no entry past the cursor holds it: nothing
+                // holds the cursor, and the walk stops here, short of the
+                // width.
+                self.walk = None;
+                return None;
+            };
+            let taken = Nat::from(taken);
+            self.cursor = shift(&self.cursor, &taken);
+            self.remaining -= taken;
+            return Some(piece);
+        }
     }
 }
 

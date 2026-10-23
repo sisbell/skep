@@ -2,11 +2,12 @@
 //! a delete undone at the SAME I-addresses leaves the arrangement as it was
 //! — the content list byte for byte, `point` answering the old addresses,
 //! nothing minted — so every link on them returns; the wide reach, a removed
-//! run placed into another document by identity; the duplicate edge; and
-//! each guard the real state can reach, in its documented order.
+//! run placed into another document by identity; the duplicate edge; a run
+//! whose I-extent holds a key off its chain, placed whole; and each guard the
+//! real state can reach, in its documented order.
 
 use skep_address::{Address, SpanSet};
-use skep_arrangement::{Caller, HasM5, ReinstateError, Run, ShotRun};
+use skep_arrangement::{Caller, Deposit, HasM5, ReinstateError, Run, ShotRun, Vstream};
 use skep_content::HasContent;
 use skep_namespace::PrincipalId;
 
@@ -88,6 +89,30 @@ fn a_removed_run_is_placed_into_another_document_by_identity_and_a_duplicate_is_
     assert_eq!(m5.content_runs(&doc1()).len(), 3, "[ca1][ca3][ca1] — no merge across the seam");
     let cov = SpanSet::singleton(Run::new(ca(2), n(1)).expect("a content run").iextent());
     assert_eq!(m5.docs_ever_containing(&cov), vec![doc1(), doc2()]);
+}
+
+/// REINSTATE places a run whole when its I-extent holds a key off its chain.
+///
+/// The existence check is M4's run read, which passes over such a key —
+/// `D·0·1·1·7`, under the atom at `ca(1)`, stored by M4's stage door alone
+/// since no mint issues one — for it holds none of the run's addresses. So
+/// the run of the two atoms the key sorts between is placed by identity, and
+/// each position reads its atom.
+#[test]
+fn reinstate_places_a_run_whose_extent_holds_a_key_off_its_chain() {
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"XY"), val(b"UV")], Deposit::Undeclared)
+        .expect("two atoms commit");
+    store_unminted(&k, &a(&[1, 0, 1, 0, 1, 0, 1, 1, 7]), b"i");
+    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(1), 2)])
+        .expect("every address of the run holds a value");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(m5.point(&doc2(), &vp(1, 1)), Some(ca(1)));
+    assert_eq!(m5.point(&doc2(), &vp(1, 2)), Some(ca(2)));
+    assert_eq!(read_v(&s, &doc2(), 1), b"XY".to_vec());
+    assert_eq!(read_v(&s, &doc2(), 2), b"UV".to_vec());
 }
 
 /// Each guard the real state reaches, in the order `Vstream::reinstate`

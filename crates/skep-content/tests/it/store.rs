@@ -12,17 +12,19 @@
 //! refused at both doors and the interloper key beneath one is refused by the
 //! doors and the decoder while every byte still answers; that the one run
 //! read walks an extent piece by piece, across the seam between a stretch and
-//! a value, and says whether the extent is covered; that identity is by
-//! address, never by value, and `Val` implements no `Hash` (S4); that a
-//! slice's equality is its contents', address and value each counting; that
-//! the one enumeration visits every entry once, through `iter` and through a
-//! `for` loop over the slice alike, as a walk a caller can name, which knows
-//! exactly what remains at every step, shows no entry in its `Debug`, and
-//! offers no walk from the far end; that any byte string is a value, shares
-//! its bytes with every clone, comes back exactly as written, and renders
-//! into `Debug` as its byte length, never a byte; and that the stage doors
-//! panic on a non-content address in debug builds, before they look at what
-//! is stored there, and stage every such address as given in release.
+//! a value and past a key off the extent's chain, and says whether the extent
+//! is covered — exactly where every address of it answers a point query;
+//! that identity is by address, never by value, and `Val` implements no
+//! `Hash` (S4); that a slice's equality is its contents', address and value
+//! each counting; that the one enumeration visits every entry once, through
+//! `iter` and through a `for` loop over the slice alike, as a walk a caller
+//! can name, which knows exactly what remains at every step, shows no entry
+//! in its `Debug`, and offers no walk from the far end; that any byte string
+//! is a value, shares its bytes with every clone, comes back exactly as
+//! written, and renders into `Debug` as its byte length, never a byte; and
+//! that the stage doors panic on a non-content address in debug builds,
+//! before they look at what is stored there, and stage every such address as
+//! given in release.
 
 use skep_address::{Address, Nat};
 use skep_content::{
@@ -706,6 +708,71 @@ fn pieces_crosses_the_seam_between_stretch_value_and_stretch_inside_one_run() {
         (vec![(true, b"c".to_vec()), (false, b"X".to_vec())], true),
         "the stretch's last byte, then the value"
     );
+}
+
+#[test]
+fn pieces_passes_over_a_key_off_the_windows_chain_and_agrees_with_the_point_queries() {
+    // store.rs (`pieces`, `Pieces::covered`): a key that extends an address
+    // by a component or more — `D·0·1·3·7` beside the value at `D·0·1·3` —
+    // sorts between that address and the next ordinal, holds no address of a
+    // window on `D·0·1·x`, and is admitted by both doors where nothing covers
+    // it. The run read passes over it and every key like it — a value, a
+    // stretch, a key deeper still — and lends the window's next address from
+    // the entry that holds it. So `covered` is true exactly where `value_at`
+    // answers at every address of the window, on `D·0·1·x` and on each chain
+    // a passed-over key opens, and each passed-over key answers by itself.
+    let c = with_stretch(&ContentStore::default(), 1, b"ab"); // 1..=2
+    let c = with_value(&c, 3, b"atom"); // 3
+    let c = with_value(&c, 4, b"next"); // 4
+    let c = with_stretch(&c, 5, b"cd"); // 5..=6
+    let i = a(&[1, 0, 1, 0, 1, 0, 1, 3, 7]);
+    let kl = a(&[1, 0, 1, 0, 1, 0, 1, 3, 8]);
+    let j = a(&[1, 0, 1, 0, 1, 0, 1, 4, 2, 9]);
+    let c = c.apply_write(&stage_write(&c, i.clone(), val(b"i")).expect("nothing covers it"));
+    let c =
+        c.apply_stretch(&stage_stretch(&c, kl.clone(), bytes(b"kl")).expect("nothing covers it"));
+    let c = c.apply_write(&stage_write(&c, j.clone(), val(b"j")).expect("nothing covers it"));
+    assert_eq!(c.len(), 7, "the premise: four entries on the chain, three off it");
+    assert_eq!(
+        pieces_of(&c, ca(1).tumbler(), 6),
+        (
+            vec![
+                (true, b"ab".to_vec()),
+                (false, b"atom".to_vec()),
+                (false, b"next".to_vec()),
+                (true, b"cd".to_vec()),
+            ],
+            true
+        ),
+        "the walk passes over the three keys off the chain"
+    );
+    // The law, over every window up to one address past each chain's last
+    // stored one: on `D·0·1·x`, and on `D·0·1·3·x` and `D·0·1·4·2·x`, the
+    // chains the off-chain keys open — where a window starting short of
+    // `D·0·1·3·7` meets the value at `D·0·1·3` as its start's predecessor.
+    for (anchor, ordinals) in [
+        (&[1u32, 0, 1, 0, 1, 0, 1][..], 1..=7u32),
+        (&[1, 0, 1, 0, 1, 0, 1, 3][..], 6..=10),
+        (&[1, 0, 1, 0, 1, 0, 1, 4, 2][..], 8..=10),
+    ] {
+        let at = |ordinal: u32| t(&[anchor, &[ordinal][..]].concat());
+        for start in ordinals.clone() {
+            for width in 0..=(ordinals.end() + 1 - start) {
+                let answered = (start..start + width).all(|o| c.value_at(&at(o)).is_some());
+                assert_eq!(
+                    pieces_of(&c, &at(start), width).1,
+                    answered,
+                    "the run read from {} over {width} disagrees with the point queries",
+                    at(start)
+                );
+            }
+        }
+    }
+    // Each key passed over answers by itself.
+    assert_eq!(read(&c, i.tumbler()), Some(b"i".to_vec()));
+    assert_eq!(read(&c, kl.tumbler()), Some(b"k".to_vec()));
+    assert_eq!(read(&c, &t(&[1, 0, 1, 0, 1, 0, 1, 3, 9])), Some(b"l".to_vec()));
+    assert_eq!(read(&c, j.tumbler()), Some(b"j".to_vec()));
 }
 
 #[test]

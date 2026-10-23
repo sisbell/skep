@@ -42,9 +42,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   answering `Gone` or `Absent` or the failure; and `stale` with
   `sweep_stale`, the temps a dead run left, told from a live run's by the
   lock its writer holds. The client's key store, bindings file and anchor
-  export and the shell's held-writes file take it; the parse of a line,
-  the policy for a whole line that does not read, every word said and the
-  directory's lock stay the caller's.
+  export and the shell's held-writes file and the dev board's manifest take
+  it; the parse of a line, the policy for a whole line that does not read,
+  every word said and the directory's lock stay the caller's.
 
 An item lives here if and only if at least two crates take it and it has
 no subject of its own — a constant is configuration, not a utility, and

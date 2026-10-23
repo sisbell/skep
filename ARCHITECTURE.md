@@ -72,12 +72,12 @@ above it.
   once or published by a locked temp and a rename, the removal that
   answers what it did, and the sweep of the temps a dead run left — which
   the client's key store, bindings file and anchor export and the shell's
-  held-writes file take. It depends on no other skep crate and on
-  `serde_json` alone, so it may stand anywhere in the foundation; it
-  stands last because it holds no part of the world — the crates above it
-  are what a board is made of, and this one is what the crates that write
-  files lean on. No constant lives here: a constant is configuration, not
-  a utility. Its rules: §The support crate.
+  held-writes file and the dev board's manifest take. It depends on no
+  other skep crate and on `serde_json` alone, so it may stand anywhere in
+  the foundation; it stands last because it holds no part of the world —
+  the crates above it are what a board is made of, and this one is what
+  the crates that write files lean on. No constant lives here: a constant
+  is configuration, not a utility. Its rules: §The support crate.
 - `skep-corpus` — the prose corpus a dev board is seeded from and the
   search budgets are measured over: a git repository read at one pinned
   commit through `git` alone — the records tier's filter, the paragraphs
@@ -738,19 +738,20 @@ never destroyed unsaid. `read_lines` and the streaming `LineReader` hand
 back a file's lines as bytes and classify its tail (`Tail`); `Appender`
 writes a line and its newline in one write where the last whole line
 ends — found by a scan, or trusted from the caller's own read — a torn
-tail first cut off (`OnTail::Cut`, the held-writes file's way) or closed
-by a mark in the same write (`OnTail::Close`, the bindings file's, whose
-last line may be a person's own record), and cuts a failed write back to
-the whole lines, the cut's own failure named beside the write's;
-`write_once` makes a new file at its name, synced, a failed write
-removed; `publish` puts a file at its name whole or not at all — a temp
-beside the name held by an advisory lock for the write's life, synced,
-renamed, the directory synced; `remove` answers `Gone` or `Absent` or the
-failure, never a file destroyed that stands; and `stale` with
-`sweep_stale` list or unlink the temps a dead run left, told from a live
-run's by the lock its writer holds. Bytes in, bytes out: the parse of a
-line, the policy for a whole line that does not read, every word said
-and the directory's lock are each the caller's; the modes are handed in.
+tail first cut off (`OnTail::Cut`, the held-writes file's way and the dev
+board's manifest's) or closed by a mark in the same write
+(`OnTail::Close`, the bindings file's, whose last line may be a person's
+own record), and cuts a failed write back to the whole lines, the cut's
+own failure named beside the write's; `write_once` makes a new file at
+its name, synced, a failed write removed; `publish` puts a file at its
+name whole or not at all — a temp beside the name held by an advisory
+lock for the write's life, synced, renamed, the directory synced;
+`remove` answers `Gone` or `Absent` or the failure, never a file
+destroyed that stands; and `stale` with `sweep_stale` list or unlink the
+temps a dead run left, told from a live run's by the lock its writer
+holds. Bytes in, bytes out: the parse of a line, the policy for a whole
+line that does not read, every word said and the directory's lock are
+each the caller's; the modes are handed in.
 
 Rules that hold across its files:
 

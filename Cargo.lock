@@ -1261,6 +1261,7 @@ dependencies = [
  "skep-identity",
  "skep-shell",
  "skep-signature",
+ "skep-util",
  "skepd",
  "tempfile",
 ]

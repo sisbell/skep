@@ -21,7 +21,11 @@
 //! the two runs naming the write the cut left in flight, the resume cutting
 //! away the torn last line a stop inside the manifest's own write leaves;
 //! F8 an unclaimed board and a stranger's board halt before any write, and
-//! the agent space holds no document after a run. Beside them, the seed's
+//! the agent space holds no document after a run. The manifest's bytes are
+//! pinned beside F5: an empty file and one holding a torn header alone are
+//! written from the first byte, a failed write's partial bytes are cut back
+//! at the next record, and every line is the compact JSON of one value —
+//! the header and the first two items byte for byte. Beside them, the seed's
 //! own lines: each stall said as it is met and at most once per ten seconds
 //! after, the session's key, the frames and positions of the run; the
 //! failures a board's or a volume's state makes — the closing history read
@@ -476,6 +480,40 @@ fn manifest_item(path: &str, id: &str) -> Value {
         .map(|l| serde_json::from_str::<Value>(l).expect("a JSON line"))
         .find(|v| v["id"].as_str() == Some(id))
         .unwrap_or_else(|| panic!("no `{id}` in the manifest"))
+}
+
+/// `H.1`'s chain of `board`, lowercase hex, as the manifest's name spells it.
+fn chain_of(board: &Board) -> String {
+    board.board_term().unwrap().unwrap().chain.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The manifest's path beside the suite's store under `dir`, as the tool
+/// spells it: `store-seed/<chain>.jsonl`.
+fn manifest_at(dir: &Path, board: &Board) -> PathBuf {
+    dir.join("store-seed").join(format!("{}.jsonl", chain_of(board)))
+}
+
+/// The header line the tool writes for the suite's seed ([`seed_args`]) of
+/// the board at `board_origin` whose chain is `chain`, over `pin`, byte for
+/// byte: the seed's key as one line of compact JSON, its members in sorted
+/// order — the bytes a second run is keyed by.
+fn expected_header(board_origin: &str, chain: &str, pin: &str) -> String {
+    format!(
+        "{{\"account\":\"1.0.1\",\"board\":\"{board_origin}\",\"chain\":\"{chain}\",\"cut\":\"cut-v1\",\"documents\":12,\
+         \"drafts\":3,\"from\":null,\"kind\":\"seed\",\"pin\":\"{pin}\",\"principal\":1,\"tool\":\"skep-dev seed\",\"versions\":4}}"
+    )
+}
+
+/// The lines the manifest holds past its header at a run's end, as the
+/// run says it: `manifest: … now holds N lines, …`.
+fn held_now(run: &Run) -> usize {
+    run.err
+        .lines()
+        .filter(|l| l.starts_with("manifest: "))
+        .find_map(|l| l.split(" now holds ").nth(1))
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the run says what the manifest holds: {}", run.err))
 }
 
 /// The members of a seed's JSON that name what landed — equal across a
@@ -1364,6 +1402,147 @@ fn a_manifest_write_refused_shows_its_lines_and_the_run_after_resumes_exact() {
     assert_eq!(v["already_seeded"], false);
     assert_expected_shape(&v, &cut);
     assert!(r.err.contains("the run resumes after them"), "{}", r.err);
+}
+
+/// AN EMPTY MANIFEST FILE AND ONE HOLDING A TORN HEADER ALONE are each a
+/// new seed's (`Manifest::open`): what a run killed inside its first write
+/// leaves — nothing, or the header's first bytes with no newline — holds
+/// no complete line, so on a fresh board the run says a new seed, its first
+/// record cuts the torn bytes away and writes from the first byte
+/// (`Manifest::record`), and the manifest after it is byte for byte a run
+/// with no file's: the header and the staging draft's mint as its first
+/// two lines, the first document's insert the third, each line the compact
+/// JSON of one value ending in a newline, one per write recorded.
+#[test]
+fn an_empty_manifest_and_a_torn_header_are_written_from_the_first_byte() {
+    for torn in [false, true] {
+        let dir: TempDir = tempfile::tempdir().unwrap();
+        let (repo, pin, cut) = repository(dir.path());
+        let sd = spawn(&dir.path().join("board"), true);
+        let board_origin = origin(sd.port());
+        let board = board_at(&board_origin);
+        let store = dir.path().join("store");
+        claim_board(&board_origin, &store, &dir.path().join("anchors"));
+        let manifest = manifest_at(dir.path(), &board);
+        let header = expected_header(&board_origin, &chain_of(&board), &pin);
+        let staged: &[u8] = if torn { &header.as_bytes()[..header.len() / 2] } else { b"" };
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(&manifest, staged).unwrap();
+        let args = seed_args(&board_origin, s(&store), s(&repo), &pin);
+        let r = skep_dev(&args);
+        let v = parse_json(&r);
+        assert_eq!(v["already_seeded"], false, "torn {torn}");
+        assert!(
+            r.err.contains("a new seed of this board"),
+            "torn {torn}: a file holding no complete line is a new seed's: {}",
+            r.err
+        );
+        assert_expected_shape(&v, &cut);
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        let first_item = "{\"addr\":\"1.0.1.0.2\",\"id\":\"staging:mint\"}";
+        let second_item = format!(
+            "{{\"at\":1,\"id\":\"cut-00001:draft\",\"len\":{}}}",
+            cut.documents[0].document.bytes.len()
+        );
+        assert!(
+            text.starts_with(&format!("{header}\n{first_item}\n{second_item}\n")),
+            "torn {torn}: the header and the first items from the first byte, the torn bytes cut away:\n{}",
+            &text[..text.len().min(700)]
+        );
+        assert!(text.ends_with('\n'), "torn {torn}: the manifest ends on a whole line");
+        for line in text.lines() {
+            let value: Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("torn {torn}: `{line}`: {e}"));
+            assert_eq!(
+                line,
+                value.to_string(),
+                "torn {torn}: each line is the compact JSON of one value"
+            );
+        }
+        assert_eq!(
+            text.lines().count(),
+            1 + held_now(&r),
+            "torn {torn}: the header and one line per write recorded: {}",
+            r.err
+        );
+    }
+}
+
+/// A FAILED WRITE's PARTIAL BYTES ARE CUT BACK AT THE NEXT RECORD
+/// (`Manifest::record`): a manifest ending in the first bytes of a line —
+/// what a write refused part-way, or a kill between the write and its
+/// sync, leaves — is read to its whole lines, the partial line no line
+/// (`Manifest::open`), and the next run's first record cuts those bytes
+/// off before it appends, so the line it records stands whole where the
+/// partial one stood and the bytes before it are unchanged: the manifest
+/// is byte for byte the one-shot run's again, and the run after it reads
+/// every line whole and writes nothing. The line cut is the seed's last
+/// record, the second account's, whose every write stands recorded — so
+/// the resume records it again and sends the board nothing.
+#[test]
+fn a_failed_writes_partial_bytes_are_cut_back_at_the_next_record() {
+    let dir: TempDir = tempfile::tempdir().unwrap();
+    let (repo, pin, cut) = repository(dir.path());
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let board = board_at(&board_origin);
+    let store = dir.path().join("store");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    let args = seed_args(&board_origin, s(&store), s(&repo), &pin);
+    let r = skep_dev(&args);
+    let v = parse_json(&r);
+    assert_expected_shape(&v, &cut);
+    let manifest = manifest_at(dir.path(), &board);
+    let whole = std::fs::read(&manifest).unwrap();
+    let held = held_now(&r);
+    assert_eq!(
+        whole.iter().filter(|&&b| b == b'\n').count(),
+        1 + held,
+        "the header and one line per write recorded, each ending in a newline"
+    );
+    // The last line, the seed's last record, cut to its first bytes: what
+    // a write of it refused part-way leaves.
+    let last_at = whole[..whole.len() - 1].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let last = std::str::from_utf8(&whole[last_at..]).unwrap();
+    assert!(
+        last.contains("\"id\":\"account\""),
+        "the last line is the second account's step: {last}"
+    );
+    let partial = &whole[..last_at + last.len() / 2];
+    std::fs::write(&manifest, partial).unwrap();
+    let before = log_position(&board);
+    let r = skep_dev(&args);
+    let again = parse_json(&r);
+    assert_eq!(again["already_seeded"], false, "the last record made again: {}", r.err);
+    assert!(
+        r.err.contains(&format!(
+            "holds {} lines of this seed: the run resumes after them",
+            held - 1
+        )),
+        "the partial line is no line: {}",
+        r.err
+    );
+    assert!(
+        !r.err.contains("resuming at `"),
+        "every write stands recorded, so the board is sent nothing: {}",
+        r.err
+    );
+    assert_eq!(log_position(&board), before, "no write");
+    assert_eq!(shape(&again), shape(&v), "the same object");
+    assert_eq!(
+        std::fs::read(&manifest).unwrap(),
+        whole,
+        "the partial bytes cut back and the line recorded whole where they stood: the manifest is the one-shot run's, byte for byte"
+    );
+    let r = skep_dev(&args);
+    assert_eq!(parse_json(&r)["already_seeded"], true);
+    assert!(
+        r.err.contains(&format!(
+            "records every write of this seed ({held} lines): this run writes nothing"
+        )),
+        "the run after reads every line whole: {}",
+        r.err
+    );
 }
 
 /// A WRITE ANSWERED `poisoned` IS NAMED IN FLIGHT (`Unsettled::Poisoned`;

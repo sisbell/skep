@@ -66,12 +66,21 @@
 //! the command's answer — so no command picks a code of its own, nor ends
 //! the run before its stop's block is said.
 //!
+//! A LINE FILE IS READ AND APPENDED THROUGH THE SUPPORT CRATE's MODULE. The
+//! dev manifest is the one line file this crate writes, and it takes
+//! `skep_util::file` for its read and its append — the one tail rule the
+//! client's and the shell's files keep, under which a torn last line is cut
+//! off at the next append — so no code line under `src/` opens a file
+//! `append(true)` or `create_new(true)`, a raw append no tail rule governs.
+//!
 //! Each scan asserts that it found what it allows — an edge between
 //! modules, a write in each writer, a touch in each reader, an end in each
 //! `main`, the seven variables in `src/args.rs`, the variables read beside
-//! them — or, where it allows nothing, that it reads the forms it refuses,
-//! so a scan gone blind fails rather than passing a clean tree. Comments
-//! are not code, and neither is anything from an inline `mod tests {` on.
+//! them — or, where it allows nothing, that it reads the forms it refuses
+//! (the line-file scan, that it read the dev manifest and found it naming
+//! the module), so a scan gone blind fails rather than passing a clean
+//! tree. Comments are not code, and neither is anything from an inline
+//! `mod tests {` on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -221,6 +230,43 @@ fn the_process_is_ended_by_main_alone() {
         EXITERS,
         "ends the process",
         "only a root's `main` ends the process, with `finish`'s rendering of the command's answer (§2.3): answer a `Stop` with `?` instead",
+    );
+}
+
+/// A line file is read and appended through the support crate's module,
+/// `skep_util::file`: no code line under `src/` opens a file `append(true)`
+/// or `create_new(true)` — a raw append, which no tail rule governs — and
+/// since nothing is allowed, the control is the file's own: the scan read
+/// the dev manifest, the line file this check exists for, and it names the
+/// module.
+#[test]
+fn a_line_file_is_read_and_appended_through_the_support_crates_module() {
+    let samples = [
+        ("    let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;", true),
+        ("        .create_new(true)", true),
+        ("    Appender::open(&self.path, 0o666)?.append(text.as_bytes(), OnTail::Cut, Fsync::Data)", false),
+    ];
+    for (sample, appends) in samples {
+        assert_eq!(appends_raw(sample), appends, "the scan reads the forms it refuses: `{sample}`");
+    }
+    confined(
+        appends_raw,
+        &[],
+        "appends to a file raw",
+        "a line file is read and appended through `skep_util::file`, the one tail rule the client's and the shell's files keep \
+         — never by an `append(true)` or a `create_new(true)` of its own, which cuts no torn last line",
+    );
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let manifest = src.join("dev").join("manifest.rs");
+    assert!(
+        files.contains(&manifest),
+        "src/dev/manifest.rs: the dev manifest, the line file this check exists for, is nowhere this scan reads: the file has moved"
+    );
+    assert!(
+        code_lines(&read(&manifest)).any(|(_, code)| code.contains("skep_util::file")),
+        "src/dev/manifest.rs names `skep_util::file` nowhere in code: the manifest's read and append have left the module"
     );
 }
 
@@ -377,6 +423,12 @@ fn touches_stdin(code: &str) -> bool {
 /// nothing.
 fn ends_the_process(code: &str) -> bool {
     names(code, "exit(") || names(code, "abort(")
+}
+
+/// Whether `code` appends to a file raw: an `append(true)` or a
+/// `create_new(true)` on a file's open options, each read after its `.`.
+fn appends_raw(code: &str) -> bool {
+    names(code, "append(true)") || names(code, "create_new(true)")
 }
 
 /// Whether `code` holds `needle` as a whole word — no identifier character

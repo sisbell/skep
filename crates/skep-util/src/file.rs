@@ -276,7 +276,10 @@ impl Appender {
     /// The count is the caller's own read's ([`LineReader::whole`],
     /// [`Lines::whole`]) or its own count of the lines it wrote. The file
     /// stands already — its first line was written by [`write_once`] or an
-    /// earlier append — so none is created here.
+    /// earlier append — so none is created here. A file that may be absent
+    /// is opened by [`Appender::open`], whose scan over nothing answers
+    /// `whole` 0; a caller that read the file itself opens at its count
+    /// where the read answered a file.
     ///
     /// # Errors
     ///

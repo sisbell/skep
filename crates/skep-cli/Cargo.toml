@@ -75,6 +75,12 @@ skep-shell = { path = "../skep-shell" }
 # of skep. The provider's own HTTP — its caps, the CORS headers for the one
 # origin, the event stream's framing — stays in `src/dev/serve/http.rs`.
 skep-http = { path = "../skep-http" }
+# The file under the tail rule (`skep_util::file`): the dev manifest's read
+# as lines and its append where the last whole line ends, a torn last line
+# cut off first. The support crate stands below every crate of the
+# workspace and names no store (ARCHITECTURE.md §The support crate); the
+# parse of a line and every word said stay here.
+skep-util = { path = "../skep-util" }
 # The daemon IN-PROCESS with its test hooks, behind `dev-hooks` alone (the
 # feature above): a REGULAR dependency, optional, so `cargo tree -e normal`
 # at the default features names no `skepd`. The dev-dependency below is

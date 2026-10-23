@@ -38,7 +38,8 @@
 //!   closed by a mark, a whole file written once or published by a locked
 //!   temp and a rename, a removal that answers what it did, and the sweep
 //!   of the temps a dead run left — the client's key store, bindings file
-//!   and anchor export and the shell's held-writes file take it.
+//!   and anchor export and the shell's held-writes file and the dev board's
+//!   manifest take it.
 //!
 //! ## The rule of membership
 //!

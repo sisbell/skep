@@ -27,22 +27,25 @@
 //! The path follows the search index's precedent — "the index directory
 //! beside the key store, never inside it", `<data>/index/<chain>/` — as
 //! `<store's parent>/<store's name>-seed/<chain>.jsonl`: `~/.skep-seed/…`
-//! for the default store. A line is one `write` of the whole line with its
-//! newline; a torn final line — a run killed inside the write, or a write
-//! cut short at a full volume — is no line and is ignored, as the bindings
-//! file's reader ignores one (§3.7), so the write it would have recorded is
-//! made again on the resume — whose first record cuts the fragment away
-//! before it appends ([`Manifest::record`]), so no line is ever written
-//! onto a torn one, where the two would read back as one line that is no
-//! JSON and refuse every later run.
+//! for the default store. The file is read and appended through the
+//! support crate's `file` module (`skep_util::file`), the one tail rule the
+//! client's and the shell's files keep: a line is one `write` of the whole
+//! line with its newline, and a torn final line — a run killed inside the
+//! write, or a write cut short at a full volume — is no line and is
+//! ignored, as the bindings file's reader ignores one (§3.7), so the write
+//! it would have recorded is made again on the resume — whose first record
+//! cuts the fragment away before it appends ([`Manifest::record`]), so no
+//! line is ever written onto a torn one, where the two would read back as
+//! one line that is no JSON and refuse every later run. The parse of each
+//! line and every word said stay here.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 use skep_client::Halt;
+use skep_util::file::{read_lines, Appender, Fsync, OnTail};
 
 /// The suffix of the manifest directory's name beside the store.
 ///
@@ -143,50 +146,50 @@ pub struct Manifest {
     ///
     /// It counts whether its header line was complete or not.
     found: bool,
-    /// The length of the file's complete lines, where a torn line followed.
-    ///
-    /// The torn line is the final one, found when the run opened the file;
-    /// the length is what the next record cuts the file back to before it
-    /// appends.
-    torn_at: Option<u64>,
 }
 
 impl Manifest {
     /// Opens the manifest at `path` for `header`'s seed.
     ///
-    /// It is read where the file stands — its header judged against
-    /// `header`, each complete line an item by its id, a torn final line
-    /// marked for the next record to cut away — else empty, its header
-    /// written at the first record.
+    /// It is read where the file stands (`skep_util::file::read_lines`) —
+    /// its header judged against `header`, each whole line an item by its
+    /// id, a torn final line no line, left for the next record's append to
+    /// cut away — else empty, its header written at the first record.
     ///
     /// # Errors
     ///
     /// Any difference between its header and `header` is a halt naming it;
     /// a file that cannot be read as this tool's is a halt naming why —
-    /// unreadable, a first line that is no JSON or no seed's header, or a
-    /// later line that is no JSON or names no `id`.
+    /// unreadable, a line that is not UTF-8, a first line that is no JSON
+    /// or no seed's header, or a later line that is no JSON or names no
+    /// `id`.
     pub fn open(path: PathBuf, header: Header) -> Result<Manifest, Halt> {
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        let read = match read_lines(&path) {
+            Ok(Some(read)) => read,
+            Ok(None) => {
                 return Ok(Manifest {
                     path,
                     header,
                     items: BTreeMap::new(),
                     on_disk: false,
                     found: false,
-                    torn_at: None,
                 });
             }
             Err(e) => return Err(unreadable(&path, e.to_string())),
         };
-        // Complete lines alone: a torn final line is no line.
-        let complete = match text.rfind('\n') {
-            Some(i) => &text[..=i],
-            None => "",
-        };
-        let torn_at = (complete.len() < text.len()).then_some(complete.len() as u64);
-        let mut lines = complete.lines();
+        // Whole lines alone, each decoded here: a torn final line is no
+        // line, and a line that is not UTF-8 is a file this tool cannot
+        // read, judged before any line is.
+        let mut lines = Vec::with_capacity(read.lines.len());
+        for (n, line) in read.lines.iter().enumerate() {
+            match std::str::from_utf8(line) {
+                Ok(line) => lines.push(line),
+                Err(e) => {
+                    return Err(unreadable(&path, format!("line {} is not UTF-8: {e}", n + 1)))
+                }
+            }
+        }
+        let mut lines = lines.into_iter();
         let Some(first) = lines.next() else {
             return Ok(Manifest {
                 path,
@@ -194,7 +197,6 @@ impl Manifest {
                 items: BTreeMap::new(),
                 on_disk: false,
                 found: true,
-                torn_at,
             });
         };
         let recorded: Value = serde_json::from_str(first)
@@ -222,7 +224,7 @@ impl Manifest {
             };
             items.insert(id.to_string(), v);
         }
-        Ok(Manifest { path, header, items, on_disk: true, found: true, torn_at })
+        Ok(Manifest { path, header, items, on_disk: true, found: true })
     }
 
     /// Returns where the manifest is written.
@@ -261,9 +263,12 @@ impl Manifest {
 
     /// Records one write, after its ack: `item`'s members under `id`.
     ///
-    /// They are appended as one line — the header line first where the file
-    /// is new, and a torn final line the run found cut away first, so the
-    /// record lands on a line of its own.
+    /// They are appended as one line through `skep_util::file`'s
+    /// `Appender`, in one write where the file's last whole line ends — the
+    /// header line joined ahead of them where the file is new, a torn final
+    /// line cut away first (`OnTail::Cut`), the bytes synced (`Fsync::Data`)
+    /// — so the record lands on a line of its own; a write that fails is
+    /// cut back to the whole lines.
     ///
     /// # Errors
     ///
@@ -284,17 +289,13 @@ impl Manifest {
             text.push('\n');
         }
         text.push_str(&item.to_string());
-        text.push('\n');
         let written = (|| {
             if let Some(dir) = self.path.parent() {
                 fs::create_dir_all(dir)?;
             }
-            if let Some(complete) = self.torn_at {
-                OpenOptions::new().write(true).open(&self.path)?.set_len(complete)?;
-            }
-            let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-            file.write_all(text.as_bytes())?;
-            file.sync_data()
+            // Created at the default mode, 0o666 before the umask, as a
+            // plain open would make it.
+            Appender::open(&self.path, 0o666)?.append(text.as_bytes(), OnTail::Cut, Fsync::Data)
         })();
         if let Err(e) = written {
             let lines: Vec<&str> = text.lines().collect();
@@ -312,7 +313,6 @@ impl Manifest {
             ));
         }
         self.on_disk = true;
-        self.torn_at = None;
         self.items.insert(id.to_string(), item);
         Ok(())
     }

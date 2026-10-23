@@ -544,7 +544,11 @@ Rules that hold across its files:
 - **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
   `Store`'s entry points, a log line's at open. No name reaches a path out
   of the root; and a creation names no designation at all, but a
-  `HashFunction` the store computes (`Store::create_upload`).
+  `HashFunction` the store computes (`Store::create_upload`). An upload
+  log whose records name a function the store does not compute is
+  another build's, refused at open whole and before any act
+  (`Store::refuse_uploads_of_another_function`), so every upload the store
+  serves is filed under a function it computes.
 - **A byte is received once it is durable, and a stream is one
   request's** (`Store::resume`, `Stream`): the partial's file closes with
   it.
@@ -614,9 +618,17 @@ Rules that hold across its files:
   refusal of bounded length — eight clauses named, the partials of one
   directory one clause, the rest counted by kind — with the act for each
   kind (`blobs::refuse_links_and_special_files`): nothing is followed or
-  written through. Among the acts that take room, the volume is probed for
-  the one capability no other act of the open exercises, a second name for
-  a file, which a re-PUT of a file the board holds takes: a volume that
+  written through. Next, still before any act, the upload log is read as
+  found and held to the functions this build computes: a record naming
+  another — another build's upload — fails the open whole, nothing changed,
+  where the reconciliation would act on it in that build's directory and a
+  finish would name it by BLAKE3's hash
+  (`Store::refuse_uploads_of_another_function`, which an embedder can run on
+  its own ahead of its start's writes, beside
+  `Store::refuse_links_and_special_files`). Among the acts that take room,
+  the volume is probed for the one capability no other act of the open
+  exercises, a second name for a file, which a re-PUT of a file the board
+  holds takes: a volume that
   makes none fails the open with the act that clears it
   (`blobs::probe_hard_link`), where
   it would otherwise serve every new upload and fail every re-PUT, the

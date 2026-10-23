@@ -114,35 +114,44 @@
 //!   special file, or a second link to a file the store writes in place
 //!   failing the open, every one it found counted in one refusal of bounded
 //!   length, up to eight clauses naming them, with the act for each kind
-//!   (`blobs.rs`). Then what frees room before what takes it, so an open on
-//!   a full volume has made the room its own repairs make before it asks for
-//!   any beyond the reconciliation's lines: every aside removed, a crash's, a
-//!   failed finish's or the pruner's (`blobs.rs`); the records' log
-//!   tail-checked, and the partials and the records held to each other both
-//!   ways, an orphan partial removed under the designations this build
-//!   computes alone — another build's designation directory left to it —
-//!   and a partial that cannot be read failing the open rather than reading
-//!   as absent (`partials.rs`); and only then the lease log tail-checked and
-//!   rewritten to its current leases, a lease past the horizon dropped; the
-//!   volume probed for a second name for a file, which a re-PUT of a file
-//!   the board holds takes, a volume that makes none failing the open with
-//!   the act that clears it (`blobs.rs`); and the records' log rewritten to
-//!   its current records — in either log a line naming a designation or hex
-//!   the store's name check refuses, or an offset past its length, read as
-//!   no record (see [`Store`]), so a log restored from elsewhere names no
-//!   path out of the root. Last, the root fsynced and the board's own
-//!   directory after it, whose fsync alone makes `blobs/`'s own entry
-//!   durable — at every open.
+//!   (`blobs.rs`). Next, the upload log read as found and held to the
+//!   functions this build computes: a record naming another is another
+//!   build's upload, and the open refuses the log whole, nothing changed,
+//!   rather than reconcile it in that build's directory or finish it under
+//!   that name ([`Store::refuse_uploads_of_another_function`], which an
+//!   embedder can run on its own ahead of its start's writes, as it can
+//!   [`Store::refuse_links_and_special_files`]). Then what frees room before
+//!   what takes it, so an open on a full volume has made the room its own
+//!   repairs make before it asks for any beyond the reconciliation's lines:
+//!   every aside removed, a crash's, a failed finish's or the pruner's
+//!   (`blobs.rs`); the records' log tail-checked, and the partials and the
+//!   records held to each other both ways, an orphan partial removed under
+//!   the designations this build computes alone — another build's
+//!   designation directory left to it — and a partial that cannot be read
+//!   failing the open rather than reading as absent (`partials.rs`); and
+//!   only then the lease log tail-checked and rewritten to its current
+//!   leases, a lease past the horizon dropped; the volume probed for a
+//!   second name for a file, which a re-PUT of a file the board holds takes,
+//!   a volume that makes none failing the open with the act that clears it
+//!   (`blobs.rs`); and the records' log rewritten to its current records —
+//!   in either log a line naming a designation or hex the store's name check
+//!   refuses, or an offset past its length, read as no record (see
+//!   [`Store`]), so a log restored from elsewhere names no path out of the
+//!   root. Last, the root fsynced and the board's own directory after it,
+//!   whose fsync alone makes `blobs/`'s own entry durable — at every open.
 //! * **A caller's bug is no refusal**: a finish short of the declared length
 //!   panics, naming the obligation it breaks ([`Stream::finish`]), and so
 //!   does a defect of the store's own — a byte received marked past its
 //!   record's length (`UploadRecords::mark_received`); [`BlobError`] carries
 //!   only answers a caller acts on.
-//! * **A key a creation makes names the function that made it**: the store
-//!   computes one hash, BLAKE3's, and a creation names it by type —
+//! * **Every key names the function that made it**: the store computes one
+//!   hash, BLAKE3's, and a creation names it by type —
 //!   [`HashFunction::Blake3`], filed under its designation, `blake3` — so no
 //!   creation can name a function the store does not compute
-//!   ([`Store::create_upload`]; `media.md` §The design, item 4).
+//!   ([`Store::create_upload`]); and its open refuses an upload log whose
+//!   records name one, so no finish names a file or its lease by a hash its
+//!   designation's function did not make ([`Store::open`]; `media.md` §The
+//!   design, item 4; the register M-I3 (f)).
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of

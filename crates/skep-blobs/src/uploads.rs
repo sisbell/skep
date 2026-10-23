@@ -10,7 +10,13 @@
 //! store's name check refuses reads as lost too — the log's lines meet the
 //! check a caller's names meet (`parse_line`) — so a log restored from
 //! elsewhere names no path out of the root. A record line whose offset
-//! passes its length, which no act writes, reads as lost as well.
+//! passes its length, which no act writes, reads as lost as well. A record
+//! line naming a designation the check admits reads as a record, whatever
+//! function it names: whether this build computes that function is the
+//! store's open's to judge, over the whole log and before any act, and a
+//! log naming another is another build's, refused whole
+//! ([`Store::open`](crate::Store::open)) — read as lost, its upload would be
+//! dropped at the compaction.
 //!
 //! **A record changes by its holder's acts alone** (`media.md` §The media
 //! stores, the upload records — written at an upload's creation and after
@@ -106,10 +112,13 @@ pub struct UploadRecord {
     pub principal: String,
     /// The designation the upload's line spells.
     ///
-    /// It is its creation's function's
-    /// ([`HashFunction::designation`](crate::HashFunction::designation)), or,
-    /// off a log restored from elsewhere, any designation the name check
-    /// admits — a name read from disk, so a string and not the type.
+    /// In a store that opened, it is a function's the store computes
+    /// ([`HashFunction::designation`](crate::HashFunction::designation)): its
+    /// creation's, or a line's the open held to them, refusing a log that
+    /// names another ([`Store::open`](crate::Store::open)). In a log read as
+    /// found ([`Store::inspect`](crate::Store::inspect)), it is any
+    /// designation the name check admits — a name read from disk, so a string
+    /// and not the type.
     pub designation: String,
     /// The upload's declared length, in bytes.
     pub length: u64,
@@ -171,7 +180,13 @@ enum Line {
 /// [`UploadRecord`]'s invariant a line from disk meets: no act writes one,
 /// and standing, its upload would refuse every append, never reach a
 /// finish, and count past its length in its principal's pending bytes
-/// until it expired.
+/// until it expired. A record line naming a designation the check admits is
+/// read as a record whatever function it names: another build's upload read
+/// as lost here would be dropped at the compaction — its schema unknown to
+/// this reader, and its null a destruction, which D13 has a reader halt on
+/// — so whether this build computes the function is judged over the whole
+/// log, before any act, by the store's open
+/// ([`Store::open`](crate::Store::open)).
 fn parse_line(v: &Value) -> Option<Line> {
     let id = UploadId::parse(v.get("id")?.as_str()?)?;
     if v.get("retired").and_then(Value::as_bool) == Some(true) {

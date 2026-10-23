@@ -68,7 +68,7 @@
 #[cfg(feature = "test-hooks")]
 mod hooks;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -78,7 +78,7 @@ use parking_lot::Mutex;
 
 use crate::blobs::{
     self, aside_name, designation_ok, dir_label, fsync_dir, hex_ok, is_aside_name, label, named, not_found_as_none,
-    partial_label,
+    partial_label, PLANTED_NAMED,
 };
 use crate::error::BlobError;
 use crate::jsonl::{LogRead, LogSize, LogStop};
@@ -132,11 +132,12 @@ pub enum Step {
 
 /// A finished upload's answer: the file's designation, hash and size.
 ///
-/// Its hash is BLAKE3's — the function its designation names, save for an
-/// upload read off a log restored from elsewhere under another designation
-/// — as lowercase hex. One shape whether or not the file was already here
-/// (`media.md` Op inventory 1, "no answer of the upload says whether the
-/// file was already here").
+/// Its hash is BLAKE3's, the function its designation names, as lowercase
+/// hex: every upload a store serves is filed under a function it computes,
+/// its open refusing an upload log that names another ([`Store::open`]).
+/// One shape whether or not the file was already here (`media.md` Op
+/// inventory 1, "no answer of the upload says whether the file was already
+/// here").
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -273,8 +274,13 @@ pub struct Opened {
 /// a lost line does (`uploads.rs`, `lease.rs`), so a log restored from
 /// elsewhere names no path out of the root, and the leases, holding no
 /// malformed name, answer one as none ([`Store::lease_state`],
-/// [`Store::any_live_lease`]). Inside the crate a name that has passed this
-/// check, or that the store spelled itself (a finish's hash), is trusted.
+/// [`Store::any_live_lease`]). A record line naming a well-spelled
+/// designation of a function the store does not compute is no lost line
+/// but another build's upload: the open refuses the log whole rather than
+/// reconcile that upload in the other build's directory or finish it under
+/// that name by BLAKE3's hash ([`Store::open`]). Inside the crate a name
+/// that has passed this check, or that the store spelled itself (a finish's
+/// hash), is trusted.
 ///
 /// **A log that stops stays stopped until a compaction completes.** Each log
 /// cuts a failed append back off its file; where that cut fails too, the
@@ -370,7 +376,12 @@ impl Store {
     ///
     /// Before any act under the root, every name the store acts on there is
     /// held to what the store makes, and nothing is followed or written
-    /// through one that is not (`blobs.rs`, `refuse_links_and_special_files`).
+    /// through one that is not (`blobs.rs`, `refuse_links_and_special_files`);
+    /// and the upload log, read as found, is held to the functions this build
+    /// computes: a record naming another is another build's upload, which the
+    /// open would otherwise reconcile in that build's directory and a finish
+    /// would name by BLAKE3's hash, so the log is refused whole
+    /// ([`Store::refuse_uploads_of_another_function`]).
     ///
     /// **Then what frees room, before what takes it.** Every aside is removed
     /// — a crash's, a failed finish's or the pruner's, nothing naming any —
@@ -425,11 +436,14 @@ impl Store {
     /// writes in place fails the open as `InvalidData`, before any act under
     /// the root: one refusal of bounded length counting every one it found,
     /// naming them in at most eight clauses and the act that clears each
-    /// kind. A volume that makes no second name for a file fails it at the
-    /// probe, naming its lack and the act that clears it. A partial that
-    /// cannot be read fails it, its record not retired (`partials.rs`): an
-    /// I/O failure is no absence. Every other failure names its file and its
-    /// act.
+    /// kind. An upload log whose records name a hash function this build does
+    /// not compute fails it next, as `InvalidData`, still before any act:
+    /// nothing is changed, and the refusal names the log, the functions — at
+    /// most eight — and the build to start instead. A volume that makes no
+    /// second name for a file fails it at the probe, naming its lack and the
+    /// act that clears it. A partial that cannot be read fails it, its record
+    /// not retired (`partials.rs`): an I/O failure is no absence. Every other
+    /// failure names its file and its act.
     pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
         let root = root.as_ref();
         let at_root = |act: &'static str| move |e: io::Error| named(e, dir_label(root, 1), act);
@@ -439,6 +453,9 @@ impl Store {
         // as found.
         blobs::dir_builder().recursive(true).create(root).map_err(at_root("create"))?;
         blobs::refuse_links_and_special_files(root)?;
+        // Another build's uploads, judged by reading alone: refused whole
+        // before the sweep, the reconciliation or a compaction acts on any.
+        refuse_uploads_of_another_function_at(root)?;
         // What frees room, before what takes it: on a full volume the open
         // has made the room its own repairs make before it asks for any
         // beyond the reconciliation's lines.
@@ -513,6 +530,51 @@ impl Store {
         let root = root.as_ref();
         if fs::symlink_metadata(root).is_ok_and(|meta| meta.is_dir()) {
             blobs::refuse_links_and_special_files(root)?;
+        }
+        Ok(())
+    }
+
+    /// Refuses an upload log naming a function this build does not compute.
+    ///
+    /// It is the judgment [`Store::open`] makes after its walk, offered on its
+    /// own as [`Store::refuse_links_and_special_files`] is, so an embedder can
+    /// make it ahead of every write its start would otherwise make before
+    /// reaching the store's open — the journal's open among them
+    /// (`operations.md` §3.1 step 3: the refusal at the earliest act the fault
+    /// is decidable from). It reads alone and writes nothing: the walk first,
+    /// so the log's read follows no link and waits on no FIFO, then the log
+    /// read as found and folded, every record it leaves held to the functions
+    /// this build computes. The open makes both again as its own
+    /// precondition. A root that does not stand, or is no directory, holds
+    /// nothing this check refuses, and answers `Ok`.
+    ///
+    /// **Why the whole log.** A record naming a function this build does not
+    /// compute is another build's upload, its partial in that build's
+    /// designation directory: the open's reconciliation would cut it back,
+    /// remove it or retire it there, where clause (4) and the pruner's halt on
+    /// a foreign designation directory (D13's carve-out) keep this build out;
+    /// and its finish would hash its bytes with BLAKE3 and name the file and
+    /// its lease under that designation, a key naming a function that did not
+    /// make it (`media.md` §The design, item 4, "a bare key would not say
+    /// which function made it"; the register M-I3 (f)). Read as a lost line
+    /// instead, it would be dropped at the open's compaction — another build's
+    /// upload destroyed by a reader that does not know its schema, which D13
+    /// forbids. A record the log retired since names no upload, and refuses
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// The walk's refusal, as [`Store::refuse_links_and_special_files`]
+    /// answers it; then a record the log folds to — standing or expired alike
+    /// — naming a designation no function this build computes spells, as
+    /// `InvalidData`, the open's own refusal: the log, the functions, at most
+    /// eight, and the build to start instead; a listing, a stat or the log's
+    /// read failing, named.
+    pub fn refuse_uploads_of_another_function(root: impl AsRef<Path>) -> io::Result<()> {
+        let root = root.as_ref();
+        if fs::symlink_metadata(root).is_ok_and(|meta| meta.is_dir()) {
+            blobs::refuse_links_and_special_files(root)?;
+            refuse_uploads_of_another_function_at(root)?;
         }
         Ok(())
     }
@@ -1394,6 +1456,83 @@ fn make_dir(dir: &Path) -> io::Result<()> {
     }
 }
 
+/// Refuses the upload log under `root` where a record names another function.
+///
+/// The log is read as found (`UploadRecords::read_as_found`) — no tail cut,
+/// nothing opened for appending, nothing created — and folded, and every
+/// record it leaves, standing or expired alike, is held to the designations
+/// of the functions this build computes ([`HashFunction::ALL`]). It is the
+/// judgment [`Store::open`] and [`Store::refuse_uploads_of_another_function`]
+/// share, the walk having refused first anything at the log's name a read
+/// would follow or wait on; why it refuses the whole log is that door's
+/// card.
+///
+/// # Errors
+///
+/// A record naming a designation no function this build computes spells,
+/// as `InvalidData`, its text [`another_function_refusal`]'s; the log's read
+/// failing, named (`read`).
+fn refuse_uploads_of_another_function_at(root: &Path) -> io::Result<()> {
+    let (records, read) = UploadRecords::read_as_found(root)?;
+    let computed: Vec<&str> = HashFunction::ALL.iter().map(|function| function.designation()).collect();
+    let mut foreign: BTreeMap<&str, usize> = BTreeMap::new();
+    for record in &records {
+        if !computed.contains(&record.designation.as_str()) {
+            *foreign.entry(record.designation.as_str()).or_default() += 1;
+        }
+    }
+    if foreign.is_empty() {
+        return Ok(());
+    }
+    Err(io::Error::new(io::ErrorKind::InvalidData, another_function_refusal(&read.name, &foreign, &computed)))
+}
+
+/// Returns the refusal of an upload log naming another build's functions.
+///
+/// `log` is the log's name within the data directory; `foreign` holds each
+/// designation the records name that this build computes no function for,
+/// with its count of records; `computed` holds this build's designations.
+/// It reads `{log}: read: {cause}`, as every failure at a file reads: the
+/// records and the functions they name, why a finish here would break
+/// their keys, that nothing was changed, and last the act that clears it,
+/// the build that wrote the log. It names at most [`PLANTED_NAMED`]
+/// designations and counts the rest, so the line stays whole however many a
+/// log restored from elsewhere spells; a designation names no identifier,
+/// principal or path.
+fn another_function_refusal(log: &str, foreign: &BTreeMap<&str, usize>, computed: &[&str]) -> String {
+    let records: usize = foreign.values().sum();
+    let designations: Vec<&str> = foreign.keys().copied().collect();
+    let functions = listed(&designations, PLANTED_NAMED);
+    let name = if records == 1 { "upload record names" } else { "upload records name" };
+    let (what, under) = if designations.len() == 1 {
+        ("a hash function", format!("under {functions} by a hash that function did not make"))
+    } else {
+        ("hash functions", "under one of them by a hash its function did not make".to_string())
+    };
+    format!(
+        "{log}: read: {records} {name} {functions}, {what} this build does not compute (it computes {}), so a \
+         finish here would name a file and its lease {under}; nothing was changed: start the board with the build \
+         that wrote this log, one that computes {functions}",
+        listed(computed, computed.len())
+    )
+}
+
+/// Returns `names` as a line lists them: `a`, `a and b`, `a, b and c`.
+///
+/// Past `at_most` the rest are counted, not named: `a, …, h and 4 more`.
+fn listed(names: &[&str], at_most: usize) -> String {
+    let (shown, rest) = names.split_at(names.len().min(at_most));
+    let mut parts: Vec<String> = shown.iter().map(|name| name.to_string()).collect();
+    if !rest.is_empty() {
+        parts.push(format!("{} more", rest.len()));
+    }
+    match parts.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
 /// The pull's copy buffer: 64 KiB, on the stack.
 ///
 /// The bytes of the pull's source are read, hashed and written through it
@@ -1714,5 +1853,47 @@ mod tests {
         );
         assert_eq!(second.settle(5).expect("the settle answers").offset, 1, "the record set to the second's bytes");
         assert_eq!(fs::read(partials::partial_path(dir.path(), "blake3", &rec.id)).unwrap(), b"x");
+    }
+
+    /// The refusal of another build's uploads names eight functions at most.
+    ///
+    /// It reads as every failure at a file does — the log, the act, the
+    /// cause — its cause counting the records, one or many, and listing the
+    /// designations as a line lists names, in name order; past eight it names
+    /// eight and counts the rest, so the line stays whole whatever a restored
+    /// log spells; and its act, last, names the build to start.
+    #[test]
+    fn the_refusal_of_another_builds_uploads_names_its_functions_eight_at_most() {
+        let refusal = |foreign: &[(&str, usize)]| {
+            another_function_refusal("blobs/uploads.log", &foreign.iter().copied().collect(), &["blake3"])
+        };
+        assert_eq!(
+            refusal(&[("sha256-tree", 1)]),
+            "blobs/uploads.log: read: 1 upload record names sha256-tree, a hash function this build does not \
+             compute (it computes blake3), so a finish here would name a file and its lease under sha256-tree by \
+             a hash that function did not make; nothing was changed: start the board with the build that wrote \
+             this log, one that computes sha256-tree"
+        );
+        assert_eq!(
+            refusal(&[("sha512", 2), ("sha256-tree", 3)]),
+            "blobs/uploads.log: read: 5 upload records name sha256-tree and sha512, hash functions this build does \
+             not compute (it computes blake3), so a finish here would name a file and its lease under one of them \
+             by a hash its function did not make; nothing was changed: start the board with the build that wrote \
+             this log, one that computes sha256-tree and sha512"
+        );
+        let names: Vec<String> = (0..12).map(|i| format!("d{i:02}")).collect();
+        let twelve: Vec<(&str, usize)> = names.iter().map(|name| (name.as_str(), 1)).collect();
+        let eight_and_more = "d00, d01, d02, d03, d04, d05, d06, d07 and 4 more";
+        assert_eq!(
+            refusal(&twelve),
+            format!(
+                "blobs/uploads.log: read: 12 upload records name {eight_and_more}, hash functions this build does \
+                 not compute (it computes blake3), so a finish here would name a file and its lease under one of \
+                 them by a hash its function did not make; nothing was changed: start the board with the build \
+                 that wrote this log, one that computes {eight_and_more}"
+            )
+        );
+        assert_eq!(listed(&["a", "b", "c"], 8), "a, b and c", "three named");
+        assert_eq!(listed(&["a"], 8), "a", "one named");
     }
 }

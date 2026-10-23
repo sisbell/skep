@@ -29,10 +29,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   stores as they stand, which creates, cuts, renames and syncs nothing and
   answers what each log's reading found; and the pull's install of one
   file by the PUT's own order, no lease and no record, its refusal saying
-  whether anything was installed. Beside them, the open's first check on
-  its own — `Store::refuse_links_and_special_files`, reading alone — so an
-  embedder refuses a root holding a link or a special file before any
-  write its start would otherwise make.
+  whether anything was installed. Beside them, the open's two first checks
+  on their own, each reading alone — `Store::refuse_links_and_special_files`
+  and `Store::refuse_uploads_of_another_function` — so an embedder refuses a
+  root holding a link or a special file, or an upload log naming a hash
+  function the store does not compute, before any write its start would
+  otherwise make.
 
 The store knows a principal only as an opaque string, takes no lock of its
 caller's, writes no operator stream and reads no limits record: what bounds

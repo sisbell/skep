@@ -6,7 +6,10 @@
 //! and retiring nothing; a record line read as no record
 //! where it lacks any member, its interval among them, where its offset
 //! passes its length, and where its designation climbs out of the root,
-//! nothing beside the root touched; the compaction, down to nothing where
+//! nothing beside the root touched; an upload log naming a function this
+//! build does not compute — another build's — refusing the open whole,
+//! nothing changed, and its read-alone door walking first, never left
+//! waiting; the compaction, down to nothing where
 //! nothing stands, over the twin a kill mid-compaction left beside each
 //! log — a twin never read in place of its log; and before any of it, a
 //! link at a name open acts on — symbolic, or a second hard link to a file
@@ -344,6 +347,116 @@ fn a_record_line_whose_designation_climbs_out_of_the_root_is_no_record() {
     let stand: Vec<UploadId> = store.uploads_of("k", 10).into_iter().map(|r| r.id).collect();
     assert_eq!(stand, vec![kept], "the line naming a designation a creation admits stands alone");
     assert_eq!(fs::read_to_string(root.join("uploads.log")).unwrap().lines().count(), 1, "compacted to it");
+}
+
+/// AN UPLOAD LOG NAMING A FUNCTION THIS BUILD DOES NOT COMPUTE REFUSES THE
+/// OPEN, NOTHING CHANGED (`Store::open`; `media.md` §The design, item 4, "a
+/// bare key would not say which function made it"; the register M-I3 (f)):
+/// a log restored from another build holds two upload records under
+/// `sha256-tree` — one standing, one expired — beside one of this build's,
+/// each over a partial longer than its offset. The open refuses the log
+/// whole before any act: the log and every partial as found, byte for byte,
+/// where its reconciliation would cut the standing ones back and remove the
+/// expired one's partial in the other build's directory, and no log begun;
+/// the refusal names the log, the function and the build to start, never an
+/// identifier, a principal or a path, and `RUNBOOK.md` quotes it whole; the
+/// read-alone door answers it alike, and over a root that does not stand
+/// answers `Ok` and makes nothing. An expired record of that build's alone
+/// refuses the open too, its partial's removal an act in that build's
+/// directory; with both retired — no upload of that build's left — the open
+/// serves, its own upload reconciled and the other build's directory left
+/// as found.
+#[test]
+fn an_upload_log_naming_a_function_this_build_does_not_compute_refuses_the_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let id_of = |n: usize| UploadId::parse(&hex_of(&[n as u8])[..32]).expect("32 lowercase hex");
+    let (standing_there, expired_there, ours) = (id_of(0), id_of(1), id_of(2));
+    let partial = |designation: &str, id: &UploadId| root.join(designation).join(format!(".upload-{}", id.to_hex()));
+    let record = |id: &UploadId, designation: &str, expires: u64| {
+        let v = serde_json::json!({
+            "designation": designation, "expires": expires, "id": id.to_hex(),
+            "interval": 1_000, "key": "p-4242", "length": 100, "offset": 3,
+        });
+        format!("{v}\n")
+    };
+    let retirement = |id: &UploadId| format!("{}\n", serde_json::json!({"id": id.to_hex(), "retired": true}));
+    for designation in ["sha256-tree", "blake3"] {
+        fs::create_dir_all(root.join(designation)).unwrap();
+    }
+    fs::write(partial("sha256-tree", &standing_there), b"another build's bytes").unwrap();
+    fs::write(partial("sha256-tree", &expired_there), b"another build's, expired").unwrap();
+    fs::write(partial("blake3", &ours), b"abcdef").unwrap();
+    let log = root.join("uploads.log");
+    let lines = [
+        record(&standing_there, "sha256-tree", 9_999),
+        record(&expired_there, "sha256-tree", 5),
+        record(&ours, "blake3", 9_999),
+    ];
+    fs::write(&log, lines.concat()).unwrap();
+    let append = |line: String| fs::write(&log, fs::read_to_string(&log).unwrap() + &line).unwrap();
+    // Every file under the root and in its two designation directories, by
+    // path, with its bytes: what "nothing changed" compares.
+    let as_found = || -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for at in [root.clone(), root.join("sha256-tree"), root.join("blake3")] {
+            for entry in fs::read_dir(&at).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    out.push((path.display().to_string(), fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    };
+    let before = as_found();
+    let refused = Store::open(&root, HORIZON, 10).map(drop).expect_err("another build's uploads refuse the open");
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData, "{refused}");
+    let text = refused.to_string();
+    assert_eq!(
+        text,
+        "blobs/uploads.log: read: 2 upload records name sha256-tree, a hash function this build does not compute \
+         (it computes blake3), so a finish here would name a file and its lease under sha256-tree by a hash that \
+         function did not make; nothing was changed: start the board with the build that wrote this log, one \
+         that computes sha256-tree"
+    );
+    assert_eq!(as_found(), before, "the log and every partial as found: nothing reconciled, cut or removed");
+    assert!(!root.join("leases.log").exists(), "and no log begun");
+    for id in [&standing_there, &expired_there, &ours] {
+        assert!(!text.contains(&id.to_hex()), "never an identifier: {text}");
+    }
+    assert!(!text.contains("4242"), "never a principal: {text}");
+    assert!(!text.contains(&dir.path().display().to_string()), "never an absolute path: {text}");
+    let door = Store::refuse_uploads_of_another_function(&root).expect_err("the door refuses it as the open does");
+    assert_eq!((door.kind(), door.to_string()), (refused.kind(), text.clone()), "one judgment, two callers");
+    assert_eq!(as_found(), before, "the door reads alone");
+    let absent = dir.path().join("absent");
+    assert!(Store::refuse_uploads_of_another_function(&absent).is_ok(), "a root that does not stand holds nothing");
+    assert!(!absent.exists(), "and is not made");
+    let runbook = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).unwrap();
+    let quoted = text.replace("sha256-tree", "{designation}").replace("2 upload records", "{n} upload records");
+    assert!(runbook.contains(&format!("skepd: blob store: {quoted}\n")), "RUNBOOK.md quotes it whole: {quoted}");
+    // That build's standing record retired: its expired one alone still
+    // refuses the open.
+    append(retirement(&standing_there));
+    let before = as_found();
+    let refused = Store::open(&root, HORIZON, 10).map(drop).expect_err("an expired record of that build's refuses");
+    assert!(
+        refused.to_string().starts_with("blobs/uploads.log: read: 1 upload record names sha256-tree, a hash function"),
+        "{refused}"
+    );
+    assert_eq!(as_found(), before, "its partial not removed: nothing changed");
+    // Both retired: no upload of that build's stands in the log.
+    append(retirement(&expired_there));
+    let store = open(&root, 10);
+    let opened = store.opened();
+    assert_eq!((opened.partials_cut_back, opened.orphan_partials, opened.expired_uploads), (1, 0, 0), "{opened:?}");
+    assert_eq!(store.upload("p-4242", &ours, 10).map(|r| r.offset), Some(3), "this build's upload stands");
+    assert_eq!(fs::read(partial("blake3", &ours)).unwrap(), b"abc", "reconciled, its partial cut back to its offset");
+    assert_eq!(fs::read(partial("sha256-tree", &standing_there)).unwrap(), b"another build's bytes", "left as found");
+    assert_eq!(fs::read(partial("sha256-tree", &expired_there)).unwrap(), b"another build's, expired");
+    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 1, "compacted to this build's one record");
 }
 
 /// (1) A RECORD LINE WHOSE OFFSET PASSES ITS LENGTH IS NO RECORD
@@ -893,6 +1006,32 @@ fn a_special_file_at_a_name_open_acts_on_fails_the_open_and_never_hangs_it() {
     let (kind, message) = opened.expect_err("a FIFO fails the open");
     assert_eq!(kind, std::io::ErrorKind::InvalidData, "{message}");
     assert!(message.contains("blobs/leases.log is a special file"), "named: {message}");
+}
+
+/// THE UPLOAD LOG's DOOR WALKS BEFORE IT READS, AND NEVER HANGS
+/// (`Store::refuse_uploads_of_another_function`): a FIFO planted at the
+/// upload log's name — where the door's read of the log would wait for good
+/// on a writer that never comes — is refused by the door's own walk, named,
+/// inside a bounded wait, whatever its caller ran before it.
+#[cfg(unix)]
+#[test]
+fn the_upload_logs_door_walks_before_it_reads_and_never_hangs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let log = root.join("uploads.log");
+    fs::remove_file(&log).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(&log).status().expect("mkfifo runs");
+    assert!(made.success(), "a FIFO made at the upload log's name");
+    let (tx, rx) = std::sync::mpsc::channel();
+    // On a thread of its own: a door that read the FIFO would wait for good.
+    std::thread::spawn(move || {
+        let _ = tx.send(Store::refuse_uploads_of_another_function(&root).map_err(|e| (e.kind(), e.to_string())));
+    });
+    let answered = rx.recv_timeout(Duration::from_secs(5)).expect("the door answers inside a bounded wait");
+    let (kind, message) = answered.expect_err("a FIFO refuses the door");
+    assert_eq!(kind, std::io::ErrorKind::InvalidData, "{message}");
+    assert!(message.contains("blobs/uploads.log is a special file"), "named: {message}");
 }
 
 /// A HARD-LINK PROBE A KILL CUT SHORT IS THE NEXT OPEN's TO CLEAR

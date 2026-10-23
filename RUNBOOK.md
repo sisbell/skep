@@ -1669,6 +1669,26 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    file: remove it, and put the store's file back from the board
    directory's copy (Restore). Then start again.
 
+   Where `blobs/uploads.log` holds an upload record under a hash
+   function this build does not compute — a log another build
+   wrote, restored here, or a newer build's under an older binary
+   (Upgrade, step 5) — that upload is the other build's: its
+   partial stands in that build's directory under `blobs/`, and a
+   finish here would name its file and its lease by a hash that
+   function did not make. The open acts on none of it, and refuses
+   with nothing changed:
+
+   ```
+   skepd: blob store: blobs/uploads.log: read: {n} upload records name {designation}, a hash function this build does not compute (it computes blake3), so a finish here would name a file and its lease under {designation} by a hash that function did not make; nothing was changed: start the board with the build that wrote this log, one that computes {designation}
+   ```
+
+   Start the board with the build that wrote the log. To serve it
+   under this build instead, remove `blobs/uploads.log` while no
+   daemon runs: every upload in progress then reads as none, its
+   client's resume answered `404 no_upload` (the cost Restore, step
+   8, names), and the other build's directory under `blobs/` halts
+   the pruner's unlinking while it stands (The full volume, step 3).
+
    A volume that makes no hard link refuses the start: a re-PUT of
    a file the board holds gives the file it replaces a second name,
    so the open probes for one before it serves, in a `.link-probe/`
@@ -2090,14 +2110,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    carry no stamp either, and an open that meets lines of a shape
    its build does not read — an older build's under a newer binary
    as much as a newer build's under an older one — keeps none of
-   them and says nothing. An upload whose record is lost is no
+   them, and says how many (`failure: {log}: {n} lines read as no
+   …`, Start, step 3, item 9). An upload whose record is lost is no
    upload: its partial is removed as an orphan, and its client's
    resume is answered `404 no_upload`. A deposit whose lease is
    lost is no deposit: the pruner takes its file unless a cell
    names it or another live lease holds it, and the cure is the
-   depositor's re-PUT. The open's
-   compaction then removes the lines for good. Go back to an older
-   binary only with the copy from step 1.
+   depositor's re-PUT. The open's compaction then removes the lines
+   for good. An upload record under a hash function the older
+   binary does not compute is refused instead, the log left whole
+   (Start, step 3). Go back to an older binary only with the copy
+   from step 1.
 
 ## 7. Back up
 

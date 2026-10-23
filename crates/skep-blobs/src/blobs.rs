@@ -426,14 +426,17 @@ struct Planted {
     found: Found,
 }
 
-/// The most clauses one refusal names: eight, interim.
+/// The most names one of the open's refusals lists: eight, interim.
 ///
-/// The entries past them are counted by kind, so the refusal is one line
-/// whose acts end it, however many entries a tree holds — a line of one
-/// clause per entry over ten thousand passes the 16 KiB a container's log
-/// driver splits a line at (journald's 48 KiB not long after), its act
-/// landing in a record of its own, the `skepd: ` prefix far above it.
-const PLANTED_NAMED: usize = 8;
+/// The walk's refusal names its entries in at most this many clauses and
+/// counts the rest by kind; the refusal of an upload log naming functions
+/// this build does not compute (`store.rs`) names at most this many of them
+/// and counts the rest. Each is one line whose acts end it, however many a
+/// tree or a log holds — a line of one clause per entry over ten thousand
+/// passes the 16 KiB a container's log driver splits a line at (journald's
+/// 48 KiB not long after), its act landing in a record of its own, the
+/// `skepd: ` prefix far above it.
+pub(crate) const PLANTED_NAMED: usize = 8;
 
 /// The walk's one refusal.
 ///

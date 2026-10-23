@@ -1,22 +1,23 @@
-//! The tool catalog: names, descriptions, input schemas, the server
-//! `instructions` string, and the `SKEP_COMMONS` sentence template
-//! (`commons_instructions`, `{addr}` placeholder) — data, not code. The
-//! shipped `tools.json` is embedded at build time and overridable with
-//! `--tools-file`. Loading cross-checks the catalog against the dispatch in
-//! BOTH directions, so the file and the code cannot drift silently: a file
-//! entry the dispatch doesn't know refuses startup, and a dispatch tool the
-//! file doesn't name refuses startup. The dispatch has two kinds of tool
-//! ([`Tool`]): the *wire ops*, each spelled as the wire spells it, whose
-//! arguments are the frame and which the adapter sends as `op(session, frame)`
-//! through the shell; and the *adapter tools* — the shell's calls (`boards`,
-//! `health`, `probe`, `search`, `places`, `held`, `resolve`) and the apparatus
-//! (`session_info`, `changes_since`, `fetch`) — whose arguments are the
-//! bridge's row minus the session and the board, the adapter supplying each
-//! where the row requires it, and whose members the adapter reads by name.
-//! `Tool::admit` is the dispatch's door, admitting a call or refusing it;
-//! `wire_frame` maps a wire op's call onto its frame, and
-//! `Catalog::append_commons` fills the commons template in beside the check on
-//! its placeholder.
+//! The tool catalog and the dispatch it is checked against.
+//!
+//! The catalog is data, not code: names, descriptions, input schemas, the
+//! server `instructions` string, and the `SKEP_COMMONS` sentence template
+//! (`commons_instructions`, `{addr}` placeholder). The shipped `tools.json`
+//! is embedded at build time and overridable with `--tools-file`. Loading
+//! cross-checks the catalog against the dispatch in both directions, so the
+//! file and the code cannot drift silently: a file entry the dispatch doesn't
+//! know refuses startup, and a dispatch tool the file doesn't name refuses
+//! startup. The dispatch has two kinds of tool ([`Tool`]): the *wire ops*,
+//! each spelled as the wire spells it, whose arguments are the frame and
+//! which the adapter sends as `op(session, frame)` through the shell; and the
+//! *adapter tools* — the shell's calls (`boards`, `health`, `probe`, `search`,
+//! `places`, `held`, `resolve`) and the apparatus (`session_info`,
+//! `changes_since`, `fetch`) — whose arguments are the bridge's row minus the
+//! session and the board, the adapter supplying each where the row requires
+//! it, and whose members the adapter reads by name. `Tool::admit` is the
+//! dispatch's door, admitting a call or refusing it; `wire_frame` maps a wire
+//! op's call onto its frame, and `Catalog::append_commons` fills the commons
+//! template in beside the check on its placeholder.
 
 use std::fmt;
 
@@ -25,10 +26,10 @@ use serde_json::{Map, Value};
 /// The shipped catalog (`tools.json` beside `Cargo.toml`).
 pub const EMBEDDED: &str = include_str!("../tools.json");
 
-/// The wire operations this adapter maps — every op of wire.md
-/// §Operations, each spelled exactly as the wire spells it, since the tool
-/// name IS the frame's `op`. No general `op` tool ships: every op has a
-/// name here.
+/// The wire operations this adapter maps: every op of wire.md §Operations.
+///
+/// Each is spelled exactly as the wire spells it, since the tool name *is*
+/// the frame's `op`. No general `op` tool ships: every op has a name here.
 const DISPATCH_OPS: &[&str] = &[
     // Namespace.
     "create_new_document",
@@ -161,12 +162,12 @@ impl Tool {
     /// `name` must be one the dispatch answers. A wire op's arguments pass
     /// through unread here as the frame — the shell's checks of what it sends
     /// or holds, then the daemon's strict parse, their validators (*every tool
-    /// is one call of the shell*) — save one shape: a numeric `at` beside an
-    /// object `frame`, which skep-shell's `op` row reads as its `/op-at` form
-    /// and would send as another frame. An adapter tool's every member must be
-    /// one its row takes, and every member of its `opts` one of the row's
-    /// options the door takes (`OPTS_MEMBERS`) — members the adapter and the
-    /// shell read.
+    /// is one call of the shell*) — save one shape: a non-negative integer
+    /// `at` beside an object `frame`, which skep-shell's `op` row reads as its
+    /// `/op-at` form and would send as another frame. An adapter tool's every
+    /// member must be one its row takes, and every member of its `opts` one of
+    /// the row's options the door takes (`OPTS_MEMBERS`) — members the adapter
+    /// and the shell read.
     ///
     /// # Errors
     ///
@@ -205,7 +206,7 @@ impl Tool {
         Ok(tool)
     }
 
-    /// The tool the dispatch answers `name` by, where it answers one.
+    /// Returns the tool the dispatch answers `name` by, where it answers one.
     fn named(name: &str) -> Option<Tool> {
         if let Some(op) = DISPATCH_OPS.iter().find(|op| **op == name) {
             return Some(Tool::Op(op));
@@ -213,15 +214,18 @@ impl Tool {
         ADAPTER_TOOLS.iter().find(|(n, _, _)| *n == name).map(|(_, tool, _)| *tool)
     }
 
-    /// Every name the dispatch answers, the wire ops first, then the
-    /// adapter tools in their table's order.
+    /// Returns every name the dispatch answers.
+    ///
+    /// The wire ops come first, then the adapter tools in their table's order.
     fn names() -> impl Iterator<Item = &'static str> {
         DISPATCH_OPS.iter().copied().chain(ADAPTER_TOOLS.iter().map(|(name, _, _)| *name))
     }
 
-    /// The argument members an adapter tool's row takes — the only ones the
-    /// adapter reads, so any other is refused by name — or `None` for a wire
-    /// op, whose arguments pass through unread as the frame.
+    /// Returns the argument members an adapter tool's row takes.
+    ///
+    /// They are the only ones the adapter reads, so any other is refused by
+    /// name; `None` for a wire op, whose arguments pass through unread as the
+    /// frame.
     fn members(self) -> Option<&'static [&'static str]> {
         match self {
             Tool::Op(_) => None,
@@ -252,8 +256,8 @@ fn listed(members: &[&str]) -> String {
 /// strict parse's to refuse, never the relay's to resolve. Only top-level
 /// argument names are affected — a `from` nested inside an object value is
 /// wire shape, untouched. `Catalog::load` refuses a schema that spells
-/// `from_` on any other op, whose agents' `from_` would reach the wire
-/// unmapped.
+/// `from_` on any other tool, an adapter tool's among them; on another op,
+/// its agents' `from_` would reach the wire unmapped.
 const RENAMES_FROM: &[&str] = &["make_link", "emit"];
 
 /// Returns a wire op's frame (*every tool is one call of the shell*).
@@ -271,9 +275,10 @@ pub fn wire_frame(op: &str, mut args: Map<String, Value>) -> Value {
     Value::Object(args)
 }
 
-/// The substitution point in `commons_instructions`: `Catalog::load`
-/// refuses a template without one, and `Catalog::append_commons` replaces
-/// every one.
+/// The substitution point in `commons_instructions`.
+///
+/// `Catalog::load` refuses a template without one, and
+/// `Catalog::append_commons` replaces every one.
 const ADDR_PLACEHOLDER: &str = "{addr}";
 
 /// The loaded catalog: the instructions, the commons template, and the tools.
@@ -291,12 +296,15 @@ const ADDR_PLACEHOLDER: &str = "{addr}";
 #[derive(Debug)]
 pub struct Catalog {
     instructions: String,
-    /// The sentence `append_commons` adds to `instructions` when
-    /// `SKEP_COMMONS` names the commons; `{addr}` is the substitution point.
+    /// The sentence `append_commons` adds to `instructions`.
+    ///
+    /// It is added when `SKEP_COMMONS` names the commons; `{addr}` is the
+    /// substitution point.
     commons_instructions: String,
-    /// The catalog's tool definitions in file order, each checked by
-    /// `check_tool` and kept as the file spells it: exactly the `tools`
-    /// array `tools/list` answers.
+    /// The catalog's tool definitions in file order.
+    ///
+    /// Each is checked by `check_tool` and kept as the file spells it:
+    /// exactly the `tools` array `tools/list` answers.
     tools: Vec<Value>,
 }
 
@@ -322,7 +330,7 @@ impl Catalog {
     ///    know;
     /// 5. each dispatch tool the file doesn't name;
     /// 6. each entry in file order whose schema spells a top-level `from_`
-    ///    on an op `wire_frame` does not map back.
+    ///    on any tool but the ops `wire_frame` maps it back on.
     pub fn load(text: &str) -> Result<Catalog, String> {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
         let Value::Object(mut root) = v else {
@@ -374,14 +382,16 @@ impl Catalog {
         Ok(Catalog { instructions, commons_instructions, tools })
     }
 
-    /// The server instructions `initialize` answers, the commons sentence
-    /// appended when `SKEP_COMMONS` is set.
+    /// Returns the server instructions `initialize` answers.
+    ///
+    /// The commons sentence is appended when `SKEP_COMMONS` is set.
     pub fn instructions(&self) -> &str {
         &self.instructions
     }
 
-    /// The tool definitions `tools/list` answers: exactly the entries
-    /// `Catalog::load` checked, in file order.
+    /// Returns the tool definitions `tools/list` answers.
+    ///
+    /// They are exactly the entries `Catalog::load` checked, in file order.
     pub fn tools(&self) -> &[Value] {
         &self.tools
     }
@@ -411,11 +421,11 @@ impl Catalog {
     }
 }
 
-/// How a catalog's text differs from another's, as `Catalog::drift_from`
-/// counts it.
+/// How a catalog's text differs from another's.
 ///
-/// Its `Display` is the clause a line names the difference by: `its
-/// instructions, and <n> of its <m> tools' entries`, or either half alone.
+/// It is what `Catalog::drift_from` counts. Its `Display` is the clause a
+/// line names the difference by: `its instructions, and <n> of its <m> tools'
+/// entries`, or either half alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Drift {
     /// Whether the instructions, or the commons template, read otherwise.
@@ -441,8 +451,8 @@ impl fmt::Display for Drift {
 ///
 /// The definition is a nonempty string `name` and `description`, an
 /// `inputSchema` of type `"object"` (MCP 2025-06-18's `Tool.inputSchema`),
-/// and no other field. A definition's fields are named here and nowhere else
-/// in the adapter.
+/// and no other field. A definition's fields are named here — `inputSchema`
+/// in `Catalog::load`'s `from_` check too — and nowhere else in the adapter.
 ///
 /// # Errors
 ///

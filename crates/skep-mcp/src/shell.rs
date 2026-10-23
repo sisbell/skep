@@ -1,13 +1,13 @@
-//! The backend: the one module of the adapter that calls `skep-shell`.
+//! The backend: the one module of the adapter that calls the shell.
 //!
 //! It opens the shell over the one board in the signed mode with the refusing
-//! arm (`ArmConfig::Refuse`: no person is present, so every SECRET and CONSENT
+//! arm (`ArmConfig::Refuse`: no person is present, so every secret and consent
 //! moment is refused `person_required`), checks the board and the key as
 //! `skep-dev serve` does, opens one signed content-scoped session for the
 //! configured principal before any tool is served, and from then on supplies
 //! that session's reference to every call that runs under it, and the board's
-//! to the one call whose row names it, so no tool's arguments name either. The
-//! references are the shell's opaque names (THE PIN of `client.md` §4b.1):
+//! to each call whose row requires it, so no tool's arguments name either. The
+//! references are the shell's opaque names (the pin of `client.md` §4b.1):
 //! never a token, never a credential. Every session it opens goes through one
 //! door, `open_session`, the one reader of the row's answer, whose refusal
 //! carries no answer's text, since the answer to `POST /session` carries the
@@ -25,23 +25,26 @@
 //! answers `session_died` or `session_ended` waits for the drain to settle it
 //! (within `SETTLE_WAIT`), reading no reason itself and opening no second
 //! session early, which would leave the shell's re-open adopted by nothing. It
-//! is then reissued once under the session that stands, one it opens itself
-//! where none does — the death executed nothing: the board refuses a dead token
-//! before it runs the frame — save that a death the shell did not re-open is
-//! the answer to the call that met it. A death the shell does not re-open — the
-//! key retired (AUTH-5.28, AUTH-5.77), the account seeded, the prefix blocked,
-//! or a restart whose re-open the board refused for any cause but `busy` —
-//! stops the adapter: one plain line naming the arm goes to the process's stop,
-//! and nothing more is served; the person stops an agent by retiring its key,
-//! and the adapter's end is what the agent's client sees. A board that does not
-//! answer, or does not accept the sign-in twice in a row (`busy`, transient by
-//! skep-client's own face, AUTH-5.25), is served through: no session stands,
-//! every call answers its refusal, and each call opens one afresh until the
-//! board takes it, the board's refusal of it judged as a refused re-open is.
+//! is then reissued once under what stands — the session in the dead one's
+//! place, one it opens itself where the last lapsed, or the reference that died
+//! where the adapter stopped (the death executed nothing: the board refuses a
+//! dead token before it runs the frame) — save that a death after which no
+//! session stands is the answer to the call that met it. A death the shell does
+//! not re-open — the key retired (AUTH-5.28, AUTH-5.77), the account seeded,
+//! the prefix blocked, the board's mode moved, or a restart whose re-open was
+//! refused for any cause but `busy` or a board that did not answer — stops the
+//! adapter: one plain line naming the arm goes to the process's stop, and the
+//! loop serves no line queued behind it; the person stops an agent by retiring
+//! its key, and the adapter's end is what the agent's client sees. A board that
+//! does not answer, or does not accept the sign-in twice in a row (`busy`,
+//! transient by skep-client's own face, AUTH-5.25), is served through: no
+//! session stands, and each call that runs under one opens one afresh,
+//! answering its refusal until the board takes it, a refusal of it judged as a
+//! refused re-open is.
 //!
 //! The bus is subscribed in `Backend::open` before the session opens, so no
 //! death of it is emitted unheard, and drained on a thread of its own for the
-//! process's life: an undrained subscriber's channel grows without bound
+//! shell's life: an undrained subscriber's channel grows without bound
 //! (`EventBus::emit` clones every event to every subscriber). The events this
 //! adapter acts on are `session-died`; `daemon`, whose outage's end is said
 //! with how long it lasted; `mode`, a move of the board's pair; and `index`,
@@ -92,8 +95,8 @@ const SETTLE_WAIT: Duration = Duration::from_secs(60);
 /// The backend stops the adapter at most once in its life, since the
 /// session's state never moves off a stop, and with no lock held: from the
 /// drain's thread, where a death's reason asks the stop (`classify`), or from
-/// the thread making a call, where the board refused the fresh session that
-/// call needed (`Backend::open_afresh`). That thread may be the very loop
+/// the thread making a call, where the fresh session that call needed was
+/// refused (`Backend::open_afresh`). That thread may be the very loop
 /// that takes the line, so the stop must never wait, and an unbounded
 /// channel's sender alone builds one (`OnStop::new`): its send returns at
 /// once, where a send into a bounded channel full of stdin's lines would hold
@@ -139,9 +142,9 @@ fn is_shell(refusal: &Refusal, named: Name) -> bool {
 ///
 /// It names what did not hold, then the shell's refusal in the library's own
 /// words (`Refusal`'s `Display`), said once. Where the board did not answer,
-/// it says the act too: a start dials the board once and does not wait for it,
-/// though an adapter that serves serves through an outage, so the adapter is
-/// started again once the board answers.
+/// it says the act too: a start makes one attempt at the board and does not
+/// wait for it, though an adapter that serves serves through an outage, so the
+/// adapter is started again once the board answers.
 fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
     let act = match refusal {
         Refusal::Unreachable(_) => " — a start does not wait for a board that is not answering, though one met while serving is served through: start the adapter again once the board answers",
@@ -259,10 +262,11 @@ fn index_line(state: &Value, index_dir: &str) -> Option<(&'static str, String)> 
 /// Returns the line a face's build of the index says at its end.
 ///
 /// A build is its face's `building` or `widening`, `took` from the first
-/// heard to the first arm past both: `complete`, as of the position the index
-/// reached, or another the state names — a floor, a ceiling, units unplaced —
-/// in which the build ended all the same. `face` is the session the face is,
-/// `None` for the published face.
+/// heard to the first arm past both, `busy` and `none` aside: `complete`, as
+/// of the position the index reached, or another the state names — a floor,
+/// a ceiling, units unplaced, a newer skep's file — in which the build ended
+/// all the same. `face` is the session the face is, `None` for the published
+/// face.
 fn built_line(index_dir: &str, face: Option<&str>, state: &Value, took: Duration) -> String {
     let whose = face.map_or_else(|| "the published documents".to_string(), |session| format!("session {session}'s reading"));
     let secs = took.as_secs_f64();
@@ -272,21 +276,23 @@ fn built_line(index_dir: &str, face: Option<&str>, state: &Value, took: Duration
     }
 }
 
-/// What the drain has said of the search index, so each state is said once.
+/// What the drain has said of the search index.
 ///
 /// A state that asks an act of whoever runs the adapter (`index_line`) is said
-/// once for the process's life, save `busy`, said again once the face it was
-/// said for answers otherwise — a busy the board's history caused at the
-/// index's resume ends at a later poll, and one another process's lock causes
-/// never does. A face's build is timed from its first `building` or
-/// `widening` to the first arm past both, and its end said once
-/// (`built_line`).
+/// once for the process's life, save `busy`, said again only after the face it
+/// was said for has answered otherwise, which is said too — a busy the board's
+/// history caused at the index's resume ends at a later poll, and one another
+/// process's lock causes never does. A face's build is timed from its first
+/// `building` or `widening` to the first arm past both, `busy` and `none`
+/// aside, and its end said once (`built_line`).
 #[derive(Debug, Default)]
 struct IndexSaid {
     /// The arms said, of those `index_line` reads.
     said: Vec<&'static str>,
-    /// The face `busy` was said for, while it stands: `None` within for the
-    /// published face, a session's reference for that session's.
+    /// The face `busy` was said for, while it stands.
+    ///
+    /// It is `None` within for the published face, a session's reference for
+    /// that session's.
     busy: Option<Option<String>>,
     /// Each building face, by the session it is, and when its build began.
     building: HashMap<Option<String>, Instant>,
@@ -330,8 +336,8 @@ impl IndexSaid {
 /// A session the shell opened, as its `session` row answers it.
 ///
 /// The answer is skep-shell's `SessionOpened`: the fresh reference, the
-/// principal's account where the board named one, and whether a write may go
-/// out under the session.
+/// principal, its account where the board named one, and whether a write may
+/// go out under the session.
 #[derive(Debug)]
 struct SessionOpened {
     /// The session's opaque reference, in the token's place.
@@ -405,26 +411,28 @@ const UNQUOTED: &str = "the session's open met an answer this client could not r
 ///
 /// It holds the shell, the one board's reference, the one session's state, the
 /// process's stop, and the facts `session_info` reports; its `Debug` shows all
-/// but the TALK sink, a bare closure.
+/// but the `talk` sink, a bare closure.
 pub struct Backend {
     shell: Shell,
     /// The board's opaque reference, fixed at the open.
     board: String,
     origin: Origin,
     principal: u64,
-    /// The principal's account, as the session's open answered it.
+    /// The principal's account, as the startup session's open answered it.
     account: Option<String>,
-    /// Whether a write may go out under the session, as its open answered.
+    /// Whether a write may go out under the session.
+    ///
+    /// It is as the startup session's open answered it.
     writes: bool,
-    /// The store's key the adapter signs with.
+    /// The store's key the adapter signs with, as the start selected it.
     key: KeyFacts,
     /// The session the calls run under, watched.
     ///
     /// The drain settles it by a death's reason, and the call that opens a
-    /// session itself moves it to that session, or settles it by the board's
-    /// refusal of the open (`open_afresh`).
+    /// session itself moves it to that session, or settles it by a refusal of
+    /// the open (`open_afresh`).
     session: Arc<SessionWatch>,
-    /// The process's stop, which every line that stops the adapter goes to.
+    /// The process's stop, taking every line that stops the serving adapter.
     on_stop: OnStop,
     talk: Talk,
 }
@@ -468,9 +476,11 @@ impl Backend {
     ///
     /// 1. the board's `/health` unanswered or refused;
     /// 2. no key to sign with: `no_key` or `store_unreadable`;
-    /// 3. the signed session not opened: its armed names (`origin_state`,
-    ///    `not_registered`, `retired`, `not_enrolled`, `busy`), the
-    ///    unreachable board, the block, or the board's own verdict.
+    /// 3. the signed session not opened: its armed names (`no_key` or
+    ///    `store_unreadable` where the store's key, selected anew, fails it,
+    ///    `origin_state`, `not_registered`, `retired`, `not_enrolled`,
+    ///    `busy`), the unreachable board, the block, or the board's own
+    ///    verdict.
     ///
     /// The shell is dropped before the error is returned, so its stop has
     /// run.
@@ -546,7 +556,7 @@ impl Backend {
         (self.talk)(line);
     }
 
-    /// Reads the bus on a thread of its own for the process's life.
+    /// Reads the bus on a thread of its own for the shell's life.
     ///
     /// `events` is the subscription `open` took before the session opened. A
     /// `session-died` of the session the calls run under carries that death's
@@ -628,14 +638,14 @@ impl Backend {
     ///
     /// The calls run under it once it opens, and the log says so, naming the
     /// session that died and the one opened. A refusal of it is judged as a
-    /// refused re-open is (`refused_afresh`, by way of `refused_open`): a board
-    /// that does not answer, or does not accept the sign-in, leaves the
-    /// session's state lapsed, and any other refusal stops the adapter, its
-    /// line naming this open handed to the stop from the calling thread
-    /// (`OnStop`). Where the drain settled the session's state while the
-    /// session opened, the session is closed, so none stands that no call
-    /// names — said first, with what stands instead, since the shell's stop
-    /// names any it could not close.
+    /// refused re-open is (`refused_afresh`, by way of `refused_open`), where
+    /// the state still names `died`: a board that does not answer, or does not
+    /// accept the sign-in, leaves the session's state lapsed, and any other
+    /// refusal stops the adapter, its line naming this open handed to the stop
+    /// from the calling thread (`OnStop`). Where the drain settled the
+    /// session's state while the session opened, the session is closed, so
+    /// none stands that no call names — said first, with what stands instead,
+    /// since the shell's stop names any it could not close.
     ///
     /// # Errors
     ///
@@ -667,7 +677,7 @@ impl Backend {
         Ok(())
     }
 
-    /// Runs one attempt under the session, and the session's life around it.
+    /// Runs `attempt` under the session, and the session's life around it.
     ///
     /// The session is the one the calls run under. Where the last session
     /// lapsed, one is opened first (`open_afresh`); where the adapter has
@@ -679,7 +689,7 @@ impl Backend {
     /// later is adopted by nothing — and is reissued once under what stands
     /// then — a session opened afresh where the death lapsed the last, the
     /// reference that died where it stopped the adapter. One answer stands
-    /// instead: a `session_died` whose death was not re-opened, which carries
+    /// instead: a `session_died` after which no session stands, which carries
     /// the death's reason; a `session_ended` carries none, so the call that met
     /// it takes what stands. Every other answer is the attempt's own, and a
     /// second death is answered as it stands.
@@ -721,10 +731,10 @@ impl Backend {
                 ));
                 self.open_afresh(&reference)?;
             }
-            // A death the call met itself and the shell did not re-open is the
-            // call's answer: its refusal carries the reason. A session found
-            // already ended (`session_ended`) carries none, and the call takes
-            // what stands.
+            // A death the call met itself, after which no session stands, is
+            // the call's answer: its refusal carries the reason. A session
+            // found already ended (`session_ended`) carries none, and the call
+            // takes what stands.
             if met_death && !matches!(self.session.current(), SessionState::Open(_)) {
                 return outcome;
             }
@@ -782,9 +792,9 @@ impl Backend {
     /// The shell's refusal of the call, after the session's life has been
     /// run around it (`under_session`): the board's verdict, the unreachable
     /// board, a halt, or the shell's own by name — `session_died` with the
-    /// reason where the death was not re-opened, `session_ended` where the
-    /// adapter has stopped or a reissue met a second end — or the shell's
-    /// refusal of a session the adapter opened itself.
+    /// reason where no session stands after the death, `session_ended` where
+    /// the adapter has stopped, and either where a reissue met a second end —
+    /// or the shell's refusal of a session the adapter opened itself.
     pub fn session_call(&self, name: &str, args: Map<String, Value>) -> Result<Value, Refusal> {
         // An object by construction, so setting a member of it cannot panic.
         let mut args = Value::Object(args);
@@ -799,7 +809,7 @@ impl Backend {
     /// The fetch runs under the session, and `i` goes to the shell as the
     /// agent gave it: the shell refuses one that is no address in its one
     /// spelling, as it refuses every row's argument. The answer is the shell's
-    /// streamed fetch (wire.md §Media, THE FETCH), its head and its body still
+    /// streamed fetch (wire.md §Media, the fetch), its head and its body still
     /// unread, which [`read_whole`](crate::media::read_whole) reads under the
     /// adapter's cap and deadline.
     ///
@@ -808,7 +818,8 @@ impl Backend {
     /// The shell's refusal of the fetch: `malformed_args` naming `i`; the
     /// board's verdict on the address (`withheld`, `not_a_cell`, `no_value`,
     /// `blob_missing`, …) under its own status; the unreachable board; or the
-    /// session's end as `session_call` carries it.
+    /// session's end as `session_call` carries it, or the shell's refusal of a
+    /// session the adapter opened itself.
     pub fn fetch(&self, i: &Value) -> Result<Fetched, Refusal> {
         self.under_session(|reference| self.shell.fetch(&json!({"session": reference, "i": i})))
     }
@@ -816,12 +827,12 @@ impl Backend {
     /// Returns the URI of a picture's file by the I-address `i` of its cell.
     ///
     /// It is the route the shell's fetch dials, `GET /blob?i=<i>` at the
-    /// board's origin (wire.md §Media, THE FETCH), which a resource block
+    /// board's origin (wire.md §Media, the fetch), which a resource block
     /// names; `i` rides the query as written.
     ///
     /// # Panics
     ///
-    /// In a debug build, where `i` is no address in its one spelling
+    /// Panics in a debug build where `i` is no address in its one spelling
     /// (`is_address_text`): the caller's obligation, which every `i` the
     /// shell's `fetch` row admits meets.
     pub fn blob_uri(&self, i: &str) -> String {
@@ -863,12 +874,13 @@ impl Backend {
     /// board, every index saved, the feed threads joined. A session the calls
     /// run under is said closed at the board, with the bursts it leaves held
     /// (`left_held`); where none stands — a death or a refused open stopped
-    /// the adapter, or the board did not answer — the session already ended
-    /// there, its end having left the shell's table, and the line says so, and
-    /// that a burst still held stays in its held file for the next start, save
-    /// one the shell kept in memory alone: no session stands to read the held
-    /// lines under, so none is counted. Either way the line names the session,
-    /// and carries `served`, what the loop answered over the run.
+    /// the adapter, the board did not answer or did not accept the sign-in, or
+    /// a death of another arm that serves on lapsed it — the session already
+    /// ended there, its end having left the shell's table, and the line says
+    /// so, and that a burst still held stays in its held file for the next
+    /// start, save one the shell kept in memory alone: no session stands to
+    /// read the held lines under, so none is counted. Either way the line names
+    /// the session, and carries `served`, what the loop answered over the run.
     ///
     /// The stop's time is said once it returns. Its closing save rewrites
     /// every face of the index whole, clean or not, and each session's close

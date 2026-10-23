@@ -1,16 +1,16 @@
 //! The MCP side: the stdio transport, JSON-RPC 2.0 dispatch, and the tools.
 //!
 //! [`read_stdin`] reads stdin on a thread of its own and hands each line to
-//! the loop, [`Server::run`], which answers it on stdout, where nothing but
-//! the protocol is written; the dispatch takes `tools/call` onto the
-//! backend's calls.
+//! the loop, [`Server::run`], which answers on stdout, where nothing but the
+//! protocol is written, each line owed an answer; the dispatch takes
+//! `tools/call` onto the backend's calls.
 //!
 //! **A refusal as a result**, the crate's rule of that name, is kept here:
-//! `tool_result` renders every answer the shell gives by it, the board's
-//! verdict as data and any other refusal `isError`; `Server::fetch` adds its
-//! own two `isError`, a file past the cap and a stream cut short; and `respond`
-//! answers -32602 a call `call_params` or `Tool::admit` refuses, which is no
-//! tool result at all.
+//! `tool_result` renders every answer the shell gives by it but a fetched
+//! file, the board's verdict as data and any other refusal `isError`;
+//! `Server::fetch` adds its own two `isError`, a file past the cap and a
+//! stream cut short; and `respond` answers -32602 a call `call_params` or
+//! `Tool::admit` refuses, which is no tool result at all.
 
 use std::io::{BufRead, Write};
 use std::process::ExitCode;
@@ -44,8 +44,9 @@ const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 /// hold together were at least as long, and its line says them.
 const SLOW_CALL: Duration = skep_client::dial::IO_TIMEOUT;
 
-/// The JSON-RPC 2.0 error codes this server answers (the spec's §5.1),
-/// each the spec's own number: a name for it, never a new one.
+/// The JSON-RPC 2.0 error codes this server answers (the spec's §5.1).
+///
+/// Each is the spec's own number: a name for it, never a new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ErrorCode {
     ParseError = -32700,
@@ -57,12 +58,14 @@ enum ErrorCode {
 /// Whether a tool result is MCP's `isError`.
 ///
 /// *A refusal as a result* decides it for the shell's answers (`tool_result`),
-/// and `Server::fetch` for its own two.
+/// and `Server::fetch` for the file it fetched and its own two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IsError {
     /// A normal result: an answer, or the board's verdict as data.
     No,
     /// The shell could not get the board's verdict, or `fetch` declined a file.
+    ///
+    /// A fetch whose stream was cut short is one too.
     Yes,
 }
 
@@ -77,8 +80,9 @@ pub enum Inbound {
     Line(Vec<u8>, Instant),
     /// Stdin's end, or a read of it that failed.
     Eof,
-    /// The backend's stop: the plain line the loop says before it exits, and
-    /// the moment the backend sent it.
+    /// The backend's stop: the plain line the loop says before it exits.
+    ///
+    /// The moment the backend sent it rides beside it.
     Stop(String, Instant),
 }
 
@@ -120,8 +124,8 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
 /// Each answer written on stdout is counted once it is written: a tool
 /// result, `isError` or not, a JSON-RPC error, or any other method's result.
 /// Beside the counts it keeps the two figures of the loop's one call at a
-/// time: how much of the run the loop was busy, and the longest a line
-/// waited behind the calls read before it.
+/// time: how much of the run the loop was busy, and the longest an answered
+/// line waited behind the calls read before it.
 #[derive(Debug, Default)]
 struct Served {
     /// The answers written.
@@ -131,10 +135,13 @@ struct Served {
     is_error: u64,
     /// The JSON-RPC errors among them.
     rpc_errors: u64,
-    /// The loop's time on the lines it answered, each from the moment it took
-    /// the line to its answer written.
+    /// The loop's time on the lines it answered.
+    ///
+    /// Each counts from the moment it took the line to its answer written.
     busy: Duration,
-    /// The longest a line waited between its read and the loop taking it.
+    /// The longest an answered line waited.
+    ///
+    /// A line's wait runs between its read and the loop taking it.
     longest_wait: Duration,
 }
 
@@ -166,11 +173,12 @@ impl Served {
     }
 }
 
-/// The MCP side's state: the backend every tool calls and the catalog
-/// `tools/list` and `initialize` answer from.
+/// The MCP side's state: the backend every tool calls, and the catalog.
+///
+/// `tools/list` and `initialize` answer from the catalog.
 #[derive(Debug)]
 pub struct Server {
-    /// The backend, its one session open.
+    /// The backend, its session opened before any tool is served.
     pub backend: Backend,
     /// The loaded catalog, its commons sentence appended where one is set.
     pub catalog: Catalog,
@@ -227,10 +235,11 @@ impl Server {
     /// Returns the one message, if any, that answers one inbound line.
     ///
     /// The line, its raw bytes owned and dropped once parsed, is classified
-    /// by two members alone: `method` (a string) and `id` (any JSON value,
-    /// echoed as given; `jsonrpc` is not read). A request — a method and an
-    /// id — gets its response under that id, `waited` its wait behind the
-    /// calls read before it (`Server::respond`). `None` for a blank line, a
+    /// by two members: `method` (a string) and `id` (any JSON value, echoed
+    /// as given; `jsonrpc` is not read), and an id with no method by its
+    /// `result` or `error` too. A request — a method and an id — gets its
+    /// response under that id, `waited` its wait behind the calls read before
+    /// it (`Server::respond`). `None` for a blank line, a
     /// notification (a method, no id: all consumed silently), a stray
     /// response (an id, no method, a `result` or an `error`) or an id-less
     /// non-request: there is nothing to answer under. A line is blank where it
@@ -414,9 +423,17 @@ impl Server {
     }
 }
 
-/// `tools/call` params: `{"name": …, "arguments": {…}?}`; absent or null
+/// Returns a `tools/call`'s tool name and arguments, read off its params.
+///
+/// The params are `{"name": …, "arguments": {…}?}`; absent or null
 /// arguments are the empty object. The params are the message's own, taken
-/// by value: the arguments move into the frame, never copied.
+/// by value: the arguments move out of them, never copied, and a wire op's on
+/// into its frame.
+///
+/// # Errors
+///
+/// The refusal's text, which `respond` answers -32602: no params, no string
+/// `name`, or `arguments` that are neither absent, null nor an object.
 fn call_params(params: Option<Value>) -> Result<(String, Map<String, Value>), String> {
     let mut p = params.ok_or("tools/call requires params")?;
     let Some(Value::String(name)) = p.get_mut("name").map(Value::take) else {
@@ -492,7 +509,7 @@ fn tool_result(answer: Result<Value, Refusal>) -> Value {
         Ok(value) => text_result(value.to_string(), IsError::No),
         Err(refusal) => {
             let is_error = match refusal {
-                // The board's verdict on the frame: data.
+                // The board's verdict on the call: data.
                 Refusal::Board(_) => IsError::No,
                 // The shell could not get the board's verdict.
                 Refusal::Halt { .. } | Refusal::Blocked(_) | Refusal::Unreachable(_) | Refusal::Shell { .. } => IsError::Yes,
@@ -511,8 +528,10 @@ mod tests {
 
     use super::*;
 
-    /// tools/call params: a string `name`; `arguments` absent, null (both the
-    /// empty object) or an object taken whole — anything else refused.
+    /// Checks `tools/call` params: a string `name` and optional arguments.
+    ///
+    /// `arguments` is absent, null (both the empty object) or an object taken
+    /// whole — anything else refused.
     #[test]
     fn tools_call_params_are_a_string_name_and_object_or_absent_arguments() {
         let (name, args) = call_params(Some(json!({"name": "fork"}))).expect("argument-less call");
@@ -529,15 +548,15 @@ mod tests {
         assert!(call_params(Some(json!({"name": "fork", "arguments": 3}))).is_err());
     }
 
-    /// *A refusal as a result*: an answer and the board's verdict are data.
+    /// Checks that an answer and the board's verdict are data.
     ///
-    /// An answer is the text whole; the board's verdict rides as the refusal's
-    /// whole value — its body verbatim under `body`, every member skep-shell
-    /// declares for it beside it and no other — `isError` false; a halt, the
-    /// block, the unreachable board and the shell's own refusals are `isError`
-    /// true with the refusal's value as the text (the mutant that marks every
-    /// refusal `isError` loses "rejections are data"; the one that marks none
-    /// loses `unreachable`).
+    /// It is *a refusal as a result*. An answer is the text whole; the board's
+    /// verdict rides as the refusal's whole value — its body verbatim under
+    /// `body`, every member skep-shell declares for it beside it and no other
+    /// — `isError` false; a halt, the block, the unreachable board and the
+    /// shell's own refusals are `isError` true with the refusal's value as the
+    /// text (the mutant that marks every refusal `isError` loses "the board's
+    /// verdict is data"; the one that marks none loses `unreachable`).
     #[test]
     fn an_answer_and_the_boards_verdict_are_data_and_every_other_refusal_is_an_error() {
         let read = |v: &Value| -> (bool, Value) {
@@ -577,7 +596,7 @@ mod tests {
         }
     }
 
-    /// The builders move what they wrap into the shapes the two specs name.
+    /// Checks that the builders move what they wrap into the two specs' shapes.
     ///
     /// Each equals what `json!` builds from the same members: a JSON-RPC
     /// response and error (JSON-RPC 2.0 §5), and a tool result of one text
@@ -590,7 +609,7 @@ mod tests {
         assert_eq!(text_result("t".into(), IsError::No), json!({"content": [{"type": "text", "text": "t"}], "isError": false}));
     }
 
-    /// A slow call is said by its tool, request, wait, hold and answer.
+    /// Checks a slow call's line: its tool, request, wait, hold and answer.
     ///
     /// The line names the tool, the request's id as given — a long one cut at
     /// 64 characters — how long the request waited behind earlier calls, how
@@ -611,7 +630,7 @@ mod tests {
         assert_eq!(queued, "the `boards` call of request 9 waited 58.3 s behind earlier calls and held the loop 0.0 s: answered");
     }
 
-    /// What the loop served is counted by the answers written.
+    /// Checks that what the loop served is counted by the answers written.
     ///
     /// Every answer counts; a tool result counts as one, `isError` or not, and
     /// a JSON-RPC error as one; the loop's time on each adds up as its busy

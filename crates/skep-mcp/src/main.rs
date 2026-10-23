@@ -1,18 +1,20 @@
-//! skep-mcp — the adapter between an agent harness (MCP: JSON-RPC 2.0 over
-//! stdio, newline-delimited UTF-8, one message per line) and a board,
-//! served through the shell's core, `skep-shell` — the engine the dev
-//! provider and the desktop shell run on. One process per agent, one
-//! board, ONE SIGNED SESSION for the adapter's life:
+//! `skep-mcp`, the adapter between an agent harness and a board.
 //!
-//! * **Every tool is one call of the shell** under that session. A WIRE OP's
-//!   tool name IS the frame's `op` and its arguments ARE the frame (the one
-//!   mapping is `from_` → `from` on make_link/emit, when the arguments carry no
-//!   `from` of their own), sent as `op(session, frame)`: attested where the
-//!   session's key attests the kind, held where the board cannot take a burst
-//!   or rejects one (the `held` answer comes back as data; a refused run's
-//!   line, and the bursts behind it on its document, wait on the agent's
-//!   `resolve`), a `write_busy` reissued once and a `durability` twice within
-//!   the call, as the shell does. The shell's own calls — `boards`, `health`,
+//! The harness speaks MCP (JSON-RPC 2.0 over stdio, newline-delimited UTF-8,
+//! one message per line), and the board is served through the shell's core,
+//! `skep-shell` — the engine the dev provider and the desktop shell run on.
+//! One process per agent, one board, one signed session at a time:
+//!
+//! * **Every tool is one call of the shell**, under that session where the
+//!   call takes one. A wire op's tool name *is* the frame's `op` and its
+//!   arguments *are* the frame (the one mapping is `from_` → `from` on
+//!   make_link/emit, when the arguments carry no `from` of their own), sent
+//!   as `op(session, frame)`: attested where the session's key attests the
+//!   kind, held where the board cannot take a burst or rejects one (the
+//!   `held` answer comes back as data; a refused run's line, and the bursts
+//!   behind it on its document, wait on the agent's `resolve`), a
+//!   `write_busy` reissued once and a `durability` twice within the call, as
+//!   the shell does. The shell's own calls — `boards`, `health`,
 //!   `probe`, `search`, `places`, `held`, `resolve` — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
 //!   adapter supplying each where the row requires it; and three are the
@@ -20,35 +22,36 @@
 //!   `changes`, a pull), and `fetch` (the shell's streamed fetch as an image or
 //!   resource block, the type sniffed off the bytes, the size capped). The
 //!   adapter passes a wire op's arguments through unread, save the one shape
-//!   the shell's `op` row reads as its `/op-at` form, a numeric `at` beside an
-//!   object `frame`, which no wire op takes. Before the board sees a frame,
-//!   the shell refuses one it cannot send or hold whole, nothing sent, each
-//!   refusal `isError`: a burst whose `doc` is no document address in its one
-//!   spelling (`malformed_args` naming `frame.doc`) or whose frame would pass
-//!   the board's cap (`frame_too_large`), and a write of the ten kinds the
-//!   session's key attests whose attest it cannot compose from the frame
-//!   (`attest_not_composed`, a halt). Where the board refuses a read the shell
-//!   makes to compose that attest, the call answers the read's verdict, as
-//!   data, and the write is not sent. Past the shell's checks, a frame goes to
-//!   the board, whose strict parse is its validator, its rejection data.
+//!   the shell's `op` row reads as its `/op-at` form, a non-negative integer
+//!   `at` beside an object `frame`, which no wire op takes. Before the board
+//!   sees a frame, the shell refuses one it cannot send or hold whole, nothing
+//!   sent, each refusal `isError`: a burst whose `doc` is no document address
+//!   in its one spelling (`malformed_args` naming `frame.doc`) or whose frame
+//!   would pass the board's cap (`frame_too_large`), and a write of the ten
+//!   kinds the session's key attests whose attest it cannot compose from the
+//!   frame (`attest_not_composed`, a halt). Where the board refuses a read the
+//!   shell makes to compose that attest, the call answers the read's verdict,
+//!   as data, and the write is not sent. Past the shell's checks, a frame goes
+//!   to the board, whose strict parse is its validator, its rejection data.
 //! * **A refusal as a result.** The board's verdict is data: a `refused`
 //!   refusal is a normal tool result, the verdict's body verbatim under `body`
-//!   with the refusal's `name`, `status`, `code`, `detail` and `op` beside it,
-//!   since a client that cannot decode a rejection has been silently failed
-//!   (wire.md §Rejections). `isError` is every other refusal — the shell could
-//!   not get the board's verdict: the board unreachable, a halt, the block, the
-//!   shell's own names — and `fetch`'s two answers of the adapter's own, a file
-//!   past its cap and a stream cut short, each a plain sentence. A write
-//!   refused `unreachable` may have committed: the shell faces a lost answer to
-//!   any write but a burst (whose line it holds, `sent`), and the adapter never
-//!   reissues it. So may a write the board refused `poisoned`, whose frames its
-//!   restart replays from the journal (wire.md §Rejection codes; client.md
-//!   §3c.2), or answered `500 internal_panic` past its commit — each the
-//!   board's verdict, and so data. A call the adapter will not run — a tool
-//!   outside the catalog, a member an adapter tool's row or its `opts` does not
-//!   take, a wire op's arguments of the shell's `/op-at` shape — is no tool
-//!   result at all: it is refused -32602, as malformed `tools/call` params are;
-//!   a member of the wrong form is the shell's `malformed_args`.
+//!   with the refusal's `kind`, `name`, `status`, `code`, `detail` and `op`
+//!   beside it, since a client that cannot decode a rejection has been
+//!   silently failed (wire.md §Rejections). `isError` is every other refusal —
+//!   the shell could not get the board's verdict: the board unreachable, a
+//!   halt, the block, the shell's own names — and `fetch`'s two answers of the
+//!   adapter's own, a file past its cap and a stream cut short, each a plain
+//!   sentence. A write refused `unreachable` may have committed: the shell
+//!   faces a lost answer to any write but a burst (whose line it holds,
+//!   `sent`), and the adapter never reissues it. So may a write the board
+//!   refused `poisoned`, whose frames its restart replays from the journal
+//!   (wire.md §Rejection codes; client.md §3c.2), or answered
+//!   `500 internal_panic` past its commit — each the board's verdict, and so
+//!   data. A call the adapter will not run — a tool outside the catalog, a
+//!   member an adapter tool's row or its `opts` does not take, a wire op's
+//!   arguments of the shell's `/op-at` shape — is no tool result at all: it is
+//!   refused -32602, as malformed `tools/call` params are; a member of the
+//!   wrong form is the shell's `malformed_args`.
 //! * **A signed session, opened at startup**, before the first tool call, for
 //!   the configured principal with the store's key for it — enrolled in its
 //!   account's set or the nearest set above it — and no bare mode exists. No
@@ -56,43 +59,46 @@
 //!   adapter before it serves: a start waits for no board, and is made again
 //!   once the board answers. A board restart is met by the shell's silent
 //!   re-open; a death the shell does not re-open — the key retired, the prefix
-//!   blocked, the account seeded, a re-open the board refused — stops the
-//!   process with one plain line naming the arm, and so does the board's
+//!   blocked, the account seeded, the board's mode moved, a re-open refused —
+//!   stops the process with one plain line naming the arm, and so does a
 //!   refusal of a session the adapter opens itself where the shell's end left
 //!   none; a sign-in the board did not accept at either open (`busy`) lapses
 //!   the session instead, as a board that does not answer does, and a later
 //!   call opens one. No person is at the seam (`ArmConfig::Refuse`): no
-//!   ceremony tool is offered, every SECRET or CONSENT moment would be refused
+//!   ceremony tool is offered, every secret or consent moment would be refused
 //!   `person_required`, and `search` takes no `opts.reindex`, the person's
 //!   refresh of the index (`search.md` §5.5), which re-reads every document
 //!   the index holds while the call waits.
 //!
 //! `server.rs` is the MCP side: the stdio transport — stdin's reader, and the
-//! loop that answers each line on stdout — the JSON-RPC dispatch, and `call`,
-//! which keeps *a refusal as a result*. `shell.rs` is the backend, the one
-//! module that calls `skep-shell`: the open and its checks, every call under
-//! the one session and the life around it, the bus drained; its child
-//! `shell/watch.rs` is the session's state, which one door moves
-//! (`SessionWatch::move_off`), and what a death asks of it. `media.rs` is the
-//! fetched file: its bytes read whole under the adapter's cap, its type
-//! sniffed, its base64. `tools.rs` holds the catalog (`tools.json`, embedded)
-//! with its commons sentence, the dispatch's two kinds the catalog is checked
-//! against when loaded, the dispatch's door (`Tool::admit`, which admits a call
-//! or refuses it -32602), and a wire op's call mapped onto its frame (*every
-//! tool is one call of the shell*). `log.rs` is the adapter's log on stderr,
-//! which every module and the shell's TALK write through: each line stamped
-//! with the moment it was said and cut of any answer's text, and never
-//! waiting on its reader, with the panic hook that makes a panic one line of
-//! it.
-//! This file is startup — the settings, each spelled once and refused by name
-//! before any dial, the store's write probe and the hold that keeps it one
-//! adapter process's, the `settings:` line naming each setting in force and
-//! its source, the shell's open — and the loop's two inputs (stdin's reader,
-//! the backend's stop) wired onto one channel.
+//! loop that answers on stdout each line owed an answer — the JSON-RPC
+//! dispatch, and `call`, which keeps *a refusal as a result*. `shell.rs` is
+//! the backend, the one module that calls the shell: the open and its checks,
+//! every call — under the one session where it takes one — and the life
+//! around it, the bus drained; its child `shell/watch.rs` is the session's
+//! state, which one door moves (`SessionWatch::move_off`), and what a death
+//! asks of it. `media.rs` is the fetched file: its bytes read whole under the
+//! adapter's cap, its type sniffed, its base64. `tools.rs` holds the catalog
+//! (`tools.json`, embedded) with its commons sentence, the dispatch's two kinds
+//! the catalog is checked against when loaded, the dispatch's door
+//! (`Tool::admit`, which admits a call or refuses it -32602), and a wire op's
+//! call mapped onto its frame (*every tool is one call of the shell*).
+//! `log.rs` is the adapter's log on stderr, which every module that says a
+//! line and the shell's `Talk` write through: each line stamped with the
+//! moment it was said and cut of any answer skep-client quotes, and, while
+//! its writer runs, never waiting on its reader, with the panic hook that
+//! makes a panic one line of it. This file is startup — the settings, each
+//! spelled once and refused by name before any dial, the store's write probe
+//! and the hold that keeps it one adapter process's, the `settings:` line
+//! naming each setting in force and its source, the shell's open — and the
+//! loop's two inputs (stdin's reader, the backend's stop) wired onto one
+//! channel.
 //!
-//! stdout is protocol-only; all logging goes to stderr, through `log`, which
-//! fails nothing and waits on nothing. Stdin EOF is the clean exit: the
-//! shell's stop closes the session at the board and saves the index.
+//! stdout is protocol-only while the adapter serves; all logging goes to
+//! stderr, through `log`, which fails nothing and, while its writer runs,
+//! waits on nothing. Stdin EOF is the clean exit, and so are a failed read of
+//! stdin and a closed stdout: the shell's stop closes the session at the
+//! board and saves the index.
 
 #![forbid(unsafe_code)]
 
@@ -224,13 +230,15 @@ const TOOLS_FILE: Spelling = ("--tools-file", None);
 /// No flag stands in for it.
 const COMMONS_VARIABLE: &str = "SKEP_COMMONS";
 
-/// The variable the board was named by before `SKEP_BOARD`, read no longer.
+/// The board's retired variable, which `SKEP_BOARD` replaces, not read.
 ///
-/// Whether it is set is said; its value is never decoded.
+/// Where it is set, that is said; its value is never decoded.
 const RETIRED_BOARD_VARIABLE: &str = "SKEPD_URL";
 
-/// Every setting a flag supplies, for the suite that holds the usage and the
-/// README's settings table to their spellings.
+/// Every setting a flag supplies, as the suite reads them.
+///
+/// The suite holds the usage and the README's settings table to their
+/// spellings.
 #[cfg(test)]
 const SETTINGS: [Spelling; 4] = [BOARD, DIR, PRINCIPAL, TOOLS_FILE];
 
@@ -240,17 +248,18 @@ const SETTINGS: [Spelling; 4] = [BOARD, DIR, PRINCIPAL, TOOLS_FILE];
 /// (`1.1.0.1.0.1 · 0 · 3 · n`, commons-map), and the format fixes it:
 /// skep-namespace's `ghost_home_document`, skep-registry's
 /// `COMMONS_TYPE_PREFIX` and every type address skep-client signs and reads
-/// (`T_ENROLL`, `T_GRANT`, …), which the suite holds to it. `SKEP_COMMONS`
-/// takes this value alone.
+/// (`T_ENROLL`, `T_GRANT`, …), and the suite holds those addresses to it.
+/// `SKEP_COMMONS` takes this value alone.
 const COMMONS_DOCUMENT: &str = "1.1.0.1.0.1";
 
-/// The largest principal id a board registers: `2^53 − 1`, the top of the
-/// range a JSON number carries exactly — skepd's `delegate` refuses a
-/// larger `new_id` at the parse (wire.md §Value encodings), so every
-/// principal a board seats sits at or below it. An adapter bound past it
-/// could never open a session, so startup is the bound's one check here —
-/// as skep-cli's `parse_principal` is for the same variable, at the same
-/// bound.
+/// The largest principal id a board registers: `2^53 − 1`.
+///
+/// It is the top of the range a JSON number carries exactly — skepd's
+/// `delegate` refuses a larger `new_id` at the parse (wire.md §Value
+/// encodings), so every principal a board seats sits at or below it. An
+/// adapter bound past it could never open a session, so startup is the
+/// bound's one check here — as skep-cli's `parse_principal` is for the same
+/// variable, at the same bound.
 const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
 
 /// The file under the store whose lock keeps it one adapter process's.
@@ -263,11 +272,11 @@ const STORE_LOCK: &str = "skep-mcp.lock";
 
 /// The longest a start waits for another adapter's hold on its store to end.
 ///
-/// INTERIM: a restart's predecessor's clean stop at a board that answers —
-/// the session's close and the index's save, a few seconds — with room, and
-/// well inside the time a harness gives `initialize`. A predecessor still
-/// stopping past it, or a second adapter left running over the store, refuses
-/// the start.
+/// **Interim.** It is a restart's predecessor's clean stop at a board that
+/// answers — the session's close and the index's save, a few seconds — with
+/// room, and well inside the time a harness gives `initialize`. A predecessor
+/// still stopping past it, or a second adapter left running over the store,
+/// refuses the start.
 const STORE_WAIT: Duration = Duration::from_secs(30);
 
 /// The directory under the store the shell keeps its held bursts in.
@@ -279,12 +288,13 @@ const HELD_DIR: &str = "held";
 /// Returns this binary's build: `<crate version> (<commit>)`.
 ///
 /// The version is the one Cargo compiled in, and the commit the one the build
-/// named through `SKEP_GIT_SHA`, `unknown` where it named none, which a
-/// developer's own build never does. Both are read at compile time, so the run
+/// named through `SKEP_GIT_SHA`, `unknown` where it named none, as a
+/// developer's own build names none. Both are read at compile time, so the run
 /// consults no file and no variable; the release scripts set the variable and
 /// hold the four shipped binaries to one version and one commit. The log's
-/// first line names it beside the process (`version <build>, pid <id>`), a
-/// panic's line names it again, and the version line answers it.
+/// first line once the command line is read names it beside the process
+/// (`version <build>, pid <id>`), a panic's line names it again, and the
+/// version line answers it.
 fn build() -> String {
     format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
 }
@@ -305,7 +315,7 @@ struct Setting {
 }
 
 impl Setting {
-    /// Returns the setting spelled `spelling`, its flag not yet given.
+    /// Returns the setting spelled `(flag, var)`, its flag not yet given.
     fn new((flag, var): Spelling) -> Setting {
         Setting { flag, var, given: None }
     }
@@ -373,6 +383,11 @@ fn main() -> ExitCode {
 }
 
 /// Starts the adapter and serves it to its end: the code to exit with.
+///
+/// # Panics
+///
+/// Where a tools file is given and the embedded catalog, which `tools::tests`
+/// holds to the dispatch, does not load.
 fn serve() -> ExitCode {
     let mut board = Setting::new(BOARD);
     let mut dir = Setting::new(DIR);
@@ -580,7 +595,7 @@ fn serve() -> ExitCode {
     // for its wait.
     let (inbound, inbox) = mpsc::channel::<Inbound>();
     let on_stop = OnStop::new(inbound.clone(), |line| Inbound::Stop(line, Instant::now()));
-    // THE SHELL: opened, checked and its one session opened before any tool
+    // The shell: opened, checked and its one session opened before any tool
     // is served; a stop here returns, so the shell's own stop has run.
     let talk: skep_shell::Talk = Arc::new(|line: &str| log(line));
     let backend = match Backend::open(origin, store_dir, principal_id, talk, on_stop) {
@@ -641,16 +656,16 @@ fn is_the_persons_store(store_dir: &Path) -> bool {
 
 /// Takes the store for this process: the lock on `STORE_LOCK` under it.
 ///
-/// The lock is held for the file's life, the process's, so it ends with the
-/// process however that ends. Where another adapter holds it — a restart's
-/// predecessor still stopping, or a second adapter over one store — the wait
-/// is said once, naming that process by the pid it wrote, and the lock is
-/// tried each tenth of a second until `wait` runs out. The refusal past it
-/// names both: how long a predecessor's call in flight or its clean stop can
-/// hold the store, and the store a second adapter takes in this one's place,
-/// a store and a key of its own and never a copy of this one, whose key is
-/// the agent's. Once taken, this process's pid is written in the file for the
-/// next start to name.
+/// The lock is held for the file's life, which `serve` ends as it returns,
+/// or until the process ends, however that ends. Where another adapter holds
+/// it — a restart's predecessor still stopping, or a second adapter over one
+/// store — the wait is said once, naming that process by the pid it wrote,
+/// and the lock is tried each tenth of a second until `wait` runs out. The
+/// refusal past it names both: how long a predecessor's call in flight or its
+/// clean stop can hold the store, and the store a second adapter takes in
+/// this one's place, a store and a key of its own and never a copy of this
+/// one, whose key is the agent's. Once taken, this process's pid is written
+/// in the file for the next start to name.
 ///
 /// # Errors
 ///
@@ -751,13 +766,15 @@ fn env_text(var: &str) -> Option<String> {
     }
 }
 
-/// T4 well-formedness of a dotted-decimal tumbler string (wire.md §Value
-/// encodings; the four clauses of skep-address's validator): every
-/// component is a decimal natural, the first and last are nonzero, no two
-/// zeros are adjacent, and at most three components are zero. Zeroness is
-/// judged on the digits (`"00"` is zero, matching the daemon's lenient
-/// numeric read); magnitudes stay strings — T4 never bounds size. A test
-/// holds it to the validator's verdict on every short dotted decimal.
+/// Returns whether a dotted-decimal tumbler string is T4 well-formed.
+///
+/// T4 well-formedness (wire.md §Value encodings; the four clauses of
+/// skep-address's validator): every component is a decimal natural, the
+/// first and last are nonzero, no two zeros are adjacent, and at most three
+/// components are zero. Zeroness is judged on the digits (`"00"` is zero,
+/// matching the daemon's lenient numeric read); magnitudes stay strings — T4
+/// never bounds size. A test holds it to the validator's verdict on every
+/// short dotted decimal.
 fn is_t4_address(s: &str) -> bool {
     let is_zero = |c: &str| c.bytes().all(|b| b == b'0');
     let mut zeros = 0usize;

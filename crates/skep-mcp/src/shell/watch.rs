@@ -8,11 +8,11 @@
 //! off the session that died only while the state still names that session,
 //! never off a stop, and wakes every call waiting in `settled_within`. The
 //! drain moves it by a death (`settle`), and the backend by a session it opens
-//! itself (`move_off`) or by the board's refusal of one (`settle`).
+//! itself (`move_off`) or by a refusal of one (`settle`).
 //!
 //! The state's lock and its signal are private to this module, so the backend
 //! moves the state through `move_off` alone, and every holder of the lock is a
-//! method of `SessionWatch` in this file.
+//! method of `SessionWatch` in this file, save the unit test that poisons it.
 
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -24,21 +24,23 @@ use serde_json::Value;
 /// Every variant carries a session's reference: the live one, or the one that
 /// died and what its end left. The drain settles it by a death
 /// (`SessionWatch::settle`); the backend moves it to a session it opens
-/// itself, or settles it by the board's refusal of that open; nothing moves it
-/// off a stop.
+/// itself, or settles it by a refusal of that open; nothing moves it off a
+/// stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SessionState {
     /// The session every call runs under.
     Open(String),
     /// The session that died with no re-open, the adapter serving on.
     ///
-    /// Its end met a board that did not answer, or one that did not accept the
-    /// re-open's sign-in (`busy`). The next call opens one.
+    /// Its end, or an open of the adapter's own that followed it, asked
+    /// `Death::ServeOn`: it met a board that did not answer, or one that did
+    /// not accept the sign-in (`busy`), or was of another arm that serves on.
+    /// The next call that runs under a session tries to open one.
     Lapsed(String),
     /// The session whose end stops the adapter.
     ///
-    /// The end is a death the shell did not re-open, or the board's refusal of
-    /// the session the adapter opened in its place. No call opens a session; a
+    /// The end is a death the shell did not re-open, or a refusal of the
+    /// session the adapter opened in its place. No call opens a session; a
     /// call still in flight runs under the reference that died, and the shell
     /// answers it.
     Stopped(String),
@@ -54,7 +56,8 @@ pub(super) enum Death {
     /// The `unreachable` arm, and a re-open or an open of the adapter's own
     /// that met a board that did not answer, or did not accept the sign-in
     /// (`busy`): no session stands until a call opens one afresh. The
-    /// adapter's own `closed` too.
+    /// adapter's own `closed` too, a re-open whose reason names no fresh
+    /// reference, and an arm skep-shell does not declare.
     ServeOn,
     /// A death not re-opened, or a refused open: the plain line the stop says.
     Stop(String),
@@ -112,7 +115,7 @@ pub(super) fn classify(reason: &Value) -> Death {
 /// It is read off the death's reason, as `classify` reads the arm: the board
 /// did not answer the end's read, its text the client's own; the board
 /// restarted and did not answer the re-open, or did not accept its sign-in;
-/// or the arm itself, where another served on.
+/// or the arm itself, where another served on, or that the end named none.
 pub(super) fn lapse_cause(reason: &Value) -> String {
     match (reason["arm"].as_str(), reason["refused"].as_str()) {
         (Some("unreachable"), _) => match reason["text"].as_str() {
@@ -193,9 +196,9 @@ fn refused_open(refused: &str, opening: Opening) -> Death {
 ///
 /// It is the session the calls run under, watched: the drain settles it by a
 /// death (`SessionWatch::settle`), and the backend moves it to a session it
-/// opens itself (`SessionWatch::move_off`) or settles it by the board's refusal
-/// of that open; a call that met a death waits on it
-/// (`SessionWatch::settled_within`), woken by the move.
+/// opens itself (`SessionWatch::move_off`) or settles it by a refusal of that
+/// open; a call that met a death waits on it (`SessionWatch::settled_within`),
+/// woken by the move.
 #[derive(Debug)]
 pub(super) struct SessionWatch {
     state: Mutex<SessionState>,
@@ -212,10 +215,10 @@ impl SessionWatch {
     /// Locks the session's state, poisoned or not.
     ///
     /// The lock is private to this module, so its every holder is a method of
-    /// `SessionWatch` here, and none leaves the state half-moved by an unwind —
-    /// each critical section clones, compares or assigns one whole
-    /// `SessionState` — so a poisoned lock still guards the state as it stands,
-    /// and no call fails for another's panic.
+    /// `SessionWatch` here, save the unit test that poisons it, and none leaves
+    /// the state half-moved by an unwind — each critical section clones,
+    /// compares or assigns one whole `SessionState` — so a poisoned lock still
+    /// guards the state as it stands, and no call fails for another's panic.
     fn lock(&self) -> MutexGuard<'_, SessionState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -286,7 +289,7 @@ mod tests {
 
     use super::*;
 
-    /// Each arm of a death's reason asks one thing.
+    /// Checks that each arm of a death's reason asks one thing.
     ///
     /// The restart's re-open names the fresh reference; a restart the board
     /// refused, a retirement, a block, a seeding and a mode flip each stop
@@ -294,9 +297,10 @@ mod tests {
     /// session's or a key's, and the position it landed at, a seeding its
     /// first key and position, a re-open the key store failed the store, not
     /// the board; the unreachable board, a re-open that met a board that did
-    /// not answer or did not accept its sign-in, the adapter's own close, and
-    /// a spelling no arm has serve on, each lapse said with its cause. The arms
-    /// the cases name are exactly the ones skep-shell declares for a death's
+    /// not answer or did not accept its sign-in, the adapter's own close, a
+    /// re-open that names no fresh reference and a spelling no arm has serve
+    /// on, each lapse but those last two said with its cause. The arms the
+    /// cases name are exactly the ones skep-shell declares for a death's
     /// reason (`shapes::shape`), so an arm the shell adds or renames fails
     /// here before `classify`'s wildcard serves a death of it through.
     #[test]
@@ -361,7 +365,7 @@ mod tests {
         assert_eq!(read, declared, "the arms read are the ones skep-shell declares");
     }
 
-    /// The session's state moves off a session once, and never off a stop.
+    /// Checks that the state moves off a session once, and never off a stop.
     ///
     /// Two callers settling one re-open move it once; a death of a session the
     /// state has left moves nothing; a death no one re-opened lapses it, the
@@ -383,16 +387,16 @@ mod tests {
         assert_eq!(watch.current(), SessionState::Stopped("s-late".into()));
     }
 
-    /// A death is settled once, and a stop's line goes to the stop once.
+    /// Checks that a death is settled once, its stop's line handed on once.
     ///
     /// A death settled a second time — a `session-died` heard twice, a refused
     /// open judged twice — moves nothing: the first to settle it moves the
     /// session's state and hands the stop its line, alone. A refused open stops
     /// a lapsed state as a stopping death stops an open one, and the two
     /// refused opens — the shell's re-open, the adapter's own — each name the
-    /// open refused, name a key store that failed it as the store, and agree
-    /// that a board that does not answer, or does not accept the sign-in,
-    /// serves on.
+    /// open refused, the adapter's own names a key store that failed it as the
+    /// store, and the two agree that a board that does not answer, or does not
+    /// accept the sign-in, serves on.
     #[test]
     fn a_death_is_settled_once_and_its_stop_said_once() {
         let said = Mutex::new(Vec::new());
@@ -417,7 +421,7 @@ mod tests {
         assert_eq!(refused_afresh("busy"), Death::ServeOn, "a sign-in the board did not accept serves on, whoever opened");
     }
 
-    /// The wait ends as the drain settles the session.
+    /// Checks that the wait ends as the drain settles the session.
     ///
     /// A death settled a moment later wakes it, well inside its bound — a lapse
     /// or a stop as surely as a re-open — and with none settled the wait runs
@@ -442,7 +446,7 @@ mod tests {
         assert!(!watch.settled_within("s-1", Duration::from_millis(100)), "with nothing settled the wait runs out");
     }
 
-    /// A panic under the lock leaves the session's state standing and moving.
+    /// Checks that a panic under the lock leaves the state standing and moving.
     ///
     /// A holder that panics poisons the lock; the state still reads as it
     /// stood, still moves off its session, and a wait still reads the move:

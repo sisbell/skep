@@ -7,7 +7,7 @@
 //!
 //! The board declares no media type — a picture's cell is `{type, hash,
 //! size}` and the fetch's `Content-Type` is always `application/octet-stream`
-//! (wire.md §Media, THE FETCH: "the daemon reads no type off the bytes and
+//! (wire.md §Media, the fetch: "the daemon reads no type off the bytes and
 //! declares none it did not read") — so the adapter reads the magic itself:
 //! PNG, JPEG, GIF and WebP are answered as an image block with the type the
 //! magic names, and everything else as an embedded resource of
@@ -21,14 +21,16 @@ use std::time::{Duration, Instant};
 
 use skep_client::dial::Headers;
 
-/// The most bytes `fetch` answers: one JSON-RPC line carries the whole file
-/// as base64, so the bound is the line's, well under the board's 64 MiB per
-/// file (wire.md §Transport). Eight mebibytes is the frame routes' request
-/// cap and skep-client's answer cap, the one figure the wire already
-/// bounds a single exchange by, and its base64 line is under eleven
-/// mebibytes — what an agent runtime takes in one message and what a
-/// model takes as one image. Checked against the answer's `Content-Length`
-/// before a byte is read; a file past it is refused naming the cap.
+/// The most bytes `fetch` answers.
+///
+/// One JSON-RPC line carries the whole file as base64, so the bound is the
+/// line's, well under the board's 64 MiB per file (wire.md §Transport). Eight
+/// mebibytes is the frame routes' request cap and skep-client's answer cap
+/// less its room for the head, a figure the wire already bounds a single
+/// exchange by, and its base64 line is under eleven mebibytes — what an agent
+/// runtime takes in one message and what a model takes as one image. Checked
+/// against the answer's `Content-Length` before a byte is read; a file past it
+/// is refused naming the cap.
 pub const MAX_FETCH_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The longest a fetched file's body is read.
@@ -36,7 +38,7 @@ pub const MAX_FETCH_BYTES: u64 = 8 * 1024 * 1024;
 /// It is an honest board's own bound on its fetch stream — wire.md
 /// §Transport's transfer bound of ten minutes and idle bound of thirty
 /// seconds (skepd's `BLOB_TRANSFER_BOUND` and `BLOB_IDLE_BOUND`) — past which
-/// the board has ended the stream itself, at its length or by a RESET short
+/// the board has ended the stream itself, at its length or by a reset short
 /// of it, so it cuts nothing an honest board still sends. It bounds the
 /// slowness skep-client's per-read bound cannot: the streamed form leaves
 /// the body's time to its caller, a peer pacing a byte inside each per-read
@@ -80,7 +82,7 @@ pub enum FetchAnswer {
     RanPastTheCap { read: u64 },
     /// The stream ended short, a read failed, or its deadline passed.
     ///
-    /// The board's RESET (wire.md §Media, THE FETCH) is one: `read` bytes
+    /// The board's reset (wire.md §Media, the fetch) is one: `read` bytes
     /// came, and `error` says why — the failed read's own, `UnexpectedEof`
     /// where the stream ended short of the declared length, or `TimedOut`
     /// where `FETCH_DEADLINE` passed before the file was whole.
@@ -159,8 +161,10 @@ pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
 /// The standard alphabet (RFC 4648 §4).
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// Returns `bytes` as base64 (RFC 4648 §4): the standard alphabet, three
-/// bytes to four characters, the last group padded with `=` to four.
+/// Returns `bytes` as base64 (RFC 4648 §4).
+///
+/// It uses the standard alphabet, three bytes to four characters, the last
+/// group padded with `=` to four.
 pub fn base64(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let (groups, remainder) = bytes.as_chunks::<3>();

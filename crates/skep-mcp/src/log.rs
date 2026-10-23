@@ -1,14 +1,15 @@
-//! The adapter's log: stderr, one line per notice, never waiting on a reader.
+//! The adapter's log: stderr, one line per notice.
 //!
 //! Every line the adapter says goes through [`log`] — startup's lines, the
-//! stops, the loop's own and the shell's TALK — so stdout stays the JSON-RPC
-//! stream alone. A line is rendered by `logged`, and opens with the moment it
-//! was said: `skep-mcp: 2026-10-20T14:05:12.345Z the board restarted: …`, RFC
-//! 3339 UTC to the millisecond, read from the system clock where the line is
-//! said — never where the writer below writes it, which a slow reader makes
-//! later — and rendered by the civil-date conversion skep-util's `notice`
-//! stamps the daemon's stream with, copied here (`Rfc3339`). So a log kept in a
-//! file carries its own moments, and joins the board's stream by them.
+//! stops, the loop's own and the shell's `Talk` — so stdout, while the adapter
+//! serves, stays the JSON-RPC stream alone. A line is rendered by `logged`,
+//! and opens with the moment it was said:
+//! `skep-mcp: 2026-10-20T14:05:12.345Z the board restarted: …`, RFC 3339 UTC
+//! to the millisecond, read from the system clock where the line is said —
+//! never where the writer below writes it, which a slow reader makes later —
+//! and rendered by the civil-date conversion skep-util's `notice` stamps the
+//! daemon's stream with, copied here (`Rfc3339`). So a log kept in a file
+//! carries its own moments, and joins the board's stream by them.
 //!
 //! **What a line never carries.** The log says what happened at the board,
 //! never what a principal read (D9). A line can quote an answer all the same:
@@ -20,8 +21,8 @@
 //! `LINE_BYTES` of rendered text, each cut saying how many bytes it took.
 //!
 //! Three rules travel with a line's write, the ones `notice` keeps for the
-//! daemon: it never fails the work it reports on, never reports, and never
-//! waits.
+//! daemon: it never fails the work it reports on, never reports, and, while
+//! its writer runs, never waits.
 //!
 //! **Never fails, never reports.** The write's result is discarded — never
 //! `eprintln!`, which panics when the write fails — so a pipe whose reader has
@@ -29,19 +30,20 @@
 //!
 //! **Never waits.** MCP's stdio transport lets a client ignore the server's
 //! stderr, and a pipe whose reader stays open and stops reading blocks the
-//! write that meets it full. Every thread says lines here — the loop, the
-//! drain, and the shell's feed thread, whose resend says one every two seconds
-//! while a held line is not taken — and a feed thread blocked so would hold
-//! every `search` and `places`, the loop and `ping` behind them. So [`log`]
-//! puts its line on a queue bounded in bytes and returns, and one thread,
-//! `skep-mcp-log`, writes the lines to stderr in order, one write a line. A
-//! line that meets a full queue is dropped and counted, and the gap is said
-//! where it is, at the moment its first line was said: the next line the
-//! queue takes follows one naming how many went, and a gap still open at the
-//! exit is said by the drain. Where the OS refuses the thread, each line is
-//! written where it is said. [`drain`] waits for the queue before the process
-//! exits, for as long as the reader takes lines: one that has taken none for
-//! `DRAIN_STALL` costs the exit the lines it left, never the exit.
+//! write that meets it full. Every thread says lines here — the loop, stdin's
+//! reader, the drain, and the shell's feed thread, whose resend says one every
+//! two seconds while a held line is not taken — and a feed thread blocked so
+//! would hold every `search` and `places`, the loop and `ping` behind them. So
+//! [`log`] puts its line on a queue bounded in bytes and returns, and one
+//! thread, `skep-mcp-log`, writes the lines to stderr in order, one write a
+//! line, a gap's line in the write of the line it precedes. A line that meets
+//! a full queue is dropped and counted, and the gap is said where it is, at
+//! the moment its first line was said: the next line the queue takes follows
+//! one naming how many went, and a gap still open at the exit is said by the
+//! drain. Where the OS refuses the thread, each line is written where it is
+//! said. [`drain`] waits for the queue before the process exits, for as long
+//! as the reader takes lines: one that has taken none for `DRAIN_STALL` costs
+//! the exit the lines it left, never the exit.
 //!
 //! A panic is a line of it too ([`install_the_panic_hook`]).
 
@@ -60,15 +62,17 @@ use skep_client::sheet::render_inert;
 ///
 /// A line's rendered text runs to `LINE_BYTES`, so lines vary in bytes from a
 /// few dozen to some four thousand, and the bound is in bytes, not lines: a
-/// reader that stopped costs the process this much and the line the writer
-/// holds, no more. A line meeting an empty queue is taken whatever its size.
+/// reader that stopped costs the process this much, a gap's line or two past
+/// it (`State::bytes`), and the line the writer holds, no more. A line
+/// meeting an empty queue is taken whatever its size.
 const QUEUE_BYTES: usize = 1024 * 1024;
 
 /// The most bytes of rendered text one line carries past its prefix and time.
 ///
 /// It is past every line the adapter composes — the usage a usage error says
-/// is the longest, under three kilobytes — so it clips a board's text alone: a
-/// refusal or a face whose text runs on, the rest named by its count. It
+/// is the longest, under four kilobytes — so it clips only the text the
+/// adapter is given: a board's refusal or face whose text runs on, or a
+/// setting or an argument given at length, the rest named by its count. It
 /// bounds the rendered text, so a control's eight-byte rendering does not
 /// multiply it.
 const LINE_BYTES: usize = 4096;
@@ -91,17 +95,19 @@ const THREAD: &str = "skep-mcp-log";
 /// The stream over the process's stderr, made at the first line.
 static STDERR: OnceLock<Arc<Stream>> = OnceLock::new();
 
-/// Writes one line of the log, stderr, as `logged` renders it.
+/// Says one line of the log, stderr, as `logged` renders it.
 ///
-/// The moment is read first, where the line is said; the line is queued,
-/// never written here, so it neither fails, reports nor waits (the module
-/// doc). The shell's `Talk` lines come through here too.
+/// The moment is read first, where the line is said; the line is queued, or
+/// dropped and counted where the queue is full, and never written here while
+/// the writer runs, so it neither fails, reports nor waits (the module doc) —
+/// where the OS refused the writer its thread, the line is written here. The
+/// shell's `Talk` lines come through here too.
 pub fn log(line: impl Display) {
     let at = SystemTime::now();
     STDERR.get_or_init(|| Stream::over(Box::new(std::io::stderr()))).say(at, &logged(at, line));
 }
 
-/// Waits for the lines said so far to reach stderr, before the process ends.
+/// Waits for the lines queued so far to reach stderr, before the process ends.
 ///
 /// A gap still open is said first, at its first dropped line's moment. It
 /// returns once each line is written, or once the reader has taken none for
@@ -166,18 +172,20 @@ fn panic_line(thread: Option<&str>, location: Option<&Location<'_>>, payload: Op
 ///
 /// It opens `skep-mcp: ` and the moment, RFC 3339 UTC to the millisecond.
 /// Every control `render_inert` disarms — the C0 controls, DEL and the bidi
-/// controls (AUTH-5.2) — is shown as its code point, and every line it breaks
-/// onto is indented two spaces, an empty one left empty. A board's text rides
-/// many lines here — a refusal's code and detail, the `/health` claimant, a
-/// block's record and ground, the shell's `Talk` of its feed and held threads
-/// — and the log is read on a terminal, or kept and shown on one later, where
-/// a control acts: ESC opens a sequence that retitles the window, moves the
-/// cursor or writes the clipboard, CR overwrites the line. So no C0 control,
-/// DEL or bidi control a board chose acts there, and no text it chose opens a
-/// line of the log as `skep-mcp: `. A C1 control passes as it came, as
-/// `render_inert` passes it. An answer skep-client quotes is cut at its parse
-/// error (`unquoted_answer`), and the rendered text clipped at `LINE_BYTES`
-/// (`clipped`), before the line reaches the queue (D9).
+/// controls (AUTH-5.2) — is shown as its code point, save the line feed,
+/// which breaks the line: every line the text breaks onto is indented two
+/// spaces, an empty one left empty. A board's text rides many lines here — a
+/// refusal's code and detail, the `/health` claimant, a block's record and
+/// ground, the shell's `Talk` of its feed and its held bursts — and the log
+/// is read on a terminal, or kept and shown on one later, where a control
+/// acts: ESC opens a sequence that retitles the window, moves the cursor or
+/// writes the clipboard, CR overwrites the line. So of the C0 controls, DEL
+/// and the bidi controls a board chose, none acts there but the line feed,
+/// and no text it chose opens a line of the log as `skep-mcp: `. A C1 control
+/// passes as it came, as `render_inert` passes it. An answer skep-client
+/// quotes is cut at its parse error (`unquoted_answer`), and the rendered
+/// text clipped at `LINE_BYTES` (`clipped`), before the line reaches the
+/// queue (D9).
 fn logged(at: SystemTime, line: impl Display) -> String {
     let text = line.to_string();
     let mut body = String::new();
@@ -284,7 +292,7 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
     (year, month, day)
 }
 
-/// The queue and the thread that writes it.
+/// The queue and the thread that writes it, where one runs.
 ///
 /// One stream runs over stderr for the process; the unit suite runs its own
 /// over sinks of the test's.
@@ -300,27 +308,33 @@ struct Stream {
 struct State {
     /// The lines queued, oldest first, each ending `\n`.
     lines: VecDeque<String>,
-    /// The bytes `lines` holds, never past `QUEUE_BYTES` but for one line and
-    /// a gap's line the drain says.
+    /// The bytes `lines` holds.
+    ///
+    /// They are never past `QUEUE_BYTES` but for one line, a gap's line
+    /// queued before a line, and a gap's line the drain says.
     bytes: usize,
-    /// Lines queued since the stream began, and lines written: a drain waits
-    /// for the second to reach the first as it stood at the call.
+    /// The texts queued since the stream began (`push`), and those written.
+    ///
+    /// A drain waits for the second to reach the first as it stood at the
+    /// call.
     queued: u64,
     taken: u64,
     /// Lines dropped since the last line the queue took.
     dropped: u64,
     /// The moment the first of them was said, while any stands dropped.
     dropped_since: Option<SystemTime>,
-    /// Whether the writer runs; where it does not, a line is written where it
-    /// is said.
+    /// Whether the writer runs.
+    ///
+    /// Where it does not, a line is written where it is said.
     threaded: bool,
     /// The sink, until the writer takes it; the sayer's own where none runs.
     sink: Option<Box<dyn Write + Send>>,
 }
 
 impl State {
-    /// Returns the gap's line, ended, where lines stand dropped; the count
-    /// starts again.
+    /// Returns the gap's line, ended, where lines stand dropped.
+    ///
+    /// The count starts again.
     fn take_gap(&mut self) -> Option<String> {
         let since = self.dropped_since.take()?;
         let dropped = std::mem::take(&mut self.dropped);
@@ -363,12 +377,12 @@ impl Stream {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Says one rendered line, said at `at`: queued, or dropped and counted.
+    /// Says one rendered line, said at `at`: queued, dropped, or written.
     ///
-    /// It never waits on the sink. A line meeting a full queue is dropped, and
-    /// the first dropped notes its moment; a line the queue takes after a gap
-    /// follows the gap's line (`gap_line`). Where no writer runs, the line is
-    /// written here.
+    /// It never waits on the sink while the writer runs. A line meeting a full
+    /// queue is dropped and counted, and the first dropped notes its moment; a
+    /// line the queue takes after a gap follows the gap's line (`gap_line`).
+    /// Where no writer runs, the line is written here.
     fn say(&self, at: SystemTime, line: &str) {
         let mut st = self.lock();
         if !st.threaded {
@@ -391,8 +405,9 @@ impl Stream {
 
     /// Writes each queued line in order, for the writer's whole life.
     ///
-    /// One write a line, its result discarded; the wait for the next costs
-    /// nothing while nothing is said.
+    /// One write a line, a gap's line in the write of the line it precedes,
+    /// its result discarded; the wait for the next costs nothing while
+    /// nothing is said.
     fn write_each_in_order(&self) {
         let Some(mut sink) = self.lock().sink.take() else { return };
         loop {

@@ -61,8 +61,9 @@
 //!   `RecordFrame`, its rows named.
 //! * [`sheet`] — the key file's one JSON spelling, its size bound and its
 //!   refusals, `KeyFileError` (§3.2), the byline `Label` and its domain
-//!   (AUTH-1.24), the `Seed` every secret is born into, the R42 grouping
-//!   (AUTH-5.1) and the sheet's field list (AUTH-5.38).
+//!   (AUTH-1.24), the `Seed` every secret is born into and the `SeedText`
+//!   the sheet shows it as, each wiped on drop (AUTH-5.54 step 3), the R42
+//!   grouping (AUTH-5.1) and the sheet's field list (AUTH-5.38).
 //! * [`store`] — the `KeyStore` seam and `FileStore` (§3), the seed's
 //!   custodian: a lookup answers a key's public facts and a stored key signs
 //!   through `KeyStore::signer` alone (§3a); the halts the store's refusals

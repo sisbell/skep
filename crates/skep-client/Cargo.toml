@@ -11,12 +11,13 @@ readme = "README.md"
 [features]
 # `acting` — the ACTING half (client.md §1.1's graph): `sign`, `store`,
 # `ceremony`, `person`, `sheet`, the reader's `verify`, `share` — the grant
-# composed and read, which signs — and the `skep-resolve`
-# edge. DEFAULT ON. It alone turns `skep-signature`'s `sign` on; a daemon
-# that embeds this crate's dialer takes it with `default-features = false`,
-# so its build graph holds no signer (AUTH-2.2 under feature unification).
+# composed and read, which signs — the `skep-resolve` edge, and the wipe of
+# the seed and of the sheet's text of it. DEFAULT ON. It alone turns
+# `skep-signature`'s `sign` on; a daemon that embeds this crate's dialer
+# takes it with `default-features = false`, so its build graph holds no
+# signer (AUTH-2.2 under feature unification).
 default = ["acting"]
-acting = ["skep-signature/sign", "dep:skep-resolve", "dep:getrandom"]
+acting = ["skep-signature/sign", "dep:skep-resolve", "dep:getrandom", "dep:zeroize"]
 # `tls` — `https://` through rustls and the platform verifier (§9 item 12).
 # OFF here; the `skep` binary and the frontend's shell turn it on. The
 # sidecar image builds the binary `--no-default-features`.
@@ -79,6 +80,13 @@ skep-search = { path = "../skep-search", optional = true }
 serde_json.workspace = true
 # OS entropy: seeds, the backup moment's per-run token, `new_id`.
 getrandom = { workspace = true, optional = true }
+# The wipe of the seed and of the sheet's text of it: `Zeroize` and
+# `ZeroizeOnDrop`, derived (`derive`), as skep-signature derives them for its
+# half seeds. AUTH-5.54 step 3's drop is owed as a wipe (client.md §3.4, §4.2
+# step 5), and a plain store the compiler may elide is none. Behind `acting`;
+# naming it compiles no crate the acting build would not, since
+# `skep-signature/sign` takes it with its derive.
+zeroize = { version = "1", optional = true, features = ["derive"] }
 # The `tls` arm.
 rustls = { workspace = true, optional = true }
 rustls-platform-verifier = { workspace = true, optional = true }

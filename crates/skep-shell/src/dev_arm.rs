@@ -150,7 +150,7 @@ impl DevArm {
         let sheets = sheets.lock().expect("the sheets' lock");
         let sheet = sheets.get(n)?;
         let prefix = sheet.fingerprint_hex.get(..8)?;
-        Some((sheet.seed_grouped.split_whitespace().collect(), prefix.to_string()))
+        Some((sheet.seed_grouped.as_str().split_whitespace().collect(), prefix.to_string()))
     }
 
     /// THE RE-TYPE (SECRET): the auto arm declines it; a script types it off

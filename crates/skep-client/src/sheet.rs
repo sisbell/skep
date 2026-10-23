@@ -4,12 +4,14 @@
 //! and its reader with its refusals, [`KeyFileError`] (§3.2); the byline a
 //! key carries, [`Label`], one domain test (AUTH-1.24) wherever a label is
 //! made — a box — or read — a file; the [`Seed`] every key's secret is born
-//! into; the R42 grouping (AUTH-5.1: eight groups of eight hex, a single
-//! space between groups, four groups to a line, for a fingerprint wherever
-//! one is displayed and for the exported anchor seed on the sheet alike),
-//! and the sheet's field list (AUTH-5.38) — the drawing is each embedder's
-//! (§5.2). No scannable form (§9 item 13).
+//! into and the [`SeedText`] the sheet shows it as, each wiped on drop
+//! (AUTH-5.54 step 3); the R42 grouping (AUTH-5.1: eight groups of eight
+//! hex, a single space between groups, four groups to a line, for a
+//! fingerprint wherever one is displayed and for the exported anchor seed on
+//! the sheet alike), and the sheet's field list (AUTH-5.38) — the drawing is
+//! each embedder's (§5.2). No scannable form (§9 item 13).
 
+use std::borrow::Cow;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read};
@@ -18,11 +20,15 @@ use std::path::Path;
 use serde_json::Value;
 use skep_identity::{Fingerprint, PublicKey, SigAlgRow, ALGS};
 use skep_signature::HybridSigner;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::address::is_address_text;
 use crate::hex;
 use crate::origin::Origin;
 use crate::sign::signer_from_seed_under;
+
+#[cfg(test)]
+mod tests;
 
 /// The most bytes a key file holds (§3.2).
 ///
@@ -67,18 +73,24 @@ pub(crate) fn read_key_file(path: &Path) -> io::Result<Vec<u8>> {
 ///
 /// It is 64 hex as eight groups of eight, a single space between groups,
 /// four groups to a line (R42; RES-62 item 9, pick A).
-///
-/// # Panics
-///
-/// Panics if a group boundary falls inside a multi-byte character, which
-/// hex never holds.
 pub fn group_hex(hex64: &str) -> String {
-    let groups: Vec<&str> = (0..hex64.len()).step_by(8).map(|i| &hex64[i..(i + 8).min(hex64.len())]).collect();
-    groups
-        .chunks(4)
-        .map(|line| line.join(" "))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::with_capacity(hex64.len() + hex64.len() / 8);
+    push_grouped(&mut out, hex64.chars());
+    out
+}
+
+/// Pushes `digits` onto `out` in AUTH-5.1's grouping.
+///
+/// The digits run eight to a group, a single space between groups and four
+/// groups to a line: the one grouping, which [`group_hex`] writes for a
+/// fingerprint and `Seed`'s own grouping writes for the sheet's seed text.
+fn push_grouped(out: &mut String, digits: impl Iterator<Item = char>) {
+    for (i, digit) in digits.enumerate() {
+        if i > 0 && i % 8 == 0 {
+            out.push(if i % 32 == 0 { '\n' } else { ' ' });
+        }
+        out.push(digit);
+    }
 }
 
 /// Returns whether `typed` names `fp`.
@@ -114,20 +126,30 @@ pub fn render_inert(label: &str) -> String {
     out
 }
 
-/// The 32-byte seed — the paper backup's 64 hex — zeroed on drop, best effort.
+/// The 32-byte seed — the paper backup's 64 hex — wiped on drop.
 ///
-/// This crate takes no zeroizing dependency and forbids unsafe code, so the
-/// overwrite is a plain store the compiler is free to elide. Every seed the
-/// crate makes is born in this value — drawn by [`Seed::fresh`], decoded by
-/// [`Seed::from_hex`] — so no bare copy of its bytes outlives the drop
-/// AUTH-5.54 step 3 owes; the hex spelled from it — [`Seed::to_hex`], the
-/// key file's `seed` member, the sheet's field — is a plain `String` that no
-/// drop wipes. The signer derived from it wipes both halves' keys on drop,
-/// the Ed25519 key and the ML-DSA-65 key, and what the KDF and the key
-/// libraries compute from a secret inside a call is released unwiped
-/// (`skep_signature::HybridSigner`'s doc): the drop is open work for that
-/// residue, reported and not claimed.
+/// The wipe is derived, `Zeroize` and `ZeroizeOnDrop` together, as
+/// skep-signature derives its half seeds' wipe: the `ZeroizeOnDrop` derive
+/// writes both the `Drop` that overwrites the bytes, with writes the compiler
+/// may not elide, and the marker this module's suite reads, so the drop
+/// AUTH-5.54 step 3 owes is a wipe (`client.md` §3.4). Every seed the crate
+/// makes is born in this value — drawn by [`Seed::fresh`], decoded by
+/// [`Seed::from_hex`] — so no bare copy of its bytes outlives that drop. The
+/// sheet shows the seed as a [`SeedText`], which wipes in turn; the hex
+/// spelled from it — [`Seed::to_hex`], the key file's `seed` member — is a
+/// plain `String` that no drop wipes. The signer derived from it wipes both
+/// halves' keys on drop, the Ed25519 key and the ML-DSA-65 key, and what the
+/// KDF and the key libraries compute from a secret inside a call is released
+/// unwiped (`skep_signature::HybridSigner`'s doc): the drop is open work for
+/// that residue, reported and not claimed.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Seed([u8; 32]);
+
+/// The bytes the sheet's seed text holds.
+///
+/// They are AUTH-5.1's grouping of the seed's 32 bytes: 64 hex, six spaces
+/// between the groups of a line and one line break between the two lines.
+const SEED_TEXT_LEN: usize = 71;
 
 impl Seed {
     /// Returns a seed from its bytes.
@@ -165,21 +187,69 @@ impl Seed {
         &self.0
     }
 
-    /// Returns the seed's 64 hex — the sheet's one secret field.
+    /// Returns the seed's 64 hex in a plain `String` that no drop wipes.
+    ///
+    /// It is the key file's `seed` member; the sheet shows the seed as a
+    /// [`SeedText`] instead, which wipes.
     pub fn to_hex(&self) -> String {
         hex::encode(&self.0)
     }
-}
 
-impl Drop for Seed {
-    fn drop(&mut self) {
-        self.0 = [0u8; 32];
+    /// Returns the seed in AUTH-5.1's grouping, as the sheet shows it.
+    ///
+    /// The digits are written from the bytes into one buffer of its final
+    /// size, `SEED_TEXT_LEN`, so no growth leaves a copy of them behind the
+    /// wipe.
+    fn grouped(&self) -> SeedText {
+        let mut text = String::with_capacity(SEED_TEXT_LEN);
+        push_grouped(&mut text, self.0.iter().flat_map(|b| hex::digits(*b)));
+        SeedText(text)
     }
 }
 
 impl fmt::Debug for Seed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Seed(…)")
+    }
+}
+
+/// The seed's 64 hex in AUTH-5.1's grouping, as the sheet shows it.
+///
+/// It is secret text, wiped on drop (AUTH-5.54 step 3). The wipe is
+/// derived, `Zeroize` and `ZeroizeOnDrop` together, as [`Seed`]'s is: the
+/// `ZeroizeOnDrop` derive writes both the `Drop` that overwrites the whole
+/// buffer, its spare capacity included, and the marker this module's suite
+/// reads. The library builds the text from the seed's bytes at its final
+/// size ([`KeyFile::sheet`]), so no growth leaves a copy behind;
+/// [`SheetFields::lines`] lends it and copies none of it, and a clone is a
+/// `SeedText` that wipes in turn. What an embedder copies out of
+/// [`SeedText::as_str`] to draw the sheet is the embedder's to wipe.
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+pub struct SeedText(String);
+
+impl SeedText {
+    /// Returns the text, lent.
+    ///
+    /// It is the one way the text is read.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A text taken as given — a fixture's or an embedder's.
+///
+/// The library's own seed text is built from the seed's bytes
+/// ([`KeyFile::sheet`]).
+impl From<&str> for SeedText {
+    fn from(text: &str) -> SeedText {
+        SeedText(text.to_owned())
+    }
+}
+
+/// The text is secret, so it prints as none of itself.
+impl fmt::Debug for SeedText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SeedText(…)")
     }
 }
 
@@ -377,11 +447,12 @@ pub struct Facts {
 ///
 /// It holds the fields save `public` — the seed and the fingerprint grouped
 /// (AUTH-5.1), the label rendered inert by [`SheetFields::lines`]
-/// (AUTH-5.2), the three facts where they exist. It is a rendering of the
-/// fields and never of the file's bytes; read by a person, parsed by
-/// nothing. Its `Debug` prints every field but the seed, which shows as
-/// `…`: the sheet is a `Secret` moment's payload (§1.1's `person` row), and
-/// a debug log of moments is an ordinary embedder's.
+/// (AUTH-5.2), the three facts where they exist. The seed's text is a
+/// [`SeedText`], wiped on drop, which [`SheetFields::lines`] lends. It is a
+/// rendering of the fields and never of the file's bytes; read by a person,
+/// parsed by nothing. Its `Debug` prints every field but the seed, which
+/// shows as `…`: the sheet is a `Secret` moment's payload (§1.1's `person`
+/// row), and a debug log of moments is an ordinary embedder's.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SheetFields {
     /// Whether the key is an anchor.
@@ -394,8 +465,8 @@ pub struct SheetFields {
     pub fingerprint_hex: String,
     /// The fingerprint's hex, grouped.
     pub fingerprint_grouped: String,
-    /// The seed's hex, grouped.
-    pub seed_grouped: String,
+    /// The seed's hex, grouped — a [`SeedText`], wiped on drop.
+    pub seed_grouped: SeedText,
     /// The account, where known.
     pub account: Option<String>,
     /// The principal, where known.
@@ -407,25 +478,28 @@ pub struct SheetFields {
 impl SheetFields {
     /// Returns the labelled lines a terminal or a window draws.
     ///
-    /// They come in the pinned order.
-    pub fn lines(&self) -> Vec<(String, String)> {
+    /// They come in the pinned order. Each value is lent from the fields —
+    /// the seed's among them, never copied out of the [`SeedText`] that
+    /// wipes it — and made fresh only where it is a rendering: the label
+    /// rendered inert, the principal's digits.
+    pub fn lines(&self) -> Vec<(&'static str, Cow<'_, str>)> {
         let mut out = vec![
-            ("kind".to_string(), if self.anchor { "ANCHOR (paper)".to_string() } else { "device key".to_string() }),
-            ("alg".to_string(), self.alg.clone()),
+            ("kind", Cow::Borrowed(if self.anchor { "ANCHOR (paper)" } else { "device key" })),
+            ("alg", Cow::Borrowed(self.alg.as_str())),
         ];
         if let Some(label) = &self.label {
-            out.push(("label".to_string(), render_inert(label)));
+            out.push(("label", Cow::Owned(render_inert(label))));
         }
-        out.push(("fingerprint".to_string(), self.fingerprint_grouped.clone()));
-        out.push(("seed".to_string(), self.seed_grouped.clone()));
+        out.push(("fingerprint", Cow::Borrowed(self.fingerprint_grouped.as_str())));
+        out.push(("seed", Cow::Borrowed(self.seed_grouped.as_str())));
         if let Some(a) = &self.account {
-            out.push(("account".to_string(), a.clone()));
+            out.push(("account", Cow::Borrowed(a.as_str())));
         }
         if let Some(p) = self.principal {
-            out.push(("principal".to_string(), p.to_string()));
+            out.push(("principal", Cow::Owned(p.to_string())));
         }
         if let Some(o) = &self.origin {
-            out.push(("origin".to_string(), o.clone()));
+            out.push(("origin", Cow::Borrowed(o.as_str())));
         }
         out
     }
@@ -505,14 +579,17 @@ impl KeyFile {
         signer_from_seed_under(self.public.sig_alg_row().tag, self.seed.bytes()).expect("the file's alg is a row this build holds")
     }
 
-    /// Returns the seed's 64 hex, the sheet's one secret field.
+    /// Returns the seed's 64 hex in a plain `String` that no drop wipes.
+    ///
+    /// It is the key file's `seed` member, as [`Seed::to_hex`] spells it.
     pub fn seed_hex(&self) -> String {
         self.seed.to_hex()
     }
 
     /// Returns the sheet's fields (AUTH-5.38).
     ///
-    /// The seed and the fingerprint are grouped (AUTH-5.1).
+    /// The seed and the fingerprint are grouped (AUTH-5.1), the seed into a
+    /// [`SeedText`] written straight from its bytes, which wipes on drop.
     pub fn sheet(&self) -> SheetFields {
         SheetFields {
             anchor: self.anchor,
@@ -520,7 +597,7 @@ impl KeyFile {
             label: self.label.clone(),
             fingerprint_hex: self.fingerprint.to_hex(),
             fingerprint_grouped: group_hex(&self.fingerprint.to_hex()),
-            seed_grouped: group_hex(&self.seed.to_hex()),
+            seed_grouped: self.seed.grouped(),
             account: self.account.clone(),
             principal: self.principal,
             origin: self.origin.as_ref().map(|o| o.as_str().to_string()),
@@ -647,182 +724,5 @@ impl KeyFile {
             return Err(KeyFileError::Disagrees);
         }
         Ok(KeyFile { anchor, alg: alg.to_string(), seed, public, fingerprint, label, account, principal, origin })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use skep_identity::Enrollment;
-
-    use super::*;
-
-    /// AUTH-5.1 — eight groups of eight, four to a line.
-    #[test]
-    fn the_grouping_is_eight_by_eight_four_to_a_line() {
-        let hex64 = "0123456789abcdef".repeat(4);
-        let grouped = group_hex(&hex64);
-        let lines: Vec<&str> = grouped.lines().collect();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "01234567 89abcdef 01234567 89abcdef");
-        assert_eq!(lines[1], lines[0]);
-    }
-
-    /// AUTH-5.2 — control and bidi characters render as code points.
-    #[test]
-    fn a_label_renders_inert() {
-        assert_eq!(render_inert("ok name"), "ok name");
-        assert_eq!(render_inert("a\u{202E}b\u{07}"), "a<U+202E>b<U+0007>");
-    }
-
-    /// AUTH-5.2, the whole set.
-    ///
-    /// Every C0 control, DEL and every bidi control renders as its code point
-    /// — 45 characters — and a neighbour at one end or both of each range
-    /// renders as itself.
-    #[test]
-    fn every_control_and_bidi_control_renders_as_its_code_point() {
-        let inert: Vec<char> = (0x00..=0x1f)
-            .chain([0x7f, 0x061c, 0x200e, 0x200f])
-            .chain(0x202a..=0x202e)
-            .chain(0x2066..=0x2069)
-            .map(|c| char::from_u32(c).expect("a scalar value"))
-            .collect();
-        assert_eq!(inert.len(), 45);
-        for c in &inert {
-            assert_eq!(render_inert(&c.to_string()), format!("<U+{:04X}>", *c as u32), "{:04X}", *c as u32);
-        }
-        for c in [' ', '~', '\u{061b}', '\u{061d}', '\u{200d}', '\u{2010}', '\u{202f}', '\u{2065}', '\u{206a}'] {
-            assert_eq!(render_inert(&c.to_string()), c.to_string(), "{:04X} renders as itself", c as u32);
-        }
-        let all: String = inert.iter().collect();
-        assert!(render_inert(&all).bytes().all(|b| b.is_ascii_graphic()), "{}", render_inert(&all));
-    }
-
-    /// AUTH-1.24/1.25 at the box.
-    ///
-    /// 128 bytes are admitted, 129 refused with the byte count named
-    /// (AUTH-2.96's vector row), a newline refused, the empty label faced
-    /// (AUTH-5.42).
-    #[test]
-    fn the_label_domain_is_tested_at_the_box() {
-        assert!(Label::new(&"a".repeat(128)).is_ok());
-        assert_eq!(Label::new(&"a".repeat(129)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
-        assert_eq!(Label::new("two\nlines").unwrap_err(), LabelFault::Newline);
-        assert_eq!(Label::new("").unwrap_err(), LabelFault::Empty);
-        assert!(Label::new("my phone ").is_ok(), "a trailing space is in the domain");
-        assert_eq!(Label::new("Paper A / 2026").unwrap().slug(), "paper-a-2026");
-        // Bytes, not characters: 43 three-byte characters are 129 bytes.
-        assert_eq!(Label::new(&"€".repeat(43)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
-        let fault: &dyn std::error::Error = &LabelFault::Empty;
-        assert!(fault.to_string().contains("a name is required"));
-    }
-
-    /// One byline domain, the box's and the record's (AUTH-1.24, AUTH-1.25).
-    ///
-    /// Every text the box admits `Enrollment::new` keeps as it is, and every
-    /// text the box refuses — save the empty one, which the record maps to
-    /// none — `Enrollment::new` refuses too, over labels of 0 to 135 bytes
-    /// of one- to four-byte characters, a line break at the start, the
-    /// middle, the end or none. The walks' `expect`s on a label the box
-    /// admitted stand on this.
-    #[test]
-    fn the_box_and_the_record_hold_one_label_domain() {
-        let key = KeyFile::new(Seed::new([11u8; 32]), false, None, None).public;
-        for ch in ['a', 'é', '€', '𝄞'] {
-            for lead in ["", "a", "aa", "aaa"] {
-                for k in 0..=131 / ch.len_utf8() {
-                    let body = format!("{lead}{}", ch.to_string().repeat(k));
-                    let middle = body.len() / 2;
-                    let middle = (0..=middle).rev().find(|i| body.is_char_boundary(*i)).unwrap_or(0);
-                    for text in [body.clone(), format!("\n{body}"), format!("{body}\n"), format!("{}\n{}", &body[..middle], &body[middle..])] {
-                        let record = Enrollment::new(key.clone(), false, Some(text.clone()));
-                        assert_eq!(Label::new(&text).is_ok(), !text.is_empty() && record.is_ok(), "{} bytes: {text:?}", text.len());
-                        if Label::new(&text).is_ok() {
-                            assert_eq!(record.unwrap().label(), Some(text.as_str()));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// §9 item 35's typed prefix, one rule.
-    ///
-    /// It is at least one R42 group, a prefix of the fingerprint, read
-    /// trimmed and in either case — and a short group padded with spaces is
-    /// no group.
-    #[test]
-    fn a_typed_prefix_is_one_r42_group_or_more_in_either_case() {
-        let fp = KeyFile::new(Seed::new([8u8; 32]), true, None, None).fingerprint;
-        let hex = fp.to_hex();
-        assert!(typed_prefix_matches(&hex[..8], &fp) && typed_prefix_matches(&hex, &fp));
-        assert!(typed_prefix_matches(&format!("  {}\n", hex[..16].to_ascii_uppercase()), &fp));
-        assert!(!typed_prefix_matches(&hex[..7], &fp), "under one group");
-        assert!(!typed_prefix_matches(&format!("       {}", &hex[..1]), &fp), "padding is no group");
-        let other = if hex.starts_with('0') { "1" } else { "0" };
-        assert!(!typed_prefix_matches(&format!("{other}{}", &hex[1..8]), &fp), "another key's group");
-    }
-
-    /// A seed is born in its zeroing value, and the sheet hides it.
-    ///
-    /// It is drawn fresh, or decoded from its 64 hex in either case — any
-    /// other text is no seed; and the sheet prints every field but the seed.
-    #[test]
-    fn a_seed_is_drawn_or_decoded_into_its_value_and_the_sheet_hides_it() {
-        assert_ne!(Seed::fresh().bytes(), Seed::fresh().bytes());
-        assert_eq!(Seed::from_hex(&"AB".repeat(32)).map(|s| *s.bytes()), Some([0xab; 32]));
-        assert!(Seed::from_hex(&"ab".repeat(31)).is_none() && Seed::from_hex(&"zz".repeat(32)).is_none());
-        let file = KeyFile::new(Seed::new([4u8; 32]), true, Some(Label::new("paper").unwrap()), None);
-        let printed = format!("{:?}", file.sheet());
-        assert!(printed.contains(&file.fingerprint.to_hex()) && printed.contains("seed_grouped: …"), "{printed}");
-        assert!(!printed.contains(&file.seed_hex()[..8]), "the seed never prints: {printed}");
-    }
-
-    /// §3.2 — one spelling written, a standard parser reading it back.
-    ///
-    /// Whitespace and member order are admitted, the refusals the store's
-    /// own.
-    #[test]
-    fn the_key_file_round_trips_and_refuses_by_state() {
-        let facts = Facts { account: "1.0.1".into(), principal: 1, origin: Origin::parse("http://127.0.0.1:8642").unwrap() };
-        let file = KeyFile::new(Seed::new([3u8; 32]), true, Some(Label::new("paper-a").unwrap()), Some(&facts));
-        let json = file.to_json();
-        assert!(json.starts_with("{\"type\":\"skep-key\",\"v\":1,\"anchor\":true,\"alg\":\"mldsa65-ed25519\",\"seed\":\""));
-        assert!(json.ends_with("\"origin\":\"http://127.0.0.1:8642\"}\n"));
-        assert!(!json.contains(' '));
-        let again = KeyFile::parse(json.as_bytes()).unwrap();
-        assert_eq!(again.fingerprint, file.fingerprint);
-        assert_eq!(again.label.as_deref(), Some("paper-a"));
-        assert_eq!(again.principal, Some(1));
-        // An editor-touched file still opens: whitespace, CRLF, member order.
-        let v: Value = serde_json::from_str(&json).unwrap();
-        let pretty = serde_json::to_string_pretty(&v).unwrap().replace('\n', "\r\n");
-        assert_eq!(KeyFile::parse(pretty.as_bytes()).unwrap().fingerprint, file.fingerprint);
-        // The refusals.
-        assert_eq!(KeyFile::parse(b"not json").unwrap_err(), KeyFileError::NotKeyFile);
-        assert_eq!(KeyFile::parse(br#"{"type":"skep-enroll"}"#).unwrap_err(), KeyFileError::NotKeyFile);
-        let mut newer = v.clone();
-        newer["v"] = Value::from(2);
-        assert_eq!(KeyFile::parse(newer.to_string().as_bytes()).unwrap_err(), KeyFileError::Newer { v: 2 });
-        let mut extra = v.clone();
-        extra["custody"] = Value::from("x");
-        assert_eq!(KeyFile::parse(extra.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "custody".into() });
-        // The file's `label` member is held to the box's own domain test.
-        for bad in [String::new(), "two\nlines".into(), "a".repeat(129)] {
-            let mut bad_label = v.clone();
-            bad_label["label"] = Value::from(bad);
-            assert_eq!(KeyFile::parse(bad_label.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "label".into() });
-        }
-        let mut bad_seed = v.clone();
-        bad_seed["seed"] = Value::from("00".repeat(32));
-        assert_eq!(KeyFile::parse(bad_seed.to_string().as_bytes()).unwrap_err(), KeyFileError::Disagrees);
-        // AUTH-5.39's other half: the seed and the public key agree, and the
-        // `fingerprint` member names another key.
-        let mut other_fingerprint = v.clone();
-        other_fingerprint["fingerprint"] = Value::from(KeyFile::new(Seed::new([9u8; 32]), true, None, None).fingerprint.to_hex());
-        assert_eq!(KeyFile::parse(other_fingerprint.to_string().as_bytes()).unwrap_err(), KeyFileError::Disagrees);
-        let mut wrong_type = v.clone();
-        wrong_type["anchor"] = Value::from("yes");
-        assert_eq!(KeyFile::parse(wrong_type.to_string().as_bytes()).unwrap_err(), KeyFileError::Schema { member: "anchor".into() });
     }
 }

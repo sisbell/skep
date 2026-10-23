@@ -1282,6 +1282,7 @@ dependencies = [
  "skep-signature",
  "skepd",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

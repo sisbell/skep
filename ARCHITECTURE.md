@@ -1195,10 +1195,12 @@ each ceremony:
   the `closed` predicate.
 - Under `acting`. `sign.rs` the `Signer` seam and the bytes a signer signs
   (the session payload, a credential record's frame); `sheet.rs` the key
-  file's one spelling and its refusals, the byline `Label` and the `Seed`
-  every secret is born into; `store.rs` the `FileStore` — key files, the
-  bindings file, the lock — and the halts its refusals render as, its unit
-  suite in `store/tests.rs`; `person.rs` the `Person` seam,
+  file's one spelling and its refusals, the byline `Label`, the `Seed`
+  every secret is born into and the `SeedText` the sheet shows it as, each
+  wiped on drop, its unit suite in `sheet/tests.rs`; `store.rs` the
+  `FileStore` — key files, the bindings file, the lock — and the halts its
+  refusals render as, its unit suite in `store/tests.rs`; `person.rs` the
+  `Person` seam,
   and under `test-hooks` `person/scripted.rs`, the scripted person a suite
   drives; `derive/records.rs` the one admitted read of an account's
   credential records, their positions and hands, its unit suite in

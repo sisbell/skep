@@ -143,7 +143,7 @@ impl Person for Scripted {
             Script::RetypeFromSheet(n) => {
                 let sheet = self.sheets.get(n).expect("that sheet was shown before the re-type");
                 Ok(Retyped::Typed {
-                    seed_hex: sheet.seed_grouped.split_whitespace().collect(),
+                    seed_hex: sheet.seed_grouped.as_str().split_whitespace().collect(),
                     fingerprint_prefix: sheet.fingerprint_hex[..8].to_string(),
                 })
             }
@@ -178,7 +178,7 @@ impl Person for Scripted {
             Script::ImportFromSheet(n) => {
                 let sheet = self.sheets.get(n).expect("that sheet was shown before the import");
                 Ok(Imported::Typed {
-                    seed_hex: sheet.seed_grouped.split_whitespace().collect(),
+                    seed_hex: sheet.seed_grouped.as_str().split_whitespace().collect(),
                     fingerprint_prefix: sheet.fingerprint_hex[..8].to_string(),
                 })
             }

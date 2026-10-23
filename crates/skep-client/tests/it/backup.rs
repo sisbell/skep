@@ -194,8 +194,8 @@ fn the_paper_path_retypes_from_the_sheet_between_a_dismissal_and_the_offer() {
     assert!(person.said("AUTH-5.44 (notebook)") && person.said("keep the papers apart"), "the notebook form, 'papers'");
     for sheet in &person.sheets {
         assert_eq!((sheet.account.as_deref(), sheet.principal, sheet.origin.as_deref()), (Some("1.0.1"), Some(1), Some("http://127.0.0.1:8642")), "the notebook artifact carries the three facts");
-        assert_eq!(sheet.seed_grouped.split_whitespace().count(), 8, "8 groups of 8 (AUTH-5.1)");
-        assert_eq!(sheet.seed_grouped.lines().count(), 2, "4 groups per line");
+        assert_eq!(sheet.seed_grouped.as_str().split_whitespace().count(), 8, "8 groups of 8 (AUTH-5.1)");
+        assert_eq!(sheet.seed_grouped.as_str().lines().count(), 2, "4 groups per line");
     }
 
     // Declined: the print UNVERIFIED, the file the verified artifact, never

@@ -10,13 +10,20 @@
 /// alone.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
+    out.extend(bytes.iter().flat_map(|b| digits(*b)));
     out
+}
+
+/// Returns the two lowercase hex digits of `b`, the high nibble first.
+///
+/// It is the one spelling of a byte: [`encode`] writes it, and so does the
+/// sheet's seed text (`sheet::SeedText`), written digit by digit into its
+/// own buffer.
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
+pub(crate) fn digits(b: u8) -> [char; 2] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    [HEX[(b >> 4) as usize] as char, HEX[(b & 0x0f) as usize] as char]
 }
 
 fn nibble(c: u8) -> Option<u8> {
@@ -77,6 +84,7 @@ mod tests {
     #[test]
     fn hex_round_trips_and_refuses_odd_or_foreign_text() {
         assert_eq!(encode(&[0, 15, 255]), "000fff");
+        assert_eq!([digits(0x00), digits(0x9f), digits(0xff)], [['0', '0'], ['9', 'f'], ['f', 'f']]);
         assert_eq!(decode("000FFF"), Some(vec![0, 15, 255]));
         assert_eq!(decode("abc"), None);
         assert_eq!(decode("zz"), None);

@@ -1,16 +1,27 @@
 //! THE HELD-BURST STORE (`client.md` §3c.1–§3c.3), beside the key store: one
 //! file per (board, principal), `held/<chain>/principal-<n>.held`, APPEND-ONLY
 //! in the key store's idiom (§3.2, §3.7). The first line is the HEADER, written
-//! once under `create_new` (`store.rs`'s `write_once` idiom): one JSON object,
-//! no whitespace outside strings, lowercase hex, a `v`, no unknown member, one
-//! `\n`. After it, one JSON object per line in TWO forms and no third — a
-//! `held` line (a burst the board could not take) and a `done` line (its
-//! resolution) — where a `held` line of an ordinal that already stands
-//! RE-MARKS it: the reader takes it in the earlier line's place. Each line is
-//! ONE `write` followed by `sync_data` BEFORE `op` answers `held` —
-//! PERSIST-FIRST (J1): the answer is a promise the disk already keeps. A
-//! reader IGNORES a final line without `\n` (a torn last line is the burst a
-//! crash caught mid-append, R14's one).
+//! once under `create_new` (`store.rs`'s `write_once` idiom, so a header the
+//! device did not take whole leaves no file): one JSON object, no whitespace
+//! outside strings, lowercase hex, a `v`, no unknown member, one `\n`. After
+//! it, one JSON object per line in TWO forms and no third — a `held` line (a
+//! burst the board could not take) and a `done` line (its resolution) — where
+//! a `held` line of an ordinal that already stands RE-MARKS it: the reader
+//! takes it in the earlier line's place. Each line is ONE `write` followed by
+//! `sync_data` BEFORE `op` answers `held` — PERSIST-FIRST (J1): the answer is
+//! a promise the disk already keeps. A reader IGNORES a final line without
+//! `\n` (a torn last line is the burst a crash caught mid-append, R14's one).
+//!
+//! **A torn line is only ever the tail.** Every line is written where the
+//! file's last whole line ends. A copy the device refuses — its write cut
+//! short, or its sync refused — is cut back off the file, and a tail past the
+//! whole lines — a crash's torn line, or a refused copy whose cut-back failed
+//! — is cut off before the next line is written, so no line is written after
+//! bytes no reader reads, which would glue the two into one line the reader
+//! halts on (P38). It is the rule skep-blobs' `jsonl` log keeps. The bindings
+//! file's way — a torn line closed by a mark its lenient reader skips
+//! (`store.rs`'s `TORN_MARK`) — is not this file's, whose reader halts on
+//! every line that is not one of the two forms.
 //!
 //! THE QUEUE IS THE MEMORY, THE FILE ITS COPY: a principal's [`HeldQueue`] is
 //! its held lines in `k` order, and every line enters it under a fresh
@@ -18,8 +29,9 @@
 //! copied to it as it enters; where the store keeps the queue in memory alone
 //! ([`HeldQueue::in_memory`]: another window's lock, a directory out of reach,
 //! §3c.3) no copy is made, and a close loses the lines. An append the device
-//! refuses is answered beside the line, which stands in the queue all the same.
-//! A re-mark that changes nothing is no line at all.
+//! refuses is answered beside the line, which stands in the queue all the
+//! same, its bytes cut back off the file. A re-mark that changes nothing is no
+//! line at all.
 //!
 //! THE FILE IS PRIMARY (PATTERNS P38; §3c.3): a newer `v`, an unknown header
 //! member, or a middle line that is not a whole line of the two forms — not
@@ -31,7 +43,8 @@
 //! not the file's name) is MOVED ASIDE by a rename that never overwrites
 //! (`aside_name`'s form, the index's idiom), this principal's file started
 //! fresh. COMPACTION: once the queue holds no line, the file is REMOVED under
-//! the lock; a file is never rewritten in place.
+//! the lock; a file is never rewritten in place, its whole lines never
+//! touched — the writer's one cut takes only bytes past the last of them.
 //!
 //! THE STORE's BUDGETS, on what a HOLD ADDS: no line held that would carry
 //! the queue's standing frames past [`MAX_HELD_FRAME_BYTES`], the board's own
@@ -349,11 +362,14 @@ impl HeldDir {
     /// are held as the file is read, each re-mark in its line's place and each
     /// `done` taking its line out, and the re-mark lines' bytes counted
     /// against [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's
-    /// budget where its writer left it. `account` is the header's where this
-    /// open writes one.
+    /// budget where its writer left it. The whole lines' bytes are counted
+    /// too, so the next line is written where the last of them ends, a torn
+    /// tail cut off first; the open itself writes nothing, a tail it meets
+    /// left for that cut. `account` is the header's where this open writes
+    /// one.
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
-        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, remark_bytes: 0 };
+        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, whole_bytes: 0, remark_bytes: 0 };
         let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
         let file = match File::open(&path) {
             Ok(f) => f,
@@ -365,6 +381,9 @@ impl HeldDir {
         let mut buf = Vec::new();
         // No complete header line — one torn before its sync — is damaged.
         let Line::Complete = next_line(&mut reader, &mut buf)? else { return halted(HaltWhy::Damaged) };
+        // The header and its `\n`, the first of the whole lines the next line
+        // is written after.
+        let mut whole_bytes = buf.len() as u64 + 1;
         let Some(header) = object(&buf) else { return halted(HaltWhy::Damaged) };
         // `v` read FIRST (§3c.2): a `v` above 1 is the newer face, never half-read.
         match header.get("v").and_then(Value::as_u64) {
@@ -402,8 +421,9 @@ impl HeldDir {
                 Line::Long => return halted(HaltWhy::Damaged),
             }
             // The line's bytes, its `\n` dropped, as MAX_HELD_REMARK_BYTES
-            // counts a re-mark.
+            // counts a re-mark; the whole lines' count takes its `\n` too.
             let line_bytes = buf.len();
+            whole_bytes += line_bytes as u64 + 1;
             let Some(m) = object(&buf) else { return halted(HaltWhy::Damaged) };
             if let Some(held) = m.get("held") {
                 let Some(k) = ordinal(held) else { return halted(HaltWhy::Damaged) };
@@ -425,7 +445,7 @@ impl HeldDir {
         }
         let lines: Vec<HeldLine> = standing.into_values().collect();
         let held_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
-        let disk = Disk { created: true, remark_bytes, ..disk };
+        let disk = Disk { created: true, whole_bytes, remark_bytes, ..disk };
         // `max_k` is within MAX_ORDINAL, so its successor is a `u64`.
         Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
     }
@@ -465,11 +485,12 @@ pub struct HeldQueue {
     held_bytes: usize,
 }
 
-/// The file a queue's lines are copied to: its path, the header's facts,
-/// whether the header is on disk yet (created lazily on the first append,
-/// under `create_new`, and again after a compaction), and the bytes of the
-/// re-mark lines it holds ([`MAX_HELD_REMARK_BYTES`]'s count, from its
-/// creation).
+/// The file a queue's lines are copied to.
+///
+/// It holds its path, the header's facts, whether the header is on disk yet
+/// (created lazily on the first append, under `create_new`, and again after a
+/// compaction), the bytes of its whole lines, and the bytes of the re-mark
+/// lines it holds ([`MAX_HELD_REMARK_BYTES`]'s count, from its creation).
 #[derive(Debug)]
 struct Disk {
     path: PathBuf,
@@ -477,6 +498,14 @@ struct Disk {
     principal: u64,
     account: String,
     created: bool,
+    /// The bytes of the file's whole lines, its header's first.
+    ///
+    /// It is the length where the file's last whole line ends, which the
+    /// next line is written at: counted by the open's read, and grown by
+    /// every copy that lands. A file longer than this holds a tail no reader
+    /// reads — a crash's torn line, or a refused copy whose cut-back failed
+    /// — which the next copy cuts off first ([`Disk::append`]).
+    whole_bytes: u64,
     remark_bytes: usize,
 }
 
@@ -646,8 +675,19 @@ impl Disk {
         self.write_line(bytes)
     }
 
-    /// The header written once under `create_new` (`store.rs`'s idiom), mode
-    /// `0600`; a no-op once it stands.
+    /// Writes the header once under `create_new`, mode `0600`.
+    ///
+    /// It is `store.rs`'s `write_once` idiom: a header the device did not take
+    /// whole — its write cut short, or its sync refused — has the file this
+    /// call made removed, best effort, so the next copy makes the file again
+    /// under `create_new` and no file stands with no whole header, which the
+    /// reader halts on (P38). A no-op once the header stands.
+    ///
+    /// # Errors
+    ///
+    /// The open's, the write's or the sync's I/O error — `AlreadyExists` where
+    /// a file this call did not make stands at the path, which it leaves as it
+    /// stands.
     fn ensure_header(&mut self) -> io::Result<()> {
         if self.created {
             return Ok(());
@@ -660,35 +700,55 @@ impl Disk {
             opts.mode(0o600);
         }
         let mut file = opts.open(&self.path)?;
-        file.write_all(&header_bytes(&self.chain, self.principal, &self.account))?;
-        file.sync_data()?;
+        let header = header_bytes(&self.chain, self.principal, &self.account);
+        if let Err(e) = write_synced(&mut file, &header) {
+            drop(file);
+            let _ = fs::remove_file(&self.path);
+            return Err(e);
+        }
         self.created = true;
+        self.whole_bytes = header.len() as u64;
         Ok(())
     }
 
-    /// ONE `write` of the whole line, then `sync_data` BEFORE the caller builds
-    /// its answer (PERSIST-FIRST). A `#[cfg(test)]` seam forces the sync to
-    /// fail (T5's `store_unwritable`, which the `held` answer carries as
-    /// `unwritable`) and interposes a read of the file after the sync, so a
-    /// suite pins the line ON DISK before the answer is built.
+    /// Appends one line where the file's last whole line ends, synced before
+    /// the caller builds its answer (PERSIST-FIRST, J1).
+    ///
+    /// A tail past the whole lines — a crash's torn line, or a refused copy
+    /// whose cut-back failed — is cut off first, so the line is never written
+    /// after bytes no reader reads, which would glue the two into one line the
+    /// reader halts on (P38); the cut takes only a tail, never a byte of a
+    /// whole line. A copy the device refuses — its write cut short, or its
+    /// sync refused — is cut back off the file, best effort, so the file holds
+    /// its whole lines alone and no later line lands behind pages a refused
+    /// sync may never have written; where that cut fails, the next copy's
+    /// first cut takes the tail. A `#[cfg(test)]` seam reads the file after
+    /// the sync, so a suite pins the line on disk before the answer is built.
     ///
     /// UNVERIFIED HERE (§3c.3, the record §7 items 2–3): that one small
     /// `write_all` is one `write(2)` (and may split for a large buffer — the
-    /// torn-last-line rule covers either), and that `sync_data` orders the line
-    /// before the answer, is Rust's std and APFS's `F_FULLFSYNC` — the barrier
-    /// the kernel's own durability assumes, not measured here. The write-ahead
-    /// variant (every burst appended before its dial, tombstoned at its ack, so
-    /// even the burst in flight survives a crash) is named and NOT taken
-    /// (§3c.6): R14's bound does not ask it, and the typing cadence would pay a
-    /// synced append and tombstone churn.
-    fn append(&self, bytes: &[u8]) -> io::Result<()> {
+    /// torn-last-line rule and the cut before each copy cover either), and
+    /// that `sync_data` orders the line before the answer, is Rust's std and
+    /// APFS's `F_FULLFSYNC` — the barrier the kernel's own durability assumes,
+    /// not measured here. The write-ahead variant (every burst appended before
+    /// its dial, tombstoned at its ack, so even the burst in flight survives a
+    /// crash) is named and NOT taken (§3c.6): R14's bound does not ask it, and
+    /// the typing cadence would pay a synced append and tombstone churn.
+    ///
+    /// # Errors
+    ///
+    /// The open's, the first cut's, the write's or the sync's I/O error; a
+    /// first cut that fails writes nothing.
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
-        file.write_all(bytes)?;
-        #[cfg(test)]
-        if tests::fail_sync() {
-            return Err(io::Error::new(io::ErrorKind::StorageFull, "the held store's sync was made to fail"));
+        if file.metadata()?.len() > self.whole_bytes {
+            file.set_len(self.whole_bytes)?;
         }
-        file.sync_data()?;
+        if let Err(e) = write_synced(&mut file, bytes) {
+            let _ = file.set_len(self.whole_bytes);
+            return Err(e);
+        }
+        self.whole_bytes += bytes.len() as u64;
         #[cfg(test)]
         tests::after_sync(&self.path);
         Ok(())
@@ -699,8 +759,36 @@ impl Disk {
     fn remove(&mut self) {
         let _ = fs::remove_file(&self.path);
         self.created = false;
+        self.whole_bytes = 0;
         self.remark_bytes = 0;
     }
+}
+
+/// Writes `bytes` whole to `file`, then syncs them: one copy's body.
+///
+/// It is the body of the header's copy and of every line's, its `sync_data`
+/// run before the caller builds its answer (PERSIST-FIRST, J1). Two
+/// `#[cfg(test)]` seams stand in for a device that refuses part-way: the
+/// first bytes written and the rest refused, as a full disk does
+/// (`tests::torn_write`), or the sync refused (T5's `store_unwritable`, which
+/// the `held` answer carries as `unwritable`).
+///
+/// # Errors
+///
+/// The write's or the sync's I/O error; the bytes written before it stand in
+/// the file, the caller's to cut.
+fn write_synced(file: &mut File, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(n) = tests::torn_write() {
+        file.write_all(&bytes[..n.min(bytes.len())])?;
+        return Err(io::Error::new(io::ErrorKind::StorageFull, "the held store's write was made to fail part-way"));
+    }
+    file.write_all(bytes)?;
+    #[cfg(test)]
+    if tests::fail_sync() {
+        return Err(io::Error::new(io::ErrorKind::StorageFull, "the held store's sync was made to fail"));
+    }
+    file.sync_data()
 }
 
 /// The header's exact bytes (§3c.2): members in one order, no whitespace

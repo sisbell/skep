@@ -1614,7 +1614,12 @@ Rules that hold across its files:
   the burst's line is written and synced before `op` answers `held`
   (§3c.3, J1), so a crash after the answer loses nothing of it, and
   `shutdown` writes nothing of the store: a crash between any two steps of
-  the stop loses at most the open or in-flight burst, R14's bound. A second
+  the stop loses at most the open or in-flight burst, R14's bound. A torn
+  line is only ever the file's tail, as in skep-blobs' `jsonl` log: every
+  line is written where the last whole line ends, a crash's torn tail cut
+  off before it, a copy the device refused — its write cut short, its sync
+  refused — cut back off the file, and a header it did not take whole
+  leaving no file, so no open meets a line glued to a torn one. A second
   shell on the same data directory finds the `held/<chain>/` lock held and
   writes nothing — its bursts answer `held` with `cause: other_window`, kept
   in memory alone and resent like any held line; a line whose copy the

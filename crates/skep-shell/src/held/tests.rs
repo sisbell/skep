@@ -1,15 +1,18 @@
 //! THE STORE's FENCE (T1–T5): the header written once and read whole with
 //! P38's faces (`v` first) — a header of every other form halting with its
-//! own — the torn last line ignored and a damaged middle line halting, the
-//! misplaced file moved aside and never overwriting, the lock a second
-//! holder cannot take, compaction once every line is done and the file
-//! recreated, header first, by the next line, a reopened queue taking an
-//! ordinal past every one its file names, and persist-first — the line on
-//! disk before the append returns. Every line form reads back as it was
-//! held, and the store is its owner's alone. And the queue as the
-//! memory with the file its copy: a line the device refused stands in the
-//! queue under its ordinal, a re-mark reads back as the one line it
-//! re-marks, and a `done` the device refused still settles its line. THE
+//! own, and a header the device did not take whole leaving no file — the
+//! torn last line ignored, and cut before the next line is written, and a
+//! damaged middle line halting, the misplaced file moved aside and never
+//! overwriting, the lock a second holder cannot take, compaction once every
+//! line is done and the file recreated, header first, by the next line, a
+//! reopened queue taking an ordinal past every one its file names, and
+//! persist-first — the line on disk before the append returns, and a copy
+//! the device cut short or whose sync it refused cut back off the file.
+//! Every line form reads back as it was held, and the store is its owner's
+//! alone. And the queue as the memory with the file its copy: a line the
+//! device refused stands in the queue under its ordinal, a re-mark reads
+//! back as the one line it re-marks, and a `done` the device refused still
+//! settles its line, a reopen reading the line as held again. THE
 //! STORE's BUDGETS: the queue's frames held to the board's frame cap and its
 //! lines to the line budget — a reopened queue past it read whole, holding
 //! nothing more until it drains — an unchanged re-mark writing nothing and
@@ -30,13 +33,14 @@ use tempfile::TempDir;
 
 use super::*;
 
-// ── THE SYNC SEAMS (read by `Disk::append` under `#[cfg(test)]`) ─────────────
+// ── THE COPY SEAMS (read by `write_synced` and `Disk::append`) ───────────────
 
 /// The seam a suite installs to read the file after a sync.
 type Seam = Box<dyn Fn(&Path)>;
 
 thread_local! {
     static FAIL_SYNC: Cell<bool> = const { Cell::new(false) };
+    static TORN_WRITE: Cell<Option<usize>> = const { Cell::new(None) };
     static AFTER_SYNC: RefCell<Option<Seam>> = const { RefCell::new(None) };
 }
 
@@ -44,6 +48,19 @@ thread_local! {
 /// which the `held` answer carries as `unwritable`).
 pub(super) fn fail_sync() -> bool {
     FAIL_SYNC.with(Cell::get)
+}
+
+/// Returns the bytes the next copy writes before its write is refused.
+///
+/// It stands in for a device that cuts a write short, as a full disk does,
+/// and fires once: the copy after it is written whole.
+pub(super) fn torn_write() -> Option<usize> {
+    TORN_WRITE.with(Cell::take)
+}
+
+/// The principal-1 file's path under `tmp`.
+fn file_path(tmp: &TempDir) -> std::path::PathBuf {
+    tmp.path().join("held").join(chain().to_string()).join("principal-1.held")
 }
 
 /// The seam run after a successful `sync_data`, before the append returns — a
@@ -265,9 +282,11 @@ fn the_file_compacts_once_every_line_is_done() {
 /// after; an append whose `sync_data` is made to fail answers §3c.3's
 /// `store_unwritable` (the device's I/O error, which the `held` answer
 /// carries as `unwritable`) BESIDE a line that stands in the queue under
-/// its ordinal, the next line taking the ordinal after it (the mutant that
-/// keeps the refused line out of the queue loses the burst its `held` answer
-/// promised).
+/// its ordinal, its bytes cut back off the file, the next line taking the
+/// ordinal after it and a reopen reading the lines the disk took (the
+/// mutant that keeps the refused line out of the queue loses the burst its
+/// `held` answer promised; the one that leaves its bytes on the file keeps
+/// pages a refused sync may never write, behind every later line).
 #[test]
 fn an_appends_line_is_on_disk_before_its_answer() {
     let tmp = TempDir::new().unwrap();
@@ -295,9 +314,11 @@ fn an_appends_line_is_on_disk_before_its_answer() {
     assert_eq!(refused.unwritten.expect("the device refused the copy").kind(), std::io::ErrorKind::StorageFull, "store_unwritable, answered `unwritable`");
     assert_eq!(refused.k, 2);
     assert_eq!(ks(&queue), [1, 2], "the refused line stands in the queue");
+    assert!(!fs::read_to_string(file_path(&tmp)).unwrap().contains("\"doc\":\"1.0.1.0.2\""), "its bytes cut back off the file");
     let next = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
     assert!(next.unwritten.is_none());
     assert_eq!((next.k, ks(&queue)), (3, vec![1, 2, 3]), "the next line takes the ordinal after it");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 3], "a reopen reads the lines the disk took");
 }
 
 /// A QUEUE IN MEMORY ALONE (§3c.3) enters, re-marks and settles lines as a
@@ -338,7 +359,9 @@ fn a_remarked_line_reads_back_once_with_its_new_cause() {
 /// A `done` THE DEVICE REFUSED still settles its line: the line leaves the
 /// queue, so the resend that acked it never sends it again (the mutant that
 /// keeps the line standing resends the acked burst at once), and the
-/// refusal is answered for the shell's own window to say.
+/// refusal is answered for the shell's own window to say; its bytes are cut
+/// back off the file, so a reopen reads the line as held again and the
+/// resend's read decides it (§3c.5), as `DoneError::Unwritten` says.
 #[test]
 fn a_done_the_device_refused_still_settles_its_line() {
     let tmp = TempDir::new().unwrap();
@@ -351,6 +374,84 @@ fn a_done_the_device_refused_still_settles_its_line() {
     FAIL_SYNC.with(|f| f.set(false));
     assert!(matches!(settled, Err(DoneError::Unwritten(_))), "{settled:?}");
     assert_eq!(ks(&queue), [k2], "the settled line has left the queue");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [k1, k2], "a reopen reads the line as held again");
+}
+
+/// A TORN LAST LINE is cut before the next line is written (R14; P38): a
+/// file whose last line a crash tore reopens with the lines before it, and
+/// the first copy after — a hold, or a `done` — is written where the last
+/// whole line ends, so the next open reads every line and halts on none
+/// (the mutant that appends past the torn bytes glues them to the new line,
+/// one line the reader halts on, the person's every held burst out of reach
+/// with it; the one that cuts before a hold's line alone glues a `done`).
+#[test]
+fn a_torn_last_line_is_cut_before_the_next_line_is_written() {
+    let whole = |k: u64| format!("{{\"held\":{k},\"doc\":\"1.0.1.0.1\",\"base\":0,\"frame\":{{\"op\":\"insert\"}},\"cause\":\"stopped\",\"sent\":false,\"time\":1}}\n");
+    for done in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let body = format!("{}{}{{\"held\":3,\"doc\":\"1.0.1.0.1\",\"ba", whole(1), whole(2));
+        let mut queue = live(opened_over(&tmp, body.as_bytes()));
+        assert_eq!(ks(&queue), [1, 2], "done {done}: the torn line ignored");
+        if done {
+            queue.done(1, Done::Kept { at: Some(9) }).unwrap();
+        } else {
+            let held = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+            assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
+        }
+        let want: &[u64] = if done { &[2] } else { &[1, 2, 3] };
+        assert_eq!(ks(&live(dir(&tmp).open_file(1, "1.0.1").unwrap())), want, "done {done}: every line read, none glued");
+    }
+}
+
+/// A COPY CUT SHORT leaves the file as it was: a line whose write the
+/// device cut part-way, as a full disk does, answers `unwritable` and
+/// stands in the queue, its bytes cut back off the file, so the next line
+/// is written where the last whole one ends and a reopen reads every line
+/// the disk took (the mutant that skips the cut-back leaves on the file the
+/// bytes its `unwritable` answer says it does not hold).
+#[test]
+fn a_copy_cut_short_leaves_the_file_as_it_was() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    let before = fs::read(file_path(&tmp)).unwrap();
+    TORN_WRITE.with(|t| t.set(Some(20)));
+    let cut = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+    assert_eq!(cut.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::StorageFull), "the device cut the copy short");
+    assert_eq!(fs::read(file_path(&tmp)).unwrap(), before, "its bytes cut back off the file");
+    assert_eq!(ks(&queue), [1, 2], "and the line stands in the queue");
+    assert!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().unwritten.is_none());
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 3], "a reopen reads every line the disk took");
+}
+
+/// A HEADER THE DEVICE DID NOT TAKE WHOLE leaves no file (`write_once`'s
+/// idiom): a header write cut short, and a header sync refused, each answer
+/// the line `unwritable`, the line standing in the queue and the file the
+/// header began removed, so the next line makes the file again under
+/// `create_new`, header first, and a reopen reads it (the mutant that leaves
+/// the half-made file refuses every later copy `AlreadyExists`, and closed
+/// with a line standing leaves a file the next open halts on).
+#[test]
+fn a_header_the_device_did_not_take_whole_leaves_no_file() {
+    for torn in [true, false] {
+        let tmp = TempDir::new().unwrap();
+        let d = dir(&tmp);
+        let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+        if torn {
+            TORN_WRITE.with(|t| t.set(Some(5)));
+        } else {
+            FAIL_SYNC.with(|f| f.set(true));
+        }
+        let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+        FAIL_SYNC.with(|f| f.set(false));
+        assert_eq!(first.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::StorageFull), "torn {torn}: the device refused the header");
+        assert!(!queue.on_disk(), "torn {torn}: the half-made file is removed");
+        assert_eq!(ks(&queue), [1], "torn {torn}: the line stands in the queue");
+        let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+        assert!(next.unwritten.is_none(), "torn {torn}: {:?}", next.unwritten);
+        assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [2], "torn {torn}: a reopen reads the line the file took");
+    }
 }
 
 /// AFTER COMPACTION the next line recreates the file, header first (§3c.3):
@@ -458,7 +559,7 @@ fn sized_frame(bytes: usize) -> Value {
 
 /// The principal-1 file's length on disk, 0 where there is none.
 fn file_len(tmp: &TempDir) -> u64 {
-    fs::metadata(tmp.path().join("held").join(chain().to_string()).join("principal-1.held")).map_or(0, |m| m.len())
+    fs::metadata(file_path(tmp)).map_or(0, |m| m.len())
 }
 
 /// THE QUEUE's BUDGET: the standing frames held to [`MAX_HELD_FRAME_BYTES`]

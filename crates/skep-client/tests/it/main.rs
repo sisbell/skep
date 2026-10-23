@@ -12,11 +12,15 @@
 //! over a claimed board, its fixture its own; `merge` drives the `merge`
 //! module's one whole merge over a claimed permissive board; `share` drives
 //! the `share` module — the share, the revoke, the re-share, the privash and
-//! the lost answer — over three keyed siblings on a claimed permissive board.
+//! the lost answer — over three keyed siblings on a claimed permissive board;
+//! `removals` drives the ceremonies' removals of anchor files against a
+//! directory that refuses the unlink, over the loss arm, and `cut_short`
+//! the face a cut-short anchor file meets at the import.
 
 mod backup;
 mod claim;
 mod common;
+mod cut_short;
 mod enroll;
 mod handoff;
 mod handshake;
@@ -24,6 +28,7 @@ mod hosted;
 mod loss;
 mod merge;
 mod recover;
+mod removals;
 mod retire;
 mod rotate;
 mod search;

@@ -1,8 +1,10 @@
 # skep-util
 
-The support crate below the daemon and the media crate: the three
-utilities both take and neither owns — a counting permit, the operator's
-notice line, and the JSON determinism helpers.
+The support crate below the daemon, the media crate, the client and the
+shell: the five utilities two or more crates of the workspace take and
+none owns — a counting permit, the operator's notice line, the JSON
+determinism helpers, a setting's source, and the file one process writes
+and reads back after a crash under one tail rule.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
@@ -25,13 +27,31 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   which the last pair given wins; `hex_string`, lowercase hex; and
   `parse_lower_hex` with `hex_nibble`, its exact inverse at a fixed
   width, refusing what `hex_string` never writes.
+- **A setting's source**, `source` — `Source`, where a setting's value in
+  force came from: the default, a flag, a variable — carried beside the
+  value so an open's report names each setting's source.
+- **The file under the tail rule**, `file` — a file one process writes and
+  reads back after a crash, a kill or a refused write: `read_lines` and
+  the streaming `LineReader`, which hand back a file's lines as bytes and
+  classify its tail (`Tail`); `Appender`, which writes a line and its
+  newline in one write where the last whole line ends, a torn tail first
+  cut off (`OnTail::Cut`) or closed by a mark (`OnTail::Close`), and cuts
+  a failed write back; `write_once`, a new file at its name, synced, a
+  failed write removed; `publish`, a file put at its name whole or not at
+  all by a locked temp, a rename and the directory's sync; `remove`,
+  answering `Gone` or `Absent` or the failure; and `stale` with
+  `sweep_stale`, the temps a dead run left, told from a live run's by the
+  lock its writer holds. The client's key store, bindings file and anchor
+  export and the shell's held-writes file take it; the parse of a line,
+  the policy for a whole line that does not read, every word said and the
+  directory's lock stay the caller's.
 
-An item lives here if and only if both `skepd` and `skep-media` take it
-and it has no subject of its own — a constant is configuration, not a
-utility, and stays with the crate whose number it is. The crate names no
-store and no engine; its one dependency is `serde_json`. Its modules are
-in its crate root (`src/lib.rs`); the rules that hold across its files,
-in the workspace's `ARCHITECTURE.md` §The support crate.
+An item lives here if and only if at least two crates take it and it has
+no subject of its own — a constant is configuration, not a utility, and
+stays with the crate whose number it is. The crate names no store and no
+engine; its one dependency is `serde_json`. Its modules are in its crate
+root (`src/lib.rs`); the rules that hold across its files, in the
+workspace's `ARCHITECTURE.md` §The support crate.
 
 ## License
 

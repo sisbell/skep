@@ -6,13 +6,18 @@
 //! its session opened, a fresh pair exported under AUTH-5.54 steps 1–3 and
 //! enrolled as one anchor-flagged record, each fresh anchor re-imported from
 //! its artifact and probed (step 3's failure arm retiring a pair whose
-//! private half exists nowhere and re-running under a fresh one), the
-//! supersession trail from the lost anchor's enroll link to the new pair's,
-//! the lost anchor retired — on the race arm every key enrolled since L0
-//! too — and the end face. The device arm's helpers it shares are its
-//! parent's.
+//! private half exists nowhere, destroying its files — each removal said,
+//! one the volume refuses said standing by its path (AUTH-5.40) — and
+//! re-running under a fresh one), the supersession trail from the lost
+//! anchor's enroll link to the new pair's, the lost anchor retired — on the
+//! race arm every key enrolled since L0 too — and the end face. The
+//! surviving anchor is disposed of with the person ahead of every halt the
+//! arm takes after its import, so a placed copy's removal is never left to
+//! the drop, which can say nothing. The device arm's helpers it shares are
+//! its parent's.
 
 use skep_identity::{Enrollment, Fingerprint, PublicKey};
+use skep_util::file;
 
 use super::{abandoned, reread, retire_one, row_text, RecoverOptions, Recovered};
 use crate::board::{Board, Scope};
@@ -163,13 +168,24 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         ImportOutcome::Anchor(a) => *a,
         ImportOutcome::Neither => return Err(no_artifact_face(person, &cx)),
     };
+    // Every halt from here to the close disposes of the surviving anchor
+    // with the person first: a placed copy's removal is said, never left to
+    // the drop.
     if surviving.fingerprint == lost_fp {
+        surviving.dispose(person);
         return Err(Halt::face("the artifact handed in is the LOST paper's own key", "this arm runs under the SURVIVING paper's session; the lost one holds no session any party but its finder could open", "hand in the surviving paper, or name the lost one with `--lost`"));
     }
     if whose == Whose::Agent {
+        surviving.dispose(person);
         return Err(Halt::face("the loss arm at an agent's account is the owner's custody rotation", "AUTH-5.62: the custody pair is the owner's; this arm enrolls a fresh pair for a PERSON's own account", "run the walk at your own account; the agent's custody rotation lands with the attendant campaign"));
     }
-    let session = handshake(board, Scope::Full, &surviving.signer, opts.principal, Site::Recover)?;
+    let session = match handshake(board, Scope::Full, &surviving.signer, opts.principal, Site::Recover) {
+        Ok(session) => session,
+        Err(halt) => {
+            surviving.dispose(person);
+            return Err(halt);
+        }
+    };
     let facts = Facts { account: account.clone(), principal: opts.principal, origin: board.dialed().clone() };
     let mut retired: Vec<Fingerprint> = Vec::new();
     let mut enrolled_pair: Vec<Fingerprint> = Vec::new();
@@ -225,9 +241,17 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                     retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &a.fingerprint, &held, PreviewSite::LossArm)?;
                     retired.push(a.fingerprint);
                 }
-                for a in &backup.anchors {
-                    if let Some(p) = &a.file {
-                        let _ = std::fs::remove_file(p);
+                // The dead pair's files destroyed, each removal read and
+                // said: a file the volume keeps is a findable paper of a
+                // retired key, said standing by its path (AUTH-5.40).
+                for p in backup.anchors.iter().filter_map(|a| a.file.as_ref()) {
+                    match file::remove(p) {
+                        Ok(_) => say(person, "AUTH-5.59 step 3", format!("the dead pair's file {} is destroyed: its key is retired and opens nothing", p.display())),
+                        Err(e) => say(
+                            person,
+                            "AUTH-5.40",
+                            format!("the dead pair's file {} could not be destroyed ({e}) and STILL STANDS: its key is retired and opens nothing, so destroy it yourself", p.display()),
+                        ),
                     }
                 }
                 labels = boxes(person, attempt + 1)?;

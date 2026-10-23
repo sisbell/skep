@@ -856,3 +856,71 @@ fn a_sessions_held_line_is_kept_at_the_board_it_stands_at() {
     assert_eq!(holds.lines(&sessions[1]).unwrap().as_array().unwrap().len(), 1);
     assert!(holds.lines(&sessions[0]).unwrap().as_array().unwrap().is_empty(), "b-1's session lists nothing of it");
 }
+
+/// Checks that a held file with no whole header line is read as fresh and
+/// said on `Talk` (§3c.3; the tail rule's class A).
+///
+/// An empty file, and a header torn before its newline, each found at the
+/// session's open, are a crash's tail at the file's head: the queue is
+/// opened fresh, the finding said once in the shell's own window — and on
+/// no event the page reads — and the next hold cuts the file and heads it,
+/// its line read back by a reopen (the mutant that halts on a torn header
+/// refuses every burst of the principal `store_halted` until a person
+/// removes a file that holds no line).
+#[test]
+fn a_held_file_with_no_whole_header_line_is_read_as_fresh_and_said_on_talk() {
+    let ours = Chain::parse(&"ab".repeat(32)).unwrap();
+    let torn_header = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{ours}\",\"principal\":1");
+    for (cell, body) in [("an empty file", String::new()), ("a header torn before its newline", torn_header)] {
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        HeldDir::new(store.path(), ours).ensure().unwrap();
+        let held = store.path().join("held").join(ours.to_string()).join("principal-1.held");
+        std::fs::write(&held, &body).unwrap();
+        let g = ground_in(store, facts, 0);
+        assert!(g.lines().is_empty(), "{cell}: the queue is opened fresh");
+        let said = g.said.lock().unwrap().clone();
+        let line = format!("held: principal 1's held file holds no whole header line ({} bytes of a torn one", body.len());
+        assert_eq!(said.iter().filter(|l| l.starts_with(&line)).count(), 1, "{cell}: said once: {said:?}");
+        let events: Vec<String> = g.rx.try_iter().map(|e| e.data.to_string()).collect();
+        assert!(events.iter().all(|data| !data.contains("header")), "{cell}: the finding crossed to the page: {events:?}");
+        let answer = g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+        assert!(answer.get("unwritable").is_none(), "{cell}: the next hold cuts and heads the file: {answer}");
+        let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), ours).open_file(1, "1.0.1").unwrap() else { panic!("{cell}: the headed file reads live") };
+        assert_eq!(queue.lines().len(), 1, "{cell}: the next hold's line read back");
+    }
+}
+
+/// Checks that a held file the compaction cannot remove is said on `Talk`
+/// and appended on.
+///
+/// Every line done and the unlink refused — the directory sealed against it
+/// — the file stands with every line in it `done`, the failure is said once
+/// naming the path, and the next hold appends to the standing file, read
+/// back by a reopen (the mutant that marks the file gone refuses every later
+/// burst `unwritable: AlreadyExists` and keeps it in memory alone, lost at
+/// a relaunch).
+#[cfg(unix)]
+#[test]
+fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let g = ground();
+    // A refused run's line: the one `resolve(drop)` settles.
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
+    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    let ours = Chain::parse(&"ab".repeat(32)).unwrap();
+    let board_dir = g.store.path().join("held").join(ours.to_string());
+    let held = board_dir.join("principal-1.held");
+    std::fs::set_permissions(&board_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let resolved = g.holds.resolve(&g.session, k, ResolveAct::Drop);
+    assert_eq!(resolved.unwrap(), Resolved::Dropped);
+    let said = g.said.lock().unwrap().clone();
+    let line = format!("held: every held line is done, and the held file {} could not be removed (", held.display());
+    assert_eq!(said.iter().filter(|l| l.starts_with(&line)).count(), 1, "{said:?}");
+    assert!(held.is_file(), "the file stands");
+    let answer = g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+    assert!(answer.get("unwritable").is_none(), "the next hold appends to the standing file: {answer}");
+    std::fs::set_permissions(&board_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), ours).open_file(1, "1.0.1").unwrap() else { panic!("the file reads live") };
+    assert_eq!(queue.lines().len(), 1, "a reopen reads the line");
+}

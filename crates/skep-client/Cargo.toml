@@ -76,6 +76,14 @@ skep-resolve = { path = "../skep-resolve", optional = true }
 # this crate — its budgets suite's dev board — is the upward one Cargo
 # admits as a dev-cycle.
 skep-search = { path = "../skep-search", optional = true }
+# The file under the tail rule (`skep_util::file`): the key store's publish
+# by a locked temp and a rename, the bindings file's append where its last
+# whole line ends and its read as lines, the anchor export's write-once,
+# the ceremonies' removals that answer what they did, and the sweep of the
+# temps a killed generation left. The support crate stands below every
+# crate of the workspace and names no store (ARCHITECTURE.md §The support
+# crate); the parse of a line and every word said stay here.
+skep-util = { path = "../skep-util" }
 # The wire frames and the key file.
 serde_json.workspace = true
 # OS entropy: seeds, the backup moment's per-run token, `new_id`.

@@ -5,13 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The support crate below the daemon and the media crate: the three utilities both take and neither owns — the counting permit pool behind the daemon's bounded pools, the operator's notice line, and the JSON determinism helpers (the key-sorting object builder, lowercase hex and its exact inverse). It holds no constant, names no store and no engine, and depends on serde_json alone."
+description = "The support crate below the daemon, the media crate, the client and the shell: the five utilities two or more crates of the workspace take and none owns — the counting permit pool behind the daemon's bounded pools, the operator's notice line, the JSON determinism helpers (the key-sorting object builder, lowercase hex and its exact inverse), a setting's source, and the file one process writes and reads back after a crash under one tail rule. It holds no constant, names no store and no engine, and depends on serde_json alone."
 readme = "README.md"
 
 [dependencies]
 # The JSON value the determinism helpers build: `json::obj` sorts a `Vec` of
 # pairs into a `serde_json::Map`, so the daemon's canonical output is
 # alphabetical-by-key whatever backs the map, and the last pair given wins
-# by a stable sort rather than by accident. The permit pool and the notice
-# line use `std` alone.
+# by a stable sort rather than by accident. The permit pool, the notice
+# line, the source and the file use `std` alone.
 serde_json.workspace = true
+
+[dev-dependencies]
+# The file module's suite writes, tears, holds and sweeps files under a
+# directory of its own, removed with the test.
+tempfile.workspace = true

@@ -4,11 +4,16 @@
 //! `bind` — and its `FileStore` arm, plain files with modes (§3a's rung 1):
 //! `<store>/keys/<fingerprint>.key` in a `0700` directory, written once —
 //! its bytes under `O_EXCL` at mode `0600` to `<fingerprint>.key.tmp`,
-//! synced, then published by a rename and the directory's sync, so no
-//! lookup reads a key file cut short (§3.3, §3.7) — the append-only
-//! `bindings` file in its two line forms (§3.5), each append a line of its
-//! own under the advisory lock `<store>/lock` (§3.7), and no anchor under
-//! the store, ever (§3.4; AUTH-5.54 step 3). The store is the seed's
+//! held by an advisory lock for the write's life, synced, then published
+//! by a rename and the directory's sync, so no lookup reads a key file cut
+//! short (§3.3, §3.7), and the temp a killed generation left swept at the
+//! next generation and named by the listing — the append-only `bindings`
+//! file in its two line forms (§3.5), each append a line of its own under
+//! the advisory lock `<store>/lock` (§3.7), and no anchor under the store,
+//! ever (§3.4; AUTH-5.54 step 3). Every file is written and read through
+//! `skep_util::file`, the one tail rule the shell's held-writes file keeps
+//! too; the parse of a line, the mark that closes a torn one and every
+//! word said are this module's. The store is the seed's
 //! custodian (§3a: "signing and key lookup behind `Signer` and
 //! `KeyStore`"): a lookup answers a key's public facts, [`KeyFacts`], and
 //! the seed leaves a lookup only as the signer [`KeyStore::signer`] derives
@@ -24,11 +29,12 @@
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use skep_identity::{Fingerprint, PublicKey};
+use skep_util::file::{self, Appender, Fsync, OnStale, OnTail};
 
 use crate::address::first_child;
 use crate::derive::Mode;
@@ -199,6 +205,14 @@ pub enum StoreError {
     ///
     /// It is halt and surface naming it, never a fallback (AUTH-5.67).
     Io { path: PathBuf, error: io::Error },
+    /// A line of the bindings file that is not valid UTF-8.
+    ///
+    /// The file stands and reads; one of its whole lines — a hand edit
+    /// saved in another encoding — holds bytes no UTF-8 reader decodes.
+    /// The lookup refuses rather than guess which bindings to use, and the
+    /// halt names the file and the line, never a key file's path (§3.5,
+    /// §3.7). `line` counts from 1.
+    BindingsNotUtf8 { path: PathBuf, line: usize },
     /// A key the store could not write.
     ///
     /// Its directory or its file could not be made, written or synced. A key
@@ -225,6 +239,7 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::KeyFile { path, error } | StoreError::Unlistable { path, error } => write!(f, "{}: {error}", path.display()),
             StoreError::Io { path, error } | StoreError::Unwritten { path, error } => write!(f, "{}: {error}", path.display()),
+            StoreError::BindingsNotUtf8 { path, line } => write!(f, "{}: line {line} of the bindings file is not valid UTF-8", path.display()),
             StoreError::MissingKey { path, fingerprint } => {
                 write!(f, "{}: the bindings name key {fingerprint} and the store holds no file for it", path.display())
             }
@@ -308,6 +323,13 @@ impl From<StoreError> for Halt {
                 "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
                 "check the path (`--key`, `SKEP_KEY`, `--dir`)",
             ),
+            StoreError::BindingsNotUtf8 { path, line } => Halt::face(
+                format!("the bindings file {} is not valid UTF-8 at line {line}", path.display()),
+                "the file stands and reads, and one of its lines holds bytes no UTF-8 reader decodes — a hand edit saved in another \
+                 encoding; the lookup refuses rather than guess which bindings to use (client.md §3.5, §3.7)",
+                "re-save the bindings file as UTF-8 — every line it holds is ASCII: an origin, a principal number, an account and 64 \
+                 hex — then run this again",
+            ),
             StoreError::Unwritten { path, error } => {
                 let volume = path.parent().unwrap_or(path.as_path()).display().to_string();
                 Halt::face(
@@ -379,7 +401,10 @@ pub trait KeyStore {
     /// Generates one device key of the production kind from a fresh OS seed.
     ///
     /// Its file is written once and enters the store whole or not at all
-    /// (§3.3, §3.7); the fingerprint names it.
+    /// (§3.3, §3.7); the fingerprint names it. The file store's sweep of
+    /// the temps killed generations left is `FileStore::generate_and_sweep`,
+    /// which answers their names for the caller to say: a generation that
+    /// can say nothing sweeps nothing.
     ///
     /// # Errors
     ///
@@ -497,63 +522,90 @@ impl FileStore {
 
     /// Writes `bytes` to a new file at `path`, once (§3.3).
     ///
-    /// The open is `O_CREAT|O_EXCL` with mode `0600` set at creation — never
-    /// chmod'd after a world-readable moment. It is the one writer every key
-    /// file and anchor file of this crate goes through. A write or a sync
-    /// that fails removes the file the call created, best effort; a kill
-    /// leaves what was written, so the store writes its key files beside
-    /// their names and renames them into place (`publish`).
+    /// It is `skep_util::file::write_once` at mode `0600`: the open is
+    /// `O_CREAT|O_EXCL` with the mode set at creation — never chmod'd after
+    /// a world-readable moment — the bytes written and synced, and a write
+    /// or a sync that fails removes the file the call created. It is the
+    /// one writer every anchor file of this crate goes through, at its
+    /// final name — the backup moment's media may lack links, so the
+    /// destination is said before the write and a kill inside it leaves a
+    /// file the words already named (§4.2). A kill leaves what was written,
+    /// so the store writes its own key files by `FileStore::publish`.
     ///
     /// # Errors
     ///
     /// The open's, the write's and the sync's I/O errors — `AlreadyExists`
-    /// where a file stands at `path`, which the call leaves as it stands.
+    /// where a file stands at `path`, which the call leaves as it stands; a
+    /// removal that fails after a failed write is named beside it.
     pub fn write_once(path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let mut opts = OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut file = opts.open(path)?;
-        if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-            drop(file);
-            let _ = fs::remove_file(path);
-            return Err(e);
-        }
-        Ok(())
+        file::write_once(path, bytes, 0o600)
     }
 
     /// Puts `bytes` at `path` whole or not at all (§3.3, §3.7).
     ///
-    /// The bytes go to `<path>.tmp` — for a key file `<fingerprint>.key.tmp`,
-    /// a name [`FileStore::list`] never reads — under
-    /// [`FileStore::write_once`]; a rename then makes `path`, and the
-    /// directory is synced so the name is as durable as the bytes. A failure
-    /// removes what the call made, best effort; only a kill leaves a `.tmp`
-    /// behind.
+    /// It is `skep_util::file::publish` at mode `0600`: the bytes go to
+    /// `<path>.tmp` — for a key file `<fingerprint>.key.tmp`, a name
+    /// [`FileStore::list`] never reads — under `create_new`, the temp held
+    /// by an advisory lock for the write's life, so the sweep at the next
+    /// generation ([`FileStore::generate_and_sweep`]) tells a live
+    /// generation's temp from a killed one's; written and synced; a rename
+    /// then makes `path`, and the directory is synced so the name is as
+    /// durable as the bytes. A failure removes what the call made; only a
+    /// kill leaves a `.tmp` behind, which the next generation sweeps and
+    /// [`FileStore::unfinished`] names meanwhile.
     ///
     /// **Precondition.** No file stands at `path`, which a rename replaces:
     /// the one caller names a fresh key by its fingerprint.
     ///
     /// # Errors
     ///
-    /// The write's, the rename's and the directory sync's I/O errors.
+    /// The temp's open, the write's, the rename's and the directory sync's
+    /// I/O errors.
     fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        Self::write_once(&tmp, bytes)?;
-        if let Err(e) = fs::rename(&tmp, path) {
-            let _ = fs::remove_file(&tmp);
-            return Err(e);
-        }
-        if let Err(e) = sync_parent(path) {
-            let _ = fs::remove_file(path);
-            return Err(e);
-        }
-        Ok(())
+        file::publish(path, bytes, 0o600, OnStale::Replace)
+    }
+
+    /// Returns the unfinished key files: `keys/<fingerprint>.key.tmp` no
+    /// live generation holds (§3.7).
+    ///
+    /// Each is the temp a generation killed inside its write left, holding
+    /// part or all of a seed that is nobody's key — it entered no listing,
+    /// binding or enrollment — and is removed at the next
+    /// [`FileStore::generate_and_sweep`]; a temp a live generation holds,
+    /// by the lock `FileStore::publish` takes, is not among them. They
+    /// come in name order, for `fingerprint --dir` to print as unfinished,
+    /// never as a key.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Io`] where the keys directory stands and cannot be
+    /// read, or a temp under it cannot be opened.
+    pub fn unfinished(&self) -> Result<Vec<PathBuf>, StoreError> {
+        let keys = self.keys_dir();
+        file::stale(&keys, ".key.tmp").map_err(|error| StoreError::Io { path: keys, error })
+    }
+
+    /// Generates one device key, then sweeps the unfinished key files (§3.7).
+    ///
+    /// It is [`KeyStore::generate`] with the sweep after it: every
+    /// `keys/<fingerprint>.key.tmp` no live generation holds is unlinked,
+    /// and the names removed — and the names that stand, each with the
+    /// failure that left it — are answered for the caller to say once, so
+    /// no file holding a seed is removed unsaid. The sweep follows the key's
+    /// publish, so a generation the store cannot finish sweeps nothing and
+    /// answers its own refusal alone.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyStore::generate`]'s; the sweep's own failures ride the answer.
+    pub fn generate_and_sweep(&self, label: Option<Label>) -> Result<Generated, StoreError> {
+        let id = self.generate(label)?;
+        let keys = self.keys_dir();
+        let (swept, unswept) = match file::sweep_stale(&keys, ".key.tmp") {
+            Ok(sweep) => (sweep.removed, sweep.failed),
+            Err(error) => (Vec::new(), vec![(keys, error)]),
+        };
+        Ok(Generated { id, swept, unswept })
     }
 
     /// Loads and judges one key file, the seed with it (§3.2's reader).
@@ -575,7 +627,8 @@ impl FileStore {
     /// Returns the public facts of every key file in the store.
     ///
     /// They come in file name order. Only the `*.key` files under `keys/` are
-    /// read: a key not yet published, `*.key.tmp`, is never listed.
+    /// read: a key not yet published, `*.key.tmp`, is never listed —
+    /// [`FileStore::unfinished`] names the ones no live generation holds.
     ///
     /// # Errors
     ///
@@ -627,25 +680,32 @@ impl FileStore {
 
     /// Returns every binding line, in file order.
     ///
-    /// A final line without `\n` is ignored (§3.7: a torn append is never a
-    /// torn record), and the next append closes it as a line of neither form
-    /// (`TORN_MARK`), so it never becomes one.
+    /// The file is read as lines of bytes (`skep_util::file::read_lines`),
+    /// each decoded here: a whole line of neither form is skipped, and a
+    /// final line without `\n` is ignored (§3.7: a torn append is never a
+    /// torn record), the next append closing it with `TORN_MARK`'s words,
+    /// after which the line is never read, whatever bytes it holds.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] where the bindings file stands and cannot be read.
+    /// [`StoreError::Io`] where the bindings file stands and cannot be read;
+    /// [`StoreError::BindingsNotUtf8`] where a whole line of it, one the
+    /// mark does not close, is not valid UTF-8, naming the line — the
+    /// lookup refuses rather than guess.
     pub fn all_bindings(&self) -> Result<Vec<Binding>, StoreError> {
         let path = self.bindings_path();
-        let text = match fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(StoreError::Io { path, error }),
-        };
-        let complete = match text.rfind('\n') {
-            Some(i) => &text[..=i],
-            None => "",
-        };
-        Ok(complete.lines().filter_map(|line| line.parse().ok()).collect())
+        let Some(found) = file::read_lines(&path).map_err(|error| StoreError::Io { path: path.clone(), error })? else { return Ok(Vec::new()) };
+        let mut bindings = Vec::new();
+        for (i, line) in found.lines.iter().enumerate() {
+            if line.ends_with(TORN_MARK.as_bytes()) {
+                continue;
+            }
+            let text = std::str::from_utf8(line).map_err(|_| StoreError::BindingsNotUtf8 { path: path.clone(), line: i + 1 })?;
+            if let Ok(binding) = text.parse() {
+                bindings.push(binding);
+            }
+        }
+        Ok(bindings)
     }
 
     /// Returns the last enrollment line for (`origin`, `principal`).
@@ -823,18 +883,23 @@ impl FileStore {
     /// Appends `line` to the bindings file as a line of its own (§3.7).
     ///
     /// The append runs under the advisory lock on `<store>/lock` and is one
-    /// `write`. Where the file's last byte is not `\n` — an earlier append
-    /// cut short, a line recorded by hand without its newline — the write
-    /// first closes that line with `TORN_MARK`'s words and a newline, then
-    /// carries `line` and its own newline. So an append never changes how the
-    /// bytes before it read: the torn bytes were no binding, the line the
-    /// words close is none either, and `line` starts a line of its own.
+    /// `write` (`skep_util::file::Appender`, opened at mode `0600` where the
+    /// last whole line ends, which it finds under the lock, so no other
+    /// append moves it before the write). Where the file holds a tail past
+    /// that line — an earlier append cut short, a line recorded by hand
+    /// without its newline — the write first closes that line with
+    /// `TORN_MARK`'s words and a newline (`OnTail::Close`: never cut, since
+    /// it may be the person's own record), then carries `line` and its own
+    /// newline. So an append never changes how the bytes before it read:
+    /// the torn bytes were no binding, the line the words close is none
+    /// either, and `line` starts a line of its own. The write is synced
+    /// before the call answers.
     ///
     /// # Errors
     ///
     /// A failed append — a read-only mount, a missing permission, a full
     /// volume — is [`Unappended`], carrying the line for the person to
-    /// record.
+    /// record; the file is cut back to what it held.
     pub fn append_line(&self, line: &str) -> Result<(), Unappended> {
         let path = self.bindings_path();
         let unappended = |error: io::Error| Unappended { path: path.clone(), line: line.to_string(), error };
@@ -848,77 +913,39 @@ impl FileStore {
         }
         let lock = lock_opts.open(self.lock_path()).map_err(unappended)?;
         lock.lock().map_err(unappended)?;
-        let result = (|| -> io::Result<()> {
-            let mut opts = OpenOptions::new();
-            opts.read(true).append(true).create(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut file = opts.open(&path)?;
-            // The last byte is read under the lock, so no other append moves
-            // it before the write below.
-            let mut text = String::new();
-            if let Some(last) = file.metadata()?.len().checked_sub(1) {
-                let mut byte = [0u8; 1];
-                file.seek(SeekFrom::Start(last))?;
-                file.read_exact(&mut byte)?;
-                if byte[0] != b'\n' {
-                    text.push_str(TORN_MARK);
-                    text.push('\n');
-                }
-            }
-            text.push_str(line);
-            text.push('\n');
-            file.write_all(text.as_bytes())?;
-            file.sync_all()
-        })();
+        let result = Appender::open(&path, 0o600).and_then(|mut file| file.append(line.as_bytes(), OnTail::Close(TORN_MARK.as_bytes()), Fsync::All));
         let _ = lock.unlock();
-        result.map_err(unappended)
+        result.map(drop).map_err(unappended)
     }
+}
+
+/// What [`FileStore::generate_and_sweep`] did: the key, and the sweep.
+///
+/// The sweep's names are the caller's to say once: a removed temp held a
+/// seed nobody's key was made of, and one that stands still does.
+#[derive(Debug)]
+pub struct Generated {
+    /// The key generated.
+    pub id: KeyId,
+    /// The unfinished key files removed, in name order.
+    pub swept: Vec<PathBuf>,
+    /// The unfinished key files that stand, each with the failure that left
+    /// it — or the keys directory itself, where it could not be listed.
+    pub unswept: Vec<(PathBuf, io::Error)>,
 }
 
 /// The words that close a torn last line of the bindings file (§3.7).
 ///
 /// Bytes after the file's last `\n` are no line the reader reads; an append
-/// that finds them closes them with these words and a newline first, so its
-/// own line starts a line of its own. The words are nine, opening with a
-/// space, so the line they close holds nine or more whatever its torn bytes
-/// held — neither of §3.5's forms, which hold three words or four: the
-/// reader ignores it as it ignored them, and a person opening the file
+/// that finds them closes them with these words and a newline first
+/// (`skep_util::file::OnTail::Close`), so its own line starts a line of its
+/// own. The words are nine, opening with a space, so the line they close
+/// holds nine or more whatever its torn bytes held — neither of §3.5's
+/// forms, which hold three words or four: the reader skips a line ending
+/// in them before it decodes it, as it ignored the torn bytes, so a torn
+/// tail of any bytes closed stays unread, and a person opening the file
 /// reads why.
 const TORN_MARK: &str = " # not read: this line ended without a newline";
-
-/// Syncs the directory holding `path`, so a rename into it is durable.
-///
-/// A directory that takes no sync is no failure: a filesystem that answers
-/// the sync `Unsupported`, or `InvalidInput` as some answer a directory's —
-/// there the name is as durable as the filesystem makes it.
-///
-/// # Errors
-///
-/// An I/O error opening or syncing the directory, save those two.
-#[cfg(unix)]
-fn sync_parent(path: &Path) -> io::Result<()> {
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    match fs::File::open(dir)?.sync_all() {
-        Err(e) if matches!(e.kind(), io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput) => Ok(()),
-        other => other,
-    }
-}
-
-/// Syncs nothing: on this platform a directory opens as no file.
-///
-/// A rename here is as durable as the filesystem makes it.
-///
-/// # Errors
-///
-/// Never.
-#[cfg(not(unix))]
-fn sync_parent(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
 
 /// Returns `path` as the filesystem will resolve it.
 ///

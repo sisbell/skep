@@ -1280,6 +1280,7 @@ dependencies = [
  "skep-resolve",
  "skep-search",
  "skep-signature",
+ "skep-util",
  "skepd",
  "tempfile",
  "zeroize",
@@ -1598,6 +1599,7 @@ dependencies = [
  "skep-kernel",
  "skep-links",
  "skep-search",
+ "skep-util",
  "skepd",
  "tempfile",
 ]
@@ -1625,6 +1627,7 @@ name = "skep-util"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

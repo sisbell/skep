@@ -472,3 +472,94 @@ fn a_generation_that_cannot_write_leaves_no_key_and_is_faced_as_a_write() {
     assert_eq!(names, [format!("{}.key", first.0.to_hex())], "nothing of the refused key stands");
     assert_eq!(store.list().unwrap().len(), 1);
 }
+
+/// §3.7 — AN UNFINISHED KEY FILE, `<fingerprint>.key.tmp` left by a killed
+/// generation, is named by `unfinished` as such — never listed as a key —
+/// and swept at the next `generate_and_sweep`, which answers its name for
+/// the caller to say; one a live generation holds, by the lock the publish
+/// takes on its temp, is skipped by both until it is released; a temp the
+/// unlink refuses is answered standing, with its cause; and the seam's own
+/// `generate`, which can say nothing, sweeps nothing (the mutant sweep that
+/// ignores the lock unlinks a live generation's temp from under it, and
+/// that generation's rename fails).
+#[test]
+fn an_unfinished_key_file_is_named_by_the_listing_and_swept_by_the_next_generation() {
+    let (_dir, store) = store();
+    let first = store.generate(None).unwrap();
+    let keys = store.root().join("keys");
+    let dead = keys.join(format!("{}.key.tmp", "ab".repeat(32)));
+    fs::write(&dead, b"{\"type\":\"skep-key\",\"v\":1,\"anchor\":false,\"seed\":\"ab").unwrap();
+    let live = keys.join(format!("{}.key.tmp", "cd".repeat(32)));
+    fs::write(&live, b"{\"type\":").unwrap();
+    let held = fs::OpenOptions::new().read(true).write(true).open(&live).unwrap();
+    held.try_lock().unwrap();
+    assert_eq!(store.unfinished().unwrap(), std::slice::from_ref(&dead), "the dead run's temp is named, the live one's not");
+    assert_eq!(store.list().unwrap().iter().map(|k| k.fingerprint).collect::<Vec<_>>(), [first.0], "never listed as a key");
+    let generated = store.generate_and_sweep(Some(Label::new("second").unwrap())).unwrap();
+    assert_eq!(generated.swept, std::slice::from_ref(&dead), "swept and answered");
+    assert!(generated.unswept.is_empty(), "{:?}", generated.unswept);
+    assert!(!dead.exists() && live.exists(), "the live generation's temp stands");
+    assert!(store.unfinished().unwrap().is_empty());
+    assert_eq!(store.list().unwrap().len(), 2, "the key generated beside the sweep");
+    assert!(store.list().unwrap().iter().any(|k| k.fingerprint == generated.id.0));
+    drop(held);
+    assert_eq!(store.unfinished().unwrap(), std::slice::from_ref(&live), "released, it is a dead run's");
+    let generated = store.generate_and_sweep(None).unwrap();
+    assert_eq!(generated.swept, std::slice::from_ref(&live));
+    assert!(!live.exists());
+    // The seam's `generate` removes nothing: its caller can say nothing.
+    fs::write(&dead, b"").unwrap();
+    store.generate(None).unwrap();
+    assert_eq!(store.unfinished().unwrap(), std::slice::from_ref(&dead), "the seam's generate sweeps nothing");
+    #[cfg(unix)]
+    {
+        // A temp the unlink refuses — here a directory under the name —
+        // stands, and is answered with its cause.
+        let stuck = keys.join(format!("{}.key.tmp", "ef".repeat(32)));
+        fs::create_dir(&stuck).unwrap();
+        let generated = store.generate_and_sweep(None).unwrap();
+        assert_eq!(generated.swept, [dead]);
+        assert_eq!(generated.unswept.len(), 1, "{:?}", generated.unswept);
+        assert_eq!(generated.unswept[0].0, stuck);
+        assert!(stuck.exists());
+    }
+}
+
+/// §3.5, §3.7 — A BINDINGS FILE IN ANOTHER ENCODING is faced as the
+/// bindings file's own: a line holding Latin-1's `é` is `BindingsNotUtf8` naming the
+/// file and the line, its face saying "not valid UTF-8" and the re-save,
+/// never a key file "missing, unreadable or mis-pathed"; every lookup over
+/// the file refuses rather than guess; a torn tail of such bytes is ignored
+/// like any torn tail; and a file that cannot be read keeps `Io`.
+#[test]
+fn a_bindings_file_in_another_encoding_is_faced_as_the_bindings_files_own() {
+    let (_dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+    store.bind(&Binding::Enrollment { origin: origin.clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp }).unwrap();
+    let path = store.root().join("bindings");
+    let original = fs::read(&path).unwrap();
+    fs::write(&path, [&original[..], b"# caf\xe9\n"].concat()).unwrap();
+    let err = store.all_bindings().unwrap_err();
+    assert!(matches!(&err, StoreError::BindingsNotUtf8 { path: p, line: 2 } if *p == path), "{err:?}");
+    assert_eq!(err.to_string(), format!("{}: line 2 of the bindings file is not valid UTF-8", path.display()));
+    let face = Halt::from(err).to_string();
+    assert!(face.contains(&format!("the bindings file {} is not valid UTF-8 at line 2", path.display())) && face.contains("re-save the bindings file as UTF-8"), "{face}");
+    assert!(!face.contains("mis-pathed") && !face.contains("key file"), "{face}");
+    assert!(matches!(store.bindings(&origin), Err(StoreError::BindingsNotUtf8 { .. })), "every lookup refuses rather than guess");
+    assert!(matches!(store.enrollment_for(&origin, 1), Err(StoreError::BindingsNotUtf8 { .. })));
+    // A torn tail of such bytes is no line: ignored, and the next append
+    // closes it.
+    fs::write(&path, [&original[..], b"# caf\xe9"].concat()).unwrap();
+    assert_eq!(store.all_bindings().unwrap().len(), 1);
+    store.bind(&Binding::Signed { dialed: origin.clone(), signed: Origin::parse("https://board.example").unwrap() }).unwrap();
+    assert_eq!(store.all_bindings().unwrap().len(), 2);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = store.all_bindings();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(unreadable, Err(StoreError::Io { .. })), "a file that cannot be read keeps `Io`: {unreadable:?}");
+    }
+}

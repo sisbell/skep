@@ -3,8 +3,11 @@
 //! The keys are every key in the store, or the one `--select` names in it,
 //! or the one file `--key` (or `SKEP_KEY`) names, never two — each with the
 //! bindings that name it, or the pending state where none does
-//! (AUTH-5.32); `--payload` re-prints a key's enrollment record, `--json`
-//! answers one document.
+//! (AUTH-5.32); the store's listing names each unfinished key file beside
+//! them — a `keys/<fp>.key.tmp` a killed generation left, which holds no
+//! key this store names (§3.7) — on a row of its own, never as a key;
+//! `--payload` re-prints a key's enrollment record, `--json` answers one
+//! document of the keys.
 
 use skep_client::halt::Halt;
 use skep_client::sheet::{group_hex, render_inert};
@@ -28,6 +31,9 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     // `--select` names in the store, or every key the store holds — two
     // named at once refused, never one picked over the other (§2.2:
     // selecting within a store is `--select`'s alone).
+    // The store's listing alone names its unfinished key files beside the
+    // keys; a key named by path or selector lists nothing else.
+    let mut unfinished = Vec::new();
     let keys: Vec<KeyFacts> = match (c.key_file()?, c.value("--select")) {
         (Some(_), Some(_)) => {
             return Err(Usage("`--select` names a key in the store and `--key` (or SKEP_KEY) names a key file: give one — SKEP_KEY set empty is unset".into()).into())
@@ -50,7 +56,10 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
             Err(StoreError::NotFound { select }) => return Err(Halt::face(format!("no key in the store matches `{select}`"), "the store's keys are listed by `skep fingerprint --dir`", "check the selector").into()),
             Err(e) => return Err(e.into()),
         },
-        (None, None) => store.list()?,
+        (None, None) => {
+            unfinished = store.unfinished()?;
+            store.list()?
+        }
     };
     // An unreadable bindings file halts naming it: read as an empty one, it
     // would list every key unbound and name the wrong act.
@@ -114,6 +123,17 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     }
     if c.switch("--json") {
         data(serde_json::Value::Array(json_rows).to_string())?;
+        return Ok(());
+    }
+    // Each unfinished key file on a row of its own, after the keys and
+    // never among them: the temp a killed generation left (§3.7), nobody's
+    // key, which the next generation removes.
+    for path in &unfinished {
+        data(format!(
+            "UNFINISHED {} — a key file a generation did not complete: it holds no key this store names and nothing reads it; the next `skep keygen` \
+             removes it, or remove it yourself",
+            path.display()
+        ))?;
     }
     Ok(())
 }

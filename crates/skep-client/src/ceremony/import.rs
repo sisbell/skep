@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 use skep_identity::{Fingerprint, PublicKey};
 use skep_signature::HybridSigner;
+use skep_util::file;
 
 use super::say;
 use crate::board::{Board, KeySet};
@@ -39,7 +40,7 @@ use crate::derive::records::{Hand, Records};
 use crate::derive::KeyDiagnosis;
 use crate::halt::Halt;
 use crate::person::{HandedPath, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
-use crate::sheet::{read_key_file, render_inert, typed_prefix_matches, KeyFile, Seed};
+use crate::sheet::{read_key_file, render_inert, typed_prefix_matches, KeyFile, KeyFileError, Seed};
 use crate::sign::Signer;
 use crate::store::FileStore;
 
@@ -60,11 +61,15 @@ pub enum Whose {
 /// and label, and the kept-or-placed answer for its file. The anchor is
 /// dropped when the ceremony it was imported *for* ends (AUTH-5.54 step 3),
 /// and every exit ends that ceremony: [`ImportedAnchor::dispose`] is the
-/// close that tells the person, and an anchor dropped without it — every
-/// halt a walk takes after the import — still destroys a placed copy on the
-/// drop, best effort, so the person who answered "placed" never leaves with
-/// a findable paper on the ladder's worst rung (AUTH-5.40). The seed goes
-/// with the anchor.
+/// close that tells the person — a placed copy's removal read and said, a
+/// removal the volume refuses said standing by its path, never "destroyed"
+/// (AUTH-5.40: a seed on media is a findable paper until it is gone) — and
+/// an anchor dropped without it — a halt a walk takes after the import
+/// without disposing first — still destroys a placed copy on the drop,
+/// best effort, so the person who answered "placed" never leaves with a
+/// findable paper on the ladder's worst rung; the drop has no person, so
+/// a removal that fails there is said by no one, which is why a walk
+/// disposes before every halt it can. The seed goes with the anchor.
 pub struct ImportedAnchor {
     pub signer: HybridSigner,
     pub fingerprint: Fingerprint,
@@ -80,25 +85,53 @@ pub struct ImportedAnchor {
 impl ImportedAnchor {
     /// Disposes of the anchor at the close — AUTH-5.54 step 3's mirror.
     ///
-    /// The placed copy is destroyed, the kept artifact retained — each said.
+    /// The placed copy is destroyed, the kept artifact retained — each
+    /// said. The removal's answer is read: a file that went, or none that
+    /// stood, is destroyed; one the volume refuses to remove STILL STANDS,
+    /// said so by its path at that moment (AUTH-5.40).
     pub fn dispose(mut self, person: &mut dyn Person) {
         self.ended = true;
         match (&self.file, self.kept_or_placed) {
-            (Some(path), KeptOrPlaced::Placed) => {
-                let gone = std::fs::remove_file(path).is_ok();
-                say(person, "AUTH-5.54 step 3", format!("the placed copy {} is {}", path.display(), if gone { "destroyed" } else { "already gone" }));
-            }
+            (Some(path), KeptOrPlaced::Placed) => match file::remove(path) {
+                Ok(_) => say(person, "AUTH-5.54 step 3", format!("the placed copy {} is destroyed", path.display())),
+                Err(e) => say(
+                    person,
+                    "AUTH-5.40",
+                    format!("the placed copy {} could not be destroyed ({e}) and STILL STANDS — a findable paper until you remove it yourself", path.display()),
+                ),
+            },
             (Some(path), KeptOrPlaced::Kept) => say(person, "AUTH-5.54 step 3", format!("the kept artifact {} is retained", path.display())),
             (None, _) => say(person, "AUTH-5.54 step 3", "the paper stays the kept artifact; nothing of the seed remains in this client"),
         }
     }
 }
 
+/// The last resort for a placed copy: a drop without the close.
+///
+/// It is reached where a walk halts after the import without disposing
+/// first. The removal is made, best effort, and its failure is said by no
+/// one — a drop has no person — so a walk disposes ahead of every halt it
+/// can (the loss arm does); what reaches here is an unwinding panic's, or
+/// a walk's halt path this crate has not yet given its person.
 impl Drop for ImportedAnchor {
     fn drop(&mut self) {
         if let (false, Some(path), KeptOrPlaced::Placed) = (self.ended, &self.file, self.kept_or_placed) {
-            let _ = std::fs::remove_file(path);
+            let _ = file::remove(path);
         }
+    }
+}
+
+/// Returns whether `bytes` are the front of a JSON object cut short.
+///
+/// A key file is one JSON object and a newline (§3.2), and no prefix of
+/// a JSON object is a JSON object, so an export killed inside its write
+/// leaves bytes a standard parser refuses for ending too soon — and
+/// nothing else: a file that is no JSON at all is refused for another
+/// cause. An empty file is cut short too, a kill before the first byte.
+fn cut_short(bytes: &[u8]) -> bool {
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Err(e) => e.is_eof(),
+        Ok(_) => false,
     }
 }
 
@@ -424,8 +457,10 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
 /// # Errors
 ///
 /// A path inside the store, ahead of the question; an abandoned question;
-/// a file missing, unreadable or mis-pathed; a file the parse refuses; a
-/// device key's file; and the facts' disagreement.
+/// a file missing, unreadable or mis-pathed; a file cut short — the front
+/// of a key file an export killed inside its write left at its final name
+/// (§4.2), faced as that state and never as a device key's; a file the
+/// parse refuses; a device key's file; and the facts' disagreement.
 fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> Result<Handed, Halt> {
     if cx.store.contains_path(path) {
         return Err(Halt::face(
@@ -448,7 +483,19 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
     let bytes = read_key_file(path).map_err(|e| {
         Halt::face(format!("the anchor file {} is missing, unreadable or mis-pathed: {e}", path.display()), "AUTH-5.67: HALT AND SURFACE naming the path, never a fallback", "check the path")
     })?;
-    let file = KeyFile::parse(&bytes).map_err(|e| Halt::face(format!("the anchor file {} is refused: {e}", path.display()), "the file's own contents decide this (§3.2)", "hand in the anchor file the backup moment wrote"))?;
+    let file = KeyFile::parse(&bytes).map_err(|e| {
+        if matches!(e, KeyFileError::NotKeyFile) && cut_short(&bytes) {
+            return Halt::face(
+                format!("the anchor file {} is cut short: the export that wrote it did not finish", path.display()),
+                "a run killed inside an anchor's write leaves the front of a key file at its final name (client.md §4.2); the \
+                 export and its read-back come before any enroll, so the key this file would have held was enrolled nowhere and \
+                 no account was ever bound to it",
+                "use the other artifact — the pair's other file, or the print — and destroy this one; where the pair's export \
+                 never completed, the ceremony that exports a pair is re-run from the start",
+            );
+        }
+        Halt::face(format!("the anchor file {} is refused: {e}", path.display()), "the file's own contents decide this (§3.2)", "hand in the anchor file the backup moment wrote")
+    })?;
     if !file.anchor {
         return Err(Halt::face(
             format!("{} is a device key's file, not an anchor's", path.display()),

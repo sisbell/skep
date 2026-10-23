@@ -162,11 +162,11 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
 /// A HEADER OF ANOTHER FORM halts with its own face (§3c.2, P38): a `type`
 /// not the store's, or none, no `v`, a `v` of 0 or of a string — each the
 /// unknown-member face; a newer `v` the newer face whatever its `type`, `v`
-/// read first; a header that is no JSON object, and a file with no complete
-/// header line — empty, or its header torn before its newline — the damaged
-/// face (the mutants that drop the `type` check, read a missing `v` as 1,
-/// take any `v` but 1 as newer, read `type` before `v`, or open a file of no
-/// whole header as a fresh queue).
+/// read first; a whole header line that is no JSON object the damaged face
+/// (the mutants that drop the `type` check, read a missing `v` as 1, take
+/// any `v` but 1 as newer, or read `type` before `v`). A file with no whole
+/// header line is no header of another form: it is a crash's tail, read as
+/// fresh (the next test).
 #[test]
 fn a_header_of_another_form_halts_with_its_face() {
     let header = |members: &str| format!("{{{members}\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", chain());
@@ -178,8 +178,6 @@ fn a_header_of_another_form_halts_with_its_face() {
         ("a v of a string", header("\"type\":\"skep-held-bursts\",\"v\":\"1\","), HaltWhy::UnknownMember),
         ("a newer v of another type", header("\"type\":\"skep-other\",\"v\":3,"), HaltWhy::Newer),
         ("no object", "[1]\n".to_string(), HaltWhy::Damaged),
-        ("an empty file", String::new(), HaltWhy::Damaged),
-        ("a header torn before its newline", header("\"type\":\"skep-held-bursts\",\"v\":1,").trim_end().to_string(), HaltWhy::Damaged),
     ];
     for (cell, header, why) in cells {
         let tmp = TempDir::new().unwrap();
@@ -190,6 +188,42 @@ fn a_header_of_another_form_halts_with_its_face() {
             Opened::Live { .. } => panic!("{cell}: read live"),
         }
     }
+}
+
+/// A FILE WITH NO WHOLE HEADER LINE is read as FRESH (§3c.3; the tail rule's
+/// class A at the file's head): an empty file, and a header torn before its
+/// newline, each open `Live` with no lines, the open answering what it found
+/// for the shell to say once; the next hold cuts the file's bytes and heads
+/// it, its line on disk, and a reopen reads that line and halts on nothing;
+/// a torn LAST line is answered the same way, as the line it is (the mutant
+/// that halts on a torn header blocks every burst of the principal at the
+/// board until a person removes a file that holds no line; the one that
+/// makes the file anew under `create_new` refuses every copy
+/// `AlreadyExists`).
+#[test]
+fn a_file_with_no_whole_header_line_is_read_as_fresh_and_headed_by_the_next_line() {
+    let header = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", chain());
+    let cells = [("an empty file", String::new()), ("a header torn before its newline", header.trim_end().to_string())];
+    for (cell, body) in cells {
+        let tmp = TempDir::new().unwrap();
+        let d = dir(&tmp);
+        fs::write(file_path(&tmp), &body).unwrap();
+        let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+        assert!(queue.lines().is_empty(), "{cell}: opened fresh");
+        assert_eq!(queue.torn(), Some(Torn::Header { bytes: body.len() as u64 }), "{cell}: the open answers what it found");
+        let held = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+        assert!(held.unwritten.is_none(), "{cell}: {:?}", held.unwritten);
+        assert_eq!(held.k, 1);
+        let raw = fs::read_to_string(file_path(&tmp)).unwrap();
+        assert!(raw.starts_with(&format!("{header}{{\"held\":1,")), "{cell}: the file cut and headed:\n{raw}");
+        let reopened = live(d.open_file(1, "1.0.1").unwrap());
+        assert_eq!(ks(&reopened), [1], "{cell}: the next hold's line read back");
+        assert_eq!(reopened.torn(), None, "{cell}: the file reads whole now");
+    }
+    let tmp = TempDir::new().unwrap();
+    let torn = b"{\"held\":1,\"doc\"";
+    let queue = live(opened_over(&tmp, torn));
+    assert_eq!(queue.torn(), Some(Torn::Line { bytes: torn.len() as u64 }), "a torn last line answered as the line it is");
 }
 
 // ── T2 ──────────────────────────────────────────────────────────────────────
@@ -361,7 +395,7 @@ fn a_remarked_line_reads_back_once_with_its_new_cause() {
 /// keeps the line standing resends the acked burst at once), and the
 /// refusal is answered for the shell's own window to say; its bytes are cut
 /// back off the file, so a reopen reads the line as held again and the
-/// resend's read decides it (§3c.5), as `DoneError::Unwritten` says.
+/// resend's read decides it (§3c.5), as `Settled::unwritten` says.
 #[test]
 fn a_done_the_device_refused_still_settles_its_line() {
     let tmp = TempDir::new().unwrap();
@@ -370,11 +404,45 @@ fn a_done_the_device_refused_still_settles_its_line() {
     let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
     let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k;
     FAIL_SYNC.with(|f| f.set(true));
-    let settled = queue.done(k1, Done::Kept { at: Some(9) });
+    let settled = queue.done(k1, Done::Kept { at: Some(9) }).unwrap();
     FAIL_SYNC.with(|f| f.set(false));
-    assert!(matches!(settled, Err(DoneError::Unwritten(_))), "{settled:?}");
+    assert!(settled.unwritten.is_some() && settled.unremoved.is_none(), "{settled:?}");
     assert_eq!(ks(&queue), [k2], "the settled line has left the queue");
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [k1, k2], "a reopen reads the line as held again");
+}
+
+/// A HELD FILE THE COMPACTION CANNOT REMOVE is kept and appended on — the
+/// removal's answer read, never assumed: every line done and the unlink
+/// refused, the directory sealed against it, the settle answers the failure
+/// naming the path, the file stands, the next hold APPENDS to it (no
+/// `AlreadyExists`) under an ordinal past the file's, and a reopen reads
+/// that line; the directory writable again, the next compaction removes it
+/// and the ordinals start over (the mutant that marks the file gone refuses
+/// every later line `AlreadyExists` and keeps every burst after it in
+/// memory alone, lost at a relaunch).
+#[cfg(unix)]
+#[test]
+fn a_held_file_the_compaction_cannot_remove_is_kept_and_appended_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let board_dir = tmp.path().join("held").join(chain().to_string());
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
+    fs::set_permissions(&board_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    let settled = queue.done(k, Done::Kept { at: Some(3) }).unwrap();
+    assert!(settled.unwritten.is_none(), "{settled:?}");
+    let (path, _) = settled.unremoved.expect("the removal's failure is answered");
+    assert_eq!(path, file_path(&tmp));
+    assert!(queue.on_disk() && queue.lines().is_empty(), "the file stands, every line done");
+    let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    assert!(next.unwritten.is_none(), "the next hold appends to the standing file: {:?}", next.unwritten);
+    assert_eq!(next.k, 2, "an ordinal past the file's");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [2], "a reopen reads the line");
+    fs::set_permissions(&board_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let settled = queue.done(2, Done::Dropped).unwrap();
+    assert!(settled.unremoved.is_none() && !queue.on_disk(), "writable again, the compaction removes the file");
+    assert_eq!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k, 1, "the ordinals start over once the file is gone");
 }
 
 /// A TORN LAST LINE is cut before the next line is written (R14; P38): a

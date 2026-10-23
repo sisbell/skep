@@ -666,8 +666,9 @@ fn tools_file_refusal(tools_file: &Path) -> String {
 /// says it leaves one burst held, and the next start says one burst is left,
 /// waiting on the agent's `resolve`. A held file a newer skep wrote halts the
 /// principal's bursts at the board: the start says the file is halted and
-/// why, and a burst is refused `store_halted`. An empty one, a crash's
-/// leftover, halts as damaged, and its act is to set it aside, never to run a
+/// why, and a burst is refused `store_halted`. One whose header line is no
+/// JSON object — damage, never a crash's tail, which the shell reads as
+/// fresh — halts as damaged, and its act is to set it aside, never to run a
 /// skep that wrote it.
 #[test]
 fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
@@ -694,7 +695,7 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let refusal = halted.call_error("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
     assert_eq!(refusal["name"], "store_halted", "{refusal}");
     assert!(halted.finish().success());
-    std::fs::write(&file, b"").expect("a held file a crash left headless");
+    std::fs::write(&file, b"[1]\n").expect("a held file whose header line is no object");
     let mut damaged = Launch::over(&fixture, 1).logged().spawn();
     damaged.initialize();
     let log = damaged.log_holding(&[&format!("held: the held file {} is halted (damaged", file.display())], Duration::from_secs(10));

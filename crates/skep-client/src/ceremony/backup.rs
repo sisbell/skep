@@ -5,8 +5,10 @@
 //! The moment is the three statements at the head (AUTH-5.54 (a)–(c)), the
 //! two anchor boxes with their per-run defaults and the domain test at the
 //! box (AUTH-5.42; AUTH-1.24), generate (step 1), export (step 2) — each
-//! anchor to its own destination, `O_EXCL` `0600`, never under the store
-//! (§3.4), the ladder words at the path (AUTH-5.40) and the one-place
+//! anchor to its own destination, `O_EXCL` `0600` at its final name (the
+//! media may lack links), never under the store (§3.4), the ladder words
+//! at the path said BEFORE the write, so a run killed inside it leaves a
+//! file the words already named (AUTH-5.40; §4.2), and the one-place
 //! sentence where both land in one place — the sheet besides under
 //! `--paper`, the drop (step 3), the dismissal on the paper path
 //! (§4.2 step 6), the re-import over a channel whose absence breaks it
@@ -15,8 +17,11 @@
 //! (step 5; AUTH-5.39), AUTH-5.41 where both exist, the keep-the-papers
 //! line keyed per site (AUTH-5.44; §4.2 step 10) — and only then the
 //! caller's genesis (step 6). A file-path read-back that fails re-runs from
-//! step 1 under a fresh pair, every file of the pair destroyed (§4.1 S3).
-//! Steps 1–3 alone — the generate, the export and the drop — are
+//! step 1 under a fresh pair, every file of the pair destroyed (§4.1 S3) —
+//! each removal's answer read, a file the volume refuses to unlink said
+//! standing by its path, never "destroyed", as every removal of an anchor
+//! file is (AUTH-5.40: a seed on media is a findable paper until it is
+//! gone). Steps 1–3 alone — the generate, the export and the drop — are
 //! `export_pair`, and statement (b) alone is `two_places`: the loss arm
 //! cites the order with those two and inherits nothing else (§4a.6 L3).
 
@@ -24,6 +29,7 @@ use std::path::{Path, PathBuf};
 
 use skep_identity::{Fingerprint, PublicKey};
 use skep_signature::HybridSigner;
+use skep_util::file;
 
 use super::say;
 use crate::halt::Halt;
@@ -204,14 +210,43 @@ fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: Stri
 ///
 /// They are keyed to the path the run takes: ending at "move it to media
 /// you control" on the file-only path, the print clause under `--paper`
-/// alone (RES-62 item 7).
+/// alone (RES-62 item 7). They are said BEFORE the write (§4.2): the
+/// export writes at its final name, since its media may lack links, so a
+/// run killed inside the write leaves a part of a file there — and these
+/// words have named it, for the person to check against.
 fn ladder_words(path: &Path, paper: bool) -> String {
     let tail = if paper { ", or destroy it and keep the print" } else { "" };
     format!(
-        "anchor file written: {} — an exported file that syncs, rides into a backup, or sits on a shared machine IS a FINDABLE \
-         PAPER, the ladder's worst rung, so move it to media you control{tail}",
+        "anchor file written: {} — written as these words are said, so a run killed inside the write leaves a part of a file at \
+         this name, which no restore takes for an anchor; an exported file that syncs, rides into a backup, or sits on a shared \
+         machine IS a FINDABLE PAPER, the ladder's worst rung, so move it to media you control{tail}",
         path.display()
     )
+}
+
+/// Destroys the anchor file at `path`, saying what the removal did.
+///
+/// A file that went, or none that stood, is destroyed; a removal the
+/// volume refuses — a permission, a read-only medium — leaves the file
+/// standing, and says so at once naming the path, never "destroyed": a
+/// seed on media is a findable paper until it is gone (AUTH-5.40). `what`
+/// names the file's standing in the words ("the anchor file", "the file").
+/// Answers whether the file is gone.
+fn destroy(person: &mut dyn Person, what: &str, path: &Path, rule: &'static str) -> bool {
+    match file::remove(path) {
+        Ok(_) => {
+            say(person, rule, format!("{what} {} is destroyed", path.display()));
+            true
+        }
+        Err(e) => {
+            say(
+                person,
+                "AUTH-5.40",
+                format!("{what} {} could not be destroyed ({e}) and STILL STANDS — a findable paper until you remove it yourself", path.display()),
+            );
+            false
+        }
+    }
 }
 
 /// Returns the destination for anchor `which`: the flag's, or asked.
@@ -341,17 +376,19 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
     // value — no copy of it outlives step 5's drop.
     let files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.clone()), facts)).collect();
     let publics: Vec<(PublicKey, Fingerprint)> = files.iter().map(|f| (f.public.clone(), f.fingerprint)).collect();
-    // Step 4: export — the file, each to its own destination.
+    // Step 4: export — the file, each to its own destination, its path said
+    // BEFORE the write (§4.2): the file is written at its final name, and a
+    // run killed inside the write leaves a part of a file the words named.
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
     for (i, file) in files.iter().enumerate() {
         let dir = destination(person, opts, i)?;
         std::fs::create_dir_all(&dir).map_err(|e| Halt::face(format!("the destination {} cannot be made", dir.display()), e.to_string(), "name a directory you control"))?;
         let path = dir.join(anchor_file_name(&labels[i], &file.fingerprint));
+        say(person, "AUTH-5.40", ladder_words(&path, opts.paper));
         FileStore::write_once(&path, file.to_json().as_bytes()).map_err(|e| {
             Halt::face(format!("the anchor file {} could not be written", path.display()), e.to_string(), "name a directory you control, writable and not a `--rm` container's own filesystem")
         })?;
-        say(person, "AUTH-5.40", ladder_words(&path, opts.paper));
         let canon = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
         if i == 1 && dirs.iter().any(|d| *d == canon) {
             say(
@@ -396,7 +433,8 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
 ///
 /// The steps are [`export_pair`], then the re-import, the offer and the
 /// per-site line; `None` where the file path's read-back failed — every
-/// file the pair wrote destroyed — and the moment re-runs.
+/// file the pair wrote destroyed, each removal said, one the volume
+/// refuses said standing — and the moment re-runs.
 ///
 /// # Errors
 ///
@@ -420,21 +458,23 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
         if artifact.print != Some(Print::Verified) {
             // The file read back from the path it wrote — the disk channel.
             if read_back_from_file(&path, &artifact.public, &artifact.fingerprint).is_none() {
-                say(person, "§4.1 S3", format!("the anchor file {} did not read back as the key it names; it is destroyed (never a verified artifact) and the moment re-runs (attempt {})", path.display(), attempt + 1));
+                say(person, "§4.1 S3", format!("the anchor file {} did not read back as the key it names (never a verified artifact): the pair's files are destroyed next, each said, and the moment re-runs (attempt {})", path.display(), attempt + 1));
+                // Each file's removal read and said: the pair opens nothing,
+                // and a file the volume keeps is a findable paper.
                 for written in exported.iter().filter_map(|a| a.file.as_ref()) {
-                    let _ = std::fs::remove_file(written);
+                    destroy(person, "the anchor file", written, "§4.1 S3");
                 }
                 return Ok(None);
             }
         }
         // Step 9: AUTH-5.41 where both exist and the print passed — offer to
-        // destroy the file, never the act unasked.
+        // destroy the file, never the act unasked; the removal's answer read,
+        // a file the volume keeps said standing and kept as the artifact.
         if artifact.print == Some(Print::Verified) {
-            let destroy = person
+            let destroy_it = person
                 .yes_no(Public(Question { text: format!("the print of anchor {} passed its re-type and is the KEPT artifact; destroy the file {} and keep the print? (AUTH-5.40)", artifact.label, path.display()) }))
                 .map_err(abandoned)?;
-            if destroy {
-                let _ = std::fs::remove_file(&path);
+            if destroy_it && destroy(person, "the file", &path, "AUTH-5.41") {
                 artifact.file = None;
             }
         }

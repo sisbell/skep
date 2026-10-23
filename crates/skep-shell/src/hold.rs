@@ -70,7 +70,7 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Unheld, MAX_HELD_FRAME_BYTES, MAX_HELD_LINES};
+use crate::held::{Done, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Torn, Unheld, MAX_HELD_FRAME_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, Sessions};
@@ -835,6 +835,17 @@ impl Holds {
                         if let Some(aside) = aside {
                             self.say(format_args!("principal {principal}'s held file named another board or principal, and is set aside at {}", aside.display()));
                         }
+                        // A crash's tail, said once as the open's own landing;
+                        // the next line written cuts it.
+                        match queue.torn() {
+                            Some(Torn::Header { bytes }) => self.say(format_args!(
+                                "principal {principal}'s held file holds no whole header line ({bytes} bytes of a torn one — a crash before its header's sync) and is read as fresh; the next line written cuts it and heads the file"
+                            )),
+                            Some(Torn::Line { bytes }) => self.say(format_args!(
+                                "principal {principal}'s held file ends in a torn line of {bytes} bytes — a crash's, held by no one — which the next line written cuts off"
+                            )),
+                            None => {}
+                        }
                         ph.queue = queue;
                         ph.custody = Custody::File;
                     }
@@ -1175,10 +1186,17 @@ impl Holds {
 
     /// Takes one line out of the queue, whatever the disk did.
     ///
-    /// A `done` the device refused is said on `Talk`.
+    /// A `done` the device refused is said on `Talk`, and so is a held
+    /// file the volume would not remove once every line in it was done —
+    /// the store appends on to it.
     fn done_line(&self, ph: &mut PrincipalHold, k: u64, done: Done) {
-        if let Err(DoneError::Unwritten(e)) = ph.queue.done(k, done) {
-            self.say(format_args!("line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
+        if let Ok(settled) = ph.queue.done(k, done) {
+            if let Some(e) = settled.unwritten {
+                self.say(format_args!("line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
+            }
+            if let Some((path, e)) = settled.unremoved {
+                self.say(format_args!("every held line is done, and the held file {} could not be removed ({e}); it stands, and the next line is appended to it", path.display()));
+            }
         }
         ph.reissues.remove(&k);
     }

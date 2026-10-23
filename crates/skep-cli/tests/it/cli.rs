@@ -1374,6 +1374,33 @@ fn an_unbound_key_beside_a_bound_one_is_pending_at_no_board_this_store_knows_nev
     assert!(r.lines().contains(&"bound http://127.0.0.1:1 principal 1 account 1.0.1") && !r.out.contains("UNBOUND"), "{}", r.out);
 }
 
+/// AN UNFINISHED KEY FILE (§3.7; `fingerprint --dir`): `keys/<fp>.key.tmp`,
+/// left by a killed generation, is listed by `fingerprint --dir` as
+/// UNFINISHED on a row of its own — never as a key, the store's keys
+/// unchanged beside it — and the next `keygen` removes it and says so on
+/// stderr; listed again, it is gone.
+#[test]
+fn an_unfinished_key_file_is_listed_as_such_and_swept_by_the_next_keygen() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let fp = skep(&["keygen", "--label", "k", "--dir", s(&store)], &[], None).lines()[0].to_string();
+    let dead = store.join("keys").join(format!("{}.key.tmp", "ab".repeat(32)));
+    std::fs::write(&dead, b"{\"type\":\"skep-key\",\"v\":1,\"seed\":\"ab").unwrap();
+    let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let row = r.lines().into_iter().find(|l| l.starts_with("UNFINISHED ")).expect("the unfinished row");
+    assert!(row.contains(&dead.display().to_string()) && row.contains("`skep keygen`"), "{row}");
+    assert_eq!(r.lines().iter().filter(|l| l.len() == 64).count(), 1, "one key listed, the temp never a key: {}", r.out);
+    assert!(r.out.contains(&fp) && !r.out.contains(&format!("{}\n", "ab".repeat(32))), "{}", r.out);
+    let r = skep(&["keygen", "--label", "k2", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.err.contains(&format!("removed an unfinished key file {}", dead.display())), "{}", r.err);
+    assert!(!dead.exists(), "swept");
+    let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
+    assert!(r.code == 0 && !r.out.contains("UNFINISHED"), "{r:?}");
+    assert_eq!(keys_ending_in(&store, "key").len(), 2);
+}
+
 /// A PAYLOAD FILE THAT IS NOT THERE HALTS NAMING IT (AUTH-5.67: a
 /// mis-pathed file is a halt naming the path, never a fallback), before any
 /// socket opens — the dead board behind it is never dialed.

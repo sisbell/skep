@@ -1,10 +1,15 @@
 //! THE BACKUP MOMENT (`client.md` §4.2; AUTH-5.54's order) — no daemon: the
-//! file path's read-back FROM THE FILE, the re-run from step 1 when the file
-//! is gone and the act named by venue when the runs run out, the paper path's
-//! re-type and dismissal, the label domain at the box, the one-place
-//! sentence, the store refused as a destination however the path reaches it.
+//! file path's read-back FROM THE FILE, the destination said BEFORE the
+//! write, the re-run from step 1 when the file is gone and the act named by
+//! venue when the runs run out, a pair file the unlink refuses said standing
+//! and never "destroyed", the paper path's re-type and dismissal and the
+//! file its offer cannot destroy said standing and kept, the label domain
+//! at the box, the one-place sentence, the store refused as a destination
+//! however the path reaches it.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use skep_client::ceremony::backup::{anchor_file_name, backup_moment, BackupOptions, Print, Venue};
 use skep_client::person::scripted::{Script, Scripted};
@@ -62,19 +67,31 @@ fn the_file_path_reads_each_anchor_back_from_its_file() {
     assert!(person.said("AUTH-5.44 (create-org)") && person.said("keep the anchor files"), "the per-site line");
 }
 
-/// A person who removes the FIRST anchor's file the moment its ladder words
-/// are said — between the export and the read-back — once.
+/// The path the ladder words name.
+fn ladder_path(text: &str) -> PathBuf {
+    text.strip_prefix("anchor file written: ").and_then(|t| t.split(" — ").next()).map(PathBuf::from).expect("the path in the ladder words")
+}
+
+/// A person who removes the FIRST anchor's file once it stands — at the
+/// second anchor's ladder words, said before that anchor's write and after
+/// the first's — so it is gone before its read-back, once.
 struct Vanisher {
     inner: Scripted,
+    named: Option<PathBuf>,
     removed: Option<PathBuf>,
 }
 
 impl Person for Vanisher {
     fn say(&mut self, m: Public<Statement>) {
         if m.0.rule == "AUTH-5.40" && self.removed.is_none() {
-            let path = m.0.text.strip_prefix("anchor file written: ").and_then(|t| t.split(" — ").next()).map(PathBuf::from).expect("the path in the ladder words");
-            std::fs::remove_file(&path).expect("remove the anchor file");
-            self.removed = Some(path);
+            let path = ladder_path(&m.0.text);
+            match self.named.take() {
+                None => self.named = Some(path),
+                Some(first) => {
+                    std::fs::remove_file(&first).expect("remove the first anchor's file");
+                    self.removed = Some(first);
+                }
+            }
         }
         self.inner.say(m);
     }
@@ -119,10 +136,11 @@ impl Person for Vanisher {
 fn a_file_gone_before_its_read_back_re_runs_the_moment_from_step_one() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (dir.path().join("a"), dir.path().join("b"));
-    let mut person = Vanisher { inner: Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]), removed: None };
+    let mut person = Vanisher { inner: Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]), named: None, removed: None };
     let out = backup_moment(&mut person, &Venue::DoorSide, &options(vec![a.clone(), b.clone()], false, None)).expect("the moment completes on its second run");
     let removed = person.removed.clone().expect("a file was removed");
     assert!(person.inner.said("did not read back as the key it names") && person.inner.said("re-runs from step 1"), "{}", person.inner.transcript.join("\n"));
+    assert!(person.inner.said(&format!("the anchor file {} is destroyed", removed.display())), "a file gone before its removal is destroyed:\n{}", person.inner.transcript.join("\n"));
     for anchor in &out.anchors {
         let path = anchor.file.clone().expect("the second run's file stands");
         assert_ne!(path, removed);
@@ -144,12 +162,16 @@ fn a_moment_whose_runs_run_out_names_its_venues_own_command() {
     for (venue, command) in [(handoff, "`skep accept`"), (Venue::DoorSide, "`skep keygen --anchors`"), (notebook_venue(), "`skep claim`")] {
         let dir = tempfile::tempdir().unwrap();
         let mut person = Hooked::new(vec![Script::LabelDefault, Script::LabelDefault]);
-        // Every run's anchor a is gone before its read-back.
-        person.on_say = Box::new(|rule, text| {
-            if rule == "AUTH-5.40" {
-                let path = text.strip_prefix("anchor file written: ").and_then(|t| t.split(" — ").next()).map(PathBuf::from).expect("the path in the ladder words");
-                if path.file_name().is_some_and(|n| n.to_string_lossy().contains("-a-")) {
-                    std::fs::remove_file(&path).expect("remove anchor a");
+        // Every run's anchor a is gone before its read-back: removed at
+        // anchor b's ladder words, once a's file stands.
+        let mut pending: Option<PathBuf> = None;
+        person.on_say = Box::new(move |rule, text| {
+            if rule == "AUTH-5.40" && text.starts_with("anchor file written: ") {
+                let path = ladder_path(text);
+                if let Some(a) = pending.take() {
+                    std::fs::remove_file(&a).expect("remove anchor a");
+                } else if path.file_name().is_some_and(|n| n.to_string_lossy().contains("-a-")) {
+                    pending = Some(path);
                 }
             }
         });
@@ -157,6 +179,122 @@ fn a_moment_whose_runs_run_out_names_its_venues_own_command() {
         let text = err.to_string();
         assert!(text.contains("could not complete") && text.contains(&format!("re-run {command}")), "{command}: {text}");
     }
+}
+
+/// §4.2 — THE DESTINATION IS SAID BEFORE THE WRITE: at each anchor's ladder
+/// words the path they name holds no file yet, and once the moment is done
+/// every path so named holds the anchor the outcome names — so a run killed
+/// inside the write leaves a file the words already named (the mutant that
+/// says the words after the write names a file a kill leaves unsaid).
+#[test]
+fn the_destination_is_said_before_the_file_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let named: Rc<RefCell<Vec<PathBuf>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&named);
+    let mut person = Hooked::new(vec![Script::LabelDefault, Script::LabelDefault]);
+    person.on_say = Box::new(move |rule, text| {
+        if rule == "AUTH-5.40" && text.starts_with("anchor file written: ") {
+            let path = ladder_path(text);
+            assert!(!path.exists(), "{}: the file stands before its words are said", path.display());
+            seen.borrow_mut().push(path);
+        }
+    });
+    let out = backup_moment(&mut person, &Venue::DoorSide, &options(vec![a, b], false, None)).expect("the moment");
+    let named = named.borrow();
+    assert_eq!(named.len(), 2, "one line per anchor");
+    for (anchor, path) in out.anchors.iter().zip(named.iter()) {
+        assert_eq!(anchor.file.as_deref(), Some(path.as_path()), "the outcome names the path the words named");
+        assert!(path.is_file(), "{}: written after its words", path.display());
+    }
+    assert!(person.inner.said("written as these words are said"), "{}", person.inner.transcript.join("\n"));
+}
+
+/// AUTH-5.40; §4.1 S3 — A PAIR FILE THE UNLINK REFUSES after a failed
+/// read-back is said STANDING by its path, never "destroyed": anchor a's
+/// file damaged and its directory sealed against the unlink before the
+/// read-back, the moment says a's path could not be destroyed and still
+/// stands, says b's destroyed, and re-runs; the directory taking writes
+/// again, the second run completes beside the file that stands (the mutant
+/// that drops the unlink's answer says nothing of a seed left on the media).
+#[cfg(unix)]
+#[test]
+fn a_pair_file_the_unlink_refuses_is_said_standing_never_destroyed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let mut person = Hooked::new(vec![Script::LabelDefault, Script::LabelDefault]);
+    let a_dir = a.clone();
+    let mut first: Option<PathBuf> = None;
+    let mut sealed = false;
+    person.on_say = Box::new(move |rule, text| {
+        if rule == "AUTH-5.40" && text.starts_with("anchor file written: ") && !sealed {
+            let path = ladder_path(text);
+            match first.take() {
+                None => first = Some(path),
+                Some(a_file) => {
+                    // Anchor a's file stands: damaged, and its directory
+                    // sealed against the unlink.
+                    std::fs::write(&a_file, b"{\"type\":\"skep-key\"").unwrap();
+                    std::fs::set_permissions(&a_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+                    sealed = true;
+                }
+            }
+        }
+        if rule == "§4.1 S3" && text.contains("re-runs from step 1 under a fresh pair") {
+            std::fs::set_permissions(&a_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    });
+    let out = backup_moment(&mut person, &Venue::DoorSide, &options(vec![a.clone(), b.clone()], false, None));
+    std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let out = out.unwrap_or_else(|h| panic!("{h}\n{}", person.inner.transcript.join("\n")));
+    let t = person.inner.transcript.join("\n");
+    let (a_name, b_name) = (a.display().to_string(), b.display().to_string());
+    let standing = person.inner.transcript.iter().find(|l| l.contains("could not be destroyed")).unwrap_or_else(|| panic!("the standing file is said:\n{t}"));
+    assert!(standing.contains(&a_name) && standing.contains("STILL STANDS"), "{standing}");
+    assert!(person.inner.transcript.iter().any(|l| l.contains("is destroyed") && l.contains(&b_name)), "b's file destroyed, said:\n{t}");
+    assert!(!person.inner.transcript.iter().any(|l| l.contains("is destroyed") && l.contains(&a_name)), "never 'destroyed' of a file that stands:\n{t}");
+    assert_eq!(files_in(&a).len(), 2, "the damaged file stands beside the second run's");
+    assert_eq!(files_in(&b).len(), 1, "the first run's b destroyed, the second's stands");
+    assert!(out.anchors.iter().all(|x| x.file.as_ref().is_some_and(|p| p.is_file())));
+}
+
+/// AUTH-5.41; AUTH-5.40 — THE FILE THE OFFER CANNOT DESTROY is said STANDING
+/// by its path and kept as the artifact: anchor a's directory sealed against
+/// the unlink by the time its print passes, "destroy the file and keep the
+/// print" answered yes leaves the file, said, and the outcome still names
+/// it; anchor b's offer declined keeps its file as before (the mutant that
+/// drops the unlink's answer tells the person a seed is gone that is not).
+#[cfg(unix)]
+#[test]
+fn a_file_the_offer_cannot_destroy_is_said_standing_and_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let script = vec![Script::LabelDefault, Script::LabelDefault, Script::RetypeFromSheet(0), Script::YesNo(true), Script::RetypeFromSheet(1), Script::YesNo(false)];
+    let mut person = Hooked::new(script);
+    let a_dir = a.clone();
+    let mut words = 0;
+    person.on_say = Box::new(move |rule, text| {
+        if rule == "AUTH-5.40" && text.starts_with("anchor file written: ") {
+            words += 1;
+            if words == 2 {
+                std::fs::set_permissions(&a_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+            }
+        }
+    });
+    let out = backup_moment(&mut person, &notebook_venue(), &options(vec![a.clone(), b.clone()], true, None));
+    std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let out = out.unwrap_or_else(|h| panic!("{h}\n{}", person.inner.transcript.join("\n")));
+    let t = person.inner.transcript.join("\n");
+    let a_file = out.anchors[0].file.clone().expect("the file the volume kept stands in the outcome");
+    assert!(a_file.is_file() && out.anchors[0].print == Some(Print::Verified));
+    let a_name = a_file.display().to_string();
+    let standing = person.inner.transcript.iter().find(|l| l.contains("could not be destroyed")).unwrap_or_else(|| panic!("the standing file is said:\n{t}"));
+    assert!(standing.contains(&a_name) && standing.contains("STILL STANDS"), "{standing}");
+    assert!(!person.inner.said(&format!("the file {a_name} is destroyed")), "never 'destroyed' of a file that stands:\n{t}");
+    assert!(out.anchors[1].file.as_ref().is_some_and(|p| p.is_file()), "b's offer declined keeps its file");
+    assert_eq!(files_in(&a).len() + files_in(&b).len(), 2);
 }
 
 /// THE PAPER PATH (`--paper`): the sheets shown after the export, DISMISSED
@@ -191,6 +329,7 @@ fn the_paper_path_retypes_from_the_sheet_between_a_dismissal_and_the_offer() {
     assert!(out.anchors[0].print == Some(Print::Verified) && out.anchors[0].file.as_ref().is_some_and(|p| p.is_file()), "a: verified, the file kept");
     assert!(out.anchors[1].print == Some(Print::Verified) && out.anchors[1].file.is_none(), "b: verified, the file destroyed on the offer");
     assert_eq!(files_in(&b).len(), 0);
+    assert!(person.transcript.iter().any(|l| l.contains("[AUTH-5.41]") && l.contains("is destroyed")), "the destruction said after the act:\n{}", t.join("\n"));
     assert!(person.said("AUTH-5.44 (notebook)") && person.said("keep the papers apart"), "the notebook form, 'papers'");
     for sheet in &person.sheets {
         assert_eq!((sheet.account.as_deref(), sheet.principal, sheet.origin.as_deref()), (Some("1.0.1"), Some(1), Some("http://127.0.0.1:8642")), "the notebook artifact carries the three facts");

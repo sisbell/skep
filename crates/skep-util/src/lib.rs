@@ -1,8 +1,10 @@
-//! # skep-util — the support crate below the daemon and the media crate
+//! # skep-util — the support crate below the daemon and the clients
 //!
-//! Four utilities `skepd` and `skep-media` both take and neither owns, in
-//! one home, so the media crate's move out of the daemon copies no helper
-//! and the daemon's five pools keep one permit type:
+//! Five utilities two or more crates of the workspace take and none owns —
+//! the daemon, the media crate, the client library and the shell's core
+//! stand above it — in one home, so the media crate's move out of the
+//! daemon copies no helper, the daemon's five pools keep one permit type,
+//! and the client's and the shell's files keep one tail rule:
 //!
 //! * [`permits`] — the counting permit pool: a try-acquire with no queue
 //!   and no blocking, whose guard returns its slot on drop. One mechanism
@@ -29,16 +31,25 @@
 //!   from: the default, a flag, a variable — carried beside the value on
 //!   the daemon's session-layer options and the media crate's upload
 //!   setting, so the open's report names each setting's source.
+//! * [`file`](mod@file) — a file one process writes and reads back after
+//!   a crash, a kill or a refused write, under one tail rule: a read that
+//!   hands back a file's lines as bytes and classifies its tail, an append written
+//!   where the last whole line ends with a torn tail first cut off or
+//!   closed by a mark, a whole file written once or published by a locked
+//!   temp and a rename, a removal that answers what it did, and the sweep
+//!   of the temps a dead run left — the client's key store, bindings file
+//!   and anchor export and the shell's held-writes file take it.
 //!
 //! ## The rule of membership
 //!
-//! An item lives here if and only if BOTH `skepd` and `skep-media` take it
-//! AND it has no subject of its own. A constant is configuration, not a
-//! utility — the limits the two crates share are the media crate's own
-//! public numbers, and the daemon's stay the daemon's — so none lives here.
-//! A setting's SOURCE is the rule's positive case beside the permit: both
-//! crates' option types carry one, and whether a value came from a flag or
-//! a variable is a fact about the parse, the subject of neither crate. The
+//! An item lives here if and only if at least two crates take it and it
+//! has no subject of its own. A constant is configuration, not a utility —
+//! the limits the two daemon crates share are the media crate's own public
+//! numbers, and the daemon's stay the daemon's; the bound a client file's
+//! line keeps is that file's own — so none lives here. A setting's SOURCE
+//! is the rule's positive case beside the permit: both daemon crates'
+//! option types carry one, and whether a value came from a flag or a
+//! variable is a fact about the parse, the subject of neither crate. The
 //! crate names no store and no engine; it depends on `serde_json` and
 //! `std` alone, and on nothing of skep.
 //!
@@ -60,6 +71,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod file;
 pub mod json;
 pub mod notice;
 pub mod permits;

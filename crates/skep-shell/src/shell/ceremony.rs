@@ -129,7 +129,16 @@ impl Shell {
                 Label::new(&text).map_err(empty_label)?
             }
         };
-        let id = self.store.generate(Some(label.clone())).map_err(|e| Refusal::of_named(Name::STORE_UNWRITABLE, e.into()))?;
+        let generated = self.store.generate_and_sweep(Some(label.clone())).map_err(|e| Refusal::of_named(Name::STORE_UNWRITABLE, e.into()))?;
+        // The sweep's names, said on TALK: a temp a killed generation left
+        // held a seed nobody's key was made of (client.md §3.7).
+        for swept in &generated.swept {
+            self.say(format!("keygen: removed an unfinished key file {}, left by a generation that did not complete", swept.display()));
+        }
+        for (left, e) in &generated.unswept {
+            self.say(format!("keygen: an unfinished key file could not be removed ({e}) and stands: {}", left.display()));
+        }
+        let id = generated.id;
         let path = self.store.key_path(&id.0);
         let key = self.store.select(&KeySelector::Path(&path), Purpose::Read).map_err(|e| Refusal::of_named(Name::STORE_UNREADABLE, e.into()))?;
         let enrollment = Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).map_err(|e| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": e.to_string()})))?;

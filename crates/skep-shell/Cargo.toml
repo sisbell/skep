@@ -37,6 +37,14 @@ skep-address = { path = "../skep-address" }
 # (`aside_name`), which the held store's directory is keyed and set aside
 # by. No feature.
 skep-search = { path = "../skep-search" }
+# The file under the tail rule (`skep_util::file`): the held-writes file's
+# header written once, its lines appended where the last whole line ends
+# with a crash's tail cut off first, its removal at compaction answering
+# what it did, and its read line by line within the line bound. The support
+# crate stands below every crate of the workspace and names no store
+# (ARCHITECTURE.md §The support crate); the forms, the halts and every word
+# said stay here.
+skep-util = { path = "../skep-util" }
 # The bridge's values: every call's input and output, every event, is a
 # `serde_json::Value` shaped as client.md §4b.1 and §4b.2 draw it.
 serde_json.workspace = true

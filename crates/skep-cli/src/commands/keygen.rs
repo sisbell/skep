@@ -24,7 +24,7 @@ use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::halt::Halt;
 use skep_client::person::{LabelBox, Person, Public, Statement};
 use skep_client::sheet::{group_hex, Label};
-use skep_client::store::{KeySelector, KeyStore, Purpose};
+use skep_client::store::{KeySelector, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
 use super::{data, host_name_and_date, record_refused, require_terminal, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
@@ -141,13 +141,22 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             entries.push(Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).map_err(record_refused).inspect_err(|_| abandoned())?);
         }
     }
-    let id = store.generate(Some(label.clone())).inspect_err(|_| {
+    let generated = store.generate_and_sweep(Some(label.clone())).inspect_err(|_| {
         // The moment's anchors stand written: their disposition, beside the
         // generation's halt, which says the store holds nothing of its key.
         if door_side {
             talk(ABANDONED);
         }
     })?;
+    // The sweep's names, said: a temp a killed generation left held a seed
+    // nobody's key was made of (§3.7), and one the volume keeps still does.
+    for swept in &generated.swept {
+        talk(format!("removed an unfinished key file {}, left by a generation that did not complete", swept.display()));
+    }
+    for (left, e) in &generated.unswept {
+        talk(format!("an unfinished key file could not be removed ({e}) and stands: {}", left.display()));
+    }
+    let id = generated.id;
     let path = store.key_path(&id.0);
     let key = store.select(&KeySelector::Path(&path), Purpose::Read)?;
     talk(custody_line(&path));

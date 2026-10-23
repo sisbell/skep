@@ -1,25 +1,28 @@
-//! THE CELL INDEX (`media.md` Op inventory 1 — "ONE DERIVED INDEX SERVES THE
-//! BASE AND THE PRUNER's REFERENCE TEST BOTH … held by skepd IN MEMORY … ON
-//! PATTERNS P22's RECOMPUTE ARM"; the register M-I5 (b), M-I6 (a); the
-//! rulings ms5-R and ms5-T4): per hash, the cells naming it; per account,
-//! the DISTINCT hashes its cells name at their size — the BASE, one number
-//! derived from the record and nothing else (M-I6 (a)). Two writers and
-//! three readers. ENTERED AT EVERY COMMIT THAT MINTS A CELL, whichever op
-//! minted it — an `insert`'s values, a shot's re-inserted values — before
-//! that commit's serialization guard drops ([`CellIndex::enter_insert`],
-//! [`CellIndex::enter_publish`], the write path's one hook). REBUILT WHOLE
-//! AT EVERY OPEN from the world replayed there and never from the retained
-//! journal alone: a thread walks an immutable snapshot of the content store
-//! ([`walk`]) while every other request is served, adding every cell it
-//! finds INTO THE ONE COPY the commits since the open have entered their
-//! own into, never installing a copy in its place — THE COMPOSITION CLAUSE,
-//! which holds by construction because an entry is IDEMPOTENT PER CELL
-//! ADDRESS: a cell is permanent, so an entry made twice is made once.
-//! THE READINESS (`CellIndex::is_ready`) flips when that walk completes,
-//! and until then the index's three readers alone — the PUT's creation and
-//! resume, the pruner's pass, the deposit read's base — refuse with one
-//! retry-class token (ms5-R, the narrow reading: every other request is
-//! served throughout, the door's binding reading the lease arm alone).
+//! The cell index: per hash the cells naming it, per account the base.
+//!
+//! Its rules are `media.md` Op inventory 1 — "one derived index serves the
+//! base and the pruner's reference test both … held by skepd in memory … on
+//! PATTERNS P22's recompute arm" — and the register M-I5 (b), M-I6 (a). Per
+//! hash it holds the cells naming it; per account, the distinct hashes its
+//! cells name at their size — the base, one number derived from the record
+//! and nothing else (M-I6 (a)). Two writers, and three readers beside the
+//! door's binding and the pruner's pass. Entered at every commit that mints
+//! a cell, whichever op minted it — an `insert`'s values, a shot's
+//! re-inserted values — before that commit's serialization guard drops
+//! ([`CellIndex::enter_insert`], [`CellIndex::enter_publish`], the write
+//! path's one hook). Rebuilt whole at every open from the world replayed
+//! there and never from the retained journal alone: a thread walks an
+//! immutable snapshot of the content store ([`walk`]) while every other
+//! request is served, adding every cell it finds into the one copy the
+//! commits since the open have entered their own into, never installing a
+//! copy in its place — the composition clause, which holds by construction
+//! because an entry is idempotent per cell address: a cell is permanent, so
+//! an entry made twice is made once. The readiness (`CellIndex::is_ready`)
+//! flips when that walk completes, and until then the index's three
+//! readers — the PUT's creation and resume, the deposit read's base —
+//! refuse with one retry-class token and the pruner's pass does not start
+//! (every other request is served throughout, the door's binding reading
+//! the lease arm alone).
 //!
 //! **The failed state** (`CellIndex::is_failed`; `operations.md` §4 row 26,
 //! §1.1 row 41; PATTERNS P10, P22's honest-null arm). Where the walk dies —
@@ -34,32 +37,33 @@
 //! that stands: never a retry that cannot succeed, and never an open that
 //! fails for a structure the board can serve without.
 //!
-//! THE HALT MARK (DOCTRINE D13's carve-out, ms5-T4): a value naming the
-//! cell's kind that parses under no schema this build pins is entered as a
-//! halt mark — its address and the fault — and counts in no base; while
-//! one stands the pruner halts its unlink pass, naming it, and never reads
-//! the value as absent, since at the pruner absence is a permission. The
-//! door refuses such a value at its own insert, so a halt mark is reachable
-//! only from a board another build wrote.
+//! **The halt mark** (DOCTRINE D13's carve-out). A value opening as the
+//! cell's kind (the prefix test) that parses under no schema this build
+//! pins is entered as a halt mark — its address and the fault — and counts
+//! in no base; while one stands the pruner halts its unlink pass, naming
+//! it, and never reads the value as absent, since at the pruner absence is
+//! a permission. The door refuses such a value at its own insert, so a
+//! halt mark is reachable only from a board another build wrote.
 //!
-//! THE LOCK IS THE INDEX's OWN: the commit enters under the serialization
-//! guard, the media gate reads under the credential lock's read arm, the
-//! pruner under its write arm, the walk under neither — so the index sits
-//! behind a `parking_lot::RwLock` taken innermost and held across no other
-//! lock.
-//! The cheap PREFIX TEST (`cell::names_kind_by_prefix`, the picture kind's
-//! canonical opening) stands before every parse, and a STRETCH — one entry
-//! for a run of single-byte values, none of which can be a cell — is counted
-//! and skipped whole by its arm before the test, so a walk over a prose
-//! board's million one-byte values costs a step per stretch, a board of atoms
-//! a byte compare apiece, and a parse for the cells alone.
+//! **The lock is the index's own.** The commit enters under the
+//! serialization guard, the door's binding reads under the credential
+//! lock's read arm, the PUT's scopes and the deposit read under no arm of
+//! it, the pruner under its write arm, the walk under neither — so the
+//! index sits behind a `parking_lot::RwLock` taken innermost and held across
+//! no other lock. The cheap prefix test (`cell::names_kind_by_prefix`, the
+//! picture kind's canonical opening) stands before every parse, and a
+//! stretch — one entry for a run of single-byte values, none of which can be
+//! a cell — is counted and skipped whole by its arm before the test, so a
+//! walk over a prose board's million one-byte values costs a step per
+//! stretch, a board of atoms a byte compare apiece, and a parse for the
+//! cells alone.
 //!
-//! THE INVENTORY's READS ([`CellIndex::references`], [`CellIndex::accounts`],
-//! [`CellIndex::halts`]; `media.md` §Recovery, "THE OPERATOR CAN LIST THE
-//! HOLES"): the operator's tool walks a copy's world into a fresh index
-//! through the same [`walk`] and reads it whole — every reference with the
-//! cells naming it and the size they name, every account's base, every halt
-//! mark — recording nothing (D9).
+//! **The inventory's reads** ([`CellIndex::references`],
+//! [`CellIndex::accounts`], [`CellIndex::halts`]; `media.md` §Recovery, "the
+//! operator can list the holes"). The operator's tool walks a copy's world
+//! into a fresh index through the same [`walk`] and reads it whole — every
+//! reference with the cells naming it and the size they name, every
+//! account's base, every halt mark — recording nothing (D9).
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
@@ -105,29 +109,34 @@ impl HashKey {
     }
 }
 
-/// One account's side of the index: the distinct hashes its cells name,
-/// each at the size counted for it, and their sum, THE BASE.
+/// One account's side of the index: its hashes and their sum, the base.
+///
+/// The hashes are the distinct ones its cells name, each at the size
+/// counted for it.
 #[derive(Default)]
 struct Account {
     hashes: BTreeMap<HashKey, u64>,
     base: u64,
 }
 
-/// A HALT MARK: a value at `at` naming the kind under no pinned schema.
+/// A halt mark: a value at `at` naming the kind under no pinned schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HaltMark {
     /// The value's address.
     pub at: Address,
     /// The kind the value names.
     pub kind: String,
-    /// The schema fault: `unknown_cell_schema`, the name of the cell's own
-    /// verdict, as the door's arm 4 answers it.
+    /// The schema fault: `unknown_cell_schema`.
+    ///
+    /// It is the name of the cell's own verdict, as the door's arm 4 answers
+    /// it.
     pub fault: String,
 }
 
-/// One REFERENCE as the inventory reads it: a hash, the cells naming it,
-/// and the size they name it at — the largest any names, as the base
-/// counts it.
+/// One reference as the inventory reads it: a hash, its cells and its size.
+///
+/// The cells are those naming the hash; the size is the one they name it
+/// at — the largest any names, as the base counts it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
     /// The hash function's designation, as the sidecar key spells it.
@@ -145,11 +154,13 @@ pub struct Reference {
 struct Entries {
     /// Per hash, the cells naming it — the pruner's reference test.
     by_hash: BTreeMap<HashKey, BTreeSet<Tumbler>>,
-    /// Per hash, the largest size any cell names it at — the inventory's
-    /// length test, kept for a cell under no seat too.
+    /// Per hash, the largest size any cell names it at.
+    ///
+    /// It is the inventory's length test, kept for a cell under no seat too.
     sizes: BTreeMap<HashKey, u64>,
-    /// Per account (the principal seated at it, ω of the cell's document),
-    /// the hashes its cells name at their size — the base.
+    /// Per account, the hashes its cells name at their size: the base.
+    ///
+    /// The account is the principal seated at it, ω of the cell's document.
     by_account: BTreeMap<PrincipalId, Account>,
     /// The halt marks, by address.
     halts: BTreeMap<Tumbler, HaltMark>,
@@ -157,9 +168,10 @@ struct Entries {
     cells: BTreeSet<Tumbler>,
 }
 
-/// THE REBUILD's REPORT: what the walk at open found and what it cost —
-/// the record's measure (its §Costs: "the time from open to the first PUT
-/// the gate [the media gate] admits") read off the daemon rather than
+/// The rebuild's report: what the walk at open found and what it cost.
+///
+/// It is the record's measure (its §Costs: "the time from open to the first
+/// PUT the gate [the media gate] admits") read off the daemon rather than
 /// guessed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rebuild {
@@ -178,15 +190,18 @@ pub struct Rebuild {
 /// The index.
 pub struct CellIndex {
     entries: RwLock<Entries>,
-    /// THE READINESS: the walk at open completed. Monotone.
+    /// The readiness: the walk at open completed.
+    ///
+    /// Monotone.
     ready: AtomicBool,
     /// The failed state: the walk at open died, caught.
     ///
-    /// Set by that catch alone ([`CellIndex::fail`]; `operations.md` §4 row
-    /// 26), whichever thread the walk ran on, and never cleared: nothing
-    /// walks again but a restart. Exclusive with `ready` by construction:
-    /// `complete` runs only after a walk returned, `fail` only on an unwind
-    /// out of the walk or its completion.
+    /// Set by that catch ([`CellIndex::fail`]; `operations.md` §4 row 26),
+    /// whichever thread the walk ran on, and by a test on an index it built
+    /// by hand; never cleared: nothing walks again but a restart. Exclusive
+    /// with `ready` by construction on the walk's path: `complete` runs only
+    /// after a walk returned, `fail` only on an unwind out of the walk or its
+    /// completion.
     failed: AtomicBool,
     rebuild: Mutex<Option<Rebuild>>,
 }
@@ -200,8 +215,9 @@ enum Entered {
 }
 
 impl CellIndex {
-    /// An empty index, NOT READY and not failed: the walk makes it ready,
-    /// or its death marks it failed.
+    /// Returns an empty index, not ready and not failed.
+    ///
+    /// The walk makes it ready, or its death marks it failed.
     pub fn new() -> CellIndex {
         CellIndex {
             entries: RwLock::new(Entries::default()),
@@ -211,23 +227,28 @@ impl CellIndex {
         }
     }
 
-    /// Whether the walk at open has completed — what the three readers
-    /// consult. Monotone: once ready, ready for the life of the process.
+    /// Returns whether the walk at open has completed.
+    ///
+    /// It is what the three readers consult. Monotone: once ready, ready for
+    /// the life of the process.
     pub(crate) fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
-    /// Whether the walk at open DIED — the FAILED state (`operations.md` §4
-    /// row 26), the third beside ready and not-ready: the three readers
-    /// refuse `index_failed` for the life of the process, the door answers
-    /// the lease arm's verdict as final, the pruner runs no pass. Monotone,
-    /// and never true beside `CellIndex::is_ready`.
+    /// Returns whether the walk at open died: the failed state.
+    ///
+    /// It is the third state beside ready and not-ready (`operations.md` §4
+    /// row 26): the three readers refuse `index_failed` for the life of the
+    /// process, the door answers the lease arm's verdict as final, the
+    /// pruner runs no pass. Monotone, and never true beside
+    /// `CellIndex::is_ready`.
     pub(crate) fn is_failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }
 
-    /// The walk's report, once it has completed — the open-cost measure's
-    /// read, a suite's.
+    /// Returns the walk's report, once it has completed.
+    ///
+    /// It is the open-cost measure's read, a suite's.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn rebuild_report(&self) -> Option<Rebuild> {
@@ -238,9 +259,10 @@ impl CellIndex {
     ///
     /// It says the walk's landing (`operations.md` §1.1 row 13), its figures
     /// and its two durations in milliseconds ([`RebuiltLine`]), and, where a
-    /// value names a kind under no schema this build reads, the standing
-    /// failure that halts the pruner's unlink pass (row 14), once. It is the
-    /// walk's own door; a test readies an index it built by hand through it.
+    /// halt mark stands — a value opening as the picture kind under no schema
+    /// this build reads — the standing failure that halts the pruner's unlink
+    /// pass (row 14), once. It is the walk's own door; a test readies an
+    /// index it built by hand through it.
     pub(crate) fn complete(&self, report: Rebuild) {
         notice::emit(Class::Landing, RebuiltLine { report: &report });
         if let Some(mark) = self.first_halt() {
@@ -271,11 +293,12 @@ impl CellIndex {
         notice::emit(Class::Failure, WalkFailedLine { payload: payload_text(payload) });
     }
 
-    /// ENTER one cell at `at`, minted in a document `owner` is seated over
-    /// (`None`: a document under no seat — counted in no base, named for the
-    /// pruner all the same). IDEMPOTENT per address — the composition
-    /// clause's premise: a cell is permanent, so a second entry of one
-    /// address changes nothing. `true` where the entry was new.
+    /// Enters one cell at `at`, minted in a document `owner` is seated over.
+    ///
+    /// `None` is a document under no seat — counted in no base, named for the
+    /// pruner all the same. Idempotent per address — the composition clause's
+    /// premise: a cell is permanent, so a second entry of one address changes
+    /// nothing. Answers `true` where the entry was new.
     pub(crate) fn enter(&self, at: &Address, owner: Option<PrincipalId>, cell: &Cell) -> bool {
         let key = HashKey::of(cell);
         let mut entries = self.entries.write();
@@ -287,7 +310,7 @@ impl CellIndex {
         *named = (*named).max(cell.size);
         if let Some(owner) = owner {
             let account = entries.by_account.entry(owner).or_default();
-            // One size per hash per account, order-independent — the LARGEST
+            // One size per hash per account, order-independent — the largest
             // its cells name — so the base is one number whatever order the
             // walk and the commits entered in (M-I6 (a)); cells disagreeing
             // on a hash's size are reachable only off a board another build
@@ -301,10 +324,11 @@ impl CellIndex {
         true
     }
 
-    /// ENTER A HALT MARK at `at`: the picture kind named under no pinned
-    /// schema, its fault the verdict's own name
-    /// ([`cell::UNKNOWN_SCHEMA_TOKEN`]). Idempotent per address. `true`
-    /// where new.
+    /// Enters a halt mark at `at`.
+    ///
+    /// There the picture kind is named under no pinned schema; the mark's
+    /// fault is the verdict's own name ([`cell::UNKNOWN_SCHEMA_TOKEN`]).
+    /// Idempotent per address. Answers `true` where new.
     fn halt(&self, at: &Address) -> bool {
         let mut entries = self.entries.write();
         if entries.halts.contains_key(at.tumbler()) {
@@ -319,14 +343,18 @@ impl CellIndex {
         true
     }
 
-    /// Whether `owner`'s OWN cells name `<designation>/<hex>` — the
-    /// binding's index-first arm: a reference, kept by no lease.
+    /// Returns whether `owner`'s own cells name `<designation>/<hex>`.
+    ///
+    /// It is the pending rule's read (`MediaGate::lease_counted`): a hash its
+    /// own cells name is a reference, kept by no lease.
     pub(crate) fn names(&self, owner: PrincipalId, designation: &str, hex: &str) -> bool {
         self.size_named(owner, designation, hex).is_some()
     }
 
-    /// The size `owner`'s own cells name `<designation>/<hex>` at — the
-    /// size its base counts the hash at — or `None` where none names it.
+    /// Returns the size `owner`'s own cells name `<designation>/<hex>` at.
+    ///
+    /// It is the size its base counts the hash at — the binding's index-first
+    /// arm reads it — or `None` where none names it.
     pub(crate) fn size_named(&self, owner: PrincipalId, designation: &str, hex: &str) -> Option<u64> {
         self.entries
             .read()
@@ -335,32 +363,37 @@ impl CellIndex {
             .and_then(|a| a.hashes.get(&HashKey::named(designation, hex)).copied())
     }
 
-    /// Whether ANY cell names `<designation>/<hex>` — the pruner's reference
-    /// test, whose null is a permission; the pull's test of the file it is
-    /// handed.
+    /// Returns whether any cell names `<designation>/<hex>`.
+    ///
+    /// It is the pruner's reference test, whose null is a permission; the
+    /// pull's test of the file it is handed.
     pub fn referenced(&self, designation: &str, hex: &str) -> bool {
         self.entries.read().by_hash.contains_key(&HashKey::named(designation, hex))
     }
 
-    /// THE BASE of `owner`'s account: the sum of its distinct hashes' sizes
-    /// — the deposit read's first figure.
+    /// Returns the base of `owner`'s account.
+    ///
+    /// It is the sum of its distinct hashes' sizes — the deposit read's first
+    /// figure.
     pub fn base(&self, owner: PrincipalId) -> u64 {
         self.entries.read().by_account.get(&owner).map_or(0, |a| a.base)
     }
 
-    /// Every account's base, summed — the venue total's record-derived
-    /// half beside the pending bytes.
+    /// Returns every account's base, summed.
+    ///
+    /// It is the venue total's record-derived half beside the pending bytes.
     pub(crate) fn total_base(&self) -> u64 {
         self.entries.read().by_account.values().fold(0u64, |acc, a| acc.saturating_add(a.base))
     }
 
-    /// The first halt mark standing, by address — what the pruner halts on
-    /// and names.
+    /// Returns the first halt mark standing, by address.
+    ///
+    /// It is what the pruner halts on and names.
     pub(crate) fn first_halt(&self) -> Option<HaltMark> {
         self.entries.read().halts.values().next().cloned()
     }
 
-    /// The counts: cells, distinct hashes, halt marks — a suite's read.
+    /// Returns the counts: cells, distinct hashes, halt marks — a suite's read.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn counts(&self) -> (usize, usize, usize) {
@@ -368,8 +401,10 @@ impl CellIndex {
         (e.cells.len(), e.by_hash.len(), e.halts.len())
     }
 
-    /// EVERY REFERENCE — the inventory's read: per hash, the cells naming
-    /// it and the size they name, in hash order.
+    /// Returns every reference: the inventory's read.
+    ///
+    /// Per hash, it gives the cells naming it and the size they name, in hash
+    /// order.
     pub fn references(&self) -> Vec<Reference> {
         let e = self.entries.read();
         e.by_hash
@@ -383,27 +418,30 @@ impl CellIndex {
             .collect()
     }
 
-    /// EVERY ACCOUNT's BASE — the inventory's read: the principal seated at
-    /// the account and its base, in principal order.
+    /// Returns every account's base: the inventory's read.
+    ///
+    /// It gives the principal seated at the account and its base, in
+    /// principal order.
     pub fn accounts(&self) -> Vec<(PrincipalId, u64)> {
         self.entries.read().by_account.iter().map(|(p, a)| (*p, a.base)).collect()
     }
 
-    /// EVERY HALT MARK standing, by address — the inventory's read.
+    /// Returns every halt mark standing, by address: the inventory's read.
     pub fn halts(&self) -> Vec<HaltMark> {
         self.entries.read().halts.values().cloned().collect()
     }
 
-    /// THE ONE ENTRY PATH for a value past the prefix test, at `at` in
-    /// `world`: the one parser's verdict — a cell is entered under ω of the
-    /// cell's document (M3's one walk, read once per cell); a value naming
-    /// the kind under no schema is entered as a halt mark — a body past the
-    /// cap that opens as the picture kind among them, since the cap bounds
-    /// the parse and never the classification; a value the parser reads as
-    /// no cell of the kind — malformed past the prefix, or past the cap and
-    /// opening as no kind — is nothing, as it is to the door. Generic over
-    /// the world M10 reads ([`FebeWorld`]), as every entry and the walk are:
-    /// the daemon instantiates them at its `World`.
+    /// Enters a value past the prefix test, at `at` in `world`.
+    ///
+    /// It is the one entry path, by the one parser's verdict: a cell is
+    /// entered under ω of the cell's document (M3's one walk, read once per
+    /// cell); a value naming the kind under no schema is entered as a halt
+    /// mark — a body past the cap that opens as the picture kind among them,
+    /// since the cap bounds the parse and never the classification; a value
+    /// the parser reads as no cell of the kind — malformed past the prefix,
+    /// or past the cap and opening as no kind — is nothing, as it is to the
+    /// door. Generic over the world M10 reads ([`FebeWorld`]), as every entry
+    /// and the walk are: the daemon instantiates them at its `World`.
     fn enter_value<W: FebeWorld>(&self, world: &W, at: &Address, bytes: &[u8]) -> Entered {
         match cell::parse(bytes) {
             Ok(cell) => {
@@ -420,11 +458,12 @@ impl CellIndex {
         }
     }
 
-    /// THE ENTRY AT AN `insert`'s COMMIT: the values the ack placed, read off
-    /// the post-commit `world` at the addresses the commit minted — `start`
-    /// (the ack's address, the first minted) and the next ones, I-adjacent
-    /// under the named document's content chain — for the value indices
-    /// `naming` the prefix test admitted ahead of the commit.
+    /// Enters the values an `insert`'s commit placed: the entry at its commit.
+    ///
+    /// They are read off the post-commit `world` at the addresses the commit
+    /// minted — `start` (the ack's address, the first minted) and the next
+    /// ones, I-adjacent under the named document's content chain — for the
+    /// value indices `naming` the prefix test admitted ahead of the commit.
     pub fn enter_insert<W: FebeWorld>(&self, world: &W, start: &Address, naming: &[usize]) {
         let content = world.content();
         for &i in naming {
@@ -440,13 +479,15 @@ impl CellIndex {
         }
     }
 
-    /// THE ENTRY AT A SHOT's COMMIT: the `reinserted` values the shot minted
-    /// as fresh identity under the trunk's content chain — the last
-    /// `reinserted` addresses of that chain in the post-commit `world`,
-    /// where `skep_arrangement::Vstream::publish` states a shot's fresh
-    /// identity lands, read off its frontier (M3's content mint, asked and
-    /// not staged, is the chain's peek) — each put through the prefix test
-    /// and the one entry path.
+    /// Enters the values a shot's commit minted: the entry at its commit.
+    ///
+    /// They are the `reinserted` values the shot minted as fresh identity
+    /// under the trunk's content chain — the last `reinserted` addresses of
+    /// that chain in the post-commit `world`, where
+    /// `skep_arrangement::Vstream::publish` states a shot's fresh identity
+    /// lands, read off its frontier (M3's content mint, asked and not staged,
+    /// is the chain's peek) — each put through the prefix test and the one
+    /// entry path.
     pub fn enter_publish<W: FebeWorld>(&self, world: &W, member: &Address, reinserted: u64) {
         let trunk = trunk_of(member);
         let Ok((next, _)) = world.m3().mint_content(&trunk) else { return };
@@ -563,10 +604,13 @@ fn payload_text(payload: &(dyn Any + Send)) -> &'static str {
     payload.downcast_ref::<&'static str>().copied().unwrap_or("a panic")
 }
 
-/// THE WALK AT OPEN: every value of the world `snapshot` holds, through the
-/// prefix test and then the one entry path, into `index` — the one copy
-/// the commits since the open enter their own into. Reads an immutable
-/// snapshot, so commits proceed on later roots while it walks.
+/// Walks every value of the world `snapshot` holds into `index`.
+///
+/// It is the walk at open: a stretch's values counted and skipped whole,
+/// every other value through the prefix test and then the one entry path,
+/// into `index` — the one copy the commits since the open enter their own
+/// into. Reads an immutable snapshot, so commits proceed on later roots
+/// while it walks.
 pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild {
     #[cfg(any(test, feature = "test-hooks"))]
     WALK_HOLD.wait();
@@ -577,12 +621,12 @@ pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild 
     let (mut values, mut cells, mut halts) = (0usize, 0usize, 0usize);
     let mut parse = Duration::ZERO;
     for (at, piece) in world.content().iter() {
-        // BY ARM, not by the prefix test: a stretch is N single-byte values,
+        // By arm, not by the prefix test: a stretch is N single-byte values,
         // none of which can be a cell, so it is counted — `values` keeps
-        // counting VALUES, which keeps the operator line's words true — and
+        // counting *values*, which keeps the operator line's words true — and
         // skipped whole; the test run over a whole stretch's bytes would take
         // typed text that happens to open `{"type":"` for a cell. A value is
-        // tested as before.
+        // put through the test.
         let bytes = match piece {
             Piece::Bytes(bytes) => {
                 values += bytes.len();
@@ -676,9 +720,10 @@ fn walk_under_the_catch<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex)
 #[cfg(test)]
 static REFUSE_THE_WALKS_THREAD: AtomicBool = AtomicBool::new(false);
 
-/// TEST SEAM: a hold on the walk, armed before a daemon opens, so a suite
-/// can serve requests against a daemon whose index is not ready and release
-/// the walk at its own moment.
+/// The test seam's hold on the walk, armed before a daemon opens.
+///
+/// It is there so a suite can serve requests against a daemon whose index
+/// is not ready and release the walk at its own moment.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub struct WalkHold {
@@ -686,20 +731,25 @@ pub struct WalkHold {
     released: Condvar,
 }
 
-/// The test seam's one hold on the walk — process-wide, since the walk
-/// starts inside the open.
+/// The test seam's one hold on the walk.
+///
+/// It is process-wide, since the walk starts inside the open.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub static WALK_HOLD: WalkHold = WalkHold { held: Mutex::new(false), released: Condvar::new() };
 
 #[cfg(any(test, feature = "test-hooks"))]
 impl WalkHold {
-    /// Arm: every walk started from here on parks before its first entry.
+    /// Arms the hold: every walk started from here on parks.
+    ///
+    /// It parks before its first entry.
     pub fn hold(&self) {
         *self.held.lock() = true;
     }
 
-    /// Release: every parked walk proceeds, and later walks never park.
+    /// Releases the hold: every parked walk proceeds.
+    ///
+    /// Later walks park only where the hold is armed again.
     pub fn release(&self) {
         *self.held.lock() = false;
         self.released.notify_all();
@@ -726,21 +776,29 @@ pub struct WalkFault {
     armed: AtomicBool,
 }
 
-/// The test seam's one fault in the walk — process-wide, as the hold is,
-/// since the walk starts inside the open.
+/// The test seam's one fault in the walk.
+///
+/// It is process-wide, as the hold is, since the walk starts inside the
+/// open.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub static WALK_FAULT: WalkFault = WalkFault { armed: AtomicBool::new(false) };
 
 #[cfg(any(test, feature = "test-hooks"))]
 impl WalkFault {
-    /// Arm: the next walk to pass its hold panics. Arming again re-arms.
+    /// Arms the fault: the next walk to pass its hold panics.
+    ///
+    /// Arming again re-arms.
     pub fn arm(&self) {
         self.armed.store(true, Ordering::Release);
     }
 
-    /// The walk's side: take the arm where it stands and panic — once per
-    /// arming, the payload a literal the binary's hook carries.
+    /// Takes the arm where it stands: the walk's side.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the fault is armed — once per arming, the payload a
+    /// literal the binary's hook carries.
     fn fire_if_armed(&self) {
         if self.armed.swap(false, Ordering::AcqRel) {
             panic!("the test seam's walk fault");
@@ -754,16 +812,22 @@ mod tests {
 
     use super::*;
 
-    /// A test address from its dotted form, T4-validated.
+    /// Returns a test address from its dotted form, T4-validated.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `s` spells no T4-valid address.
     fn addr(s: &str) -> Address {
         let comps: Vec<Nat> = s.split('.').map(|c| Nat::from(c.parse::<u32>().unwrap())).collect();
         validate(Tumbler::new(comps).expect("a tumbler")).expect("a test address")
     }
 
-    /// The two maps and the base: an entry is idempotent per address; two
-    /// cells of one account over one hash count once; a second account's
-    /// cell over the same hash counts in its own base; a halt mark counts
-    /// in no base and is the first halt; readiness flips once.
+    /// Checks the two maps and the base.
+    ///
+    /// An entry is idempotent per address; two cells of one account over one
+    /// hash count once; a second account's cell over the same hash counts in
+    /// its own base; a halt mark counts in no base and is the first halt;
+    /// readiness flips once.
     #[test]
     fn entries_are_idempotent_per_cell_and_the_base_counts_distinct_hashes_once() {
         let index = CellIndex::new();
@@ -817,7 +881,11 @@ mod tests {
         assert_eq!(index.rebuild_report().map(|r| r.values), Some(0));
     }
 
-    /// Poll until `done`, bounded, naming what never came.
+    /// Polls until `done`, bounded, naming what never came.
+    ///
+    /// # Panics
+    ///
+    /// Panics, naming `what`, where `done` has not come within 30 seconds.
     fn wait_until(what: &str, done: impl Fn() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(30);
         while !done() {
@@ -890,7 +958,7 @@ mod tests {
         assert_eq!(payload_text(formatted.as_ref()), "a panic", "a formatted payload never rides");
         let other: Box<dyn Any + Send> = Box::new(7u8);
         assert_eq!(payload_text(other.as_ref()), "a panic");
-        // The door by hand, as the gate's suite takes it: FAILED set, ready
+        // The door by hand, as the gate's suite takes it: failed set, ready
         // not, nothing entered.
         let by_hand = CellIndex::new();
         by_hand.fail(other.as_ref());

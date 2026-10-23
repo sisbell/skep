@@ -1,60 +1,63 @@
-//! THE WRITE DOOR's MEDIA STEP (media lane A; `media.md` Op inventory 2 —
-//! "BOTH REFUSALS ARE skepd's, RUN AT ITS WRITE DOOR ON THE GUARD THE
-//! `insert` COMMITS UNDER", "A SHOT MINTS A CELL ONLY FROM A DRAFT ITS
-//! CALLER OWNS"; §The publication seam — "THE HALF IS THE WRITE DOOR's WHOLE
-//! STEP, ITS ARMED SET LANDING WITH IT"; the register M-I1 (a), (f)): ONE
-//! step of the plain write sequence, between its admission and the commit,
-//! answering every value naming the cell's kind. The reads are M5's, M3's
-//! and M4's public ones off the locked snapshot the commit will read (the
-//! serialization guard admits no commit between, so the check that passed
-//! and the commit it guards are one interval); the parse is
-//! `cell::parse`'s, the one parser.
+//! The write door's media step: one step of the plain write sequence.
 //!
-//! THE ARMED SET, in answer order (PATTERNS P6 — enumerated here, at the
-//! surface, and in `docs/wire.md` §Media, so no later lane moves one
+//! Its rules are `media.md` Op inventory 2 — "both refusals are skepd's,
+//! run at its write door on the guard the `insert` commits under", "a shot
+//! mints a cell only from a draft its caller owns"; §The publication seam —
+//! "the half is the write door's whole step, its armed set landing with it";
+//! the register M-I1 (a), (f). It runs between the sequence's admission and
+//! the commit, answering every value naming the cell's kind. The reads are
+//! M5's, M3's and M4's public ones and the world's read predicate
+//! (`ReadableWorld::readable`) off the locked snapshot the commit will read
+//! (the serialization guard admits no commit between, so the check that
+//! passed and the commit it guards are one interval); the parse is
+//! `cell::classify`'s, the one classification.
+//!
+//! **The armed set**, in answer order (PATTERNS P6 — enumerated here, at the
+//! surface, and in `docs/wire.md` §Media, so no later change moves one
 //! state's answer from one code to another):
 //!
-//! 1. `published_target` — an `insert` into a PUBLISHED document (or a
+//! 1. `published_target` — an `insert` into a published document (or a
 //!    member of one, PUB-2.15) the caller owns whose values hold one naming
-//!    the kind, WHATEVER its `deposit` declaration. M10's own door answers
-//!    this code to an UNDECLARED insert at a published target before any
-//!    consult; the DECLARED deposit is M5's one door that admits a published
+//!    the kind, whatever its `deposit` declaration. M10's own door answers
+//!    this code to an undeclared insert at a published target before any
+//!    consult; the declared deposit is M5's one door that admits a published
 //!    target on its class, and it judges the type and never the atom
 //!    (`skep-febe`'s `Op::Insert` card; PUB-2.59, PUB-2.64), so this arm is
 //!    what refuses a cell declared under a deposit class — the one cell the
-//!    stores do not cover — ahead of both refusals below; for an undeclared
+//!    stores do not cover — ahead of every refusal below; for an undeclared
 //!    one it is the same code M10 would answer, so the order against M10 is
 //!    unobservable.
 //! 2. `not_owner`, naming the draft — a `publish` whose draft-native runs
 //!    (the ones the shot re-inserts as fresh identity, PUB-2.40) hold a
-//!    value naming the kind, from a caller who does not OWN the draft: ω,
+//!    value naming the kind, from a caller who does not own the draft: ω,
 //!    exact — the same predicate `not_owner` makes of `doc`
 //!    (`skep-arrangement`'s `Caller::is_owner`, never a second spelling). A
 //!    grantee's, an ancestor's or a descendant's shot naming the owner's
 //!    private original would otherwise re-mint its cell with no `insert`
 //!    and no refusal on the way — the binding's own attack, one op over.
-//! 3. `unbound_cell` (`credential_refused`, PERMANENT) — a cell in a draft
-//!    `insert`, or at the owner's own shot, naming a hash THIS PRINCIPAL
-//!    DID NOT DEPOSIT UNDER ITS OWN LEASE: THE BINDING's refusal, real from
-//!    lane B — the media gate reads the principal's own lease record first
-//!    and the file only where that record names the hash under a live lease
+//! 3. `unbound_cell` (`credential_refused`, permanent) — a cell in a draft
+//!    `insert`, or at the owner's own shot, naming a hash this principal did
+//!    not deposit under its own lease: the binding's refusal — the media
+//!    gate reads the principal's own side first, the cell index where its
+//!    walk has completed and then the principal's own lease record, and the
+//!    file only where its own cells or a live lease of its own name the hash
 //!    (`MediaGate::binding`); a cell whose hash the principal holds a live
 //!    lease on, over a whole file whose length the cell's `size` names, is
-//!    ADMITTED and goes on to the store. A deposit whole on disk whose size
+//!    admitted and goes on to the store. A deposit whole on disk whose size
 //!    the cell contradicts is this refusal too — no deposit of this
-//!    principal's is the cell as written. PERMANENT for the request as
+//!    principal's is the cell as written. Permanent for the request as
 //!    sent: the act that exists is a PUT of the bytes, then the cell the
-//!    PUT's answer spells. THE FACE (M-I7 (e)) says that NO DEPOSIT OF THE
-//!    PERSON's HERE IS THE CELL AS WRITTEN, and never that none was made —
+//!    PUT's answer spells. The face (M-I7 (e)) says that no deposit of the
+//!    person's here is the cell as written, and never that none was made —
 //!    it is the answer too to a person who did deposit, past the horizon or
 //!    at an operator's honest nulls: "no deposit of yours here is this
 //!    picture's cell as written: upload the file, then place the cell its
 //!    answer spells." P10's fence-only face ("this board takes no
-//!    uploads") is RETIRED with the store at this arm: on a board whose
-//!    uploads are CLOSED the client keys that face off `/health`'s echo
-//!    before this token's face speaks.
-//! 4. `unknown_cell_schema` (`credential_refused`, PERMANENT) — a value
-//!    naming EITHER media kind — the picture's or the blind document's —
+//!    uploads") is not this arm's: on a board whose uploads are closed the
+//!    client keys that face off `/health`'s echo before this token's face
+//!    speaks.
+//! 4. `unknown_cell_schema` (`credential_refused`, permanent) — a value
+//!    naming either media kind — the picture's or the blind document's —
 //!    that parses under no pinned schema, in the same two positions:
 //!    DOCTRINE D13's carve-out, the halt a reader makes at a permanent act
 //!    on a schema it does not know, so the day a second schema is pinned no
@@ -62,74 +65,75 @@
 //!    same bytes are never admitted. The face a client renders: "this value
 //!    names a media cell — a picture's or a blind document's — in a form
 //!    this board does not read".
-//! 5. `lease_lapsed` (`credential_refused`, PERMANENT for the request as
-//!    sent) — a cell naming a hash this principal DID deposit, whose lease
+//! 5. `lease_lapsed` (`credential_refused`, permanent for the request as
+//!    sent) — a cell naming a hash this principal did deposit, whose lease
 //!    has lapsed within the horizon, or whose lease is live over a file
-//!    that is not there or not whole: the deposit is gone, and the act is a
-//!    re-PUT of the bytes, which re-takes the lease. Told apart from the
-//!    binding's refusal so a client's resume can be written against it,
-//!    and read off this principal's own record alone — never off the file's
-//!    presence beyond that record's live lease (Op inventory 1, "a client
-//!    meeting a LAPSED lease meets its OWN refusal"). Past the horizon the
-//!    record answers no lease and the binding's refusal stands.
-//! 6. `index_rebuilding` (`credential_refused`, RETRY) — THE REBUILD
-//!    WINDOW's answer, in the binding's position and during the walk alone:
+//!    that is not there or not whole — or a hash its own cells already
+//!    name, whose file is not there or not whole: the deposit is gone, and
+//!    the act is a re-PUT of the bytes, which re-takes the lease. Told apart
+//!    from the binding's refusal so a client's resume can be written against
+//!    it, and read off this principal's own side alone — its cells and its
+//!    record — never off the file's presence beyond them (Op inventory 1, "a
+//!    client meeting a lapsed lease meets its own refusal"). Past the
+//!    horizon the record answers no lease and the binding's refusal stands.
+//! 6. `index_rebuilding` (`credential_refused`, retry) — the rebuild
+//!    window's answer, in the binding's position and during the walk alone:
 //!    the index's rebuild at open has not completed, and the lease arm alone
 //!    would have answered `unbound_cell` or `lease_lapsed` — a verdict the
 //!    index arm, unread, may overturn (a hash the principal's own cells
 //!    name, its file whole). The readiness token re-used, its class the
 //!    readiness refusal's: the request as sent may be perfectly good, and
-//!    the walk momentarily unfinished (ms5-R: the door never waits; P22; the
-//!    register M-I5 (b)). A cell the lease arm ADMITS in the rebuild window
-//!    is admitted. The one arm of the armed set that is not PERMANENT.
+//!    the walk momentarily unfinished (the door never waits; P22; the
+//!    register M-I5 (b)). A cell the lease arm admits in the rebuild window
+//!    is admitted. The one arm of the armed set that is not permanent.
 //!
-//! EVERY VALUE IS JUDGED (M-I1 (a): the binding is per cell, at every mint):
-//! a write carrying several values naming the kind is answered by the first
-//! refusal any of them earns — in V-order at an `insert`, in placement order
-//! at a shot — the target's arm and the owner's asked once, ahead of every
-//! value's own verdict. A cell admitted beside one refused admits nothing for
-//! it, and the write lands whole or not at all.
+//! **Every value is judged** (M-I1 (a): the binding is per cell, at every
+//! mint). A write carrying several values naming the kind is answered by
+//! the first refusal any of them earns — in V-order at an `insert`, in
+//! placement order at a shot — the target's arm and the owner's asked once,
+//! ahead of every value's own verdict. A cell admitted beside one refused
+//! admits nothing for it, and the write lands whole or not at all.
 //!
-//! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
-//! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
-//! every arm. THE BLIND DOCUMENT's cell (`cell/blind.rs`) meets arms 1, 2
-//! and 4 as the picture's does — `published_target` at a published target,
-//! `not_owner` at a reader's shot, the halt on a malformed body — and
-//! NEVER arms 3 and 5: it is ADMITTED into a draft and at the owner's shot
-//! with no store consulted, there being no deposit to bind (the board holds
-//! no byte of a blind picture) and no lease to lapse. The same door, the
-//! same order, one classification ahead of it.
+//! **The kind column** (`media.md` item 4; the blind-document investigation
+//! §5 (i)). The arms above are read per kind. The picture's cell meets every
+//! arm. The blind document's cell (`cell/blind.rs`) meets arms 1, 2 and 4 as
+//! the picture's does — `published_target` at a published target,
+//! `not_owner` at a reader's shot, the halt on a malformed body — and never
+//! arms 3, 5 and 6: it is admitted into a draft and at the owner's shot with
+//! no store consulted, there being no deposit to bind (the board holds no
+//! byte of a blind picture) and no lease to lapse. The same door, the same
+//! order, one classification ahead of it.
 //!
-//! THE SHOT'S BINDING: the owner's own shot re-inserting a draft's cell asks
-//! the binding again, as its `insert` did — the whole armed set lands
-//! together at both positions. The binding reads THE CELL INDEX FIRST
+//! **The shot's binding.** The owner's own shot re-inserting a draft's cell
+//! asks the binding again, as its `insert` did — the whole armed set lands
+//! together at both positions. The binding reads the cell index first
 //! (`MediaGate::binding`): a hash the requester's own cells already name
 //! is a reference, kept by no lease — so the owner's shot of a draft whose
 //! cell was admitted is admitted after the lease lapsed, while the file is
 //! whole at the cell's size, and `lease_lapsed` where it is not. Until the
 //! index's walk at open completes the index arm is skipped and the lease
-//! arm alone ADMITS, so a lease lapsed between the insert and the shot
+//! arm alone admits, so a lease lapsed between the insert and the shot
 //! answers `index_rebuilding` in the rebuild window — retry-class — and the
 //! shot is admitted after the walk with no re-PUT: the door never waits on
 //! the index.
 //!
-//! WHAT STANDS AHEAD. The plain sequence's producers — the mint class, the
-//! `replaces` fence, the board-state gate with the write-path check behind
-//! it, the `nullify` class — have answered before this step runs: a bare
-//! session's write into a published document is `signed_session_required`,
-//! an unsigned shot `attestation_required`, an attested shot copying in a
-//! draft the caller may not read `attestation_invalid:withheld` or the
-//! store's `withheld`. What stands BEHIND it — the store's own slots — is
-//! kept ahead of its arms by construction: an `insert` is read only where
-//! `doc` is registered and the caller owns it (PUB-6.36's slot 1, PUB-6.37),
-//! and a `publish` only where M5's own admission of the shot
-//! ([`shot_admission`], slots 1 through 6, the source gate included) passes
-//! it, the draft is readable to the caller (PATTERNS P31: no value the
-//! caller may not read is read on its behalf — a verdict here is answered
-//! to the caller) and the re-insert is within M5's budget; every other case
-//! answers nothing here and the store answers it as built. A refusal here
-//! commits nothing and gives the head writer its turn, as an admission
-//! refusal does (l7-C1).
+//! **What stands ahead.** The plain sequence's producers — the mint class,
+//! the `replaces` fence, the board-state gate with the write-path check
+//! behind it, the `nullify` class — have answered before this step runs: a
+//! bare session's write into a published document is
+//! `signed_session_required`, an unsigned shot `attestation_required`, an
+//! attested shot copying in a draft the caller may not read
+//! `attestation_invalid:withheld` or the store's `withheld`. What stands
+//! behind it — the store's own slots — is kept ahead of its arms by
+//! construction: an `insert` is read only where `doc` is registered and the
+//! caller owns it (PUB-6.36's slot 1, PUB-6.37), and a `publish` only where
+//! M5's own admission of the shot ([`shot_admission`], slots 1 through 6,
+//! the source gate included) passes it, the draft is readable to the caller
+//! (PATTERNS P31: no value the caller may not read is read on its behalf —
+//! a verdict here is answered to the caller) and the re-insert is within
+//! M5's budget; every other case answers nothing here and the store answers
+//! it as built. A refusal here commits nothing and gives the head writer its
+//! turn, as an admission refusal does.
 
 use skep_address::{Address, Nat};
 use skep_arrangement::{published_target, shot_admission, Caller, Shot, MAX_REINSERTED_VALUES};
@@ -140,42 +144,53 @@ use skep_namespace::PrincipalId;
 use crate::cell;
 use crate::gate::{Binding, MediaGate};
 
-/// The door's answer — one variant per arm of the armed set, in the
-/// module's order. Two are M10's own codes, raised here on the daemon's
-/// channel with M10's classification; four are the daemon's tokens, riding
-/// `credential_refused` as every daemon-side refusal does (AUTH-3.53's
-/// family; wire.md §Credential refusals).
+/// The door's answer: one variant per arm of the armed set.
+///
+/// They come in the module's order. Two are M10's own codes, raised here on
+/// the daemon's channel with M10's classification; four are the daemon's
+/// tokens, riding `credential_refused` as every daemon-side refusal but the
+/// registry sequence's does (AUTH-3.53's family; wire.md §Credential
+/// refusals).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaRefusal {
     /// Arm 1: `published_target`, M10's code, no site.
     PublishedTarget,
-    /// Arm 2: `not_owner`, M10's code, `site.addr` the DRAFT — the document
-    /// that failed the ω test, as every `not_owner` names one.
+    /// Arm 2: `not_owner`, M10's code, `site.addr` the draft.
+    ///
+    /// The draft is the document that failed the ω test, as every
+    /// `not_owner` names one.
     NotOwner {
         /// The staging draft, judged as the document it projects to.
         draft: Address,
     },
-    /// Arm 3: the binding's refusal — token `unbound_cell`: a hash this
-    /// principal did not deposit under its own lease.
+    /// Arm 3: the binding's refusal, token `unbound_cell`.
+    ///
+    /// A hash this principal did not deposit under its own lease, or a
+    /// deposit whole on disk whose size the cell contradicts: no deposit of
+    /// this principal's is the cell as written.
     UnboundCell,
     /// Arm 4: D13's halt — token `unknown_cell_schema`.
     UnknownCellSchema,
-    /// Arm 5: the binding's LAPSED arm — token `lease_lapsed`: the deposit
-    /// is gone, re-PUT the bytes. INTERIM in spelling (the board's sm-Q8).
+    /// Arm 5: the binding's lapsed arm, token `lease_lapsed`.
+    ///
+    /// The deposit is gone: re-PUT the bytes. Interim in spelling.
     LeaseLapsed,
-    /// Arm 6: THE REBUILD WINDOW — token `index_rebuilding`, the readiness
-    /// token re-used, RETRY-CLASS: the index's walk at open is not done and
-    /// the lease arm alone would have refused. INTERIM in spelling (sm-Q8).
+    /// Arm 6: the rebuild window, token `index_rebuilding`.
+    ///
+    /// The readiness token re-used, retry-class: the index's walk at open has
+    /// neither completed nor died, and the lease arm alone would have
+    /// refused. Interim in spelling.
     IndexRebuilding,
 }
 
 impl MediaRefusal {
-    /// The `detail` token of the four refusals that ride
-    /// `credential_refused`; `None` for the two that are M10's own codes.
-    /// Spelled here, but for arm 4's: `unknown_cell_schema` is the name of
-    /// the cell's own verdict on a value naming a media kind under no pinned
-    /// schema, spelled with that verdict in `cell` (`UNKNOWN_SCHEMA_TOKEN`),
-    /// where the index's halt marks record it too.
+    /// Returns the refusal's `detail` token, or `None` for M10's own codes.
+    ///
+    /// The four refusals that ride `credential_refused` carry one. Spelled
+    /// here, but for arm 4's: `unknown_cell_schema` is the name of the cell's
+    /// own verdict on a value naming a media kind under no pinned schema,
+    /// spelled with that verdict in `cell` (`UNKNOWN_SCHEMA_TOKEN`), where
+    /// the index's halt marks record it too.
     pub fn token(&self) -> Option<&'static str> {
         match self {
             MediaRefusal::PublishedTarget | MediaRefusal::NotOwner { .. } => None,
@@ -186,17 +201,19 @@ impl MediaRefusal {
         }
     }
 
-    /// The class of each refusal. The two M10 codes are ASKED of M10's own
-    /// classification ([`RejectCode::disposition`]) — the row
-    /// `Rejection::classified` applies to the reply built for them — so this
-    /// answer and that reply cannot drift. The tokens: PERMANENT for three — for the request AS SENT no act
-    /// admits it: a value under an unknown schema is never admitted, and an
-    /// unbound or lapsed cell is admitted only after a PUT, which is another
-    /// act (the lease re-taken by it), never a retry of this one — and RETRY
-    /// for the rebuild window's answer alone, the class the reply layer
-    /// gives the readiness refusal: the same request may be admitted once
-    /// the walk completes. Exhaustive, so a new arm is classed where it is
-    /// added.
+    /// Returns the class of each refusal.
+    ///
+    /// The two M10 codes are asked of M10's own classification
+    /// ([`RejectCode::disposition`]) — the row `Rejection::classified`
+    /// applies to the reply built for them — so this answer and that reply
+    /// cannot drift. The tokens: permanent for three — for the request as
+    /// sent no act admits it: a value under an unknown schema is never
+    /// admitted, and an unbound or lapsed cell is admitted only after a PUT,
+    /// which is another act (the lease re-taken by it), never a retry of
+    /// this one — and retry for the rebuild window's answer alone, the class
+    /// the reply layer gives the readiness refusal: the same request may be
+    /// admitted once the walk completes. Exhaustive, so a new arm is classed
+    /// where it is added.
     pub fn disposition(&self) -> Disposition {
         match self {
             MediaRefusal::PublishedTarget => RejectCode::PublishedTarget.disposition(),
@@ -209,14 +226,15 @@ impl MediaRefusal {
     }
 }
 
-/// What a value is to this door, BY KIND (`media.md` item 4, "ONE
-/// CLASSIFICATION"; the blind-document investigation §5): the picture's
-/// cell, which the binding is asked about; the BLIND document's cell, which
-/// the target's and the owner's arms judge as the picture's and the
-/// binding never sees — the board holds no byte of its picture, so there is
-/// no deposit to bind and no media gate to ask (`cell/blind.rs`); a value
-/// naming either kind under no pinned schema; or — `None` — nothing it
-/// answers.
+/// What a value is to this door, by kind.
+///
+/// Per `media.md` item 4, "one classification", and the blind-document
+/// investigation §5, it is the picture's cell, which the binding is asked
+/// about; the blind document's cell, which the target's and the owner's arms
+/// judge as the picture's and the binding never sees — the board holds no
+/// byte of its picture, so there is no deposit to bind and no media gate to
+/// ask (`cell/blind.rs`); a value naming either kind under no pinned schema;
+/// or — `None` — nothing it answers.
 #[derive(Debug, Clone)]
 enum Named {
     Cell(cell::Cell),
@@ -224,9 +242,11 @@ enum Named {
     UnknownSchema,
 }
 
-/// The one classification, read for what the door acts on — over the BYTES,
-/// which is what a request's `Val` and M4's borrowed piece both lend; a
-/// one-byte piece inside a stretch names no kind.
+/// Reads the one classification for what the door acts on.
+///
+/// It reads over the bytes, which is what a request's `Val` and M4's
+/// borrowed piece both lend; a one-byte piece inside a stretch names no
+/// kind.
 fn names_the_kind(bytes: &[u8]) -> Option<Named> {
     match cell::classify(bytes) {
         cell::Class::Picture(Ok(c)) => Some(Named::Cell(c)),
@@ -236,11 +256,13 @@ fn names_the_kind(bytes: &[u8]) -> Option<Named> {
     }
 }
 
-/// Arms 3, 4, 5 and 6 — the value's own verdict once the target's and the
-/// owner's arms have passed: a picture's cell is asked of THE BINDING at
-/// the media gate, `None` where it is admitted, the rebuild window's state
-/// retry-class; a blind cell is ADMITTED with no store consulted — the
-/// kind's whole deposit story is its owner's, off this board.
+/// Answers arms 3, 4, 5 and 6: the value's own verdict.
+///
+/// It runs once the target's and the owner's arms have passed: a picture's
+/// cell is asked of the binding at the media gate, `None` where it is
+/// admitted, the rebuild window's state retry-class; a blind cell is
+/// admitted with no store consulted — the kind's whole deposit story is its
+/// owner's, off this board.
 fn value_arm(
     named: Named,
     media_gate: &MediaGate,
@@ -258,17 +280,21 @@ fn value_arm(
     }
 }
 
-/// THE STEP: the door's answer to `op` by `principal` on `world`, the
-/// locked snapshot, with `media_gate` the media gate, the daemon's media
-/// resource the binding is asked of — `Some` where an arm fires, `None`
-/// where the write goes on to the store. `world` MUST be the snapshot taken
-/// under the serialization guard for this request, the one the commit will
-/// run against; the plain sequence is its one caller, which holds the
-/// credential lock's read arm across this step and the commit. Generic over
-/// the world M10 reads ([`FebeWorld`], the one bound): the daemon
-/// instantiates it at its `World`, and this crate names no engine.
+/// Returns the door's answer to `op` by `principal` on `world`: the step.
 ///
-/// EXHAUSTIVE with no `_` arm, the treatment `deposits_credential_link`
+/// `world` is the locked snapshot and `media_gate` the media gate, the
+/// daemon's media resource the binding is asked of — `Some` where an arm
+/// fires, `None` where the write goes on to the store. The plain sequence is
+/// its one caller, which holds the credential lock's read arm across this
+/// step and the commit. Generic over the world M10 reads ([`FebeWorld`], the
+/// one bound): the daemon instantiates it at its `World`, and this crate
+/// names no engine.
+///
+/// **Precondition.** `world` must be the snapshot taken under the
+/// serialization guard for this request, the one the commit will run
+/// against.
+///
+/// Exhaustive with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
 /// whether it can carry or re-insert a value naming the kind. `copy`,
 /// `reinstate` and `version` share identity and mint no cell (`media.md`
@@ -332,16 +358,19 @@ pub fn media_door<W: FebeWorld>(
     }
 }
 
-/// The `insert` arms (1, 3, 4): read only where `doc` is registered and the
-/// caller owns it — the store's ownership-gate question, asked of M5
-/// ([`Caller::passes_ownership_gate`]): PUB-6.36's slot 1 ahead of everything
-/// here, as every producer ahead of the store keeps it, so an unregistered
-/// or foreign `doc` answers the store's own `doc_not_registered` or
-/// `not_owner` and is never told whether it is published. EVERY value
-/// naming the kind is judged (M-I1 (a): the binding is per cell, and a cell
-/// bound beside one that is not binds nothing for it), in V-order, the
-/// first refusal answering; a value that names it not is passed over at the
-/// cost of one byte compare.
+/// Answers the `insert` arms, 1 and 3 to 6.
+///
+/// They are read only where `doc` is registered and the caller owns it —
+/// the store's ownership-gate question, asked of M5
+/// ([`Caller::passes_ownership_gate`]): PUB-6.36's slot 1 ahead of
+/// everything here, as every producer ahead of the store keeps it, so an
+/// unregistered or foreign `doc` answers the store's own
+/// `doc_not_registered` or `not_owner` and is never told whether it is
+/// published. Every value naming the kind is judged (M-I1 (a): the binding
+/// is per cell, and a cell bound beside one that is not binds nothing for
+/// it), in V-order, the first refusal answering; a value that names it not
+/// is passed over at the cost of the classification — one byte compare for
+/// a value that opens no JSON object.
 fn insert_arm<W: FebeWorld>(
     world: &W,
     doc: &Address,
@@ -355,7 +384,7 @@ fn insert_arm<W: FebeWorld>(
     }
     let mut named = values.iter().filter_map(|v| names_the_kind(v.as_bytes())).peekable();
     named.peek()?;
-    // Arm 1 — the TARGET's refusal first, whatever the value's form and
+    // Arm 1 — the target's refusal first, whatever the value's form and
     // whatever the declaration: M5's own publication read, projected to the
     // document (PUB-2.15), on the registered address the line above found.
     if published_target(m3, doc) {
@@ -364,17 +393,19 @@ fn insert_arm<W: FebeWorld>(
     named.find_map(|named| value_arm(named, media_gate, principal))
 }
 
-/// The `publish` arms (2, 3, 4): read only where M5's own admission of the
-/// shot passes it through the source gate, the staging draft is readable
-/// to the caller, and the re-insert is within M5's budget — so every
-/// refusal the store gives ahead of its existence walk stands ahead of this
-/// door, in the store's own words, and the door reads no value the caller
-/// may not read. The draft-native runs are walked as the commit re-mints
-/// them ([`Shot::reinserted_runs`], M5's own family rule, in the commit's
-/// order), each position read by M4's point read — a one-byte piece inside
-/// a stretch names no kind and is passed over by the classification itself;
-/// EVERY value naming the kind is judged (M-I1 (a)) — the owner test once,
-/// at the first, then each value's own verdict in placement order, the first
+/// Answers the `publish` arms, 2 to 6.
+///
+/// They are read only where M5's own admission of the shot passes it
+/// through the source gate, the staging draft is readable to the caller, and
+/// the re-insert is within M5's budget — so every refusal the store gives
+/// ahead of its existence walk stands ahead of this door, in the store's own
+/// words, and the door reads no value the caller may not read. The
+/// draft-native runs are walked as the commit re-mints them
+/// ([`Shot::reinserted_runs`], M5's own family rule, in the commit's order),
+/// each position read by M4's point read — a one-byte piece inside a stretch
+/// names no kind and is passed over by the classification itself; every
+/// value naming the kind is judged (M-I1 (a)) — the owner test once, at the
+/// first, then each value's own verdict in placement order, the first
 /// refusal answering. Per address still, bounded by the re-insert's cap.
 fn publish_arm<W: FebeWorld>(
     world: &W,
@@ -445,13 +476,15 @@ fn publish_arm<W: FebeWorld>(
     None
 }
 
-/// THE VISIBILITY CLASS A CALLER WRITES AT, over the trait: the predicate
-/// M10 lends the real shot's source gate — the engine's `World::visible_to`,
-/// which this crate cannot name — rebuilt on [`ReadableWorld::readable`],
-/// whose contract makes `None` the guest: a principal reads at its own
-/// class, the system caller (M9's automation path) at the guest's, which is
-/// exactly the closure the engine returns. `Copy`-free and borrowing
-/// nothing: it reads the world handed to it per consult and nothing else.
+/// Returns the visibility class a caller writes at, over the trait.
+///
+/// It is the predicate M10 lends the real shot's source gate — the engine's
+/// `World::visible_to`, which this crate cannot name — rebuilt on
+/// [`ReadableWorld::readable`], whose contract makes `None` the guest: a
+/// principal reads at its own class, the system caller (M9's automation
+/// path) at the guest's, which is exactly the closure the engine returns.
+/// `Copy`-free and borrowing nothing: it reads the world handed to it per
+/// consult and nothing else.
 fn visible_to<W: ReadableWorld>(caller: Caller) -> impl Fn(&W, &Address) -> bool {
     move |world: &W, doc: &Address| match caller {
         Caller::Principal(p) => world.readable(Some(p), doc),

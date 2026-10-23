@@ -1,66 +1,70 @@
-//! THE PRUNER (`media.md` Op inventory 1 — "Unreferenced blobs … are
+//! The pruner: the pass, run once the index is ready and then on a cadence.
+//!
+//! Its rules are `media.md` Op inventory 1 — "Unreferenced blobs … are
 //! prunable sidecar garbage … pruning checks reference absence, in the cell
-//! index … ONLY UNDER THE DESIGNATIONS THIS BUILD's SCHEMAS PIN, a value
+//! index … only under the designations this build's schemas pin, a value
 //! naming the cell's kind that parses under no schema this build knows
-//! HALTING THE PRUNER's UNLINK OF AN UNREFERENCED FILE"; Op inventory 2 —
-//! "the PRUNER TAKES A FILE's NAME ONLY UNDER THE GATE's EXCLUSIVE ARM,
+//! halting the pruner's unlink of an unreferenced file"; Op inventory 2 —
+//! "the pruner takes a file's name only under the gate's exclusive arm,
 //! `gate.write()` [the record's `gate` here is the credential write lock,
 //! AUTH-3.1–3.3's write gate, whose write arm this pass is handed as
 //! `exclusive` — never the media gate whose store and index it reads],
-//! re-reading the cell index and the lease there, ONE FILE PER ACQUISITION
+//! re-reading the cell index and the lease there, one file per acquisition
 //! — re-read, rename aside, release, the aside unlinked after under no
 //! arm"; §The media stores — "the pruner's pass rewrites either store the
 //! same way once its log has passed a size trigger"; the register M-I5 (b),
-//! (f); the rulings ms5-R, ms5-T4 — D13's carve-out): THE PASS, run once
-//! the index is ready and then on a cadence (the daemon's
-//! `PRUNE_INTERVAL`, the transport's thread waiting it out).
+//! (f); D13's carve-out. The cadence is the daemon's `PRUNE_INTERVAL`, the
+//! transport's thread waiting it out.
 //!
-//! Each pass, in order: (a) THE EXPIRED PARTIALS — every upload record past
-//! its expiry and held by no stream is retired and its partial removed,
-//! off the store's own read of expiry and the media gate's hold, reading no
-//! reference; (b) THE HALTS — a designation directory under `blobs/`
+//! Each pass, in order: (a) the expired partials — every upload record past
+//! its expiry and held by no stream is retired and its partial removed, off
+//! the store's own read of expiry and the media gate's hold, reading no
+//! reference; (b) the halts — a designation directory under `blobs/`
 //! outside the pinned set, or a halt mark standing in the index, halts the
-//! unlink pass before its first unlink, and so does a read of them that
-//! failed — the pass's line naming the directory or the schema, or saying
-//! them unread; (c) THE UNREFERENCED FILES — for each file at a hex name
-//! under the pinned designation, under the credential lock's EXCLUSIVE ARM
-//! taken for that one file: the index re-read (no cell names the hash, and
-//! no halt mark stands), the lease log re-read (no key holds a live lease
-//! on it), the file RENAMED ASIDE to `.retired-<hex>-<n>` — the REPLACE's
-//! own aside name — the arm released; and the aside UNLINKED AFTER, under
-//! no arm, which is where the file's blocks are freed. A file
-//! a cell names or any live lease holds is KEPT (M-I5 (b): no housekeeping
-//! act creates a hole — the re-read and the rename are one interval under
-//! the arm, and a crash between the rename and the unlink leaves an aside
-//! open removes); the arm is held one re-read and one rename, never across
-//! an unlink (M-I5 (f): a retirement never queues behind a drain's I/O —
-//! at the per-file cap an unlink held every write on the board for the
-//! freeing's time); a replace's aside the deferred step did not reach is
-//! removed at the pass's end, as before. Then (d) THE LOGS' COMPACTION —
-//! the lease log's leases past the horizon dropped first, as the store's
-//! open drops them, then each of the two logs rewritten to its current
-//! records where its lines have passed
-//! [`crate::limits::COMPACTION_TRIGGER`] times those records
-//! (never under [`crate::limits::COMPACTION_MIN_LINES`]), under the store's
-//! own lock on that log's appends alone and NO arm of the credential lock
-//! (P22: the honest-null arm compacted by its reclaimer); a log that has
-//! STOPPED — an append whose cut back to its last whole line failed too, or
-//! a compaction that failed past its rename — takes no append until a
-//! compaction completes, and the pass's line names it WITH ITS CAUSE, the
-//! OS's own (a full volume told apart from a read-only mount or a failing
-//! device, so the act that clears it is the one named), how long it has
-//! stood and the appends it has refused, and names a stop the pass's own
-//! rewrite lifted as it stood. Every pass's line says each log's size, and
-//! what a compaction rewrote it from, and the bytes the pass's removals
-//! freed. The pass never touches a partial whose upload stands, and reads
-//! no directory's bytes as a scope (M-I6: the scopes stay record-derived).
+//! unlink pass before its first unlink, and so do a read of them that
+//! failed and the daemon's standing halt ([`Pruner::halt_the_unlink_pass`])
+//! — the pass's line naming the directory or the schema, saying them
+//! unread, or giving the daemon's reason; (c) the unreferenced files — for
+//! each file at a hex name under the pinned designation, under the
+//! credential lock's exclusive arm taken for that one file: the index
+//! re-read (no cell names the hash, and no halt mark stands), the lease log
+//! re-read (no key holds a live lease on it), the file renamed aside to
+//! `.retired-<hex>-<n>` — the replace's own aside name — the arm released;
+//! and the aside unlinked after, under no arm, which is where the file's
+//! blocks are freed. A file a cell names or any live lease holds is kept
+//! (M-I5 (b): no housekeeping act creates a hole — the re-read and the
+//! rename are one interval under the arm, and a crash between the rename
+//! and the unlink leaves an aside open removes); the arm is held one
+//! re-read and one rename, never across the unlink of a file the pass takes
+//! (M-I5 (f): a retirement never queues behind a drain's I/O — at the
+//! per-file cap an unlink under the arm would hold every write on the board
+//! for the freeing's time); a replace's aside the deferred step did not
+//! reach is removed at the pass's end, one per acquisition of the arm,
+//! which is held across that removal. Then (d) the logs' compaction — the
+//! lease log's leases past the horizon dropped first, as the store's open
+//! drops them, then each of the two logs rewritten to its current records
+//! where its lines have passed [`crate::limits::COMPACTION_TRIGGER`] times
+//! those records (never under [`crate::limits::COMPACTION_MIN_LINES`]), or
+//! where it has stopped, whatever its count, under the store's own lock on
+//! that log's appends alone and no arm of the credential lock (P22: the
+//! honest-null arm compacted by its reclaimer); a log that has stopped — an
+//! append whose cut back to its last whole line failed too, or a compaction
+//! that failed past its rename — takes no append until a compaction
+//! completes, and the pass's line names it with its cause, the OS's own (a
+//! full volume told apart from a read-only mount or a failing device, so the
+//! act that clears it is the one named), how long it has stood and the
+//! appends it has refused, and names a stop the pass's own rewrite lifted as
+//! it stood. Every pass's line says each log's size, and what a compaction
+//! rewrote it from, and the bytes the pass's removals freed. The pass never
+//! touches a partial whose upload stands, and reads no directory's bytes as
+//! a scope (M-I6: the scopes stay record-derived).
 //!
 //! **The pass's exit** (`operations.md` §4 row 5; §1.1 row 35). Every step
-//! runs whatever an earlier one answered, and each step's failure is the
-//! report's and never the pass's: the first error a store call answered in
-//! that step, the step named and that step's own loop stopped there
+//! but (c) runs whatever an earlier one answered, and each step's failure is
+//! the report's and never the pass's: the first error a store call answered
+//! in that step, the step named and that step's own loop stopped there
 //! ([`PrunePass::failed`], in step order). The one step whose failure stops
-//! another is (b). At the pruner an absence is a permission (ms5-T4, D13's
+//! another is (b). At the pruner an absence is a permission (D13's
 //! carve-out), so halts it could not read halt the unlink pass as halts it
 //! read do, and (c) runs only where (b) read them and found none. So an
 //! expiry that fails at (a) — a stopped `uploads.log` refusing a
@@ -70,18 +74,19 @@
 //! halt's included, so the compaction that lifts a stopped log runs
 //! whatever failed before it. The halt and the failures are the report's,
 //! and its one line says them — line 34, or line 35 where a step failed,
-//! each failure ahead of the figures — hourly (§1.1 row 36 RETIRED: the
-//! pass writes no standalone line of its own).
+//! each failure ahead of the figures — hourly: the pass writes no
+//! standalone line of its own (§1.1 row 36).
 //!
-//! THE ARM IS THE SESSION LAYER's and is handed in: this module sits
+//! **The arm is the session layer's** and is handed in: this module sits
 //! beside the write path and names nothing above it, so the pass takes the
 //! acquisition as a closure and holds whatever guard it answers for
 //! exactly one file.
 //!
-//! THE PRUNER ([`Pruner`]) is the pass as one daemon runs it, beside that
-//! daemon's media gate: the gate holds the store and the index the pass
-//! reads, and the pruner what is the pass's own — under the test seam its
-//! hold and its count, and nothing outside it.
+//! **The pruner** ([`Pruner`]) is the pass as one daemon runs it, beside
+//! that daemon's media gate: the gate holds the store and the index the
+//! pass reads, and the pruner what is the pass's own — the daemon's
+//! standing halt of the unlink pass, and under the test seam its hold and
+//! its count.
 
 use std::fmt;
 use std::io;
@@ -100,53 +105,68 @@ use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 
 /// What one pass did: the test hook's answer, and the operator's line.
 ///
-/// Rendered through its [`fmt::Display`], it is the pass's one line: line 34
-/// (`operations.md` §1.1 row 34), or line 35 (row 35) where a step failed,
-/// each failure named ahead of the same figures ([`PrunePass::failed`]).
+/// Rendered through its [`fmt::Display`], it is the pass's one line, line 34
+/// (`operations.md` §1.1 row 34) or line 35 (row 35) where a step failed —
+/// each failure named ahead of the same figures ([`PrunePass::failed`]) —
+/// but the tail the daemon appends: the pass's duration, and on line 34 a
+/// reading of the resident set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrunePass {
     /// Expired uploads retired, their partials removed.
     pub expired_partials: usize,
-    /// Files at hex names taken — renamed aside under the arm and unlinked
-    /// after it.
+    /// Files at hex names taken: renamed aside under the arm, unlinked after.
     pub unlinked: usize,
-    /// Files at hex names kept — named by a cell or held by a live lease.
+    /// Files at hex names kept.
+    ///
+    /// Each was named by a cell or held by a live lease, or met a halt mark
+    /// entered since the listing.
     pub kept: usize,
-    /// Asides removed at the pass's end — the deferred step's leftovers,
-    /// and a pass's own aside a crash left behind.
+    /// Asides removed at the pass's end.
+    ///
+    /// They are the deferred step's leftovers, and a pass's own aside an
+    /// earlier pass's failed unlink left behind.
     pub asides: usize,
-    /// THE BYTES THE PASS FREED — what it reclaimed, a landing line's figure
-    /// (`operations.md` §1, RULED 2026-10-07, set 1): each removal's as the
-    /// store answers it (`Store::remove_aside`, `Store::expire_upload`), a
-    /// file's length where its unlink took its last name and nothing where
+    /// The bytes the pass freed: what it reclaimed, a landing line's figure.
+    ///
+    /// The landing line's figure (`operations.md` §1) is each removal's as
+    /// the store answers it (`Store::remove_aside`, `Store::expire_upload`),
+    /// a file's length where its unlink took its last name and nothing where
     /// another name still holds it — so a pass that unlinked files and freed
     /// nothing, a hard-link backup holding the volume full, says so.
     pub freed: u64,
     /// Why the unlink pass halted before its first unlink, if it did.
     ///
     /// It is the operator line's reason: the directory or the schema it
-    /// halted on, or the halts unread where step (b)'s read of them failed.
+    /// halted on, the halts unread where step (b)'s read of them failed, or
+    /// the reason the daemon's standing halt gave
+    /// ([`Pruner::halt_the_unlink_pass`]).
     pub halted: Option<String>,
-    /// The logs this pass COMPACTED — `(uploads, leases)`, each by the size
-    /// it was rewritten from (`Store::compact_logs_if_past`), `None` where
-    /// the pass left it as it was.
+    /// The logs this pass compacted, as `(uploads, leases)`.
+    ///
+    /// Each is by the size it was rewritten from
+    /// (`Store::compact_logs_if_past`), `None` where the pass left it as it
+    /// was.
     pub compacted: (Option<LogSize>, Option<LogSize>),
-    /// Each log's size once the pass is done — `(uploads, leases)`
-    /// (`Store::log_sizes`): its whole lines and their bytes, said at every
-    /// pass, the room the next rewrite of each needs being a second copy of
-    /// it, and each log named by it on the line.
+    /// Each log's size once the pass is done, as `(uploads, leases)`.
+    ///
+    /// It is its whole lines and their bytes (`Store::log_sizes`), said at
+    /// every pass, the room the next rewrite of each needs being a second
+    /// copy of it, and each log named by it on the line.
     pub logs: (LogSize, LogSize),
-    /// Why a compaction failed, if one did — the operator line's reason;
-    /// the logs then stopped are named beside it.
+    /// Why a compaction failed, if one did: the operator line's reason.
+    ///
+    /// The logs then stopped are named beside it.
     pub compaction_failed: Option<String>,
-    /// The logs STOPPED after this pass — `(uploads, leases)`, each its stop
-    /// as the store keeps it (`Store::stopped_logs`: the cause, the stop's
-    /// age, the appends refused since), `None` where the log takes appends:
-    /// each takes no append until a compaction completes.
+    /// The logs stopped after this pass, as `(uploads, leases)`.
+    ///
+    /// Each is its stop as the store keeps it (`Store::stopped_logs`: the
+    /// cause, the stop's age, the appends refused since), `None` where the
+    /// log takes appends: each takes no append until a compaction completes.
     pub stopped: (Option<LogStop>, Option<LogStop>),
-    /// The stops this pass's compaction LIFTED — `(uploads, leases)`, each
-    /// as it stood before the rewrite: a log stopped before the rewrite and
-    /// taking appends after it.
+    /// The stops this pass's compaction lifted, as `(uploads, leases)`.
+    ///
+    /// Each is as it stood before the rewrite: a log stopped before the
+    /// rewrite and taking appends after it.
     pub lifted: (Option<LogStop>, Option<LogStop>),
     /// Each step's failure, in step order.
     ///
@@ -155,8 +175,9 @@ pub struct PrunePass {
     /// and one of (b)'s or (c)'s, since a failed (b) halts the unlink pass
     /// (`halted`) and (c) never runs over halts unread. Every other step ran
     /// past it, and step (d) on every exit, so a stop this pass met is lifted
-    /// by its own compaction and not a restart's. Empty, the pass's line is
-    /// line 34; else line 35, naming each failure ahead of the figures.
+    /// by its own compaction, where the rewrite completes, and not a
+    /// restart's. Empty, the pass's line is line 34; else line 35, naming
+    /// each failure ahead of the figures.
     pub failed: Vec<PassFailure>,
 }
 
@@ -177,21 +198,23 @@ impl fmt::Display for PassFailure {
     }
 }
 
-/// The steps of a pass a store call can fail in — (a), (b) and (c); (d),
-/// the compaction, answers its failure as the report's own
+/// The steps of a pass a store call can fail in: (a), (b) and (c).
+///
+/// Step (d), the compaction, answers its failure as the report's own
 /// (`compaction_failed`) and never ends the pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassStep {
-    /// (a) THE EXPIRED PARTIALS: a partial's removal or its record's
-    /// retirement — the retirement an append `uploads.log` refuses while
-    /// it has stopped.
+    /// (a) The expired partials.
+    ///
+    /// A partial's removal or its record's retirement — the retirement an
+    /// append `uploads.log` refuses while it has stopped.
     ExpiredPartials,
     /// (b) The halts' read: the designation directories under `blobs/`.
     ///
     /// Its failure halts the unlink pass as a halt read does: (c) never runs
     /// over halts unread.
     Halts,
-    /// (c) THE UNREFERENCED FILES: a listing, a rename aside, an unlink.
+    /// (c) The unreferenced files: a listing, a rename aside, an unlink.
     UnreferencedFiles,
 }
 
@@ -206,8 +229,9 @@ impl fmt::Display for PassStep {
 }
 
 impl PassStep {
-    /// This step's failure for `cause` — what the step's `?` arms map a
-    /// store's error to.
+    /// Returns this step's failure for a store's error, as a mapping.
+    ///
+    /// It is what the step's `?` arms map a store's error to.
     fn failed(self) -> impl Fn(io::Error) -> PassFailure {
         move |e| PassFailure { step: self, cause: e.to_string() }
     }
@@ -221,7 +245,7 @@ impl PassStep {
 /// ({b} bytes)`. Then come `; {log}'s stop lifted, rewritten whole after
 /// {stop}`, `; a compaction FAILED: {why}` and `; STOPPED: {log} takes no
 /// append until a compaction completes — {stop}`, each where it applies
-/// (`operations.md` §1.1 row 35: "names the failure AND the stopped logs").
+/// (`operations.md` §1.1 row 35: "names the failure and the stopped logs").
 /// A stop is said with its cause, the act that clears it turning on that
 /// cause — room on a full volume, the mount or the device where they refuse
 /// — how long it has stood and the appends it has refused: `{cause}; stopped
@@ -262,10 +286,12 @@ impl fmt::Display for Compaction<'_> {
     }
 }
 
-/// A log's stop as the pass's line says it: `{cause}; stopped {ms} ms, {n}
-/// appends refused` — the cause in the store's words, how long the stop has
-/// stood (a duration in milliseconds, `operations.md` §1), and the appends
-/// it has refused, the uploads it cost.
+/// A log's stop as the pass's line says it.
+///
+/// It reads `{cause}; stopped {ms} ms, {n} appends refused` — the cause in
+/// the store's words, how long the stop has stood (a duration in
+/// milliseconds, `operations.md` §1), and the appends it has refused, the
+/// uploads it cost.
 struct Stop<'a>(&'a LogStop);
 
 impl fmt::Display for Stop<'_> {
@@ -288,9 +314,9 @@ impl fmt::Display for Stop<'_> {
 /// 34, 35); then the figures and the bytes they freed, the halt, each log's
 /// size, the compaction and any stopped log — so a failed pass says what it
 /// did beside what failed. It is written to the formatter as it is
-/// composed, so the classed door that carries it (`skep_util::notice::emit`,
-/// through the daemon's `say`) builds no string of its own; the class word
-/// is the daemon's, by [`PrunePass::failed`].
+/// composed, so no string of it is built ahead of the classed door that
+/// carries it (`skep_util::notice::emit`, through the daemon's `say`); the
+/// class word is the daemon's, by [`PrunePass::failed`].
 impl fmt::Display for PrunePass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("pruner: ")?;
@@ -314,12 +340,14 @@ impl fmt::Display for PrunePass {
     }
 }
 
-/// THE PRUNER — the pass as one daemon runs it ([`Pruner::pass`]), one per
-/// daemon beside its media gate. The pass reads the gate's store and index
-/// and the exclusive arm it is handed; what is the pass's own stands here —
+/// The pruner: the pass as one daemon runs it ([`Pruner::pass`]).
+///
+/// There is one per daemon, beside its media gate. The pass reads the gate's
+/// store and index and the exclusive arm it is handed; what is the pass's
+/// own stands here — the daemon's standing halt of the unlink pass, and
 /// under the test seam, the hold the dirty-crash harness parks a pass in
 /// between a rename aside and its unlink, and the count of passes completed
-/// a suite waits on; outside the seam, nothing.
+/// a suite waits on.
 #[derive(Default)]
 pub struct Pruner {
     /// A halt of the unlink pass the daemon arms for the uptime.
@@ -332,15 +360,17 @@ pub struct Pruner {
     /// The test seam's hold inside the pass, after a rename aside.
     #[cfg(any(test, feature = "test-hooks"))]
     hold: AtomicBool,
-    /// The test seam's count of passes completed — a suite waits for the
-    /// cadence's first pass before it moves the clock.
+    /// The test seam's count of passes completed.
+    ///
+    /// A suite waits for the cadence's first pass before it moves the clock.
     #[cfg(any(test, feature = "test-hooks"))]
     passes_completed: AtomicU64,
 }
 
 impl Pruner {
-    /// A pruner that has run no pass — its hold unarmed and its count
-    /// nought, under the test seam.
+    /// Returns a pruner that has run no pass.
+    ///
+    /// Its hold is unarmed and its count nought, under the test seam.
     pub fn new() -> Pruner {
         Pruner::default()
     }
@@ -353,18 +383,20 @@ impl Pruner {
     /// hold no file in memory, and a pass's step (c) would unlink the files
     /// they held as unreferenced. Every later pass halts at step (b) with
     /// this reason, said on its line (`operations.md` §1.1 row 34), while
-    /// steps (a) and (d) run as before; nothing but a restart, whose open
-    /// reads the log afresh, lifts it. The first reason given stands.
+    /// steps (a) and (d) run; nothing but a restart, whose open reads the log
+    /// afresh, lifts it. The first reason given stands.
     pub fn halt_the_unlink_pass(&self, reason: String) {
         let _ = self.unlink_halted.set(reason);
     }
 
-    /// ONE PASS over the media gate's store and index (`media_gate`),
-    /// `exclusive` the acquisition of the credential lock's write arm —
+    /// Runs one pass over the media gate's store and index (`media_gate`).
+    ///
+    /// `exclusive` is the acquisition of the credential lock's write arm —
     /// called once per file, its guard held across that file's re-read and
     /// rename aside and dropped before the aside's unlink and before the
-    /// next. `None` where the index is not ready: the pass does not start
-    /// (ms5-R).
+    /// next, and once per leftover aside at the pass's end, its guard held
+    /// across that aside's removal. `None` where the index is not ready: the
+    /// pass does not start.
     ///
     /// **The exit rule** (the module's card). Every step runs whatever an
     /// earlier one failed — (c) only where (b) read the halts and found none
@@ -394,32 +426,36 @@ impl Pruner {
         // (a)–(c), each step's failure kept beside the figures, (c) gated on
         // (b)'s halts alone.
         self.steps(media_gate, &exclusive, &mut report);
-        // (d) THE LOGS' COMPACTION, under no arm — on EVERY exit: the stop a
-        // failed step may have met is lifted here, by this pass.
+        // (d) The logs' compaction, under no arm — on every exit: the stop a
+        // failed step may have met is lifted here, by this pass, where the
+        // rewrite completes.
         compact_logs(media_gate.store(), media_gate.now_ms(), &mut report);
         #[cfg(any(test, feature = "test-hooks"))]
         self.passes_completed.fetch_add(1, Ordering::Release);
         Some(report)
     }
 
-    /// The line the pruner's hold writes on the operator stream as it
-    /// parks — what the dirty-crash harness watches for before it kills.
+    /// The line the pruner's hold writes on the operator stream as it parks.
+    ///
+    /// It is what the dirty-crash harness watches for before it kills.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub const PRUNE_HOLD_NOTICE: &'static str =
         "test seam: held inside the pruner's pass after a rename aside; kill this process";
 
-    /// TEST SEAM: arm the hold inside this pruner's pass — after the next
-    /// rename aside, the arm released and the aside not yet unlinked, the
-    /// pass writes [`Pruner::PRUNE_HOLD_NOTICE`] and parks its thread for
-    /// good. Not disarmable.
+    /// Arms the hold inside this pruner's pass.
+    ///
+    /// The test seam's hold: after the next rename aside, the arm released
+    /// and the aside not yet unlinked, the pass writes
+    /// [`Pruner::PRUNE_HOLD_NOTICE`] and parks its thread for good. Not
+    /// disarmable.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn arm_prune_hold(&self) {
         self.hold.store(true, Ordering::Relaxed);
     }
 
-    /// The pass's side of the seam: park here where the hold is armed.
+    /// Parks here where the hold is armed: the pass's side of the seam.
     #[cfg(any(test, feature = "test-hooks"))]
     fn hold_after_rename_if_armed(&self) {
         if self.hold.load(Ordering::Relaxed) {
@@ -430,8 +466,10 @@ impl Pruner {
         }
     }
 
-    /// TEST SEAM: the passes this pruner has completed so far — the
-    /// cadence's and a hook's alike; a pass that did not start counts none.
+    /// Returns the passes this pruner has completed so far.
+    ///
+    /// The test seam's count: the cadence's and a hook's alike; a pass that
+    /// did not start counts none.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn passes_completed(&self) -> u64 {
@@ -441,11 +479,11 @@ impl Pruner {
     /// Runs steps (a)–(c) of the pass into `report`.
     ///
     /// Each step's failure is pushed onto the report's `failed` in step order
-    /// and ends no other step: (a) runs, then (b), and (c) only where (b) read
-    /// the halts and found none. A halt read is the report's `halted`, and so
-    /// is a read that failed ([`HALTS_UNREAD`]) and the daemon's standing
-    /// halt ([`Pruner::halt_the_unlink_pass`]), read first; nothing is
-    /// unlinked under any. The figures land in `report` as each act
+    /// and ends no other step, (b)'s aside: (a) runs, then (b), and (c) only
+    /// where (b) read the halts and found none. A halt read is the report's
+    /// `halted`, and so is a read that failed ([`HALTS_UNREAD`]) and the
+    /// daemon's standing halt ([`Pruner::halt_the_unlink_pass`]), read first;
+    /// nothing is unlinked under any. The figures land in `report` as each act
     /// completes, so a failed step's report still counts what ran before its
     /// failure.
     fn steps<G>(&self, media_gate: &MediaGate, exclusive: &impl Fn() -> G, report: &mut PrunePass) {
@@ -462,12 +500,12 @@ impl Pruner {
                     report.failed.push(failure);
                 }
             }
-            // The report carries the halt; its line says it (row 36 RETIRED:
-            // no standalone line here).
+            // The report carries the halt; its line says it, and no
+            // standalone line is written here (row 36).
             Ok(Some(reason)) => report.halted = Some(reason),
-            // (b) gates (c): at the pruner an absence is a permission (ms5-T4,
-            // D13's carve-out), so halts the read could not see halt the
-            // unlink pass as halts it saw do.
+            // (b) gates (c): at the pruner an absence is a permission (D13's
+            // carve-out), so halts the read could not see halt the unlink
+            // pass as halts it saw do.
             Err(failure) => {
                 report.failed.push(failure);
                 report.halted = Some(HALTS_UNREAD.to_string());
@@ -499,7 +537,7 @@ impl Pruner {
             for hex in store.blobs_of(designation).map_err(&failed)? {
                 let aside = {
                     let _arm = exclusive();
-                    // THE RE-READ under the arm: a cell committed since the
+                    // The re-read under the arm: a cell committed since the
                     // listing, a halt mark entered since, a lease taken since.
                     let referenced = index.referenced(designation, &hex)
                         || index.first_halt().is_some()
@@ -508,8 +546,9 @@ impl Pruner {
                         report.kept += 1;
                         None
                     } else {
-                        // THE RENAME ASIDE, the arm's one act: the name is taken
-                        // here and the blocks freed below, the arm released.
+                        // The rename aside, the arm's one act: the name is
+                        // taken here and the blocks freed below, the arm
+                        // released.
                         store.rename_aside(designation, &hex).map_err(&failed)?
                     }
                 };
@@ -519,7 +558,7 @@ impl Pruner {
                 // harness's seam — a crash here leaves an aside open removes.
                 #[cfg(any(test, feature = "test-hooks"))]
                 self.hold_after_rename_if_armed();
-                // THE UNLINK AFTER, under no arm: the freeing's cost lands on
+                // The unlink after, under no arm: the freeing's cost lands on
                 // this thread alone, and what it freed on the line.
                 report.freed +=
                     store.remove_aside(designation, &aside).map_err(&failed)?.unwrap_or(0);
@@ -599,14 +638,15 @@ fn halts(media_gate: &MediaGate) -> Result<Option<String>, PassFailure> {
     })
 }
 
-/// (d) THE LOGS' COMPACTION at `now_ms`, the media gate's clock: the lease
-/// log's leases past the horizon dropped first, as the store's open drops
-/// them, then each log rewritten where it has passed the trigger — or has
-/// STOPPED, whatever its count — under the store's lock on that log's
-/// appends alone — no arm of the credential lock is held here — and the
-/// stopped logs read before and after it: a stop standing before the
-/// rewrite and gone after it is one this pass LIFTED, said as it stood.
-/// Then each log's size, the line's figure. Run on EVERY exit of the pass, a
+/// Runs step (d), the logs' compaction, at `now_ms`, the media gate's clock.
+///
+/// The lease log's leases past the horizon are dropped first, as the
+/// store's open drops them, then each log rewritten where it has passed the
+/// trigger — or has stopped, whatever its count — under the store's lock on
+/// that log's appends alone — no arm of the credential lock is held here —
+/// and the stopped logs read before and after it: a stop standing before
+/// the rewrite and gone after it is one this pass lifted, said as it stood.
+/// Then each log's size, the line's figure. Run on every exit of the pass, a
 /// failed step's included. A failure here is the report's and never the
 /// pass's: the next pass tries again, and a stopped log is rewritten then
 /// whatever its count.
@@ -624,8 +664,10 @@ fn compact_logs(store: &Store, now_ms: u64, report: &mut PrunePass) {
     report.logs = store.log_sizes();
 }
 
-/// THE CADENCE: the pruner thread's clock and stop, one condvar — a wait of
-/// the interval ends early at the stop, so a shutdown never waits on it.
+/// The cadence: the pruner thread's clock and stop, one condvar.
+///
+/// A wait of the interval ends early at the stop, so a shutdown never waits
+/// on it.
 pub struct Cadence {
     stopped: Mutex<bool>,
     wake: Condvar,
@@ -641,12 +683,12 @@ pub enum Wake {
 }
 
 impl Cadence {
-    /// A cadence not yet stopped.
+    /// Returns a cadence not yet stopped.
     pub fn new() -> Cadence {
         Cadence { stopped: Mutex::new(false), wake: Condvar::new() }
     }
 
-    /// Wait `interval`, or less where the stop arrives first.
+    /// Waits `interval`, or less where the stop arrives first.
     pub fn wait(&self, interval: Duration) -> Wake {
         let mut stopped = self.stopped.lock();
         if *stopped {
@@ -660,7 +702,9 @@ impl Cadence {
         }
     }
 
-    /// Stop: every waiter wakes with [`Wake::Stop`], now and forever.
+    /// Stops the cadence.
+    ///
+    /// Every waiter wakes with [`Wake::Stop`], now and forever.
     pub fn stop(&self) {
         *self.stopped.lock() = true;
         self.wake.notify_all();
@@ -678,6 +722,10 @@ mod tests {
     /// Returns a gate over `dir` whose index is ready, built by hand.
     ///
     /// It goes through the walk's door, with nothing walked.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the store does not open.
     fn ready_gate(dir: &Path) -> MediaGate {
         let gate = MediaGate::open(dir).expect("the store opens");
         gate.index().complete(Rebuild {
@@ -690,8 +738,10 @@ mod tests {
         gate
     }
 
-    /// The cadence wakes at the interval, and at once at the stop — before
-    /// and after it is asked.
+    /// Checks that the cadence wakes due or stopped.
+    ///
+    /// It wakes at the interval, and at once at the stop — before and after
+    /// it is asked.
     #[test]
     fn the_cadence_wakes_due_or_stopped() {
         let cadence = Cadence::new();
@@ -708,11 +758,13 @@ mod tests {
         assert_eq!(cadence.wait(Duration::from_secs(3600)), Wake::Stop, "stopped stays stopped");
     }
 
-    /// THE PASS's (a) and the hold (clause (5)): an expired upload a stream
-    /// still holds is left to that stream's end — its partial and its record
-    /// untouched by the pass — and, the hold released, the next pass retires
-    /// it. The pruner counts the passes it ran, and a pass over an index not
-    /// yet ready does not start: it answers nothing and counts none.
+    /// Checks the pass's (a) and the hold (clause (5)).
+    ///
+    /// An expired upload a stream still holds is left to that stream's end —
+    /// its partial and its record untouched by the pass — and, the hold
+    /// released, the next pass retires it. The pruner counts the passes it
+    /// ran, and a pass over an index not yet ready does not start: it answers
+    /// nothing and counts none.
     #[test]
     fn an_expired_upload_a_stream_holds_is_left_to_that_streams_end() {
         use skep_blobs::HashFunction;

@@ -1,11 +1,12 @@
-//! KEYGEN FROM A SEED AND SIGNING, per tag — [`HybridSigner`], which composes
-//! both halves into one key and one blob, and `PqSigner`, which holds each
-//! tag's post-quantum keygen and signature; and the two RNGs the FN-DSA
-//! preview draws through: the exact bytes its keygen is fed (the KDF's half
-//! seed) and the OS draw a signature's seed comes from. Compiled under
-//! `sign`, which skepd leaves off, so the daemon's build holds none of it.
-//! Its own test hooks sit here, beside the private fields they read, each
-//! gated on `test-hooks`.
+//! Keygen from a seed and signing, per tag.
+//!
+//! The file holds [`HybridSigner`], which composes both halves into one key
+//! and one blob, and `PqSigner`, which holds each tag's post-quantum keygen
+//! and signature; and the two RNGs the FN-DSA preview draws through: the
+//! exact bytes its keygen is fed (the KDF's half seed) and the OS draw a
+//! signature's seed comes from. Compiled under `sign`, which skepd leaves
+//! off, so the daemon's build holds none of it. Its own test hooks sit here,
+//! beside the private fields they read, each gated on `test-hooks`.
 
 use std::fmt;
 
@@ -21,13 +22,14 @@ use zeroize::Zeroizing;
 use crate::kdf::derive_half_seeds;
 use crate::Rule;
 
-/// An RNG that yields EXACTLY the bytes it was given and then refuses — what
-/// `fn-dsa` 0.4.0's keygen is fed so that its one 32-byte draw IS the KDF's
-/// PQ half seed. A longer draw would be a keygen this build did not pin, and
-/// under the frozen-tag rule a NEW tag; refusing it makes the rule loud. It
-/// BORROWS the bytes: this crate makes no copy of the KDF's half seed to feed
-/// the keygen — the copy the keygen takes of its draw is its own, and
-/// [`HybridSigner`]'s doc names it.
+/// An RNG that yields exactly the bytes it was given and then refuses.
+///
+/// It is what `fn-dsa` 0.4.0's keygen is fed, so that its one 32-byte draw is
+/// the KDF's PQ half seed. A longer draw would be a keygen this build did not
+/// pin, and under the frozen-tag rule a new tag; refusing it makes the rule
+/// loud. It borrows the bytes: this crate makes no copy of the KDF's half
+/// seed to feed the keygen — the copy the keygen takes of its draw is its
+/// own, and [`HybridSigner`]'s doc names it.
 struct ExactBytes<'a> {
     bytes: &'a [u8],
     drawn: usize,
@@ -60,10 +62,12 @@ impl rand_core_06::RngCore for ExactBytes<'_> {
 
 impl rand_core_06::CryptoRng for ExactBytes<'_> {}
 
-/// The crate's one OS RNG, fail-stop: what a tag-3 signature draws its
-/// 40-byte seed from outside a seeded fixture. Every draw comes from the OS
-/// (`getrandom`), so a signature's seed is never a function of process state;
-/// `rand_core` 0.6's traits, which `fn-dsa` 0.4.0 draws through.
+/// The crate's one OS RNG, fail-stop.
+///
+/// It is what a tag-3 signature draws its 40-byte seed from outside a seeded
+/// fixture. Every draw comes from the OS (`getrandom`), so a signature's
+/// seed is never a function of process state; it carries `rand_core` 0.6's
+/// traits, which `fn-dsa` 0.4.0 draws through.
 struct OsEntropy;
 
 impl rand_core_06::RngCore for OsEntropy {
@@ -86,18 +90,22 @@ impl rand_core_06::RngCore for OsEntropy {
 
 impl rand_core_06::CryptoRng for OsEntropy {}
 
-/// The post-quantum half of a signer, per tag — and on this one card both
-/// things its rule asks of it: keygen from the KDF's PQ half seed
-/// (`PqSigner::keygen`) and the PQ signature (`PqSigner::sign_into`).
+/// The post-quantum half of a signer, per tag.
+///
+/// On this one card are both things its rule asks of it: keygen from the
+/// KDF's PQ half seed (`PqSigner::keygen`) and the PQ signature
+/// (`PqSigner::sign_into`).
 enum PqSigner {
-    /// Tag 1: `ml-dsa`'s ML-DSA-65 signing key from ξ — the expanded key that
-    /// signs, beside the verifying key and ξ itself, which `ml-dsa` keeps in
-    /// it.
+    /// Tag 1: `ml-dsa`'s ML-DSA-65 signing key from ξ.
+    ///
+    /// It is the expanded key that signs, beside the verifying key and ξ
+    /// itself, which `ml-dsa` keeps in it.
     MlDsa65(ml_dsa::SigningKey<MlDsa65>),
-    /// Tag 3: the FN-DSA-512 PREVIEW signing key in `fn-dsa` 0.4.0's
-    /// encoding (`sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9,
-    /// its `f`, `g`, `F` and the hashed verifying key, which
-    /// `sizes_and_timings_per_tag` pins), decoded afresh for each signature
+    /// Tag 3: the FN-DSA-512 preview signing key in `fn-dsa` 0.4.0's encoding.
+    ///
+    /// It is `sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9, its
+    /// header byte, `f`, `g`, `F` and the hashed verifying key, which
+    /// `sizes_and_timings_per_tag` pins — decoded afresh for each signature
     /// because the crate's `sign` takes `&mut self`. The decoded key wipes
     /// itself on drop (`fn-dsa`'s own), and so do these stored bytes
     /// (`Zeroizing`; see [`HybridSigner`]).
@@ -105,12 +113,19 @@ enum PqSigner {
 }
 
 impl PqSigner {
-    /// KEYGEN of the post-quantum half under `rule`, from `half_seed`, the
-    /// KDF's PQ half seed, by the pinned crate's own keygen: the signing half,
-    /// and its verifying key's encoding — the half the KEY PIN puts first.
-    /// ML-DSA-65's is `SigningKey::from_seed(ξ)`; the FN-DSA-512 preview's is
-    /// `fn-dsa` 0.4.0's keygen fed `half_seed` through `ExactBytes`, and
-    /// checked to have drawn all 32 bytes.
+    /// Runs the keygen of the post-quantum half under `rule`, from `half_seed`.
+    ///
+    /// `half_seed` is the KDF's PQ half seed, and the keygen is the pinned
+    /// crate's own; it answers the signing half and its verifying key's
+    /// encoding — the half the key pin puts first. ML-DSA-65's is
+    /// `SigningKey::from_seed(ξ)`; the FN-DSA-512 preview's is `fn-dsa`
+    /// 0.4.0's keygen fed `half_seed` through `ExactBytes`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under tag 3 where `fn-dsa`'s keygen has not drawn all 32 bytes
+    /// of `half_seed`, the check here; a longer draw is `ExactBytes`'s to
+    /// refuse, inside the keygen.
     fn keygen(rule: Rule, half_seed: &[u8; 32]) -> (PqSigner, Vec<u8>) {
         match rule {
             Rule::MlDsa65Ed25519 => {
@@ -140,19 +155,23 @@ impl PqSigner {
         }
     }
 
-    /// THE POST-QUANTUM SIGNATURE over `msg` under this half's rule, written
-    /// into `field` — the blob's first field, exactly this rule's width
-    /// (`SigAlgRow::pq_sig_len`), the out-slice `fn-dsa`'s own `sign` takes:
-    /// ML-DSA-65's deterministic variant with the empty `ctx`, drawing
-    /// nothing; the FN-DSA-512 preview's randomized signing with
-    /// `DOMAIN_NONE` and `HASH_ID_RAW`, its per-signature seed drawn from
-    /// `rng` and its key decoded from the stored bytes for this one signature
-    /// (`fn-dsa`'s `sign` takes `&mut self`). A `field` of any other width
-    /// would mean the row and the pinned crate disagree, which
-    /// `sizes_and_timings_per_tag` rules out; that disagreement panics where
-    /// the field is written — at the ML-DSA-65 copy, at `fn-dsa`'s own width
-    /// assertion — so no blob is ever handed out at a width its crate did not
-    /// sign.
+    /// Writes the post-quantum signature over `msg` into `field`.
+    ///
+    /// The signature is under this half's rule, and `field` is the blob's
+    /// first field, exactly this rule's width (`SigAlgRow::pq_sig_len`), the
+    /// out-slice `fn-dsa`'s own `sign` takes: ML-DSA-65's deterministic
+    /// variant with the empty `ctx`, drawing nothing; the FN-DSA-512
+    /// preview's randomized signing with `DOMAIN_NONE` and `HASH_ID_RAW`, its
+    /// per-signature seed drawn from `rng` and its key decoded from the stored
+    /// bytes for this one signature (`fn-dsa`'s `sign` takes `&mut self`).
+    ///
+    /// # Panics
+    ///
+    /// Panics where `field` is of any other width, at the write — the
+    /// ML-DSA-65 copy, `fn-dsa`'s own width assertion — so no blob is ever
+    /// handed out at a width its crate did not sign. Such a `field` would
+    /// mean the row and the pinned crate disagree, which
+    /// `sizes_and_timings_per_tag` rules out.
     fn sign_into(&self, rng: &mut impl rand_core_06::CryptoRngCore, msg: &[u8], field: &mut [u8]) {
         match self {
             PqSigner::MlDsa65(sk) => field.copy_from_slice(sk.sign(msg).encode().as_slice()),
@@ -166,27 +185,28 @@ impl PqSigner {
     }
 }
 
-/// ONE HYBRID SIGNER: both halves derived from one seed under one tag, its
-/// public key the `alg` and `key` of ONE key entry — one `ALGS` token over
-/// one concatenated raw value (wire.md). Holds private-key material and
-/// prints none of it.
+/// One hybrid signer: both halves derived from one seed under one tag.
 ///
-/// DROPPING IT WIPES EVERY KEY IT HOLDS: the Ed25519 key (`ed25519-dalek`'s
-/// default `zeroize` feature); the ML-DSA-65 key — ξ and the expanded key
-/// beside it (`ml-dsa`'s `zeroize` feature); and the stored FN-DSA-512
-/// encoding (a `Zeroizing` vector — the key each tag-3 signature decodes
-/// from it wipes itself, its scratch included, `fn-dsa`'s own). The half
-/// seeds [`HybridSigner::from_seed`] derives are wiped as they go out of
+/// Its public key is the `alg` and `key` of one key entry — one `ALGS` token
+/// over one concatenated raw value (wire.md). It holds private-key material
+/// and prints none of it.
+///
+/// **Dropping it wipes every private key it holds.** It wipes the Ed25519 key
+/// (`ed25519-dalek`'s default `zeroize` feature); the ML-DSA-65 key — ξ and
+/// the expanded key beside it (`ml-dsa`'s `zeroize` feature); and the stored
+/// FN-DSA-512 encoding (a `Zeroizing` vector — the key each tag-3 signature
+/// decodes from it wipes itself, its scratch included, `fn-dsa`'s own). The
+/// half seeds [`HybridSigner::from_seed`] derives are wiped as they go out of
 /// scope inside it, once each half has been handed to its keygen
 /// (`HalfSeeds`).
 ///
-/// WHAT IS NOT WIPED: what the KDF and the three key libraries compute from
-/// a secret inside a call, which each releases without overwriting and this
-/// crate cannot reach — a library's `zeroize` feature wipes the keys it
-/// holds, never what its calls compute from them. By name, the parts that
-/// matter:
+/// **What is not wiped.** It is what the KDF and the three key libraries
+/// compute from a secret inside a call, which each releases without
+/// overwriting and this crate cannot reach — a library's `zeroize` feature
+/// wipes the keys it holds, never what its calls compute from them. By name,
+/// the parts that matter:
 ///
-/// * AT KEYGEN, all released before `from_seed` returns. The KDF's working
+/// * At keygen, all released before `from_seed` returns. The KDF's working
 ///   state, released before either half's keygen runs — `hkdf` 0.12's, and
 ///   that of the `hmac` 0.12 and `digest` 0.10 it runs on: a copy of the
 ///   seed itself, as Extract's HMAC buffers it, the PRK, the HMAC state
@@ -197,7 +217,7 @@ impl PqSigner {
 ///   `ml-dsa`'s SHAKE state over ξ and the seed ρ′ it squeezes for the key's
 ///   secret vectors; and the copy `fn-dsa`'s keygen takes of its one 32-byte
 ///   draw — the PQ half seed itself — with the stream it seeds.
-/// * AT EVERY SIGNATURE, released as the call returns. `ed25519-dalek`'s
+/// * At every signature, released as the call returns. `ed25519-dalek`'s
 ///   SHA-512 output again, re-derived from the Ed25519 key for each
 ///   signature and as good as that key, and the signature's nonce, which
 ///   beside the signature yields the secret scalar that signs; under tag 1,
@@ -226,14 +246,16 @@ impl fmt::Debug for HybridSigner {
 }
 
 impl HybridSigner {
-    /// KEYGEN FROM SEED under `tag`'s frozen rule: the KDF's two half seeds,
-    /// the Ed25519 key from its half, the PQ key from its half by the pinned
-    /// crate's own keygen (`PqSigner::keygen`), and the two public halves
-    /// composed into one key by the KEY PIN. `None` for a tag no row names or
-    /// this build holds no rule for; on `Some`, the signer's
-    /// [`tag`](HybridSigner::tag) is `tag`, and its key is a function of `tag`
-    /// and `seed` alone — the same seed derives the same key every time,
-    /// which is what lets one 64-hex seed back a key up.
+    /// Returns the signer `seed` derives under `tag`'s frozen rule.
+    ///
+    /// Keygen from seed: the KDF's two half seeds, the Ed25519 key from its
+    /// half, the PQ key from its half by the pinned crate's own keygen
+    /// (`PqSigner::keygen`), and the two public halves composed into one key
+    /// by the key pin. `None` for a tag no row names or this build holds no
+    /// rule for; on `Some`, the signer's [`tag`](HybridSigner::tag) is `tag`,
+    /// and its key is a function of `tag` and `seed` alone — the same seed
+    /// derives the same key every time, which is what lets one 64-hex seed
+    /// back a key up.
     pub fn from_seed(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
         let row = SigAlgRow::of_tag(tag)?;
         let halves = derive_half_seeds(tag, seed)?;
@@ -245,27 +267,32 @@ impl HybridSigner {
         Some(HybridSigner { ed, pq, public })
     }
 
-    /// This signer's public key — the `alg` and `key` of ONE key entry, one
-    /// `ALGS` token over the two halves' concatenated raw value (wire.md).
+    /// Returns this signer's public key.
+    ///
+    /// It is the `alg` and `key` of one key entry, one `ALGS` token over the
+    /// two halves' concatenated raw value (wire.md).
     pub fn public_key(&self) -> &PublicKey {
         &self.public
     }
 
-    /// The marker tag this signer signs under — its public key's row's, so
-    /// the tag and the key never disagree.
+    /// Returns the marker tag this signer signs under.
+    ///
+    /// It is its public key's row's, so the tag and the key never disagree.
     pub fn tag(&self) -> u8 {
         self.public.sig_alg_row().tag
     }
 
-    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-    /// API) — the Ed25519 half's signing key, which makes the Ed25519 half of
-    /// every blob this signer makes, a session's, an entry's and a record's
-    /// alike; alone it opens nothing (no half opens a session alone). This
-    /// crate's own tests read it (the Ed25519 half differs per tag), skepd's
-    /// fixtures check that it differs from the raw seed and matches the
-    /// enrolled key's Ed25519 half, and the suites' negative vector — a bare
-    /// Ed25519 signature as the `sig`, the classical layout no served board
-    /// admits — is made with it. Handed out as the suites' own
+    /// TEST HOOK: returns the Ed25519 half's signing key, as a suite holds it.
+    ///
+    /// It has the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
+    /// API. The key makes the Ed25519 half of every blob this signer makes, a
+    /// session's, an entry's and a record's alike; alone it opens nothing (no
+    /// half opens a session alone). This crate's own tests read it (the
+    /// Ed25519 half differs per tag), skepd's fixtures check that it differs
+    /// from the raw seed and matches the enrolled key's Ed25519 half, and the
+    /// suites' negative vector — a bare Ed25519 signature as the `sig`, the
+    /// classical layout no served board admits — is made with it. Handed out
+    /// as the suites' own
     /// [`Ed25519SigningKey`](crate::hooks::Ed25519SigningKey) — a copy of the
     /// half, wiped on drop as the original is — so no caller names
     /// `ed25519-dalek`'s type; and it is the one way a suite gets one, so
@@ -277,7 +304,9 @@ impl HybridSigner {
         crate::hooks::Ed25519SigningKey(self.ed.clone())
     }
 
-    /// TEST HOOK (the same standing) — [`HybridSigner::sign`] with tag 3's
+    /// TEST HOOK: signs `msg` as `sign` does, tag 3's seed drawn from `rng`.
+    ///
+    /// It has the same standing. It is [`HybridSigner::sign`] with tag 3's
     /// per-signature seed drawn from `rng`, the fixtures' seeded stream, so a
     /// tag-3 golden is byte-stable (tag 1 draws nothing). The RNG comes first,
     /// as in every `sign_with_rng` a Rust caller already knows (`signature`'s
@@ -292,27 +321,34 @@ impl HybridSigner {
         self.sign_drawing(rng, msg)
     }
 
-    /// SIGN `msg` under the tag's rule: the PQ signature THEN the Ed25519
-    /// signature over the same bytes — THE BLOB, whichever carrier takes it:
-    /// an entry's `attest`, a credential record's `sig`, a session's `sig`.
-    /// Tag 1 is deterministic (FIPS 204's deterministic variant, empty
-    /// `ctx`); tag 3 draws its per-signature seed from OS entropy, and PANICS
-    /// where the OS refuses it: the draw is the crate's fail-stop OS source
-    /// (`OsEntropy`), so a tag-3 signature is never made over a seed from
-    /// anything weaker. Tag 1 draws nothing, so this panic is tag 3's alone.
-    /// Whatever it draws, the blob is its row's `sig_len()` bytes and
-    /// [`verify`](crate::verify) passes it under this signer's
+    /// Signs `msg` under the tag's rule, answering the blob.
+    ///
+    /// The blob is the PQ signature then the Ed25519 signature over the same
+    /// bytes, whichever carrier takes it: an entry's `attest`, a credential
+    /// record's `sig`, a session's `sig`. Tag 1 is deterministic (FIPS 204's
+    /// deterministic variant, empty `ctx`); tag 3 draws its per-signature seed
+    /// from OS entropy. Whatever it draws, the blob is its row's `sig_len()`
+    /// bytes and [`verify`](crate::verify) passes it under this signer's
     /// [`tag`](HybridSigner::tag) and [`public_key`](HybridSigner::public_key)
     /// over `msg` — the round trip every carrier rests on.
+    ///
+    /// # Panics
+    ///
+    /// Panics under tag 3 where the OS refuses the draw: the draw is the
+    /// crate's fail-stop OS source (`OsEntropy`), so a tag-3 signature is
+    /// never made over a seed from anything weaker. Tag 1 draws nothing, so
+    /// this panic is tag 3's alone.
     #[must_use = "sign returns the blob; the signer keeps no copy of it"]
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         self.sign_drawing(&mut OsEntropy, msg)
     }
 
-    /// The one signing body, over the RNG tag 3's per-signature seed is drawn
-    /// from — the OS's for [`HybridSigner::sign`], a fixture's stream for the
-    /// test hook `sign_with_rng` — private, so no shipped caller picks the
-    /// draw. It writes THE BLOB at its row's width, parted where
+    /// Signs `msg`, drawing tag 3's per-signature seed from `rng`.
+    ///
+    /// It is the one signing body, over the RNG that seed is drawn from — the
+    /// OS's for [`HybridSigner::sign`], a fixture's stream for the test hook
+    /// `sign_with_rng` — private, so no shipped caller picks the draw. It
+    /// writes the blob at its row's width, parted where
     /// [`verify`](crate::verify) parts it: the PQ half's signature into the
     /// first field (`PqSigner::sign_into`), the Ed25519 signature into the
     /// last 64 bytes, over the same `msg`.
@@ -333,21 +369,25 @@ mod tests {
     use crate::hooks::{Seed, SeededRng06};
     use crate::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 
-    /// Lowercase hex, two digits a byte — skep-util's `json::hex_string`'s
-    /// output, which skepd's codec writes with, and the spelling
+    /// Returns `b` in lowercase hex, two digits a byte.
+    ///
+    /// It is skep-util's `json::hex_string`'s output, which skep-core's codec
+    /// writes with, and the spelling
     /// [`private_key_material_prints_none_of_itself`] looks for.
     fn hex_string(b: &[u8]) -> String {
         b.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
-    /// PRIVATE-KEY MATERIAL PRINTS NONE OF ITSELF: `{:?}` of `HalfSeeds`, a
-    /// `HybridSigner` of either tag and the Ed25519 half it hands out, and the
-    /// fixtures' `SeededRng06` and `Seed` — what a log line, an assertion's
-    /// message or a panic carries — holds neither the seed, nor a half seed,
-    /// nor the Ed25519 signing key, nor the FN-DSA signing key the tag-3
-    /// signer stores as bytes, in the decimal list a derived `Debug` prints or
-    /// in hex. The hand-written impls are all that stands between a
-    /// `#[derive(Debug)]` and a production key's ξ in a log.
+    /// Checks that private-key material prints none of itself.
+    ///
+    /// `{:?}` — what a log line, an assertion's message or a panic carries —
+    /// of `HalfSeeds`, a `HybridSigner` of either tag and the Ed25519 half it
+    /// hands out holds neither the seed, nor a half seed, nor the Ed25519
+    /// signing key, nor the FN-DSA signing key the tag-3 signer stores as
+    /// bytes, and of the fixtures' `SeededRng06` and `Seed` holds no seed, in
+    /// the decimal list a derived `Debug` prints or in hex. The hand-written
+    /// impls are all that stands between a `#[derive(Debug)]` and a
+    /// production key's ξ in a log.
     #[test]
     fn private_key_material_prints_none_of_itself() {
         let seed = [0x42u8; 32];
@@ -383,11 +423,12 @@ mod tests {
         }
     }
 
-    /// THE PQ HALF ON ITS OWN CARD: `PqSigner::keygen` makes the public key's
-    /// first half and `PqSigner::sign_into` writes the blob's first field —
-    /// the KEY PIN and THE BLOB, the PQ half THEN the Ed25519 one — so
-    /// `HybridSigner` composes the two halves and holds no tag's arithmetic
-    /// itself.
+    /// Checks the PQ half on its own card.
+    ///
+    /// `PqSigner::keygen` makes the public key's first half and
+    /// `PqSigner::sign_into` writes the blob's first field — the key pin and
+    /// the blob, the PQ half then the Ed25519 one — so `HybridSigner`
+    /// composes the two halves and holds no tag's arithmetic itself.
     #[test]
     fn the_pq_half_makes_the_keys_first_half_and_the_blobs_first_field() {
         let seed = [0x42u8; 32];
@@ -409,11 +450,13 @@ mod tests {
         }
     }
 
-    /// `PqSigner::sign_into` WRITES ITS RULE'S WIDTH OR NOTHING: handed a
-    /// field one byte short or one byte long of the row's post-quantum width,
-    /// either tag's half panics where it writes — the ML-DSA-65 copy,
-    /// `fn-dsa`'s own width assertion — rather than fill part of it: a row its
-    /// pinned crate disagreed with makes `sign` panic, never a blob.
+    /// Checks that `PqSigner::sign_into` writes its rule's width or nothing.
+    ///
+    /// Handed a field one byte short or one byte long of the row's
+    /// post-quantum width, either tag's half panics where it writes — the
+    /// ML-DSA-65 copy, `fn-dsa`'s own width assertion — rather than fill part
+    /// of it: a row its pinned crate disagreed with makes `sign` panic, never
+    /// a blob.
     #[test]
     fn the_pq_half_refuses_a_field_of_any_width_but_its_rules() {
         let msg = b"the entry frame";
@@ -430,13 +473,15 @@ mod tests {
         }
     }
 
-    /// `sign`'S DRAWS, AS ITS DOC STATES THEM: tag 1 draws nothing — a stream
-    /// handed to it is where it began, and two `sign`s over one message are
-    /// byte-equal — while tag 3 draws a fresh per-signature seed from the OS at
-    /// every `sign`: two blobs' post-quantum fields differ (two 40-byte OS draws
-    /// agree once in 2^320), their Ed25519 fields agree (Ed25519 signs
-    /// deterministically), and both verify. A signer that drew tag 3's seed from
-    /// anything fixed would make the two equal.
+    /// Checks `sign`'s draws, as its doc states them.
+    ///
+    /// Tag 1 draws nothing — a stream handed to it is where it began, and two
+    /// `sign`s over one message are byte-equal — while tag 3 draws a fresh
+    /// per-signature seed from the OS at every `sign`: two blobs'
+    /// post-quantum fields differ (two 40-byte OS draws agree once in
+    /// 2^320), their Ed25519 fields agree (Ed25519 signs deterministically),
+    /// and both verify. A signer that drew tag 3's seed from anything fixed
+    /// would make the two equal.
     #[test]
     fn sign_draws_nothing_under_tag_1_and_a_fresh_os_seed_under_tag_3() {
         let msg = b"the entry frame";
@@ -465,24 +510,27 @@ mod tests {
         }
     }
 
-    /// WHAT A DROPPED SIGNER WIPES, as [`HybridSigner`]'s doc states it, read
-    /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
-    /// key, the FN-DSA key each tag-3 signature decodes, the stored FN-DSA
-    /// encoding it decodes from, the ML-DSA-65 key and the KDF's half seeds wipe
-    /// themselves; the KDF's working state does not — Extract's HMAC, which
-    /// buffers a copy of the seed, the `Output` the PRK and each Expand's block
-    /// are held in, and the `Hkdf` keyed by the PRK — the KDF's part of the
-    /// residue the doc names, the key libraries' part sitting in call frames no
-    /// probe of a type can see. A feature line or a derive that moves any of the
-    /// eight, or a key field the signer holds whose type moves — each read off
-    /// the signer's own field below — fails here, so the doc moves with it.
+    /// Checks what a dropped signer wipes, as [`HybridSigner`]'s doc states it.
+    ///
+    /// Each type's `ZeroizeOnDrop` is read off in this very build: the
+    /// Ed25519 signing key, the FN-DSA key each tag-3 signature decodes, the
+    /// stored FN-DSA encoding it decodes from, the ML-DSA-65 key and the KDF's
+    /// half seeds wipe themselves; the KDF's working state does not —
+    /// Extract's HMAC, which buffers a copy of the seed, the `Output` the PRK
+    /// and each Expand's block are held in, and the `Hkdf` keyed by the PRK —
+    /// the KDF's part of the residue the doc names, the key libraries' part
+    /// sitting in call frames no probe of a type can see. A feature line or a
+    /// derive that moves any of the eight, or a key field the signer holds
+    /// whose type moves — each read off the signer's own field below — fails
+    /// here, so the doc moves with it.
     #[test]
     fn a_dropped_signer_wipes_both_keys_and_the_half_seeds_but_not_the_kdf_state() {
         use std::marker::PhantomData;
         use zeroize::ZeroizeOnDrop;
-        /// `Probe::<T>::WIPES` is `true` exactly where `T: ZeroizeOnDrop`: the
-        /// inherent const, which path resolution prefers, exists only then,
-        /// and the trait's `false` answers everywhere else.
+        /// `Probe::<T>::WIPES` is `true` exactly where `T: ZeroizeOnDrop`.
+        ///
+        /// The inherent const, which path resolution prefers, exists only
+        /// then, and the trait's `false` answers everywhere else.
         struct Probe<T>(PhantomData<T>);
         trait Unwiped {
             const WIPES: bool = false;
@@ -491,10 +539,10 @@ mod tests {
         impl<T: ZeroizeOnDrop> Probe<T> {
             const WIPES: bool = true;
         }
-        // Each key type the probes below ask about, read off a signer's own
+        // Each private key type the signer holds, read off a signer's own
         // field — the Ed25519 key and the ML-DSA-65 key off a tag-1 signer, the
         // stored FN-DSA encoding off a tag-3 one: a field typed otherwise fails
-        // to compile here, so each probe asks about the type the signer holds.
+        // to compile here, so the probes below ask about the types it holds.
         let signer1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
         let _: &EdSigningKey = &signer1.ed;
         let _: &ml_dsa::SigningKey<MlDsa65> = match &signer1.pq {

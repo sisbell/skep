@@ -1,17 +1,19 @@
-//! THE FIXTURES' HOOKS (the `fuzz_support` standing: `#[doc(hidden)]`, not a
-//! stable API), compiled under `test-hooks` alone, which no shipped signer
-//! enables — and the crate's ONE LIST of its hooks, every item whose doc opens
-//! `TEST HOOK`: `tests/it/tidy.rs` holds this list to those markers both ways,
-//! so a hook added or dropped is named here and nowhere else in prose. In this
-//! file: the seeded stream a tag-3 golden signs over ([`SeededRng06`]), the
-//! widths the sizes pin reads ([`pq_widths`], answering [`PqWidths`]), the
-//! suites' seed ([`Seed`]), which is no key, and the hybrid's Ed25519 half
-//! as a suite holds it ([`Ed25519SigningKey`]), the one door another crate's
-//! suite has to `ed25519-dalek`'s key type. Beside the private fields they
-//! read, in the signer's file:
+//! The fixtures' hooks, and the crate's one list of its hooks.
+//!
+//! The hooks have the `fuzz_support` standing (`#[doc(hidden)]`, not a
+//! stable API) and are compiled under `test-hooks` alone, which no shipped
+//! signer enables. The list names every item whose doc opens `TEST HOOK`:
+//! `tests/it/tidy.rs` holds this list to those markers both ways, so a hook
+//! added or dropped is named here and nowhere else in prose. In this file:
+//! the seeded stream a tag-3 golden signs over ([`SeededRng06`]), the widths
+//! the sizes pin reads ([`pq_widths`], answering [`PqWidths`]), the suites'
+//! seed ([`Seed`]), which is no key, and the hybrid's Ed25519 half as a suite
+//! holds it ([`Ed25519SigningKey`]), the one door another crate's suite has
+//! to `ed25519-dalek`'s key type. Beside the private fields they read, in the
+//! signer's file:
 //! [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
 //! and [`HybridSigner::sign_with_rng`](crate::HybridSigner::sign_with_rng).
-//! And the KDF's own answer, re-exported at the crate root:
+//! And the KDF and its answer, re-exported at the crate root:
 //! [`derive_half_seeds`](crate::derive_half_seeds), answering
 //! [`HalfSeeds`](crate::HalfSeeds).
 
@@ -25,27 +27,31 @@ use zeroize::Zeroizing;
 
 use crate::Rule;
 
-/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-/// API) — a DETERMINISTIC `rand_core` 0.6 stream for FIXTURES, SHA-256 in
-/// counter mode over a seed, so a tag-3 signature (randomized by the draft's
-/// own rule) is byte-stable in a golden. No part of any tag's rule: a tag-3
-/// signature verifies under the tag's rule whatever RNG made it. Never for
-/// production use — the stream is a function of its seed.
+/// TEST HOOK: a deterministic `rand_core` 0.6 stream for fixtures.
+///
+/// It has the `fuzz_support` standing: `#[doc(hidden)]`, not a stable API.
+/// The stream is SHA-256 in counter mode over a seed, so a tag-3 signature
+/// (randomized by the draft's own rule) is byte-stable in a golden. No part
+/// of any tag's rule: a tag-3 signature verifies under the tag's rule
+/// whatever RNG made it. Never for production use — the stream is a function
+/// of its seed.
 #[doc(hidden)]
 pub struct SeededRng06 {
     seed: [u8; 32],
     counter: u64,
-    /// The current SHA-256 block, handed out front to back; `drawn ==
-    /// block.len()` when the next byte needs a fresh one.
+    /// The current SHA-256 block, handed out front to back.
+    ///
+    /// When the next byte needs a fresh block, `drawn == block.len()`.
     block: [u8; 32],
     drawn: usize,
 }
 
 impl SeededRng06 {
-    /// The stream `seed` keys, from its first byte: block `i` is
-    /// SHA-256(`seed` ‖ `i` as eight big-endian bytes), `i` from 0, handed
-    /// out front to back — so one seed yields one stream, and every tag-3
-    /// signature pin rests on this definition (golden.rs's `TagGolden`;
+    /// Returns the stream `seed` keys, from its first byte.
+    ///
+    /// Block `i` is SHA-256(`seed` ‖ `i` as eight big-endian bytes), `i` from
+    /// 0, handed out front to back — so one seed yields one stream, and every
+    /// tag-3 signature pin rests on this definition (golden.rs's `TagGolden`;
     /// `the_stream_is_its_seeds_sha_256_blocks_front_to_back` holds it to
     /// this sentence).
     pub fn new(seed: [u8; 32]) -> SeededRng06 {
@@ -54,7 +60,7 @@ impl SeededRng06 {
     }
 }
 
-/// The stream's position, never its seed: this crate prints no seed.
+/// The stream's block counter, never its seed: this crate prints no seed.
 impl fmt::Debug for SeededRng06 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SeededRng06").field("counter", &self.counter).finish_non_exhaustive()
@@ -92,28 +98,31 @@ impl rand_core_06::RngCore for SeededRng06 {
 
 impl rand_core_06::CryptoRng for SeededRng06 {}
 
-/// TEST HOOK (the same standing) — the widths one tag's rule fixes,
-/// [`pq_widths`]' answer. Named, not a triple: three `usize`s meaning three
-/// things, printed into a report that is transcribed.
+/// TEST HOOK: the widths one tag's rule fixes, [`pq_widths`]' answer.
+///
+/// It has the same standing. Named, not a triple: three `usize`s meaning
+/// three things, printed into a report that is transcribed.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PqWidths {
-    /// The PQ half's verifying key.
+    /// The width of the PQ half's verifying key.
     pub key: usize,
-    /// The PQ half's signature.
+    /// The width of the PQ half's signature.
     pub sig: usize,
-    /// The PQ signing key in its crate's encoding — the expanded key's for
-    /// ML-DSA-65, which the signer holds decoded, and the bytes the signer
-    /// stores for the FN-DSA-512 preview.
+    /// The width of the PQ signing key in its crate's encoding.
+    ///
+    /// It is the expanded key's for ML-DSA-65, which the signer holds
+    /// decoded, and the bytes the signer stores for the FN-DSA-512 preview.
     pub signing_key: usize,
 }
 
-/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-/// API) — the widths a tag's rule fixes, READ OFF each pinned crate's own
-/// sizes — `ml-dsa`'s encoded-array types for tag 1, `fn-dsa`'s size
-/// functions for tag 3 — so a bump of either crate that moved one fails
-/// `sizes_and_timings_per_tag`'s literal pin by name. `None` for a tag this
-/// build holds no rule for.
+/// TEST HOOK: returns the widths `tag`'s rule fixes.
+///
+/// It has the `fuzz_support` standing: `#[doc(hidden)]`, not a stable API.
+/// The widths are read off each pinned crate's own sizes — `ml-dsa`'s
+/// encoded-array types for tag 1, `fn-dsa`'s size functions for tag 3 — so a
+/// bump of either crate that moved one fails `sizes_and_timings_per_tag`'s
+/// literal pin by name. `None` for a tag this build holds no rule for.
 #[doc(hidden)]
 pub fn pq_widths(tag: u8) -> Option<PqWidths> {
     Some(match Rule::of(tag)? {
@@ -130,13 +139,14 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
     })
 }
 
-/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-/// API) — THE SUITES' SEED: one hybrid key's 32-byte seed — wire.md's seed,
-/// the paper backup's 64 hex — held for a fixture, one per principal, and
-/// lent by [`Seed::as_bytes`] to
+/// TEST HOOK: the suites' seed, one hybrid key's 32-byte seed.
+///
+/// It has the `fuzz_support` standing: `#[doc(hidden)]`, not a stable API.
+/// It is wire.md's seed, the paper backup's 64 hex, held for a fixture, one
+/// per principal, and lent by [`Seed::as_bytes`] to
 /// [`HybridSigner::from_seed`](crate::HybridSigner::from_seed), which derives
-/// the key it seeds. It is NO KEY: it signs nothing and names no public key,
-/// so no fixture signs or enrols under the raw seed (the KDF PIN: never the
+/// the key it seeds. It is no key: it signs nothing and names no public key,
+/// so no fixture signs or enrols under the raw seed (the KDF pin: never the
 /// raw seed to either half). Private-key material: prints none of itself,
 /// wiped on drop (`Zeroizing`).
 ///
@@ -164,33 +174,41 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
 pub struct Seed(Zeroizing<[u8; 32]>);
 
 impl Seed {
-    /// The seed `bytes`.
+    /// Returns the seed `bytes`.
     pub fn from_bytes(bytes: &[u8; 32]) -> Seed {
         Seed(Zeroizing::new(*bytes))
     }
 
-    /// The seed's 32 bytes, lent as `HybridSigner::from_seed` takes them: a
-    /// borrow of the wiped buffer, never a copy of it.
+    /// Returns the seed's 32 bytes as `HybridSigner::from_seed` takes them.
+    ///
+    /// They are lent: a borrow of the wiped buffer, never a copy of it.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
 impl fmt::Debug for Seed {
+    /// Writes `Seed(..)` and nothing of the seed.
+    ///
     /// A seed is private-key material: never printed.
+    ///
+    /// # Errors
+    ///
+    /// The formatter's error, where the sink it writes to refuses the bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Seed(..)")
     }
 }
 
-/// TEST HOOK (the same standing) — THE HYBRID'S DERIVED ED25519 HALF, as a
-/// suite holds it: what
+/// TEST HOOK: the hybrid's derived Ed25519 half, as a suite holds it.
+///
+/// It has the same standing. It is what
 /// [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
 /// hands out, and the only way to get one — the type has no public
 /// constructor, so every Ed25519 key a suite holds is a hybrid's half and
 /// never a raw seed's (a seed is a [`Seed`], which is no key). It makes a
-/// bare Ed25519 signature, 64 bytes (wire.md §Sessions) — the suites' one
-/// negative vector, the classical layout no served board admits — and names
+/// bare Ed25519 signature, 64 bytes (wire.md §Sessions) — a negative vector
+/// the suites send, the classical layout no served board admits — and names
 /// its verifying key's 32 bytes, so another crate's suite names this crate and
 /// never `ed25519-dalek`, which this crate alone links. Private-key material:
 /// prints none of itself, wiped on drop (`ed25519-dalek`'s own). Its field
@@ -217,21 +235,25 @@ impl fmt::Debug for Seed {
 pub struct Ed25519SigningKey(pub(crate) EdSigningKey);
 
 impl Ed25519SigningKey {
-    /// The half's 32 bytes — the KDF's Ed25519 half seed it was made from
+    /// Returns the half's 32 bytes.
+    ///
+    /// They are the KDF's Ed25519 half seed it was made from
     /// (`ed25519-dalek`'s `SigningKey::to_bytes`).
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
 
-    /// A bare Ed25519 signature over `msg`, 64 bytes: this half alone —
-    /// never a blob, which [`HybridSigner::sign`](crate::HybridSigner::sign)
-    /// makes.
+    /// Returns a bare Ed25519 signature over `msg`, 64 bytes.
+    ///
+    /// It is this half's alone — never a blob, which
+    /// [`HybridSigner::sign`](crate::HybridSigner::sign) makes.
     pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
         self.0.sign(msg).to_bytes()
     }
 
-    /// This half's verifying key, as its 32 bytes — the Ed25519 half a hybrid
-    /// public key carries
+    /// Returns this half's verifying key, as its 32 bytes.
+    ///
+    /// They are the Ed25519 half a hybrid public key carries
     /// ([`PublicKey::ed25519_half`](skep_identity::PublicKey::ed25519_half)).
     pub fn verifying_key(&self) -> [u8; 32] {
         self.0.verifying_key().to_bytes()
@@ -239,7 +261,13 @@ impl Ed25519SigningKey {
 }
 
 impl fmt::Debug for Ed25519SigningKey {
+    /// Writes `Ed25519SigningKey(..)` and nothing of the key.
+    ///
     /// A signing key is private-key material: never printed.
+    ///
+    /// # Errors
+    ///
+    /// The formatter's error, where the sink it writes to refuses the bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Ed25519SigningKey(..)")
     }
@@ -251,14 +279,15 @@ mod tests {
     use rand_core_06::RngCore as _;
     use sha2::Digest as _;
 
-    /// THE STREAM IS [`SeededRng06::new`]'S DEFINITION: block `i` is
-    /// SHA-256(seed ‖ `i` as eight big-endian bytes), `i` from 0 — recomputed
-    /// here by the one-shot digest over that concatenation — and the stream
-    /// hands the blocks out front to back whatever the draws' sizes: one
-    /// byte, a draw that ends a block, a draw that crosses into the next. A
-    /// change to the counter's width, byte order or start, to what is hashed
-    /// or to where a draw reads from fails here by name, before it moves
-    /// every tag-3 signature pin at once.
+    /// Checks that the stream is [`SeededRng06::new`]'s definition.
+    ///
+    /// Block `i` is SHA-256(seed ‖ `i` as eight big-endian bytes), `i` from 0
+    /// — recomputed here by the one-shot digest over that concatenation — and
+    /// the stream hands the blocks out front to back whatever the draws'
+    /// sizes: one byte, a draw that ends a block, a draw that crosses into
+    /// the next. A change to the counter's width, byte order or start, to
+    /// what is hashed or to where a draw reads from fails here by name,
+    /// before it moves every tag-3 signature pin at once.
     #[test]
     fn the_stream_is_its_seeds_sha_256_blocks_front_to_back() {
         let seed = [0x5a_u8; 32];

@@ -1,37 +1,43 @@
-//! THE WRITE PATH over a fake board: a `halted` hold before any dial
-//! `sent: false`; a burst held under the first hold that stands, over all
-//! eight cells of the three; the `base` a hold takes from every kind of
-//! ack; the refused run's `resolve(drop)` dropping it and every line held
-//! behind it on its own document alone, and a drop's `held` event saying
-//! the state of the line that stands first after it; a held line under the
-//! board's own directory; a refusal the table holds nowhere faced at the
-//! first dial, a `write_busy` and a first and second `durability` reissued
-//! within the first dial's call and a third holding the burst; a burst
-//! answered `500 internal_panic` held `sent: true` and read before it is
-//! sent again; a write the hold never holds taking the same path, faced
-//! where a burst is held and its ack noted for the base; the death signal at
-//! a write's dial holding nothing; `resolve(send)` answering once the lines
-//! are handed back, before any dial; a board the holds were not opened over
-//! stopped as the caller's bug; the stored frame without its attest; P38's
-//! halted file refusing every act at the principal's door, `resolve` among
-//! them, a copy the store cannot make, and a queue kept in memory for want
-//! of its file taking the file once it empties and never before; no `held`
-//! event when a session's open reads its file, and a misplaced file set
-//! aside and said on TALK alone. THE BURST's DOOR: a burst the board takes
-//! at no send refused at the act and held never — past the frame cap as
-//! sent, or as a signed resend would send it, a page-supplied attest counted
-//! out of every resend, naming no document, an insert a signed session
-//! cannot attest — the read of the board's `H.1` an attest signs over
-//! halting as the composer's own refusal, and its answer lost holding the
-//! burst unsent; one the queue has no room for, by its frames' bytes or by
-//! its lines, refused `held_full`; and each board's hold its own, a burst at
-//! one board answered while another board's hold is held, dialed and kept at
-//! the board its session stands at.
+//! The write path over a fake board.
+//!
+//! The suite checks a `halted` hold before any dial `sent: false`; a burst
+//! held under the first hold that stands, over all eight cells of the
+//! three; the `base` a hold takes from every kind of ack; the refused run's
+//! `resolve(drop)` dropping it and every line held behind it on its own
+//! document alone, and a drop's `held` event saying the state of the line
+//! that stands first after it; a held line under the board's own directory;
+//! a refusal the table holds nowhere faced at the first dial, a
+//! `write_busy` and a first and second `durability` reissued within the
+//! first dial's call and a third holding the burst; a burst answered
+//! `500 internal_panic` held `sent: true` and read before it is sent again;
+//! a write the hold never holds taking the same path, faced where a burst is
+//! held and its ack noted for the base; the death signal at a write's dial
+//! holding nothing; `resolve(send)` answering once the lines are handed
+//! back, before any dial; a board the holds were not opened over stopped as
+//! the caller's bug; the stored frame without its attest; P38's halted file
+//! refusing every act at the principal's door, `resolve` among them, a copy
+//! the store cannot make, and a queue kept in memory for want of its file
+//! taking the file once it empties and never before; no `held` event when a
+//! session's open reads its file, and a misplaced file set aside and said
+//! on `Talk` alone.
+//!
+//! It checks the burst's door too: a burst the board takes at no send
+//! refused at the act and held never — past the frame cap as sent, or as a
+//! signed resend would send it, a page-supplied attest counted out of every
+//! resend, naming no document, an insert a signed session cannot attest —
+//! the read of the board's `H.1` an attest signs over halting as the
+//! composer's own refusal, and its answer lost holding the burst unsent;
+//! one the queue has no room for, by its frames' bytes or by its lines,
+//! refused `held_full`; and each board's hold its own, a burst at one board
+//! answered while another board's hold is held, dialed and kept at the
+//! board its session stands at.
 
 use super::*;
 
-/// A `halted` hold — the feed's `writes.halted` read, before any dial — is
-/// `sent: false`: no dial was made, so nothing of it can have landed.
+/// Checks that a `halted` hold before any dial is `sent: false`.
+///
+/// The hold comes of the feed's `writes.halted` read, before any dial: no
+/// dial was made, so nothing of it can have landed.
 #[test]
 fn a_halted_hold_before_any_dial_is_sent_false() {
     let g = ground();
@@ -44,13 +50,14 @@ fn a_halted_hold_before_any_dial_is_sent_false() {
     assert_eq!(g.fake.sends(), 0, "no dial was made");
 }
 
-/// A BURST IS HELD UNDER THE FIRST HOLD THAT STANDS (§3c.4; `send_burst`'s
-/// order), the law over all eight cells of the three: the own node stopped,
-/// else the board's writes halted, else a line of the principal's already
-/// held — the burst held under the first that stands with no dial made, and
-/// dialed where none does (the mutant that reorders the three faces the
-/// page `halted` for a stop the person made, or `behind` for a board that
-/// takes no write).
+/// Checks that a burst is held under the first hold that stands (§3c.4).
+///
+/// It is `send_burst`'s order, the law over all eight cells of the three:
+/// the own node stopped, else the board's writes halted, else a line of the
+/// principal's already held — the burst held under the first that stands
+/// with no dial made, and dialed where none does (the mutant that reorders
+/// the three faces the page `halted` for a stop the person made, or
+/// `behind` for a board that takes no write).
 #[test]
 fn a_burst_is_held_under_the_first_hold_that_stands() {
     for stopped in [false, true] {
@@ -83,16 +90,17 @@ fn a_burst_is_held_under_the_first_hold_that_stands() {
     }
 }
 
-/// THE BASE a hold takes (§3c.2): the `at` of the last ACKED write on its
-/// document — whatever its kind: a mint's, a fork's and a version's at the
-/// `addr` it minted, a link write's at its `home`, an edit's at both its
-/// documents, a burst's at its `doc` — and where none, the session's OPEN
-/// POSITION: a burst held on a document no ack names, its mint's row at 50
-/// below the session's open at 60, reads past it, is sent, and kept (the
-/// mutant whose base falls back to 0 faces the person's own text `moved`);
-/// a read notes nothing, so its document keeps the open (the mutant that
-/// drops one kind from the documents an ack names leaves that kind's
-/// document at the open).
+/// Checks the base a hold takes (§3c.2): the last ack's `at`, else the open.
+///
+/// It is the `at` of the last acked write on its document — whatever its
+/// kind: a mint's, a fork's and a version's at the `addr` it minted, a link
+/// write's at its `home`, an edit's at both its documents, a burst's at its
+/// `doc` — and where none, the session's open position: a burst held on a
+/// document no ack names, its mint's row at 50 below the session's open at
+/// 60, reads past it, is sent, and kept (the mutant whose base falls back to
+/// 0 faces the person's own text `moved`); a read notes nothing, so its
+/// document keeps the open (the mutant that drops one kind from the
+/// documents an ack names leaves that kind's document at the open).
 #[test]
 fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     let g = writer_at(60);
@@ -142,19 +150,22 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     assert_eq!(g.lines()[0]["base"], at);
 }
 
-/// A REFUSED run and `resolve`: the run's line carries the board's verdict
-/// as its `refusal` (§3c.2, "for the face") and the lines `behind` it carry
-/// none; `drop` on the refused head drops it AND every line held `behind`
-/// it on that document (the mutant that leaves them standing), the `held`
-/// event naming the session that acted; `resolve` on a holding line answers
-/// `not_resolvable`; an unknown ordinal answers `no_such_held`.
+/// Checks that a refused run's drop drops its `behind` lines.
+///
+/// The run's line carries the board's verdict as its `refusal` (§3c.2, "for
+/// the face") and the lines `behind` it carry none; `drop` on the refused
+/// head drops it and every line held `behind` it on that document (the
+/// mutant that leaves them standing), the `held` event naming the session
+/// that acted; `resolve` on a holding line answers `not_resolvable`; an
+/// unknown ordinal answers `no_such_held`.
 #[test]
 fn a_refused_run_drops_its_behind_lines() {
     let g = ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
     let head = insert(DOC, json!(["a"]));
     let k1 = g.holds.hold(&g.session, g.burst(&head), Reason::refused("out_of_bounds", verdict.clone())).unwrap()["held"].as_u64().unwrap();
-    // Two more bursts on the same document arrive while the run stands → behind.
+    // Two more bursts on the same document arrive while the run stands
+    // → behind.
     let behind = |values: Value| -> Value {
         let OpAnswer::Answered(Ok(answer)) = g.holds.send_burst(&g.session, insert(DOC, values)) else { panic!("held behind the run") };
         answer
@@ -180,12 +191,14 @@ fn a_refused_run_drops_its_behind_lines() {
     assert_eq!((said["session"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(g.session.reference.as_str()), Some(0), Some("kept")), "the drop is said under the session that acted");
 }
 
-/// A DROP on a MOVED document (§4b.1's `resolve`, §4b.2's `held`): the
-/// person drops a later line of a document the read faced `moved`, and the
-/// line held before it stands moved still — the `held` event says `moved`
-/// with the one line left, never `kept` over text still held (the mutant
-/// that says `kept` at every drop lifts the page's marks); the drop of the
-/// last line says `kept` with none.
+/// Checks that a drop says the state of the line that stands first.
+///
+/// On a moved document (§4b.1's `resolve`, §4b.2's `held`) the person drops
+/// a later line of a document the read faced `moved`, and the line held
+/// before it stands moved still — the `held` event says `moved` with the one
+/// line left, never `kept` over text still held (the mutant that says
+/// `kept` at every drop lifts the page's marks); the drop of the last line
+/// says `kept` with none.
 #[test]
 fn a_drop_says_the_state_of_the_line_that_stands_first() {
     let g = ground();
@@ -206,8 +219,10 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
 }
 
-/// No line is written outside the board's own directory: a burst held at a
-/// board whose directory is this shell's lands in `held/<chain>/`.
+/// Checks that a held line lands under the board's own directory.
+///
+/// No line is written outside it: a burst held at a board whose directory
+/// is this shell's lands in `held/<chain>/`.
 #[test]
 fn a_held_line_lands_under_the_boards_own_directory() {
     let g = ground();
@@ -218,13 +233,14 @@ fn a_held_line_lands_under_the_boards_own_directory() {
     assert!(text.lines().next().unwrap().contains("\"account\":\"1.0.1\""), "the header names the session's account: {text}");
 }
 
-/// A DROP acts on its own document's run and on no other (§4b.1's
-/// `resolve`): a refused run on one document, a burst on a second held
-/// `behind` it — a standing line holds every later burst, whatever its
-/// document — and the run's drop leaves the second document's line
-/// standing, which the next probe sends and keeps (the mutant that drops
-/// every later line, whatever its document, loses the person's text on the
-/// other document).
+/// Checks that a drop drops its own document's run and no other.
+///
+/// It acts on its own document's run (§4b.1's `resolve`): a refused run on
+/// one document, a burst on a second held `behind` it — a standing line
+/// holds every later burst, whatever its document — and the run's drop
+/// leaves the second document's line standing, which the next probe sends
+/// and keeps (the mutant that drops every later line, whatever its
+/// document, loses the person's text on the other document).
 #[test]
 fn a_drop_drops_its_own_documents_run_and_no_other() {
     let g = ground();
@@ -240,9 +256,11 @@ fn a_drop_drops_its_own_documents_run_and_no_other() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// A REFUSAL THE TABLE HOLDS NOWHERE is faced at the burst's first dial
-/// (§3c.4's NEITHER), and a `write_busy` — read by its code off the 503 the
-/// board answers it as — is REISSUED within the call, once, after the short
+/// Checks that a refusal held nowhere is faced, a `write_busy` reissued once.
+///
+/// A refusal the table holds nowhere is faced at the burst's first dial
+/// (§3c.4's neither), and a `write_busy` — read by its code off the 503 the
+/// board answers it as — is reissued within the call, once, after the short
 /// wait (§4b.1's `op` row: "reissued by the shell and reach the page as the
 /// ack or the next refusal, never as `held`"): a `write_busy` the reissue
 /// meets again is the next refusal, faced; one the reissue clears is the
@@ -265,12 +283,13 @@ fn a_refusal_the_table_holds_nowhere_is_faced_and_a_write_busy_reissued_once() {
     assert!(g.lines().is_empty(), "no burst is held");
 }
 
-/// A FIRST AND SECOND `durability` are reissued within the first dial's
-/// call as-is, and a THIRD holds the burst `durability` (§3c.4's rider), its
-/// line `sent: false`: two the reissues clear are the ack, and a
-/// `write_busy` met beside them counts nothing toward the rider (the
-/// mutants that face the first `durability`, hold it before its third, or
-/// count every reissue as one).
+/// Checks that a first and second `durability` are reissued, a third holds.
+///
+/// They are reissued within the first dial's call as-is, and a third holds
+/// the burst `durability` (§3c.4's rider), its line `sent: false`: two the
+/// reissues clear are the ack, and a `write_busy` met beside them counts
+/// nothing toward the rider (the mutants that face the first `durability`,
+/// hold it before its third, or count every reissue as one).
 #[test]
 fn a_first_and_second_durability_are_reissued_at_the_first_dial_and_a_third_holds() {
     let g = ground();
@@ -287,14 +306,15 @@ fn a_first_and_second_durability_are_reissued_at_the_first_dial_and_a_third_hold
     assert_eq!(g.lines()[0]["sent"], false);
 }
 
-/// A BURST ANSWERED `500 internal_panic` is held as a lost answer is
-/// (§3c.2, §3c.4): its write may have committed before the board's handler
-/// panicked, so the burst is answered `held`, cause `unreachable`, its line
-/// `sent: true`; and the resend reads before it sends — a row whose testimony
-/// the board lost, the burst's values standing at its site, keeps the line
-/// with nothing sent again, and no row sends it once more (the mutant that
-/// faces the 500 hands the page a refusal for text that may be on the board,
-/// a retry of which lands it twice).
+/// Checks that a burst answered `500 internal_panic` is held as a lost answer.
+///
+/// Its write may have committed before the board's handler panicked
+/// (§3c.2, §3c.4), so the burst is answered `held`, cause `unreachable`,
+/// its line `sent: true`; and the resend reads before it sends — a row
+/// whose testimony the board lost, the burst's values standing at its site,
+/// keeps the line with nothing sent again, and no row sends it once more
+/// (the mutant that faces the 500 hands the page a refusal for text that
+/// may be on the board, a retry of which lands it twice).
 #[test]
 fn a_burst_answered_internal_panic_is_held_sent_and_read_before_it_is_sent_again() {
     for committed in [true, false] {
@@ -314,15 +334,16 @@ fn a_burst_answered_internal_panic_is_held_sent_and_read_before_it_is_sent_again
     }
 }
 
-/// A WRITE THE HOLD NEVER HOLDS takes the one path a burst takes
-/// (`Holds::send`; §3c.4: "a non-burst write that fails … is faced at its
-/// act"): a `permanent` refusal, a third `durability` and a
-/// `500 internal_panic` — each of which holds a burst — are faced, the first
-/// and the third after one send each, the second after its two reissues, the
-/// third the board's verdict verbatim, and nothing is held; and its ack is
-/// noted for the base, so a burst held on the document it names reads from
-/// that ack's `at` (the mutants that hold a non-burst's hold-class answer, and
-/// that leave its ack unnoted).
+/// Checks that a write the hold never holds is faced, and its ack noted.
+///
+/// It takes the one path a burst takes (`Holds::send`; §3c.4: "a non-burst
+/// write that fails … is faced at its act"): a `permanent` refusal, a third
+/// `durability` and a `500 internal_panic` — each of which holds a burst —
+/// are faced, the first and the third after one send each, the second after
+/// its two reissues, the third the board's verdict verbatim, and nothing is
+/// held; and its ack is noted for the base, so a burst held on the document
+/// it names reads from that ack's `at` (the mutants that hold a non-burst's
+/// hold-class answer, and that leave its ack unnoted).
 #[test]
 fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     let g = ground();
@@ -344,11 +365,13 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     assert_eq!(line["base"], ack["at"], "the ack is noted for the base of the next hold on its home: {line}");
 }
 
-/// THE DEATH SIGNAL at a write's dial holds nothing (§3c.4: the death is
-/// neither held nor faced): a burst and a write the hold never holds each
-/// answer `OpAnswer::Died`, the session's end the caller's to run, and no
-/// line is held and no `held` event said (the mutant that holds the burst
-/// at the death keeps a line behind a session nobody ends).
+/// Checks that a death signal at a write's dial holds nothing.
+///
+/// The death is neither held nor faced (§3c.4): a burst and a write the
+/// hold never holds each answer `OpAnswer::Died`, the session's end the
+/// caller's to run, and no line is held and no `held` event said (the
+/// mutant that holds the burst at the death keeps a line behind a session
+/// nobody ends).
 #[test]
 fn a_death_signal_at_a_writes_dial_holds_nothing() {
     let g = ground();
@@ -360,12 +383,14 @@ fn a_death_signal_at_a_writes_dial_holds_nothing() {
     assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
 }
 
-/// `resolve(send)` HANDS the document back to the automatic machine and
-/// answers at once (§4b.1: "the call answers once the line is handed to
-/// the machine, never after its ack"): nothing is dialed in the act and the
-/// run's lines stand re-marked `behind`; the probe its caller hands the
-/// board's feed thread then sends and keeps them (the mutant that probes
-/// inside the act dials the board before the call answers).
+/// Checks that `resolve(send)` answers once the lines are handed back.
+///
+/// It hands the document back to the automatic machine and answers at once
+/// (§4b.1: "the call answers once the line is handed to the machine, never
+/// after its ack"): nothing is dialed in the act and the run's lines stand
+/// re-marked `behind`; the probe its caller hands the board's feed thread
+/// then sends and keeps them (the mutant that probes inside the act dials
+/// the board before the call answers).
 #[test]
 fn resolve_send_answers_once_the_lines_are_handed_back() {
     let g = ground();
@@ -379,7 +404,9 @@ fn resolve_send_answers_once_the_lines_are_handed_back() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// THE ONE PRECONDITION of the holds — a board reference names a board they
+/// Checks that a board the holds were not opened over is the caller's bug.
+///
+/// The one precondition of the holds — a board reference names a board they
 /// were opened over — is the caller's, asked in one place: a reference
 /// outside them is a bug of this crate's, stopped loudly, never read as a
 /// board with nothing held.
@@ -389,9 +416,11 @@ fn a_board_the_holds_were_not_opened_over_is_the_callers_bug() {
     ground().holds.probe("b-nowhere");
 }
 
-/// THE STORED FRAME carries no `attest` (§3c.2): a burst held with one is
-/// kept and listed without it, since the resend composes its attest when it
-/// sends (the mutant that stores the frame as it came).
+/// Checks that a held frame is stored without its attest (§3c.2).
+///
+/// A burst held with one is kept and listed without it, since the resend
+/// composes its attest when it sends (the mutant that stores the frame as
+/// it came).
 #[test]
 fn a_held_frame_is_stored_without_its_attest() {
     let g = ground();
@@ -405,12 +434,14 @@ fn a_held_frame_is_stored_without_its_attest() {
     assert!(!text.contains("attest"), "{text}");
 }
 
-/// P38's HALT at the hold (§3c.3): a principal's file written by a newer skep
-/// stands untouched, and every act on it answers `store_halted` naming why —
-/// the burst is not dialed, no line is held, `held(session)` lists nothing,
-/// `resolve` acts on no line — so no burst is sent past a file this shell
-/// may not write and none is rebuilt over (the mutants that dial past a
-/// halted file, or answer an act on it as no line).
+/// Checks that a halted file refuses every act and dials nothing.
+///
+/// It is P38's halt at the hold (§3c.3): a principal's file written by a
+/// newer skep stands untouched, and every act on it answers `store_halted`
+/// naming why — the burst is not dialed, no line is held, `held(session)`
+/// lists nothing, `resolve` acts on no line — so no burst is sent past a
+/// file this shell may not write and none is rebuilt over (the mutants that
+/// dial past a halted file, or answer an act on it as no line).
 #[test]
 fn a_halted_file_refuses_every_act_and_dials_nothing() {
     let store = TempDir::new().unwrap();
@@ -430,15 +461,16 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
 }
 
-/// A LINE THE STORE CANNOT COPY stands in memory and says why (§3c.3,
-/// "Persist first"): at a board with no `H.1` to name its directory, the
-/// burst is held under its own cause — never `other_window`, another
-/// window's lock alone — its answer `unwritable` naming the missing term,
-/// nothing written; at a file the device refuses (a directory where the
-/// file would be), the device's refusal rides the answer. Either line
-/// stands in the queue, and the next probe resends and keeps it (the mutant
-/// that drops `unwritable` tells the page a burst a crash would lose is on
-/// disk).
+/// Checks that a line the store cannot copy says why and stands (§3c.3).
+///
+/// It stands in memory ("Persist first"): at a board with no `H.1` to name
+/// its directory, the burst is held under its own cause — never
+/// `other_window`, another window's lock alone — its answer `unwritable`
+/// naming the missing term, nothing written; at a file the device refuses
+/// (a directory where the file would be), the device's refusal rides the
+/// answer. Either line stands in the queue, and the next probe resends and
+/// keeps it (the mutant that drops `unwritable` tells the page a burst a
+/// crash would lose is on disk).
 #[test]
 fn a_line_the_store_cannot_copy_says_why_and_stands() {
     let fake = Fake::new();
@@ -468,16 +500,18 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// A QUEUE KEPT IN MEMORY FOR WANT OF ITS FILE takes the file once it
-/// empties, and never before (§3c.3; `Custody::Unwritable`): at a board with
-/// no `H.1`, a line held in memory alone and refused at its resend still
-/// stands when the probe — the board now naming its `H.1` — establishes the
-/// directory, so the next burst is held `behind` it, still `unwritable`,
-/// under the next ordinal; once both are kept, the next line is copied to
-/// the board's file (the mutant that opens the file while lines stand
-/// replaces the queue and dials the next burst past a line it lost; the
-/// ones that never re-open the file, or never establish the directory, keep
-/// every later line in memory alone, for a crash to lose).
+/// Checks that an unwritable queue takes its file once it empties.
+///
+/// A queue kept in memory for want of its file takes the file once it
+/// empties, and never before (§3c.3; `Custody::Unwritable`): at a board
+/// with no `H.1`, a line held in memory alone and refused at its resend
+/// still stands when the probe — the board now naming its `H.1` —
+/// establishes the directory, so the next burst is held `behind` it, still
+/// `unwritable`, under the next ordinal; once both are kept, the next line
+/// is copied to the board's file (the mutant that opens the file while
+/// lines stand replaces the queue and dials the next burst past a line it
+/// lost; the ones that never re-open the file, or never establish the
+/// directory, keep every later line in memory alone, for a crash to lose).
 #[test]
 fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
     let fake = Fake::new();
@@ -505,11 +539,12 @@ fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
 }
 
-/// NO `held` EVENT GOES OUT when a session's open reads its principal's
-/// file (§4b.2; `EventName::Held`): the line the file holds is listed by
-/// `held(session)` at once, and nothing of it is said on the bus (the
-/// mutant that announces each document at the open says a state no act of
-/// the page's moved).
+/// Checks that no `held` event goes out when a session's open reads its file.
+///
+/// The open reads its principal's file (§4b.2; `EventName::Held`): the line
+/// the file holds is listed by `held(session)` at once, and nothing of it
+/// is said on the bus (the mutant that announces each document at the open
+/// says a state no act of the page's moved).
 #[test]
 fn no_held_event_goes_out_when_a_sessions_open_reads_its_file() {
     let store = TempDir::new().unwrap();
@@ -523,12 +558,14 @@ fn no_held_event_goes_out_when_a_sessions_open_reads_its_file() {
     assert!(g.states().is_empty(), "and says nothing of it");
 }
 
-/// A MISPLACED HELD FILE IS SET ASIDE AND SAID in the shell's own window
-/// (§3c.3; P39): a principal's file whose header names another board's
-/// chain, found at its session's open, is moved aside under `aside_name`'s
-/// form, the queue opened fresh, and the aside's path said on TALK — and on
-/// no event the page reads (the mutant that sets the file aside unsaid
-/// leaves the person's held text gone from every list with nothing said).
+/// Checks that a misplaced held file is set aside and said on `Talk`.
+///
+/// It is said in the shell's own window (§3c.3; P39): a principal's file
+/// whose header names another board's chain, found at its session's open,
+/// is moved aside under `aside_name`'s form, the queue opened fresh, and the
+/// aside's path said on `Talk` — and on no event the page reads (the mutant
+/// that sets the file aside unsaid leaves the person's held text gone from
+/// every list with nothing said).
 #[test]
 fn a_misplaced_held_file_is_set_aside_and_said_on_talk() {
     let store = TempDir::new().unwrap();
@@ -548,25 +585,28 @@ fn a_misplaced_held_file_is_set_aside_and_said_on_talk() {
     assert!(events.iter().all(|data| !data.contains("aside")), "the aside crossed to the page: {events:?}");
 }
 
-/// An insert of one atom, its frame's JSON spelling exactly `bytes` long —
-/// one value, so no value budget speaks before the frame's own.
+/// Returns an insert of one atom, its frame's JSON exactly `bytes` long.
+///
+/// It is one value, so no value budget speaks before the frame's own.
 fn sized_frame(bytes: usize) -> Value {
     let overhead = json_len(&insert(DOC, json!([{"atom": ""}])));
     insert(DOC, json!([{"atom": "x".repeat(bytes - overhead)}]))
 }
 
-/// THE BURST's DOOR refuses at the act a burst the board takes at no send,
-/// and holds none of it: a frame one byte past the board's frame cap — at a
-/// running board and at a stopped one, where it would otherwise be held
-/// without a dial — while a frame at the cap exactly is dialed and acked; a
-/// burst naming no document, an element where its document goes, or a
-/// document in another spelling, refused `malformed_args` undialed, and
-/// behind a standing line unheld (the mutants that drop the size or the
-/// document check dial a frame no send of which the board takes, and hold a
-/// line none could ever clear, every later burst of the principal behind
-/// it). The door's own arithmetic, under a session whose key attests no
-/// insert — a bare one, so the door keeps no attest's room; the shell's `op`
-/// row refuses such a session's write before it reaches the hold.
+/// Checks that the burst's door refuses a burst the board takes at no send.
+///
+/// It refuses at the act and holds none of it: a frame one byte past the
+/// board's frame cap — at a running board and at a stopped one, where it
+/// would otherwise be held without a dial — while a frame at the cap
+/// exactly is dialed and acked; a burst naming no document, an element
+/// where its document goes, or a document in another spelling, refused
+/// `malformed_args` undialed, and behind a standing line unheld (the mutants
+/// that drop the size or the document check dial a frame no send of which
+/// the board takes, and hold a line none could ever clear, every later
+/// burst of the principal behind it). The door's own arithmetic, under a
+/// session whose key attests no insert — a bare one, so the door keeps no
+/// attest's room; the shell's `op` row refuses such a session's write
+/// before it reaches the hold.
 #[test]
 fn a_burst_the_board_takes_at_no_send_is_refused_at_the_bursts_door() {
     let g = bare_ground();
@@ -594,13 +634,15 @@ fn a_burst_the_board_takes_at_no_send_is_refused_at_the_bursts_door() {
     assert_eq!(g.lines().len(), 1, "nothing was held behind the standing line");
 }
 
+/// Checks that a signed session's burst keeps room for its attest.
+///
 /// Under a session whose key attests an insert, the burst's door keeps the
 /// room the attest of every resend takes, and asks the composer's terms of
 /// the frame alone: a frame at the cap unattested, which no attested send
 /// fits, is refused `frame_too_large`; one the room fits is held behind a
 /// standing line; and an insert whose values the composer cannot spell is
-/// refused `attest_not_composed` before it is held (the mutant that leaves no
-/// room holds a burst every resend of which the board refuses `413`).
+/// refused `attest_not_composed` before it is held (the mutant that leaves
+/// no room holds a burst every resend of which the board refuses `413`).
 #[test]
 fn a_signed_sessions_burst_keeps_room_for_its_attest() {
     let g = ground_in(TempDir::new().unwrap(), keyed_facts(), 0);
@@ -614,14 +656,16 @@ fn a_signed_sessions_burst_keeps_room_for_its_attest() {
     assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
 }
 
-/// A PAGE-SUPPLIED ATTEST IS COUNTED OUT OF EVERY RESEND (`Burst::admit`):
-/// the held line keeps the frame without it, and every resend under a
-/// session whose key attests the kind carries the shell's own — so a frame
-/// riding the page's attest is measured as its bytes stripped of that
-/// member and grown by the room the shell's takes: at the cap it is held,
-/// one byte past it refused `frame_too_large` (the mutant that strips
-/// nothing refuses a burst every resend of which fits; the one that strips
-/// past the member holds a burst no resend of which does).
+/// Checks that a page-supplied attest is counted out of every resend.
+///
+/// It is counted at `Burst::admit`: the held line keeps the frame without
+/// it, and every resend under a session whose key attests the kind carries
+/// the shell's own — so a frame riding the page's attest is measured as its
+/// bytes stripped of that member and grown by the room the shell's takes:
+/// at the cap it is held, one byte past it refused `frame_too_large` (the
+/// mutant that strips nothing refuses a burst every resend of which fits;
+/// the one that strips past the member holds a burst no resend of which
+/// does).
 #[test]
 fn a_page_supplied_attest_is_counted_out_of_every_resend() {
     let g = ground_in(TempDir::new().unwrap(), keyed_facts(), 0);
@@ -639,13 +683,15 @@ fn a_page_supplied_attest_is_counted_out_of_every_resend() {
     assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
 }
 
-/// A HEAD READ THAT HALTS is the composer's refusal: under a session whose
-/// key attests an insert, the read of the board's `H.1` the attest signs
-/// over answered with the death signal — no session's answer, a token-free
-/// read's halt — refuses the burst `attest_not_composed`, nothing dialed and
-/// nothing held (the mutant that converts the read's halt past the
-/// composer's own conversion answers the bare `halt`, a refusal the page
-/// cannot read as the shell's failure to sign).
+/// Checks that a head read that halts is the composer's refusal.
+///
+/// Under a session whose key attests an insert, the read of the board's
+/// `H.1` the attest signs over answered with the death signal — no
+/// session's answer, a token-free read's halt — refuses the burst
+/// `attest_not_composed`, nothing dialed and nothing held (the mutant that
+/// converts the read's halt past the composer's own conversion answers the
+/// bare `halt`, a refusal the page cannot read as the shell's failure to
+/// sign).
 #[test]
 fn a_head_read_that_halts_is_the_composers_refusal() {
     let fake = Fake::new();
@@ -657,14 +703,16 @@ fn a_head_read_that_halts_is_the_composers_refusal() {
     assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
 }
 
-/// A READ THE ATTEST NEEDS, ITS ANSWER LOST, holds the burst like the
-/// dial's own failure — and `sent: false`, since the write never left
-/// (`Dialed`'s `From<Unattested>`): under a session whose key attests an
-/// insert, the read of the board's `H.1` the attest signs over meets a
-/// transport fault the table reads as a lost answer, and the burst is held
-/// `unreachable`, its line unsent and nothing dialed (the mutant that faces
-/// the read's failure loses the burst; the one that keeps the table's
-/// `sent` sends the resend to read for a landing that never happened).
+/// Checks that an unanswered read the attest needs holds the burst unsent.
+///
+/// It holds the burst like the dial's own failure — and `sent: false`,
+/// since the write never left (`Dialed`'s `From<Unattested>`): under a
+/// session whose key attests an insert, the read of the board's `H.1` the
+/// attest signs over meets a transport fault the table reads as a lost
+/// answer, and the burst is held `unreachable`, its line unsent and nothing
+/// dialed (the mutant that faces the read's failure loses the burst; the
+/// one that keeps the table's `sent` sends the resend to read for a landing
+/// that never happened).
 #[test]
 fn an_unanswered_read_the_attest_needs_holds_the_burst_unsent() {
     let fake = Fake::new();
@@ -677,12 +725,15 @@ fn an_unanswered_read_the_attest_needs_holds_the_burst_unsent() {
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
-/// THE QUEUE's BUDGET at the hold: with the principal's standing frames at
-/// the budget, the next burst is refused `held_full` — no line, no `held`
-/// event — and its answer names the bytes held and its own (the mutant that
-/// drops the queue's count holds a page's bursts without bound). The queue's
-/// own budget, under a session whose key attests no insert — a bare one, its
-/// door keeping no attest's room, so one frame fills the queue.
+/// Checks that a burst the queue has no room for is refused `held_full`.
+///
+/// It is the queue's budget at the hold: with the principal's standing
+/// frames at the budget, the next burst is refused `held_full` — no line,
+/// no `held` event — and its answer names the bytes held and its own (the
+/// mutant that drops the queue's count holds a page's bursts without
+/// bound). The queue's own budget, under a session whose key attests no
+/// insert — a bare one, its door keeping no attest's room, so one frame
+/// fills the queue.
 #[test]
 fn a_burst_the_queue_has_no_room_for_is_refused_held_full() {
     let g = bare_ground();
@@ -696,7 +747,9 @@ fn a_burst_the_queue_has_no_room_for_is_refused_held_full() {
     assert_eq!(g.fake.sends(), 0);
 }
 
-/// THE QUEUE's LINE BUDGET at the hold: behind one refused run, small
+/// Checks that a burst past the queue's line budget is refused `held_full`.
+///
+/// It is the queue's line budget at the hold: behind one refused run, small
 /// bursts on as many documents held `behind` until the principal's queue
 /// stands at `held::MAX_HELD_LINES` — their bytes a few hundred kilobytes,
 /// far under the frames' budget — and the next burst refused `held_full`,
@@ -722,11 +775,12 @@ fn a_burst_past_the_queues_line_budget_is_refused_held_full() {
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
-/// The ground over two boards, `b-1` and `b-2`, of their own chains: the
-/// holds over both, a writer's session of principal 1 at each, under one key
-/// — `sessions[0]` at `b-1`, `sessions[1]` at `b-2` — opened as the shell
-/// opens them, each board's fake, and the store directory kept for the
-/// ground's life.
+/// The ground over two boards, `b-1` and `b-2`, of their own chains.
+///
+/// It holds the holds over both, a writer's session of principal 1 at each,
+/// under one key — `sessions[0]` at `b-1`, `sessions[1]` at `b-2` — opened
+/// as the shell opens them, each board's fake, and the store directory kept
+/// for the ground's life.
 struct TwoBoards {
     holds: Arc<Holds>,
     sessions: Vec<Arc<SessionEntry>>,
@@ -757,12 +811,14 @@ fn two_boards() -> TwoBoards {
     TwoBoards { holds, sessions, fakes, store }
 }
 
-/// EACH BOARD's HOLD ITS OWN LOCK: with one board's hold held — as a burst's
-/// synced append, or a file's read at a session's open, holds it — a burst at
-/// another board is dialed and acked without waiting (the mutant that puts
-/// every board's hold under one lock makes it wait the other board out),
-/// and dialed at the board its session stands at, the other board seeing
-/// nothing of it.
+/// Checks that a burst at one board waits on no other board's hold.
+///
+/// Each board's hold is its own lock: with one board's hold held — as a
+/// burst's synced append, or a file's read at a session's open, holds it —
+/// a burst at another board is dialed and acked without waiting (the mutant
+/// that puts every board's hold under one lock makes it wait the other
+/// board out), and dialed at the board its session stands at, the other
+/// board seeing nothing of it.
 #[test]
 fn a_burst_at_one_board_waits_on_no_other_boards_hold() {
     let TwoBoards { holds, sessions, fakes, store: _store } = two_boards();
@@ -785,10 +841,11 @@ fn a_burst_at_one_board_waits_on_no_other_boards_hold() {
     assert_eq!((fakes[0].sends(), fakes[1].sends()), (0, 1), "the burst is dialed at the board its session stands at");
 }
 
-/// A SESSION's LINES ARE KEPT AT ITS OWN BOARD: a burst held under the
-/// session at b-2 lands in b-2's `held/<chain>/` and lists under that
-/// session alone — the session carries the board it stands at, so no caller
-/// pairs it with another.
+/// Checks that a session's held line is kept at the board it stands at.
+///
+/// A burst held under the session at b-2 lands in b-2's `held/<chain>/` and
+/// lists under that session alone — the session carries the board it
+/// stands at, so no caller pairs it with another.
 #[test]
 fn a_sessions_held_line_is_kept_at_the_board_it_stands_at() {
     let TwoBoards { holds, sessions, store, .. } = two_boards();

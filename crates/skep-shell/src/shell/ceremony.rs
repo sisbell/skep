@@ -1,15 +1,17 @@
-//! THE CEREMONIAL ROWS of `client.md` §4b.1: the key store's two —
-//! `keygen`, `fingerprint` — beside the eight walks over
-//! `skep_client::ceremony` — `claim`, `enroll`, `bind`, `recover`,
-//! `rotate`, `retire`, `handoff`, `accept` — each reached from
+//! The ceremonial rows of `client.md` §4b.1.
+//!
+//! They are the key store's two — `keygen`, `fingerprint` — beside the eight
+//! walks over `skep_client::ceremony` — `claim`, `enroll`, `bind`,
+//! `recover`, `rotate`, `retire`, `handoff`, `accept` — each reached from
 //! [`Shell::call`] alone. A ceremonial row runs the library's walk over the
-//! person of `person` — its PUBLIC moments the page's, its SECRET and
-//! CONSENT ones the dev arm's — and answers when the walk ends, a halt the
-//! walk met carried as the row's refusal under the armed name the row
-//! spells. A row leaves each anchor's destination to the walk, which asks it
-//! of the person ONE PER ANCHOR, the dev arm answering in the place of the
-//! shell's own save dialog (§4b.3); and a walk's options carry the date it
-//! runs on (`today`), the anchor boxes' default derived per run.
+//! person of `person` — its public moments the page's, its secret and
+//! consent ones the dev arm's, or refused where the run holds none — and
+//! answers when the walk ends, a halt the walk met carried as the row's
+//! refusal under the armed name the row spells. A row leaves each anchor's
+//! destination to the walk, which asks it of the person one per anchor, the
+//! dev arm answering in the place of the shell's own save dialog (§4b.3);
+//! and a walk's options carry the date it runs on (`today`), the anchor
+//! boxes' default derived per run.
 
 use std::sync::Arc;
 
@@ -32,7 +34,7 @@ use crate::person::BridgePerson;
 use crate::refusal::{Name, Refusal};
 use crate::sessions;
 
-/// AUTH-5.42's statements at the device-name box, the notebook's venue.
+/// Returns AUTH-5.42's statements at the device-name box, the notebook's venue.
 fn device_box_statements() -> Vec<String> {
     vec![
         "This name is permanent and cannot be edited: fixing a typo costs a keypair.".to_string(),
@@ -42,29 +44,32 @@ fn device_box_statements() -> Vec<String> {
     ]
 }
 
-/// The outstanding act of a key enrolled nowhere (AUTH-5.32), the line
-/// `keygen` answers and `fingerprint` carries beside every UNBOUND key.
+/// The outstanding act of a key enrolled nowhere (AUTH-5.32).
+///
+/// It is the line `keygen` answers.
 const OUTSTANDING_ACT: &str = "Where it ADDS a device: take this payload to a device already signed in, run `enroll` there, and bring its three facts back to `bind` here. Where it REPLACES a machine: `rotate` with the payload there instead, then `bind` here.";
 
-/// The three facts as the bridge spells them.
+/// Returns the three facts as the bridge spells them.
 fn facts_json(f: &skep_client::sheet::Facts) -> Value {
     json!({"principal": f.principal, "account": f.account, "origin": f.origin.as_str()})
 }
 
-/// `bind`'s warning where the key store refused the binding line (§3.7):
-/// the LINE for the page to show and the device's cause — never the
-/// bindings file's path, the store's location being NATIVE (§4b.3), said on
-/// TALK alone.
+/// Returns `bind`'s warning where the key store refused the binding line.
+///
+/// It is §3.7's: the line for the page to show and the device's cause —
+/// never the bindings file's path, the store's location being native
+/// (§4b.3), said on `Talk` alone.
 fn bind_warning(w: &Unappended) -> String {
     format!("the binding could not be recorded in the key store ({}); record this line yourself: {}", w.error, w.line)
 }
 
-/// The armed name of an `accept` halt, picked from its TEXT: the one place
-/// the shell names a refusal off prose, because `skep-client`'s `accept`
-/// reports its three armed cases — the address already seeded, not yet
-/// delegated, the label refused at the box — only in the halt's words, so
-/// this match stands on that walk's phrasing and the suite runs it against
-/// the real walk's message.
+/// Returns the armed name of an `accept` halt, picked from its text.
+///
+/// It is the one place the shell names a refusal off prose, because
+/// `skep-client`'s `accept` reports its three armed cases — the address
+/// already seeded, not yet delegated, the label refused at the box — only in
+/// the halt's words, so this match stands on that walk's phrasing and the
+/// suite runs it against the real walk's message.
 fn accept_arm(h: &Halt) -> Option<Name> {
     let text = h.to_string();
     if text.contains("already holds a key set") {
@@ -79,25 +84,39 @@ fn accept_arm(h: &Halt) -> Option<Name> {
 }
 
 impl Shell {
-    /// A person for `walk` at the board `board_reference` names, the
-    /// reference its moments carry; none for a walk that touches no board.
+    /// Returns a person for `walk` at the board `board_reference` names.
+    ///
+    /// The reference is the one its moments carry; none for a walk that
+    /// touches no board.
     fn person(&self, walk: &'static str, board_reference: Option<&str>) -> BridgePerson {
         BridgePerson::new(Arc::clone(&self.bus), Arc::clone(&self.pending), Arc::clone(&self.arm), walk, board_reference.map(str::to_string))
     }
 
-    /// The principal a ceremonial row runs as: the row's own where it names
-    /// one, else the session mode's.
+    /// Returns the principal a ceremonial row runs as.
+    ///
+    /// It is the row's own where it names one, else the session mode's.
+    ///
+    /// # Errors
+    ///
+    /// Returns `malformed_args` naming `principal` where it is present in
+    /// another form.
     fn principal_for(&self, args: &Value) -> Result<u64, Refusal> {
         Ok(optional(args, "principal", principal_arg)?.unwrap_or(self.session_mode.principal()))
     }
 
-    /// `keygen({label?})` → `{fingerprint, payload, outstanding}`: one
-    /// device key into the store, its byline fixed at the box — a PUBLIC
-    /// moment where no label is passed. Refused `empty_label` where the
-    /// label is refused at the box — empty, holding a line break, or past its
-    /// byte bound (AUTH-1.24) — naming its `cause`; `abandoned` where the box
-    /// is left; `store_unwritable` and `store_unreadable` where the key store
-    /// refuses the key or its read-back.
+    /// Answers `keygen({label?})` with `{fingerprint, payload, outstanding}`.
+    ///
+    /// One device key goes into the store, its byline fixed at the box — a
+    /// public moment where no label is passed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `malformed_args` naming `label` where it is present in another
+    /// form; `empty_label` where the label is refused at the box — empty,
+    /// holding a line break, or past its byte bound (AUTH-1.24) — naming its
+    /// `cause`; `abandoned` where the box is left; `store_unwritable` and
+    /// `store_unreadable` where the key store refuses the key or its
+    /// read-back.
     pub(super) fn keygen(&self, args: &Value) -> Result<Value, Refusal> {
         let empty_label = |f: skep_client::sheet::LabelFault| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": f.to_string()}));
         let label = match optional(args, "label", Value::as_str)? {
@@ -118,9 +137,19 @@ impl Shell {
         Ok(json!({"fingerprint": key.fingerprint.to_hex(), "payload": encode_enroll(&[enrollment]), "outstanding": OUTSTANDING_ACT}))
     }
 
-    /// `fingerprint({select?, payload?})` → `[{fingerprint, label,
-    /// bindings, unbound, payload}]`: the store's keys, or the one `select`
-    /// names.
+    /// Answers `fingerprint({select?, payload?})` with the store's keys.
+    ///
+    /// It answers `[{fingerprint, label, bindings, unbound, payload}]`: the
+    /// store's keys, or the one `select` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns `malformed_args` naming `select` or `payload` where one is
+    /// present in another form; `ambiguous` where `select` matches more than
+    /// one key, naming each match; `not_found` where it matches none;
+    /// `store_unreadable` where the store cannot be read; and `empty_label`
+    /// where `payload` asks for the record of a key whose stored label the
+    /// enrollment refuses.
     pub(super) fn fingerprint(&self, args: &Value) -> Result<Value, Refusal> {
         let unreadable = |e: StoreError| Refusal::of_named(Name::STORE_UNREADABLE, e.into());
         let select = optional(args, "select", Value::as_str)?;
@@ -164,11 +193,21 @@ impl Shell {
         Ok(Value::Array(rows))
     }
 
-    /// `claim(board, {principal?, name?, paper?})`: the notebook walk run
-    /// by the shell against the board, each anchor's destination asked of
-    /// the dev arm, one per anchor (§4b.3); `no_key` where the store holds
-    /// no key at all — the notebook door is two calls, `keygen` then
-    /// `claim` — and `already_claimed` where another store's claim stands.
+    /// Answers `claim(board, {principal?, name?, paper?})`: the notebook walk.
+    ///
+    /// The shell runs it against the board, each anchor's destination asked
+    /// of the dev arm — or refused where the run holds none — one per anchor
+    /// (§4b.3).
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `principal`, `name` or `paper` where one is
+    /// present in another form; `no_key` where the store holds no key at all
+    /// — the notebook door is two calls, `keygen` then `claim` — or the
+    /// `/health` read's refusal where the read its face needs fails;
+    /// `already_claimed` where another store's claim stands; and the walk's
+    /// halt as the row's refusal.
     pub(super) fn claim(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let principal = optional(args, "principal", principal_arg)?;
@@ -201,8 +240,18 @@ impl Shell {
         }
     }
 
-    /// `enroll(board, payload)` → the three facts: the hop's signed-in half
-    /// run by the shell in its own full session as the mode's principal.
+    /// Answers `enroll(board, payload)`: the hop's signed-in half.
+    ///
+    /// The shell runs it in its own full session as the row's principal,
+    /// else the mode's, and answers `{facts, fingerprints, reconciled,
+    /// warnings}`, `facts` the three facts.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `payload` where it is absent or no string, then
+    /// `principal` where it is present in another form; and the walk's halt
+    /// as the row's refusal.
     pub(super) fn enroll(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let payload = args["payload"].as_str().ok_or_else(|| Refusal::malformed("payload"))?;
@@ -219,15 +268,28 @@ impl Shell {
         }
     }
 
-    /// `bind(board, {principal, account, origin})` → `{}`: the three facts
-    /// confirmed against the board, the key-set compare, the binding line
-    /// appended, the first signed session run where one is owed. A line the
-    /// key store could not append is answered as `warning`, the line for the
-    /// page to record ([`bind_warning`]), the store's own words — its path
-    /// among them — said on TALK. The whole-set compare against a genesis
-    /// another hand wrote (the handoff landing's anchor files) is not reached
-    /// here: the shell has no window for the files' pick, and the landing is
-    /// taken as the hop's.
+    /// Answers `bind(board, {principal, account, origin})` with `{}`.
+    ///
+    /// The three facts are confirmed against the board, the key-set compare
+    /// made, the binding line appended, and the first signed session run
+    /// where one is owed, its warnings answered as `warnings`. A line the key
+    /// store could not append is answered as `warning`, the line for the page
+    /// to record ([`bind_warning`]), the store's own words — its path among
+    /// them — said on `Talk`. The whole-set compare against a genesis another
+    /// hand wrote (the handoff landing's anchor files) is not reached here:
+    /// the shell has no window for the files' pick, and the landing is taken
+    /// as the hop's.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `principal`, `account` or `origin` where one is
+    /// absent or of another form, the account in another spelling among them;
+    /// `origin_disagrees` where the pasted origin is not the board's;
+    /// `origin_state`; `account_disagrees` where the board seats no such pair;
+    /// `no_key`, `store_unreadable`, `retired` or `not_enrolled` for the
+    /// store's key; and the board's refusal, `unreachable` or a halt where a
+    /// read, the handshake or the first session is refused or halts.
     pub(super) fn bind(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let principal = principal_arg(&args["principal"]).ok_or_else(|| Refusal::malformed("principal"))?;
@@ -274,9 +336,19 @@ impl Shell {
         Ok(Value::Object(out))
     }
 
-    /// `recover(board, {principal, lost: [fp], stolen, anchorLost})` → the
-    /// three facts: the device arm, or the loss arm; the import, and a new
-    /// pair's destinations, SECRET, the dev arm's.
+    /// Answers `recover(board, {principal, lost: [fp], stolen, anchorLost})`.
+    ///
+    /// It runs the device arm, or the loss arm, and answers `{facts,
+    /// enrolled, retired, containment, recovery_read, warnings}`, `facts` the
+    /// three facts; the import, and a new pair's destinations, are secret, the
+    /// dev arm's — or refused where the run holds none.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `lost`, `stolen`, `anchorLost` or `principal`
+    /// where one is present in another form; and the walk's halt as the
+    /// row's refusal.
     pub(super) fn recover(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let lost = optional(args, "lost", |v| v.as_array()?.iter().map(|f| f.as_str().map(str::to_string)).collect::<Option<Vec<String>>>())?.unwrap_or_default();
@@ -307,7 +379,16 @@ impl Shell {
         }
     }
 
-    /// `rotate(board, {principal, label?, payload?})` → the three facts.
+    /// Answers `rotate(board, {principal, label?, payload?})`.
+    ///
+    /// It answers `{facts, old, new, trail, warnings}`, `facts` the three
+    /// facts.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `principal`, `label` or `payload` where one is
+    /// present in another form; and the walk's halt as the row's refusal.
     pub(super) fn rotate(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let opts = rotate::RotateOptions {
@@ -328,8 +409,17 @@ impl Shell {
         }
     }
 
-    /// `retire(board, principal, fingerprint)` → `{}`: the preview and its
-    /// typed confirmation the dev arm's.
+    /// Answers `retire(board, principal, fingerprint)` with `{}`.
+    ///
+    /// The preview and its typed confirmation are the dev arm's — or refused
+    /// where the run holds none.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `fingerprint` where it is absent or no string,
+    /// then `principal` where it is present in another form; and the walk's
+    /// halt as the row's refusal.
     pub(super) fn retire(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let fingerprint = args["fingerprint"].as_str().ok_or_else(|| Refusal::malformed("fingerprint"))?;
@@ -341,8 +431,17 @@ impl Shell {
         }
     }
 
-    /// `handoff(board, {account, payload?})`: beat (a) alone without a
-    /// payload, answering the address; the genesis with one, `{}`.
+    /// Answers `handoff(board, {account, payload?})`.
+    ///
+    /// Without a payload it runs beat (a) alone, answering `{address,
+    /// principal, already}`; with one, the genesis, answering `{}`.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `account` where it is absent or no string, then
+    /// `principal` or `payload` where one is present in another form; and the
+    /// walk's halt as the row's refusal.
     pub(super) fn handoff(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let account = args["account"].as_str().ok_or_else(|| Refusal::malformed("account"))?;
@@ -360,9 +459,20 @@ impl Shell {
         }
     }
 
-    /// `accept(board, {address, label?, paper?, noAnchors?})` →
-    /// `{payload}`: the recipient's beat, each anchor's destination asked of
-    /// the dev arm; `no_address` where none is given.
+    /// Answers `accept(board, {address, label?, paper?, noAnchors?})`.
+    ///
+    /// It runs the recipient's beat and answers `{payload}`, each anchor's
+    /// destination asked of the dev arm — or refused where the run holds
+    /// none.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `board`, then `unknown_board`;
+    /// `malformed_args` naming `address` where it is present in another form,
+    /// and `no_address` where none, or a blank one, is given; `malformed_args`
+    /// naming `label`, `paper` or `noAnchors` where one is present in another
+    /// form; and the walk's halt as the row's refusal, `already_seeded`,
+    /// `not_delegated` and `empty_label` named off its text ([`accept_arm`]).
     pub(super) fn accept(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let Some(address) = optional(args, "address", Value::as_str)?.filter(|a| !a.trim().is_empty()) else {
@@ -398,11 +508,13 @@ mod tests {
 
     use super::*;
 
-    /// `bind`'s WARNING names the binding line the page records and the
-    /// device's cause, never the key store's path (§4b.3: the store's location
-    /// is NATIVE): the `Unappended` the store answers carries its bindings file,
-    /// and the warning built from it carries the line alone (the mutant that
-    /// answers the store's own text hands the page the store's location).
+    /// Checks that `bind`'s warning names the line and never the store.
+    ///
+    /// It names the binding line the page records and the device's cause,
+    /// never the key store's path (§4b.3: the store's location is native):
+    /// the `Unappended` the store answers carries its bindings file, and the
+    /// warning built from it carries the line alone (the mutant that answers
+    /// the store's own text hands the page the store's location).
     #[test]
     fn a_binds_warning_names_the_line_and_never_the_store() {
         let refused = Unappended {

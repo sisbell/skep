@@ -1,10 +1,11 @@
-//! THE DEV ARM's SCRIPT (`client.md` §4b.3, §4b.5): the file a run names,
-//! parsed into the answers the dev arm gives the SECRET and CONSENT
-//! moments of a ceremony, one per moment in order — the transport reads
-//! the file and hands the answers in as
+//! The dev arm's script (`client.md` §4b.3, §4b.5): the file a run names.
+//!
+//! It is parsed into the answers the dev arm gives the secret and consent
+//! moments of a ceremony, one per moment in order — the transport reads the
+//! file and hands the answers in as
 //! [`ArmConfig::Script`](crate::ArmConfig::Script).
 //!
-//! THE SCRIPT's GRAMMAR, one answer per line, `#` opening a comment:
+//! **The script's grammar.** One answer per line, `#` opening a comment:
 //!
 //! ```text
 //! confirm yes | confirm no          a typed confirmation: the row, or `no`
@@ -20,24 +21,38 @@
 use std::fmt;
 use std::path::PathBuf;
 
-/// One scripted answer. Its `Debug` shows a typed import's seed as `…`, as
-/// `skep-client`'s `Imported` does, so no TALK line that names an answer
-/// carries a seed.
+/// One scripted answer.
+///
+/// Its `Debug` shows a typed import's seed as `…`, as `skep-client`'s
+/// `Imported` does, so no `Talk` line that names an answer carries a seed.
 #[derive(Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Answer {
+    /// `confirm yes` or `confirm no`: a typed confirmation, the row or `no`.
     Confirm(bool),
+    /// `typed <text>`: a typed confirmation answered in text.
     Typed(String),
+    /// `retype sheet [n]`: the re-type off the n-th sheet shown.
     RetypeSheet(usize),
+    /// `retype wrong`: the re-type answered with a wrong hex.
     RetypeWrong,
+    /// `retype declined`: the re-type declined.
     RetypeDeclined,
+    /// `destination <path>`: one anchor file's directory.
     Destination(PathBuf),
+    /// `import file <path>`: the anchor import from the file at `<path>`.
     ImportFile(PathBuf),
+    /// `import sheet [n]`: the anchor import off the n-th sheet shown.
     ImportSheet(usize),
+    /// `import typed <hex> <prefix>`: the anchor import typed in.
     ImportTyped { seed_hex: String, fingerprint_prefix: String },
+    /// `import neither`: the anchor import answered with neither.
     ImportNeither,
+    /// `kept`: the kept-or-placed answer, kept.
     Kept,
+    /// `placed`: the kept-or-placed answer, placed.
     Placed,
+    /// `abandon`: the person leaves at this moment.
     Abandon,
 }
 
@@ -63,12 +78,15 @@ impl fmt::Debug for Answer {
     }
 }
 
-/// A script line the grammar refuses: its number and the line — an `import
-/// typed` line named by its form alone, since the words after the form may
-/// be a seed.
+/// A script line the grammar refuses: its number and the line.
+///
+/// An `import typed` line is named by its form alone, since the words after
+/// the form may be a seed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptError {
+    /// The line's number, counted from 1.
     pub line: usize,
+    /// The line, trimmed — `import typed …` for a typed import's.
     pub text: String,
 }
 
@@ -80,7 +98,12 @@ impl fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
-/// The script's text parsed, in order.
+/// Parses the script's text into its answers, in order.
+///
+/// # Errors
+///
+/// Returns the first line the grammar refuses, by its number
+/// ([`ScriptError`]).
 pub fn parse(text: &str) -> Result<Vec<Answer>, ScriptError> {
     let mut out = Vec::new();
     for (i, raw) in text.lines().enumerate() {
@@ -123,8 +146,10 @@ pub fn parse(text: &str) -> Result<Vec<Answer>, ScriptError> {
 mod tests {
     use super::*;
 
-    /// The grammar: every form parses, a comment and a blank line are
-    /// skipped, and a line of no form is refused by number.
+    /// Checks that every form parses and a line of no form is refused.
+    ///
+    /// A comment and a blank line are skipped, and the refused line is named
+    /// by its number.
     #[test]
     fn the_script_grammar_parses_every_form_and_refuses_the_rest() {
         let text = "# a comment\n\nconfirm yes\nconfirm no\ntyped a wrong row\nretype sheet\nretype sheet 1\nretype wrong\nretype declined\ndestination /tmp/a\nimport file /tmp/k\nimport sheet\nimport typed 00ff abcd\nimport neither\nkept\nplaced\nabandon\n";
@@ -138,12 +163,14 @@ mod tests {
         assert!(e.to_string().contains("line 2"));
     }
 
-    /// THE GRAMMAR REFUSES EVERY NEAR MISS, the law over its fixed forms:
-    /// each form parses as written, and refuses with a word past its own and
-    /// with one short of it — a form's argument missing, a sheet's index
-    /// joined by another word — every refusal naming its line (the mutants
-    /// that read a form's first words and drop the rest, or take a sheet's
-    /// index from a longer tail, read a line the grammar never wrote).
+    /// Checks that the grammar refuses every near miss of its fixed forms.
+    ///
+    /// It is the law over the fixed forms: each form parses as written, and
+    /// refuses with a word past its own and with one short of it — a form's
+    /// argument missing, a sheet's index joined by another word — every
+    /// refusal naming its line (the mutants that read a form's first words
+    /// and drop the rest, or take a sheet's index from a longer tail, read a
+    /// line the grammar never wrote).
     #[test]
     fn the_grammar_refuses_every_near_miss() {
         let forms = [
@@ -173,6 +200,8 @@ mod tests {
         }
     }
 
+    /// Checks that a typed seed prints nowhere.
+    ///
     /// A typed import's seed is in no text the script's values print: its
     /// answer's `Debug` shows the seed as `…`, and a refused `import typed`
     /// line is named by its form alone.

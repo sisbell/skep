@@ -1,16 +1,18 @@
-//! THE HELD-BURST STORE (`client.md` §3c.1–§3c.3), beside the key store: one
-//! file per (board, principal), `held/<chain>/principal-<n>.held`, APPEND-ONLY
-//! in the key store's idiom (§3.2, §3.7). The first line is the HEADER, written
-//! once under `create_new` (`store.rs`'s `write_once` idiom, so a header the
-//! device did not take whole leaves no file): one JSON object, no whitespace
-//! outside strings, lowercase hex, a `v`, no unknown member, one `\n`. After
-//! it, one JSON object per line in TWO forms and no third — a `held` line (a
-//! burst the board could not take) and a `done` line (its resolution) — where
-//! a `held` line of an ordinal that already stands RE-MARKS it: the reader
-//! takes it in the earlier line's place. Each line is ONE `write` followed by
-//! `sync_data` BEFORE `op` answers `held` — PERSIST-FIRST (J1): the answer is
-//! a promise the disk already keeps. A reader IGNORES a final line without
-//! `\n` (a torn last line is the burst a crash caught mid-append, R14's one).
+//! The held-burst store (`client.md` §3c.1–§3c.3), beside the key store.
+//!
+//! It is one file per (board, principal), `held/<chain>/principal-<n>.held`,
+//! append-only in the key store's idiom (§3.2, §3.7). The first line is the
+//! header, written once under `create_new` (`store.rs`'s `write_once` idiom,
+//! so a header the device did not take whole leaves no file): one JSON
+//! object, no whitespace outside strings, lowercase hex, a `v`, no unknown
+//! member, one `\n`. After it, one JSON object per line in two forms and no
+//! third — a `held` line (a burst the board could not take) and a `done`
+//! line (its resolution) — where a `held` line of an ordinal that already
+//! stands re-marks it: the reader takes it in the earlier line's place. Each
+//! line is one `write` followed by `sync_data` before `op` answers `held` —
+//! persist-first: the answer is a promise the disk already keeps. A reader
+//! ignores a final line without `\n` within [`MAX_HELD_LINE_BYTES`] (a torn
+//! last line is the burst a crash caught mid-append, R14's one).
 //!
 //! **A torn line is only ever the tail.** Every line is written where the
 //! file's last whole line ends. A copy the device refuses — its write cut
@@ -23,46 +25,50 @@
 //! (`store.rs`'s `TORN_MARK`) — is not this file's, whose reader halts on
 //! every line that is not one of the two forms.
 //!
-//! THE QUEUE IS THE MEMORY, THE FILE ITS COPY: a principal's [`HeldQueue`] is
-//! its held lines in `k` order, and every line enters it under a fresh
-//! ordinal whatever the disk did. Where the file is on disk each line is
-//! copied to it as it enters; where the store keeps the queue in memory alone
-//! ([`HeldQueue::in_memory`]: another window's lock, a directory out of reach,
-//! §3c.3) no copy is made, and a close loses the lines. An append the device
-//! refuses is answered beside the line, which stands in the queue all the
-//! same, its bytes cut back off the file. A re-mark that changes nothing is no
-//! line at all.
+//! **The queue is the memory, the file its copy.** A principal's
+//! [`HeldQueue`] is its held lines in `k` order, and every line enters it
+//! under a fresh ordinal whatever the disk did. Where the file is on disk
+//! each line is copied to it as it enters; where the store keeps the queue
+//! in memory alone ([`HeldQueue::in_memory`]: another window's lock, a
+//! directory out of reach, §3c.3) no copy is made, and a close loses the
+//! lines. An append the device refuses is answered beside the line, which
+//! stands in the queue all the same, its bytes cut back off the file. A
+//! re-mark that changes nothing is no line at all.
 //!
-//! THE FILE IS PRIMARY (PATTERNS P38; §3c.3): a newer `v`, an unknown header
-//! member, or a middle line that is not a whole line of the two forms — not
-//! UTF-8, not a JSON object, a member missing or of another type, a `doc`
-//! that is no document address, an ordinal past [`MAX_ORDINAL`], a line past
-//! [`MAX_HELD_LINE_BYTES`] — HALTS this principal's writing at this board
-//! naming the path: never rebuilt over, never moved, never removed. A
-//! MISPLACED file (header `board` not the directory's chain, or `principal`
-//! not the file's name) is MOVED ASIDE by a rename that never overwrites
+//! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
+//! header member, or a middle line that is not a whole line of the two
+//! forms — not UTF-8, not a JSON object, a member missing or of another
+//! type, a `doc` that is no document address, an ordinal past
+//! [`MAX_ORDINAL`], a line past [`MAX_HELD_LINE_BYTES`] — halts this
+//! principal's writing at this board naming the path, and so does a header
+//! that is no whole JSON object, names another `type` or carries no `v` of
+//! 1 or more: never rebuilt over, never moved, never removed. A misplaced
+//! file (header `board` not the directory's chain, or `principal` not the
+//! file's name) is moved aside by a rename that never overwrites
 //! (`aside_name`'s form, the index's idiom), this principal's file started
-//! fresh. COMPACTION: once the queue holds no line, the file is REMOVED under
+//! fresh.
+//!
+//! **Compaction.** Once the queue holds no line, the file is removed under
 //! the lock; a file is never rewritten in place, its whole lines never
 //! touched — the writer's one cut takes only bytes past the last of them.
 //!
-//! THE STORE's BUDGETS, on what a HOLD ADDS: no line held that would carry
-//! the queue's standing frames past [`MAX_HELD_FRAME_BYTES`], the board's own
-//! frame cap, or its lines past [`MAX_HELD_LINES`] — a line past either
-//! refused and kept nowhere. A reopened queue is read whole, past either
-//! budget where its file is past it (a `done` the device refused leaves its
-//! line on disk, and a file another writer made may hold any number), and
-//! holds nothing more until it drains below them. Each line within
-//! [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike; the re-marks
-//! one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark past them
-//! taken in the queue alone; and the file READ LINE BY LINE, keeping the
-//! standing lines alone — so an open holds the queue it reads, never the
-//! file's history of lines done.
+//! **The store's budgets, on what a hold adds.** No line is held that would
+//! carry the queue's standing frames past [`MAX_HELD_FRAME_BYTES`], the
+//! board's own frame cap, or its lines past [`MAX_HELD_LINES`] — a line past
+//! either refused and kept nowhere. A reopened queue is read whole, past
+//! either budget where its file is past it (a `done` the device refused
+//! leaves its line on disk, and a file another writer made may hold any
+//! number), and holds nothing more until it drains below them. Each line is
+//! bounded by [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike;
+//! the re-marks one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark
+//! past them taken in the queue alone; and the file is read line by line,
+//! keeping the standing lines alone — so an open holds the queue it reads,
+//! never the file's history of lines done.
 //!
-//! THE LOCK `held/<chain>/lock` (the key store's `flock` idiom, copied from
-//! `search::directory::BoardDir::try_lock` — the index directory's type is the
-//! index's) is held for the shell's life; a second shell finding it held holds
-//! NOTHING.
+//! **The lock** `held/<chain>/lock` (the key store's `flock` idiom, copied
+//! from `search::directory::BoardDir::try_lock` — the index directory's type
+//! is the index's) is held for the shell's life; a second shell finding it
+//! held holds nothing on disk.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -79,93 +85,109 @@ use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 /// The lock file's name, the key store's idiom (`search.md` §5.6).
 const LOCK_NAME: &str = "lock";
 
-/// THE QUEUE's BUDGET — the most bytes a HOLD lets a principal's standing
-/// lines' frames come to at one board: the board's own frame cap
-/// ([`MAX_FRAME_BYTES`]), so a burst the hold admits always fits a queue
-/// holding none. The design's estimate is that hours of typing are kilobytes
-/// (§3c.3), three orders under it; a queue past it is a page holding without
-/// bound — every frame copied to disk and read back at the next open — so
-/// the line that would pass it is refused, and kept nowhere. A reopened
-/// queue is read whole, past it where its file is, and holds no line more
-/// until it drains below it.
+/// The queue's budget: the board's own frame cap, [`MAX_FRAME_BYTES`].
+///
+/// It is the most bytes a hold lets a principal's standing lines' frames
+/// come to at one board, so a burst the hold admits always fits a queue
+/// holding none. The design's estimate is that hours of typing are
+/// kilobytes (§3c.3), three orders under it; a queue past it is a page
+/// holding without bound — every frame copied to disk and read back at the
+/// next open — so the line that would pass it is refused, and kept nowhere.
+/// A reopened queue is read whole, past it where its file is, and holds no
+/// line more until it drains below it.
 pub const MAX_HELD_FRAME_BYTES: usize = MAX_FRAME_BYTES;
 
-/// The most bytes one line of a held file may carry, its `\n` aside — at the
-/// writer and at the reader alike. A `held` line spells its frame (within
-/// [`MAX_HELD_FRAME_BYTES`]) and beside it the frame's own `doc` and `id`
-/// again, a second frame's worth at most, with room over for its cause and a
-/// board's verdict as a daemon answers one (a few hundred bytes). The writer
-/// copies no longer line — the queue keeps it, unwritten, as it keeps a line
-/// the device refused — and the reader halts on one as damaged, reading no
-/// more of it than one byte past the bound.
+/// The most bytes one line of a held file may carry, its `\n` aside.
+///
+/// The bound holds at the writer and at the reader alike. A `held` line
+/// spells its frame (within [`MAX_HELD_FRAME_BYTES`]) and beside it the
+/// frame's own `doc` and `id` again, a second frame's worth at most, with
+/// room over for its cause and a board's verdict as a daemon answers one (a
+/// few hundred bytes). The writer copies no longer line — the queue keeps
+/// it, unwritten, as it keeps a line the device refused — and the reader
+/// halts on one as damaged, reading no more of it than one byte past the
+/// bound.
 const MAX_HELD_LINE_BYTES: usize = 2 * MAX_HELD_FRAME_BYTES + 64 * 1024;
 
-/// THE QUEUE's LINE BUDGET — the most lines a HOLD lets a principal's queue
-/// come to at one board. The resend walks the queue line by line, finding
-/// each line's document among the others, and a line costs its walk the same
-/// whatever its frame holds — so the lines a hold admits bound the walk's
-/// work as the frames' bytes bound its memory, and the byte budget alone
-/// admits a quarter of a million empty bursts held behind one refused. The
-/// design's outage is hours of typing in kilobytes (§3c.3), the burst machine
-/// coalescing each pause's keystrokes into one burst: at a burst per ten
-/// bytes typed, 4096 lines is hours of continuous typing. Past it a line is
-/// refused `held_full`, as one past the bytes is. A reopened queue is read
-/// whole, past it where its file is, and holds no line more until it drains
-/// below it.
+/// The most lines a hold lets a principal's queue come to at one board.
+///
+/// It is the queue's line budget. The resend walks the queue line by line,
+/// finding each line's document among the others, and a line costs its walk
+/// the same whatever its frame holds — so the lines a hold admits bound the
+/// walk's work as the frames' bytes bound its memory, and the byte budget
+/// alone admits a quarter of a million empty bursts held behind one
+/// refused. The design's outage is hours of typing in kilobytes (§3c.3), the
+/// burst machine coalescing each pause's keystrokes into one burst: at a
+/// burst per ten bytes typed, 4096 lines is hours of continuous typing.
+/// Past it a line is refused `held_full`, as one past the bytes is. A
+/// reopened queue is read whole, past it where its file is, and holds no
+/// line more until it drains below it.
 pub const MAX_HELD_LINES: usize = 4096;
 
-/// THE RE-MARK BUDGET — the most bytes of re-mark lines, each counted as
-/// [`MAX_HELD_LINE_BYTES`] counts a line, one file copies between its
-/// creation and its compaction. A re-mark copies its whole line, frame and
-/// all, under the new reason, and the board's answers choose the reasons: a
-/// board answering each probe with another hold-class cause would grow the
-/// file by a synced line at every probe for as long as it answers so, for a
-/// few hundred bytes of answer each. An honest outage re-marks a document's
-/// head a handful of times as the board's state and the person's acts move
-/// it, and its text is kilobytes (§3c.3), so one line bound holds its
-/// re-marks many times over — a head of kilobytes re-marked thousands of
-/// times, the largest line the writer copies re-marked once. Past it a
-/// re-mark is taken in the queue alone, its copy refused as a copy the device
-/// refused is ([`HeldQueue::remark`]): a reopen reads the reason copied last,
-/// and the resend's read decides the line from there.
+/// The most bytes of re-mark lines one file copies, creation to compaction.
+///
+/// It is the re-mark budget, each line counted as [`MAX_HELD_LINE_BYTES`]
+/// counts a line. A re-mark copies its whole line, frame and all, under the
+/// new reason, and the board's answers choose the reasons: a board
+/// answering each probe with another hold-class cause would grow the file
+/// by a synced line at every probe for as long as it answers so, for a few
+/// hundred bytes of answer each. An honest outage re-marks a document's head
+/// a handful of times as the board's state and the person's acts move it,
+/// and its text is kilobytes (§3c.3), so one line bound holds its re-marks
+/// many times over — a head of kilobytes re-marked thousands of times, the
+/// largest line the writer copies re-marked once. Past it a re-mark is
+/// taken in the queue alone, its copy refused as a copy the device refused
+/// is ([`HeldQueue::remark`]): a reopen reads the reason copied last, and
+/// the resend's read decides the line from there.
 const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 
-/// The largest ordinal a line may carry: `2^53 − 1`, the top of the range a
-/// JSON number carries EXACTLY (AUTH-6.36's clause) — the page names a line
-/// by its ordinal (`resolve`'s `held`), and a JavaScript-backed page reads
-/// every number as a double. A file naming a larger one is damaged, and a
-/// queue whose next ordinal would pass it holds no more lines.
+/// The largest ordinal a line may carry: `2^53 − 1`.
+///
+/// It is the top of the range a JSON number carries exactly (AUTH-6.36's
+/// clause) — the page names a line by its ordinal (`resolve`'s `held`), and
+/// a JavaScript-backed page reads every number as a double. A file naming a
+/// larger one is damaged, and a queue whose next ordinal would pass it holds
+/// no more lines.
 const MAX_ORDINAL: u64 = (1 << 53) - 1;
 
-/// Unix milliseconds now — a line's `time`.
+/// Returns the Unix milliseconds now: a line's `time`.
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// WHY A LINE IS HELD (§3c.2): its `cause`, the board's verdict beside a
-/// REFUSED run's, and whether the burst MAY have landed — the three members a
-/// hold writes and a re-mark rewrites together.
+/// Why a line is held (§3c.2).
+///
+/// It holds the line's `cause`, the board's verdict beside a refused run's,
+/// and whether the burst may have landed — the three members a hold writes
+/// and a re-mark rewrites together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reason {
-    /// A token of §3c.4's table, or a REFUSED run's own token.
+    /// A token of §3c.4's table, or a refused run's own token.
     pub cause: String,
-    /// The board's verdict verbatim beside a REFUSED run's line, for the face.
+    /// The board's verdict verbatim beside a refused run's line, for the face.
     pub refusal: Option<Value>,
-    /// Whether the burst may have landed: a dial made whose answer was lost
-    /// (`Timeout`/`Io`/`Truncated`, or the board's `500 internal_panic`), or
-    /// a `poisoned` answer, whose frames the board's journal keeps for its
-    /// restart; `false` where no dial reached the board.
+    /// Whether the burst may have landed.
+    ///
+    /// It may where a dial was made whose answer was lost (`Timeout`, `Io`,
+    /// `Truncated`, `Response`, `TooLarge` or a later transport error, or
+    /// the board's `500 internal_panic`), or on a `poisoned` answer, whose
+    /// frames the board's journal keeps for its restart; `false` where no
+    /// dial reached the board.
     pub sent: bool,
 }
 
 impl Reason {
-    /// A line held for `cause`, `sent` whether the burst MAY have landed.
+    /// Returns the reason of a line held for `cause`.
+    ///
+    /// `sent` is whether the burst may have landed.
     pub fn of(cause: &str, sent: bool) -> Reason {
         Reason { cause: cause.to_string(), refusal: None, sent }
     }
 
-    /// A REFUSED run's line: the board's `token` its cause, its `verdict`
-    /// beside it; a refused burst landed nothing.
+    /// Returns the reason of a refused run's line.
+    ///
+    /// The board's `token` is its cause, its `verdict` beside it; a refused
+    /// burst landed nothing.
     pub fn refused(token: &str, verdict: Value) -> Reason {
         Reason { cause: token.to_string(), refusal: Some(verdict), sent: false }
     }
@@ -180,10 +202,12 @@ pub struct HeldLine {
     pub doc: String,
     /// The page's envelope `id`, where it sent one (A-60).
     pub id: Option<String>,
-    /// The `at` of the last ACKED write on `doc` under this session, or the
-    /// session's open position — the `since` of the resend's read (§3c.5).
+    /// The `since` of the resend's read (§3c.5).
+    ///
+    /// It is the `at` of the last acked write on `doc` under this session,
+    /// or the session's open position.
     pub base: u64,
-    /// The page's wire frame AS COMPOSED, with no `attest` (§3c.2).
+    /// The page's wire frame as composed, with no `attest` (§3c.2).
     pub frame: Value,
     /// Why the line is held.
     pub reason: Reason,
@@ -194,13 +218,18 @@ pub struct HeldLine {
 /// What opening a principal's file yields.
 #[derive(Debug)]
 pub enum Opened {
-    /// The queue read whole from the file, or a fresh one: its un-done `held`
-    /// lines in `k` order; `aside` the path a MISPLACED file was moved to, for
-    /// the shell's own window to say (never the page, P39).
+    /// The queue read whole from the file, or a fresh one.
+    ///
+    /// It holds its un-done `held` lines in `k` order; `aside` is the path a
+    /// misplaced file was moved to, for the shell's own window to say (never
+    /// the page, P39).
     Live { queue: HeldQueue, aside: Option<PathBuf> },
-    /// P38's HALT: the file was written by a newer skep, carries an unknown
-    /// header member, or a middle line is not a whole line of the two forms —
-    /// the path and the reason.
+    /// P38's halt, with the path and the reason.
+    ///
+    /// The file was written by a newer skep, carries an unknown header
+    /// member, a header that is no whole JSON object, another `type` or no
+    /// `v` of 1 or more, or a middle line is not a whole line of the two
+    /// forms.
     Halted { path: PathBuf, why: HaltWhy },
 }
 
@@ -210,14 +239,20 @@ pub enum HaltWhy {
     /// A `v` above the reader's — "written by a newer skep".
     Newer,
     /// A header member the reader does not know.
+    ///
+    /// The face is the same for a header naming another `type` or carrying
+    /// no `v` of 1 or more.
     UnknownMember,
-    /// A middle line that is not a whole line of the two forms — a damaged
-    /// body.
+    /// A line that is not a whole line of its form — a damaged file.
+    ///
+    /// It is a middle line that is not a whole line of the two forms, a line
+    /// past [`MAX_HELD_LINE_BYTES`] (the last one too), or a header that is
+    /// no whole JSON object.
     Damaged,
 }
 
 impl HaltWhy {
-    /// The token the halt's face carries.
+    /// Returns the token the halt's face carries.
     pub fn token(self) -> &'static str {
         match self {
             HaltWhy::Newer => "newer",
@@ -227,8 +262,9 @@ impl HaltWhy {
     }
 }
 
-/// THE DIRECTORY `held/<chain>/`: ensured `0700`, locked once for the shell's
-/// life, a principal's file opened under it.
+/// The directory `held/<chain>/`, a principal's file opened under it.
+///
+/// It is ensured `0700` and locked once for the shell's life.
 #[derive(Debug)]
 pub struct HeldDir {
     path: PathBuf,
@@ -240,18 +276,25 @@ pub struct HeldDir {
 enum Line {
     /// A whole line, its `\n` dropped.
     Complete,
-    /// The file ends before the line's `\n`: the torn last line a crash
-    /// caught mid-append.
+    /// The file ends before the line's `\n`.
+    ///
+    /// It is the torn last line a crash caught mid-append.
     Torn,
-    /// A line past [`MAX_HELD_LINE_BYTES`], read no further than one byte
-    /// past it.
+    /// A line past [`MAX_HELD_LINE_BYTES`].
+    ///
+    /// It is read no further than one byte past the bound.
     Long,
     /// No byte left.
     End,
 }
 
-/// The next line of `reader` into `buf` (cleared first), read no further
-/// than one byte past [`MAX_HELD_LINE_BYTES`].
+/// Reads the next line of `reader` into `buf`, cleared first.
+///
+/// It reads no further than one byte past [`MAX_HELD_LINE_BYTES`].
+///
+/// # Errors
+///
+/// Returns the reader's I/O error.
 fn next_line(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Line> {
     buf.clear();
     let read = reader.take(MAX_HELD_LINE_BYTES as u64 + 1).read_until(b'\n', buf)?;
@@ -265,7 +308,7 @@ fn next_line(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Line> {
     Ok(if buf.len() > MAX_HELD_LINE_BYTES { Line::Long } else { Line::Torn })
 }
 
-/// A whole line as its JSON object, or `None` where it is no UTF-8 object.
+/// Returns a whole line's JSON object, or `None` where it is no UTF-8 object.
 fn object(bytes: &[u8]) -> Option<Map<String, Value>> {
     match serde_json::from_str(std::str::from_utf8(bytes).ok()?).ok()? {
         Value::Object(m) => Some(m),
@@ -273,14 +316,15 @@ fn object(bytes: &[u8]) -> Option<Map<String, Value>> {
     }
 }
 
-/// An ordinal member, within [`MAX_ORDINAL`].
+/// Returns an ordinal member, within [`MAX_ORDINAL`].
 fn ordinal(v: &Value) -> Option<u64> {
     v.as_u64().filter(|k| *k <= MAX_ORDINAL)
 }
 
-/// A `held` line's members, every one of its type — `doc` a document
-/// address, `id` a string where present, `frame` an object, `refusal`
-/// anything but `null` where present — or `None`.
+/// Returns a `held` line's members, every one of its type, or `None`.
+///
+/// `doc` is a document address, `id` a string where present, `frame` an
+/// object, `refusal` any value where present, a `null` one read as none.
 fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
     let doc = m.get("doc")?.as_str().filter(|d| document_address(d).is_some())?.to_string();
     let id = match m.remove("id") {
@@ -297,8 +341,10 @@ fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
     Some(HeldLine { k, doc, id, base: m.get("base")?.as_u64()?, frame, reason, time: m.get("time")?.as_u64()? })
 }
 
-/// Whether a `done` line's members are each of its type: `as` `kept` with
-/// an optional `at`, or `dropped` with none, and a `time`.
+/// Returns whether a `done` line's members are each of its type.
+///
+/// `as` is `kept` with an optional `at`, or `dropped` with none, and a
+/// `time` stands.
 fn is_done_line(m: &Map<String, Value>) -> bool {
     let at = m.get("at");
     let resolved = match m.get("as").and_then(Value::as_str) {
@@ -310,16 +356,23 @@ fn is_done_line(m: &Map<String, Value>) -> bool {
 }
 
 impl HeldDir {
-    /// `<data_dir>/held/<chain>/` — the data directory the index takes
-    /// (§3c.8), the held store BESIDE the key store and never under it
-    /// (§3c.1's `<app data>`).
+    /// Returns the directory `<data_dir>/held/<chain>/`.
+    ///
+    /// `data_dir` is the data directory the index takes (§3c.8), the held
+    /// store beside the key store and never under it (§3c.1's `<app data>`).
     pub fn new(data_dir: &Path, chain: Chain) -> HeldDir {
         HeldDir { path: data_dir.join("held").join(chain.to_string()), chain }
     }
 
-    /// The directory and `held/` above it, each `0700`, created once (§3c.1):
-    /// one recursive create, which makes every missing parent with the mode
-    /// it makes the directory with, and leaves a standing one as it stands.
+    /// Creates the directory and `held/` above it, each `0700` (§3c.1).
+    ///
+    /// They are created once: one recursive create, which makes every missing
+    /// parent with the mode it makes the directory with, and leaves a
+    /// standing one as it stands.
+    ///
+    /// # Errors
+    ///
+    /// Returns the create's I/O error.
     pub fn ensure(&self) -> io::Result<()> {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
@@ -331,9 +384,16 @@ impl HeldDir {
         builder.create(&self.path)
     }
 
-    /// THE LOCK (`BoardDir::try_lock`'s idiom, copied): `held/<chain>/lock`
-    /// opened `0600` and `flock`ed. `Some(file)` holds it for the file's life —
-    /// it dies with the process — and `None` says another shell holds it.
+    /// Takes the lock: `held/<chain>/lock` opened `0600` and `flock`ed.
+    ///
+    /// It is `BoardDir::try_lock`'s idiom, copied. `Some(file)` holds it for
+    /// the file's life — it dies with the process — and `None` says another
+    /// shell holds it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the open's I/O error, or the lock's other than a lock held
+    /// elsewhere.
     pub fn try_lock(&self) -> io::Result<Option<File>> {
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true).truncate(false);
@@ -350,23 +410,30 @@ impl HeldDir {
         }
     }
 
-    /// The file name for a principal (P39: the file, never a column).
+    /// Returns the file name for a principal (P39: the file, never a column).
     fn file_name(principal: u64) -> String {
         format!("principal-{principal}.held")
     }
 
-    /// Open the principal's file, reading it LINE BY LINE with P38's faces
-    /// (§3c.3): a newer `v`, an unknown header member or a middle line that is
-    /// not a whole line of the two forms HALTS; a MISPLACED file is moved
-    /// aside and this principal's file started fresh. Only the standing lines
-    /// are held as the file is read, each re-mark in its line's place and each
-    /// `done` taking its line out, and the re-mark lines' bytes counted
-    /// against [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's
-    /// budget where its writer left it. The whole lines' bytes are counted
-    /// too, so the next line is written where the last of them ends, a torn
-    /// tail cut off first; the open itself writes nothing, a tail it meets
-    /// left for that cut. `account` is the header's where this open writes
-    /// one.
+    /// Opens the principal's file, reading it line by line with P38's faces.
+    ///
+    /// As §3c.3 has it, a newer `v`, an unknown header member or a middle
+    /// line that is not a whole line of the two forms halts, as does a
+    /// header that is no whole JSON object, names another `type` or carries
+    /// no `v` of 1 or more; a misplaced file is moved aside and this
+    /// principal's file started fresh. Only the standing lines are held as
+    /// the file is read, each re-mark in its line's place and each `done`
+    /// taking its line out, and the re-mark lines' bytes counted against
+    /// [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's budget where
+    /// its writer left it. The whole lines' bytes are counted too, so the
+    /// next line is written where the last of them ends, a torn tail cut off
+    /// first; the open itself writes nothing, a tail it meets left for that
+    /// cut. `account` is the header's where this open writes one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the open's I/O error other than a file not found, the read's,
+    /// and the move's where a misplaced file cannot be moved aside.
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
         let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, whole_bytes: 0, remark_bytes: 0 };
@@ -385,7 +452,8 @@ impl HeldDir {
         // is written after.
         let mut whole_bytes = buf.len() as u64 + 1;
         let Some(header) = object(&buf) else { return halted(HaltWhy::Damaged) };
-        // `v` read FIRST (§3c.2): a `v` above 1 is the newer face, never half-read.
+        // `v` read first (§3c.2): a `v` above 1 is the newer face, never
+        // half-read.
         match header.get("v").and_then(Value::as_u64) {
             Some(1) => {}
             Some(n) if n > 1 => return halted(HaltWhy::Newer),
@@ -398,8 +466,9 @@ impl HeldDir {
         if header.keys().any(|k| !matches!(k.as_str(), "type" | "v" | "board" | "principal" | "account")) {
             return halted(HaltWhy::UnknownMember);
         }
-        // A MISPLACED file — header `board` not the directory's chain, or
-        // `principal` not the file's name — moved aside, this file started fresh.
+        // A misplaced file — header `board` not the directory's chain, or
+        // `principal` not the file's name — moved aside, this file started
+        // fresh.
         let own_chain = header.get("board").and_then(Value::as_str).and_then(Chain::parse);
         let board_here = own_chain == Some(self.chain);
         let principal_here = header.get("principal").and_then(Value::as_u64) == Some(principal);
@@ -429,7 +498,7 @@ impl HeldDir {
                 let Some(k) = ordinal(held) else { return halted(HaltWhy::Damaged) };
                 let Some(line) = parse_held_line(k, m) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
-                // A `held` line of a standing ordinal is its RE-MARK
+                // A `held` line of a standing ordinal is its re-mark
                 // ([`HeldQueue::remark`]): it takes the earlier line's place,
                 // and its bytes count against the file's re-mark budget.
                 if standing.insert(k, line).is_some() {
@@ -450,11 +519,21 @@ impl HeldDir {
         Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
     }
 
-    /// THE ASIDE (`aside_name`'s form, the index's idiom): `name` renamed to
-    /// `principal-<n>.held.aside.<its own chain>.<m>` by a rename that NEVER
-    /// overwrites — the name taken by a hard link, which fails where it exists,
-    /// then the original unlinked. A second misplaced file lands beside the
-    /// first at `.2`. Said once in the shell's own window, never to the page.
+    /// Moves `name` aside by a rename that never overwrites.
+    ///
+    /// The aside (`aside_name`'s form, the index's idiom) is
+    /// `principal-<n>.held.aside.<its own chain>.<m>`: the name taken by a
+    /// hard link, which fails where it exists, then the original unlinked. A
+    /// second misplaced file lands beside the first at `.2`. Said once in the
+    /// shell's own window, never to the page.
+    ///
+    /// # Errors
+    ///
+    /// Returns the link's I/O error other than a name taken, or the unlink's.
+    ///
+    /// # Panics
+    ///
+    /// Panics where every `u32` ordinal's aside name is taken.
     fn move_aside(&self, name: &str, own_chain: &Chain) -> io::Result<PathBuf> {
         let from = self.path.join(name);
         for m in 1u32.. {
@@ -472,9 +551,10 @@ impl HeldDir {
     }
 }
 
-/// ONE PRINCIPAL's QUEUE (J1: "THE SHELL holds the queue"): its un-done
-/// `held` lines in `k` order — a hold adding none past [`MAX_HELD_LINES`] —
-/// the next ordinal, the bytes its lines' frames hold
+/// One principal's queue, which the shell holds.
+///
+/// It holds its un-done `held` lines in `k` order — a hold adding none past
+/// [`MAX_HELD_LINES`] — the next ordinal, the bytes its lines' frames hold
 /// ([`MAX_HELD_FRAME_BYTES`]'s count), and the file the lines are copied to
 /// — `None` where the store keeps them in memory alone (§3c.3).
 #[derive(Debug)]
@@ -509,11 +589,12 @@ struct Disk {
     remark_bytes: usize,
 }
 
-/// One line entered in the queue: the ordinal it took, and — where its copy
-/// could not be written (§3c.3's `store_unwritable`, which the `held`
-/// answer carries as `unwritable`: a full disk, a read-only volume, a line
-/// past [`MAX_HELD_LINE_BYTES`]) — why. The line stands in the queue either
-/// way.
+/// One line entered in the queue: the ordinal it took, and why no copy stands.
+///
+/// The why is given where its copy could not be written (§3c.3's
+/// `store_unwritable`, which the `held` answer carries as `unwritable`: a
+/// full disk, a read-only volume, a line past [`MAX_HELD_LINE_BYTES`]). The
+/// line stands in the queue either way.
 #[derive(Debug)]
 pub struct Entered {
     pub k: u64,
@@ -523,20 +604,26 @@ pub struct Entered {
 /// Why a line was not held, and is kept nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unheld {
+    /// The queue is full, by its bytes, its lines or its ordinals.
+    ///
     /// The queue's standing frames' bytes, `held_bytes`, and the line's,
     /// `frame_bytes`, would pass [`MAX_HELD_FRAME_BYTES`] — or the queue's
     /// lines, `held_lines`, stand at [`MAX_HELD_LINES`] already, or past it
-    /// as a reopened file can, or its next ordinal would pass [`MAX_ORDINAL`].
+    /// as a reopened file can, or its next ordinal would pass
+    /// [`MAX_ORDINAL`].
     Full { held_bytes: usize, frame_bytes: usize, held_lines: usize },
+    /// A line no reader of the file reads.
+    ///
     /// The line's `doc` is no document address in its one spelling
-    /// (`wire::document_address`), or its `frame` no JSON object: a line
-    /// no reader of the file reads.
+    /// (`wire::document_address`), or its `frame` no JSON object.
     Unreadable,
 }
 
-/// How a `done` line resolves its line (§3c.2's `as`): `kept` with the `at`
-/// of its ack, or of the row the read found — none where the arrangement
-/// alone decided — or `dropped` by the person's act, which names no position.
+/// How a `done` line resolves its line (§3c.2's `as`).
+///
+/// It is `kept` with the `at` of its ack, or of the row the read found —
+/// none where the arrangement alone decided — or `dropped` by the person's
+/// act, which names no position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Done {
     Kept { at: Option<u64> },
@@ -546,42 +633,50 @@ pub enum Done {
 /// Why a `done` was refused or not copied.
 #[derive(Debug)]
 pub enum DoneError {
-    /// No `held` line of that ordinal stands — the writer refuses it (T4).
+    /// No `held` line of that ordinal stands: the writer refuses it.
     NoSuchLine,
-    /// The line left the queue and its `done` did not reach the disk: a reopen
-    /// reads the line as held again, and the resend's read decides it (§3c.5).
+    /// The line left the queue and its `done` did not reach the disk.
+    ///
+    /// A reopen reads the line as held again, and the resend's read decides
+    /// it (§3c.5).
     Unwritten(io::Error),
 }
 
 impl HeldQueue {
-    /// A queue kept in memory alone (§3c.3): its lines enter and leave as a
-    /// file's do, and no copy is written — a close loses them.
+    /// Returns a queue kept in memory alone (§3c.3).
+    ///
+    /// Its lines enter and leave as a file's do, and no copy is written — a
+    /// close loses them.
     pub fn in_memory() -> HeldQueue {
         HeldQueue { disk: None, lines: Vec::new(), next_k: 1, held_bytes: 0 }
     }
 
-    /// The un-done `held` lines, in `k` order.
+    /// Returns the un-done `held` lines, in `k` order.
     pub fn lines(&self) -> &[HeldLine] {
         &self.lines
     }
 
-    /// Whether the queue's file is on disk (a header has been written).
+    /// Returns whether the queue's file is on disk, its header written.
     #[cfg(test)]
     fn on_disk(&self) -> bool {
         self.disk.as_ref().is_some_and(|d| d.path.exists())
     }
 
-    /// HOLD A LINE: entered in the queue under the next ordinal and, where the
-    /// queue has a file, copied to it — one `write` then `sync_data`
-    /// (PERSIST-FIRST, J1), the header written once first where the file is
-    /// new. The ordinal the line took, and why its copy failed where it did,
-    /// for the caller's answer to say (§3c.3); or [`Unheld`], checked in this
-    /// order, the first that holds answering — its `doc` or `frame` one the
-    /// reader refuses ([`Unheld::Unreadable`]), else its ordinal past
-    /// [`MAX_ORDINAL`], the queue at [`MAX_HELD_LINES`] lines, or its frame
-    /// carrying the queue's past [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`])
-    /// — and the line kept nowhere: the writer holds no line the file's
-    /// reader would halt on.
+    /// Holds a line: enters it in the queue under the next ordinal.
+    ///
+    /// Where the queue has a file, the line is copied to it — one `write`
+    /// then `sync_data` (persist-first), the header written once first where
+    /// the file is new. It answers the ordinal the line took, and why its
+    /// copy failed where it did, for the caller's answer to say (§3c.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unheld`], checked in this order, the first that holds
+    /// answering — its `doc` or `frame` one the reader refuses
+    /// ([`Unheld::Unreadable`]), else its ordinal past [`MAX_ORDINAL`], the
+    /// queue at [`MAX_HELD_LINES`] lines, or its frame carrying the queue's
+    /// past [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`]) — and the line kept
+    /// nowhere: the writer holds no line the file's reader would halt on.
     pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, reason: Reason) -> Result<Entered, Unheld> {
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
@@ -599,13 +694,18 @@ impl HeldQueue {
         Ok(Entered { k, unwritten })
     }
 
-    /// RE-MARK a standing line — its cause, refusal and `sent` — by appending a
-    /// `held` line of its ordinal, which the reader takes in its place; no
-    /// `done` is owed. A reason the line already has changes nothing and
-    /// writes nothing. The queue takes the reason whatever the disk did, and
-    /// a copy refused — by the device, or past the file's
-    /// [`MAX_HELD_REMARK_BYTES`] — is answered for the caller to say (a reopen
-    /// then reads the earlier reason). A line not standing is left alone.
+    /// Re-marks a standing line: its cause, refusal and `sent`.
+    ///
+    /// It appends a `held` line of its ordinal, which the reader takes in
+    /// its place; no `done` is owed. A reason the line already has changes
+    /// nothing and writes nothing. The queue takes the reason whatever the
+    /// disk did. A line not standing is left alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a copy refused — by the device, or past the file's
+    /// [`MAX_HELD_REMARK_BYTES`] — for the caller to say (a reopen then reads
+    /// the earlier reason).
     pub fn remark(&mut self, k: u64, reason: Reason) -> io::Result<()> {
         let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
         if line.reason == reason {
@@ -620,12 +720,19 @@ impl HeldQueue {
         }
     }
 
-    /// RESOLVE line `k` with a `done` line, [`Done::Kept`] or
-    /// [`Done::Dropped`] (§3c.2). The line leaves the queue whatever the disk
-    /// did: [`DoneError::Unwritten`] says where its `done` did not reach the
-    /// file. COMPACTION: once the queue holds no line, its file is REMOVED
-    /// (§3c.3) and the ordinals start again. A `done` for an ordinal with no
-    /// `held` line is REFUSED (T4).
+    /// Resolves line `k` with a `done` line (§3c.2).
+    ///
+    /// The `done` is [`Done::Kept`] or [`Done::Dropped`]. The line leaves the
+    /// queue whatever the disk did.
+    ///
+    /// **Compaction.** Once the queue holds no line, its file is removed
+    /// (§3c.3) and the ordinals start again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DoneError::NoSuchLine`] for an ordinal with no `held` line —
+    /// the `done` is refused — and [`DoneError::Unwritten`] where its `done`
+    /// did not reach the file.
     pub fn done(&mut self, k: u64, done: Done) -> Result<(), DoneError> {
         let Some(index) = self.lines.iter().position(|l| l.k == k) else { return Err(DoneError::NoSuchLine) };
         let line = self.lines.remove(index);
@@ -647,9 +754,17 @@ impl HeldQueue {
 }
 
 impl Disk {
-    /// One line copied: the header written first where the file is new. A
-    /// line past [`MAX_HELD_LINE_BYTES`] is no line the reader reads, so it is
-    /// refused here as the device's refusal is answered, and never written.
+    /// Copies one line, the header written first where the file is new.
+    ///
+    /// A line past [`MAX_HELD_LINE_BYTES`] is no line the reader reads, so it
+    /// is refused here as the device's refusal is answered, and never
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InvalidInput` error for a line past
+    /// [`MAX_HELD_LINE_BYTES`], and what [`Disk::ensure_header`] and
+    /// [`Disk::append`] return.
     fn write_line(&mut self, bytes: &[u8]) -> io::Result<()> {
         if bytes.len() > MAX_HELD_LINE_BYTES + 1 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("the line is {} bytes, past the held store's {MAX_HELD_LINE_BYTES}", bytes.len() - 1)));
@@ -658,10 +773,16 @@ impl Disk {
         self.append(bytes)
     }
 
-    /// One RE-MARK line copied, within [`MAX_HELD_REMARK_BYTES`]: a re-mark
-    /// that would pass it refused as the device's refusal is answered, and
-    /// never written. Its bytes count as the copy is tried, so a device that
-    /// takes a line and refuses its sync spends the budget all the same.
+    /// Copies one re-mark line, within [`MAX_HELD_REMARK_BYTES`].
+    ///
+    /// Its bytes count as the copy is tried, so a device that takes a line
+    /// and refuses its sync spends the budget all the same.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `FileTooLarge` error for a re-mark that would pass
+    /// [`MAX_HELD_REMARK_BYTES`] — refused as the device's refusal is
+    /// answered, and never written — and what [`Disk::write_line`] returns.
     fn write_remark(&mut self, bytes: &[u8]) -> io::Result<()> {
         let line_bytes = bytes.len().saturating_sub(1);
         let remark_bytes = self.remark_bytes.saturating_add(line_bytes);
@@ -711,8 +832,9 @@ impl Disk {
         Ok(())
     }
 
-    /// Appends one line where the file's last whole line ends, synced before
-    /// the caller builds its answer (PERSIST-FIRST, J1).
+    /// Appends one line where the file's last whole line ends, and syncs it.
+    ///
+    /// The sync comes before the caller builds its answer (persist-first).
     ///
     /// A tail past the whole lines — a crash's torn line, or a refused copy
     /// whose cut-back failed — is cut off first, so the line is never written
@@ -725,14 +847,14 @@ impl Disk {
     /// first cut takes the tail. A `#[cfg(test)]` seam reads the file after
     /// the sync, so a suite pins the line on disk before the answer is built.
     ///
-    /// UNVERIFIED HERE (§3c.3, the record §7 items 2–3): that one small
+    /// **Unverified here** (§3c.3, the record §7 items 2–3): that one small
     /// `write_all` is one `write(2)` (and may split for a large buffer — the
     /// torn-last-line rule and the cut before each copy cover either), and
     /// that `sync_data` orders the line before the answer, is Rust's std and
     /// APFS's `F_FULLFSYNC` — the barrier the kernel's own durability assumes,
     /// not measured here. The write-ahead variant (every burst appended before
     /// its dial, tombstoned at its ack, so even the burst in flight survives a
-    /// crash) is named and NOT taken (§3c.6): R14's bound does not ask it, and
+    /// crash) is named and not taken (§3c.6): R14's bound does not ask it, and
     /// the typing cadence would pay a synced append and tombstone churn.
     ///
     /// # Errors
@@ -754,8 +876,9 @@ impl Disk {
         Ok(())
     }
 
-    /// The file removed — the directory stays, and the next line recreates it
-    /// with a re-mark budget of its own.
+    /// Removes the file; the directory stays.
+    ///
+    /// The next line recreates it with a re-mark budget of its own.
     fn remove(&mut self) {
         let _ = fs::remove_file(&self.path);
         self.created = false;
@@ -767,11 +890,11 @@ impl Disk {
 /// Writes `bytes` whole to `file`, then syncs them: one copy's body.
 ///
 /// It is the body of the header's copy and of every line's, its `sync_data`
-/// run before the caller builds its answer (PERSIST-FIRST, J1). Two
+/// run before the caller builds its answer (persist-first). Two
 /// `#[cfg(test)]` seams stand in for a device that refuses part-way: the
 /// first bytes written and the rest refused, as a full disk does
-/// (`tests::torn_write`), or the sync refused (T5's `store_unwritable`, which
-/// the `held` answer carries as `unwritable`).
+/// (`tests::torn_write`), or the sync refused (`store_unwritable`, which the
+/// `held` answer carries as `unwritable`).
 ///
 /// # Errors
 ///
@@ -791,14 +914,18 @@ fn write_synced(file: &mut File, bytes: &[u8]) -> io::Result<()> {
     file.sync_data()
 }
 
-/// The header's exact bytes (§3c.2): members in one order, no whitespace
-/// outside strings, lowercase hex, one `\n`.
+/// Returns the header's exact bytes (§3c.2).
+///
+/// Its members stand in one order, no whitespace outside strings, lowercase
+/// hex, one `\n`.
 fn header_bytes(chain: &Chain, principal: u64, account: &str) -> Vec<u8> {
     format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{chain}\",\"principal\":{principal},\"account\":{}}}\n", json_str(account)).into_bytes()
 }
 
-/// A `held` line's exact bytes (§3c.2): `held, doc, id?, base, frame, cause,
-/// refusal?, sent, time`, in that order.
+/// Returns a `held` line's exact bytes (§3c.2).
+///
+/// Its members are `held, doc, id?, base, frame, cause, refusal?, sent,
+/// time`, in that order.
 fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
@@ -813,8 +940,10 @@ fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     s.into_bytes()
 }
 
-/// A `done` line's exact bytes (§3c.2): `done, as, at?, time`, in that order —
-/// `at` on a `kept` line alone.
+/// Returns a `done` line's exact bytes (§3c.2).
+///
+/// Its members are `done, as, at?, time`, in that order — `at` on a `kept`
+/// line alone.
 fn done_line_bytes(k: u64, done: Done) -> Vec<u8> {
     let (resolved, at) = match done {
         Done::Kept { at } => ("kept", at),
@@ -828,7 +957,7 @@ fn done_line_bytes(k: u64, done: Done) -> Vec<u8> {
     s.into_bytes()
 }
 
-/// A string as a JSON string literal — the one escaper the forms share.
+/// Returns a string as a JSON string literal: the one escaper the forms share.
 fn json_str(s: &str) -> String {
     serde_json::to_string(s).expect("a `str` always serializes: it is no map key to refuse, and the in-memory writer never fails")
 }

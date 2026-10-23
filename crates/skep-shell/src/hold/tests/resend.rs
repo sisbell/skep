@@ -1,28 +1,32 @@
-//! THE RESEND WALK over a fake board (§3c.5): THE READ's TABLE, every answer
-//! the read can meet against every answer its site read can — no row (send
-//! from the head), one own row its site does not contradict (the head `done
-//! kept`, nothing re-sent), a lost testimony and `history_reclaimed`
-//! decided by the site alone, a foreign row, two rows and a page too large
-//! (MOVED, nothing sent, never rebased), a read or a site the board does not
-//! answer — the death signal among its answers — deciding nothing, and a
-//! delivery past the values asked differing — with the narrative cells
-//! beside it; THE ORDER, the lines sent in `k` order across the documents;
-//! the own hand on a read; a refusal the table holds nowhere, and the death
-//! signal, leaving a resent line standing; a resend answered
-//! `500 internal_panic` marking its line `sent: true`, its landing then kept
-//! by the read; a second window's burst resent from memory; every
-//! principal's lines resent by one probe, a bare session's line resent by
-//! none until a session of its principal's that may write stands, and a
-//! probe with no line standing dialing nothing; one drain per board at a
-//! time, and a drain that unwinds leaving the board free to drain again; a
-//! move facing its own document alone; and the own node stopped,
-//! `writes.halted` and a third `durability` holding a burst over time, a
-//! reused ordinal's reissues counted afresh.
+//! The resend walk over a fake board (§3c.5).
+//!
+//! The suite checks the read's table, every answer the read can meet
+//! against every answer its site read can — no row (send from the head), one
+//! own row its site does not contradict (the head `done kept`, nothing
+//! re-sent), a lost testimony and `history_reclaimed` decided by the site
+//! alone, a foreign row, two rows and a page too large (moved, nothing
+//! sent, never rebased), a read or a site the board does not answer — the
+//! death signal among its answers — deciding nothing, and a delivery past
+//! the values asked differing — with the narrative cells beside it; the
+//! order, the lines sent in `k` order across the documents; the own hand on
+//! a read; a refusal the table holds nowhere, and the death signal, leaving
+//! a resent line standing; a resend answered `500 internal_panic` marking
+//! its line `sent: true`, its landing then kept by the read; a second
+//! window's burst resent from memory; every principal's lines resent by one
+//! probe, a bare session's line resent by none until a session of its
+//! principal's that may write stands, and a probe with no line standing
+//! dialing nothing; one drain per board at a time, and a drain that unwinds
+//! leaving the board free to drain again; a move facing its own document
+//! alone; and the own node stopped, `writes.halted` and a third
+//! `durability` holding a burst over time, a reused ordinal's reissues
+//! counted afresh.
 
 use super::*;
 
-/// OUTCOME (i): no row since `base` — the held burst is sent from the head and
-/// acked, the line resolved, the document's state `kept`.
+/// Checks outcome (i): no row since `base` sends the burst from the head.
+///
+/// The held burst is sent and acked, the line resolved, the document's
+/// state `kept`.
 #[test]
 fn outcome_i_no_row_sends_from_the_head() {
     let g = ground();
@@ -34,11 +38,13 @@ fn outcome_i_no_row_sends_from_the_head() {
     assert!(g.states().contains(&"kept".to_string()));
 }
 
-/// OUTCOME (ii): the in-flight burst (its line `sent: true`) landed — one row
-/// of the session's own hand, consistent, its five values read back equal at
-/// the site — so the head is `done kept` and NOTHING is re-sent (the mutant
-/// that resends the head; the mutant that compares the frame's one string
-/// with one position's value faces the person's own text `moved`).
+/// Checks outcome (ii): a landed burst is kept, not re-sent.
+///
+/// The in-flight burst (its line `sent: true`) landed — one row of the
+/// session's own hand, consistent, its five values read back equal at the
+/// site — so the head is `done kept` and nothing is re-sent (the mutant that
+/// resends the head; the mutant that compares the frame's one string with
+/// one position's value faces the person's own text `moved`).
 #[test]
 fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     let g = ground();
@@ -52,13 +58,15 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
 }
 
-/// THE ORDER (§3c.5: "lines in `k` order across the board's documents, which
-/// keeps each document's order"): three lines held on two documents — one on
-/// `DOC`, one on `OTHER`, one more on `DOC` — go out as they were held, so a
-/// `copy` held between two bursts on its source transcludes the source as
-/// the person wrote it (the mutant that sends each document's whole run in
-/// turn sends the second `DOC` line before the `OTHER` one, and the copy
-/// lands the wrong text with no refusal to say so).
+/// Checks that the resend sends its lines in `k` order across the documents.
+///
+/// It is §3c.5's order, "lines in `k` order across the board's documents,
+/// which keeps each document's order": three lines held on two documents —
+/// one on `DOC`, one on `OTHER`, one more on `DOC` — go out as they were
+/// held, so a `copy` held between two bursts on its source transcludes the
+/// source as the person wrote it (the mutant that sends each document's
+/// whole run in turn sends the second `DOC` line before the `OTHER` one,
+/// and the copy lands the wrong text with no refusal to say so).
 #[test]
 fn the_resend_sends_its_lines_in_k_order_across_the_documents() {
     let g = ground();
@@ -71,12 +79,13 @@ fn the_resend_sends_its_lines_in_k_order_across_the_documents() {
     assert!(g.lines().is_empty(), "each kept");
 }
 
-/// THE DEATH SIGNAL at a resend's dial leaves its line standing (§3c.4: the
-/// death is neither held nor faced): the session's end is the caller's that
-/// meets it, and the line waits for the session that stands — never `done`,
-/// never re-marked; the next probe, the token answering again, sends and
-/// keeps it (the mutant that settles the line at the death marks the
-/// person's text kept although it never landed).
+/// Checks that a death signal at a resend's dial leaves its line standing.
+///
+/// The death is neither held nor faced (§3c.4): the session's end is the
+/// caller's that meets it, and the line waits for the session that stands —
+/// never `done`, never re-marked; the next probe, the token answering
+/// again, sends and keeps it (the mutant that settles the line at the death
+/// marks the person's text kept although it never landed).
 #[test]
 fn a_death_signal_at_a_resend_leaves_its_line_standing() {
     let g = ground();
@@ -92,14 +101,16 @@ fn a_death_signal_at_a_resend_leaves_its_line_standing() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// A RESEND ANSWERED `500 internal_panic` marks its line as one that may have
-/// landed (§3c.2): a line held `sent: false` is sent at the probe, the
+/// Checks that a resend answered `internal_panic` reads before it resends.
+///
+/// A resend answered `500 internal_panic` marks its line as one that may
+/// have landed (§3c.2): a line held `sent: false` is sent at the probe, the
 /// board's handler panics — its write perhaps committed — and the line is
 /// re-marked `sent: true`, cause `unreachable`; the next probe's read finds
-/// the row whose testimony the board lost, the line's values standing at its
-/// site, and keeps the line with nothing sent again (the mutant that faces
-/// the resend's 500 leaves the line `sent: false`, and the next read faces
-/// the person's own text `moved`).
+/// the row whose testimony the board lost, the line's values standing at
+/// its site, and keeps the line with nothing sent again (the mutant that
+/// faces the resend's 500 leaves the line `sent: false`, and the next read
+/// faces the person's own text `moved`).
 #[test]
 fn a_resend_answered_internal_panic_reads_before_it_sends_again() {
     let g = ground();
@@ -116,11 +127,13 @@ fn a_resend_answered_internal_panic_reads_before_it_sends_again() {
     assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
 }
 
-/// THE PROBE RESENDS EVERY PRINCIPAL's LINES (§3c.4): two principals hold a
-/// line each at one board — two writers' sessions, each under its own key —
-/// and one probe sends both, each under its own session (the mutant that
-/// drains its first principal alone leaves the second's text unsent, and
-/// every later burst of that principal behind it).
+/// Checks that a probe resends every principal's lines (§3c.4).
+///
+/// Two principals hold a line each at one board — two writers' sessions,
+/// each under its own key — and one probe sends both, each under its own
+/// session (the mutant that drains its first principal alone leaves the
+/// second's text unsent, and every later burst of that principal behind
+/// it).
 #[test]
 fn a_probe_resends_every_principals_lines() {
     let g = ground();
@@ -138,9 +151,11 @@ fn a_probe_resends_every_principals_lines() {
     assert!(g.lines().is_empty() && g.holds.lines(&second).unwrap().as_array().unwrap().is_empty(), "and each kept");
 }
 
-/// OUTCOME (iii): a foreign row on the document since `base` — the site MOVED:
-/// no line is sent, the lines are re-faced `moved`, never rebased (the mutant
-/// that sends the moved line at its old base).
+/// Checks outcome (iii): a foreign row moves the document.
+///
+/// With a foreign row on the document since `base` the site moved: no line
+/// is sent, the lines are re-faced `moved`, never rebased (the mutant that
+/// sends the moved line at its old base).
 #[test]
 fn outcome_iii_a_foreign_row_moves_the_document() {
     let g = ground();
@@ -154,14 +169,16 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
     assert!(states.contains(&"moved".to_string()) && !states.contains(&"sending".to_string()), "a moved document is never said `sending`: {states:?}");
 }
 
-/// A BARE SESSION RESENDS NOTHING (foundations §3.3 state 3: the keyless
-/// session reads alone, no `bare` write of this shell's ever committed): a
-/// line held under the principal's one session, a bare one, stands through
-/// the probe — the board's `/health` read, nothing sent, nothing said past
-/// its `holding` — and once a session of the principal's that may write
-/// stands, the next probe sends it, attested by that session's key, and
-/// keeps it (the mutant whose drain resends under any session of the
-/// principal commits the person's text under the bare hand).
+/// Checks that a bare session resends no held line.
+///
+/// The keyless session reads alone, no `bare` write of this shell's ever
+/// committed (foundations §3.3 state 3): a line held under the principal's
+/// one session, a bare one, stands through the probe — the board's
+/// `/health` read, nothing sent, nothing said past its `holding` — and once
+/// a session of the principal's that may write stands, the next probe sends
+/// it, attested by that session's key, and keeps it (the mutant whose drain
+/// resends under any session of the principal commits the person's text
+/// under the bare hand).
 #[test]
 fn a_bare_session_resends_no_held_line() {
     let g = bare_ground();
@@ -181,13 +198,15 @@ fn a_bare_session_resends_no_held_line() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and keeps it");
 }
 
-/// THE OWN HAND on a read (§3c.5; wire.md §`/changes`): a SIGNED entry's row
-/// carries `attest` and NO `key`, and is the session's own under a session
-/// that holds a key — the head `done kept`, nothing re-sent (the mutant that
-/// keys the test on `key` alone faces the signed row `moved`); a row with
-/// `key: "bare"` is another hand's, never a keyed session's own. No read is
-/// made under a bare session, which writes nothing of its own to find
-/// (`a_bare_session_resends_no_held_line`).
+/// Checks that a signed row is own under a keyed session alone.
+///
+/// It is the own hand on a read (§3c.5; wire.md §`/changes`): a signed
+/// entry's row carries `attest` and no `key`, and is the session's own
+/// under a session that holds a key — the head `done kept`, nothing re-sent
+/// (the mutant that keys the test on `key` alone faces the signed row
+/// `moved`); a row with `key: "bare"` is another hand's, never a keyed
+/// session's own. No read is made under a bare session, which writes
+/// nothing of its own to find (`a_bare_session_resends_no_held_line`).
 #[test]
 fn a_signed_row_is_own_under_a_keyed_session_alone() {
     let signed_row = json!({"at": 77, "op": "insert", "docs": [DOC], "attest": {"alg": "x", "sig": "y"}});
@@ -207,13 +226,15 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
     assert!(states.contains(&"moved".to_string()), "a bare hand's row is foreign to a keyed session: {states:?}");
 }
 
-/// A ROW WHOSE TESTIMONY THE BOARD LOST (`docs`, `key`, `op` the reserved
-/// null — the `poisoned` burst a restart replays, §3c.2) is judged by the
-/// arrangement alone, decisively: a `sent` insert whose values read back
-/// equal is kept and not re-sent (the mutant that reads it as a foreign hand
-/// faces the person's own text `moved`); values that differ are `moved`; a
-/// kind the site read cannot confirm is `moved` too, the person's act; and a
-/// head that was never sent reads any row as `moved`.
+/// Checks that a lost-testimony row is judged by the arrangement alone.
+///
+/// A row whose testimony the board lost (`docs`, `key`, `op` the reserved
+/// null — the `poisoned` burst a restart replays, §3c.2) is judged so,
+/// decisively: a `sent` insert whose values read back equal is kept and not
+/// re-sent (the mutant that reads it as a foreign hand faces the person's
+/// own text `moved`); values that differ are `moved`; a kind the site read
+/// cannot confirm is `moved` too, the person's act; and a head that was
+/// never sent reads any row as `moved`.
 #[test]
 fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
     let lost = lost_row();
@@ -236,12 +257,13 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
     assert!(states.contains(&"moved".to_string()) && sends == 0, "a head never sent reads any row as moved: {states:?}");
 }
 
-/// A READ THE BOARD REFUSES DECIDES NOTHING (§3c.5): a `/changes` answered
-/// `503 feed_rebuilding` — the daemon re-covering a lost `commits.log` behind
-/// its listener after an open, exactly when a resend runs — leaves a `sent`
-/// head held and unsent (the mutant that reads the refusal as "no row" sends
-/// a burst that may have landed a second time); once the board serves the
-/// page, the next probe reads it and sends.
+/// Checks that a read the board refuses decides nothing (§3c.5).
+///
+/// A `/changes` answered `503 feed_rebuilding` — the daemon re-covering a
+/// lost `commits.log` behind its listener after an open, exactly when a
+/// resend runs — leaves a `sent` head held and unsent (the mutant that reads
+/// the refusal as "no row" sends a burst that may have landed a second
+/// time); once the board serves the page, the next probe reads it and sends.
 #[test]
 fn a_read_the_board_refuses_decides_nothing() {
     let g = ground();
@@ -258,11 +280,13 @@ fn a_read_the_board_refuses_decides_nothing() {
     assert!(g.lines().is_empty());
 }
 
-/// `history_reclaimed` on the read (§3c.5): the arrangement alone decides — a
-/// `sent` head whose values read back equal at its site is (ii), kept and not
-/// re-sent; values that differ are (iii); a site read the board does not
-/// answer decides nothing and the line stands (the mutant that trusts an
-/// unread site keeps a burst that never landed).
+/// Checks that `history_reclaimed` on the read decides by the arrangement.
+///
+/// The arrangement alone decides (§3c.5) — a `sent` head whose values read
+/// back equal at its site is (ii), kept and not re-sent; values that differ
+/// are (iii); a site read the board does not answer decides nothing and the
+/// line stands (the mutant that trusts an unread site keeps a burst that
+/// never landed).
 #[test]
 fn history_reclaimed_decides_by_the_arrangement() {
     let reclaimed = || Some((410, json!({"error": "history_reclaimed", "floor": 90})));
@@ -292,11 +316,13 @@ fn history_reclaimed_decides_by_the_arrangement() {
     assert!(!g.states().contains(&"kept".to_string()));
 }
 
-/// A REFUSAL THE TABLE HOLDS NOWHERE leaves a resent line standing: the board
-/// answering `credential_refused`/`index_rebuilding`, retry-class — the cell
-/// index rebuilding after an open, when resends run — is faced to no one and
-/// never makes the line `done` (the mutant that writes `done kept` loses text
-/// the board refused); the next probe, the index ready, sends and keeps it.
+/// Checks that a refusal the table holds nowhere leaves the line standing.
+///
+/// The board answering `credential_refused`/`index_rebuilding`,
+/// retry-class — the cell index rebuilding after an open, when resends run
+/// — is faced to no one and never makes the line `done` (the mutant that
+/// writes `done kept` loses text the board refused); the next probe, the
+/// index ready, sends and keeps it.
 #[test]
 fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     let g = ground();
@@ -312,12 +338,14 @@ fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// A SECOND WINDOW (§3c.3): with the board's `held/<chain>/lock` held by
-/// another shell, a burst is held in this shell's memory alone — answered
-/// `other_window`, nothing written under the directory — and RESENT like any
-/// line once the board answers (the mutant that skips another window's
-/// queue holds every later burst `behind` it for the uptime); after it is
-/// kept, the next burst is dialed.
+/// Checks that a second window's burst is held in memory and resent (§3c.3).
+///
+/// With the board's `held/<chain>/lock` held by another shell, a burst is
+/// held in this shell's memory alone — answered `other_window`, nothing
+/// written under the directory — and resent like any line once the board
+/// answers (the mutant that skips another window's queue holds every later
+/// burst `behind` it for the uptime); after it is kept, the next burst is
+/// dialed.
 #[test]
 fn a_second_windows_burst_is_held_in_memory_and_resent() {
     let store = TempDir::new().unwrap();
@@ -338,10 +366,12 @@ fn a_second_windows_burst_is_held_in_memory_and_resent() {
     assert_eq!(next["resp"], "ack", "no line stands, so the next burst is dialed: {next}");
 }
 
-/// A DRAIN THAT UNWINDS leaves no mark (§3c.4): a probe whose `/health`
-/// dial panics leaves the board free to drain, and the next probe sends and
-/// keeps the line (the mutant whose mark outlives an unwinding drain sends
-/// nothing for the shell's life).
+/// Checks that a drain that unwinds leaves the board free to drain (§3c.4).
+///
+/// It leaves no mark: a probe whose `/health` dial panics leaves the board
+/// free to drain, and the next probe sends and keeps the line (the mutant
+/// whose mark outlives an unwinding drain sends nothing for the shell's
+/// life).
 #[test]
 fn a_drain_that_unwinds_leaves_the_board_free_to_drain() {
     let g = ground();
@@ -355,7 +385,9 @@ fn a_drain_that_unwinds_leaves_the_board_free_to_drain() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// ONE DRAIN PER BOARD AT A TIME (§3c.4): a probe that comes while another
+/// Checks that a probe while a drain runs dials nothing (§3c.4).
+///
+/// One drain runs per board at a time: a probe that comes while another
 /// drains the board — whatever thread reaches `Holds::probe` — dials
 /// nothing, so the line is sent once (the mutant whose mark admits a second
 /// drain reads `/health` twice, and may send the burst twice).
@@ -390,7 +422,7 @@ fn a_probe_while_a_drain_runs_dials_nothing() {
     assert!(g.lines().is_empty());
 }
 
-/// What the board answers THE READ of the held head's document.
+/// What the board answers the read of the held head's document.
 #[derive(Debug, Clone, Copy)]
 enum ReadAnswer {
     /// A page holding no row since the head's `base`.
@@ -411,17 +443,19 @@ enum ReadAnswer {
     Refused,
 }
 
-/// The held head: an `insert`, whose site a read can confirm, or a `delete`,
-/// whose site none can.
+/// The held head: an `insert` or a `delete`.
+///
+/// A read can confirm an `insert`'s site; none can a `delete`'s.
 #[derive(Debug, Clone, Copy)]
 enum Head {
     Insert,
     Delete,
 }
 
-/// What a read of the head's site answers: the head's own values, other
-/// values, no answer, the death signal, or the head's values and one more
-/// position than the read asked.
+/// What a read of the head's site answers.
+///
+/// It is the head's own values, other values, no answer, the death signal,
+/// or the head's values and one more position than the read asked.
 #[derive(Debug, Clone, Copy)]
 enum SiteAnswer {
     Equal,
@@ -444,24 +478,25 @@ enum Settles {
     Standing,
 }
 
-/// THE READ's TABLE (§3c.5), cell by cell: no row sends from the head; ONE
-/// row is the head's landing only where the head was sent and the row is of
-/// the session's own hand and of the head's own `op`, its site not
-/// contradicting it — an `insert` read back equal, a kind no read confirms
-/// trusted on its hand; a row whose testimony the board lost, and
-/// `history_reclaimed`, are decided by the site alone, a kind no read
-/// confirms faced `moved`; a foreign row, two rows and a page too large to
-/// serve are `moved`; a read or a site read the board does not answer — its
-/// answer the death signal among them — decides nothing; a site read
-/// delivering past the values asked differs. The mutants the cells hold
-/// off: a second tab's own-hand row landing a head whose site says otherwise
-/// (3), a delete faced on its own hand (4), an unread site taken as either
-/// answer (5, 11, 18), a head never sent kept off a row (6, 19), another
-/// `op` of the own hand (7), the first of two rows taken as the landing
-/// (14), a reclaimed kind no read confirms kept (17), a page too large read
-/// as none or as unread (20), the death signal at the site read taken as an
-/// answer (22–24), and a delivery past the values asked read as theirs
-/// (25–27).
+/// Checks the read's table (§3c.5), cell by cell.
+///
+/// No row sends from the head; one row is the head's landing only where the
+/// head was sent and the row is of the session's own hand and of the head's
+/// own `op`, its site not contradicting it — an `insert` read back equal, a
+/// kind no read confirms trusted on its hand; a row whose testimony the
+/// board lost, and `history_reclaimed`, are decided by the site alone, a
+/// kind no read confirms faced `moved`; a foreign row, two rows and a page
+/// too large to serve are `moved`; a read or a site read the board does not
+/// answer — its answer the death signal among them — decides nothing; a
+/// site read delivering past the values asked differs. The mutants the
+/// cells hold off: a second tab's own-hand row landing a head whose site
+/// says otherwise (3), a delete faced on its own hand (4), an unread site
+/// taken as either answer (5, 11, 18), a head never sent kept off a row (6,
+/// 19), another `op` of the own hand (7), the first of two rows taken as
+/// the landing (14), a reclaimed kind no read confirms kept (17), a page too
+/// large read as none or as unread (20), the death signal at the site read
+/// taken as an answer (22–24), and a delivery past the values asked read as
+/// theirs (25–27).
 #[test]
 fn every_read_answer_meets_every_site_answer_as_the_table_says() {
     use Head::{Delete, Insert};
@@ -551,11 +586,12 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
     }
 }
 
-/// A MOVED document faces its own lines and no other (§3c.5, J3): a foreign
-/// row on one document moves it, while a burst held `behind` it on a second
-/// document, whose read finds no row under it, is sent and kept (the mutant
-/// that faces every line moved at one document's foreign row strands the
-/// person's text on the other).
+/// Checks that a moved document faces its own lines alone (§3c.5).
+///
+/// A foreign row on one document moves it, while a burst held `behind` it
+/// on a second document, whose read finds no row under it, is sent and
+/// kept (the mutant that faces every line moved at one document's foreign
+/// row strands the person's text on the other).
 #[test]
 fn a_moved_document_faces_its_own_lines_alone() {
     let g = ground();
@@ -571,11 +607,12 @@ fn a_moved_document_faces_its_own_lines_alone() {
     assert_eq!(sent_docs, [json!(OTHER)], "the other document's line is sent");
 }
 
-/// THE OWN NODE STOPPED (§3c.4): while its owner's stop stands, a burst is
-/// held `stopped` without a dial — `sent: false`, since nothing left — and
-/// the probe dials nothing; once the node runs, the probe sends and keeps
-/// it (the mutant that dials past the stop, and the one whose probe drains
-/// a stopped node).
+/// Checks that a stopped node holds every burst until it runs (§3c.4).
+///
+/// While its owner's stop stands, a burst is held `stopped` without a dial
+/// — `sent: false`, since nothing left — and the probe dials nothing; once
+/// the node runs, the probe sends and keeps it (the mutant that dials past
+/// the stop, and the one whose probe drains a stopped node).
 #[test]
 fn a_stopped_node_holds_every_burst_until_it_runs() {
     let g = ground();
@@ -591,7 +628,9 @@ fn a_stopped_node_holds_every_burst_until_it_runs() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// THE HALTED HOLD lasts from the first `true` read of `writes.halted` to the
+/// Checks that the halted hold ends at the first read that says writes go.
+///
+/// The hold lasts from the first `true` read of `writes.halted` to the
 /// first `false` (§3c.4): a burst holds `halted`, a probe reading `true`
 /// sends nothing, the probe reading `false` sends and keeps the line, and a
 /// burst after it is dialed and acked (the mutant whose read only ever sets
@@ -613,10 +652,12 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     assert_eq!(next["resp"], "ack", "the hold has ended: {next}");
 }
 
-/// THE RIDER (§3c.4): a resent line's first and second `durability` are
-/// reissued at the next probe, its THIRD holds it `durability` — counted per
-/// line across the resends — and the board taking writes again keeps it
-/// (the mutant that never counts reissues the line forever).
+/// Checks that a third `durability` on a resent line holds it (§3c.4's rider).
+///
+/// A resent line's first and second `durability` are reissued at the next
+/// probe, its third holds it `durability` — counted per line across the
+/// resends — and the board taking writes again keeps it (the mutant that
+/// never counts reissues the line forever).
 #[test]
 fn a_third_durability_on_a_resent_line_holds_it() {
     let g = ground();
@@ -632,13 +673,14 @@ fn a_third_durability_on_a_resent_line_holds_it() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// A REUSED ORDINAL STARTS ITS REISSUES AFRESH (§3c.4's rider, counted per
-/// line; §3c.3's compaction, which starts the ordinals again): a line
-/// reissued twice and then kept leaves the queue empty, so the next line
-/// held takes ordinal 1 again — and its first `durability` is reissued,
-/// never counted as the settled line's third (the mutant that keeps a
-/// settled line's count holds the person's next burst at its first
-/// `durability`).
+/// Checks that a reused ordinal starts its reissues afresh.
+///
+/// The rider is counted per line (§3c.4), and the compaction starts the
+/// ordinals again (§3c.3): a line reissued twice and then kept leaves the
+/// queue empty, so the next line held takes ordinal 1 again — and its first
+/// `durability` is reissued, never counted as the settled line's third (the
+/// mutant that keeps a settled line's count holds the person's next burst at
+/// its first `durability`).
 #[test]
 fn a_reused_ordinal_starts_its_reissues_afresh() {
     let g = ground();
@@ -656,8 +698,10 @@ fn a_reused_ordinal_starts_its_reissues_afresh() {
     assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (4, Some("unreachable")), "the new line's first `durability` is reissued");
 }
 
-/// THE PROBE READS `/health` ONLY WHILE A LINE STANDS (§3c.4): a probe over
-/// an empty queue dials nothing; a line held is sent and kept by the next
+/// Checks that a probe with no line standing dials nothing (§3c.4).
+///
+/// The probe reads `/health` only while a line stands: a probe over an
+/// empty queue dials nothing; a line held is sent and kept by the next
 /// probe, its one `/health` read the probe's own; and the probe after it,
 /// the queue empty again, reads nothing more (the mutant that probes every
 /// board at every cadence reads `/health` for the shell's life).

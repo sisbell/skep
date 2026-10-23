@@ -1,25 +1,27 @@
-//! THE HELD-BURST STORE against the real daemon in-process, its bursts a
-//! signed session's — a bare session reads alone: a burst held while the
-//! daemon is stopped and resent `kept` after a restart, the kernel poison
-//! holding a burst `poisoned` then `halted`, the poisoned burst that lands
-//! at the restart and is kept, a burst that committed and then panicked —
-//! answered `500 internal_panic` — held and kept off the read, sent once,
-//! the signed session's own attested row kept by the resend, a refused run
-//! with its `behind` lines and `resolve`'s two acts, the close order and the
-//! relaunch listing its held line, a second principal's file untouched and
-//! unlisted, a burst on a draft just minted kept across a restart, a
-//! relaunch with its board down listing its held line — the bare mode's
-//! resending none of it, the signed mode's keeping it — and the probe
-//! keeping its cadence while the board keeps committing.
+//! The held-burst store against the real daemon in-process.
+//!
+//! Its bursts are a signed session's — a bare session reads alone. The suite
+//! checks a burst held while the daemon is stopped and resent `kept` after a
+//! restart, the kernel poison holding a burst `poisoned` then `halted`, the
+//! poisoned burst that lands at the restart and is kept, a burst that
+//! committed and then panicked — answered `500 internal_panic` — held and
+//! kept off the read, sent once, the signed session's own attested row kept
+//! by the resend, a refused run with its `behind` lines and `resolve`'s two
+//! acts, the close order and the relaunch listing its held line, a second
+//! principal's file untouched and unlisted, a burst on a draft just minted
+//! kept across a restart, a relaunch with its board down listing its held
+//! line — the bare mode's resending none of it, the signed mode's keeping it
+//! — and the probe keeping its cadence while the board keeps committing.
 
 use super::*;
 use crate::held::Opened;
 use crate::sessions::open_bare;
 
-/// The ground every hold cell stands on: the shell over a claimed board,
-/// the events seen, the board's reference, a signed session's, and a draft
-/// with one insert acked — each by its name, so no cell takes one
-/// reference for another.
+/// The ground most hold cells stand on.
+///
+/// It is the shell over a claimed board, the events seen, the board's
+/// reference, a signed session's, and a draft with one insert acked — each
+/// by its name, so no cell takes one reference for another.
 struct HeldGround {
     shell: Shell,
     seen: Arc<Mutex<Vec<Event>>>,
@@ -28,8 +30,10 @@ struct HeldGround {
     draft: String,
 }
 
-/// A claimed board, a signed shell opened over it — the store's key the
-/// claim's — a session and a draft with one insert acked.
+/// Builds the ground: a claimed board and a signed shell opened over it.
+///
+/// The store's key is the claim's, and the shell holds a session and a draft
+/// with one insert acked.
 fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
@@ -44,13 +48,15 @@ fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
     HeldGround { shell, seen, board, session, draft }
 }
 
-/// T7: a burst POISONED by the kernel (`JournalBarrier` + `JournalRepair`) is
-/// held `poisoned`, `held(session)` lists it; the daemon restarted at the same
-/// port, a fresh session re-acquired, the resend acked, the `held` event
-/// `kept`, the row read back from the board, and the file compacted away. The
-/// hold here is driven by STOPPING the daemon (the burst's dial `unreachable`,
-/// `sent: false`, so it did not land) — deterministic across a restart; the
-/// daemon's halt doors are exercised as hold triggers in the two cells below.
+/// Checks that a held burst is resent after a restart and kept.
+///
+/// A burst held while the daemon is stopped — its dial `unreachable`,
+/// `sent: false`, so it did not land — is listed by `held(session)`; the
+/// daemon restarted at the same port, a fresh session re-acquired, the
+/// resend acked, the `held` event `kept`, the row read back from the board,
+/// and the file compacted away. Stopping the daemon is deterministic across
+/// a restart; the daemon's halt doors are exercised as hold triggers in the
+/// two cells below.
 #[test]
 fn a_held_burst_is_resent_after_a_restart_and_kept() {
     let dir = TempDir::new().unwrap();
@@ -70,8 +76,8 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     let sd = spawn_at(&dir.path().join("board"), true, port);
     wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    // The resend runs under the fresh session (the feed's probe/daemon-running):
-    // the held event reaches `kept`.
+    // The resend runs under the fresh session (the feed's
+    // probe/daemon-running): the held event reaches `kept`.
     let deadline = Instant::now() + Duration::from_secs(20);
     while !seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept") {
         if Instant::now() >= deadline {
@@ -88,14 +94,17 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     sd.shutdown();
 }
 
-/// T7's named door `fail_the_attest_stores_next_write` fails the attest store's
-/// DURABLE COPY, which a board writes only for a signed commit BELOW the
-/// reclaim floor; a fresh test board does not reach it without advancing the
-/// floor, so the write-path halt is driven instead by the kernel poison below,
-/// which sets `writes.halted` identically (every write then `poisoned`, §The
-/// other endpoints). Here the POISON door holds a burst `poisoned` at the
-/// direct refusal, and once the feed's tick reads `writes.halted` true, a
-/// further burst holds `halted` — the two causes §3c.4 draws.
+/// Checks that the poisoned write path holds bursts `poisoned`, then `halted`.
+///
+/// The named door `fail_the_attest_stores_next_write` fails the attest
+/// store's next line, which a board writes at every commit whose marker slot
+/// is filled — a signed write of the publish class, and so never a burst's
+/// on a draft — so the write-path halt is driven here by the kernel poison
+/// instead, which sets `writes.halted` identically (every write then
+/// `poisoned`, §The other endpoints). The poison door holds a burst
+/// `poisoned` at the direct refusal, and once the feed's tick reads
+/// `writes.halted` true, a further burst holds `halted` — the two causes
+/// §3c.4 draws.
 #[test]
 fn the_poisoned_write_path_holds_bursts_poisoned_then_halted() {
     let dir = TempDir::new().unwrap();
@@ -123,26 +132,29 @@ fn the_poisoned_write_path_holds_bursts_poisoned_then_halted() {
     sd.shutdown();
 }
 
-/// The acting principal's held file under `store`, where one stands.
+/// Returns the acting principal's held file under `store`, where one stands.
 fn held_path(store: &Path) -> Option<PathBuf> {
     std::fs::read_dir(store.join("held")).ok()?.flatten().map(|e| e.path().join("principal-1.held")).find(|p| p.is_file())
 }
 
-/// A delivery's text, its items joined (adjacent text comes as one item).
+/// Returns a delivery's text, its items joined.
+///
+/// Adjacent text comes as one item.
 fn text_of(delivery: &Value) -> String {
     delivery["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect()
 }
 
-/// THE POISONED BURST LANDS AND IS KEPT (§3c.2): the kernel poisoned as the
-/// cell above poisons it, a burst of two characters held `poisoned` — its
-/// line on disk `sent: true`, since the failed repair keeps its frames in the
-/// journal — then the daemon restarted at the same port, whose open replays
-/// them: the resend's read finds the landed row, the site holds the burst's
-/// two values, the `held` event reaches `kept` and never `moved`, the board
-/// holds the burst's row exactly once, and the file compacts away (the
-/// mutant that leaves `poisoned` at `sent: false`, and the one that holds the
-/// frame's one string to one position's value, face the person's own text
-/// `moved`).
+/// Checks that a poisoned burst lands at the restart and is kept (§3c.2).
+///
+/// The kernel poisoned as the cell above poisons it, a burst of two
+/// characters is held `poisoned` — its line on disk `sent: true`, since the
+/// failed repair keeps its frames in the journal — then the daemon restarted
+/// at the same port, whose open replays them: the resend's read finds the
+/// landed row, the site holds the burst's two values, the `held` event
+/// reaches `kept` and never `moved`, the board holds the burst's row exactly
+/// once, and the file compacts away (the mutant that leaves `poisoned` at
+/// `sent: false`, and the one that holds the frame's one string to one
+/// position's value, face the person's own text `moved`).
 #[test]
 fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     let dir = TempDir::new().unwrap();
@@ -169,7 +181,7 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     assert!(!states.contains(&"moved".to_string()), "the own burst is never faced moved: {states:?}");
     assert!(shell.call("held", &json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "the lines are done");
     assert!(held_path(&store).is_none(), "the file compacted away");
-    // The board holds the burst ONCE: the draft reads `a`, `bc` and the rows
+    // The board holds the burst once: the draft reads `a`, `bc` and the rows
     // under it since genesis are the mint, the first insert and the burst.
     let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
     assert_eq!(text_of(&read), "abc", "{read}");
@@ -178,7 +190,7 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     assert_eq!(rows.len(), 3, "the mint, the first insert, the burst once: {rows:?}");
     assert_eq!((rows[0]["op"].as_str(), rows[1]["op"].as_str()), (Some("create_new_document"), Some("insert")), "{rows:?}");
     // The daemon fact the read rests on: the write path records no row for a
-    // write it refused `poisoned`, so the replayed commit's row carries LOST
+    // write it refused `poisoned`, so the replayed commit's row carries lost
     // testimony — its hand and kind the reserved null — and the arrangement
     // alone could keep it.
     assert!(rows[2]["key"].is_null() && rows[2]["op"].is_null() && rows[2]["docs"].is_null(), "the replayed commit's testimony is lost: {:?}", rows[2]);
@@ -186,19 +198,21 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     sd.shutdown();
 }
 
-/// A BURST THAT COMMITTED, THEN PANICKED, IS KEPT AND SENT ONCE (§3c.2,
-/// §3c.5): the board's inline checkpoint armed to panic at its first step and
-/// forced to run on the committing thread — the checkpoint thread held, every
-/// commit crossing the cadence — so a burst's write commits and its handler
-/// panics past the commit, the board answering `500 internal_panic` and
-/// recording the position as a bare entry (`operations.md` §4 row 34). The
-/// burst is answered `held`, cause `unreachable`; the resend's read finds the
-/// bare row since the burst's base, the site holds the burst's value, and the
-/// line is kept with nothing sent again — the document's `held` events
-/// `holding` then `kept` alone, the draft reading `abc`, the board holding the
-/// burst's row once (the mutant that faces the 500 answers the page an error
-/// for text that is on the board; the one that holds it `sent: false` faces
-/// the person's own text `moved`).
+/// Checks that a burst that committed, then panicked, is kept and sent once.
+///
+/// It is §3c.2's and §3c.5's case: the board's inline checkpoint armed to
+/// panic at its first step and forced to run on the committing thread — the
+/// checkpoint thread held, every commit crossing the cadence — so a burst's
+/// write commits and its handler panics past the commit, the board
+/// answering `500 internal_panic` and recording the position as a bare entry
+/// (`operations.md` §4 row 34). The burst is answered `held`, cause
+/// `unreachable`; the resend's read finds the bare row since the burst's
+/// base, the site holds the burst's value, and the line is kept with nothing
+/// sent again — the document's `held` events `holding` then `kept` alone,
+/// the draft reading `abc`, the board holding the burst's row once (the
+/// mutant that faces the 500 answers the page an error for text that is on
+/// the board; the one that holds it `sent: false` faces the person's own
+/// text `moved`).
 #[test]
 fn a_burst_that_committed_then_panicked_is_kept_and_sent_once() {
     let dir = TempDir::new().unwrap();
@@ -232,20 +246,22 @@ fn a_burst_that_committed_then_panicked_is_kept_and_sent_once() {
     sd.shutdown();
 }
 
-/// THE SIGNED MODE's OWN ROW: a held burst whose line says `sent: true` has
-/// LANDED by the signed session's own hand, and the resend's read after the
-/// daemon's restart — under the session the restart arm re-opened —
-/// recognises it: the `held` event reaches `kept`, never `moved`, nothing is
-/// re-sent, and the board holds the row once. The row's shape is pinned as
-/// the daemon serves it: the shell attests every insert, but the daemon
-/// DROPS an attest on a write outside the publish class (wire.md §The two
-/// attestation codes), and a burst lands on a draft, so its row is an
-/// UNSIGNED entry whose `key` is the session key's fingerprint — no burst
-/// row is a signed entry on a conforming daemon; the own-row test's signed
-/// arm (`attest`, no `key`) is fenced by `hold`'s suite over a fake board.
-/// The in-flight landing is forced by hand: the attested burst of two
-/// characters written through the board under the session's token, so the
-/// shell saw no ack, then held `sent: true` as a lost answer is.
+/// Checks that a signed session's landed burst is kept by the resend.
+///
+/// It is the signed mode's own row: a held burst whose line says
+/// `sent: true` has landed by the signed session's own hand, and the
+/// resend's read after the daemon's restart — under the session the restart
+/// arm re-opened — recognises it: the `held` event reaches `kept`, never
+/// `moved`, nothing is re-sent, and the board holds the row once. The row's
+/// shape is pinned as the daemon serves it: the shell attests every insert,
+/// but the daemon drops an attest on a write outside the publish class
+/// (wire.md §The two attestation codes), and a burst lands on a draft, so
+/// its row is an unsigned entry whose `key` is the session key's fingerprint
+/// — no burst row is a signed entry on a conforming daemon; the own-row
+/// test's signed arm (`attest`, no `key`) is fenced by `hold`'s suite over a
+/// fake board. The in-flight landing is forced by hand: the attested burst
+/// of two characters written through the board under the session's token,
+/// so the shell saw no ack, then held `sent: true` as a lost answer is.
 #[test]
 fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let dir = TempDir::new().unwrap();
@@ -300,7 +316,9 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     sd.shutdown();
 }
 
-/// T10: a REFUSED run — `out_of_bounds` (a `permanent` refusal) on a burst, two
+/// Checks that a refused run holds behind it and `resolve` acts on it.
+///
+/// A refused run — `out_of_bounds` (a `permanent` refusal) on a burst, two
 /// bursts behind it on the same document held `behind`, the `held` event
 /// `refused`; a `resolve` on a holding line is `not_resolvable`, an unknown
 /// ordinal `no_such_held`; an act the row does not spell is refused
@@ -356,11 +374,13 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     sd.shutdown();
 }
 
-/// T11: the close order — a held burst's line is on disk and listed by
-/// `held(session)` before `shutdown`, which writes nothing of the store; the
-/// next `Shell::open` over the same store, in the bare mode — a session that
-/// reads alone, its held lines among what it reads — lists the line at its
-/// first session's open.
+/// Checks the close order: the held line persists and the relaunch lists it.
+///
+/// A held burst's line is on disk and listed by `held(session)` before
+/// `shutdown`, which writes nothing of the store; the next `Shell::open`
+/// over the same store, in the bare mode — a session that reads alone, its
+/// held lines among what it reads — lists the line at its first session's
+/// open.
 #[test]
 fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     let dir = TempDir::new().unwrap();
@@ -372,7 +392,8 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     {
         let HeldGround { shell, session, draft: d, .. } = held_ground(&dir, &sd);
         draft = d;
-        // Stop the node under the shell's feet, then a burst holds `unreachable`.
+        // Stop the node under the shell's feet, then a burst holds
+        // `unreachable`.
         sd.shutdown();
         let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
         assert_eq!(held["resp"], "held", "{held}");
@@ -401,8 +422,9 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     sd.shutdown();
 }
 
-/// A directory's shape — the file names and sizes under it, sorted — so a test
-/// can pin that nothing changed.
+/// Returns a directory's shape: the file names and sizes under it, sorted.
+///
+/// A test pins by it that nothing changed.
 fn dir_signature(root: &Path) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, u64)>) {
@@ -422,14 +444,16 @@ fn dir_signature(root: &Path) -> Vec<(String, u64)> {
     out
 }
 
-/// T12: a second principal's file is untouched and unlisted under the first's
-/// session — the first's own acts, a burst held behind its line and a
-/// `resolve` among them, leave its bytes as they were — and no answer and no
-/// event names a path, a directory or the other principal (the mutant that
-/// opens the first principal's acts on the second's file writes the
-/// person's text into another principal's store). The second principal's
-/// file holds the line an earlier session of its own held, read under a bare
-/// session of its now, which resends none of it.
+/// Checks that a second principal's file is untouched and unlisted.
+///
+/// It is untouched and unlisted under the first's session — the first's own
+/// acts, a burst held behind its line and a `resolve` among them, leave its
+/// bytes as they were — and no answer and no event names a path, a
+/// directory or the other principal (the mutant that opens the first
+/// principal's acts on the second's file writes the person's text into
+/// another principal's store). The second principal's file holds the line
+/// an earlier session of its own held, read under a bare session of its
+/// now, which resends none of it.
 #[test]
 fn a_second_principals_file_is_untouched_and_unlisted() {
     let dir = TempDir::new().unwrap();
@@ -445,7 +469,7 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let two = json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["two"]});
     assert!(queue.hold("1.0.2.0.1", None, 0, two, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     drop(queue);
-    // ONE shell (so one lock on `held/<chain>/`) holding a session for each of
+    // One shell (so one lock on `held/<chain>/`) holding a session for each of
     // two principals: principal 1's signed, owning the draft; principal 2's
     // bare, opened beside it.
     let (shell, _lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
@@ -482,12 +506,14 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     shell.shutdown();
 }
 
-/// A BURST ON A DRAFT JUST MINTED (§3c.2's `base`): the mint's ack is noted
-/// as every write's is, so a burst held on the draft before any burst of it
-/// was acked reads from the mint's position — the daemon stopped under it,
-/// restarted at the same port, a fresh signed session re-acquired: the burst
-/// is resent and kept, never faced `moved` (the mutant that notes a burst's
-/// acks alone reads the mint's own row and faces the person's text).
+/// Checks that a burst on a draft just minted is kept after a restart.
+///
+/// It is §3c.2's `base`: the mint's ack is noted as every write's is, so a
+/// burst held on the draft before any burst of it was acked reads from the
+/// mint's position — the daemon stopped under it, restarted at the same
+/// port, a fresh signed session re-acquired: the burst is resent and kept,
+/// never faced `moved` (the mutant that notes a burst's acks alone reads the
+/// mint's own row and faces the person's text).
 #[test]
 fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
     let dir = TempDir::new().unwrap();
@@ -517,18 +543,19 @@ fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
     sd.shutdown();
 }
 
-/// A RELAUNCH WITH ITS BOARD DOWN (§3c.7): the held file is read at a
-/// session's open, never only at the shell's — a shell opened while its
-/// board's port is closed, the daemon started there before the first
-/// `session`: `held(session)` lists the line the store already holds (the
-/// mutant that reads the store at the shell's open alone lists nothing and
-/// resends nothing). A bare relaunch, the keyless session that reads alone,
-/// lists it and resends none of it — three probe cadences on, the line
-/// stands and the board holds no row of it (the mutant whose drain resends
-/// under any session commits the person's text under the bare hand); a
-/// signed relaunch resends it `kept`. And a file written after a relaunch
-/// whose board was up names the session's account in its header, never an
-/// empty one.
+/// Checks that a relaunch with its board down lists and resends its line.
+///
+/// It is §3c.7's: the held file is read at a session's open, never only at
+/// the shell's — a shell opened while its board's port is closed, the daemon
+/// started there before the first `session`: `held(session)` lists the line
+/// the store already holds (the mutant that reads the store at the shell's
+/// open alone lists nothing and resends nothing). A bare relaunch, the
+/// keyless session that reads alone, lists it and resends none of it —
+/// three probe cadences on, the line stands and the board holds no row of it
+/// (the mutant whose drain resends under any session commits the person's
+/// text under the bare hand); a signed relaunch resends it `kept`. And a
+/// file written after a relaunch whose board was up names the session's
+/// account in its header, never an empty one.
 #[test]
 fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let dir = TempDir::new().unwrap();
@@ -583,12 +610,13 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     again.shutdown();
 }
 
-/// THE PROBE KEEPS ITS CADENCE while the board keeps committing (§3c.4): a
-/// line held `unreachable`, `sent: true` — a lost answer's — at a board that
-/// answers, while a second session mints a draft every 500 ms and each
-/// commit wakes the board's feed, is resent and kept within three cadences
-/// (the mutant that counts the cadence from the feed's last wake never
-/// probes while the commits come).
+/// Checks that the probe keeps its cadence while the board keeps committing.
+///
+/// It is §3c.4's: a line held `unreachable`, `sent: true` — a lost answer's
+/// — at a board that answers, while a second session mints a draft every
+/// 500 ms and each commit wakes the board's feed, is resent and kept within
+/// three cadences (the mutant that counts the cadence from the feed's last
+/// wake never probes while the commits come).
 #[test]
 fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     let dir = TempDir::new().unwrap();

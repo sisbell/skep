@@ -1,18 +1,19 @@
-//! THE DEV ARM (`client.md` §4b.3, §4b.5): where the SECRET and CONSENT
-//! moments of a ceremony go in the dev provider — the sheet, the re-type,
-//! an anchor's destination, the import, kept-or-placed, every typed
-//! confirmation — since "the page never sees a seed" and a consent "is
-//! answered in the SHELL's OWN WINDOW and never by the page", and the
-//! provider has no window. Two arms: a SCRIPT read from a file, one answer
-//! per line in order (the precedent is `skep-client`'s `person::scripted`,
-//! a suite's hands), or the AUTO arm, which answers each moment the way a
-//! developer on a throwaway board would — the confirmation typed, the
-//! anchor files placed under the provider's own directory, the re-type
-//! declined, no artifact held. Every answer is SAID on the TALK stream,
-//! naming the moment and what was done and never the seed: the sheet a
-//! walk shows is kept in this process where a script runs, so its `retype
-//! sheet` can type it back, and dropped by the auto arm, which types no
-//! seed — it leaves the process nowhere. The NATIVE statements — those
+//! The dev arm: where a ceremony's secret and consent moments go.
+//!
+//! In the dev provider (`client.md` §4b.3, §4b.5) they come here — the
+//! sheet, the re-type, an anchor's destination, the import, kept-or-placed,
+//! every typed confirmation — since "the page never sees a seed" and a
+//! consent "is answered in the shell's own window and never by the page",
+//! and the provider has no window. Two arms: a script read from a file, one
+//! answer per line in order (the precedent is `skep-client`'s
+//! `person::scripted`, a suite's hands), or the auto arm, which answers each
+//! moment the way a developer on a throwaway board would — the confirmation
+//! typed, the anchor files placed under the provider's own directory, the
+//! re-type declined, no artifact held. Every answer is said on the `Talk`
+//! stream, naming the moment and what was done and never the seed: the
+//! sheet a walk shows is kept in this process where a script runs, so its
+//! `retype sheet` can type it back, and dropped by the auto arm, which types
+//! no seed — it leaves the process nowhere. The native statements — those
 //! naming where key material rests on disk (§4b.3; `person`'s
 //! `NATIVE_RULES`) — are said there too, in the place of the shell's own
 //! window, and sent to no page.
@@ -21,7 +22,7 @@
 //! read the file and handed in as `ArmConfig::Script`.
 //!
 //! A moment the script has no line for, or a line of another moment's
-//! kind, ABANDONS the walk — said so, never a panic: the provider serves
+//! kind, abandons the walk — said so, never a panic: the provider serves
 //! on.
 
 use std::collections::VecDeque;
@@ -40,22 +41,25 @@ use crate::Talk;
 enum Kind {
     /// The auto arm, the anchor files' directory.
     Auto { anchors: PathBuf },
-    /// The script's answers, taken in order, and the sheets shown so far —
-    /// never sent anywhere — kept for a `retype sheet` or an `import sheet`
-    /// to type back.
+    /// The script's answers, taken in order, and the sheets shown so far.
+    ///
+    /// The sheets are never sent anywhere — kept for a `retype sheet` or an
+    /// `import sheet` to type back.
     Script { answers: Mutex<VecDeque<Answer>>, sheets: Mutex<Vec<SheetFields>> },
 }
 
-/// What answers a moment: the auto arm, its anchor files' directory beside
-/// it, or the script's next answer.
+/// What answers a moment: the auto arm, or the script's next answer.
+///
+/// The auto arm comes with its anchor files' directory beside it.
 #[derive(Debug)]
 enum Answering<'a> {
     Auto { anchors: &'a Path },
     Script(Answer),
 }
 
-/// THE DEV ARM: its kind — a script's holding the sheets shown so far — and
-/// the TALK sink every answer is said on.
+/// The dev arm: its kind and the `Talk` sink every answer is said on.
+///
+/// A script's kind holds the sheets shown so far.
 pub struct DevArm {
     kind: Kind,
     talk: Talk,
@@ -68,18 +72,19 @@ impl fmt::Debug for DevArm {
 }
 
 impl DevArm {
-    /// The AUTO arm: anchor files under `anchors`, every answer said on
-    /// `talk`.
+    /// Returns the auto arm, its anchor files under `anchors`.
+    ///
+    /// Every answer is said on `talk`.
     pub fn auto(anchors: PathBuf, talk: Talk) -> DevArm {
         DevArm { kind: Kind::Auto { anchors }, talk }
     }
 
-    /// The SCRIPT arm over `answers`, every answer said on `talk`.
+    /// Returns the script arm over `answers`, every answer said on `talk`.
     pub fn script(answers: Vec<Answer>, talk: Talk) -> DevArm {
         DevArm { kind: Kind::Script { answers: Mutex::new(answers.into()), sheets: Mutex::new(Vec::new()) }, talk }
     }
 
-    /// Whether this is the script arm.
+    /// Returns whether this is the script arm.
     pub fn is_script(&self) -> bool {
         matches!(self.kind, Kind::Script { .. })
     }
@@ -88,8 +93,16 @@ impl DevArm {
         (self.talk)(&format!("dev arm: {line}"));
     }
 
-    /// What answers `moment`: the auto arm, or the script's next answer —
-    /// `Abandon` and an exhausted script answering the abandonment.
+    /// Returns what answers `moment`: the auto arm or the script's next answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] for `Abandon` and for an exhausted script, each
+    /// said on `Talk`.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the script's lock is poisoned.
     fn answering(&self, moment: &str) -> Result<Answering<'_>, Abandoned> {
         let answers = match &self.kind {
             Kind::Auto { anchors } => return Ok(Answering::Auto { anchors }),
@@ -111,16 +124,24 @@ impl DevArm {
         }
     }
 
-    /// A script answer of another moment's kind: said, and the walk
-    /// abandoned — whatever answer the moment asked for.
+    /// Says a script answer of another moment's kind, abandoning the walk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] always, whatever answer the moment asked for.
     fn wrong_kind<T>(&self, moment: &str, got: &Answer) -> Result<T, Abandoned> {
         self.say(format_args!("{moment}: the script's next answer {got:?} is of another moment's kind — the walk is abandoned"));
         Err(Abandoned)
     }
 
-    /// THE SHEET (SECRET), shown to no one: kept where a script runs, for
-    /// its `retype sheet` or `import sheet` to type back; dropped by the
-    /// auto arm, which types no seed.
+    /// Takes the sheet (secret), shown to no one.
+    ///
+    /// It is kept where a script runs, for its `retype sheet` or `import
+    /// sheet` to type back; dropped by the auto arm, which types no seed.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the sheets' lock is poisoned.
     pub fn sheet(&self, fields: SheetFields) {
         match &self.kind {
             Kind::Script { sheets, .. } => {
@@ -131,20 +152,29 @@ impl DevArm {
         }
     }
 
-    /// THE DISMISSAL (SECRET): nothing was displayed, nothing to clear.
+    /// Answers the dismissal (secret): nothing was displayed, nothing to clear.
     pub fn dismiss(&self) {
         self.say("the sheet is dismissed (nothing was displayed)");
     }
 
-    /// A NATIVE STATEMENT (`client.md` §4b.3): the shell's own window's, so
-    /// said on TALK under its rule and sent to no page.
+    /// Says a native statement (`client.md` §4b.3) under its rule.
+    ///
+    /// It is the shell's own window's, so it is said on `Talk` and sent to no
+    /// page.
     pub fn native(&self, statement: &Statement) {
         self.say(format_args!("{}: {}", statement.rule, statement.text));
     }
 
-    /// The seed and the fingerprint's first eight hex digits off the `n`-th
-    /// sheet a script was shown — `None` where no sheet `n` was kept, or its
-    /// fingerprint is shorter than the prefix a typed answer carries.
+    /// Returns the seed and fingerprint prefix off the `n`-th sheet shown.
+    ///
+    /// The sheet is the `n`-th a script was shown, the prefix its
+    /// fingerprint's first eight hex digits — `None` where no sheet `n` was
+    /// kept, or its fingerprint is shorter than the prefix a typed answer
+    /// carries.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the sheets' lock is poisoned.
     fn off_sheet(&self, n: usize) -> Option<(String, String)> {
         let Kind::Script { sheets, .. } = &self.kind else { return None };
         let sheets = sheets.lock().expect("the sheets' lock");
@@ -153,8 +183,15 @@ impl DevArm {
         Some((sheet.seed_grouped.as_str().split_whitespace().collect(), prefix.to_string()))
     }
 
-    /// THE RE-TYPE (SECRET): the auto arm declines it; a script types it off
-    /// a sheet shown, types it wrong, or declines.
+    /// Answers the re-type (secret).
+    ///
+    /// The auto arm declines it; a script types it off a sheet shown, types
+    /// it wrong, or declines.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the script abandons or is exhausted, names
+    /// a sheet no sheet shown can type, or answers another moment's kind.
     pub fn retype(&self) -> Result<Retyped, Abandoned> {
         match self.answering("the re-type")? {
             Answering::Auto { .. } => {
@@ -183,8 +220,15 @@ impl DevArm {
         }
     }
 
-    /// ONE ANCHOR FILE's DESTINATION (SECRET): the auto arm places anchor
-    /// `which` under its own directory; a script names a path.
+    /// Answers one anchor file's destination (secret).
+    ///
+    /// The auto arm places anchor `which` under its own directory; a script
+    /// names a path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the script abandons or is exhausted, or
+    /// answers another moment's kind.
     pub fn destination(&self, which: usize) -> Result<PathBuf, Abandoned> {
         let dir = match self.answering("the destination")? {
             Answering::Auto { anchors } => anchors.join(format!("anchor-{which}")),
@@ -195,8 +239,15 @@ impl DevArm {
         Ok(dir)
     }
 
-    /// A TYPED CONFIRMATION (CONSENT): the auto arm types the row asked
-    /// for; a script types the row, `no`, or its own text.
+    /// Answers a typed confirmation (consent).
+    ///
+    /// The auto arm types the row asked for; a script types the row, `no`,
+    /// or its own text.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the script abandons or is exhausted, or
+    /// answers another moment's kind.
     pub fn confirm(&self, confirmation: &Confirmation) -> Result<String, Abandoned> {
         let Confirmation { text, expected } = confirmation;
         match self.answering("the confirmation")? {
@@ -216,8 +267,15 @@ impl DevArm {
         }
     }
 
-    /// THE ANCHOR IMPORT (SECRET): the auto arm holds neither; a script
-    /// hands a file, types off a sheet, types its own, or holds neither.
+    /// Answers the anchor import (secret).
+    ///
+    /// The auto arm holds neither; a script hands a file, types off a sheet,
+    /// types its own, or holds neither.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the script abandons or is exhausted, names
+    /// a sheet no sheet shown can type, or answers another moment's kind.
     pub fn import(&self) -> Result<Imported, Abandoned> {
         match self.answering("the import")? {
             Answering::Auto { .. } => {
@@ -250,7 +308,14 @@ impl DevArm {
         }
     }
 
-    /// KEPT OR PLACED (SECRET): the auto arm answers kept; a script says.
+    /// Answers kept-or-placed (secret).
+    ///
+    /// The auto arm answers kept; a script says.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the script abandons or is exhausted, or
+    /// answers another moment's kind.
     pub fn kept_or_placed(&self, path: &Path) -> Result<KeptOrPlaced, Abandoned> {
         match self.answering("kept-or-placed")? {
             Answering::Auto { .. } | Answering::Script(Answer::Kept) => {
@@ -278,9 +343,10 @@ mod tests {
         (Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string())), lines)
     }
 
-    /// The auto arm answers each SECRET and CONSENT moment as a developer
-    /// would and says so, keeping no sheet it is shown; the seed never
-    /// reaches the TALK stream.
+    /// Checks that the auto arm answers and says what it did, never the seed.
+    ///
+    /// It answers each secret and consent moment as a developer would,
+    /// keeping no sheet it is shown; the seed never reaches `Talk`.
     #[test]
     fn the_auto_arm_answers_and_says_what_it_did_without_the_seed() {
         let (talk, lines) = talk();
@@ -300,9 +366,10 @@ mod tests {
         assert!(!arm.is_script());
     }
 
-    /// The script arm answers in order, types a re-type off the sheet
-    /// shown, and abandons on a wrong kind, on `abandon`, and when
-    /// exhausted — never a panic.
+    /// Checks that the script arm answers in order and abandons, never a panic.
+    ///
+    /// It types a re-type off the sheet shown, and abandons on a wrong kind,
+    /// on `abandon`, and when exhausted.
     #[test]
     fn the_script_arm_answers_in_order_and_abandons_on_a_wrong_kind_or_exhaustion() {
         let (talk, lines) = talk();
@@ -328,8 +395,9 @@ mod tests {
         assert!(!said.contains("5e5e"), "{said}");
     }
 
-    /// A script's typed import met by another moment abandons the walk, and
-    /// the answer it names on TALK carries no seed.
+    /// Checks that a script's typed import met by another moment abandons.
+    ///
+    /// The walk is abandoned, and the answer named on `Talk` carries no seed.
     #[test]
     fn a_typed_import_of_the_wrong_kind_says_no_seed() {
         let (talk, lines) = talk();
@@ -340,6 +408,8 @@ mod tests {
         assert!(!said.contains("5e5e"), "the seed never reaches TALK: {said}");
     }
 
+    /// Checks that a sheet too short to type off abandons the walk.
+    ///
     /// A sheet whose fingerprint is shorter than the prefix a typed answer
     /// carries — `SheetFields` is another crate's, filled by its walks —
     /// abandons a re-type or an import typed off it, never a panic at a slice.
@@ -364,8 +434,9 @@ mod tests {
         }
     }
 
-    /// Two sheets shown to `arm`: seeds `5e5e 5e5e` and `6f6f 6f6f`, under
-    /// fingerprints of `ab` and of `cd`.
+    /// Shows `arm` two sheets: seeds `5e5e 5e5e` and `6f6f 6f6f`.
+    ///
+    /// They stand under fingerprints of `ab` and of `cd`.
     fn show_two_sheets(arm: &DevArm) {
         for (seed, fingerprint) in [("5e5e 5e5e", "ab"), ("6f6f 6f6f", "cd")] {
             let fields = SheetFields { anchor: true, alg: "mldsa65-ed25519".into(), label: None, fingerprint_hex: fingerprint.repeat(32), fingerprint_grouped: fingerprint.repeat(2), seed_grouped: seed.into(), account: None, principal: None, origin: None };
@@ -373,8 +444,9 @@ mod tests {
         }
     }
 
-    /// What a moment answered, a typed seed spelled out — never through
-    /// `Debug`, which hides it.
+    /// What a moment answered, a typed seed spelled out.
+    ///
+    /// It is never read through `Debug`, which hides the seed.
     #[derive(Debug, PartialEq)]
     enum Said {
         Typed(String, String),
@@ -391,7 +463,7 @@ mod tests {
     /// The five moments the arm answers.
     const MOMENTS: [&str; 5] = ["retype", "destination", "confirm", "import", "kept_or_placed"];
 
-    /// `moment` asked of `arm`, its answer spelled.
+    /// Asks `moment` of `arm`, its answer spelled.
     fn ask(arm: &DevArm, moment: &str) -> Said {
         let said = match moment {
             "retype" => arm.retype().map(|r| match r {
@@ -413,13 +485,14 @@ mod tests {
         said.unwrap_or(Said::Abandoned)
     }
 
-    /// EVERY SCRIPTED ANSWER MEETS EVERY MOMENT as the grammar says, the law
-    /// over the seventeen answers and the five moments: an answer meets its
-    /// own moment as its line reads — a re-type or an import typed off the
-    /// very sheet it names, a sheet never shown abandoning — and abandons
-    /// every other, `abandon` every one; and no seed shown or typed reaches
-    /// TALK (the mutants that answer one kind as another, take another
-    /// moment's answer, or type off the wrong sheet).
+    /// Checks every scripted answer against every moment, as the grammar says.
+    ///
+    /// It is the law over the seventeen answers and the five moments: an
+    /// answer meets its own moment as its line reads — a re-type or an import
+    /// typed off the very sheet it names, a sheet never shown abandoning — and
+    /// abandons every other, `abandon` every one; and no seed shown or typed
+    /// reaches `Talk` (the mutants that answer one kind as another, take
+    /// another moment's answer, or type off the wrong sheet).
     #[test]
     fn every_scripted_answer_meets_every_moment_as_the_grammar_says() {
         let typed = |seed: &str, prefix: &str| Said::Typed(seed.into(), prefix.into());

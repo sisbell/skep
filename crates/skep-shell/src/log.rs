@@ -1,18 +1,20 @@
-//! THE LOG the page's gate reads (the dev provider record §3.4; the
-//! structure record §6.3's class 5 — "every call the page made reached the
-//! provider, and the provider's dials to the daemon were these"): one entry
-//! per CALL the page made — its name, its bytes in and out, its time and
-//! whether it answered a result or a refusal — and one per DIAL the shell
-//! made — the method, the path, the status, the sizes, the time — in one
-//! sequence, so a driver reads which calls caused which dials. NO TOKEN, NO
-//! HEADER AND NO BODY is kept: the dial's record is the request line's two
-//! words and the answer's status, which is what a count needs and nothing a
-//! capture could use. [`ShellDialer`] is the one `Dialer` every board of
-//! the shell dials through — `PlainHttp` behind the record — so no dial
-//! escapes the log, and the shell's STOP is its one door: once the stop
-//! stands no dial is made at all. THE LOG IS BOUNDED: it keeps the latest
-//! [`MAX_LOG_ENTRIES`], and a call under a name the bridge does not spell is
-//! kept by its length, never its bytes.
+//! The log the page's gate reads: the page's calls and the shell's dials.
+//!
+//! As the dev provider record §3.4 and the structure record §6.3's class 5
+//! draw it — "every call the page made reached the provider, and the
+//! provider's dials to the daemon were these" — it holds one entry per call
+//! the page made — its name, its bytes in and out, its time and whether it
+//! answered a result or a refusal — and one per dial the shell made — the
+//! method, the path, the status, the sizes, the time — in one sequence, so
+//! a driver reads which calls caused which dials. No token, no header and
+//! no body is kept: the dial's record is the request line's two words and
+//! the answer's status, which is what a count needs and nothing a capture
+//! could use. [`ShellDialer`] is the one `Dialer` every board of the shell
+//! dials through — `PlainHttp` behind the record — so no dial escapes the
+//! log, and the shell's stop is its one door: once the stop stands no dial
+//! is made at all. The log is bounded: it keeps the latest
+//! [`MAX_LOG_ENTRIES`], and a call under a name the bridge does not spell
+//! is kept by its length, never its bytes.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -25,8 +27,7 @@ use serde_json::{json, Value};
 use skep_client::dial::{DialError, Dialer, Headers, Method, PlainHttp, Request, RequestHead, Response, StreamedResponse};
 use skep_client::Origin;
 
-/// How a CALL the log records was answered, as its entry's `outcome`
-/// spells it.
+/// How a logged call was answered, as its entry's `outcome` spells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CallOutcome {
@@ -41,7 +42,7 @@ pub enum CallOutcome {
 }
 
 impl CallOutcome {
-    /// The outcome as the log spells it.
+    /// Returns the outcome as the log spells it.
     pub const fn as_str(self) -> &'static str {
         match self {
             CallOutcome::Result => "result",
@@ -58,18 +59,21 @@ impl fmt::Display for CallOutcome {
     }
 }
 
-/// The most entries the log keeps: the latest 2^16, the oldest dropped as
-/// each new one comes. A scenario the page's gate runs before it reads the
-/// log is hundreds to a few thousand calls and dials, so the log keeps every
-/// entry of one many times over; an entry is a handful of short members,
-/// under a kilobyte held, so the log's bill stays under 64 MiB however long
-/// the shell runs. Every entry's `seq` counts on past the bound, so a reader
-/// sees where the kept entries start by the first `seq` it reads.
+/// The most entries the log keeps: the latest 2^16.
+///
+/// The oldest is dropped as each new one comes. A scenario the page's gate
+/// runs before it reads the log is hundreds to a few thousand calls and
+/// dials, so the log keeps every entry of one many times over; an entry is
+/// a handful of short members, under a kilobyte held, so the log's bill
+/// stays under 64 MiB however long the shell runs. Every entry's `seq`
+/// counts on past the bound, so a reader sees where the kept entries start
+/// by the first `seq` it reads.
 const MAX_LOG_ENTRIES: usize = 1 << 16;
 
-/// The log: its latest entries in arrival order — 2^16 of them, the oldest
-/// dropped as each new one comes — each numbered by its place in the whole
-/// sequence.
+/// The log: its latest entries in arrival order.
+///
+/// It keeps 2^16 of them, the oldest dropped as each new one comes, each
+/// numbered by its place in the whole sequence.
 #[derive(Debug, Default)]
 pub struct Log {
     entries: Mutex<Entries>,
@@ -83,15 +87,20 @@ struct Entries {
 }
 
 impl Log {
-    /// An empty log.
+    /// Returns an empty log.
     pub fn new() -> Log {
         Log::default()
     }
 
-    /// One entry placed, numbered and stamped under the lock that places
-    /// it — its `seq` its place in the whole sequence, so the order the
-    /// entries are read in is the order they were numbered in — and the
-    /// oldest dropped where the log holds [`MAX_LOG_ENTRIES`] already.
+    /// Places one entry, numbered and stamped under the lock that places it.
+    ///
+    /// Its `seq` is its place in the whole sequence, so the order the
+    /// entries are read in is the order they were numbered in; the oldest is
+    /// dropped where the log holds [`MAX_LOG_ENTRIES`] already.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the log's lock is poisoned.
     fn push(&self, mut entry: Value) {
         let mut entries = self.entries.lock().expect("the log's lock");
         entry["seq"] = Value::from(entries.next_seq);
@@ -103,13 +112,14 @@ impl Log {
         entries.kept.push_back(entry);
     }
 
-    /// One CALL the page made: `call` its name — one of the bridge's
-    /// spellings (`CALLS`), and `'static`, so the bytes of a page's request
-    /// cannot reach the log; a name of no call is `Log::unknown_call`'s,
-    /// kept by its length alone — `bytes_in` the call's arguments and
-    /// `bytes_out` its answer, each counted as compact JSON — a stream's
-    /// `bytes_out` the bytes its body yielded — `elapsed` its time, `outcome`
-    /// how it was answered.
+    /// Records one call the page made.
+    ///
+    /// `call` is its name — one of the bridge's spellings (`CALLS`), and
+    /// `'static`, so the bytes of a page's request cannot reach the log; a
+    /// name of no call is `Log::unknown_call`'s, kept by its length alone —
+    /// `bytes_in` the call's arguments and `bytes_out` its answer, each
+    /// counted as compact JSON — a stream's `bytes_out` the bytes its body
+    /// yielded — `elapsed` its time, `outcome` how it was answered.
     pub fn call(&self, call: &'static str, bytes_in: usize, bytes_out: usize, elapsed: Duration, outcome: CallOutcome) {
         self.push(json!({
             "kind": "call",
@@ -121,10 +131,11 @@ impl Log {
         }));
     }
 
-    /// One CALL the page made under a name the bridge does not spell — its
-    /// refusal is `unknown_call` — kept as `<unknown>` with the name's
-    /// length in bytes and never the name: the page chooses those bytes, and
-    /// the log keeps what a count needs.
+    /// Records one call the page made under a name the bridge does not spell.
+    ///
+    /// Its refusal is `unknown_call`; it is kept as `<unknown>` with the
+    /// name's length in bytes and never the name: the page chooses those
+    /// bytes, and the log keeps what a count needs.
     pub(crate) fn unknown_call(&self, name_bytes: usize, bytes_in: usize, bytes_out: usize, elapsed: Duration) {
         self.push(json!({
             "kind": "call",
@@ -137,12 +148,14 @@ impl Log {
         }));
     }
 
-    /// One DIAL the shell made: the method and the path (its query cut off
-    /// — a query may name a position and nothing else, but the record keeps
-    /// the route alone), the status answered or the transport's refusal,
-    /// the sizes and the time. Private to the dialer's file, so
-    /// [`ShellDialer`] alone writes one, and every dial the log keeps is one
-    /// the shell made.
+    /// Records one dial the shell made.
+    ///
+    /// It keeps the method and the path (its query cut off — a query names
+    /// positions, addresses, a principal and a page's options, but the
+    /// record keeps the route alone), the status answered or none where the
+    /// transport refused, the sizes and the time. Private to the dialer's
+    /// file, so [`ShellDialer`] alone writes one, and every dial the log
+    /// keeps is one the shell made.
     fn dial(&self, method: Method, path: &str, status: Option<u16>, bytes_in: usize, bytes_out: usize, elapsed: Duration) {
         let route = path.split('?').next().unwrap_or(path);
         self.push(json!({
@@ -156,32 +169,46 @@ impl Log {
         }));
     }
 
-    /// Every entry kept, in order.
+    /// Returns every entry kept, in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the log's lock is poisoned.
     pub fn entries(&self) -> Vec<Value> {
         self.entries.lock().expect("the log's lock").kept.iter().cloned().collect()
     }
 
-    /// How many dials the log holds.
+    /// Returns how many dials the log holds.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the log's lock is poisoned.
     #[cfg(test)]
     fn dials(&self) -> usize {
         self.entries.lock().expect("the log's lock").kept.iter().filter(|e| e["kind"] == "dial").count()
     }
 
-    /// How many calls the log holds.
+    /// Returns how many calls the log holds.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the log's lock is poisoned.
     #[cfg(test)]
     fn calls(&self) -> usize {
         self.entries.lock().expect("the log's lock").kept.iter().filter(|e| e["kind"] == "call").count()
     }
 }
 
-/// THE ONE DIALER of the shell: `PlainHttp` — which writes no `Origin`
-/// header, so the daemon's bare set is met by the shell and never by the
-/// page — behind the dial log and behind the shell's STOP: once
-/// [`ShellDialer::stop`] is called (`Shell::shutdown`), every dial is
-/// refused as one that made no connection, recorded nowhere since none was
-/// made, so every loop that dials — a feed read to a board's head, the
-/// library's drain beneath it — ends at its next exchange, whatever a board
-/// answers. Cloned into every board; one record, one stop.
+/// The one dialer of the shell: `PlainHttp` behind the log and the stop.
+///
+/// `PlainHttp` writes no `Origin` header, so the daemon's bare set is met
+/// by the shell and never by the page; it stands behind the dial log and
+/// behind the shell's stop: once [`ShellDialer::stop`] is called
+/// (`Shell::shutdown`), every dial is refused as one that made no
+/// connection, recorded nowhere since none was made, so every loop that
+/// dials — a feed read to a board's head, the library's drain beneath it —
+/// ends at its next exchange, whatever a board answers. Cloned into every
+/// board; one record, one stop.
 #[derive(Debug, Clone)]
 pub struct ShellDialer {
     inner: PlainHttp,
@@ -190,19 +217,23 @@ pub struct ShellDialer {
 }
 
 impl ShellDialer {
-    /// The plain arm behind `log`, dialing until [`ShellDialer::stop`].
+    /// Returns the plain arm behind `log`, dialing until [`ShellDialer::stop`].
     pub fn new(log: Arc<Log>) -> ShellDialer {
         ShellDialer { inner: PlainHttp::new(), log, stopping: Arc::new(AtomicBool::new(false)) }
     }
 
-    /// THE STOP (`Shell::shutdown`): from now on this dialer and every clone
-    /// of it refuse every dial as one that made no connection.
+    /// Stops the dialer: the stop `Shell::shutdown` makes.
+    ///
+    /// From the call on, this dialer and every clone of it refuse every dial
+    /// as one that made no connection.
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
     }
 
-    /// The refusal of a dial once the stop stands: a connection never made,
-    /// which `hold`'s table reads as a burst that did not leave.
+    /// Returns the refusal of a dial once the stop stands.
+    ///
+    /// It is a connection never made, which `hold`'s table reads as a burst
+    /// that did not leave.
     fn stop_refusal(&self) -> Option<DialError> {
         self.stopping.load(Ordering::SeqCst).then(|| DialError::Connect("the shell is stopping: no dial is made".into()))
     }
@@ -246,8 +277,9 @@ impl Dialer for ShellDialer {
 mod tests {
     use super::*;
 
-    /// The entries are numbered in arrival order, a dial's path loses its
-    /// query, and the counts read each kind.
+    /// Checks that the log numbers calls and dials in arrival order.
+    ///
+    /// A dial's path loses its query, and the counts read each kind.
     #[test]
     fn the_log_numbers_calls_and_dials_in_order() {
         let log = Log::new();
@@ -267,8 +299,9 @@ mod tests {
         assert!(entries.iter().all(|e| e["at_ms"].as_u64().is_some()));
     }
 
-    /// An outcome displays as the log spells it, and the four are four keys
-    /// a transport counts its calls by.
+    /// Checks that an outcome displays as the log spells it.
+    ///
+    /// The four are four keys a transport counts its calls by.
     #[test]
     fn an_outcome_displays_as_the_log_spells_it() {
         let outcomes = [CallOutcome::Result, CallOutcome::Refused, CallOutcome::Stream, CallOutcome::Canned];
@@ -278,8 +311,9 @@ mod tests {
         assert_eq!(outcomes.into_iter().collect::<std::collections::HashSet<_>>().len(), outcomes.len());
     }
 
-    /// Entries placed from many threads at once are numbered by their
-    /// place: every `seq` is its index in the order `entries` reads.
+    /// Checks that entries placed from many threads are numbered by place.
+    ///
+    /// Placed at once, every `seq` is its index in the order `entries` reads.
     #[test]
     fn concurrent_entries_are_numbered_by_their_place() {
         let log = Log::new();
@@ -298,11 +332,12 @@ mod tests {
         assert_eq!(misplaced, 0, "an entry's seq is its place");
     }
 
-    /// THE DIALER's RECORD: a dial no board answers is recorded all the same
-    /// — its method, its route without the query, no status, the body's size
-    /// in and none out — and neither the token its header carries nor the
-    /// body it sent is kept (the mutants that record an answered dial alone,
-    /// or keep the query, or count no body).
+    /// Checks that the dialer records a dial no board answers all the same.
+    ///
+    /// The record keeps its method, its route without the query, no status,
+    /// the body's size in and none out, and neither the token its header
+    /// carries nor the body it sent (the mutants that record an answered dial
+    /// alone, or keep the query, or count no body).
     #[test]
     fn the_dialers_record_keeps_the_route_and_sizes_answered_or_not() {
         let log = Arc::new(Log::new());
@@ -322,12 +357,13 @@ mod tests {
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("insert"), "{kept}");
     }
 
-    /// THE DIALER's STREAMED RECORD: a streamed dial — `/events` and `/blob`
-    /// go out so — no board answers is recorded as an exchange is: its
-    /// method, its route without the query, no status, the body its head
-    /// declares in and none out — never the token its header carries nor
-    /// the address its query names (the mutants that drop the streamed
-    /// record, or count no declared body).
+    /// Checks that the dialer records a streamed dial as an exchange is.
+    ///
+    /// A streamed dial — `/events` and `/blob` go out so — no board answers
+    /// keeps its method, its route without the query, no status, the body
+    /// its head declares in and none out — never the token its header
+    /// carries nor the address its query names (the mutants that drop the
+    /// streamed record, or count no declared body).
     #[test]
     fn the_dialers_streamed_record_keeps_the_route_and_sizes() {
         let log = Arc::new(Log::new());
@@ -346,12 +382,13 @@ mod tests {
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("1.0.1.0.1"), "{kept}");
     }
 
-    /// THE DIALER's RECORD OF AN ANSWERED DIAL keeps the board's status and
-    /// the bytes its answer carried: an exchange answered `200` with five
-    /// bytes is recorded `200` and five out, and a stream answered `200` and
-    /// dropped unread `200` and none out — its body the reader's, never
-    /// counted at the dial (the mutants that record an answer's size as
-    /// none, or a stream's status as none).
+    /// Checks that the dialer's record of an answered dial keeps its status.
+    ///
+    /// It keeps the board's status and the bytes its answer carried: an
+    /// exchange answered `200` with five bytes is recorded `200` and five
+    /// out, and a stream answered `200` and dropped unread `200` and none
+    /// out — its body the reader's, never counted at the dial (the mutants
+    /// that record an answer's size as none, or a stream's status as none).
     #[test]
     fn the_dialers_record_of_an_answered_dial_keeps_its_status_and_size() {
         use std::io::{BufRead, BufReader, Write};
@@ -376,14 +413,16 @@ mod tests {
         assert_eq!(records, [("/health".to_string(), Some(200), Some(5)), ("/blob".to_string(), Some(200), Some(0))]);
     }
 
-    /// THE STOP DIALS NOTHING: once a clone of the shell's dialer is stopped,
-    /// an exchange and a stream through the dialer itself at a board
-    /// listening — its backlog would take the connection — are each refused
-    /// as connections never made, at once, the log recording none and the
-    /// board never asked (the mutant that dials past the stop connects
-    /// through the backlog and waits out the read bound, and a board that
-    /// answers without end holds the shell's stop for good; the one whose
-    /// clone stops alone leaves every other board of the shell dialing).
+    /// Checks that the stop dials nothing.
+    ///
+    /// Once a clone of the shell's dialer is stopped, an exchange and a
+    /// stream through the dialer itself at a board listening — its backlog
+    /// would take the connection — are each refused as connections never
+    /// made, at once, the log recording none and the board never asked (the
+    /// mutant that dials past the stop connects through the backlog and
+    /// waits out the read bound, and a board that answers without end holds
+    /// the shell's stop for good; the one whose clone stops alone leaves
+    /// every other board of the shell dialing).
     #[test]
     fn a_stopped_dialer_makes_no_connection() {
         let log = Arc::new(Log::new());
@@ -401,11 +440,13 @@ mod tests {
         assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "the board was never asked");
     }
 
-    /// THE LOG IS BOUNDED: past [`MAX_LOG_ENTRIES`] the oldest go, the
-    /// latest [`MAX_LOG_ENTRIES`] kept in order, their `seq` counting on — so
-    /// the first kept says where the kept entries start (the mutant that keeps
-    /// every entry grows the log for the shell's life; the one that renumbers
-    /// from the kept entries hides the drop).
+    /// Checks that the log is bounded.
+    ///
+    /// Past [`MAX_LOG_ENTRIES`] the oldest go, the latest [`MAX_LOG_ENTRIES`]
+    /// kept in order, their `seq` counting on — so the first kept says where
+    /// the kept entries start (the mutant that keeps every entry grows the
+    /// log for the shell's life; the one that renumbers from the kept
+    /// entries hides the drop).
     #[test]
     fn the_log_keeps_its_latest_entries() {
         let log = Log::new();
@@ -417,8 +458,9 @@ mod tests {
         assert_eq!((entries[0]["seq"].as_u64(), entries[MAX_LOG_ENTRIES - 1]["seq"].as_u64()), (Some(10), Some(MAX_LOG_ENTRIES as u64 + 9)));
     }
 
-    /// A call under a name the bridge does not spell is kept by the name's
-    /// length and never its bytes, whatever the page sent.
+    /// Checks that a call the bridge does not spell is kept by its length.
+    ///
+    /// The name's length is kept and never its bytes, whatever the page sent.
     #[test]
     fn an_unknown_call_is_kept_by_its_length() {
         let log = Log::new();

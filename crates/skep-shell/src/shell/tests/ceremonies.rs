@@ -1,23 +1,26 @@
-//! THE CEREMONIAL ROWS END TO END against the real daemon in-process:
-//! `bind` confirming the three facts against the board before it appends
-//! the line; a second device's key enrolled from the first device, bound
-//! there and retiring the first's key, whose session dies on the arm that
-//! names the hand; and a rotation ending its old key's session on the own
-//! hand's arm — each death read for its hand, each answer held to its
-//! declaration.
+//! The ceremonial rows end to end, against the real daemon in-process.
+//!
+//! The suite checks `bind` confirming the three facts against the board
+//! before it appends the line; a second device's key enrolled from the
+//! first device, bound there and retiring the first's key, whose session
+//! dies on the arm that names the hand; and a rotation ending its old key's
+//! session on the own hand's arm — each death read for its hand, each
+//! walk's answer held to its declaration.
 
 use super::*;
 
-/// `bind` CONFIRMS THE THREE FACTS AGAINST THE BOARD before it appends the
-/// line (§4b.1's `bind` row; AUTH-5.32's return leg): a pasted origin that
-/// is not the board's is `origin_disagrees`, naming both; a principal the
-/// board does not seat at the pasted account is `account_disagrees`,
-/// naming the one it seats; an account of another spelling is
-/// `malformed_args` naming `account` — each appending nothing; and the
-/// claim's own facts are answered `{}`, the binding line appended once
-/// more, the newest winning (the mutants that drop the origin's check bind
-/// this board's key for a paste meant for another, take any seated
-/// principal, or answer `{}` with no line appended).
+/// Checks that `bind` confirms the three facts against the board.
+///
+/// It confirms them before it appends the line (§4b.1's `bind` row;
+/// AUTH-5.32's return leg): a pasted origin that is not the board's is
+/// `origin_disagrees`, naming both; a principal the board does not seat at
+/// the pasted account is `account_disagrees`, naming the one it seats; an
+/// account of another spelling is `malformed_args` naming `account` — each
+/// appending nothing; and the claim's own facts are answered `{}`, the
+/// binding line appended once more, the newest winning (the mutants that
+/// drop the origin's check bind this board's key for a paste meant for
+/// another, take any seated principal, or answer `{}` with no line
+/// appended).
 #[test]
 fn bind_confirms_the_three_facts_against_the_board() {
     let dir = TempDir::new().unwrap();
@@ -49,17 +52,18 @@ fn bind_confirms_the_three_facts_against_the_board() {
     sd.shutdown();
 }
 
-/// A RETIREMENT BY ANOTHER HAND ENDS A SESSION ON THE ARM THAT NAMES IT
-/// (§4b.2's `retired` arm; AUTH-5.77): a second device's key enrolled from
-/// the first device (`enroll`), bound on the second (`bind`) and retiring
-/// the first's key from there (`retire`) — and the first device's signed
-/// session dies on the `retired` arm naming its key, the hand that retired
-/// it and that hand's label off the admitted read, the retirement's
+/// Checks that a retirement by another hand ends a session on its arm.
+///
+/// It is §4b.2's `retired` arm (AUTH-5.77): a second device's key enrolled
+/// from the first device (`enroll`), bound on the second (`bind`) and
+/// retiring the first's key from there (`retire`) — and the first device's
+/// signed session dies on the `retired` arm naming its key, the hand that
+/// retired it and that hand's label off the admitted read, the retirement's
 /// position, and `own` false, since no key of the first device's store
-/// wrote it (the mutants that read the hand as the store's own, or name
-/// the retired key's label for the hand's, face the page a rotation's
-/// expected end where another hand evicted the device); every answer held
-/// to its declaration.
+/// wrote it (the mutants that read the hand as the store's own, or name the
+/// retired key's label for the hand's, face the page a rotation's expected
+/// end where another hand evicted the device); the three walks' answers held
+/// to their declarations.
 #[test]
 fn a_retirement_by_another_hand_ends_a_session_on_the_arm_that_names_it() {
     let dir = TempDir::new().unwrap();
@@ -103,12 +107,13 @@ fn a_retirement_by_another_hand_ends_a_session_on_the_arm_that_names_it() {
     sd.shutdown();
 }
 
-/// A ROTATION ENDS ITS OLD KEY's SESSION ON THE OWN HAND's ARM (§4b.2's
-/// `retired` arm; AUTH-5.28's expected end): with a signed session open,
-/// the rotation (`rotate`) enrolls a new key — its device-name box
-/// prefilled from the old key's label, answered with that default — and
-/// retires the old key under the old key's own hand, and the session dies
-/// on the `retired` arm naming the old key as both the key retired and the
+/// Checks that a rotation ends its old key's session on the own hand's arm.
+///
+/// It is §4b.2's `retired` arm (AUTH-5.28's expected end): with a signed
+/// session open, the rotation (`rotate`) enrolls a new key — its device-name
+/// box prefilled from the old key's label, answered with that default — and
+/// retires the old key under the old key's own hand, and the session dies on
+/// the `retired` arm naming the old key as both the key retired and the
 /// hand, its label, the retirement's position, and `own` true, since this
 /// store's key wrote it (the mutant that reads no store's keys faces the
 /// person's own rotation as another hand's eviction); the rotation's answer

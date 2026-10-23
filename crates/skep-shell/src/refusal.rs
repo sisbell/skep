@@ -1,9 +1,11 @@
-//! THE ONE REFUSAL SHAPE the page renders (`client.md` §4b.1's refusal
-//! column: "the armed set; anything else is a `Halt {state, cause, act}` the
-//! page renders"): every refusal a call answers is one value with a `kind`
-//! and ONE `name` token the page faces on — never prose —
+//! The one refusal shape the page renders.
 //!
-//! * `refused` — the board's own verdict, carried back VERBATIM: the
+//! It is `client.md` §4b.1's refusal column: "the armed set; anything else
+//! is a `Halt {state, cause, act}` the page renders". Every refusal a call
+//! answers is one value with a `kind` and one `name` token the page faces
+//! on — never prose —
+//!
+//! * `refused` — the board's own verdict, carried back verbatim: the
 //!   `rejected` document's code and detail, or a non-200's error, its `name`
 //!   the one token `Rejection::key` dispatches on;
 //! * `halt` — a halt's face, the state, its cause and the one act, its
@@ -14,7 +16,7 @@
 //! * `unreachable` — the board is not answering;
 //! * `shell` — the shell's own refusal, with its detail.
 //!
-//! THE NAMES the shell spells — the shell's own refusals and the armed names
+//! The names the shell spells — the shell's own refusals and the armed names
 //! a halt's face takes — are [`Name`]'s constants and nothing else: its field
 //! is private to this file, so a call site names a refusal only by a
 //! constant declared here, and this list is the one the README and
@@ -26,8 +28,10 @@ use serde_json::{json, Map, Value};
 use skep_client::halt::{Blocked, Face, Halt, Refused};
 use skep_client::DialError;
 
-/// The refusal: the error every call answers, a `Halt` converting into its
-/// member by `From`, so `?` carries a walk's halt to the row's refusal.
+/// The refusal: the error every call answers.
+///
+/// A `Halt` converts into its member by `From`, so `?` carries a walk's halt
+/// to the row's refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// The board's own verdict, verbatim.
@@ -38,65 +42,75 @@ pub enum Refusal {
     Blocked(Blocked),
     /// The board is not answering.
     Unreachable(DialError),
-    /// The shell's own refusal: its `detail` an object whose members ride
-    /// beside `kind` and `name`, never in their place; a detail of another
-    /// type renders no member.
+    /// The shell's own refusal.
+    ///
+    /// Its `detail` is an object whose members ride beside `kind` and `name`,
+    /// never in their place; a detail of another type renders no member.
     Shell { name: Name, detail: Value },
 }
 
-/// A NAME the shell spells: ONE token, closed to the constants below — the
-/// shell's own refusals first, then the armed names a halt's face takes.
+/// A name the shell spells: one token, closed to the constants below.
+///
+/// The shell's own refusals come first, then the armed names a halt's face
+/// takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Name(&'static str);
 
 impl Name {
-    // ── THE SHELL's OWN: `Refusal::shell` ────────────────────────────────
+    // ── The shell's own: `Refusal::shell` ────────────────────────────────
 
-    /// THE PIN's stale-reference refusal: "session ended" — a reference
-    /// this shell holds no session under, issued or not.
+    /// The pin's stale-reference refusal: "session ended".
+    ///
+    /// It answers a reference this shell holds no session under, issued or
+    /// not.
     pub const SESSION_ENDED: Name = Name("session_ended");
-    /// The call's session met the death signal: the reason its end carried
-    /// beside it.
+    /// The call's session met the death signal.
+    ///
+    /// The reason its end carried rides beside it.
     pub const SESSION_DIED: Name = Name("session_died");
     /// A board reference this shell instance never issued.
     pub const UNKNOWN_BOARD: Name = Name("unknown_board");
     /// A call the bridge does not spell.
     pub const UNKNOWN_CALL: Name = Name("unknown_call");
-    /// `fetch` through the dispatch: it streams, on its transport's own
-    /// route.
+    /// `fetch` through the dispatch: it streams, on its transport's own route.
     pub const STREAMED_CALL: Name = Name("streamed_call");
     /// A call's arguments are not the row's shape.
     pub const MALFORMED_ARGS: Name = Name("malformed_args");
-    /// A row the library does not reach at this pin: the detail says where
-    /// it stops.
-    pub const NOT_REACHED: Name = Name("not_reached");
-    /// A WRITE frame in the guest form, refused without a dial.
-    pub const WRITE_IN_GUEST_FORM: Name = Name("write_in_guest_form");
-    /// A write under a bare session, or its `resolve(send)`, refused without
-    /// a dial.
+    /// A row the library does not reach at this pin.
     ///
-    /// The bare session is the keyless session for reading alone
-    /// (foundations §3.3 state 3, E16 (a′): "the shell refuses every write in
-    /// it"); the detail names the `op`, or the `act`.
+    /// The detail says where it stops.
+    pub const NOT_REACHED: Name = Name("not_reached");
+    /// A write frame in the guest form, refused without a dial.
+    pub const WRITE_IN_GUEST_FORM: Name = Name("write_in_guest_form");
+    /// A write under a bare session, refused without a dial.
+    ///
+    /// Its `resolve(send)` is refused so too. The bare session is the keyless
+    /// session for reading alone (foundations §3.3 state 3: "the shell
+    /// refuses every write in it"); the detail names the `op`, or the `act`.
     pub const WRITE_IN_BARE_SESSION: Name = Name("write_in_bare_session");
     /// A guest form's origin is not a canonical origin.
     pub const NOT_CANONICAL: Name = Name("not_canonical");
     /// A query past the bridge's bound.
     pub const QUERY_TOO_LONG: Name = Name("query_too_long");
-    /// The board's feed thread has stopped: no search is answered.
+    /// The board's feed thread has stopped: no search or listing is answered.
     pub const FEED_STOPPED: Name = Name("feed_stopped");
-    /// The walk was abandoned: the page cancelled a moment, or the dev arm
-    /// left.
+    /// The walk was abandoned.
+    ///
+    /// The page or the shell's stop cancelled a moment, or the dev arm left.
     pub const ABANDONED: Name = Name("abandoned");
-    /// A SECRET or CONSENT moment of the walk was refused because no person
-    /// is present to answer it (`ArmConfig::Refuse`): nothing answered it,
-    /// no arm and no page, and the walk was abandoned there — the detail
-    /// names the `walk`, the `moment` and its `class`.
+    /// A secret or consent moment of the walk, refused with no one to answer.
+    ///
+    /// No person is present to answer it (`ArmConfig::Refuse`): nothing
+    /// answered it, no arm and no page, and the walk was abandoned there —
+    /// the detail names the `walk`, the `moment`, its `class` and, a
+    /// confirmation's, its `text`, beside the walk's `halt`.
     pub const PERSON_REQUIRED: Name = Name("person_required");
-    /// A label refused at the box — empty, holding a line break, or past its
-    /// byte bound (AUTH-1.24's whole domain, one refusal with its `cause`;
-    /// §4b.1's `keygen` row) — `keygen`'s, and `accept`'s box as a halt's
-    /// armed name.
+    /// A label refused at the box.
+    ///
+    /// It is empty, holding a line break, or past its byte bound (AUTH-1.24's
+    /// whole domain, one refusal with its `cause`; §4b.1's `keygen` row) —
+    /// `keygen`'s, `fingerprint`'s where a stored key's label lies outside
+    /// that domain, and `accept`'s box as a halt's armed name.
     pub const EMPTY_LABEL: Name = Name("empty_label");
     /// A `select` that matches more than one key of the store.
     pub const AMBIGUOUS: Name = Name("ambiguous");
@@ -106,53 +120,66 @@ impl Name {
     pub const ALREADY_CLAIMED: Name = Name("already_claimed");
     /// `bind`'s pasted origin is not the board's.
     pub const ORIGIN_DISAGREES: Name = Name("origin_disagrees");
-    /// `bind`'s pasted account and principal are not a pair the board
-    /// seats.
+    /// `bind`'s pasted account and principal are not a pair the board seats.
     pub const ACCOUNT_DISAGREES: Name = Name("account_disagrees");
     /// `accept` with no address.
     pub const NO_ADDRESS: Name = Name("no_address");
     /// An attest asked of a session the board answered no account for.
     pub const NO_ACCOUNT: Name = Name("no_account");
-    /// `held(session)`, and every act on the principal's held lines: the
-    /// HELD-BURST store's file was written by a newer skep, or is damaged —
-    /// P38's halt (§3c.3), its detail the file's `path` and its `why`, one of
-    /// `newer` (a newer `v`), `unknown_member` (an unknown header member, or
-    /// a header off its spelling) or `damaged` (a line not read whole, the
-    /// header's or a body line's), as `held::HaltWhy::token` spells them.
+    /// The held-burst store's file was written by a newer skep, or is damaged.
+    ///
+    /// It answers `held(session)`, and every act on the principal's held
+    /// lines — P38's halt (§3c.3), its detail the file's `path` and its
+    /// `why`, one of `newer` (a newer `v`), `unknown_member` (an unknown
+    /// header member, or a header off its spelling) or `damaged` (a line not
+    /// read whole, the header's or a body line's), as `held::HaltWhy::token`
+    /// spells them.
     pub const STORE_HALTED: Name = Name("store_halted");
     /// `resolve(session, …)`: no held line of that ordinal stands.
     pub const NO_SUCH_HELD: Name = Name("no_such_held");
-    /// `resolve(session, …)`: the line is `holding` or `sending`, not refused
-    /// or moved — no act exists until the board answers (P10).
+    /// `resolve(session, …)`: the line is `holding` or `sending`.
+    ///
+    /// It is not refused or moved — no act exists until the board answers
+    /// (P10).
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
-    /// A burst whose frame passes the board's frame cap, as sent or as a
-    /// resend's attest would carry it — one the board answers `413` unread at
-    /// every send — refused at the act and never held.
+    /// A burst whose frame passes the board's frame cap, refused at the act.
+    ///
+    /// The frame passes it as sent or as a resend's attest would carry it —
+    /// one the board answers `413` unread at every send — and the burst is
+    /// never held.
     pub const FRAME_TOO_LARGE: Name = Name("frame_too_large");
-    /// A burst the principal's held queue has no room for: its standing
-    /// frames, or its lines, hold the queue's budget already — refused, and
-    /// kept nowhere.
+    /// A burst the principal's held queue has no room for.
+    ///
+    /// Its standing frames or its lines hold the queue's budget already, or
+    /// its ordinals are spent — the burst refused, and kept nowhere.
     pub const HELD_FULL: Name = Name("held_full");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");
 
-    // ── THE HALTS' ARMED NAMES: `Refusal::named`, `Refusal::of_named` ────
+    // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────
 
     /// A halt the row arms no name for.
     pub const HALT: Name = Name("halt");
-    /// The KEY store holds no key for (this board, the principal).
+    /// The key store holds no key for (this board, the principal).
     pub const NO_KEY: Name = Name("no_key");
-    /// The KEY store cannot be read — the shell's own data directory, its
-    /// act and never a page act (`client.md` §4b.1).
+    /// The key store cannot be read.
+    ///
+    /// It is the shell's own data directory, its act and never a page act
+    /// (`client.md` §4b.1).
     pub const STORE_UNREADABLE: Name = Name("store_unreadable");
-    /// The KEY store cannot be written — the shell's own data directory, its
-    /// act and never a page act (`client.md` §4b.1, §3.7).
+    /// The key store cannot be written.
+    ///
+    /// It is the shell's own data directory, its act and never a page act
+    /// (`client.md` §4b.1, §3.7).
     pub const STORE_UNWRITABLE: Name = Name("store_unwritable");
-    /// The origin the shell signs for is not among the board's signed
-    /// origins (AUTH-5.24, AUTH-5.36's origin state).
+    /// The origin the shell signs for is not among the board's signed origins.
+    ///
+    /// It is the origin state of AUTH-5.24 and AUTH-5.36.
     pub const ORIGIN_STATE: Name = Name("origin_state");
-    /// The principal holds no account at the board: `principal_prefix`
-    /// answered none (AUTH-5.67 (2)).
+    /// The principal holds no account at the board.
+    ///
+    /// `principal_prefix` answered none (AUTH-5.67 (2)); the pre-check's other
+    /// halts, its walk's among them, take this name too.
     pub const NOT_REGISTERED: Name = Name("not_registered");
     /// The key stands in the retired list.
     pub const RETIRED: Name = Name("retired");
@@ -164,11 +191,12 @@ impl Name {
     pub const ALREADY_SEEDED: Name = Name("already_seeded");
     /// `accept` at an address not yet delegated.
     pub const NOT_DELEGATED: Name = Name("not_delegated");
-    /// The attest a signed session's write needs could not be composed;
-    /// nothing was sent.
+    /// The attest a signed session's write needs could not be composed.
+    ///
+    /// Nothing was sent.
     pub const ATTEST_NOT_COMPOSED: Name = Name("attest_not_composed");
 
-    /// The token.
+    /// Returns the token.
     pub fn as_str(self) -> &'static str {
         self.0
     }
@@ -181,17 +209,20 @@ impl fmt::Display for Name {
 }
 
 impl Refusal {
-    /// The shell's own refusal named `name`, with its detail object — its
-    /// members rendered beside `kind` and `name`, never in their place.
+    /// Returns the shell's own refusal named `name`, with its detail object.
+    ///
+    /// The detail's members render beside `kind` and `name`, never in their
+    /// place.
     pub fn shell(name: Name, detail: Value) -> Refusal {
         Refusal::Shell { name, detail }
     }
 
-    /// THE BOARD's VERDICT on a non-200 answer: its status, the error
-    /// document's `error` as the code (`http_error` where the body names
-    /// none), its `detail` and `op` where they ride, and the body whole —
-    /// read as `skep-client` reads every non-200 it does not answer as a
-    /// value.
+    /// Returns the board's verdict on a non-200 answer.
+    ///
+    /// It holds its status, the error document's `error` as the code
+    /// (`http_error` where the body names none), its `detail` and `op` where
+    /// they ride, and the body whole — read as `skep-client` reads every
+    /// non-200 it does not answer as a value.
     pub fn board(status: u16, body: Value) -> Refusal {
         Refusal::Board(Refused {
             status,
@@ -202,22 +233,24 @@ impl Refusal {
         })
     }
 
-    /// The row's arguments are not its shape: `what` says which member.
+    /// Returns the refusal for arguments that are not the row's shape.
+    ///
+    /// `what` says which member.
     pub fn malformed(what: impl Into<String>) -> Refusal {
         Refusal::shell(Name::MALFORMED_ARGS, json!({"what": what.into()}))
     }
 
-    /// A halt the row arms no name for.
+    /// Returns a halt the row arms no name for.
     pub fn halt(face: Face) -> Refusal {
         Refusal::Halt { name: Name::HALT, face }
     }
 
-    /// A halt under the armed name the row spells.
+    /// Returns a halt under the armed name the row spells.
     pub fn named(name: Name, face: Face) -> Refusal {
         Refusal::Halt { name, face }
     }
 
-    /// The conversion `From<Halt>` makes, a halt's face taking `name`.
+    /// Converts `h` as `From<Halt>` does, a halt's face taking `name`.
     pub fn of_named(name: Name, h: Halt) -> Refusal {
         match h {
             Halt::Halt(face) => Refusal::Halt { name, face },
@@ -225,7 +258,7 @@ impl Refusal {
         }
     }
 
-    /// The one token the page faces on.
+    /// Returns the one token the page faces on.
     pub fn name(&self) -> &str {
         match self {
             Refusal::Board(r) => match (r.code.as_str(), r.detail.as_deref()) {
@@ -238,7 +271,7 @@ impl Refusal {
         }
     }
 
-    /// The value the page renders.
+    /// Returns the value the page renders.
     pub fn to_value(&self) -> Value {
         let name = self.name();
         match self {
@@ -299,8 +332,10 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// The family's member as the row carries it: the board's verdict verbatim,
-/// a halt's face under `halt`, the block, the unreachable board.
+/// The family's member as the row carries it.
+///
+/// Each halt maps to its member: the board's verdict verbatim, a halt's face
+/// under `halt`, the block, the unreachable board.
 impl From<Halt> for Refusal {
     fn from(h: Halt) -> Refusal {
         match h {
@@ -316,9 +351,11 @@ impl From<Halt> for Refusal {
 mod tests {
     use super::*;
 
-    /// Every member names ONE token: the board's key, the armed name, the
-    /// block, the unreachable board, the shell's code — and renders under
-    /// its kind with the member's own fields.
+    /// Checks that every refusal names one token and renders under its kind.
+    ///
+    /// Every member names one token — the board's key, the armed name, the
+    /// block, the unreachable board, the shell's code — and renders under its
+    /// kind with the member's own fields.
     #[test]
     fn every_refusal_names_one_token_and_renders_under_its_kind() {
         let board = Refusal::Board(Refused { status: 200, code: "credential_refused".into(), detail: Some("signed_session_required".into()), op: Some("publish".into()), body: json!({"resp": "rejected"}) });
@@ -340,9 +377,11 @@ mod tests {
         assert_eq!((v["kind"].as_str(), v["name"].as_str(), v["session"].as_str()), (Some("shell"), Some("session_ended"), Some("s-1")));
     }
 
+    /// Checks that a shell refusal's detail never overwrites its token.
+    ///
     /// A shell refusal's `kind` and `name` are its own, whatever its detail
-    /// holds: a detail naming either rides beside them, never in their
-    /// place, and a detail of no object renders no member.
+    /// holds: a detail naming either rides beside them, never in their place,
+    /// and a detail of no object renders no member.
     #[test]
     fn a_shell_refusals_detail_never_overwrites_its_token() {
         let v = Refusal::shell(Name::SESSION_ENDED, json!({"kind": "x", "name": "y", "session": "s-1"})).to_value();
@@ -350,9 +389,10 @@ mod tests {
         assert_eq!(Refusal::shell(Name::SESSION_ENDED, json!("a string")).to_value(), json!({"kind": "shell", "name": "session_ended"}));
     }
 
-    /// A non-200 is the board's verdict under its own status: the error its
-    /// token, the members it carries kept in the body; a body that names no
-    /// error is `http_error`.
+    /// Checks that a non-200 is the board's verdict under its own status.
+    ///
+    /// The error is its token, the members it carries kept in the body; a
+    /// body that names no error is `http_error`.
     #[test]
     fn a_non_200_is_the_boards_verdict_under_its_status() {
         let r = Refusal::board(400, json!({"error": "beyond_head", "head": 12}));
@@ -363,12 +403,14 @@ mod tests {
         assert_eq!(Refusal::board(502, Value::Null).name(), "http_error");
     }
 
-    /// A VERDICT's NAME is the token its rejection dispatches on (wire.md
-    /// §Rejections: "key client behavior on the token, never on prose"), the
-    /// law over the families: `credential_refused` and `registry_refused`
-    /// with a detail named by it, without one by their code, and any other
-    /// code by itself, its detail prose (the mutant that drops a family from
-    /// `name` faces `registry_refused` where the walk keys on its detail).
+    /// Checks that a verdict's name is the token its rejection dispatches on.
+    ///
+    /// It is wire.md §Rejections' "key client behavior on the token, never on
+    /// prose", the law over the families: `credential_refused` and
+    /// `registry_refused` with a detail named by it, without one by their
+    /// code, and any other code by itself, its detail prose (the mutant that
+    /// drops a family from `name` faces `registry_refused` where the walk keys
+    /// on its detail).
     #[test]
     fn a_verdicts_name_is_the_token_its_rejection_dispatches_on() {
         for code in ["credential_refused", "registry_refused", "out_of_bounds"] {

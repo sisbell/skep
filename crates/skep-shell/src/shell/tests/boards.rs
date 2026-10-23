@@ -1,4 +1,6 @@
-//! EACH BOARD's OWN: the own node's state announced at its board — a
+//! Each board's own: its node's state, its feed and the shell's stop.
+//!
+//! The suite checks the own node's state announced at its board — a
 //! deliberate stop said once, its feed adding no `unreachable` while it
 //! stands, while another board's stream failure is still announced, and its
 //! `Running` handing the probe to the board's feed thread; a search held at
@@ -12,9 +14,11 @@ use std::io::{Read, Write};
 use super::*;
 use crate::sessions::{Facts, Open};
 
-/// THE OWN NODE's STATE: a shell that runs the node announces each state
-/// its owner reports on the `daemon` event at the node's board, and `probe`
-/// answers it; a shell that runs none has none to report.
+/// Checks that the own node's state is announced at its board.
+///
+/// A shell that runs the node announces each state its owner reports on the
+/// `daemon` event at the node's board, and `probe` answers it; a shell that
+/// runs none has none to report.
 #[test]
 fn the_own_nodes_state_is_announced_at_its_board() {
     let dir = TempDir::new().unwrap();
@@ -41,16 +45,18 @@ fn the_own_nodes_state_is_announced_at_its_board() {
     sd.shutdown();
 }
 
-/// A DELIBERATE STOP IS SAID ONCE: with the own node running and its feed
-/// live, `set_node_state(Stopped)` and then the node's shutdown — within
-/// three probe cadences the board's `daemon` events are EXACTLY one `stopped`
-/// and no `unreachable` (the mutant that keeps the feed's emit under the
-/// stop); the node back at the same port and `set_node_state(Running)`:
-/// exactly one `running`, the feed's first tick after the restart adding none
-/// of its own (the mutant that marks the stream unreachable under the stop
-/// and so says `running` twice). A second board that is NOT the own node,
-/// shut down the same way, still announces `unreachable`: the `daemon` event
-/// reaches every board the shell dials, each naming its board.
+/// Checks that a deliberate stop of the own node is said once.
+///
+/// With the own node running and its feed live, `set_node_state(Stopped)`
+/// and then the node's shutdown — within three probe cadences the board's
+/// `daemon` events are exactly one `stopped` and no `unreachable` (the
+/// mutant that keeps the feed's emit under the stop); the node back at the
+/// same port and `set_node_state(Running)`: exactly one `running`, the feed's
+/// first tick after the restart adding none of its own (the mutant that
+/// marks the stream unreachable under the stop and so says `running`
+/// twice). A second board that is not the own node, shut down the same way,
+/// still announces `unreachable`: the `daemon` event reaches every board the
+/// shell dials, each naming its board.
 #[test]
 fn a_deliberate_stop_of_the_own_node_is_said_once() {
     let dir = TempDir::new().unwrap();
@@ -69,7 +75,8 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     let refs = shell.board_references();
     let (own, other) = (refs[0].clone(), refs[1].clone());
     let daemon_states = |board: &str| -> Vec<String> { seen.lock().unwrap().iter().filter(|e| e.name == EventName::Daemon && e.data["board"] == board).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
-    // The own node's feed is live: a session's supplement widened on its thread.
+    // The own node's feed is live: a session's supplement widened on its
+    // thread.
     let session = shell.call("session", &json!({"board": own})).unwrap()["session"].as_str().unwrap().to_string();
     wait_for(&seen, |e| e.name == EventName::Index && e.data["session"] == session);
     // The stop, deliberate: said once; then both nodes go down.
@@ -97,8 +104,9 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     own_sd.shutdown();
 }
 
-/// A listener that accepts every connection and holds it for `delay` before
-/// letting it go unanswered: a board each of whose dials takes that long
+/// Returns the origin of a listener that holds every connection for `delay`.
+///
+/// It lets each go unanswered: a board each of whose dials takes that long
 /// and answers nothing.
 fn tarpit(delay: Duration) -> String {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -114,13 +122,15 @@ fn tarpit(delay: Duration) -> String {
     origin
 }
 
-/// A board that pages without end: every `/changes` read answered with an
-/// empty page whose `last` passes its `since` by one and whose `more` stands
-/// — each read counted — its `/events` stream one commit and then silence,
-/// its `/health` a board at position 10 that takes writes, and every `/op`
-/// an empty delivery (no `H.1`, so no index opens). Each page moves its
-/// reader on as the wire's paging rule asks, so no reader refuses one, and
-/// a read to the head never ends.
+/// Returns a board that pages without end, its reads counted.
+///
+/// Every `/changes` read is answered with an empty page whose `last` passes
+/// its `since` by one and whose `more` stands — each read counted — its
+/// `/events` stream one commit and then silence, its `/health` a board at
+/// position 10 that takes writes, and every `/op` an empty delivery (no
+/// `H.1`, so no index opens). Each page moves its reader on as the wire's
+/// paging rule asks, so no reader refuses one, and a read to the head never
+/// ends.
 fn endless_pages() -> (String, Arc<AtomicUsize>) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -135,8 +145,10 @@ fn endless_pages() -> (String, Arc<AtomicUsize>) {
     (origin, pages)
 }
 
-/// One request off `stream` — its head through the blank line, its body as
-/// long as its `Content-Length` says — answered as `endless_pages`' board.
+/// Answers one request off `stream` as `endless_pages`' board.
+///
+/// The request is its head through the blank line, its body as long as its
+/// `Content-Length` says.
 fn answer_one_request(mut stream: std::net::TcpStream, pages: &AtomicUsize) {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -171,13 +183,15 @@ fn answer_one_request(mut stream: std::net::TcpStream, pages: &AtomicUsize) {
     let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
 }
 
-/// A BOARD PAGING WITHOUT END HOLDS NO STOP: the board's feed thread reads
-/// pages that never end — each one's `more` standing, its `last` one past
-/// its `since`, as the wire's paging rule admits — and the shell's stop
-/// returns all the same, the dialer refusing every dial once the stop
-/// stands so the read ends at its next exchange; once the stop returns no
-/// page is read (the mutant that dials past the stop waits for a feed
-/// thread that never takes its `Stop`, and the shell's `Drop` with it).
+/// Checks that a board paging without end holds no stop.
+///
+/// The board's feed thread reads pages that never end — each one's `more`
+/// standing, its `last` one past its `since`, as the wire's paging rule
+/// admits — and the shell's stop returns all the same, the dialer refusing
+/// every dial once the stop stands so the read ends at its next exchange;
+/// once the stop returns no page is read (the mutant that dials past the
+/// stop waits for a feed thread that never takes its `Stop`, and the
+/// shell's `Drop` with it).
 #[test]
 fn a_board_paging_without_end_holds_no_stop() {
     let dir = TempDir::new().unwrap();
@@ -203,11 +217,13 @@ fn a_board_paging_without_end_holds_no_stop() {
     assert_eq!(pages.load(Ordering::SeqCst), read, "no page is read once the stop returns");
 }
 
-/// ONE BOARD's WAIT HOLDS NO OTHER: a guest `search` queued behind a board
-/// whose feed thread waits out dial after dial does not hold back a
-/// `session` at another board, which is answered while the search still
-/// waits (the mutant that runs a board's command under one lock over every
-/// board's handle makes the session wait the search out).
+/// Checks that one board's wait holds back no call at another.
+///
+/// A guest `search` queued behind a board whose feed thread waits out dial
+/// after dial does not hold back a `session` at another board, which is
+/// answered while the search still waits (the mutant that runs a board's
+/// command under one lock over every board's handle makes the session wait
+/// the search out).
 #[test]
 fn a_search_waiting_on_one_board_holds_back_no_call_at_another() {
     let dir = TempDir::new().unwrap();
@@ -231,13 +247,14 @@ fn a_search_waiting_on_one_board_holds_back_no_call_at_another() {
     sd.shutdown();
 }
 
-/// THE NODE's `Running` HANDS ITS PROBE OVER (§3c.4): with a line held at the
-/// own node's board, and the board a tarpit holding each dial two seconds,
-/// `set_node_state(Running)` answers at once — the hold ended and the probe
-/// handed to the board's feed thread, as `resolve(send)` hands it, never
-/// run on the caller's thread (the mutant that probes inline waits the
-/// tarpit's `/health` read out before the verb that owns the node is
-/// answered).
+/// Checks that the node's `Running` hands its probe over (§3c.4).
+///
+/// With a line held at the own node's board, and the board a tarpit holding
+/// each dial two seconds, `set_node_state(Running)` answers at once — the
+/// hold ended and the probe handed to the board's feed thread, as
+/// `resolve(send)` hands it, never run on the caller's thread (the mutant
+/// that probes inline waits the tarpit's `/health` read out before the verb
+/// that owns the node is answered).
 #[test]
 fn the_nodes_running_hands_its_probe_to_the_boards_feed_thread() {
     let dir = TempDir::new().unwrap();
@@ -260,12 +277,13 @@ fn the_nodes_running_hands_its_probe_to_the_boards_feed_thread() {
     drop(shell);
 }
 
-/// THE DROP is the stop: a shell dropped with a session open and never
-/// stopped closes the session at its board — the token answers the death
-/// signal — joins its threads and frees its board's held lock, so a second
-/// holder takes it (the mutant whose stop leaves the token live at the
-/// board, and the one whose feed threads outlive their shell holding the
-/// lock for the process's life).
+/// Checks that the drop is the stop: a dropped shell frees its board's lock.
+///
+/// A shell dropped with a session open and never stopped closes the session
+/// at its board — the token answers the death signal — joins its threads
+/// and frees its board's held lock, so a second holder takes it (the mutant
+/// whose stop leaves the token live at the board, and the one whose feed
+/// threads outlive their shell holding the lock for the process's life).
 #[test]
 fn a_dropped_shell_frees_its_boards_held_lock() {
     let dir = TempDir::new().unwrap();
@@ -288,14 +306,15 @@ fn a_dropped_shell_frees_its_boards_held_lock() {
     sd.shutdown();
 }
 
-/// A BOARD DOWN AT THE OPEN is fed from its FIRST ANSWER: a shell opened while
-/// its board's port refuses — the feed's own first read of it failing, which
-/// its `daemon` event says — the board started there after, never replays
-/// the history before the shell could read it — every `feed` row it emits
-/// lies past the position the board had reached before the open — while the
-/// draft a signed session mints after is fed, from the session's own open
-/// (the mutant that starts a board it could not read at 0 replays the
-/// board's whole feed to every subscriber).
+/// Checks that a board down at the open is fed from its first answer.
+///
+/// A shell opened while its board's port refuses — the feed's own first read
+/// of it failing, which its `daemon` event says — the board started there
+/// after, never replays the history before the shell could read it — every
+/// `feed` row it emits lies past the position the board had reached before
+/// the open — while the draft a signed session mints after is fed, from the
+/// session's own open (the mutant that starts a board it could not read at 0
+/// replays the board's whole feed to every subscriber).
 #[test]
 fn a_board_down_at_the_open_is_fed_from_its_first_answer() {
     let dir = TempDir::new().unwrap();

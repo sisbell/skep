@@ -1,24 +1,26 @@
-//! THE PERSON OVER THE BRIDGE (the dev provider record §2.2 (ii);
-//! `client.md` §4b.2's `moment`, §4b.3's three classes): a `Person` whose
-//! PUBLIC moments — the statements, the boxes, every question over public
-//! facts — become `moment(id, kind, data)` events on the bus and BLOCK on a
-//! channel the page's `answer(id, value)` or `cancel(id)` fills, and whose
-//! SECRET and CONSENT moments go to the dev arm ([`DevArm`]) and never to
-//! the page — or, where the shell was opened with NO ARM
-//! (`ArmConfig::Refuse`: no person is present, an agent's client), REACH NO
-//! ARM: each such moment is refused here, answered by nothing, said on TALK,
-//! and the walk abandoned at it, the call's refusal then `person_required`
-//! naming the moment and its class. The trait is synchronous —
+//! The person over the bridge.
+//!
+//! As the dev provider record §2.2 (ii), `client.md` §4b.2's `moment` and
+//! §4b.3's three classes draw it, it is a `Person` whose public moments —
+//! the statements, the boxes, every question over public facts — become
+//! `moment(id, kind, data)` events on the bus and block on a channel the
+//! page's `answer(id, value)` or `cancel(id)` fills, and whose secret and
+//! consent moments go to the dev arm ([`DevArm`]) and never to the page —
+//! or, where the shell was opened with no arm (`ArmConfig::Refuse`: no
+//! person is present, an agent's client), reach no arm: each such moment is
+//! refused here, answered by nothing, said on `Talk`, and the walk abandoned
+//! at it, the call's refusal then `person_required` naming the moment and
+//! its class. The trait is synchronous —
 //! `label(&mut self, …) -> Result<String, Abandoned>` — so each walk runs on
 //! its own thread and the person it holds waits here; a `cancel` answers
 //! `Abandoned`, which takes the walk's own abandonment exit, and the person
 //! names the walk's halt as the call's refusal — `abandoned`, or
-//! `person_required` ([`BridgePerson::walk_refusal`]). A statement needs
-//! no answer and is forwarded as a moment whose `answerable` is false; the
-//! page may ignore it — save a NATIVE one ([`NATIVE_RULES`]), a statement
+//! `person_required` ([`BridgePerson::walk_refusal`]). A statement needs no
+//! answer and is forwarded as a moment whose `answerable` is false; the
+//! page may ignore it — save a native one ([`NATIVE_RULES`]), a statement
 //! naming where key material rests on disk, which goes to the dev arm — or,
-//! with no arm, is said on TALK here, the shell's own window's line — and
-//! never to the page. AN ANSWER's FORM is its moment's kind's
+//! with no arm, is said on `Talk` here, the shell's own window's line — and
+//! never to the page. An answer's form is its moment's kind's
 //! ([`MomentKind::takes`]): a label box takes a string, or `null` where the
 //! box offers a default, which the answer then is; a question a string; a
 //! yes-or-no a boolean — asked by [`Pending::answer`], the page's one way
@@ -51,19 +53,22 @@ enum Reply {
     Cancel,
 }
 
-/// THE PENDING MOMENTS: each waiting walk's channel by the moment's id, with
-/// the moment's kind, so an answer is routed to the walk that asked (the dev
-/// provider record §3.3) and held to the form that kind takes. The shell's
-/// stop CLOSES the table ([`Pending::cancel_all`]): from then on no moment is
-/// entered, so no walk waits on a page that will never answer.
+/// The pending moments: each waiting walk's channel by the moment's id.
+///
+/// Each stands with the moment's kind, so an answer is routed to the walk
+/// that asked (the dev provider record §3.3) and held to the form that kind
+/// takes. The shell's stop closes the table ([`Pending::cancel_all`]): from
+/// then on no moment is entered, so no walk waits on a page that will never
+/// answer.
 #[derive(Debug, Default)]
 pub struct Pending {
     table: Mutex<Table>,
 }
 
-/// The moments waiting, and whether the stop has closed the table — the
-/// one lock over both, so no moment is entered after the stop has drained
-/// the table.
+/// The moments waiting, and whether the stop has closed the table.
+///
+/// One lock stands over both, so no moment is entered after the stop has
+/// drained the table.
 #[derive(Debug, Default)]
 struct Table {
     waiting: HashMap<String, (MomentKind, Sender<Reply>)>,
@@ -71,14 +76,19 @@ struct Table {
 }
 
 impl Pending {
-    /// No moment pending.
+    /// Returns a table with no moment pending.
     pub fn new() -> Pending {
         Pending::default()
     }
 
-    /// A moment entered under `id`, its answer to come on the receiver — or
-    /// `None` once the stop has closed the table: a moment asked after it is
-    /// entered nowhere.
+    /// Enters a moment under `id`, its answer to come on the receiver.
+    ///
+    /// It answers `None` once the stop has closed the table: a moment asked
+    /// after it is entered nowhere.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the pending lock is poisoned.
     fn register(&self, id: &str, kind: MomentKind) -> Option<Receiver<Reply>> {
         let mut table = self.table.lock().expect("the pending lock");
         if table.closed {
@@ -89,8 +99,19 @@ impl Pending {
         Some(rx)
     }
 
-    /// The moment `id` taken out of the table, where it waits and `admits`
-    /// its kind; a moment `admits` refuses keeps waiting.
+    /// Takes the moment `id` out of the table, where it waits.
+    ///
+    /// It is taken where `admits` admits its kind; a moment `admits` refuses
+    /// keeps waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal `admits` makes, and `no_such_moment` where no
+    /// moment of that id waits.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the pending lock is poisoned.
     fn take(&self, id: &str, admits: impl FnOnce(MomentKind) -> Result<(), Refusal>) -> Result<Sender<Reply>, Refusal> {
         match self.table.lock().expect("the pending lock").waiting.entry(id.to_string()) {
             Entry::Occupied(moment) => {
@@ -101,10 +122,16 @@ impl Pending {
         }
     }
 
-    /// `answer(id, value)`: `value` handed to the walk that asked, of the
-    /// form its moment's kind takes ([`MomentKind::takes`]) — else
-    /// `malformed_args` naming `value` and the form, the moment still
-    /// waiting for one; `no_such_moment` where no moment of that id waits.
+    /// Handles `answer(id, value)`: `value` handed to the walk that asked.
+    ///
+    /// The value is of the form its moment's kind takes
+    /// ([`MomentKind::takes`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns `malformed_args` naming `value` and the form where `value` is
+    /// of another form, the moment still waiting for one; `no_such_moment`
+    /// where no moment of that id waits.
     pub fn answer(&self, id: &str, value: Value) -> Result<(), Refusal> {
         let tx = self.take(id, |kind| if kind.takes(&value) { Ok(()) } else { Err(Refusal::shell(Name::MALFORMED_ARGS, json!({"what": "value", "takes": kind.form()}))) })?;
         // A walk that ended without its answer dropped its receiver: no
@@ -112,16 +139,24 @@ impl Pending {
         tx.send(Reply::Answer(value)).map_err(|_| no_such_moment(id))
     }
 
-    /// `cancel(id)`: the walk that asked abandoned at that moment;
-    /// `no_such_moment` where no moment of that id waits.
+    /// Handles `cancel(id)`: the walk that asked abandoned at that moment.
+    ///
+    /// # Errors
+    ///
+    /// Returns `no_such_moment` where no moment of that id waits.
     pub fn cancel(&self, id: &str) -> Result<(), Refusal> {
         let tx = self.take(id, |_| Ok(()))?;
         tx.send(Reply::Cancel).map_err(|_| no_such_moment(id))
     }
 
-    /// Every pending moment cancelled and the table CLOSED — the shell's
-    /// stop: a moment asked after it is abandoned at once, never entered and
-    /// never sent to the page.
+    /// Cancels every pending moment and closes the table: the shell's stop.
+    ///
+    /// A moment asked after it is abandoned at once, never entered and never
+    /// sent to the page.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the pending lock is poisoned.
     pub fn cancel_all(&self) {
         let all: Vec<Sender<Reply>> = {
             let mut table = self.table.lock().expect("the pending lock");
@@ -133,16 +168,21 @@ impl Pending {
         }
     }
 
-    /// The ids waiting, in no order.
+    /// Returns the ids waiting, in no order.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the pending lock is poisoned.
     #[cfg(test)]
     fn ids(&self) -> Vec<String> {
         self.table.lock().expect("the pending lock").waiting.keys().cloned().collect()
     }
 }
 
-/// A PUBLIC moment's kind, as `MomentEvent.kind` spells it: a statement
-/// said, or a box or a question the page answers — a label box beside
-/// whether it offers a default, which its form turns on.
+/// A public moment's kind, as `MomentEvent.kind` spells it.
+///
+/// It is a statement said, or a box or a question the page answers — a
+/// label box beside whether it offers a default, which its form turns on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MomentKind {
     Statement,
@@ -152,7 +192,7 @@ enum MomentKind {
 }
 
 impl MomentKind {
-    /// The kind as the event spells it.
+    /// Returns the kind as the event spells it.
     fn as_str(self) -> &'static str {
         match self {
             MomentKind::Statement => "statement",
@@ -162,15 +202,16 @@ impl MomentKind {
         }
     }
 
-    /// Whether the page owes an answer: every kind but a statement.
+    /// Returns whether the page owes an answer: every kind but a statement.
     fn answerable(self) -> bool {
         self != MomentKind::Statement
     }
 
-    /// Whether `answer` is of the form this kind takes: a label box a
-    /// string, or `null` where the box offers a default, which the answer
-    /// then is; a question a string; a yes-or-no a boolean. A statement
-    /// takes none: no answer is owed it.
+    /// Returns whether `answer` is of the form this kind takes.
+    ///
+    /// A label box takes a string, or `null` where the box offers a default,
+    /// which the answer then is; a question a string; a yes-or-no a boolean.
+    /// A statement takes none: no answer is owed it.
     fn takes(self, answer: &Value) -> bool {
         match self {
             MomentKind::Statement => false,
@@ -180,7 +221,7 @@ impl MomentKind {
         }
     }
 
-    /// The form this kind takes, as a refused answer names it.
+    /// Returns the form this kind takes, as a refused answer names it.
     fn form(self) -> &'static str {
         match self {
             MomentKind::Statement => "no answer",
@@ -191,48 +232,56 @@ impl MomentKind {
     }
 }
 
-/// THE RULES WHOSE STATEMENTS ARE NATIVE — the shell's own window's and
-/// never the page's (`client.md` §4b.3: an anchor file's destination is
-/// NATIVE, "its copy the ladder words" with it, and "a key file's path, the
-/// store's location, an anchor file's path or contents: the same"). Each
-/// is a rule whose statements name where key material rests, or what was
-/// done with it there: AUTH-5.40's ladder words at the anchor file written;
-/// AUTH-5.41's line on the print, naming the file kept; §4.1 S3's
-/// read-back of an anchor file; AUTH-5.54 step 3's placed copy and kept
-/// artifact; §3a's key file written into the store; and §9 item 36's key
-/// file a retirement leaves in place. A statement is classed by its rule,
-/// the one handle a `Public<Statement>` carries.
+/// The rules whose statements are native, the shell's own window's.
+///
+/// Their statements are never the page's (`client.md` §4b.3: an anchor
+/// file's destination is native, "its copy the ladder words" with it, and
+/// "a key file's path, the store's location, an anchor file's path or
+/// contents: the same"). Each is a rule whose statements name where key
+/// material rests, or what was done with it there: AUTH-5.40's ladder words
+/// at the anchor file written; AUTH-5.41's line on the print, naming the
+/// file kept; §4.1 S3's read-back of an anchor file; AUTH-5.54 step 3's
+/// placed copy and kept artifact; §3a's key file written into the store;
+/// and §9 item 36's key file a retirement leaves in place. A statement is
+/// classed by its rule, the one handle a `Public<Statement>` carries.
 const NATIVE_RULES: [&str; 6] = ["AUTH-5.40", "AUTH-5.41", "§4.1 S3", "AUTH-5.54 step 3", "§3a", "§9 item 36"];
 
-/// The refusal for an `answer` or a `cancel` no moment waits for.
+/// Returns the refusal for an `answer` or a `cancel` no moment waits for.
 fn no_such_moment(id: &str) -> Refusal {
     Refusal::shell(Name::NO_SUCH_MOMENT, json!({"id": id}))
 }
 
-/// Why a moment of the walk went unanswered — what the walk's halt is then
-/// named as the call's refusal ([`BridgePerson::walk_refusal`]).
+/// Why a moment of the walk went unanswered.
+///
+/// It is what the walk's halt is then named as the call's refusal
+/// ([`BridgePerson::walk_refusal`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Unanswered {
-    /// The page cancelled a moment, or the dev arm left one: `abandoned`.
+    /// A moment was cancelled or left: `abandoned`.
+    ///
+    /// The page or the shell's stop cancelled it, or the dev arm left it.
     Abandoned,
-    /// No person is present to answer a SECRET or CONSENT moment
-    /// (`ArmConfig::Refuse`): `person_required`, naming the moment by the
-    /// seam's own name for it, its class, and — a confirmation's — the text
-    /// that was asked, public data (`client.md` §4b.3).
+    /// No person is present to answer a secret or consent moment.
+    ///
+    /// Under `ArmConfig::Refuse` it is `person_required`, naming the moment
+    /// by the seam's own name for it, its class, and — a confirmation's — the
+    /// text that was asked, public data (`client.md` §4b.3).
     Refused { moment: &'static str, class: &'static str, text: Option<String> },
 }
 
-/// Who answers a walk's SECRET and CONSENT moments, as the shell holds it
-/// for the run: the dev arm (`ArmConfig::Auto`, `ArmConfig::Script`), or
-/// no one (`ArmConfig::Refuse`) — the person then refuses each such
-/// moment, reaching no arm, and says the refusal and the NATIVE statements
-/// on the TALK sink carried here. Its `Debug` leaves out the sink, a
-/// closure.
+/// Who answers a walk's secret and consent moments, as the shell holds it.
+///
+/// The shell holds it for the run: the dev arm (`ArmConfig::Auto`,
+/// `ArmConfig::Script`), or no one (`ArmConfig::Refuse`) — the person then
+/// refuses each such moment, reaching no arm, and says the refusal and the
+/// native statements on the `Talk` sink carried here. Its `Debug` leaves out
+/// the sink, a closure.
 pub enum Answerer {
     /// The dev arm answers.
     Arm(DevArm),
-    /// No person is present: every SECRET and CONSENT moment is refused,
-    /// said on this sink.
+    /// No person is present: every secret and consent moment is refused.
+    ///
+    /// Each refusal is said on this sink.
     Refuse(Talk),
 }
 
@@ -245,38 +294,46 @@ impl std::fmt::Debug for Answerer {
     }
 }
 
-/// The person a walk is handed: the bus its PUBLIC moments go out on, the
-/// pending table their answers come back through, the answerer the SECRET
-/// and CONSENT moments go to — the dev arm, or none, under which they are
-/// refused here — and the walk's name and board reference for the event.
+/// The person a walk is handed.
+///
+/// It holds the bus its public moments go out on, the pending table their
+/// answers come back through, the answerer the secret and consent moments
+/// go to — the dev arm, or none, under which they are refused here — and
+/// the walk's name and board reference for the event.
 #[derive(Debug)]
 pub struct BridgePerson {
     bus: Arc<EventBus>,
     pending: Arc<Pending>,
     answerer: Arc<Answerer>,
     walk: &'static str,
-    /// The board reference the walk runs at; none for a walk that touches
-    /// no board (`keygen`'s box).
+    /// The board reference the walk runs at.
+    ///
+    /// It is none for a walk that touches no board (`keygen`'s box).
     board_reference: Option<String>,
-    /// A moment went unanswered — cancelled by the page, left by the dev
+    /// Why a moment went unanswered, where one did.
+    ///
+    /// It was cancelled by the page or the shell's stop, left by the dev
     /// arm, or refused here with no arm: the walk's halt is that refusal
     /// ([`BridgePerson::walk_refusal`]).
     unanswered: Option<Unanswered>,
 }
 
 impl BridgePerson {
-    /// The person for `walk` at the board `board_reference` names, its
-    /// SECRET and CONSENT moments `answerer`'s — the dev arm's, or refused
-    /// where the run holds none.
+    /// Returns the person for `walk` at the board `board_reference` names.
+    ///
+    /// Its secret and consent moments are `answerer`'s — the dev arm's, or
+    /// refused where the run holds none.
     pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, answerer: Arc<Answerer>, walk: &'static str, board_reference: Option<String>) -> BridgePerson {
         BridgePerson { bus, pending, answerer, walk, board_reference, unanswered: None }
     }
 
-    /// The walk's halt `h` as the call's refusal: `person_required` where a
-    /// SECRET or CONSENT moment of the walk was refused for want of a
-    /// person, the abandonment where a moment was cancelled by the page or
-    /// left by the dev arm, else the family's member — a halt's face under
-    /// `armed` where the row diagnosed its armed name.
+    /// Returns the walk's halt `h` as the call's refusal.
+    ///
+    /// It is `person_required` where a secret or consent moment of the walk
+    /// was refused for want of a person, the abandonment where a moment was
+    /// cancelled by the page or the shell's stop or left by the dev arm, else
+    /// the family's member — a halt's face under `armed` where the row
+    /// diagnosed its armed name.
     pub fn walk_refusal(&self, h: Halt, armed: Option<Name>) -> Refusal {
         match &self.unanswered {
             Some(Unanswered::Refused { moment, class, text }) => {
@@ -298,10 +355,15 @@ impl BridgePerson {
         }
     }
 
-    /// A PUBLIC moment forwarded: the event, then the wait for the page's
-    /// answer where its kind owes one; a cancel abandons, and so does a
-    /// moment the stop's closed table enters no more — abandoned before its
-    /// event, since no page will answer it.
+    /// Forwards a public moment to the page as its event.
+    ///
+    /// The wait for the page's answer follows where its kind owes one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] for a cancel, and for a moment the stop's
+    /// closed table enters no more — abandoned before its event, since no
+    /// page will answer it.
     fn moment(&mut self, kind: MomentKind, data: Value) -> Result<Value, Abandoned> {
         let id = moment_id();
         let answerable = kind.answerable();
@@ -332,12 +394,18 @@ impl BridgePerson {
         }
     }
 
-    /// A SECRET or CONSENT moment handed to the dev arm, where the shell
-    /// holds one, its answer passed on and the person marked abandoned
-    /// where the arm left the moment; REFUSED where it holds none
-    /// (`ArmConfig::Refuse`): nothing answers it, the refusal is said on
-    /// TALK naming the moment and its class, and the walk takes its
-    /// abandonment exit, the halt then named `person_required`.
+    /// Hands a secret or consent moment to the dev arm, where one stands.
+    ///
+    /// Its answer is passed on, and the person marked abandoned where the arm
+    /// left the moment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the arm left the moment, and where the
+    /// shell holds no arm (`ArmConfig::Refuse`): nothing answers it, the
+    /// refusal is said on `Talk` naming the moment and its class, and the
+    /// walk takes its abandonment exit, the halt then named
+    /// `person_required`.
     fn hand<T>(&mut self, moment: &'static str, class: &'static str, text: Option<String>, ask: impl FnOnce(&DevArm) -> Result<T, Abandoned>) -> Result<T, Abandoned> {
         let answerer = Arc::clone(&self.answerer);
         match &*answerer {
@@ -445,7 +513,7 @@ mod tests {
         (Arc::new(EventBus::new()), Arc::new(Pending::new()), Arc::new(Answerer::Arm(DevArm::auto(PathBuf::from("/tmp/x"), quiet()))))
     }
 
-    /// A PUBLIC moment is an event with its id and kind, answered by the
+    /// A public moment is an event with its id and kind, answered by the
     /// page through the pending table and never by the arm; a statement
     /// needs no answer; a cancel abandons and marks the person.
     #[test]
@@ -479,7 +547,7 @@ mod tests {
         answerer.join().unwrap();
     }
 
-    /// AN ANSWER's FORM is its moment's kind's: a label box answered `7`, a
+    /// An answer's form is its moment's kind's: a label box answered `7`, a
     /// question answered `null`, a yes-or-no answered `"yes"` and a box with
     /// no default answered `null` are each refused `malformed_args` naming
     /// `value` and the form, the moment still waiting; the right form then
@@ -522,7 +590,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap().data["board"], Value::Null);
     }
 
-    /// A SECRET and a CONSENT moment never reach the bus — every one of the
+    /// A secret and a consent moment never reach the bus — every one of the
     /// seven, the sheet, its dismissal and an anchor's destination among
     /// them: the arm answers.
     #[test]
@@ -541,8 +609,8 @@ mod tests {
         assert!(rx.try_recv().is_err(), "no event crossed to the page");
     }
 
-    /// A NATIVE STATEMENT — one naming where key material rests (§4b.3) — is
-    /// said on TALK under its rule and never reaches the bus, under each of
+    /// A native statement — one naming where key material rests (§4b.3) — is
+    /// said on `Talk` under its rule and never reaches the bus, under each of
     /// the six rules spelled here; a statement of another rule crosses as a
     /// moment (the mutant that drops a rule from `NATIVE_RULES` hands the
     /// page an anchor file's path, or the store's location).
@@ -574,7 +642,7 @@ mod tests {
         assert_eq!(person.unanswered, Some(Unanswered::Abandoned));
     }
 
-    /// THE WALK's HALT as the call's refusal is the person's to name: before
+    /// The walk's halt as the call's refusal is the person's to name: before
     /// any moment is cancelled, the halt's face under the row's armed name,
     /// or the halt's own member where the row arms none; once one is, the
     /// abandonment, whatever the row armed.

@@ -1,13 +1,15 @@
-//! THE WIRE's SHARED FACTS: what the composer (`attest`), the held store
-//! (`held`), the burst's door and the resend (`hold`) and the call log the
-//! shell keeps (`shell`) each read of the board's wire and none of them owns
-//! — the board's frame cap and how a frame is measured against it, the
-//! tumbler component budget and an address read within it, a document
-//! address in its one spelling, and the wire's VALUE FORMS both ways
-//! (wire.md §Value encodings) with the insert's value budget: a frame's
-//! `values` minted as the composer signs them, and a delivery read back as
-//! the composer's read-back and the resend's content confirm hold it. A
-//! leaf: it names no other module of the crate.
+//! The wire's shared facts, which several modules read and none owns.
+//!
+//! They are what the composer (`attest`), the held store (`held`), the
+//! burst's door and the resend (`hold`) and the call log the shell keeps
+//! (`shell`) each read of the board's wire and none of them owns — the
+//! board's frame cap and how a frame is measured against it, the tumbler
+//! component budget and an address read within it, a document address in its
+//! one spelling, and the wire's value forms both ways (wire.md §Value
+//! encodings) with the insert's value budget: a frame's `values` minted as
+//! the composer signs them, and a delivery read back as the composer's
+//! read-back and the resend's content confirm hold it. A leaf: it names no
+//! other module of the crate.
 
 use std::borrow::Cow;
 use std::io;
@@ -16,58 +18,68 @@ use serde_json::Value;
 use skep_address::{Address, Level};
 use skep_client::address::{is_address_text, parse_address};
 
-/// THE BOARD's FRAME CAP — the most bytes one `/op` body may carry: skepd's
-/// `body_cap("POST", "/op")`, its `MAX_REQUEST_BODY`, refused `413` on the
-/// declared length before a byte is read. Two budgets are this number: a
-/// burst whose frame the board takes at no send never enters the hold
-/// (`hold`'s `Burst::admit`), and a shot's body is built under it — the
+/// The board's frame cap: the most bytes one `/op` body may carry.
+///
+/// It is skepd's `body_cap("POST", "/op")`, its `MAX_REQUEST_BODY`, refused
+/// `413` on the declared length before a byte is read. Two budgets are this
+/// number: a burst whose frame the board takes at no send never enters the
+/// hold (`hold`'s `Burst::admit`), and a shot's body is built under it — the
 /// parity the daemon's own composer holds a shot's body to (`auth/entry.rs`'s
 /// `MAX_SHOT_BODY_BYTES`), answering a longer one
 /// `attestation_invalid:frame_too_large`. Pinned equal to the board's by the
 /// suite.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
-/// The most components one tumbler may carry, an address or a width —
-/// skepd's codec's `MAX_TUMBLER_COMPONENTS`, refused at the board's parse,
-/// `malformed`; counted here before a component is converted or collected.
-/// The codec's constant is private, so the suite pins this one by the
-/// board's behaviour: an address at it parsed, one past it refused.
+/// The most components one tumbler may carry, an address or a width.
+///
+/// It is `skep-core`'s codec's `MAX_TUMBLER_COMPONENTS`, refused at the
+/// board's parse, `malformed`; counted here before a component is converted
+/// or collected. The codec's constant is private, so the suite pins this one
+/// by the board's behaviour: an address at it parsed, one past it refused.
 pub const MAX_TUMBLER_COMPONENTS: usize = 256;
 
-/// The most values one `insert` may mint — skepd's codec's
-/// `MAX_INSERT_VALUES`, refused at the board's parse, `malformed`; counted
-/// by [`values_of`] ahead of each element it is about to mint, a hex by its
-/// encoded length, as the codec counts it. Pinned by the board's behaviour,
-/// as [`MAX_TUMBLER_COMPONENTS`] is.
+/// The most values one `insert` may mint.
+///
+/// It is `skep-core`'s codec's `MAX_INSERT_VALUES`, refused at the board's
+/// parse, `malformed`; counted by [`values_of`] ahead of each element it is
+/// about to mint, a hex by its encoded length, as the codec counts it.
+/// Pinned by the board's behaviour, as [`MAX_TUMBLER_COMPONENTS`] is.
 pub const MAX_INSERT_VALUES: usize = 1 << 18;
 
-/// Whether `text` splits into at most [`MAX_TUMBLER_COMPONENTS`]
-/// components — counted without converting or collecting one.
+/// Returns whether `text` splits within the component budget.
+///
+/// It splits into at most [`MAX_TUMBLER_COMPONENTS`] components, counted
+/// without converting or collecting one.
 pub fn within_components(text: &str) -> bool {
     text.split('.').nth(MAX_TUMBLER_COMPONENTS).is_none()
 }
 
-/// `text` as an address — within [`MAX_TUMBLER_COMPONENTS`], counted before
-/// a component is converted, each a decimal natural, and T4-valid — or
-/// `None`.
+/// Returns `text` as an address, or `None`.
+///
+/// The address is within [`MAX_TUMBLER_COMPONENTS`], counted before a
+/// component is converted, each a decimal natural, and T4-valid.
 pub fn bounded_address(text: &str) -> Option<Address> {
     within_components(text).then(|| parse_address(text)).flatten()
 }
 
-/// `text` as a DOCUMENT address in its ONE spelling — dotted decimal
-/// naturals, no sign and no leading zero (`is_address_text`) — within
-/// [`MAX_TUMBLER_COMPONENTS`], T4-valid and of the document level, or
-/// `None`. The one spelling, because the hold keys a document's lines by
-/// its text and reads its rows `under` that text, and a trunk is split by
-/// text (`attest`'s `trunk_text`): two spellings of one document would be
-/// two documents to the hold, and a `00` is no `0` to a split.
+/// Returns `text` as a document address in its one spelling, or `None`.
+///
+/// The spelling is dotted decimal naturals, no sign and no leading zero
+/// (`is_address_text`); the address is within [`MAX_TUMBLER_COMPONENTS`],
+/// T4-valid and of the document level. The one spelling, because the hold
+/// keys a document's lines by its text and reads its rows `under` that text,
+/// and a trunk is split by text (`attest`'s `trunk_text`): two spellings of
+/// one document would be two documents to the hold, and a `00` is no `0` to
+/// a split.
 pub fn document_address(text: &str) -> Option<Address> {
     is_address_text(text).then(|| bounded_address(text)).flatten().filter(|a| a.level() == Level::Document)
 }
 
-/// The length of `v`'s compact JSON text — the bytes a value carries on the
-/// wire, as the shell counts a call's for its log and measures a frame
-/// against the board's cap — counted as it is written and never kept.
+/// Returns the length of `v`'s compact JSON text.
+///
+/// It is the bytes a value carries on the wire, as the shell counts a call's
+/// for its log and measures a frame against the board's cap — counted as it
+/// is written and never kept.
 pub fn json_len(v: &Value) -> usize {
     /// A writer that keeps nothing but the count.
     struct Count(usize);
@@ -90,18 +102,27 @@ pub fn json_len(v: &Value) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValuesFault {
     /// An element of no wire form, or a hex that does not decode.
+    ///
+    /// The values being no list is this fault too.
     NotAWireForm,
     /// More values than the board's parse admits ([`MAX_INSERT_VALUES`]).
     PastBudget,
 }
 
-/// The wire's `values` as the value at each position the frame fills: a
-/// string and a `{"hex"}` mint one value per byte, an `{"atom"}` and an
+/// Returns the wire's `values` as the value at each position the frame fills.
+///
+/// A string and a `{"hex"}` mint one value per byte, an `{"atom"}` and an
 /// `{"atom_hex"}` one composite value (wire.md §Value encodings). A text's
 /// and an atom's values are borrowed from the frame; a hex's are decoded,
-/// and so owned. At most [`MAX_INSERT_VALUES`], asked of each element
-/// before it mints — a hex by its encoded length — so a frame past the
-/// budget mints nothing past it.
+/// and so owned. At most [`MAX_INSERT_VALUES`], asked of each element before
+/// it mints — a hex by its encoded length — so a frame past the budget mints
+/// nothing past it.
+///
+/// # Errors
+///
+/// Returns [`ValuesFault::NotAWireForm`] where `values` is no list, an
+/// element is of no wire form or a hex does not decode, and
+/// [`ValuesFault::PastBudget`] where the values pass [`MAX_INSERT_VALUES`].
 pub fn values_of(values: &Value) -> Result<Vec<Cow<'_, [u8]>>, ValuesFault> {
     let room = |minted: usize, adding: usize| if minted.saturating_add(adding) > MAX_INSERT_VALUES { Err(ValuesFault::PastBudget) } else { Ok(()) };
     let mut out = Vec::new();
@@ -131,15 +152,19 @@ pub fn values_of(values: &Value) -> Result<Vec<Cow<'_, [u8]>>, ValuesFault> {
     Ok(out)
 }
 
-/// A delivery's items as the value at each position they deliver, in order —
-/// the inverse of [`values_of`]: a `content` text and a `hex` item one value
-/// per byte (adjacent text arrives as one item), an `atom` and an `atom_hex`
-/// one composite value — borrowed from the delivery where it spells them,
-/// owned where a hex is decoded. An item no value spells — a withheld run, a
-/// reference, a `hex` that does not decode, one this shell does not know —
-/// is answered in its place as the item itself, and nothing after it. LAZY:
-/// a reader walks a board's delivery position by position and holds what it
-/// keeps, never a value for every position the board chose to deliver.
+/// Returns a delivery's items as the value at each position they deliver.
+///
+/// They come in order — the inverse of [`values_of`]: a `content` text and a
+/// `hex` item one value per byte (adjacent text arrives as one item), an
+/// `atom` and an `atom_hex` one composite value — borrowed from the delivery
+/// where it spells them, owned where a hex is decoded. An item no value
+/// spells — a withheld run, a reference, a `hex` that does not decode, one
+/// this shell does not know — is answered in its place as the item itself,
+/// and nothing after it.
+///
+/// **Lazy.** A reader walks a board's delivery position by position and
+/// holds what it keeps, never a value for every position the board chose to
+/// deliver.
 pub fn delivered_values(delivery: &Value) -> impl Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_ {
     let items = delivery["items"].as_array().map(Vec::as_slice).unwrap_or_default();
     let mut stopped = false;
@@ -152,7 +177,7 @@ pub fn delivered_values(delivery: &Value) -> impl Iterator<Item = Result<Cow<'_,
     })
 }
 
-/// One delivered item's positions, as [`delivered_values`] reads them.
+/// Returns one delivered item's positions, as [`delivered_values`] reads them.
 fn item_values(item: &Value) -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_> {
     let unread = || -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_> { Box::new(std::iter::once(Err(item.clone()))) };
     if let Some(text) = item["content"].as_str() {
@@ -174,10 +199,11 @@ fn item_values(item: &Value) -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Va
     }
 }
 
-/// Lowercase or uppercase hex decoded, `None` where it is none: an odd
-/// length, or any byte that is no ASCII hex digit — a sign, or a byte of a
-/// multi-byte character. The text is read byte by byte, so no character
-/// boundary can be cut.
+/// Returns lowercase or uppercase hex decoded, `None` where it is none.
+///
+/// It is none at an odd length, or at any byte that is no ASCII hex digit —
+/// a sign, or a byte of a multi-byte character. The text is read byte by
+/// byte, so no character boundary can be cut.
 fn decode_hex(h: &str) -> Option<Vec<u8>> {
     let digit = |b: u8| char::from(b).to_digit(16);
     let (pairs, odd) = h.as_bytes().as_chunks::<2>();
@@ -194,16 +220,18 @@ mod tests {
 
     use super::*;
 
-    /// A delivery's values collected, or the item that stopped them.
+    /// Returns a delivery's values collected, or the item that stopped them.
     fn delivered(delivery: &Value) -> Result<Vec<Cow<'_, [u8]>>, Value> {
         delivered_values(delivery).collect()
     }
 
-    /// The wire's four value forms mint the body's values: per byte for a
-    /// string and a `hex`, one composite for an `atom` and an `atom_hex`,
-    /// the text's and the atom's borrowed from the frame; a hex of either
-    /// case decodes, and one with a sign or a multi-byte character is no
-    /// value (never a panic at a character boundary), its fault named.
+    /// Checks that the wire's four value forms mint the body's values.
+    ///
+    /// They mint per byte for a string and a `hex`, one composite for an
+    /// `atom` and an `atom_hex`, the text's and the atom's borrowed from the
+    /// frame; a hex of either case decodes, and one with a sign or a
+    /// multi-byte character is no value (never a panic at a character
+    /// boundary), its fault named.
     #[test]
     fn the_values_read_as_the_wire_spells_them() {
         let frame = json!(["ab", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
@@ -219,10 +247,11 @@ mod tests {
         assert_eq!(values_of(&json!([{"hex": "abc"}])), Err(ValuesFault::NotAWireForm), "an odd length");
     }
 
-    /// A delivery reads back as the values a frame spells them in: adjacent
-    /// text arrives as ONE item and is one value per byte, as the frame's
-    /// string was; a withheld run, or a `hex` that does not decode, is no
-    /// value and is answered as the item that stopped the read.
+    /// Checks that a delivery reads back as the values its frame spelled.
+    ///
+    /// Adjacent text arrives as one item and is one value per byte, as the
+    /// frame's string was; a withheld run, or a `hex` that does not decode,
+    /// is no value and is answered as the item that stopped the read.
     #[test]
     fn a_delivery_reads_back_as_the_values_its_frame_spelled() {
         let frame = json!(["he", "llo", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
@@ -238,9 +267,11 @@ mod tests {
         assert_eq!(stopped.len(), 2, "nothing is read past the item that stopped the read: {stopped:?}");
     }
 
-    /// An insert's values are held to the codec's count AHEAD of each element:
-    /// a string of exactly the budget mints, one byte more is refused as past
-    /// it, and a hex is counted by its encoded length, an atom as one value.
+    /// Checks that an insert's values are held to the budget before they mint.
+    ///
+    /// They are held to the codec's count ahead of each element: a string of
+    /// exactly the budget mints, one byte more is refused as past it, and a
+    /// hex is counted by its encoded length, an atom as one value.
     #[test]
     fn the_values_are_held_to_the_insert_budget_before_they_mint() {
         let at = "a".repeat(MAX_INSERT_VALUES);
@@ -251,9 +282,11 @@ mod tests {
         assert_eq!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES)}])).unwrap().len(), MAX_INSERT_VALUES);
     }
 
-    /// An address is recognized within its component budget — counted before a
-    /// component is converted — and a burst's document in its ONE spelling: no
-    /// sign, no leading zero, of the document level.
+    /// Checks an address within its budget and a document in its one spelling.
+    ///
+    /// An address is recognized within its component budget — counted before
+    /// a component is converted — and a burst's document in its one spelling:
+    /// no sign, no leading zero, of the document level.
     #[test]
     fn an_address_is_recognized_within_its_budget_and_a_document_in_its_one_spelling() {
         let at = format!("1{}", ".1".repeat(MAX_TUMBLER_COMPONENTS - 1));

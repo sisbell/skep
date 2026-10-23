@@ -1,34 +1,38 @@
-//! THE ATTEST a signed session composes for every write of the CHECKED SET
-//! (t5: "the shell checks it, signs where signed ops requires"; `client.md`
-//! §4b.3: the shell "signs only the ENTRY FRAME of an op it has checked,
-//! composing every axis of that frame itself — the `board` term from its own
-//! read of the board it dials, the account from the session — and never a
-//! preimage the page supplies"): for a frame of the TEN KINDS that have an
-//! entry frame ([`CheckedKind`]; wire.md §Credential refusals) —
-//! `create_new_document`, `fork`, `version`, `insert`, `publish`,
-//! `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` — the entry
-//! frame under `H.1`'s pair, the session's account, the frame's `doc` term
-//! and the body the kind's grammar spells, signed by the session's key,
-//! attached as the frame's `attest` member. ATTACH WHEN IN DOUBT (the wire's
-//! own rule): the publish class is the daemon's classification, and an
-//! `attest` on a write outside it is dropped unread, so every write of the
-//! ten kinds under a signed session is attested here, a draft's included.
-//! One composer: the body builders are `skep-identity`'s, as the daemon's
-//! verifier composes through them (`skepd`'s `auth/entry.rs`), the slots AS
-//! STORED — an address-form slot's unit spans, a V-spec slot's I-extents
-//! resolved through `image`, as `skep-dev seed`'s link is — and a
-//! `publish`'s copied runs by their values, READ BACK through the origin's
-//! arrangement under the session's own token, a window by its address. A
-//! frame the composer cannot make — a value it cannot read, a slot source
-//! it may not read, a term it cannot spell — halts naming what stopped it,
-//! and nothing is sent: the shell never sends a frame it could not sign. A
-//! death signal met at one of those reads is no halt of the composer's but
-//! the session's end ([`Unattested::Died`]), which its caller runs. The
-//! wire's value forms, both ways, are `wire`'s: the composer spells a
-//! frame's `values` and reads a delivery back through them, and faces what
-//! they refuse as its own halt.
+//! The attest a signed session composes for every write of the checked set.
 //!
-//! THE BOARD's BUDGETS, KEPT AS THE BOARD KEEPS THEM. Every read the
+//! The shell checks a write and signs where signed ops requires; as
+//! `client.md` §4b.3 has it, the shell "signs only the entry frame of an op
+//! it has checked, composing every axis of that frame itself — the `board`
+//! term from its own read of the board it dials, the account from the
+//! session — and never a preimage the page supplies". For a frame of the
+//! ten kinds that have an entry frame ([`CheckedKind`]; wire.md §Credential
+//! refusals) — `create_new_document`, `fork`, `version`, `insert`,
+//! `publish`, `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` —
+//! the attest is the entry frame under `H.1`'s pair, the session's account,
+//! the frame's `doc` term and the body the kind's grammar spells, signed by
+//! the session's key, attached as the frame's `attest` member. The wire's
+//! own rule is to attach when in doubt: the publish class is the daemon's
+//! classification, and an `attest` on a write outside it is dropped unread,
+//! so every write of the ten kinds under a signed session is attested, a
+//! draft's included — save a frame an `attest` already rides
+//! ([`wants_attest`]) and a write at a board with no `H.1` to sign over
+//! (`SessionEntry::attest`). One composer: the body builders are
+//! `skep-identity`'s, as the daemon's verifier composes through them
+//! (`skep-core`'s `auth/entry.rs`), the slots as stored — an address-form
+//! slot's unit spans, a V-spec slot's I-extents resolved through `image`,
+//! as `skep-dev seed`'s link is — and a `publish`'s copied runs by their
+//! values, read back through the origin's arrangement under the session's
+//! own token, a window by its address. A frame the composer cannot make — a
+//! value it cannot read, a slot source it may not read, a term it cannot
+//! spell — halts naming what stopped it, and nothing is sent: the shell
+//! never sends a frame it could not sign. A death signal met at one of
+//! those reads is no halt of the composer's but the session's end
+//! ([`Unattested::Died`]), which its caller runs. The wire's value forms,
+//! both ways, are `wire`'s: the composer spells a frame's `values` and
+//! reads a delivery back through them, and faces what they refuse as its
+//! own halt.
+//!
+//! **The board's budgets, kept as the board keeps them.** Every read the
 //! composer makes is one a page's frame names, and every value it holds is
 //! one a board answered, so each of its costs is held to the budget the
 //! board's own parse, store or composer holds the same frame to — an array's
@@ -36,7 +40,7 @@
 //! ([`MAX_TUMBLER_COMPONENTS`]), an insert's values ([`MAX_INSERT_VALUES`]),
 //! a slot's resolved spans ([`MAX_SLOT_SPANS`]), a shot's re-inserted values
 //! ([`MAX_REINSERTED_VALUES`]) and its body ([`MAX_FRAME_BYTES`]) — each
-//! counted BEFORE the work it bounds, a shot's whole arithmetic before its
+//! counted before the work it bounds, a shot's whole arithmetic before its
 //! first read. A frame past one is a frame the board refuses whatever it
 //! carries, so the composer halts on it as on any frame it cannot make; no
 //! budget here is one the board does not keep, so no frame the board takes
@@ -63,14 +67,17 @@ use skep_identity::{
 use crate::refusal::{Name, Refusal};
 use crate::wire::{bounded_address, delivered_values, values_of, within_components, ValuesFault, MAX_FRAME_BYTES, MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
 
-/// THE RETRACTION CLASS's reserved ghost tumbler — `[R]`, the fifth of the
-/// format's five (`1.1.0.1.0.1.0.1.x`, x = 1..=5: pred_def, pred_stable,
-/// retired, supersedes, retraction) — the type slot of the tuple a
-/// `nullify` deposits, fixed by kind (`skep-links`'s `retraction_tuple`).
+/// The retraction class's reserved ghost tumbler, `[R]`.
+///
+/// It is the fifth of the format's five (`1.1.0.1.0.1.0.1.x`, x = 1..=5:
+/// pred_def, pred_stable, retired, supersedes, retraction) — the type slot
+/// of the tuple a `nullify` deposits, fixed by kind (`skep-links`'s
+/// `retraction_tuple`).
 const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
 
-/// One of THE TEN KINDS that have an entry frame (wire.md §Credential
-/// refusals) — the CHECKED SET, read off a frame's op by
+/// A kind of the checked set: one of the ten that have an entry frame.
+///
+/// The ten (wire.md §Credential refusals) are read off a frame's op by
 /// [`CheckedKind::named`] alone, so the composer's dispatch is one arm per
 /// kind, which the compiler holds exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +109,7 @@ impl CheckedKind {
         CheckedKind::EditLink,
     ];
 
-    /// The kind as the wire spells it.
+    /// Returns the kind as the wire spells it.
     const fn as_str(self) -> &'static str {
         match self {
             CheckedKind::CreateNewDocument => "create_new_document",
@@ -118,73 +125,84 @@ impl CheckedKind {
         }
     }
 
-    /// The kind the wire spells `op`, where it is one of the ten.
+    /// Returns the kind the wire spells `op`, where it is one of the ten.
     fn named(op: &str) -> Option<CheckedKind> {
         CheckedKind::ALL.into_iter().find(|kind| kind.as_str() == op)
     }
 }
 
-/// The most elements one wire ARRAY may carry — skepd's codec's
-/// `MAX_WIRE_LIST`, refused at the board's parse (`malformed`, the frame
-/// unparsed: `op: unparseable`) whatever the array holds: a slot's
-/// addresses, V-specs or spans, `emit`'s `to`, a shot's `runs`. The codec's
-/// constant is private, so the suite pins this one by the board's
-/// behaviour: a list at it parsed, one past it refused.
+/// The most elements one wire array may carry: the codec's `MAX_WIRE_LIST`.
+///
+/// It is `skep-core`'s codec's constant, refused at the board's parse
+/// (`malformed`, the frame unparsed: `op: unparseable`) whatever the array
+/// holds: a slot's addresses, V-specs or spans, `emit`'s `to`, a shot's
+/// `runs`. The codec's constant is private, so the suite pins this one by
+/// the board's behaviour: a list at it parsed, one past it refused.
 pub const MAX_WIRE_LIST: usize = 4096;
 
-/// The most spans one link slot may resolve to — M7's `MAX_SLOT_SPANS`, the
-/// per-slot budget the store charges a slot in whichever form, one span per
-/// run a V-spec resolves to, refused `slot_too_large`: a number the frame
-/// does not show, so the composer stops at the first span past it. Pinned
-/// equal to M7's by the suite.
+/// The most spans one link slot may resolve to: M7's `MAX_SLOT_SPANS`.
+///
+/// It is the per-slot budget the store charges a slot in whichever form,
+/// one span per run a V-spec resolves to, refused `slot_too_large`: a
+/// number the frame does not show, so the composer stops at the first span
+/// past it. Pinned equal to M7's by the suite.
 const MAX_SLOT_SPANS: usize = 4096;
 
-/// The most values a shot may RE-INSERT — M5's `MAX_REINSERTED_VALUES`: the
-/// staging draft's runs' widths, summed, refused by the store as
-/// `too_many_values` by its request's arithmetic before a value is read
+/// The most values a shot may re-insert: M5's `MAX_REINSERTED_VALUES`.
+///
+/// It bounds the staging draft's runs' widths, summed, refused by the store
+/// as `too_many_values` by its request's arithmetic before a value is read
 /// (wire.md §The publish shot). Pinned equal to M5's by the suite.
 const MAX_REINSERTED_VALUES: u64 = 1 << 17;
 
-/// The most positions a shot may COPY IN by value — the body budget's own
-/// consequence and no number of its own: every value costs a shot's body at
-/// least its four-byte length prefix (`PublishBody::push`), so a body within
-/// [`MAX_FRAME_BYTES`] carries at most a quarter as many copied positions as
-/// it has bytes, whatever they hold.
+/// The most positions a shot may copy in by value.
+///
+/// It is the body budget's own consequence and no number of its own: every
+/// value costs a shot's body at least its four-byte length prefix
+/// (`PublishBody::push`), so a body within [`MAX_FRAME_BYTES`] carries at
+/// most a quarter as many copied positions as it has bytes, whatever they
+/// hold.
 const MAX_COPIED_POSITIONS: u64 = (MAX_FRAME_BYTES / 4) as u64;
 
-/// Whether `op` is one of the ten kinds that have an entry frame.
+/// Returns whether `op` is one of the ten kinds that have an entry frame.
 pub fn in_checked_set(op: &str) -> bool {
     CheckedKind::named(op).is_some()
 }
 
-/// The kind of `frame` the shell composes an attest for: its op one of the
-/// ten, no `attest` riding it — the one reader of the composer's
-/// precondition, which [`wants_attest`] and [`Composer::attach`] share.
+/// Returns the kind of `frame` the shell composes an attest for.
+///
+/// Its op is one of the ten, no `attest` riding it — the one reader of the
+/// composer's precondition, which [`wants_attest`] and [`Composer::attach`]
+/// share.
 fn wanted_kind(frame: &Value) -> Option<CheckedKind> {
     frame["op"].as_str().and_then(CheckedKind::named).filter(|_| frame.get("attest").is_none())
 }
 
-/// Whether the shell composes an attest for `frame`: its op is one of the
-/// ten kinds and no `attest` rides it already — a page-supplied attest is
-/// left as it stands, the board's to judge, since the shell signs only what
-/// it composed.
+/// Returns whether the shell composes an attest for `frame`.
+///
+/// It does where its op is one of the ten kinds and no `attest` rides it
+/// already — a page-supplied attest is left as it stands, the board's to
+/// judge, since the shell signs only what it composed.
 pub fn wants_attest(frame: &Value) -> bool {
     wanted_kind(frame).is_some()
 }
 
-/// The most bytes the attest this composer attaches adds to a frame: the
-/// member `,"attest":{"alg":"…","sig":"…"}` at the longest algorithm token
-/// and the longest signature, in hex, of the rows a key signs under
-/// (`SIG_ALGS`) — the room a burst's frame keeps for the attest every send of
-/// it under a signed session carries.
+/// Returns the most bytes the attest this composer attaches adds to a frame.
+///
+/// It is the member `,"attest":{"alg":"…","sig":"…"}` at the longest
+/// algorithm token and the longest signature, in hex, of the rows a key
+/// signs under (`SIG_ALGS`) — the room a burst's frame keeps for the attest
+/// every send of it under a signed session carries.
 pub fn attest_room() -> usize {
     let token = SIG_ALGS.iter().map(|row| row.token.len()).max().unwrap_or(0);
     let sig = SIG_ALGS.iter().map(|row| row.sig_len()).max().unwrap_or(0);
     r#","attest":{"alg":"","sig":""}"#.len() + token + 2 * sig
 }
 
-/// The composer: the board the reads are made at under `token`, the key
-/// that signs, the session's account, and the board term, `H.1`'s pair.
+/// The composer: a board, a token, a key, an account and the board term.
+///
+/// The reads are made at the board under `token`; the key is the one that
+/// signs, the account the session's, and the board term `H.1`'s pair.
 pub struct Composer<'a> {
     pub board: &'a Board,
     pub token: &'a Token,
@@ -193,27 +211,30 @@ pub struct Composer<'a> {
     pub board_term: BoardTerm,
 }
 
-/// Why the composer attached no attest: the call's REFUSAL — its own halt,
-/// and the halt of the `H.1` read it signs over, as `attest_not_composed`;
-/// `store_unreadable` where the session's key file cannot be read and
-/// `no_account` where the board answered the session none
-/// (`SessionEntry::attest`); a board's refusal of a read verbatim;
-/// `unreachable` where a read went unanswered — or the session's DEATH
-/// SIGNAL met at one of its reads, which is no refusal of the composer's:
-/// the caller ends the session (`Sessions::end`) and answers
-/// `session_died` with the reason the end derives.
+/// Why the composer attached no attest.
+///
+/// Either the call's refusal — its own halt, and the halt of the `H.1` read
+/// it signs over, as `attest_not_composed`; `store_unreadable` where the
+/// session's key file cannot be read and `no_account` where the board
+/// answered the session none (`SessionEntry::attest`); a board's refusal of
+/// a read verbatim; `unreachable` where a read went unanswered — or the
+/// session's death signal met at one of its reads, which is no refusal of
+/// the composer's: the caller ends the session (`Sessions::end`) and
+/// answers `session_died` with the reason the end derives.
 #[derive(Debug)]
 pub enum Unattested {
     /// The call's refusal: nothing was sent.
     Refused(Refusal),
-    /// The death signal on the session's token, met at a read the composer
-    /// made: nothing was sent.
+    /// The death signal on the session's token: nothing was sent.
+    ///
+    /// It was met at a read the composer made.
     Died,
 }
 
-/// The composer's own halt named `attest_not_composed`; a halt of another
-/// member — a board's refusal of a read, a read unanswered — carried as
-/// that member.
+/// The composer's own halt, named `attest_not_composed`.
+///
+/// A halt of another member — a board's refusal of a read, a read
+/// unanswered — is carried as that member.
 impl From<Halt> for Unattested {
     fn from(h: Halt) -> Unattested {
         Unattested::Refused(Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))
@@ -245,7 +266,7 @@ enum OwnedDocTerm {
 }
 
 impl OwnedDocTerm {
-    /// The term as [`entry_frame`] takes it: a view of this owned term.
+    /// Returns the term as [`entry_frame`] takes it: a view of this owned term.
     fn as_doc_term(&self) -> DocTerm<'_> {
         match self {
             OwnedDocTerm::One(a) => DocTerm::One(a),
@@ -254,11 +275,13 @@ impl OwnedDocTerm {
     }
 }
 
-/// An I-RANGE as the composer counts it: the I-addresses `prefix.first` up
-/// to, not including, `prefix.reach` — a run `image` answers, or one a shot
-/// copies in, its `i_start` split at its last component ([`split_i`]) and its
-/// width added. Made by [`IRange::new`] alone, where the reach is spellable,
-/// so every walk of its positions stands on one bound, asked once.
+/// An I-range as the composer counts it.
+///
+/// It holds the I-addresses `prefix.first` up to, not including,
+/// `prefix.reach` — a run `image` answers, or one a shot copies in, its
+/// `i_start` split at its last component ([`split_i`]) and its width added.
+/// Made by [`IRange::new`] alone, where the reach is spellable, so every
+/// walk of its positions stands on one bound, asked once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct IRange<'a> {
     prefix: &'a str,
@@ -267,56 +290,64 @@ struct IRange<'a> {
 }
 
 impl<'a> IRange<'a> {
-    /// `width` positions from `prefix.first`, where `first + width` is
-    /// spellable; none where it is not.
+    /// Returns the `width` positions from `prefix.first`.
+    ///
+    /// They are a range where `first + width` is spellable; none where it is
+    /// not.
     fn new(prefix: &'a str, first: u64, width: u64) -> Option<IRange<'a>> {
         Some(IRange { prefix, first, reach: first.checked_add(width)? })
     }
 
-    /// The last components of its positions, in order.
+    /// Returns the last components of its positions, in order.
     fn positions(self) -> Range<u64> {
         self.first..self.reach
     }
 
-    /// How many positions it holds.
+    /// Returns how many positions it holds.
     fn width(self) -> u64 {
         self.reach - self.first
     }
 }
 
-/// One run of a shot as its body takes it, in the shot's V-order: a COPIED
-/// run by the I-range whose values it brings in, and its origin — or a
-/// WINDOW onto another document's I-space.
+/// One run of a shot as its body takes it, in the shot's V-order.
+///
+/// It is a copied run, by the I-range whose values it brings in and its
+/// origin, or a window onto another document's I-space.
 #[derive(Debug)]
 enum ShotPart<'f> {
     Copied { origin: &'f str, range: IRange<'f> },
     Window { start: Address, width: NonZeroU64 },
 }
 
-/// The positions a shot copies in from ONE origin document, WANTED: the
-/// I-ranges of each I-address prefix the shot's runs name, gathered before
-/// any read, so the read that follows holds the values the shot names and
-/// never one per position the origin holds beside them. The read-back's
-/// first phase of three, each a type of its own so no phase's step is taken
-/// out of turn: [`Wanted::seal`] numbers the wanted positions and begins the
-/// [`Reading`], whose [`Reading::finish`] answers the [`ReadBack`].
+/// The positions a shot copies in from one origin document, wanted.
+///
+/// It holds the I-ranges of each I-address prefix the shot's runs name,
+/// gathered before any read, so the read that follows holds the values the
+/// shot names and never one per position the origin holds beside them. It
+/// is the read-back's first phase of three, each a type of its own so no
+/// phase's step is taken out of turn: [`Wanted::seal`] numbers the wanted
+/// positions and begins the [`Reading`], whose [`Reading::finish`] answers
+/// the [`ReadBack`].
 #[derive(Debug)]
 struct Wanted<'f> {
     origin: &'f str,
     ranges: HashMap<&'f str, Vec<WantedRange>>,
 }
 
-/// The wanted I-ranges of each prefix, MERGED AND SORTED, each with the
-/// INDEX its first position takes — a dense numbering of the wanted
-/// positions. Made by [`Wanted::seal`] alone, so every lookup through it
-/// stands on ranges its binary search can read.
+/// The wanted I-ranges of each prefix, merged and sorted, each indexed.
+///
+/// Each takes the index its first position takes — a dense numbering of
+/// the wanted positions. Made by [`Wanted::seal`] alone, so every lookup
+/// through it stands on ranges its binary search can read.
 #[derive(Debug)]
 struct WantedIndex<'f>(HashMap<&'f str, Vec<WantedRange>>);
 
-/// One origin's read under way: the wanted positions' index, a bit per
-/// wanted position marking it read — never a stored value per position a
-/// run's width claims, only one bit — and each read position's value kept
-/// once, as an offset and a length in `bytes`.
+/// One origin's read under way.
+///
+/// It holds the wanted positions' index, a bit per wanted position marking
+/// it read — never a stored value per position a run's width claims, only
+/// one bit — and each read position's value kept once, as an offset and a
+/// length in `bytes`.
 #[derive(Debug)]
 struct Reading<'f> {
     wanted: WantedIndex<'f>,
@@ -325,8 +356,9 @@ struct Reading<'f> {
     bytes: Vec<u8>,
 }
 
-/// One origin's values READ BACK: each kept value sorted by its index, for
-/// [`ReadBack::value`] to find.
+/// One origin's values read back, each kept value sorted by its index.
+///
+/// They are sorted for [`ReadBack::value`] to find.
 #[derive(Debug)]
 struct ReadBack<'f> {
     wanted: WantedIndex<'f>,
@@ -334,9 +366,10 @@ struct ReadBack<'f> {
     bytes: Vec<u8>,
 }
 
-/// One merged wanted I-range: its first position's last component, its
-/// reach — one past its last position's — and the index its first position
-/// takes.
+/// One merged wanted I-range.
+///
+/// It holds its first position's last component, its reach — one past its
+/// last position's — and the index its first position takes.
 #[derive(Debug, Clone, Copy)]
 struct WantedRange {
     first: u64,
@@ -344,9 +377,10 @@ struct WantedRange {
     index: u64,
 }
 
-/// One value read back: its index, and its offset and length in its read's
-/// `bytes` — each under 2^32, the shot's positions and its kept bytes both
-/// being held under [`MAX_FRAME_BYTES`].
+/// One value read back: its index, offset and length in its read's `bytes`.
+///
+/// Each is under 2^32, the shot's positions and its kept bytes both being
+/// held under [`MAX_FRAME_BYTES`].
 #[derive(Debug, Clone, Copy)]
 struct Kept {
     index: u32,
@@ -358,21 +392,35 @@ fn fault(state: impl Into<String>, cause: impl Into<String>) -> Halt {
     Halt::face(state, cause, "this is the shell's frame and never your act; nothing was sent")
 }
 
-/// `text` as an address, or the halt a frame naming no address is.
+/// Returns `text` as an address.
+///
+/// # Errors
+///
+/// Returns the halt a frame naming no address is, where `text` is no dotted
+/// address within [`MAX_TUMBLER_COMPONENTS`] components.
 fn addr(text: &str, what: &str) -> Result<Address, Halt> {
     bounded_address(text).ok_or_else(|| {
         fault(format!("the frame's `{what}` is not an address: `{text}`"), format!("the attest's frame names every address in its dotted spelling, at most {MAX_TUMBLER_COMPONENTS} components long"))
     })
 }
 
-/// The frame's member `name` as a string.
+/// Returns the frame's member `name` as a string.
+///
+/// # Errors
+///
+/// Returns a halt where the frame carries no string `name`.
 fn member<'f>(frame: &'f Value, name: &str) -> Result<&'f str, Halt> {
     frame[name].as_str().ok_or_else(|| fault(format!("the frame carries no `{name}`"), "the attest's grammar for this op names the member"))
 }
 
-/// The halt for a wire array past [`MAX_WIRE_LIST`] elements, which the
-/// board's parse refuses `malformed` — asked before the first element is
-/// read or resolved.
+/// Checks a wire array against [`MAX_WIRE_LIST`].
+///
+/// It is asked before the first element is read or resolved.
+///
+/// # Errors
+///
+/// Returns the halt for an array past [`MAX_WIRE_LIST`] elements, which the
+/// board's parse refuses `malformed`.
 fn check_wire_list(list: &[Value], what: &str) -> Result<(), Halt> {
     if list.len() > MAX_WIRE_LIST {
         return Err(fault(format!("the frame's `{what}` lists {} elements, past the wire's {MAX_WIRE_LIST}", list.len()), "the board refuses a frame holding a longer array `malformed`, unparsed"));
@@ -380,9 +428,13 @@ fn check_wire_list(list: &[Value], what: &str) -> Result<(), Halt> {
     Ok(())
 }
 
-/// `span` pushed onto a slot's spans, or the halt for a slot past
-/// [`MAX_SLOT_SPANS`] — the store's `slot_too_large` — met at the first span
-/// past it, as M7's own resolution meets it.
+/// Pushes `span` onto a slot's spans.
+///
+/// # Errors
+///
+/// Returns the halt for a slot past [`MAX_SLOT_SPANS`] — the store's
+/// `slot_too_large` — met at the first span past it, as M7's own resolution
+/// meets it.
 fn push_span(spans: &mut Vec<Span>, span: Span, what: &str) -> Result<(), Halt> {
     if spans.len() == MAX_SLOT_SPANS {
         return Err(fault(format!("the frame's `{what}` slot resolves to more than {MAX_SLOT_SPANS} spans"), "the board refuses such a slot `slot_too_large`, the store's per-slot budget"));
@@ -391,7 +443,7 @@ fn push_span(spans: &mut Vec<Span>, span: Span, what: &str) -> Result<(), Halt> 
     Ok(())
 }
 
-/// The halt for what a shot's [`PublishBody`] refused.
+/// Returns the halt for what a shot's [`PublishBody`] refused.
 fn body_refused(refusal: PublishRefusal) -> Halt {
     match refusal {
         PublishRefusal::PastBudget => fault(format!("the shot's body passes the board's {MAX_FRAME_BYTES}-byte budget"), "the board refuses such a shot `attestation_invalid:frame_too_large`"),
@@ -399,8 +451,10 @@ fn body_refused(refusal: PublishRefusal) -> Halt {
     }
 }
 
-/// The halt for what [`values_of`] refused: a frame's `values` the
-/// composer cannot spell as the entry body's value sequence.
+/// Returns the halt for what [`values_of`] refused.
+///
+/// That is a frame's `values` the composer cannot spell as the entry body's
+/// value sequence.
 fn values_refused(why: ValuesFault) -> Halt {
     match why {
         ValuesFault::NotAWireForm => fault("the frame's `values` are not the wire's forms", "a value is a string, `{\"hex\"}`, `{\"atom\"}` or `{\"atom_hex\"}`"),
@@ -411,12 +465,14 @@ fn values_refused(why: ValuesFault) -> Halt {
     }
 }
 
-/// THE TRUNK of a document-level address text: the address with its version
-/// components dropped — the document field after the second `0` separator
-/// kept to its first component (`1.0.1.0.1.2` → `1.0.1.0.1`); an element
-/// address is taken to its document first. The projection
-/// `skep-arrangement`'s `trunk_of` makes, reproduced over the spelling, of a
-/// text within [`MAX_TUMBLER_COMPONENTS`] — counted before it is split.
+/// Returns the trunk of a document-level address text.
+///
+/// The trunk is the address with its version components dropped — the
+/// document field after the second `0` separator kept to its first
+/// component (`1.0.1.0.1.2` → `1.0.1.0.1`); an element address is taken to
+/// its document first. It is the projection `skep-arrangement`'s `trunk_of`
+/// makes, reproduced over the spelling, of a text within
+/// [`MAX_TUMBLER_COMPONENTS`] — counted before it is split.
 fn trunk_text(text: &str) -> Option<String> {
     if !within_components(text) {
         return None;
@@ -431,8 +487,9 @@ fn trunk_text(text: &str) -> Option<String> {
     Some(comps[..=second + 1].join("."))
 }
 
-/// A tumbler from its dotted decimal, within [`MAX_TUMBLER_COMPONENTS`] —
-/// counted before a component is converted.
+/// Returns a tumbler from its dotted decimal within [`MAX_TUMBLER_COMPONENTS`].
+///
+/// The components are counted before one is converted.
 fn tumbler(text: &str) -> Option<Tumbler> {
     if !within_components(text) {
         return None;
@@ -441,9 +498,10 @@ fn tumbler(text: &str) -> Option<Tumbler> {
     Tumbler::new(comps?).ok()
 }
 
-/// A stored content extent from a run as `image` answers it: the start's
-/// own tumbler, and a width of zeros at every component but the last,
-/// which holds the count (`skep-dev seed`'s `extent_span`).
+/// Returns a stored content extent from a run as `image` answers it.
+///
+/// It is the start's own tumbler, and a width of zeros at every component
+/// but the last, which holds the count (`skep-dev seed`'s `extent_span`).
 fn extent_span(i_start: &str, width: u64) -> Option<Span> {
     let start = tumbler(i_start)?;
     let mut comps = vec![Nat::from(0u64); start.len()];
@@ -451,20 +509,30 @@ fn extent_span(i_start: &str, width: u64) -> Option<Span> {
     Span::new(start, Tumbler::new(comps).ok()?).ok()
 }
 
-/// An I-address split at its last component: the prefix, and the last
-/// component as a number — the coordinate a run's positions advance along.
+/// Splits an I-address at its last component.
+///
+/// It answers the prefix, and the last component as a number — the
+/// coordinate a run's positions advance along.
 fn split_i(i_addr: &str) -> Option<(&str, u64)> {
     let (prefix, last) = i_addr.rsplit_once('.')?;
     Some((prefix, last.parse().ok()?))
 }
 
-/// THE `insert` ARM's TERMS, read off the frame alone — no read made: the
-/// document's trunk, and the body over the declared deposit and the values,
-/// each recognized as the board's parse recognizes it, within its budgets.
-/// The composer's `insert` arm, and what the burst's door (`hold`'s
-/// `Burst::admit`) asks of an insert a signed session attests at every
-/// send, before the burst can be held: an insert the composer cannot attest
-/// is one no resend of it could ever send.
+/// Returns the `insert` arm's terms, read off the frame alone.
+///
+/// No read is made: the terms are the document's trunk, and the body over
+/// the declared deposit and the values, each recognized as the board's
+/// parse recognizes it, within its budgets. They are the composer's
+/// `insert` arm, and what the burst's door (`hold`'s `Burst::admit`) asks
+/// of an insert a signed session attests at every send, before the burst
+/// can be held: an insert the composer cannot attest is one no resend of it
+/// could ever send.
+///
+/// # Errors
+///
+/// Returns a halt where the frame carries no `doc`, where its `doc` has no
+/// trunk or its `deposit` is no address, and where its `values` are not the
+/// wire's forms or mint past [`MAX_INSERT_VALUES`].
 pub fn insert_terms(frame: &Value) -> Result<(Address, EntryBody), Halt> {
     let doc = member(frame, "doc")?;
     let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "an insert's doc term is the document's trunk"))?;
@@ -473,8 +541,15 @@ pub fn insert_terms(frame: &Value) -> Result<(Address, EntryBody), Halt> {
     Ok((addr(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(AsRef::as_ref))))
 }
 
-/// One run of an `image` answer as the I-range it maps: its `i_start` split
-/// at its last component and its width added, the reach spellable.
+/// Returns one run of an `image` answer as the I-range it maps.
+///
+/// Its `i_start` is split at its last component and its width added, the
+/// reach spellable.
+///
+/// # Errors
+///
+/// Returns a halt where the run is no I-extent: its `i_start` or its
+/// `width` unreadable, or its reach unspellable.
 fn image_run<'v>(run: &'v Value, origin: &str) -> Result<IRange<'v>, Halt> {
     let bad = || fault(format!("a run `image` answered over {origin} is no I-extent"), run.to_string());
     let (prefix, first) = run["i_start"].as_str().and_then(split_i).ok_or_else(bad)?;
@@ -487,15 +562,16 @@ impl<'f> Wanted<'f> {
         Wanted { origin, ranges: HashMap::new() }
     }
 
-    /// The positions of `range` wanted.
+    /// Adds the positions of `range` to those wanted.
     fn want(&mut self, range: IRange<'f>) {
         self.ranges.entry(range.prefix).or_default().push(WantedRange { first: range.first, reach: range.reach, index: 0 });
     }
 
-    /// THE READ BEGUN: the wanted ranges of each prefix merged and sorted,
-    /// every wanted position given an index — under [`MAX_COPIED_POSITIONS`]
-    /// in all, the widths summed having been held to it — and a bit to mark
-    /// it read.
+    /// Begins the read, every wanted position given an index.
+    ///
+    /// The wanted ranges of each prefix are merged and sorted, every wanted
+    /// position given an index — under [`MAX_COPIED_POSITIONS`] in all, the
+    /// widths summed having been held to it — and a bit to mark it read.
     fn seal(self) -> Reading<'f> {
         let mut ranges = self.ranges;
         let mut positions = 0u64;
@@ -519,7 +595,7 @@ impl<'f> Wanted<'f> {
 }
 
 impl WantedIndex<'_> {
-    /// The index of the wanted position `prefix.n`, where one is wanted.
+    /// Returns the index of the position `prefix.n`, where it is wanted.
     fn index(&self, prefix: &str, n: u64) -> Option<u64> {
         let ranges = self.0.get(prefix)?;
         let r = ranges.get(ranges.partition_point(|r| r.reach <= n))?;
@@ -528,11 +604,18 @@ impl WantedIndex<'_> {
 }
 
 impl<'f> Reading<'f> {
-    /// The value read at `prefix.n`, kept where the shot wants it and the
-    /// first time it is read — and counted against `spent`, the body budget
-    /// every origin's kept values share: a distinct value the shot copies in
-    /// is one its body carries at least once, at its length and its
-    /// four-byte prefix, so the kept values never pass [`MAX_FRAME_BYTES`].
+    /// Keeps the value read at `prefix.n`, where the shot wants it.
+    ///
+    /// It is kept the first time it is read — and counted against `spent`,
+    /// the body budget every origin's kept values share: a distinct value the
+    /// shot copies in is one its body carries at least once, at its length
+    /// and its four-byte prefix, so the kept values never pass
+    /// [`MAX_FRAME_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt for a shot's body past its budget where the value
+    /// would take the kept values past [`MAX_FRAME_BYTES`].
     fn keep(&mut self, prefix: &str, n: u64, value: &[u8], spent: &mut usize) -> Result<(), Halt> {
         let Some(index) = self.wanted.index(prefix, n) else { return Ok(()) };
         let (word, bit) = ((index / 64) as usize, 1u64 << (index % 64));
@@ -548,8 +631,9 @@ impl<'f> Reading<'f> {
         Ok(())
     }
 
-    /// THE READ DONE: the kept values sorted by index, the marks of what was
-    /// read let go.
+    /// Finishes the read, the kept values sorted by index.
+    ///
+    /// The marks of what was read are let go.
     fn finish(self) -> ReadBack<'f> {
         let Reading { wanted, mut kept, bytes, .. } = self;
         kept.sort_unstable_by_key(|k| k.index);
@@ -558,8 +642,9 @@ impl<'f> Reading<'f> {
 }
 
 impl ReadBack<'_> {
-    /// The value read back at `prefix.n`, where the shot wants it and the
-    /// origin holds it.
+    /// Returns the value read back at `prefix.n`.
+    ///
+    /// It answers one where the shot wants it and the origin holds it.
     fn value(&self, prefix: &str, n: u64) -> Option<&[u8]> {
         let index = u32::try_from(self.wanted.index(prefix, n)?).ok()?;
         let kept = self.kept[self.kept.binary_search_by_key(&index, |k| k.index).ok()?];
@@ -569,8 +654,15 @@ impl ReadBack<'_> {
 }
 
 impl Composer<'_> {
-    /// One READ under the session: the document; a rejection the board's
-    /// refusal, verbatim; the death signal [`Unattested::Died`].
+    /// Makes one read under the session, answering the document.
+    ///
+    /// # Errors
+    ///
+    /// Returns a rejection as the board's refusal, verbatim; the death signal
+    /// as [`Unattested::Died`]; and a halt of the read as its member — a
+    /// refused exchange the board's refusal, the block `blocked`, a read
+    /// unanswered `unreachable`, the library's own halt
+    /// `attest_not_composed`.
     fn read(&self, frame: &Value) -> Result<Value, Unattested> {
         match self.board.op(Some(self.token), frame)? {
             Answer::Closed => Err(Unattested::Died),
@@ -581,13 +673,22 @@ impl Composer<'_> {
         }
     }
 
-    /// A slot's spans AS STORED: the address form's unit spans; a V-spec
-    /// list's I-extents resolved through `image` — bare, as `make_link`'s
-    /// slots spell it, or as `edit_link`'s successor `ty` spells it,
-    /// `{"resolve": […]}` (wire.md §Links (writes)); or a span list verbatim
-    /// (`emit`'s `ty`). The list within [`MAX_WIRE_LIST`] before its first
-    /// element is read, and its spans within [`MAX_SLOT_SPANS`] as they
-    /// resolve.
+    /// Returns a slot's spans as stored.
+    ///
+    /// They are the address form's unit spans; a V-spec list's I-extents
+    /// resolved through `image` — bare, as `make_link`'s slots spell it, or
+    /// as `edit_link`'s successor `ty` spells it, `{"resolve": […]}` (wire.md
+    /// §Links (writes)); or a span list verbatim (`emit`'s `ty`). The list is
+    /// held within [`MAX_WIRE_LIST`] before its first element is read, and
+    /// its spans within [`MAX_SLOT_SPANS`] as they resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the slot is of neither form, its list passes
+    /// [`MAX_WIRE_LIST`], an address, a V-spec's span or a span does not
+    /// parse, an element is of no known form, `image` answers no runs or a
+    /// run that is no content extent, or the spans pass [`MAX_SLOT_SPANS`];
+    /// and whatever an `image` read refuses ([`Composer::read`]).
     fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Unattested> {
         if let Some(addrs) = slot["addrs"].as_array() {
             check_wire_list(addrs, what)?;
@@ -621,13 +722,22 @@ impl Composer<'_> {
         Ok(spans)
     }
 
-    /// The values `wanted` names in its origin, READ BACK through the
-    /// origin's own arrangement under the session's token: the extent,
-    /// refused past what one delivery can carry (every position costs a
-    /// delivery at least a byte); the V→I map through `image`, its widths
-    /// summed to that extent before the values are asked for; and the
-    /// values through `retrieve_v`, walked beside the map position by
-    /// position, each position the shot copies in kept once against `spent`.
+    /// Reads back `wanted`'s values through the origin's own arrangement.
+    ///
+    /// The read is made under the session's token: the extent, refused past
+    /// what one delivery can carry (every position costs a delivery at least
+    /// a byte); the V→I map through `image`, its widths summed to that extent
+    /// before the values are asked for; and the values through `retrieve_v`,
+    /// walked beside the map position by position, each position the shot
+    /// copies in kept once against `spent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the extent passes [`MAX_ANSWER_BYTES`] positions,
+    /// a run of the map is no I-extent, the map or the delivery disagrees
+    /// with the extent, a position cannot be read back as values, or the
+    /// kept values pass [`MAX_FRAME_BYTES`]; and whatever a read refuses
+    /// ([`Composer::read`]).
     fn read_back<'f>(&self, wanted: Wanted<'f>, spent: &mut usize) -> Result<ReadBack<'f>, Unattested> {
         let origin = wanted.origin;
         let mut reading = wanted.seal();
@@ -680,16 +790,26 @@ impl Composer<'_> {
         Ok(reading.finish())
     }
 
-    /// The `publish` body, under the board's frame budget ([`MAX_FRAME_BYTES`],
-    /// the parity the daemon holds a shot's body to): each run the shot names
-    /// in V-order, a run onto the shot document's own trunk or the staging
-    /// draft COPIED by its values, any other a WINDOW; then the base group.
-    /// THE REQUEST's ARITHMETIC first, every run classed and counted before a
-    /// value is read: the runs within [`MAX_WIRE_LIST`], the positions placed
-    /// within the body's eight-byte count, the staging draft's within the
-    /// store's re-insert budget, and the copied ones within what a body
-    /// under the budget can carry. Then each origin's values read back,
-    /// keeping the positions the shot copies in, and the body built.
+    /// Returns the `publish` body, under the board's frame budget.
+    ///
+    /// The budget is [`MAX_FRAME_BYTES`], the parity the daemon holds a
+    /// shot's body to. The body holds each run the shot names in V-order, a
+    /// run onto the shot document's own trunk or the staging draft copied by
+    /// its values, any other a window; then the base group.
+    ///
+    /// # Errors
+    ///
+    /// The request's arithmetic comes first, every run classed and counted
+    /// before a value is read: the runs within [`MAX_WIRE_LIST`], the
+    /// positions placed within the body's eight-byte count, the staging
+    /// draft's within the store's re-insert budget, and the copied ones
+    /// within what a body under the budget can carry — a halt past each, and
+    /// for a shot that names no `runs` or a run whose member, count or
+    /// I-address does not read. Then `base` and `base_extent` are read, both
+    /// or neither. Then each origin's values are read back
+    /// ([`Composer::read_back`]), keeping the positions the shot copies in,
+    /// and the body is built — a halt for a copied position its origin's
+    /// arrangement does not hold, and for a body past the budget.
     fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Unattested> {
         let draft = frame["draft"].as_str();
         let draft_trunk = draft.and_then(trunk_text);
@@ -770,7 +890,14 @@ impl Composer<'_> {
         Ok(body.finish())
     }
 
-    /// The frame's `doc` term and body, as its `kind` spells them.
+    /// Returns the frame's `doc` term and body, as its `kind` spells them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the frame lacks a member its kind's grammar names
+    /// or names an address the composer cannot spell, and whatever
+    /// [`insert_terms`], [`Composer::slot`] and [`Composer::publish_body`]
+    /// refuse.
     fn doc_term_and_body(&self, kind: CheckedKind, frame: &Value) -> Result<(OwnedDocTerm, EntryBody), Unattested> {
         let one = |text: &str, what: &str| -> Result<OwnedDocTerm, Halt> { Ok(OwnedDocTerm::One(addr(text, what)?)) };
         Ok(match kind {
@@ -830,12 +957,24 @@ impl Composer<'_> {
         })
     }
 
-    /// THE ATTEST for `frame`: its entry frame composed, signed by the
-    /// session's key and attached as the frame's `attest`. PRECONDITION, the
-    /// caller's — discharged by `SessionEntry::attest` through
-    /// [`wants_attest`]: the frame's op one of the ten kinds, no `attest`
-    /// riding it; a frame outside it is a bug of this crate's, and `attach`
-    /// panics naming the obligation.
+    /// Attaches the attest for `frame`, signed by the session's key.
+    ///
+    /// Its entry frame is composed, signed by the session's key and attached
+    /// as the frame's `attest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unattested::Died`] where a read the composer made met the
+    /// session's death signal, and [`Unattested::Refused`] for a frame it
+    /// cannot compose ([`Composer::read`], [`Composer::doc_term_and_body`])
+    /// or whose session's account is no address.
+    ///
+    /// # Panics
+    ///
+    /// Panics where its precondition, the caller's, is broken — discharged
+    /// by `SessionEntry::attest` through [`wants_attest`]: the frame's op one
+    /// of the ten kinds, no `attest` riding it; a frame outside it is a bug of
+    /// this crate's, and `attach` panics naming the obligation.
     pub fn attach(&self, frame: &mut Value) -> Result<(), Unattested> {
         let kind = wanted_kind(frame).expect("Composer::attach's precondition: wants_attest admitted the frame");
         let (doc_term, body) = self.doc_term_and_body(kind, frame)?;
@@ -847,13 +986,14 @@ impl Composer<'_> {
     }
 }
 
-/// The halt for an origin whose map and delivery disagree with its extent.
+/// Returns the halt where map and delivery disagree with an origin's extent.
 fn disagree(origin: &str, how: &str) -> Halt {
     fault(format!("{origin}'s arrangement {how}"), "an origin's image and its delivery each cover its extent, position for position")
 }
 
-/// A V-spec's span as `(from, width)` over the content subspace: `start`
-/// `1.<ordinal>`, `width` `0.<count>`.
+/// Returns a V-spec's span as `(from, width)` over the content subspace.
+///
+/// Its `start` is `1.<ordinal>` and its `width` `0.<count>`.
 fn v_spec(span: &Value) -> Option<(u64, u64)> {
     let start = span["start"].as_str()?.strip_prefix("1.")?.parse().ok()?;
     let width = span["width"].as_str()?.strip_prefix("0.")?.parse().ok()?;

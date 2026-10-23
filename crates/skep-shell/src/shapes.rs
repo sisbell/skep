@@ -1,39 +1,45 @@
-//! THE DECLARATIONS (S-16 (a), RULED: the page's declarations GENERATED
-//! from this crate's Rust types; FP-16: "every value that crosses the
-//! bridge has its shape defined on the Rust side and declared for the page
-//! from that definition"): [`declarations`] renders one TypeScript
-//! declaration file — every call's input and output, every event, the
-//! refusal, the `feed` update's shape (a `changes` entry's too) and the
-//! index state's ten arms — from
-//! THE TABLE below, which is written by hand beside the code that builds
-//! each value (`shell`, `feed`, `sessions`, `refusal`, `person`) and PINNED
-//! by this module's suite: a sample of each type, built as the code builds
-//! it, is round-tripped through `serde_json` and its field names held equal
-//! to the table's. No generator crate: the table is the one source, and a
-//! field renamed in the table alone, or in the code alone, fails the pin.
-//! The calls' argument objects are data beside it (`CALL_ROWS`' members),
-//! and the shell's suite sends each optional member a row of one form
-//! declares, in a form its type refuses, to the row itself, which must
-//! refuse it by name. The event names are rendered from `events::EventName`
-//! itself, the type every event carries.
+//! The page's declarations, generated from this crate's Rust types.
+//!
+//! FP-16 has it: "every value that crosses the bridge has its shape defined
+//! on the Rust side and declared for the page from that definition".
+//! [`declarations`] renders one TypeScript declaration file — every call's
+//! input and output, every event, the refusal, the `feed` update's shape (a
+//! `changes` entry's too) and the index state's ten arms — from the table
+//! below, which is written by hand beside the code that builds each value
+//! (`shell`, `feed`, `sessions`, `refusal`, `person`, `hold`) and pinned by
+//! this module's suite: a sample of each type, built as the code builds it,
+//! is round-tripped through `serde_json` and its field names held equal to
+//! the table's. No generator crate: the table is the one source, and a field
+//! renamed in the table alone, or in the code alone, fails the pin. The
+//! calls' argument objects are data beside it (`CALL_ROWS`' members), and
+//! the shell's suite sends each optional member a row of one form declares,
+//! in a form its type refuses, to the row itself, which must refuse it by
+//! name. The event names are rendered from `events::EventName` itself, the
+//! type every event carries.
 
 use std::fmt::{self, Write};
 
 use crate::events::EventName;
 
-/// One field of a declared type: its name, its TypeScript type, and
-/// whether every value carries it.
+/// One field of a declared type.
+///
+/// It holds its name, its TypeScript type, and whether every value carries
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Field {
+    /// The field's name.
     pub name: &'static str,
+    /// The field's TypeScript type.
     pub ty: &'static str,
+    /// Whether every value carries the field.
     pub required: bool,
 }
 
-/// A field as the declarations spell it: `name: T`, or `name?: T` where a
-/// value may leave it out — an interface's member and a call's argument
-/// alike.
+/// A field as the declarations spell it: `name: T`, or `name?: T`.
+///
+/// The second form is a field a value may leave out — an interface's member
+/// and a call's argument alike.
 impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}: {}", self.name, if self.required { "" } else { "?" }, self.ty)
@@ -48,23 +54,29 @@ const fn opt(name: &'static str, ty: &'static str) -> Field {
     Field { name, ty, required: false }
 }
 
-/// One declared type: an interface over its fields, with the line of doc
-/// the file carries above it.
+/// One declared type: an interface over its fields.
+///
+/// It comes with the line of doc the file carries above it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Shape {
+    /// The name the file declares the type under.
     pub name: &'static str,
-    /// Whether a value carries members beyond the declared fields — the
-    /// arm's own members beside `arm`, the detail beside a shell refusal's
-    /// `name` — declared as an index signature, and held by the pin to its
-    /// required fields alone.
+    /// Whether a value carries members beyond the declared fields.
+    ///
+    /// Those are the arm's own members beside `arm`, the detail beside a
+    /// shell refusal's `name` — declared as an index signature, and held by
+    /// the pin to its required fields alone.
     pub open: bool,
+    /// The line of doc the file carries above the type.
     pub doc: &'static str,
+    /// The type's fields.
     pub fields: &'static [Field],
 }
 
-/// THE TABLE: every value that crosses the bridge, by the name the file
-/// declares it under.
+/// The table of every value that crosses the bridge.
+///
+/// Each is listed by the name the file declares it under.
 const SHAPES: &[Shape] = &[
     Shape { name: "BoardRow", open: false, doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes", fields: &[req("board", "string"), req("name", "string"), req("origin", "string")] },
     Shape {
@@ -142,9 +154,11 @@ const SHAPES: &[Shape] = &[
     Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
 ];
 
-/// One call of the bridge as the file declares it: its name, its argument
-/// object — the members of each form it takes, the session form first where
-/// it takes the guest form beside it — and its result's type.
+/// One call of the bridge as the file declares it.
+///
+/// It holds its name, its argument object — the members of each form it
+/// takes, the session form first where it takes the guest form beside it —
+/// and its result's type.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallRow {
     pub(crate) name: &'static str,
@@ -152,10 +166,11 @@ pub(crate) struct CallRow {
     pub(crate) result: &'static str,
 }
 
-/// THE CALLS, as the bridge spells them — the `Bridge` interface's rows, one
-/// per name of [`crate::CALLS`], the dispatch's list, in its order. The
-/// suite holds the two lists equal, and every optional member a row of one
-/// form declares to the form its row reads it in.
+/// The calls as the bridge spells them: the `Bridge` interface's rows.
+///
+/// There is one per name of [`crate::CALLS`], the dispatch's list, in its
+/// order. The suite holds the two lists equal, and every optional member a
+/// row of one form declares to the form its row reads it in.
 pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "boards", forms: &[&[]], result: "BoardRow[]" },
     CallRow { name: "session", forms: &[&[req("board", "string"), opt("principal", "number")]], result: "SessionOpened" },
@@ -210,8 +225,9 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "changes", forms: &[&[req("session", "string"), req("since", "number"), opt("limit", "number")]], result: "ChangesAnswer" },
 ];
 
-/// One form of a call's argument object as the file spells it: `{}` where
-/// it carries no member, else `{ m: T; n?: U }`.
+/// Returns one form of a call's argument object as the file spells it.
+///
+/// It is `{}` where it carries no member, else `{ m: T; n?: U }`.
 fn argument_object(form: &[Field]) -> String {
     if form.is_empty() {
         return "{}".to_string();
@@ -220,8 +236,10 @@ fn argument_object(form: &[Field]) -> String {
     format!("{{ {} }}", members.join("; "))
 }
 
-/// THE FILE: the preamble, the aliases, every shape, the refusal union,
-/// the events, and the bridge's rows.
+/// Returns the declaration file.
+///
+/// It holds the preamble, the aliases, every shape, the refusal union, the
+/// events, and the bridge's rows.
 pub fn declarations() -> String {
     let mut out = String::new();
     out.push_str("// skep-shell — the bridge's declarations (client.md §4b), generated from\n");
@@ -261,14 +279,22 @@ pub fn declarations() -> String {
     out
 }
 
-/// The shape named `name`, where the table holds one.
+/// Returns the shape named `name`, where the table holds one.
 pub fn shape(name: &str) -> Option<&'static Shape> {
     SHAPES.iter().find(|s| s.name == name)
 }
 
-/// `value` held to the shape `name` declares: an object, every required
-/// field present, and — the shape not `open` — no member outside the table.
-/// The pin every suite holds a value the crate's code built to.
+/// Holds `value` to the shape `name` declares.
+///
+/// It is an object, every required field present, and — the shape not
+/// `open` — no member outside the table: the pin every suite holds a value
+/// the crate's code built to.
+///
+/// # Panics
+///
+/// Panics where `name` is not declared, `value` is no object, a required
+/// field is missing, or — the shape not `open` — a member lies outside the
+/// table.
 #[cfg(test)]
 pub(crate) fn assert_declared(name: &str, value: &serde_json::Value) {
     let shape = shape(name).unwrap_or_else(|| panic!("`{name}` is declared"));

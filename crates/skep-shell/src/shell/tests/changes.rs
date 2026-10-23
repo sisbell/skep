@@ -1,17 +1,18 @@
-//! THE `changes` CALL: a client that comes back to a board catches up from
-//! a position it names, at its session's class. Against the real daemon: a
-//! write by a second session after a position appears in the page from it
-//! with its position, under the `drafts` class and the session, `next`
-//! advances past it, a second ask from `next` answers nothing new, a draft
-//! in an account the session cannot read never appears while that
-//! account's published home does, `limit` bounds the page, and the
-//! refusals by name. Over a scripted board: the two reads merged by
-//! position — a straddle answered once, by the wider rendering — the
-//! published read token-free and the drafts read under the token, the cut
-//! where a read's `more` stands, `next` at the head read first on a quiet
-//! board, `limit` over the merged page, a page past the budget re-asked at
-//! the limit that fits, the retention floor as the board's own 410, and
-//! the death signal as the death.
+//! The `changes` call: a client that comes back to a board catches up.
+//!
+//! It catches up from a position it names, at its session's class. Against
+//! the real daemon the suite checks that a write by a second session after a
+//! position appears in the page from it with its position, under the
+//! `drafts` class and the session, `next` advances past it, a second ask
+//! from `next` answers nothing new, a draft in an account the session cannot
+//! read never appears while that account's published home does, `limit`
+//! bounds the page, and the refusals by name. Over a scripted board it
+//! checks the two reads merged by position — a straddle answered once, by
+//! the wider rendering — the published read token-free and the drafts read
+//! under the token, the cut where a read's `more` stands, `next` at the head
+//! read first on a quiet board, `limit` over the merged page, a page past
+//! the budget re-asked at the limit that fits, the retention floor as the
+//! board's own 410, and the death signal as the death.
 
 use std::io::Read;
 
@@ -23,22 +24,23 @@ use crate::feed::{changes_since, ChangesRead};
 use crate::refs::BoardEntry;
 use crate::sessions::{Facts, Open, Sessions, Supplements};
 
-/// A CLIENT CATCHES UP FROM A POSITION AT ITS SESSION's CLASS: a draft
-/// minted and written by a second session of the claimant's — the
+/// Checks that a client catches up from a position at its session's class.
+///
+/// A draft minted and written by a second session of the claimant's — the
 /// library's own bare session as principal 1 — after the position N the
 /// shell's session read, appears in `changes(N)` with its position, of the
 /// `drafts` class under the session, every entry past N; `next` advances
 /// past the write, and a second ask from `next` answers nothing new; from
 /// the start, the session's own draft rows ride its class, a sibling
-/// account's published home is everyone's, and that sibling's draft —
-/// which the claimant's class never reads — appears nowhere, every entry
-/// once, oldest first; `limit` bounds the page, `next` at the last entry
-/// kept and the next ask reading on from it; `since` and `limit` of another
-/// form are `malformed_args` by name, a stale session `session_ended`, and
-/// a `limit` off the route's range the board's own `malformed_changes`
-/// (the mutant that reads the drafts page without the session's token
-/// loses the session's own rows; the one that reads the published feed
-/// under the token answers one class for both).
+/// account's published home is everyone's, and that sibling's draft — which
+/// the claimant's class never reads — appears nowhere, every entry once,
+/// oldest first; `limit` bounds the page, `next` at the last entry kept and
+/// the next ask reading on from it; `since` and `limit` of another form are
+/// `malformed_args` by name, a stale session `session_ended`, and a `limit`
+/// off the route's range the board's own `malformed_changes` (the mutant
+/// that reads the drafts page without the session's token loses the
+/// session's own rows; the one that reads the published feed under the
+/// token answers one class for both).
 #[test]
 fn changes_answers_what_changed_since_a_position_at_the_sessions_class() {
     let dir = TempDir::new().unwrap();
@@ -115,23 +117,28 @@ fn changes_answers_what_changed_since_a_position_at_the_sessions_class() {
     sd.shutdown();
 }
 
-/// A board's answer to one `/changes` ask: by the ask's `since`, whether it
-/// is the `drafts=true` read, and its `limit`.
+/// A board's answer to one `/changes` ask.
+///
+/// It is given by the ask's `since`, whether it is the `drafts=true` read,
+/// and its `limit`.
 type Script = Box<dyn Fn(u64, bool, Option<u64>) -> Response + Send + Sync>;
 
-/// The asks a board saw: each one's `since`, whether it was the drafts read,
-/// its `limit`, and whether a token rode it.
+/// The asks a board saw.
+///
+/// Each holds its `since`, whether it was the drafts read, its `limit`, and
+/// whether a token rode it.
 type Asked = Vec<(u64, bool, Option<u64>, bool)>;
 
-/// A board whose `/changes` answers each ask as `script` says and whose
-/// `/health` names `head`; every ask recorded.
+/// A board whose `/changes` answers each ask as `script` says.
+///
+/// Its `/health` names `head`, and every ask is recorded.
 struct Scripted {
     head: u64,
     script: Script,
     asked: Mutex<Asked>,
 }
 
-/// The number the query member `key` names in `path`, where it names one.
+/// Returns the number the query member `key` names in `path`, if any.
 fn query_of(path: &str, key: &str) -> Option<u64> {
     path.split_once(&format!("{key}=")).and_then(|(_, rest)| rest.split('&').next()).and_then(|n| n.parse().ok())
 }
@@ -140,17 +147,17 @@ fn ok(v: Value) -> Response {
     Response { status: 200, headers: Headers::default(), body: v.to_string().into_bytes() }
 }
 
-/// One row at `at` naming `docs`.
+/// Returns one row at `at` naming `docs`.
 fn row(at: u64, docs: &[&str]) -> Value {
     json!({"at": at, "op": "insert", "docs": docs, "key": "bare"})
 }
 
-/// A page of `rows` with its `last` and its `more`.
+/// Returns a page of `rows` with its `last` and its `more`.
 fn page(rows: Vec<Value>, last: u64, more: bool) -> Response {
     ok(json!({"changes": rows, "last": last, "more": more}))
 }
 
-/// A non-200 answer of `body`.
+/// Returns a non-200 answer of `body`.
 fn refused(status: u16, body: Value) -> Response {
     Response { status, headers: Headers::default(), body: body.to_string().into_bytes() }
 }
@@ -179,9 +186,10 @@ impl Supplements for NoSupplements {
     fn narrow(&mut self, _: u64) {}
 }
 
-/// A bare session of principal 1 at a board scripted by `script`, its head
-/// at `head`; the catch-up read from `since` under `limit`, and the asks
-/// the board saw.
+/// Reads the catch-up from `since` under `limit` at a scripted board.
+///
+/// The session is a bare one of principal 1, the board scripted by `script`,
+/// its head at `head`; it returns the read and the asks the board saw.
 fn catch_up_over(head: u64, script: impl Fn(u64, bool, Option<u64>) -> Response + Send + Sync + 'static, since: u64, limit: Option<u64>) -> (Result<ChangesRead, Refusal>, Asked) {
     let fake = Arc::new(Scripted { head, script: Box::new(script), asked: Mutex::new(Vec::new()) });
     let entry = Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&fake))) });
@@ -192,7 +200,11 @@ fn catch_up_over(head: u64, script: impl Fn(u64, bool, Option<u64>) -> Response 
     (read, asked)
 }
 
-/// The page a read answered, or a panic naming what it answered instead.
+/// Returns the page a read answered.
+///
+/// # Panics
+///
+/// Panics naming what the read answered where it answered no page.
 fn page_of(read: Result<ChangesRead, Refusal>) -> crate::feed::CaughtUp {
     match read {
         Ok(ChangesRead::Page(page)) => page,
@@ -200,22 +212,23 @@ fn page_of(read: Result<ChangesRead, Refusal>) -> crate::feed::CaughtUp {
     }
 }
 
-/// The positions of a page's entries, with each entry's class.
+/// Returns the positions of a page's entries, with each entry's class.
 fn classed(page: &crate::feed::CaughtUp) -> Vec<(u64, &str)> {
     page.entries.iter().map(|entry| (entry["at"].as_u64().unwrap(), entry["class"].as_str().unwrap())).collect()
 }
 
-/// THE TWO READS MERGE BY POSITION, THE WIDER RENDERING WINNING: the
-/// published feed read token-free and the drafts supplement under the
+/// Checks that the two reads merge by position, the wider rendering winning.
+///
+/// The published feed is read token-free and the drafts supplement under the
 /// session's token, from the same `since` — each entry in the update's
 /// shape, `published` or `drafts` by the read that answered it, a drafts
 /// entry naming the session; a position both answer — a straddle, the
-/// guest's `[T]` beside the supplement's `[D, T]` — answered once, by the
-/// rendering naming more documents; and, both reads read to the head,
-/// `next` the head read first, which lies past every entry (the mutants
-/// that read the drafts page token-free, read the published feed under the
-/// token, keep the narrower rendering, or answer `next` as the last entry
-/// on a board that moved past it on masked commits).
+/// guest's `[T]` beside the supplement's `[D, T]` — is answered once, by the
+/// rendering naming more documents; and, both reads read to the head, `next`
+/// is the head read first, which lies past every entry (the mutants that
+/// read the drafts page token-free, read the published feed under the token,
+/// keep the narrower rendering, or answer `next` as the last entry on a
+/// board that moved past it on masked commits).
 #[test]
 fn the_two_reads_merge_by_position_the_wider_rendering_winning() {
     let script = |since: u64, drafts: bool, _: Option<u64>| match drafts {
@@ -232,12 +245,14 @@ fn the_two_reads_merge_by_position_the_wider_rendering_winning() {
     assert_eq!(asked, [(20, false, None, false), (20, true, None, true)], "the published feed token-free, the supplement under the token, each from `since`");
 }
 
-/// THE PAGE IS CUT WHERE A READ's `more` STANDS: nothing past the lower
-/// `last` of an unfinished read is answered — the other read may hold a
-/// position between — and `next` is that cut, whichever read is the short
-/// one; both reads complete and empty, `next` is the head, and a `since`
-/// past the head is echoed back (the mutants that answer every row of both
-/// reads, skipping the positions between, or take the greater `last`).
+/// Checks that the page is cut where a read's `more` stands.
+///
+/// Nothing past the lower `last` of an unfinished read is answered — the
+/// other read may hold a position between — and `next` is that cut,
+/// whichever read is the short one; both reads complete and empty, `next` is
+/// the head, and a `since` past the head is echoed back (the mutants that
+/// answer every row of both reads, skipping the positions between, or take
+/// the greater `last`).
 #[test]
 fn the_page_is_cut_where_a_reads_more_stands() {
     let published_short =
@@ -255,11 +270,13 @@ fn the_page_is_cut_where_a_reads_more_stands() {
     assert_eq!((caught.entries.len(), caught.next), (0, 60), "a `since` past the head is echoed");
 }
 
-/// `limit` BOUNDS THE MERGED PAGE, and a page past the budget is re-asked
-/// at the limit that fits: the merged entries cut to `limit`, `next` the
-/// last kept, both reads asked at `limit`; a `malformed_changes` naming
-/// `fits` re-asked at `fits` on that read alone (the mutants that bound
-/// each read and not the merge, or face the budget's refusal).
+/// Checks that `limit` bounds the merged page and the budget is re-asked.
+///
+/// A page past the budget is re-asked at the limit that fits: the merged
+/// entries cut to `limit`, `next` the last kept, both reads asked at
+/// `limit`; a `malformed_changes` naming `fits` re-asked at `fits` on that
+/// read alone (the mutants that bound each read and not the merge, or face
+/// the budget's refusal).
 #[test]
 fn limit_bounds_the_merged_page_and_the_budget_is_re_asked() {
     let script = |_: u64, drafts: bool, _: Option<u64>| if drafts { page(vec![row(12, &["1.0.1.0.2"])], 12, false) } else { page(vec![row(11, &["1.0.1.0.1"]), row(13, &["1.0.1.0.1"])], 13, false) };
@@ -278,13 +295,15 @@ fn limit_bounds_the_merged_page_and_the_budget_is_re_asked() {
     assert_eq!(asked, [(10, false, None, false), (10, false, Some(1), false), (10, true, None, true)], "the published read re-asked at `fits`, the drafts read as asked");
 }
 
-/// THE FLOOR AND THE DEATH ARE FACED: a `since` below the feed's memory is
-/// the board's own `410 history_reclaimed` with its floor, never resumed
-/// behind the caller's back; another refusal is the board's verdict; and
-/// the death signal on the drafts read is the death, for the shell to end
-/// the session by (the mutants that resume at the floor as the feed thread
-/// does — a catch-up silently short of what the caller asked — or read the
-/// death as an empty page).
+/// Checks that the floor and the death are faced.
+///
+/// A `since` below the feed's memory is the board's own
+/// `410 history_reclaimed` with its floor, never resumed behind the caller's
+/// back; another refusal is the board's verdict; and the death signal on the
+/// drafts read is the death, for the shell to end the session by (the
+/// mutants that resume at the floor as the feed thread does — a catch-up
+/// silently short of what the caller asked — or read the death as an empty
+/// page).
 #[test]
 fn the_floor_and_the_death_are_faced() {
     let (read, _) = catch_up_over(20, |_, _, _| refused(410, json!({"error": "history_reclaimed", "floor": 5})), 3, None);

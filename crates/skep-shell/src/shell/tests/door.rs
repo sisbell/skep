@@ -1,26 +1,26 @@
-//! THE SHELL ALONE, with no daemon behind it: an `/op-at` refusal
-//! rebuilt into the board's verdict under the wire's status; the dispatch
-//! naming every call by its own spelling — `fetch` answered `streamed_call`
-//! through it — and logging each as one entry of its outcome and sizes, and
-//! `fetch` logging its own call, a stream's as its body is dropped; a
-//! present argument of another form refused before any dial, `fetch`'s
-//! address among them, and every optional argument a call row declares
-//! read in its declared form; the guest form refusing every write kind of
-//! the wire undialed and reading the board its reference or its origin
-//! names, the reference first and the target before the frame; a bare
-//! session refusing every write kind undialed, its `/op-at` form and its
-//! `resolve(send)` too, while its read is dialed and a signed session's
-//! write goes out; a search's
-//! `opts` read as one value, and its query held to the shell's bound at
-//! every target; a listing where no index stands its whole shape with no
-//! document; a `select` of two keys or none refused by its name, a
-//! label the box refuses `empty_label` naming its cause, and the signed
-//! mode's check naming a keyless store; a probe of an own node that does
-//! not answer `unreachable`; the shell's options printing no seed and the
-//! open's preconditions stopped loudly; every day dated as the calendar
-//! counts it; and the stop abandoning a walk that waits on the page, a walk
-//! begun after it asking the page nothing, and a search or a listing after
-//! it answered `feed_stopped`.
+//! The shell alone, with no daemon behind it.
+//!
+//! The suite checks an `/op-at` refusal rebuilt into the board's verdict
+//! under the wire's status; the dispatch naming every call by its own
+//! spelling — `fetch` answered `streamed_call` through it — and logging each
+//! as one entry of its outcome and sizes, and `fetch` logging its own call,
+//! a stream's as its body is dropped; a present argument of another form
+//! refused before any dial, `fetch`'s address among them, and every optional
+//! argument a call row declares read in its declared form; the guest form
+//! refusing every write kind of the wire undialed and reading the board its
+//! reference or its origin names, the reference first and the target before
+//! the frame; a bare session refusing every write kind undialed, its
+//! `/op-at` form and its `resolve(send)` too, while its read is dialed and a
+//! signed session's write goes out; a search's `opts` read as one value, and
+//! its query held to the shell's bound at every target; a listing where no
+//! index stands its whole shape with no document; a `select` of two keys or
+//! none refused by its name, a label the box refuses `empty_label` naming
+//! its cause, and the signed mode's check naming a keyless store; a probe of
+//! an own node that does not answer `unreachable`; the shell's options
+//! printing no seed and the open's preconditions stopped loudly; every day
+//! dated as the calendar counts it; and the stop abandoning a walk that
+//! waits on the page, a walk begun after it asking the page nothing, and a
+//! search or a listing after it answered `feed_stopped`.
 
 use std::io::{Read, Write};
 
@@ -28,10 +28,12 @@ use super::*;
 use crate::sessions::{Facts, Open};
 use crate::shapes::{Field, CALL_ROWS};
 
+/// Checks that an `/op-at` refusal is the board's verdict under its status.
+///
 /// The `/op-at` refusals `skep-client` answers as values are the board's
-/// verdicts again, each under the status and error document the wire
-/// gives it, a member the variant knows riding the body and one it does
-/// not left out.
+/// verdicts again, each under the status and error document the wire gives
+/// it, a member the variant knows riding the body and one it does not left
+/// out.
 #[test]
 fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
     let verdict = |a: AtAnswer| {
@@ -47,12 +49,14 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
     assert_eq!(at_refusal(AtAnswer::Busy).name(), "history_busy");
 }
 
-/// THE DISPATCH's NAMES: every call parses back from its own spelling, so no
-/// two calls share one; `CALLS` is those spellings in §4b.1's order, the
-/// document index's listing `places` beside `search`; a name of no call
-/// names none, and `call` answers it `unknown_call`; and `fetch`, which
-/// streams on its transport's own route, is answered `streamed_call` through
-/// the door, whatever its arguments.
+/// Checks that every call is named by its own spelling.
+///
+/// Every call parses back from its own spelling, so no two calls share one;
+/// `CALLS` is those spellings in §4b.1's order, the document index's listing
+/// `places` beside `search`; a name of no call names none, and `call`
+/// answers it `unknown_call`; and `fetch`, which streams on its transport's
+/// own route, is answered `streamed_call` through the door, whatever its
+/// arguments.
 #[test]
 fn every_call_is_named_by_its_own_spelling() {
     for call in Call::ALL {
@@ -68,9 +72,11 @@ fn every_call_is_named_by_its_own_spelling() {
     assert_eq!(shell.call("fetch", &json!({"session": "s-x", "i": "1.0.1.0.1.0.1.1"})).unwrap_err().name(), "streamed_call");
 }
 
-/// A shell's options print what they name and nothing secret: the boards,
-/// the store, the mode, the arm — a script's typed seed as `…` — and the own
-/// node, the TALK sink left out.
+/// Checks that a shell's options print no seed.
+///
+/// They print what they name and nothing secret: the boards, the store, the
+/// mode, the arm — a script's typed seed as `…` — and the own node, the
+/// `Talk` sink left out.
 #[test]
 fn a_shells_options_print_no_seed() {
     let (talk, _) = talk();
@@ -81,8 +87,10 @@ fn a_shells_options_print_no_seed() {
     assert!(!shown.contains("5e5e"), "{shown}");
 }
 
-/// THE OPEN's PRECONDITIONS are its caller's, stopped loudly before
-/// anything starts: an own node outside the boards.
+/// Checks that an own node outside the boards is the caller's bug.
+///
+/// The open's preconditions are its caller's, stopped loudly before
+/// anything starts.
 #[test]
 #[should_panic(expected = "own_node")]
 fn an_own_node_outside_the_boards_is_the_callers_bug() {
@@ -92,8 +100,10 @@ fn an_own_node_outside_the_boards_is_the_callers_bug() {
     let _ = Shell::open(opts);
 }
 
-/// THE OPEN's PRECONDITIONS: a board listed twice — two feeds and two held
-/// stores over one chain — is the caller's bug.
+/// Checks that a board listed twice is the caller's bug.
+///
+/// A board listed twice — two feeds and two held stores over one chain —
+/// breaks one of the open's preconditions.
 #[test]
 #[should_panic(expected = "distinct")]
 fn a_board_listed_twice_is_the_callers_bug() {
@@ -102,24 +112,26 @@ fn a_board_listed_twice_is_the_callers_bug() {
     let _ = Shell::open(ShellOptions::new(vec![origin.clone(), origin], PathBuf::from("/nonexistent/store"), SessionMode::Bare { principal: 1 }, talk));
 }
 
-/// An origin nothing answers at: a port bound and let go.
+/// Returns an origin nothing answers at: a port bound and let go.
 fn nowhere() -> String {
     let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
     format!("http://127.0.0.1:{port}")
 }
 
-/// A PRESENT ARGUMENT OF ANOTHER FORM is refused `malformed_args` naming it,
-/// never read as absent and so never the row's default: a principal spelled
-/// as a string or past 2^53 − 1, a label, a select, a paper flag, a lost
-/// fingerprint, a search limit of another type, a listing's `opts` of no
-/// object and its `under` of no address or of another spelling, and an `op`
-/// naming neither form or both — each before any dial, the shell's board
-/// one nothing answers at, where a dial would answer `unreachable`, and the
-/// guest origin a listener counting every dial (the mutants that read such
-/// a member as absent act as the mode's principal, open the label box, list
-/// every key or the whole index, or dial a guest read the page never asked
-/// for). A `null` is the row's default: the session opens as the mode's
-/// principal and meets the board's silence.
+/// Checks that a present argument of another form is never read as absent.
+///
+/// It is refused `malformed_args` naming it, never read as absent and so
+/// never the row's default: a principal spelled as a string or past
+/// 2^53 − 1, a label, a select, a paper flag, a lost fingerprint, a search
+/// limit of another type, a listing's `opts` of no object and its `under` of
+/// no address or of another spelling, and an `op` naming neither form or
+/// both — each before any dial, the shell's board one nothing answers at,
+/// where a dial would answer `unreachable`, and the guest origin a listener
+/// counting every dial (the mutants that read such a member as absent act as
+/// the mode's principal, open the label box, list every key or the whole
+/// index, or dial a guest read the page never asked for). A `null` is the
+/// row's default: the session opens as the mode's principal and meets the
+/// board's silence.
 #[test]
 fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let dir = TempDir::new().unwrap();
@@ -152,14 +164,15 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     assert_eq!(defaulted.name(), "unreachable", "a null is the row's default, and the call goes on to the board");
 }
 
-/// EVERY OPTIONAL ARGUMENT A CALL ROW DECLARES IS READ IN ITS FORM (the
-/// declarations' `CALL_ROWS`): for each row of one form, each optional
+/// Checks that every optional argument a call row declares is read in its form.
+///
+/// For each row of one form in the declarations' `CALL_ROWS`, each optional
 /// member it names — sent in a form no reader of its declared type takes,
-/// beside the row's required members in theirs — is refused
-/// `malformed_args` naming it, before any dial and before any moment (the
-/// mutants that stop reading a declared member, or read it in another form
-/// than the declared one, answer otherwise; the rows of two forms keep their
-/// cells in `a_present_argument_of_another_form_is_refused_never_read_as_absent`).
+/// beside the row's required members in theirs — is refused `malformed_args`
+/// naming it, before any dial and before any moment (the mutants that stop
+/// reading a declared member, or read it in another form than the declared
+/// one, answer otherwise; the rows of two forms keep their cells in
+/// `a_present_argument_of_another_form_is_refused_never_read_as_absent`).
 #[test]
 fn every_declared_optional_argument_is_read_in_its_form() {
     let dir = TempDir::new().unwrap();
@@ -194,14 +207,15 @@ fn every_declared_optional_argument_is_read_in_its_form() {
     assert_eq!(asked, 22, "the optional members of the eleven rows of one form that declare any");
 }
 
-/// THE GUEST FORM's SEARCH reads the board its reference or its canonical
-/// origin names (§4b.1's `search` row): the shell's own board's origin is
-/// that board — the target its reference is — and a reference is read
-/// first, an origin beside it unread; an origin the shell holds no board at
-/// answers with no index, a non-canonical one is refused `not_canonical`,
-/// and a guest form naming neither is refused `malformed_args` (the mutants
-/// that answer every origin with no index, read the origin ahead of the
-/// reference, or read a missing target as a search with no index).
+/// Checks that a guest search reads the board its reference or origin names.
+///
+/// It is §4b.1's `search` row: the shell's own board's origin is that board
+/// — the target its reference is — and a reference is read first, an origin
+/// beside it unread; an origin the shell holds no board at answers with no
+/// index, a non-canonical one is refused `not_canonical`, and a guest form
+/// naming neither is refused `malformed_args` (the mutants that answer every
+/// origin with no index, read the origin ahead of the reference, or read a
+/// missing target as a search with no index).
 #[test]
 fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     let dir = TempDir::new().unwrap();
@@ -219,7 +233,7 @@ fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
 }
 
-/// A listing where no index stands is its whole shape with no document.
+/// Checks a listing where no index stands: its whole shape, no document.
 ///
 /// At an origin this shell holds no board at, and at its own board whose
 /// index never opened, prefix or none, the listing (A-255) is `{docs: [],
@@ -241,13 +255,15 @@ fn a_listing_where_no_index_stands_is_its_whole_shape_with_no_document() {
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
 }
 
-/// THE QUERY's BOUND is the shell's, asked of the call's text at every
+/// Checks that a query past the bound is refused at every target.
+///
+/// The query's bound is the shell's, asked of the call's text at every
 /// target (§4b.1's `search` row: "length-bounded … then parsed"): a query a
-/// byte past `QUERY_BOUND` is refused `query_too_long`, naming the bound
-/// and the length and nothing of the text, at an origin this shell holds no
+/// byte past `QUERY_BOUND` is refused `query_too_long`, naming the bound and
+/// the length and nothing of the text, at an origin this shell holds no
 /// index for and at its own board alike, while a query at the bound is
-/// answered (the mutant that leaves the bound to the library's index
-/// answers the first `state: none`).
+/// answered (the mutant that leaves the bound to the library's index answers
+/// the first `state: none`).
 #[test]
 fn a_query_past_the_bound_is_refused_at_every_target() {
     let dir = TempDir::new().unwrap();
@@ -263,13 +279,15 @@ fn a_query_past_the_bound_is_refused_at_every_target() {
     assert_eq!(at["state"]["arm"], "none", "{at}");
 }
 
-/// A `search` call's `opts` are ONE value, as the bridge declares them:
-/// absent, the defaults — the library's bounds and no refresh; present, each
-/// member read into its place, the bounds the library takes and the refresh
-/// beside them, a bound past `usize` saturating and never wrapping to a
-/// smaller one (the mutant that reads `reindex` as absent searches an index
-/// the page asked to refresh first; the one that narrows a bound with `as`
-/// wraps a 32-bit target's offset of 2^32 + 5 back to the sixth hit).
+/// Checks that a `search` call's `opts` are one value, as the bridge declares.
+///
+/// Absent, they are the defaults — the library's bounds and no refresh;
+/// present, each member is read into its place, the bounds the library takes
+/// and the refresh beside them, a bound past `usize` saturating and never
+/// wrapping to a smaller one (the mutant that reads `reindex` as absent
+/// searches an index the page asked to refresh first; the one that narrows a
+/// bound with `as` wraps a 32-bit target's offset of 2^32 + 5 back to the
+/// sixth hit).
 #[test]
 fn a_searchs_opts_are_one_value_as_the_bridge_declares_them() {
     assert_eq!(search_opts(&json!({"query": "x"})).unwrap(), BridgeSearchOpts::default());
@@ -281,21 +299,23 @@ fn a_searchs_opts_are_one_value_as_the_bridge_declares_them() {
     assert!(kept(opts.bounds.limit) && kept(opts.bounds.offset), "a bound past `usize` saturates, never wraps: {opts:?}");
 }
 
-/// A shell over no board, its store a throwaway directory: no feed thread,
-/// so nothing of its own dials.
+/// Returns a shell over no board, its store a throwaway directory.
+///
+/// It has no feed thread, so nothing of its own dials.
 fn boardless(dir: &TempDir) -> Shell {
     let (talk, _) = talk();
     Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk))
 }
 
-/// EVERY CALL IS ONE LOG ENTRY (the call log the page's gate reads): a
-/// result, an armed refusal, a call of no name and `fetch` through the door
-/// each placed once, in order, its outcome the one it answered and its
-/// sizes the compact JSON of its arguments and of its answer — the refusal
-/// as the page renders it — and the call of no name kept as `<unknown>` by
-/// its name's length (the mutants that log results alone, swap the two
-/// outcomes, skip a call of no name, keep its bytes, or measure a refusal by
-/// its text).
+/// Checks that every call is one log entry naming its outcome and sizes.
+///
+/// It is the call log the page's gate reads: a result, an armed refusal, a
+/// call of no name and `fetch` through the door each placed once, in order,
+/// its outcome the one it answered and its sizes the compact JSON of its
+/// arguments and of its answer — the refusal as the page renders it — and
+/// the call of no name kept as `<unknown>` by its name's length (the mutants
+/// that log results alone, swap the two outcomes, skip a call of no name,
+/// keep its bytes, or measure a refusal by its text).
 #[test]
 fn every_call_is_one_log_entry_naming_its_outcome_and_sizes() {
     let dir = TempDir::new().unwrap();
@@ -326,8 +346,9 @@ fn every_call_is_one_log_entry_naming_its_outcome_and_sizes() {
     assert_eq!(shell.log().entries()[3]["name_bytes"], "verify".len(), "the unknown name's length, never its bytes");
 }
 
-/// A board answering one `/blob` read with `body`, its `200` declaring the
-/// body's length.
+/// Returns a board answering one `/blob` read with `body`.
+///
+/// Its `200` declares the body's length.
 fn one_blob(body: &'static [u8]) -> String {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -347,12 +368,13 @@ fn one_blob(body: &'static [u8]) -> String {
     origin
 }
 
-/// A FETCH LOGS ITS OWN CALL, as `call` logs every row: a refusal at once,
-/// its sizes the compact JSON of its arguments and of the refusal; a stream
-/// as its body is dropped — never while the body is read — `bytes_out` the
-/// bytes its reader took (the mutants that leave the entry to the
-/// transport, which a page hanging up mid-stream skips, or write it as
-/// `fetch` returns, before a byte is read).
+/// Checks that a fetch logs its own call, as `call` logs every row.
+///
+/// A refusal is logged at once, its sizes the compact JSON of its arguments
+/// and of the refusal; a stream as its body is dropped — never while the
+/// body is read — `bytes_out` the bytes its reader took (the mutants that
+/// leave the entry to the transport, which a page hanging up mid-stream
+/// skips, or write it as `fetch` returns, before a byte is read).
 #[test]
 fn a_fetch_logs_its_own_call() {
     let dir = TempDir::new().unwrap();
@@ -376,14 +398,15 @@ fn a_fetch_logs_its_own_call() {
     assert_eq!(sizes(&logged[1]), (Some("stream".into()), Some(guest.to_string().len() as u64), Some(2)), "{}", logged[1]);
 }
 
-/// A FETCH's ADDRESS IS READ BEFORE ANY DIAL (`fetch`'s row: `i` an
-/// address, else `malformed_args` naming it), so no page's text reaches the
-/// request line the shell sends: an address carrying a second query member,
-/// one carrying a line break and a header of its own, one in another
-/// spelling and one of another type are each refused naming `i` while a
-/// listener at the named origin counts no connection — and an address in
-/// its one spelling there is dialed (the mutant that drops the check
-/// splices the page's text into the request the board is sent).
+/// Checks that a fetch's address is read before any dial.
+///
+/// It is `fetch`'s row: `i` an address, else `malformed_args` naming it, so
+/// no page's text reaches the request line the shell sends: an address
+/// carrying a second query member, one carrying a line break and a header of
+/// its own, one in another spelling and one of another type are each refused
+/// naming `i` while a listener at the named origin counts no connection —
+/// and an address in its one spelling there is dialed (the mutant that drops
+/// the check splices the page's text into the request the board is sent).
 #[test]
 fn a_fetchs_address_is_read_before_any_dial() {
     let dir = TempDir::new().unwrap();
@@ -403,11 +426,13 @@ fn a_fetchs_address_is_read_before_any_dial() {
     assert!(dials.load(Ordering::SeqCst) >= 1, "an address in its one spelling is dialed");
 }
 
-/// A PROBE OF A NODE THAT DOES NOT ANSWER is `unreachable` (`probe()`'s
-/// row): a shell whose own node is a board nothing answers at names that
-/// node, dialed and signed at itself, and its state `unreachable`; a shell
-/// over no board names none (the mutant that reads the node's silence as
-/// `running` tells the page a node it cannot reach stands).
+/// Checks that a probe of a node that does not answer is `unreachable`.
+///
+/// It is `probe()`'s row: a shell whose own node is a board nothing answers
+/// at names that node, dialed and signed at itself, and its state
+/// `unreachable`; a shell over no board names none (the mutant that reads
+/// the node's silence as `running` tells the page a node it cannot reach
+/// stands).
 #[test]
 fn a_probe_of_a_node_that_does_not_answer_is_unreachable() {
     let (dir, other) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -420,8 +445,9 @@ fn a_probe_of_a_node_that_does_not_answer_is_unreachable() {
     assert_eq!(boardless(&other).call("probe", &json!({})).unwrap(), json!({"daemon": "unreachable", "dialed": null, "signed": null}));
 }
 
-/// A listener that accepts every connection, counts it and drops it: a
-/// board that answers nothing and says how many dials reached it.
+/// Returns a listener that accepts every connection, counts it and drops it.
+///
+/// It is a board that answers nothing and says how many dials reached it.
 fn counting_listener() -> (String, Arc<AtomicUsize>) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -436,10 +462,12 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
     (origin, dials)
 }
 
-/// A listener that accepts every connection, reads its one request — its
-/// head through the blank line, its body as long as its `Content-Length`
-/// says — keeps the body's JSON, and drops the connection: a board that
-/// answers nothing and says what frames reached it.
+/// Returns a listener that keeps every request's JSON body and answers none.
+///
+/// It accepts every connection, reads its one request — its head through
+/// the blank line, its body as long as its `Content-Length` says — keeps the
+/// body's JSON, and drops the connection: a board that answers nothing and
+/// says what frames reached it.
 fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -471,17 +499,18 @@ fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
     (origin, frames)
 }
 
-/// A BARE SESSION's WRITE IS REFUSED BEFORE ANY DIAL (foundations §3.3 state
-/// 3, E16 (a′): the keyless session reads alone, "no `bare` write ever
-/// committed by this client"): under a bare session every write kind of the
-/// wire is refused `write_in_bare_session` naming its op, in the `op` form
-/// and the `/op-at` form alike, and its `resolve(send)` naming its act, while
-/// a listener at its board records no write frame; its read is dialed, and
-/// `resolve`'s `drop`, which commits nothing to the board, is answered as
-/// the line's absence; a signed session's write at the same board is dialed
-/// (the mutant that refuses in the guest form alone sends the bare session's
-/// write unattested, for the board to commit as `bare`; the one that fences
-/// the `op` form alone sends its `/op-at` form).
+/// Checks that a bare session's write is refused before any dial.
+///
+/// The keyless session reads alone, "no `bare` write ever committed by this
+/// client" (foundations §3.3 state 3): under a bare session every write kind
+/// of the wire is refused `write_in_bare_session` naming its op, in the `op`
+/// form and the `/op-at` form alike, and its `resolve(send)` naming its act,
+/// while a listener at its board records no write frame; its read is
+/// dialed, and `resolve`'s `drop`, which commits nothing to the board, is
+/// answered as the line's absence; a signed session's write at the same
+/// board is dialed (the mutant that refuses in the guest form alone sends
+/// the bare session's write unattested, for the board to commit as `bare`;
+/// the one that fences the `op` form alone sends its `/op-at` form).
 #[test]
 fn a_bare_sessions_write_is_refused_before_any_dial() {
     let dir = TempDir::new().unwrap();
@@ -516,14 +545,15 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
     assert!(recorded.contains(&read), "the bare session's read reached it: {recorded:?}");
 }
 
-/// THE GUEST FORM REFUSES EVERY WRITE KIND OF THE WIRE WITHOUT A DIAL (ps3-5):
+/// Checks that the guest form refuses every write kind without a dial.
+///
 /// `WRITE_KINDS` is the wire's sixteen write kinds (`docs/wire.md`
-/// §Operations; skepd's `parse_op`), each refused `write_in_guest_form`
-/// naming its op while a listener at the named origin counts no connection
-/// — the target the form names read first, so a write at a board this
-/// shell never issued is `unknown_board` — and a guest READ there is
-/// dialed, so the listener sees what a dial would be (the mutants that dial
-/// first and refuse after, or refuse the write before its target is read).
+/// §Operations; `skep-core`'s `parse_op`), each refused `write_in_guest_form`
+/// naming its op while a listener at the named origin counts no connection —
+/// the target the form names read first, so a write at a board this shell
+/// never issued is `unknown_board` — and a guest read there is dialed, so
+/// the listener sees what a dial would be (the mutants that dial first and
+/// refuse after, or refuse the write before its target is read).
 #[test]
 fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
     let mut listed = WRITE_KINDS.to_vec();
@@ -568,12 +598,14 @@ fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
     assert!(dials.load(Ordering::SeqCst) >= 1, "the listener counts a guest read's dial");
 }
 
-/// THE STOP ABANDONS A WALK WAITING ON THE PAGE: `keygen` with no label
-/// waits on its device-name box, a PUBLIC moment; the shell's stop cancels
-/// it, and the walk answers `abandoned` (the mutant whose stop cancels no
-/// pending moment leaves the walk — and the transport's connection thread
-/// with it — waiting for an answer no page will give; the deadline cancels
-/// it by hand, so the mutant fails rather than hangs).
+/// Checks that the stop abandons a walk waiting on the page.
+///
+/// `keygen` with no label waits on its device-name box, a public moment; the
+/// shell's stop cancels it, and the walk answers `abandoned` (the mutant
+/// whose stop cancels no pending moment leaves the walk — and the
+/// transport's connection thread with it — waiting for an answer no page
+/// will give; the deadline cancels it by hand, so the mutant fails rather
+/// than hangs).
 #[test]
 fn the_stop_abandons_a_walk_waiting_on_the_page() {
     let dir = TempDir::new().unwrap();
@@ -598,12 +630,13 @@ fn the_stop_abandons_a_walk_waiting_on_the_page() {
     assert_eq!(answer.unwrap_err().name(), "abandoned");
 }
 
-/// A WALK BEGUN AFTER THE STOP asks the page nothing: the stop closes the
-/// moment table, so `keygen` with no label — its device-name box a PUBLIC
-/// moment — is abandoned at once, no `moment` event sent (the mutant whose
-/// stop drains the table and leaves it open enters the box and waits on a
-/// page that will never answer; the deadline cancels it by hand, so the
-/// mutant fails rather than hangs).
+/// Checks that a walk begun after the stop asks the page nothing.
+///
+/// The stop closes the moment table, so `keygen` with no label — its
+/// device-name box a public moment — is abandoned at once, no `moment` event
+/// sent (the mutant whose stop drains the table and leaves it open enters
+/// the box and waits on a page that will never answer; the deadline cancels
+/// it by hand, so the mutant fails rather than hangs).
 #[test]
 fn a_walk_begun_after_the_stop_asks_the_page_nothing() {
     let dir = TempDir::new().unwrap();
@@ -628,11 +661,12 @@ fn a_walk_begun_after_the_stop_asks_the_page_nothing() {
     assert_eq!(answer.unwrap_err().name(), "abandoned");
 }
 
-/// A `select` MATCHING TWO KEYS, OR NONE, is refused by its name: two keys
-/// under one label answer `ambiguous`, naming each match by its fingerprint
-/// and label; a label of no key answers `not_found`, naming it (the mutants
-/// that read either as the store's own fault, `store_unreadable`, or list
-/// every key for a select that names none).
+/// Checks that a `select` matching two keys, or none, is refused by its name.
+///
+/// Two keys under one label answer `ambiguous`, naming each match by its
+/// fingerprint and label; a label of no key answers `not_found`, naming it
+/// (the mutants that read either as the store's own fault,
+/// `store_unreadable`, or list every key for a select that names none).
 #[test]
 fn a_select_of_two_keys_or_none_is_refused_by_its_name() {
     let dir = TempDir::new().unwrap();
@@ -646,12 +680,13 @@ fn a_select_of_two_keys_or_none_is_refused_by_its_name() {
     assert_eq!((refused["name"].as_str(), refused["select"].as_str()), (Some("not_found"), Some("a-label-of-no-key")), "{refused}");
 }
 
-/// A LABEL REFUSED AT THE BOX is `empty_label` over AUTH-1.24's whole
-/// domain, naming its `cause`: an empty label, one holding a line break and
-/// one a byte past the bound, each refused with no key written — and a label
-/// at the bound exactly taken (the mutants that name a line break or a long
-/// label another refusal, drop the `cause`, or write a key for a label the
-/// box refuses).
+/// Checks that a label refused at the box is `empty_label` naming its cause.
+///
+/// It is `empty_label` over AUTH-1.24's whole domain, naming its `cause`: an
+/// empty label, one holding a line break and one a byte past the bound, each
+/// refused with no key written — and a label at the bound exactly taken (the
+/// mutants that name a line break or a long label another refusal, drop the
+/// `cause`, or write a key for a label the box refuses).
 #[test]
 fn a_label_refused_at_the_box_is_empty_label_naming_its_cause() {
     let dir = TempDir::new().unwrap();
@@ -665,11 +700,13 @@ fn a_label_refused_at_the_box_is_empty_label_naming_its_cause() {
     assert!(shell.call("keygen", &json!({"label": "x".repeat(128)})).is_ok(), "a label at the bound exactly is taken");
 }
 
-/// THE SIGNED MODE's CHECK before serving names a keyless store: `no_key`
-/// under the signed mode, the board's mode read for the face alone — a
-/// board nothing answers at taken as unclaimed — and, under the bare mode,
-/// `Ok` with no key, its sessions signing nothing (the mutant that answers
-/// a keyless signed check `Ok` serves a signed page that can sign nothing).
+/// Checks that the signed mode's check before serving names a keyless store.
+///
+/// It is `no_key` under the signed mode, the board's mode read for the face
+/// alone — a board nothing answers at taken as unclaimed — and, under the
+/// bare mode, `Ok` with no key, its sessions signing nothing (the mutant
+/// that answers a keyless signed check `Ok` serves a signed page that can
+/// sign nothing).
 #[test]
 fn the_signed_modes_check_names_a_keyless_store() {
     let dir = TempDir::new().unwrap();
@@ -679,11 +716,12 @@ fn the_signed_modes_check_names_a_keyless_store() {
     assert!(bare.check_signed_key().unwrap().is_empty(), "the bare mode's sessions sign nothing");
 }
 
-/// A search or a listing after the stop answers `feed_stopped` at once.
+/// Checks that a search or a listing after the stop answers `feed_stopped`.
 ///
-/// The board's feed thread is joined, its handle's send meets no receiver,
-/// and the call is refused — never a panic at the send, never a wait. The
-/// mutant that unwraps the send panics the transport's connection thread.
+/// It answers at once: the board's feed thread is joined, its handle's send
+/// meets no receiver, and the call is refused — never a panic at the send,
+/// never a wait. The mutant that unwraps the send panics the transport's
+/// connection thread.
 #[test]
 fn a_search_or_a_listing_after_the_stop_answers_feed_stopped() {
     let dir = TempDir::new().unwrap();
@@ -698,12 +736,14 @@ fn a_search_or_a_listing_after_the_stop_answers_feed_stopped() {
     assert!(started.elapsed() < Duration::from_secs(1), "answered at once, not after {:?}", started.elapsed());
 }
 
-/// EVERY DAY IS DATED as the calendar counts it: `civil_date` over every day
-/// from 1970-01-01 through 2400-12-31, at its first second and at its last,
-/// against a day-by-day count with the Gregorian leap rule spelled out — the
-/// date an anchor box's default label carries, which AUTH-5.42 makes
-/// permanent (the mutants in the algorithm's constants, its month fold or
-/// its year carry misdate some day of the four centuries).
+/// Checks that every day is dated as the calendar counts it.
+///
+/// It runs `civil_date` over every day from 1970-01-01 through 2400-12-31,
+/// at its first second and at its last, against a day-by-day count with the
+/// Gregorian leap rule spelled out — the date an anchor box's default label
+/// carries, which AUTH-5.42 makes permanent (the mutants in the algorithm's
+/// constants, its month fold or its year carry misdate some day of the four
+/// centuries).
 #[test]
 fn every_day_is_dated_as_the_calendar_counts_it() {
     let leap = |year: u64| (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);

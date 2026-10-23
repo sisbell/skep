@@ -1,11 +1,13 @@
-//! THE EVENT STREAM (`client.md` §4b.2): every event the shell pushes —
-//! `mode`, `session-died`, `daemon`, `feed`, `index`, `moment`, `held` — as
-//! one value with the name the contract spells, an [`EventName`] of that
-//! closed list, fanned out to EVERY subscriber in the order it was emitted:
-//! a developer's second tab is a second subscriber (the dev provider record
-//! §3.3), and the conformance proof reads the same sequence off a subscriber
-//! of its own. A subscriber that went away is dropped at the next emission;
-//! nothing is kept for one that has not subscribed yet.
+//! The event stream (`client.md` §4b.2): every event the shell pushes.
+//!
+//! Each event — `mode`, `session-died`, `daemon`, `feed`, `index`, `moment`,
+//! `held` — is one value with the name the contract spells, an
+//! [`EventName`] of that closed list, fanned out to every subscriber in the
+//! order it was emitted: a developer's second tab is a second subscriber
+//! (the dev provider record §3.3), and the conformance proof reads the same
+//! sequence off a subscriber of its own. A subscriber that went away is
+//! dropped at the next emission; nothing is kept for one that has not
+//! subscribed yet.
 
 use std::fmt;
 use std::str::FromStr;
@@ -14,16 +16,20 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-/// One event: the name §4b.2 spells and its data, shaped as the event's
-/// row draws it (`shapes` declares each).
+/// One event: the name §4b.2 spells and its data.
+///
+/// The data is shaped as the event's row draws it (`shapes` declares each).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
+    /// The event's name.
     pub name: EventName,
+    /// The event's data, shaped as its row draws it.
     pub data: Value,
 }
 
-/// An event's NAME: one of the seven the contract spells (`client.md`
-/// §4b.2), [`EventName::as_str`] its spelling on the stream and in the
+/// An event's name: one of the seven the contract spells (`client.md` §4b.2).
+///
+/// [`EventName::as_str`] is its spelling on the stream and in the
 /// declarations, which `shapes` renders from [`EventName::ALL`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -38,23 +44,24 @@ pub enum EventName {
     Feed,
     /// A search index's state moved: `index`.
     Index,
-    /// A PUBLIC moment of a walk: `moment`.
+    /// A public moment of a walk: `moment`.
     Moment,
-    /// A document's HELD state as it moves (`client.md` §4b.2; §3c):
-    /// `holding`, `sending`, `kept`, `refused` or `moved`, with the count of
-    /// lines still held: `held`. Emitted at a hold's start, at each line's
-    /// resolution or drop, and at each state the resend moves a document
-    /// through — never when a principal's file is read at its session's
-    /// open, whose lines `held(session)` lists.
+    /// A document's held state as it moves: `held`.
+    ///
+    /// The state (`client.md` §4b.2; §3c) is `holding`, `sending`, `kept`,
+    /// `refused` or `moved`, with the count of lines still held. Emitted at
+    /// a hold's start, at each line's resolution or drop, and at each state
+    /// the resend moves a document through — never when a principal's file
+    /// is read at its session's open, whose lines `held(session)` lists.
     Held,
 }
 
 impl EventName {
-    /// Every name, in the order the contract lists them.
+    /// Every name, in the contract's order but with `moment` before `held`.
     pub const ALL: &'static [EventName] =
         &[EventName::Mode, EventName::SessionDied, EventName::Daemon, EventName::Feed, EventName::Index, EventName::Moment, EventName::Held];
 
-    /// The name as the contract spells it.
+    /// Returns the name as the contract spells it.
     pub const fn as_str(self) -> &'static str {
         match self {
             EventName::Mode => "mode",
@@ -89,7 +96,12 @@ impl std::error::Error for UnknownEventName {}
 impl FromStr for EventName {
     type Err = UnknownEventName;
 
-    /// The event the contract spells `s`.
+    /// Returns the event the contract spells `s`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnknownEventName`] where no event of the contract is
+    /// spelled `s`.
     fn from_str(s: &str) -> Result<EventName, UnknownEventName> {
         EventName::ALL.iter().copied().find(|name| name.as_str() == s).ok_or(UnknownEventName)
     }
@@ -102,28 +114,43 @@ pub struct EventBus {
 }
 
 impl EventBus {
-    /// An empty bus.
+    /// Returns an empty bus.
     pub fn new() -> EventBus {
         EventBus::default()
     }
 
-    /// One more subscriber: every event emitted from now on arrives on the
-    /// receiver, in order.
+    /// Returns the receiver of one more subscriber.
+    ///
+    /// Every event emitted from the call on arrives on the receiver, in
+    /// order.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the bus's lock is poisoned.
     pub fn subscribe(&self) -> Receiver<Event> {
         let (tx, rx) = channel();
         self.subscribers.lock().expect("the bus's lock").push(tx);
         rx
     }
 
-    /// `name` with `data` to every subscriber; a subscriber whose receiver
-    /// is gone is dropped here.
+    /// Sends `name` with `data` to every subscriber.
+    ///
+    /// A subscriber whose receiver is gone is dropped here.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the bus's lock is poisoned.
     pub fn emit(&self, name: EventName, data: Value) {
         let event = Event { name, data };
         let mut subscribers = self.subscribers.lock().expect("the bus's lock");
         subscribers.retain(|tx| tx.send(event.clone()).is_ok());
     }
 
-    /// How many subscribers stand.
+    /// Returns how many subscribers stand.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the bus's lock is poisoned.
     #[cfg(test)]
     fn subscribers(&self) -> usize {
         self.subscribers.lock().expect("the bus's lock").len()
@@ -135,6 +162,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Checks that every subscriber sees the sequence in order.
+    ///
     /// Two subscribers see one sequence in one order; a dropped receiver is
     /// forgotten at the next emission; a late subscriber sees nothing of the
     /// past.
@@ -156,8 +185,10 @@ mod tests {
         assert_eq!(seen(&late), [EventName::Daemon]);
     }
 
-    /// Each name parses back from its spelling, which is the contract's; no
-    /// two names share one; a spelling of no event parses to none.
+    /// Checks that every name parses back from its spelling.
+    ///
+    /// The spelling is the contract's; no two names share one; a spelling of
+    /// no event parses to none.
     #[test]
     fn every_name_parses_back_from_its_spelling() {
         let spelled: Vec<&str> = EventName::ALL.iter().map(|name| name.as_str()).collect();

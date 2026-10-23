@@ -1,13 +1,14 @@
-//! Credential-record constants, payload types, and the JSON record schemas —
-//! AUTH-1.18–1.28, AUTH-2.128–2.130, AUTH-2.15–2.19.
+//! Credential-record constants, payload types, and the JSON record schemas.
 //!
-//! One doorkeeper: record BYTES in, typed records out. The two schemas
-//! (AUTH-2.128 enrollment, AUTH-2.129 retirement) and the CANONICAL ENCODING
-//! (AUTH-2.130) are PERMANENT protocol pins, I2 frozen constants (AUTH-2.90).
-//! Per AUTH-2.1 the crate uses `serde_json` to answer ONE question — is this
-//! byte string a JSON value, and which — parsing to a GENERIC
+//! They realize AUTH-1.18–1.28, AUTH-2.128–2.130 and AUTH-2.15–2.19.
+//!
+//! One doorkeeper: record bytes in, typed records out. The two schemas
+//! (AUTH-2.128 enrollment, AUTH-2.129 retirement) and the canonical encoding
+//! (AUTH-2.130) are permanent protocol pins, I2 frozen constants (AUTH-2.90).
+//! Per AUTH-2.1 the crate uses `serde_json` to answer one question — is this
+//! byte string a JSON value, and which — parsing to a generic
 //! [`serde_json::Value`], with every schema, profile and domain check written
-//! IN THIS CRATE, in the spec's own order: no `serde` derive, no
+//! in this crate, in the spec's own order: no `serde` derive, no
 //! `deny_unknown_fields`, no verdict delegated to the dependency. The fold's
 //! bytes arrive from `crate::read`; another caller's — an atom it fetched for
 //! itself, an `insert`'s own value — need not have, and the parse holds them
@@ -30,46 +31,48 @@ use serde_json::Value;
 
 use crate::key::{Fingerprint, PublicKey};
 
-/// AUTH-1.18 — the enrollment record's `type` member value (AUTH-2.128).
+/// The enrollment record's `type` member value (AUTH-1.18, AUTH-2.128).
 pub const ENROLL_TYPE: &str = "skep-enroll";
 
-/// AUTH-1.18 — the retirement record's `type` member value (AUTH-2.129).
+/// The retirement record's `type` member value (AUTH-1.18, AUTH-2.129).
 pub const RETIRE_TYPE: &str = "skep-retire";
 
-/// AUTH-1.18 — the record cap. Bounds ONE record — the concatenated bytes of
-/// the link's own FROM spans, never the home document (AUTH-1.19) — counted
-/// in BYTES, never positions (AUTH-1.20). A PERMANENT pin — 128 KiB, RAISED
-/// from 64 KiB BEFORE the first served board (the hybrid-only launch's Q8,
-/// owner 2026-09-26 "b"; AUTH RES-204 re-pinning AUTH-1.18/1.21), AUTH-2.90's
-/// permanence clock starting at that board: there is no fold version and
-/// from the first served board the constant MUST NOT change (AUTH-1.21).
-/// Sized so a signed hybrid genesis carries AUTH-3.57's sixteen tag-1
-/// entries in one record — 71,074 B — with room to spare (AUTH-2.130's cost
-/// note: 32 label-free tag-1 entries, 68 tag-3). As a BYTE cap it bounds the
-/// fold's per-record work only under the wire-codec premise that every value
-/// carries ≥ 1 byte (AUTH-1.22); the second bound that rule demands wherever
-/// a zero-byte value can reach the read is
-/// [`record_bytes`](crate::record_bytes)' per-record POSITION budget, over
-/// this same constant, so the work is bounded whatever a ctx answers. The
-/// parse applies the same constant at its own head
+/// The record cap, 128 KiB (AUTH-1.18).
+///
+/// It bounds one record — the concatenated bytes of the link's own `from`
+/// spans, never the home document (AUTH-1.19) — counted in bytes, never
+/// positions (AUTH-1.20). A permanent pin (the hybrid-only launch; AUTH
+/// RES-204, AUTH-1.18/1.21), whose permanence clock, AUTH-2.90's, starts at
+/// the first served board: there is no fold version, and from that board the
+/// constant must not change (AUTH-1.21). Sized so a signed hybrid genesis
+/// carries AUTH-3.57's sixteen tag-1 entries in one record — 71,074 B — with
+/// room to spare (AUTH-2.130's cost note: 32 label-free tag-1 entries, 68
+/// tag-3). As a byte cap it bounds the fold's per-record work only under the
+/// wire-codec premise that every value carries ≥ 1 byte (AUTH-1.22); the
+/// second bound that rule demands wherever a zero-byte value can reach the
+/// read is [`record_bytes`](crate::record_bytes)' per-record position budget,
+/// over this same constant, so the work is bounded whatever a ctx answers.
+/// The parse applies the same constant at its own head
 /// ([`parse_record_value`]), so a caller holding bytes the read never capped
 /// builds no JSON tree past it.
 pub const MAX_RECORD_BYTES: usize = 128 * 1024;
 
-/// AUTH-1.24 — the label's byte bound: at most 128 BYTES of UTF-8, counted
-/// in bytes as the record cap counts (AUTH-1.20), never in characters (rc-2,
-/// owner 2026-09-26 "128 bytes"; AUTH RES-206). A longer label is
-/// `Err(LabelError::TooLong)` at [`Enrollment::new`] (AUTH-1.25) and, in a
-/// record, `bad_record` — the canonical profile's own outcome, no sub-token
-/// of its own (AUTH-2.96, AUTH-2.128).
+/// The label's byte bound, 128 bytes of UTF-8 (AUTH-1.24).
+///
+/// It is counted in bytes as the record cap counts (AUTH-1.20), never in
+/// characters (AUTH RES-206). A longer label is `Err(LabelError::TooLong)` at
+/// [`Enrollment::new`] (AUTH-1.25) and, in a record, `bad_record` — the
+/// canonical profile's own outcome, no sub-token of its own (AUTH-2.96,
+/// AUTH-2.128).
 const MAX_LABEL_BYTES: usize = 128;
 
-/// One enrollment key entry's parse (AUTH-1.23, AUTH-2.128): the key, the
-/// anchor flag, and the informational label. `anchor` is the ANCHOR flag — the
-/// REQUIRED BOOLEAN member `anchor` of the enrollment schema's key entry
-/// (AUTH-1.26, AUTH-2.128); a fingerprint's flag is fixed for the
-/// fingerprint's lifetime by the record that first enrolls it (I9,
-/// AUTH-2.104).
+/// One enrollment key entry's parse (AUTH-1.23, AUTH-2.128).
+///
+/// It holds the key, the anchor flag, and the informational label. `anchor`
+/// is the anchor flag — the required boolean member `anchor` of the
+/// enrollment schema's key entry (AUTH-1.26, AUTH-2.128); a fingerprint's
+/// flag is fixed for the fingerprint's lifetime by the record that first
+/// enrolls it (I9, AUTH-2.104).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enrollment {
     /// The enrolled public key.
@@ -80,14 +83,19 @@ pub struct Enrollment {
 }
 
 impl Enrollment {
-    /// AUTH-1.25 — the ONLY constructor. The label DOMAIN (AUTH-1.24) is
-    /// `None`, or text that is non-empty, contains no `\n` and is at most 128
-    /// BYTES of UTF-8, counted in bytes and never characters — a trailing 0x20
-    /// is IN the domain. `Some("")` maps to `None`; a label containing `\n` is
-    /// `Err(LabelError::Newline)`; one over 128 bytes is
-    /// `Err(LabelError::TooLong)` — the newline read first, so a label with
-    /// both faults names the newline (both are refusals; the fold answers
-    /// `bad_record` to either).
+    /// Builds an enrollment entry, the only constructor (AUTH-1.25).
+    ///
+    /// The label domain (AUTH-1.24) is `None`, or text that is non-empty,
+    /// contains no `\n` and is at most 128 bytes of UTF-8, counted in bytes
+    /// and never characters — a trailing 0x20 is in the domain. `Some("")`
+    /// maps to `None`.
+    ///
+    /// # Errors
+    ///
+    /// A label containing `\n` is `Err(LabelError::Newline)`; one over 128
+    /// bytes is `Err(LabelError::TooLong)` — the newline read first, so a
+    /// label with both faults names the newline (both are refusals; the fold
+    /// answers `bad_record` to either).
     pub fn new(key: PublicKey, anchor: bool, label: Option<String>) -> Result<Enrollment, LabelError> {
         let label = match label {
             Some(label) if label.contains('\n') => return Err(LabelError::Newline),
@@ -98,7 +106,7 @@ impl Enrollment {
         Ok(Enrollment { key, anchor, label })
     }
 
-    /// The label, in the AUTH-1.24 domain by construction (AUTH-1.25).
+    /// Returns the label, in the AUTH-1.24 domain by construction (AUTH-1.25).
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
     }
@@ -109,8 +117,9 @@ impl Enrollment {
 pub enum LabelError {
     /// The label contains `\n` — outside the AUTH-1.24 domain.
     Newline,
-    /// The label is over AUTH-1.24's 128 bytes of UTF-8 (counted in bytes,
-    /// never characters) — outside the domain (AUTH RES-206).
+    /// The label is over AUTH-1.24's 128 bytes of UTF-8, outside the domain.
+    ///
+    /// The bytes are counted as bytes, never characters (AUTH RES-206).
     TooLong,
 }
 
@@ -125,55 +134,66 @@ impl fmt::Display for LabelError {
 
 impl std::error::Error for LabelError {}
 
-/// AUTH-1.27 — a payload fault. `ForeignContent` and `MissingValue` report
-/// that a record's payload could not be READ; `TooLarge` that it is past the
-/// record cap — at the read, or at the parse's own head for bytes the read
-/// never capped ([`parse_record_value`]); the remaining variants that it
-/// could not be PARSED. The `usize` is a 1-BASED INDEX INTO THE KIND'S ENTRY
-/// ARRAY — `keys` on an enrollment, `fingerprints` on a retirement — and
-/// `DuplicateKey` names the REPEATING ENTRY (AUTH-2.15).
+/// A payload fault (AUTH-1.27).
+///
+/// `ForeignContent` and `MissingValue` report that a record's payload could
+/// not be read; `TooLarge` that it is past the record cap — at the read, or
+/// at the parse's own head for bytes the read never capped
+/// ([`parse_record_value`]); the remaining variants that it could not be
+/// parsed. The `usize` is a 1-based index into the kind's entry array —
+/// `keys` on an enrollment, `fingerprints` on a retirement — and
+/// `DuplicateKey` names the repeating entry (AUTH-2.15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadError {
-    /// The record's bytes exceed [`MAX_RECORD_BYTES`]: the concatenated
-    /// FROM-span bytes at the read (AUTH-2.43), or a body handed to the
-    /// parse, which applies the same cap at its head
-    /// ([`parse_record_value`]).
+    /// The record is past [`MAX_RECORD_BYTES`], in bytes or in positions.
+    ///
+    /// Its bytes exceed the cap: the concatenated `from`-span bytes at the
+    /// read (AUTH-2.43), or a body handed to the parse, which applies the same
+    /// cap at its head ([`parse_record_value`]); or its `from` spans cover
+    /// more positions than the cap, the read's per-record position budget.
     TooLarge,
-    /// The span's START failed one of the three per-span checks that run
-    /// before a byte of it is read (AUTH-2.38 items 1–3): it does not
-    /// VALIDATE to an address; or it validates to a T4-valid NON-position —
-    /// an element field that is not exactly subspace·ordinal (AUTH-2.40);
-    /// or its `document_of` is not the link's home (HOME ANCHORING,
-    /// AUTH-2.44). The position test constrains the field's SHAPE ONLY,
-    /// never WHICH subspace it names (AUTH-2.41): a start in the home's
-    /// LINK subspace IS a position, and walks to [`MissingValue`] — never
-    /// here.
+    /// The span's start failed one of the three per-span checks.
+    ///
+    /// They run before a byte of it is read (AUTH-2.38 items 1–3): it does
+    /// not validate to an address; or it validates to a T4-valid non-position
+    /// — an element field that is not exactly subspace·ordinal (AUTH-2.40); or
+    /// its `document_of` is not the link's home (home anchoring, AUTH-2.44).
+    /// The position test constrains the field's shape only, never which
+    /// subspace it names (AUTH-2.41): a start in the home's link subspace is
+    /// a position, and walks to [`MissingValue`] — never here.
     ///
     /// [`MissingValue`]: PayloadError::MissingValue
     ForeignContent,
-    /// A FROM span names a position the home had not minted as of the
-    /// deposit's commit (AUTH-2.38 item 4, AUTH-2.45).
+    /// A `from` span names a position the home had not minted.
+    ///
+    /// The position is unminted as of the deposit's commit (AUTH-2.38 item
+    /// 4, AUTH-2.45).
     MissingValue,
     /// The payload does not decode as UTF-8 (AUTH-2.19 item 1).
     NotUtf8,
-    /// The payload is not the kind's CANONICAL SCHEMA ENCODING (AUTH-2.128,
-    /// AUTH-2.129 under AUTH-2.130's admission sentence): not JSON at all, a
-    /// wrong or missing `type`, a missing/extra member, a wrong JSON type, an
-    /// unadmitted alg, a wrong hex length, a label outside AUTH-1.24, or ANY
-    /// non-canonical encoding — member order, insignificant whitespace,
-    /// escape choices, uppercase hex, a duplicate member, a trailing byte, a
-    /// BOM — none of which survives the byte-identity compare against a
-    /// minimal re-encoding (AUTH-2.130, AUTH-2.19 item 2, I2 AUTH-2.90).
+    /// The payload is not the kind's canonical schema encoding.
+    ///
+    /// The encoding is AUTH-2.128's or AUTH-2.129's under AUTH-2.130's
+    /// admission sentence. The cases are: not JSON at all, a wrong or missing
+    /// `type`, a missing/extra member, a wrong JSON type, an unadmitted alg, a
+    /// wrong hex length, a label outside AUTH-1.24, or any non-canonical
+    /// encoding — member order, insignificant whitespace, escape choices,
+    /// uppercase hex, a duplicate member, a trailing byte, a BOM — none of
+    /// which survives the byte-identity compare against a minimal re-encoding
+    /// (AUTH-2.130, AUTH-2.19 item 2, I2 AUTH-2.90).
     BadRecord,
-    /// Zero key/fingerprint entries after a clean scan (AUTH-2.16) — never
-    /// `NothingChanged`; evaluated ONLY after the canonical schema check
-    /// (AUTH-2.19 item 4).
+    /// Zero key/fingerprint entries after a clean scan (AUTH-2.16).
+    ///
+    /// Never `NothingChanged`; evaluated only after the canonical schema
+    /// check (AUTH-2.19 item 4).
     Empty,
-    /// The named ENTRY repeats an earlier entry's fingerprint, compared as
-    /// PARSED bytes (AUTH-2.15) — for the ENROLLMENT kind the parsed KEY,
-    /// whose fingerprint is a function of it. The `usize` is the 1-based index
-    /// of the REPEATING entry in the kind's array (AUTH-1.27). The canonical
-    /// schema check decides FIRST (AUTH-2.19 item 2 before item 3), so a body
+    /// The named entry repeats an earlier entry's fingerprint (AUTH-2.15).
+    ///
+    /// Fingerprints are compared as parsed bytes — for the enrollment kind,
+    /// the parsed key, whose fingerprint is a function of it. The `usize` is
+    /// the 1-based index of the repeating entry in the kind's array
+    /// (AUTH-1.27). The canonical
+    /// schema check decides first (AUTH-2.19 item 2 before item 3), so a body
     /// that is both non-canonical and duplicate-bearing answers
     /// [`BadRecord`], never this.
     ///
@@ -182,10 +202,12 @@ pub enum PayloadError {
 }
 
 impl PayloadError {
-    /// AUTH-1.28 — THE ONE authority for the payload fault tokens. `<n>` is
-    /// the 1-based ENTRY index, which is why the return type is `String`. On
-    /// the wire this token is a fold refusal's payload sub-token, in the join
-    /// [`Inert::detail`](crate::Inert::detail) writes (AUTH-2.55).
+    /// Returns the fault's token, the one authority for the tokens (AUTH-1.28).
+    ///
+    /// `<n>` is the 1-based entry index, which is why the return type is
+    /// `String`. On the wire this token is a fold refusal's payload
+    /// sub-token, in the join [`Inert::detail`](crate::Inert::detail) writes
+    /// (AUTH-2.55).
     pub fn token(&self) -> String {
         match self {
             PayloadError::TooLarge => "too_large".to_owned(),
@@ -199,10 +221,11 @@ impl PayloadError {
     }
 }
 
-/// AUTH-1.28's token, and only it: `Display` is a second ENTRY to [`token`]'s
-/// one authority, never a second vocabulary — `format!("{e}")` and
-/// `e.token()` answer the same string, so a consumer that formats is citing
-/// rather than transcribing.
+/// AUTH-1.28's token, and only it.
+///
+/// `Display` is a second entry to [`token`]'s one authority, never a second
+/// vocabulary — `format!("{e}")` and `e.token()` answer the same string, so a
+/// consumer that formats is citing rather than transcribing.
 ///
 /// [`token`]: PayloadError::token
 impl fmt::Display for PayloadError {
@@ -213,11 +236,12 @@ impl fmt::Display for PayloadError {
 
 impl std::error::Error for PayloadError {}
 
-/// AUTH-2.130 clause 3 — canonical JSON string escaping: escape EXACTLY `"`,
-/// `\` and U+0000–U+001F — the two-character forms where JSON defines one
-/// (`\b \f \n \r \t`), `\u00xx` with LOWERCASE hex otherwise — and escape
-/// NOTHING else (never `/`, never a non-ASCII character, never a `\uXXXX` for
-/// any character above U+001F).
+/// Writes `s` onto `out` as a canonical JSON string (AUTH-2.130 clause 3).
+///
+/// It escapes exactly `"`, `\` and U+0000–U+001F — the two-character forms
+/// where JSON defines one (`\b \f \n \r \t`), `\u00xx` with lowercase hex
+/// otherwise — and nothing else (never `/`, never a non-ASCII character,
+/// never a `\uXXXX` for any character above U+001F).
 fn escape_json_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -239,10 +263,12 @@ fn escape_json_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// AUTH-2.130 — ONE `keys` entry in the canonical spelling: `{alg, key,
-/// anchor, label?}` in that member order, hex lowercase (AUTH-2.17), the
-/// label escaped by [`escape_json_string`] (clause 3). The ENVELOPE around
-/// the array is [`canonical_record`]'s and is not encoded here.
+/// Writes one `keys` entry onto `out` in the canonical spelling (AUTH-2.130).
+///
+/// The members are `{alg, key, anchor, label?}` in that order, hex lowercase
+/// (AUTH-2.17), the label escaped by [`escape_json_string`] (clause 3). The
+/// envelope around the array is [`canonical_record`]'s and is not encoded
+/// here.
 fn encode_key_entry(e: &Enrollment, out: &mut String) {
     out.push_str(r#"{"alg":""#);
     out.push_str(e.key.alg());
@@ -257,34 +283,42 @@ fn encode_key_entry(e: &Enrollment, out: &mut String) {
     out.push('}');
 }
 
-/// AUTH-2.130 — ONE `fingerprints` entry: a 64-hex lowercase string
-/// (AUTH-2.17), quoted.
+/// Writes one `fingerprints` entry onto `out` (AUTH-2.130).
+///
+/// It is a 64-hex lowercase string (AUTH-2.17), quoted.
 fn encode_fingerprint_entry(fp: &Fingerprint, out: &mut String) {
     out.push('"');
     out.push_str(&fp.to_hex()); // AUTH-2.17 — hex lowercase
     out.push('"');
 }
 
-/// AUTH-2.128 — validate ONE `keys` entry against the enrollment schema, one
-/// branch per member the schema names. An OBJECT of exactly `{alg, key,
-/// anchor}` or `{alg, key, anchor, label}`, in any order (member ORDER is the
-/// canonical encoding's, judged by AUTH-2.130's byte-identity compare, not
-/// here). Any other shape is [`PayloadError::BadRecord`] (AUTH-1.28).
+/// Validates one `keys` entry against the enrollment schema (AUTH-2.128).
+///
+/// It takes one branch per member the schema names: an object of exactly
+/// `{alg, key, anchor}` or `{alg, key, anchor, label}`, in any order (member
+/// order is the canonical encoding's, judged by AUTH-2.130's byte-identity
+/// compare, not here).
+///
+/// # Errors
+///
+/// Any entry the schema does not admit is [`PayloadError::BadRecord`]
+/// (AUTH-1.28): another shape, a member of another JSON type, a label outside
+/// its domain, or a key [`PublicKey::parse`] refuses.
 fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
     let obj = v.as_object().ok_or(PayloadError::BadRecord)?;
-    // `alg` — STRING, an ALGS token (AUTH-2.128; admission is PublicKey::parse's,
-    // AUTH-1.6, AUTH-2.9's surviving half).
+    // `alg` — a string, an `ALGS` token (AUTH-2.128; admission is
+    // `PublicKey::parse`'s, AUTH-1.6, AUTH-2.9's surviving half).
     let alg = obj.get("alg").and_then(Value::as_str).ok_or(PayloadError::BadRecord)?;
-    // `key` — STRING, that row's hex length, parsed case-insensitively
+    // `key` — a string, that row's hex length, parsed case-insensitively
     // (AUTH-2.17); the case a body carries is judged by the byte-identity
-    // compare, so the PARSE admits uppercase and the canonical form is lower.
+    // compare, so the parse admits uppercase and the canonical form is lower.
     let key_hex = obj.get("key").and_then(Value::as_str).ok_or(PayloadError::BadRecord)?;
-    // `anchor` — BOOLEAN, REQUIRED, never omitted (AUTH-2.128).
+    // `anchor` — a boolean, required, never omitted (AUTH-2.128).
     let anchor = obj.get("anchor").and_then(Value::as_bool).ok_or(PayloadError::BadRecord)?;
-    // `label` — STRING, OPTIONAL: present only where a label exists, never
-    // `""`, never `null`, never containing `\n`, and AT MOST 128 BYTES of
-    // UTF-8, counted in bytes (AUTH-1.24, AUTH-1.25; AUTH-2.128 as RES-206
-    // landed it): a longer label is the canonical profile's own `bad_record`,
+    // `label` — a string, optional: present only where a label exists, never
+    // `""`, never `null`, never containing `\n`, and at most 128 bytes of
+    // UTF-8, counted in bytes (AUTH-1.24, AUTH-1.25; AUTH-2.128 under
+    // RES-206): a longer label is the canonical profile's own `bad_record`,
     // no sub-token of its own (AUTH-2.96's 128-byte · 129-byte row).
     let label = match obj.get("label") {
         None => None,
@@ -308,75 +342,93 @@ fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
     Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadRecord)
 }
 
-/// AUTH-2.129 — validate ONE `fingerprints` entry against the retirement
-/// schema: a STRING of exactly 64 hex characters, parsed case-insensitively
-/// (AUTH-2.17); the case a body carries is judged by AUTH-2.130's
-/// byte-identity compare, not here. Any other shape is
-/// [`PayloadError::BadRecord`] (AUTH-1.28).
+/// Validates one `fingerprints` entry against its schema (AUTH-2.129).
+///
+/// The retirement schema's entry is a string of exactly 64 hex characters,
+/// parsed case-insensitively (AUTH-2.17); the case a body carries is judged
+/// by AUTH-2.130's byte-identity compare, not here.
+///
+/// # Errors
+///
+/// Any other shape is [`PayloadError::BadRecord`] (AUTH-1.28).
 fn parse_fingerprint_entry(v: &Value) -> Result<Fingerprint, PayloadError> {
     let hex = v.as_str().ok_or(PayloadError::BadRecord)?;
     Fingerprint::parse_hex(hex).ok_or(PayloadError::BadRecord)
 }
 
-/// AUTH-2.15 for the ENROLLMENT kind — two entries are the same entry when
-/// their PARSED KEYS have one fingerprint, which is a function of the key:
-/// never the entry's flag, its label, or the hex case its body spelled.
+/// Returns the fingerprint an enrollment entry is compared by (AUTH-2.15).
+///
+/// For the enrollment kind, two entries are the same entry when their parsed
+/// keys have one fingerprint, which is a function of the key: never the
+/// entry's flag, its label, or the hex case its body spelled.
 fn enrollment_key_fingerprint(e: &Enrollment) -> Fingerprint {
     Fingerprint::of(&e.key)
 }
 
-/// AUTH-2.15 for the RETIREMENT kind — two entries are the same entry when
-/// they are one fingerprint.
+/// Returns the fingerprint a retirement entry is compared by (AUTH-2.15).
+///
+/// It is the entry itself: for the retirement kind, two entries are the same
+/// entry when they are one fingerprint.
 fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
     *fp
 }
 
-/// One record kind's SCHEMA — everything AUTH-2.128 and AUTH-2.129 say
-/// DIFFERENTLY, and nothing they say alike. Five rows, read by the kind's
-/// parser and its encoder alike. The envelope both schemas state in identical
-/// words is written once on each side — [`parse_record_value`] reads it,
-/// [`canonical_record`] writes it, both from the rows above — and AUTH-2.19's
-/// fault precedence, which both kinds keep, is [`parse_record_value`]'s.
+/// One record kind's schema: what AUTH-2.128 and AUTH-2.129 say differently.
 ///
-/// PRECONDITION — two rows must AGREE, and [`parse_record_value`] checks
+/// It holds everything the two say differently, and nothing they say alike:
+/// five rows, read by the kind's parser and its encoder alike. The envelope
+/// both schemas state in identical words is written once on each side —
+/// [`parse_record_value`] reads it, [`canonical_record`] writes it, both from
+/// the rows above — and AUTH-2.19's fault precedence, which both kinds keep,
+/// is [`parse_record_value`]'s.
+///
+/// **Precondition.** Two rows must agree, and [`parse_record_value`] checks
 /// neither. For every entry `parse_entry` admits from a canonical body,
 /// `encode_entry` must re-emit the bytes that entry spelled: AUTH-2.130's
 /// admission sentence is spelled `canonical_record(parsed, sig) == text`, so
-/// an `encode_entry` that is not `parse_entry`'s inverse refuses EVERY record
+/// an `encode_entry` that is not `parse_entry`'s inverse refuses every record
 /// of the kind — silently, permanently, and with no fault to tell it from a
-/// malformed body. The ENVELOPE half of that inversion needs no precondition:
+/// malformed body. The envelope half of that inversion needs no precondition:
 /// [`canonical_record`] spells the `type` value and the entry-array member
-/// from the very rows [`parse_record_value`] reads to FIND them, so the encode
+/// from the very rows [`parse_record_value`] reads to find them, so the encode
 /// and parse sides cannot disagree about either. And `compared_by` must be the
-/// kind's AUTH-2.15 sameness rule, because it is the ONLY thing standing
-/// behind each parser's DUPLICATE-FREE POSTCONDITION: a `compared_by` that
+/// kind's AUTH-2.15 sameness rule, because it is the only thing standing
+/// behind each parser's duplicate-free postcondition: a `compared_by` that
 /// separated two entries the kind calls one would admit a record the
 /// retirement arm reads as a proper subset (AUTH-2.74), emptying a key set and
 /// voiding I3 (AUTH-2.97) and AUTH-1.36. A kind is added by filling this
 /// table; these are what filling it owes.
 #[doc(hidden)]
 pub struct Schema<T> {
-    /// The `type` member's ONE admitted value ([`ENROLL_TYPE`],
-    /// [`RETIRE_TYPE`]).
+    /// The `type` member's one admitted value.
+    ///
+    /// It is [`ENROLL_TYPE`] or [`RETIRE_TYPE`].
     type_value: &'static str,
     /// The entry array's member name (`keys`, `fingerprints`).
     entries_member: &'static str,
-    /// AUTH-2.128/AUTH-2.129 — ONE entry against the kind's entry schema.
+    /// The parser of one entry, against the kind's entry schema.
+    ///
+    /// The schema is AUTH-2.128's or AUTH-2.129's, by kind.
     parse_entry: fn(&Value) -> Result<T, PayloadError>,
-    /// AUTH-2.130 — ONE entry in the canonical spelling, appended to the
-    /// buffer. The ENVELOPE is [`canonical_record`]'s, written once from
-    /// `type_value` and `entries_member` above.
+    /// The encoder of one entry, in the canonical spelling (AUTH-2.130).
+    ///
+    /// It appends the entry to the buffer. The envelope is
+    /// [`canonical_record`]'s, written once from `type_value` and
+    /// `entries_member` above.
     encode_entry: fn(&T, &mut String),
-    /// AUTH-2.15 — the FINGERPRINT two entries are compared by:
+    /// The fingerprint two entries are compared by (AUTH-2.15).
+    ///
     /// `enrollment_key_fingerprint` takes the parsed key's,
-    /// `retirement_fingerprint` the entry itself. BOTH kinds compare
+    /// `retirement_fingerprint` the entry itself. Both kinds compare
     /// fingerprints, so that is the type here and not a parameter.
     compared_by: fn(&T) -> Fingerprint,
 }
 
-/// The ENROLLMENT kind's table (AUTH-2.128, AUTH-2.130): the ONE place the
-/// kind's five rows are written, reached only through `Enrollment`'s
-/// [`RecordEntry`] impl, by the parse side and [`canonical_record`] alike.
+/// The enrollment kind's table (AUTH-2.128, AUTH-2.130).
+///
+/// It is the one place the kind's five rows are written, reached only
+/// through `Enrollment`'s [`RecordEntry`] impl, by the parse side and
+/// [`canonical_record`] alike.
 const ENROLL_SCHEMA: Schema<Enrollment> = Schema {
     type_value: ENROLL_TYPE,
     entries_member: "keys",
@@ -385,7 +437,7 @@ const ENROLL_SCHEMA: Schema<Enrollment> = Schema {
     compared_by: enrollment_key_fingerprint,
 };
 
-/// The RETIREMENT kind's table (AUTH-2.129, AUTH-2.130), as [`ENROLL_SCHEMA`].
+/// The retirement kind's table (AUTH-2.129, AUTH-2.130), as [`ENROLL_SCHEMA`].
 const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
     type_value: RETIRE_TYPE,
     entries_member: "fingerprints",
@@ -394,14 +446,16 @@ const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
     compared_by: retirement_fingerprint,
 };
 
-/// The entry type of ONE record kind, naming its `Schema` — the one index
-/// from a kind to its table, read alike by [`canonical_record`] and by the
-/// parse, [`parse_record_value`] — and so by [`parse_enroll`] and
-/// [`parse_retire`], which take its entries: [`Enrollment`] for the
-/// enrollment kind, [`Fingerprint`] for the retirement kind. Sealed: a kind
-/// is added by filling a schema table in this module, never by a foreign
-/// impl.
+/// The entry type of one record kind, naming its `Schema`.
+///
+/// It is the one index from a kind to its table, read alike by
+/// [`canonical_record`] and by the parse, [`parse_record_value`] — and so by
+/// [`parse_enroll`] and [`parse_retire`], which take its entries:
+/// [`Enrollment`] for the enrollment kind, [`Fingerprint`] for the
+/// retirement kind. Sealed: a kind is added by filling a schema table in
+/// this module, never by a foreign impl.
 pub trait RecordEntry: sealed::Sealed + Sized + 'static {
+    /// Returns the kind's schema, its one table.
     #[doc(hidden)]
     fn schema() -> &'static Schema<Self>;
 }
@@ -424,45 +478,46 @@ impl RecordEntry for Fingerprint {
     }
 }
 
-/// AUTH-2.130 — the canonical encoding of a record VALUE at ONE NAME WITH
-/// BOTH DIRECTIONS (signed ops; the design record §4.2 (C)): the SIGNER
-/// composes with `Some(sig)` the record it will deposit, and the VERIFIER
-/// composes with `None` the SIG-LESS PROJECTION of a committed, `sig`-bearing
-/// record — the one byte string every party to a record holds, and the
-/// record grade's first step at every kind. This projection ADMITS NOTHING —
-/// a verifier beside the table computes it over the entries of any record the
-/// parsers ADMIT, whatever verdict the fold's arms gave the deposit that
-/// carried it — and it is also the admission compare's own spelling:
-/// [`parse_enroll`] and [`parse_retire`] admit a body only where it equals
-/// this function over the entries they parsed and the `sig` they read
-/// (AUTH-2.130), so signer, verifier and admission rule call one function.
-/// [`encode_enroll`] and [`encode_retire`] are this function with
-/// `sig = None` (AUTH-2.18).
+/// Returns the canonical encoding of a record value (AUTH-2.130).
 ///
-/// PRECONDITION, for an answer a parser admits — `entries` is NON-EMPTY and
-/// DUPLICATE-FREE, the parsers' POSTCONDITION read from the other side, as
-/// [`encode_enroll`] and [`encode_retire`] state it, and the record spelled
-/// is at most [`MAX_RECORD_BYTES`] (AUTH-1.18: the cap bounds ONE record);
-/// `sig` may be any string, clause 3 escaping it. Outside that domain the
-/// function still answers a record value — it emits what it is given and
-/// re-checks nothing — and NO parser admits it: a signer composing over a
-/// repeated entry, or none, deposits a record the fold refuses
+/// It is one name with both directions (signed ops; the design record
+/// §4.2 (C)): the signer composes with `Some(sig)` the record it will
+/// deposit, and the verifier composes with `None` the sig-less projection of
+/// a committed, `sig`-bearing record — the one byte string every party to a
+/// record holds, and the record grade's first step at every kind. This
+/// projection admits nothing — a verifier beside the table computes it over
+/// the entries of any record the parsers admit, whatever verdict the fold's
+/// arms gave the deposit that carried it — and it is also the admission
+/// compare's own spelling: [`parse_enroll`] and [`parse_retire`] admit a body
+/// only where it equals this function over the entries they parsed and the
+/// `sig` they read (AUTH-2.130), so signer, verifier and admission rule call
+/// one function. [`encode_enroll`] and [`encode_retire`] are this function
+/// with `sig = None` (AUTH-2.18).
+///
+/// **Precondition**, for an answer a parser admits: `entries` is non-empty
+/// and duplicate-free, the parsers' postcondition read from the other side,
+/// as [`encode_enroll`] and [`encode_retire`] state it, and the record
+/// spelled is at most [`MAX_RECORD_BYTES`] (AUTH-1.18: the cap bounds one
+/// record); `sig` may be any string, clause 3 escaping it. Outside that
+/// domain the function still answers a record value — it emits what it is
+/// given and re-checks nothing — and no parser admits it: a signer composing
+/// over a repeated entry, or none, deposits a record the fold refuses
 /// `malformed_payload` (`duplicate_key:<n>`, `empty`), and one spelled past
 /// the cap a record refused `too_large` — at the read before any parse
 /// (AUTH-2.43), and by the parse itself at its head.
 ///
-/// POSTCONDITION — within it, the value ROUND-TRIPS, `sig` included: the
+/// **Postcondition.** Within it, the value round-trips, `sig` included: the
 /// kind's parser admits `canonical_record(entries, sig)` and answers
 /// `entries`, so the verifier's `canonical_record(parsed, None)` is the byte
 /// string the signer composed with `None` — the agreement "the one byte
 /// string every party to a record holds" names (I1 over the record value,
 /// AUTH-2.89; RES-105).
 ///
-/// The ENVELOPE both schemas state in identical words, written ONCE:
+/// The envelope both schemas state in identical words is written once:
 /// `{"type":"<value>",` `"<member>":[` the entries comma-separated `]`, then
 /// `,"sig":<escaped>` when present, then `}` — no whitespace outside strings,
 /// no byte after the brace (clauses 2 and 5). The admission sentence ranges
-/// over this whole value, `sig` INCLUDED (RES-105).
+/// over this whole value, `sig` included (RES-105).
 pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> String {
     let schema = T::schema();
     let mut out = String::new();
@@ -486,12 +541,12 @@ pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> Str
     out
 }
 
-/// THE RECORD VALUE a body admits (AUTH-2.130's admission sentence ranges
-/// over it): the kind's ENTRIES and the `sig` member's string where one
-/// stands — what the RECORD grade's verifier reads off a committed atom
-/// (signed ops; the design record §4.2 (C), §7.5 step 3): `sig` is the
-/// signature under trial, made over the record frame
-/// ([`RecordFrame`](crate::RecordFrame)), and
+/// The record value a body admits, its entries and its `sig` where one stands.
+///
+/// AUTH-2.130's admission sentence ranges over it. It is what the record
+/// grade's verifier reads off a committed atom (signed ops; the design record
+/// §4.2 (C), §7.5 step 3): `sig` is the signature under trial, made over the
+/// record frame ([`RecordFrame`](crate::RecordFrame)), and
 /// [`RecordValue::sigless_canonical_record`] the sig-less projection that
 /// frame carries as the `record` grammar's body-bytes row
 /// ([`entry_body_record`](crate::entry_body_record)). The fold never holds
@@ -499,67 +554,71 @@ pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> Str
 /// [`parse_enroll`] and [`parse_retire`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordValue<T> {
-    /// The kind's entries, in the record's own ENTRY ORDER, non-empty and
-    /// duplicate-free — what [`parse_record_value`] answers: [`parse_enroll`]'s
-    /// or [`parse_retire`]'s POSTCONDITION, by kind.
+    /// The kind's entries, in the record's own entry order.
+    ///
+    /// They are non-empty and duplicate-free — what [`parse_record_value`]
+    /// answers: [`parse_enroll`]'s or [`parse_retire`]'s postcondition, by
+    /// kind.
     pub entries: Vec<T>,
-    /// The `sig` member's string, where the body carried one — the empty
-    /// string included, which is a `sig` and never `None`. It is the STRING
-    /// the member spells, its JSON escapes read back: the string its signer
-    /// composed, so [`canonical_record`] over the value re-spells the body.
-    /// Nothing past that is decoded HERE — the fold reads no `sig`, and the
-    /// admission compare wants the string whatever it holds: the record grade's
-    /// verifier reads it as the blob it spells,
+    /// The `sig` member's string, where the body carried one.
+    ///
+    /// The empty string is included, which is a `sig` and never `None`. It is
+    /// the string the member spells, its JSON escapes read back: the string
+    /// its signer composed, so [`canonical_record`] over the value re-spells
+    /// the body. Nothing past that is decoded here — the fold reads no `sig`,
+    /// and the admission compare wants the string whatever it holds: the record
+    /// grade's verifier reads it as the blob it spells,
     /// [`HybridBlob::parse_hex`](crate::HybridBlob::parse_hex), a `sig` of no
     /// row's width being no signature.
     pub sig: Option<String>,
 }
 
 impl<T: RecordEntry> RecordValue<T> {
-    /// THE SIG-LESS CANONICAL RECORD of this value — [`canonical_record`] over
-    /// its entries with no `sig` (the design record §4.2 (C)): the record its
-    /// `sig` covers, as the body-bytes row of the frame the `sig` is made over
-    /// ([`RecordFrame`](crate::RecordFrame); [`RecordRows`](crate::RecordRows)'s
-    /// `sigless_canonical_record`). The value holds the entries, so it answers
-    /// their projection.
+    /// Returns this value's sig-less canonical record.
+    ///
+    /// It is [`canonical_record`] over its entries with no `sig` (the design
+    /// record §4.2 (C)): the record its `sig` covers, as the body-bytes row of
+    /// the frame the `sig` is made over ([`RecordFrame`](crate::RecordFrame);
+    /// [`RecordRows`](crate::RecordRows)'s `sigless_canonical_record`). The
+    /// value holds the entries, so it answers their projection.
     pub fn sigless_canonical_record(&self) -> String {
         canonical_record(&self.entries, None)
     }
 }
 
-/// AUTH-2.19 — the fault precedence BOTH kinds keep, and the record envelope
-/// both schemas state alike, in ONE place: the bytes are at most
-/// [`MAX_RECORD_BYTES`] (else `TooLarge` — the read's own cap, AUTH-1.18 and
-/// AUTH-2.43, ahead of item 1 as the read's refusal stands ahead of every
-/// parse); the bytes decode as UTF-8 (else `NotUtf8`, item 1); the body is a
-/// JSON object of exactly `type`, the kind's entry array, and an OPTIONAL
-/// `sig` — a STRING the fold IGNORES whatever it holds (AUTH-2.13,
-/// AUTH-2.94), and no other member (AUTH-2.128, AUTH-2.129) — whose entries
-/// each parse and whose bytes ARE the canonical re-encoding of the value they
-/// spell (else `BadRecord`, AUTH-2.130 and item 2); then the entries are
-/// scanned in order for a duplicate (`DuplicateKey(n)` naming the 1-based
-/// REPEATING entry, item 3); and `Empty` is answered ONLY after a clean scan
-/// (item 4).
+/// Parses a record body into its record value, entries and `sig` (AUTH-2.19).
 ///
-/// Item 2 precedes item 3 BY CONSTRUCTION: the duplicate test runs only on
-/// entries the canonical compare has already admitted. It is one ordered-set
-/// insert per entry, never a search of the entries before it, so no record
-/// length makes the scan quadratic.
+/// It is the one parse, and the verifier's (signed ops; the design record
+/// §4.2 (C), §7.5 step 3: "`parse_record` and then
+/// `canonical_record(.., None)` over the entries it answers"): the record
+/// value a body admits — its entries and its `sig` — the kind chosen by `T`
+/// as [`canonical_record`] chooses it: `Enrollment` for the enrollment kind,
+/// `Fingerprint` for the retirement kind. The fold's two parsers
+/// ([`parse_enroll`], [`parse_retire`]) take the entries this answers and
+/// drop the `sig` unread (AUTH-2.13, AUTH-2.94); the record grade's verifier
+/// — the daemon's write path at a credential deposit's `make_link`, a reader
+/// or a mirror beside the table — calls this over the atom the link's `from`
+/// names, takes the `sig` as the signature under trial and
+/// [`RecordValue::sigless_canonical_record`] as the body-bytes row of the
+/// record frame it was made over ([`RecordFrame`](crate::RecordFrame)). So a
+/// body is admitted by one rule whoever asks — admission is the fold's and
+/// not the verifier's — and a body this refuses is one the fold refuses,
+/// `bad_record` and the rest, carrying no `sig` a verifier could weigh.
 ///
-/// THE CAP AT THIS DOOR. Every body the fold parses has come through
+/// **The cap at this door.** Every body the fold parses has come through
 /// [`record_bytes`](crate::record_bytes), which refuses past
 /// [`MAX_RECORD_BYTES`] first, so the head check refuses nothing a fold can
 /// honor and moves no fold verdict. What it bounds is a caller holding bytes
 /// the read never capped — a record atom's own `insert` value, judged before
 /// any link names it, or an atom a reader fetched for itself — because
-/// `serde_json` builds its WHOLE tree before the first schema check, at close
+/// `serde_json` builds its whole tree before the first schema check, at close
 /// to a hundred times the body: a single-member object, seven bytes, is a
 /// whole B-tree leaf — room for eleven keys and eleven values, over six
 /// hundred bytes — beside the 32-byte `Value` that holds it. Under the cap
 /// that tree is about 12 MB; past it the tree grows with whatever the caller
 /// was handed — over half a gigabyte for an 8 MiB body — for a body refused at
 /// its first entry. The same cap is what makes "admitted by one rule whoever
-/// asks", below, hold at its edge: a body past it is one the fold refuses
+/// asks", above, hold at its edge: a body past it is one the fold refuses
 /// `too_large`.
 ///
 /// No verdict is delegated to `serde_json`: it answers only "is this a JSON
@@ -568,30 +627,34 @@ impl<T: RecordEntry> RecordValue<T> {
 /// [`RecordEntry`] — the route [`canonical_record`] takes — so the two sides
 /// read one table by one index.
 ///
-/// THE ONE PARSE, and THE VERIFIER'S (signed ops; the design record §4.2 (C),
-/// §7.5 step 3: "`parse_record` and then `canonical_record(.., None)` over
-/// the entries it answers"): the RECORD VALUE a body admits — its entries AND
-/// its `sig` — the kind chosen by `T` as [`canonical_record`] chooses it:
-/// `Enrollment` for the enrollment kind, `Fingerprint` for the retirement
-/// kind. The fold's two parsers ([`parse_enroll`], [`parse_retire`]) take the
-/// entries this answers and drop the `sig` unread (AUTH-2.13, AUTH-2.94); the
-/// record grade's verifier — the daemon's write path at a credential
-/// deposit's `make_link`, a reader or a mirror beside the table — calls this
-/// over the atom the link's `from` names, takes the `sig` as the signature
-/// under trial and [`RecordValue::sigless_canonical_record`] as the
-/// body-bytes row of the record frame it was made over
-/// ([`RecordFrame`](crate::RecordFrame)). So a body is admitted by one rule
-/// whoever asks — admission is the fold's and not the verifier's — and a body
-/// this refuses is one the fold refuses, `bad_record` and the rest, carrying
-/// no `sig` a verifier could weigh.
-///
-/// POSTCONDITION — over `entries`, the kind's own: [`parse_enroll`]'s for the
-/// enrollment kind, [`parse_retire`]'s for the retirement kind; and
+/// **Postcondition.** Over `entries`, the kind's own: [`parse_enroll`]'s for
+/// the enrollment kind, [`parse_retire`]'s for the retirement kind; and
 /// `canonical_record(&value.entries, value.sig.as_deref()) == bytes`, the
 /// admission sentence read from the other side.
+///
+/// # Errors
+///
+/// The fault precedence both kinds keep, and the record envelope both
+/// schemas state alike, are held here in one place: the bytes are at most
+/// [`MAX_RECORD_BYTES`] (else `TooLarge` — the read's own cap, AUTH-1.18 and
+/// AUTH-2.43, ahead of item 1 as the read's refusal stands ahead of every
+/// parse); the bytes decode as UTF-8 (else `NotUtf8`, item 1); the body is a
+/// JSON object of exactly `type`, the kind's entry array, and an optional
+/// `sig` — a string the fold ignores whatever it holds (AUTH-2.13,
+/// AUTH-2.94), and no other member (AUTH-2.128, AUTH-2.129) — whose entries
+/// each parse and whose bytes are the canonical re-encoding of the value they
+/// spell (else `BadRecord`, AUTH-2.130 and item 2); then the entries are
+/// scanned in order for a duplicate (`DuplicateKey(n)` naming the 1-based
+/// repeating entry, item 3); and `Empty` is answered only after a clean scan
+/// (item 4).
+///
+/// Item 2 precedes item 3 by construction: the duplicate test runs only on
+/// entries the canonical compare has already admitted. It is one ordered-set
+/// insert per entry, never a search of the entries before it, so no record
+/// length makes the scan quadratic.
 pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>, PayloadError> {
     let schema = T::schema();
-    // THE RECORD CAP AT THIS DOOR (AUTH-1.18, AUTH-2.43), ahead of item 1 as
+    // The record cap at this door (AUTH-1.18, AUTH-2.43), ahead of item 1 as
     // the read's refusal stands ahead of every parse: no body the read
     // delivers is past it, and `serde_json` below builds its whole tree
     // before the first schema check.
@@ -600,27 +663,28 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
     }
     // AUTH-2.19 item 1 — UTF-8 before every schema check.
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
-    // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
+    // AUTH-2.1/AUTH-2.19 item 2 — parse to a generic value; a non-JSON body,
     // a leading BOM, a lone surrogate, a trailing non-whitespace byte each
     // fail here as `bad_record`.
     let value: Value = serde_json::from_str(text).map_err(|_| PayloadError::BadRecord)?;
     let obj = value.as_object().ok_or(PayloadError::BadRecord)?;
-    // `type` — STRING, exactly the kind's admitted value (the parse is keyed
-    // to the kind, so a disagreeing or foreign `type` is `bad_record` and
-    // costs no daemon read).
+    // `type` — a string, exactly the kind's admitted value (the parse is
+    // keyed to the kind, so a disagreeing or foreign `type` is `bad_record`
+    // and costs no daemon read).
     match obj.get("type").and_then(Value::as_str) {
         Some(t) if t == schema.type_value => {}
         _ => return Err(PayloadError::BadRecord),
     }
-    // The entry array — ARRAY (AUTH-2.128 `keys`, AUTH-2.129 `fingerprints`).
+    // The entry array — an array (AUTH-2.128 `keys`, AUTH-2.129
+    // `fingerprints`).
     let entries_val = obj
         .get(schema.entries_member)
         .and_then(Value::as_array)
         .ok_or(PayloadError::BadRecord)?;
-    // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
-    // it holds (AUTH-2.13, AUTH-2.94): the fold's parsers drop it from their
-    // answer (`parse_record`, AUTH-2.18), and the record grade's verifier
-    // reads it. BORROWED from `value` through the admission compare —
+    // `sig` — a string, optional, canonically last, ignored by the fold
+    // whatever it holds (AUTH-2.13, AUTH-2.94): the fold's parsers drop it from
+    // their answer (`parse_record`, AUTH-2.18), and the record grade's verifier
+    // reads it. Borrowed from `value` through the admission compare —
     // `canonical_record` wants a `&str` — and copied into the answer only once
     // the body is admitted, so a refused body — a depositor-chosen string the
     // record cap above bounds only at 128 KiB — never pays for a copy of its
@@ -634,12 +698,12 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
     if obj.len() != 2 + usize::from(obj.contains_key("sig")) {
         return Err(PayloadError::BadRecord);
     }
-    // Each entry against the kind's schema, IN ORDER — the first failing entry
+    // Each entry against the kind's schema, in order — the first failing entry
     // is the verdict (an unadmitted alg at entry 1 precedes a duplicate at
     // entry 3, AUTH-2.19 item 2 before item 3).
     //
-    // The vector is sized by what the entries PARSE to, never by what the
-    // array CLAIMS: `entries_val.len()` is the depositor's count, and a body
+    // The vector is sized by what the entries parse to, never by what the
+    // array claims: `entries_val.len()` is the depositor's count, and a body
     // whose every element is `1` refuses at entry 1 — a capacity taken from
     // that count is reserved for entries never pushed, up to a doubling of
     // what `serde_json` already holds under the cap above. The growth given up
@@ -650,15 +714,15 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
     for entry in entries_val {
         entries.push((schema.parse_entry)(entry)?);
     }
-    // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
-    // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
+    // AUTH-2.130's admission sentence — the byte-identity compare over the
+    // record value, `sig` included (RES-105, I2 AUTH-2.90): admit only where
     // the input is the canonical re-encoding of every member it carries — by
     // the public projection itself, the function the signer and the verifier
     // call.
     if canonical_record(&entries, sig) != text {
         return Err(PayloadError::BadRecord);
     }
-    // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based
+    // AUTH-2.15/AUTH-2.19 item 3 — a duplicate entry, naming the 1-based
     // repeating entry index; one ordered-set insert per entry, never a search.
     let mut seen: BTreeSet<Fingerprint> = BTreeSet::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -673,79 +737,99 @@ pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>
     Ok(RecordValue { entries, sig: sig.map(str::to_owned) })
 }
 
-/// The fold's parse — [`parse_record_value`]'s entries, the `sig` dropped
-/// unread (AUTH-2.13, AUTH-2.94).
+/// Parses a record body into its entries, the fold's parse.
+///
+/// It is [`parse_record_value`]'s entries, the `sig` dropped unread
+/// (AUTH-2.13, AUTH-2.94).
+///
+/// # Errors
+///
+/// [`parse_record_value`]'s refusals, in its order.
 fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
     parse_record_value(bytes).map(|value| value.entries)
 }
 
-/// AUTH-2.128, AUTH-2.130 — parse an enrollment record. The bytes are at
-/// most [`MAX_RECORD_BYTES`] (else `TooLarge` at the head — the read's own
-/// cap, AUTH-2.43, which every body the fold parses has already passed,
-/// [`parse_record_value`]'s card), decode as UTF-8 (else `NotUtf8`, AUTH-2.19
-/// item 1), parse to a GENERIC [`serde_json::Value`] and validate the
-/// enrollment schema and its canonical encoding (else `BadRecord`, item 2);
-/// then the entries are scanned in order for a duplicate (`DuplicateKey(n)`,
-/// item 3), and `Empty` is answered only after a clean scan (item 4). No
-/// verdict is delegated to `serde_json`: it answers only "is this a JSON
+/// Parses an enrollment record (AUTH-2.128, AUTH-2.130).
+///
+/// No verdict is delegated to `serde_json`: it answers only "is this a JSON
 /// value, and which" (AUTH-2.1).
 ///
-/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16), in the
-/// record's own ENTRY ORDER (which is the order `Effect::Genesis`/`Enroll`
+/// **Postcondition.** On `Ok`, the vector is non-empty (AUTH-2.16), in the
+/// record's own entry order (which is the order `Effect::Genesis`/`Enroll`
 /// carry to `apply`), and no two entries carry the same key (AUTH-2.15) — the
 /// promise that fixes a fingerprint's anchor flag within one record (I9,
 /// AUTH-2.104).
+///
+/// # Errors
+///
+/// The bytes are at most [`MAX_RECORD_BYTES`] (else `TooLarge` at the head —
+/// the read's own cap, AUTH-2.43, which every body the fold parses has
+/// already passed, [`parse_record_value`]'s card), decode as UTF-8 (else
+/// `NotUtf8`, AUTH-2.19 item 1), parse to a generic [`serde_json::Value`] and
+/// validate the enrollment schema and its canonical encoding (else
+/// `BadRecord`, item 2); then the entries are scanned in order for a
+/// duplicate (`DuplicateKey(n)`, item 3), and `Empty` is answered only after
+/// a clean scan (item 4).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
     parse_record::<Enrollment>(bytes)
 }
 
-/// AUTH-2.129, AUTH-2.130 — parse a retirement record: the mirror of
-/// [`parse_enroll`] over the `fingerprints` array of 64-hex strings. The parse
-/// and the fault precedence are the ones BOTH kinds share (AUTH-2.19).
+/// Parses a retirement record (AUTH-2.129, AUTH-2.130).
 ///
-/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16), in the
-/// record's ENTRY ORDER, and DUPLICATE-FREE (AUTH-2.15). The distinctness is a
-/// promise the retirement arm's proof rests on: that arm reads
+/// It is the mirror of [`parse_enroll`] over the `fingerprints` array of
+/// 64-hex strings.
+///
+/// **Postcondition.** On `Ok`, the vector is non-empty (AUTH-2.16), in the
+/// record's entry order, and duplicate-free (AUTH-2.15). The distinctness is
+/// a promise the retirement arm's proof rests on: that arm reads
 /// `|removed| == |enrolled|` as set equality (AUTH-2.74), and a record listing
 /// one fingerprint twice beside the rest of the set would pass that test,
 /// empty the set, and void I3 (AUTH-2.97) and AUTH-1.36.
+///
+/// # Errors
+///
+/// The parse and the fault precedence are the ones both kinds share
+/// (AUTH-2.19): [`parse_enroll`]'s refusals, in its order.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
     parse_record::<Fingerprint>(bytes)
 }
 
-/// AUTH-2.18/AUTH-2.130 — encode an enrollment record in the canonical spelling,
-/// emitting the record value's ENTRIES and NO `sig` member (AUTH-2.130). Hex
+/// Encodes an enrollment record canonically (AUTH-2.18/AUTH-2.130).
+///
+/// It emits the record value's entries and no `sig` member (AUTH-2.130). Hex
 /// is lowercase (AUTH-2.17) and the label is escaped by the canonical rule
 /// (AUTH-2.130 clause 3).
 ///
-/// Answers TEXT, which a record is: a depositor places it in a text-valued
-/// insert as it stands. The parsers take bytes because the READ hands them
+/// Answers text, which a record is: a depositor places it in a text-valued
+/// insert as it stands. The parsers take bytes because the read hands them
 /// bytes that need not be text (`NotUtf8`); nothing an encoder emits is ever
 /// one of those.
 ///
-/// PRECONDITION — `enrollments` is NON-EMPTY, no two entries carry the same
-/// key, and the record spelled is at most [`MAX_RECORD_BYTES`]:
-/// [`parse_enroll`]'s POSTCONDITION read from the other side, and its head.
+/// **Precondition.** `enrollments` is non-empty, no two entries carry the
+/// same key, and the record spelled is at most [`MAX_RECORD_BYTES`]:
+/// [`parse_enroll`]'s postcondition read from the other side, and its head.
 /// Outside that domain this function still answers a record — it emits what
-/// it is given and re-checks nothing — but NO parser admits it.
+/// it is given and re-checks nothing — but no parser admits it.
 ///
-/// POSTCONDITION — within it, `parse_enroll(encode_enroll(x).as_bytes())` is
-/// `Ok(x)` over the whole [`Enrollment`] domain per entry, and
+/// **Postcondition.** Within it, `parse_enroll(encode_enroll(x).as_bytes())`
+/// is `Ok(x)` over the whole [`Enrollment`] domain per entry, and
 /// `encode_enroll(parse_enroll(y)…)` reproduces the entries of any body the
-/// fold admits: the round trip is a BIJECTION (I1, AUTH-2.89; AUTH-2.130).
+/// fold admits: the round trip is a bijection (I1, AUTH-2.89; AUTH-2.130).
 pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
     canonical_record(enrollments, None)
 }
 
-/// AUTH-2.18/AUTH-2.130 — encode a retirement record, as TEXT like
-/// [`encode_enroll`]; lowercase hex (AUTH-2.17), no `sig` member.
+/// Encodes a retirement record (AUTH-2.18/AUTH-2.130).
 ///
-/// PRECONDITION — `fps` is NON-EMPTY and DUPLICATE-FREE, and the record
-/// spelled is at most [`MAX_RECORD_BYTES`]: [`parse_retire`]'s POSTCONDITION
+/// It answers text, as [`encode_enroll`] does; hex is lowercase (AUTH-2.17),
+/// and no `sig` member is emitted.
+///
+/// **Precondition.** `fps` is non-empty and duplicate-free, and the record
+/// spelled is at most [`MAX_RECORD_BYTES`]: [`parse_retire`]'s postcondition
 /// read from the other side, and its head.
 ///
-/// POSTCONDITION — within it, `parse_retire(encode_retire(x).as_bytes())` is
-/// `Ok(x)` (I1, AUTH-2.89).
+/// **Postcondition.** Within it, `parse_retire(encode_retire(x).as_bytes())`
+/// is `Ok(x)` (I1, AUTH-2.89).
 pub fn encode_retire(fps: &[Fingerprint]) -> String {
     canonical_record(fps, None)
 }

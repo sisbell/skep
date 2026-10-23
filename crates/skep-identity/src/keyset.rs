@@ -6,23 +6,27 @@ use serde::{Deserialize, Serialize};
 use crate::key::Fingerprint;
 use crate::key::PublicKey;
 
-/// AUTH-1.29 — one enrolled key: the public key and its anchor flag. The
-/// same shape `Effect::Genesis`/`Effect::Enroll` name (AUTH-2.52).
+/// One enrolled key, the public key and its anchor flag (AUTH-1.29).
+///
+/// It is the shape `Effect::Genesis` and `Effect::Enroll` name (AUTH-2.52).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Enrolled {
     /// The enrolled public key.
     pub key: PublicKey,
-    /// The anchor flag the key entered under (AUTH-1.26; immutable per key
-    /// per set — I9, AUTH-2.104).
+    /// The anchor flag the key entered under (AUTH-1.26).
+    ///
+    /// It is immutable per key per set (I9, AUTH-2.104).
     pub anchor: bool,
 }
 
-/// AUTH-1.29 — one account's key set: the enrolled map and the retired map,
-/// both private. Standing invariants (each re-checked ONLY at the two
-/// deserialization boundaries AUTH-1.33 names — a transferred slice-carrying
-/// checkpoint, a checkpoint restored from backup — a bootstrap-side
-/// obligation of the engine/mirror, on no fold path, with AUTH-1.34's
-/// refuse-the-slice disposition):
+/// One account's key set, the enrolled map and the retired map (AUTH-1.29).
+///
+/// Both maps are private. AUTH-1.33 owes a re-check of each standing
+/// invariant below at two deserialization boundaries alone — a transferred
+/// slice-carrying checkpoint, a checkpoint restored from backup — as a
+/// bootstrap-side obligation of the engine or a mirror, on no fold path, with
+/// AUTH-1.34's refuse-the-slice disposition; neither this crate nor the
+/// engine's load makes it. The standing invariants:
 ///
 /// * AUTH-1.32 — for every `(fp, e)` in `enrolled`,
 ///   `fp == Fingerprint::of(&e.key)`: the map key is an index over the
@@ -31,19 +35,19 @@ pub struct Enrolled {
 /// * AUTH-1.35 — `enrolled ∩ retired = ∅` (AUTH-1.37);
 /// * AUTH-1.36/AUTH-1.57 (RES-13) — `retired ≠ ∅ ⇒ enrolled ≠ ∅`, so
 ///   `is_empty()` implies `retired = ∅` and no genesis can re-enroll a
-///   retired fingerprint (the genesis arm posts `enrolled = K` WITHOUT
+///   retired fingerprint (the genesis arm posts `enrolled = K` without
 ///   consulting `retired`, AUTH-2.70).
 ///
-/// On the WRITE path the three are held by different means: AUTH-1.32 by
+/// On the write path the three are held by different means: AUTH-1.32 by
 /// construction here (the enrolling mutator derives the map key from the
-/// value it inserts), and AUTH-1.35 and AUTH-1.36 as PRECONDITIONS on the two
-/// crate-private mutators, discharged by the posting arms — re-checked
+/// value it inserts), and AUTH-1.35 and AUTH-1.36 as preconditions on the
+/// two crate-private mutators, discharged by the posting arms — re-checked
 /// nowhere on this side, so a new posting arm inherits them and must
-/// discharge them itself. The enrolling mutator's PRECONDITION is ONE fact
+/// discharge them itself. The enrolling mutator's precondition is one fact
 /// this set answers about its own two maps, `admits`: a fingerprint it has
 /// never held, enrolled or retired. That one fact holds AUTH-1.35 and I9's
 /// per-set flag alike (AUTH-2.104, which [`Enrolled::anchor`] states), since
-/// the enrolling mutator REPLACES an enrolled row, flag and all.
+/// the enrolling mutator replaces an enrolled row, flag and all.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySet {
     enrolled: OrdMap<Fingerprint, Enrolled>,
@@ -51,42 +55,47 @@ pub struct KeySet {
 }
 
 impl KeySet {
-    /// AUTH-1.31 — ⇔ no enrolled key.
+    /// Returns whether no key is enrolled (AUTH-1.31).
     pub fn is_empty(&self) -> bool {
         self.enrolled.is_empty()
     }
 
-    /// AUTH-1.31 — ⇔ `fp` is enrolled NOW.
+    /// Returns whether `fp` is enrolled now (AUTH-1.31).
     pub fn contains(&self, fp: &Fingerprint) -> bool {
         self.enrolled.contains_key(fp)
     }
 
-    /// AUTH-1.31 — ⇔ enrolled NOW with the anchor flag.
+    /// Returns whether `fp` is enrolled now with the anchor flag (AUTH-1.31).
     pub fn is_anchor(&self, fp: &Fingerprint) -> bool {
         self.enrolled.get(fp).is_some_and(|e| e.anchor)
     }
 
-    /// AUTH-1.31 — the enrolled keys, iterated in FINGERPRINT ORDER —
-    /// ascending by the digest bytes, [`Fingerprint`]'s card — the ordering
-    /// the realm genesis-set framing reuses (AUTH-2.119, RES-1).
+    /// Returns the enrolled keys in fingerprint order (AUTH-1.31).
+    ///
+    /// The order is ascending by the digest bytes ([`Fingerprint`]'s card),
+    /// the ordering the realm genesis-set framing reuses (AUTH-2.119, RES-1).
     pub fn enrolled(&self) -> impl Iterator<Item = (&Fingerprint, &Enrolled)> {
         self.enrolled.iter()
     }
 
-    /// AUTH-1.31 — the retired fingerprints in FINGERPRINT ORDER
-    /// ([`Fingerprint`]'s card), each yielding the anchor flag it was ENROLLED
-    /// under (AUTH-1.30: the flag is for the fingerprint's lifetime,
-    /// retirement included, so "was that an ANCHOR key" is a head read).
+    /// Returns the retired fingerprints in fingerprint order (AUTH-1.31).
+    ///
+    /// The order is [`Fingerprint`]'s card's. Each fingerprint yields the
+    /// anchor flag it was enrolled under (AUTH-1.30: the flag is for the
+    /// fingerprint's lifetime, retirement included, so "was that an anchor
+    /// key" is a head read).
     pub fn retired(&self) -> impl Iterator<Item = (&Fingerprint, bool)> {
         self.retired.iter().map(|(fp, anchor)| (fp, *anchor))
     }
 
-    /// ⇔ `fp` is in NEITHER map — not enrolled now, and not retired — which,
-    /// since nothing ever leaves `retired` and a fingerprint leaves `enrolled`
-    /// only for `retired`, is a fingerprint this set has NEVER held. Those are
-    /// exactly the fingerprints an enrollment may add (AUTH-2.69's
+    /// Returns whether `fp` is in neither map, enrolled or retired.
+    ///
+    /// Since nothing ever leaves `retired` and a fingerprint leaves `enrolled`
+    /// only for `retired`, a fingerprint in neither — not enrolled now, and
+    /// not retired — is one this set has never held. Those are exactly the
+    /// fingerprints an enrollment may add (AUTH-2.69's
     /// `k ∉ enrolled ∧ k ∉ retired`), and so [`insert_enrolled`]'s
-    /// PRECONDITION, held as one fact about this set: a retired fingerprint
+    /// precondition, held as one fact about this set: a retired fingerprint
     /// never re-enters (AUTH-1.35, I4 AUTH-2.98) and an enrolled one is never
     /// posted over (I9, AUTH-2.104). A question about the whole set, not an
     /// operation on one of its maps. Crate-private because AUTH-1.29 fixes the
@@ -97,29 +106,32 @@ impl KeySet {
         !self.enrolled.contains_key(fp) && !self.retired.contains_key(fp)
     }
 
-    /// How many keys are enrolled NOW. Crate-private for the same reason; the
-    /// retirement arm's whole-set test (AUTH-2.74) is its one caller, sound
-    /// there because that arm filtered its `removed` from `enrolled` and
-    /// AUTH-2.15 left the record's fingerprints duplicate-free.
+    /// Returns how many keys are enrolled now.
+    ///
+    /// Crate-private for the same reason; the retirement arm's whole-set test
+    /// (AUTH-2.74) is its one caller, sound there because that arm filtered
+    /// its `removed` from `enrolled` and AUTH-2.15 left the record's
+    /// fingerprints duplicate-free.
     pub(crate) fn enrolled_len(&self) -> usize {
         self.enrolled.len()
     }
 
-    /// Enroll one key, the map key derived via `Fingerprint::of` on the key
-    /// inserted — establishing AUTH-1.32 by construction (AUTH-2.53).
+    /// Enrolls one key, deriving the map key with `Fingerprint::of`.
+    ///
+    /// That derivation establishes AUTH-1.32 by construction (AUTH-2.53).
     /// Crate-private: only `apply` posts.
     ///
-    /// PRECONDITION — the set [`admits`] `Fingerprint::of(&e.key)` at the
+    /// **Precondition.** The set [`admits`] `Fingerprint::of(&e.key)` at the
     /// moment of each insert. This routine consults neither map, and an insert
-    /// over an enrolled fingerprint REPLACES its row, flag and all. Broken on
+    /// over an enrolled fingerprint replaces its row, flag and all. Broken on
     /// the retired half, AUTH-1.35 (`enrolled ∩ retired = ∅`) and with it I4
     /// (AUTH-2.98) are void, nothing ever removing from `retired`; broken on
     /// the enrolled half, I9 (AUTH-2.104: a fingerprint's flag is fixed in its
-    /// set by the record that FIRST enrolled it, as [`Enrolled::anchor`]
+    /// set by the record that first enrolled it, as [`Enrolled::anchor`]
     /// states) is void — a post that names one fingerprint twice included, its
     /// second insert finding the first. Nothing here re-checks it. Both
     /// posting arms discharge it, each over a record whose entries are
-    /// duplicate-free ([`parse_enroll`]'s POSTCONDITION, AUTH-2.15), so no
+    /// duplicate-free ([`parse_enroll`]'s postcondition, AUTH-2.15), so no
     /// insert finds an earlier one of its own post: the holder arm posts only
     /// entries the set [`admits`] before the post (AUTH-2.69), and the genesis
     /// arm posts into an empty set, which AUTH-1.36 makes admit every
@@ -131,16 +143,17 @@ impl KeySet {
         self.enrolled.insert(Fingerprint::of(&e.key), e);
     }
 
-    /// Move one enrolled fingerprint to `retired`, carrying the flag it was
-    /// enrolled under (AUTH-1.30, AUTH-2.74's post); a fingerprint that is
-    /// not enrolled moves nothing, so the act is total and decides nothing
-    /// (AUTH-2.53). Crate-private: only `apply` posts, and `classify`
-    /// guarantees the membership.
+    /// Moves one enrolled fingerprint to `retired`, with its enrolled flag.
     ///
-    /// PRECONDITION — the fingerprints moved in one post do not exhaust
-    /// `enrolled`. This routine does NOT consult the set's size, so
+    /// The flag is the one it was enrolled under (AUTH-1.30, AUTH-2.74's
+    /// post); a fingerprint that is not enrolled moves nothing, so the act is
+    /// total and decides nothing (AUTH-2.53). Crate-private: only `apply`
+    /// posts, and `classify` guarantees the membership.
+    ///
+    /// **Precondition.** The fingerprints moved in one post do not exhaust
+    /// `enrolled`. This routine does not consult the set's size, so
     /// AUTH-1.36 (`retired ≠ ∅ ⇒ enrolled ≠ ∅`) and with it I3 (AUTH-2.97)
-    /// are the CALLER's to preserve. The retirement arm discharges it with
+    /// are the caller's to preserve. The retirement arm discharges it with
     /// its `WouldEmpty` test (AUTH-2.74).
     pub(crate) fn move_to_retired(&mut self, fp: &Fingerprint) {
         if let Some(e) = self.enrolled.remove(fp) {

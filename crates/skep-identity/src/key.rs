@@ -1,9 +1,10 @@
-//! Keys and fingerprints — AUTH-1.1–1.10 — and, beside `ALGS`, the
-//! marker-tag table `SIG_ALGS` (signed ops; the design record §7.3 (i)): the
-//! two tables share their tokens and widths, so one file declares both. The
-//! hybrid blob a `sig` that names no row spells is read here too, against the
-//! marker-tag table's widths and with the hex codec keys and fingerprints are
-//! read by (AUTH-4.34, AUTH-6.3).
+//! Keys and fingerprints — AUTH-1.1–1.10 — and the marker-tag table.
+//!
+//! Beside `ALGS` stands the marker-tag table `SIG_ALGS` (signed ops; the
+//! design record §7.3 (i)): the two tables share their tokens and widths, so
+//! one file declares both. The hybrid blob a `sig` that names no row spells
+//! is read here too, against the marker-tag table's widths and with the hex
+//! codec keys and fingerprints are read by (AUTH-4.34, AUTH-6.3).
 
 use core::fmt;
 
@@ -12,65 +13,70 @@ use sha2::{Digest, Sha256};
 
 use crate::framing::{framed, KEY_TAG};
 
-/// THE PRODUCTION HYBRID's alg token (AUTH-1.1; signed ops; the design record
-/// D7, the owner 2026-09-23 "keep tag 1"; the TOKEN PIN RATIFIED 2026-09-26):
-/// ONE `ALGS` row over ONE concatenated raw value — the ML-DSA-65 (FIPS 204)
-/// public key, 1,952 bytes, THEN the Ed25519 public key, 32 bytes (the KEY
-/// PIN: the post-quantum half FIRST, the order the row's blob takes too) —
-/// one entry, one fingerprint, one label (the design record §4.4). Its
-/// marker tag is `1` ([`SIG_ALGS`]). THE KEY KINDS ARE THE TWO HYBRID ROWS:
-/// there is no classical `ed25519` row and no `Ed25519` arm (the hybrid-only
-/// launch, owner 2026-09-26, "Q1 b delete it"), and tag 2's token
-/// `fndsa512-ed25519` (the final FN-DSA-512 + Ed25519, at FIPS 206) is
-/// RESERVED with no row.
+/// The production hybrid's alg token (AUTH-1.1).
+///
+/// It names one `ALGS` row over one concatenated raw value (signed ops; the
+/// design record's D7 and token pin) — the ML-DSA-65 (FIPS 204) public key,
+/// 1,952 bytes, then the Ed25519 public key, 32 bytes (the key pin: the
+/// post-quantum half first, the order the row's blob takes too) — one
+/// entry, one fingerprint, one label (the design record §4.4). Its marker tag
+/// is `1` ([`SIG_ALGS`]). The key kinds are the two hybrid rows: there is no
+/// classical `ed25519` row and no `Ed25519` arm (the hybrid-only launch), and
+/// tag 2's token `fndsa512-ed25519` (the final FN-DSA-512 + Ed25519, at FIPS
+/// 206) is reserved with no row.
 pub const ALG_MLDSA65_ED25519: &str = "mldsa65-ed25519";
 
-/// THE PREVIEW HYBRID's alg token (signed ops; THE DUAL APPROACH, the owner
-/// 2026-09-25): FN-DSA-512 + Ed25519 under Thomas Pornin's `fn-dsa` 0.4.0
-/// "best guess" at the FN-DSA draft — PLANNED AND TESTED NOW under its OWN
-/// tag, `3`, marked PREVIEW: tag `2` stays free for the final FIPS 206, and
-/// the frozen-tag rule keeps this row's signatures verifying forever under
-/// the rule they were made under, keygen-from-seed included. The raw value
-/// is the FN-DSA-512 verifying key, 897 bytes, THEN the Ed25519 public key.
-/// "preview" is IN the token so the final standard's row never has to share
+/// The preview hybrid's alg token (signed ops; the dual approach).
+///
+/// It is FN-DSA-512 + Ed25519 under Thomas Pornin's `fn-dsa` 0.4.0 "best
+/// guess" at the FN-DSA draft, carried and tested under its own tag, `3`,
+/// marked preview: tag `2` stays free for the final FIPS 206, and the
+/// frozen-tag rule keeps this row's signatures verifying forever under the
+/// rule they were made under, keygen-from-seed included. The raw value is the
+/// FN-DSA-512 verifying key, 897 bytes, then the Ed25519 public key.
+/// "preview" is in the token so the final standard's row never has to share
 /// a name with it.
 pub const ALG_FNDSA512_PREVIEW_ED25519: &str = "fndsa512-preview-ed25519";
 
-/// The Ed25519 public key's width — every hybrid row's LAST 32 raw bytes.
+/// The Ed25519 public key's width: every hybrid row's last 32 raw bytes.
 pub const ED25519_KEY_LEN: usize = 32;
-/// FIPS 204's ML-DSA-65 public key (`pkEncode`): the first 1,952 raw bytes
-/// of [`ALG_MLDSA65_ED25519`]'s value.
+/// The width of FIPS 204's ML-DSA-65 public key (`pkEncode`).
+///
+/// It is the first 1,952 raw bytes of [`ALG_MLDSA65_ED25519`]'s value.
 pub const MLDSA65_KEY_LEN: usize = 1952;
-/// `fn-dsa` 0.4.0's FN-DSA-512 verifying key encoding (header `0x09` then
-/// the NTT-form public polynomial): the first 897 raw bytes of
-/// [`ALG_FNDSA512_PREVIEW_ED25519`]'s value.
+/// The width of `fn-dsa` 0.4.0's FN-DSA-512 verifying key encoding.
+///
+/// The encoding is header `0x09` then the NTT-form public polynomial: the
+/// first 897 raw bytes of [`ALG_FNDSA512_PREVIEW_ED25519`]'s value.
 pub const FNDSA512_PREVIEW_KEY_LEN: usize = 897;
 /// [`ALG_MLDSA65_ED25519`]'s raw length: 1,952 + 32.
 pub const MLDSA65_ED25519_KEY_LEN: usize = MLDSA65_KEY_LEN + ED25519_KEY_LEN;
 /// [`ALG_FNDSA512_PREVIEW_ED25519`]'s raw length: 897 + 32.
 pub const FNDSA512_PREVIEW_ED25519_KEY_LEN: usize = FNDSA512_PREVIEW_KEY_LEN + ED25519_KEY_LEN;
 
-/// ONE ROW of the marker-tag table (signed ops; the design record §7.3 (i):
-/// "the `u8 ↔ token` mapping is pinned beside `ALGS` AS A TWO-ROW TABLE OF
-/// ITS OWN"): the commit marker's `sig_alg` byte, the [`ALGS`] token of the
-/// hybrid key that signs under it, and the fixed widths the tag's frozen
-/// rule pins — the post-quantum half's key and signature, the Ed25519
-/// half's being [`ED25519_KEY_LEN`] and 64 at every row. The row's BLOB
-/// (AUTH-4.32) is the PQ signature THEN the Ed25519 signature (the design
-/// record §2.4's pin: two fixed-width fields, no length prefix, no parser),
-/// whichever carrier holds it — the marker slot at the entry grade; a
-/// record's `sig` at the record grade and the signed session body's `sig`,
-/// each read as a [`HybridBlob`] — so [`SigAlgRow::sig_len`] is the blob's
-/// whole width and [`SigAlgRow::pq_sig_len`] is where the halves part.
+/// One row of the marker-tag table (signed ops).
 ///
-/// Tag `0` is the EMPTY marker slot and has no row; tag `2` is RESERVED for
+/// The table is the design record §7.3 (i)'s: "the `u8 ↔ token` mapping is
+/// pinned beside `ALGS` as a two-row table of its own". A row is the commit
+/// marker's `sig_alg` byte, the [`ALGS`] token of the hybrid key that signs
+/// under it, and the fixed widths the tag's frozen rule pins — the
+/// post-quantum half's key and signature, the Ed25519 half's being
+/// [`ED25519_KEY_LEN`] and 64 at every row. The row's blob (AUTH-4.32) is
+/// the PQ signature then the Ed25519 signature (the design record §2.4's
+/// pin: two fixed-width fields, no length prefix, no parser), whichever
+/// carrier holds it — the marker slot at the entry grade; a record's `sig` at
+/// the record grade and the signed session body's `sig`, each read as a
+/// [`HybridBlob`] — so [`SigAlgRow::sig_len`] is the blob's whole width and
+/// [`SigAlgRow::pq_sig_len`] is where the halves part.
+///
+/// Tag `0` is the empty marker slot and has no row; tag `2` is reserved for
 /// the final FIPS 206 and has none yet. Under the frozen-tag rule a row, once
-/// a signature has been committed under it, is EDITED NEVER: a change to what
-/// verifies — or to what a seed derives — is a new row.
+/// a signature has been committed under it, is never edited: a change to
+/// what verifies — or to what a seed derives — is a new row.
 ///
 /// Comparable as a whole, unlike [`AlgRow`]: every column is data. The routes
 /// to a row — [`SigAlgRow::of_tag`], [`SigAlgRow::of_token`],
-/// [`PublicKey::sig_alg_row`] — answer equal VALUES; compare them with `==`,
+/// [`PublicKey::sig_alg_row`] — answer equal values; compare them with `==`,
 /// never by address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -79,19 +85,25 @@ pub struct SigAlgRow {
     pub tag: u8,
     /// The `ALGS` token of the key that signs under this tag.
     pub token: &'static str,
-    /// The post-quantum half's public-key width — the FIRST bytes of the
-    /// row's raw key; the Ed25519 half is the last [`ED25519_KEY_LEN`].
+    /// The post-quantum half's public-key width.
+    ///
+    /// It is the first bytes of the row's raw key; the Ed25519 half is the
+    /// last [`ED25519_KEY_LEN`].
     pub pq_key_len: usize,
-    /// The post-quantum half's signature width — the FIRST bytes of the
-    /// row's blob; the Ed25519 half is the last 64.
+    /// The post-quantum half's signature width.
+    ///
+    /// It is the first bytes of the row's blob; the Ed25519 half is the last
+    /// 64.
     pub pq_sig_len: usize,
 }
 
 impl SigAlgRow {
-    /// The row a marker tag names — the commit marker's `sig_alg` byte — or
-    /// `None` for `0` (the empty marker slot), `2` (reserved) and every tag no
-    /// build has minted. `const`, so a type sized by a row's width reads it
-    /// off [`SIG_ALGS`] at compile time rather than walking the table itself.
+    /// Returns the row a marker tag names, or `None` where no row carries it.
+    ///
+    /// The tag is the commit marker's `sig_alg` byte; `None` answers `0` (the
+    /// empty marker slot), `2` (reserved) and every tag no build has minted.
+    /// `const`, so a type sized by a row's width reads it off [`SIG_ALGS`] at
+    /// compile time rather than walking the table itself.
     pub const fn of_tag(tag: u8) -> Option<&'static SigAlgRow> {
         let mut i = 0;
         while i < SIG_ALGS.len() {
@@ -103,28 +115,35 @@ impl SigAlgRow {
         None
     }
 
-    /// The row a wire `alg` token names, or `None` for a token no row carries
-    /// (tag 2's reserved `fndsa512-ed25519`, the deleted classical `ed25519`,
-    /// any token no build has minted).
+    /// Returns the row a wire `alg` token names, or `None` where no row does.
+    ///
+    /// No row carries tag 2's reserved `fndsa512-ed25519`, the classical
+    /// `ed25519`, or any token no build has minted.
     pub fn of_token(token: &str) -> Option<&'static SigAlgRow> {
         SIG_ALGS.iter().find(|row| row.token == token)
     }
 
-    /// The blob's whole width under this tag, in the marker slot and in a
-    /// `sig` member alike: the PQ signature ‖ the Ed25519 signature (64).
+    /// Returns the blob's whole width under this tag.
+    ///
+    /// It is the width in the marker slot and in a `sig` member alike: the PQ
+    /// signature ‖ the Ed25519 signature (64).
     pub const fn sig_len(&self) -> usize {
         self.pq_sig_len + 64
     }
 
-    /// The row's whole raw key width: the PQ key ‖ the Ed25519 key (32) —
-    /// equal to its `ALGS` row's `raw_len` (the conformance assertion).
+    /// Returns the row's whole raw key width: the PQ key ‖ the Ed25519 key.
+    ///
+    /// The Ed25519 key is 32 bytes, and the width equals the `ALGS` row's
+    /// `raw_len` (the conformance assertion).
     pub const fn key_len(&self) -> usize {
         self.pq_key_len + ED25519_KEY_LEN
     }
 }
 
-/// Tag 1's row — [`SIG_ALGS`]' first, and [`PublicKey::sig_alg_row`]'s
-/// answer for a [`PublicKey::MlDsa65Ed25519`] key.
+/// Tag 1's row, [`SIG_ALGS`]' first.
+///
+/// It is [`PublicKey::sig_alg_row`]'s answer for a
+/// [`PublicKey::MlDsa65Ed25519`] key.
 const MLDSA65_ED25519_ROW: SigAlgRow = SigAlgRow {
     tag: 1,
     token: ALG_MLDSA65_ED25519,
@@ -132,8 +151,10 @@ const MLDSA65_ED25519_ROW: SigAlgRow = SigAlgRow {
     pq_sig_len: 3309,
 };
 
-/// Tag 3's row — [`SIG_ALGS`]' second, and [`PublicKey::sig_alg_row`]'s
-/// answer for a [`PublicKey::FnDsa512PreviewEd25519`] key.
+/// Tag 3's row, [`SIG_ALGS`]' second.
+///
+/// It is [`PublicKey::sig_alg_row`]'s answer for a
+/// [`PublicKey::FnDsa512PreviewEd25519`] key.
 const FNDSA512_PREVIEW_ED25519_ROW: SigAlgRow = SigAlgRow {
     tag: 3,
     token: ALG_FNDSA512_PREVIEW_ED25519,
@@ -141,25 +162,28 @@ const FNDSA512_PREVIEW_ED25519_ROW: SigAlgRow = SigAlgRow {
     pq_sig_len: 666,
 };
 
-/// THE MARKER-TAG TABLE (signed ops): tag `1`, the PRODUCTION hybrid
-/// ML-DSA-65 + Ed25519 (3,309 ‖ 64 = 3,373-byte blob); tag `3`, the PREVIEW
-/// hybrid FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0 (666 ‖ 64 = 730-byte
-/// blob). Read through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`] —
-/// the codec's lift of the wire's `attest.alg` token to the marker slot's tag
-/// and back — and by the verifier, which dispatches on the tag to THAT tag's
-/// frozen rule. A `sig` that names no row is held to the rows' widths by
+/// The marker-tag table (signed ops).
+///
+/// Tag `1` is the production hybrid ML-DSA-65 + Ed25519 (3,309 ‖ 64 =
+/// 3,373-byte blob); tag `3`, the preview hybrid FN-DSA-512 + Ed25519 under
+/// `fn-dsa` 0.4.0 (666 ‖ 64 = 730-byte blob). Read through
+/// [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`] — the codec's lift of
+/// the wire's `attest.alg` token to the marker slot's tag and back — and by
+/// the verifier, which dispatches on the tag to that tag's frozen rule. A
+/// `sig` that names no row is held to the rows' widths by
 /// [`HybridBlob::parse_hex`]. A key reaches its own row without the table:
 /// [`PublicKey::sig_alg_row`].
 pub const SIG_ALGS: &[SigAlgRow] = &[MLDSA65_ED25519_ROW, FNDSA512_PREVIEW_ED25519_ROW];
 
-/// THE HYBRID BLOB a `sig` that names no row carries (AUTH-4.34, AUTH-6.3;
-/// signed ops: the design record §2.4's pin, and §4.5 (4)'s step (3), the
-/// record grade's blob by its width, l7-C3): the post-quantum signature THEN
-/// the Ed25519 signature, two fixed-width fields and no tag beside them, at
-/// EXACTLY a width some [`SIG_ALGS`] row's blob takes
+/// The hybrid blob a `sig` that names no row carries (AUTH-4.34, AUTH-6.3).
+///
+/// Its form is signed ops' — the design record §2.4's pin, and §4.5 (4)'s
+/// step (3), the record grade's blob by its width: the post-quantum signature
+/// then the Ed25519 signature, two fixed-width fields and no tag beside them,
+/// at exactly a width some [`SIG_ALGS`] row's blob takes
 /// ([`SigAlgRow::sig_len`]). The bytes are private and
 /// [`HybridBlob::parse_hex`] is the one constructor, so a blob of any other
-/// width is UNREPRESENTABLE (AUTH-4.34).
+/// width is unrepresentable (AUTH-4.34).
 ///
 /// Two members spell one, and each is read through this one parse: a
 /// record's `sig` ([`RecordValue::sig`](crate::RecordValue::sig)), which every
@@ -171,23 +195,24 @@ pub const SIG_ALGS: &[SigAlgRow] = &[MLDSA65_ED25519_ROW, FNDSA512_PREVIEW_ED255
 /// session body's grammar and every record-grade verifier's admission
 /// together.
 ///
-/// A WIDTH, NEVER A ROW (D7, l7-E1; SO-I6 (i)): a blob is verified under each
-/// candidate KEY's own row ([`PublicKey::sig_alg_row`]; AUTH-4.32, AUTH-4.33),
-/// and one whose width is not that row's simply fails under it — so this type
-/// names no row, and two rows at one width are one width. The widths are the
-/// table's, read at the parse, so a row added there is admitted here with no
-/// other edit.
+/// **A width, never a row** (the design record's D7; SO-I6 (i)): a blob is
+/// verified under each candidate key's own row ([`PublicKey::sig_alg_row`];
+/// AUTH-4.32, AUTH-4.33), and one whose width is not that row's simply fails
+/// under it — so this type names no row, and two rows at one width are one
+/// width. The widths are the table's, read at the parse, so a row added there
+/// is admitted here with no other edit.
 #[derive(Clone, PartialEq, Eq)]
 pub struct HybridBlob(Box<[u8]>);
 
 impl HybridBlob {
-    /// THE PARSE: hex, case-free — a `sig` is decoded and never framed, the
-    /// record frame and the session payload alike carrying none (AUTH-6.3) —
-    /// decoding to EXACTLY a width some [`SIG_ALGS`] row's blob takes (today
-    /// 6,746 hex for tag 1's 3,373 bytes, 1,460 for tag 3's 730); `None` for
-    /// every other length and for a non-hex byte. The hex LENGTH is checked
-    /// against the table first, so no allocation is sized by a stranger's
-    /// string.
+    /// Parses a blob from hex, case-free, at exactly a row's blob width.
+    ///
+    /// A `sig` is decoded and never framed, the record frame and the session
+    /// payload alike carrying none (AUTH-6.3); it decodes to exactly a width
+    /// some [`SIG_ALGS`] row's blob takes (6,746 hex for tag 1's 3,373 bytes,
+    /// 1,460 for tag 3's 730), and is `None` at every other length and for a
+    /// non-hex byte. The hex length is checked against the table first, so no
+    /// allocation is sized by a stranger's string.
     pub fn parse_hex(s: &str) -> Option<HybridBlob> {
         if !SIG_ALGS.iter().any(|row| row.sig_len() * 2 == s.len()) {
             return None;
@@ -195,17 +220,18 @@ impl HybridBlob {
         hex_decode(s).map(|bytes| HybridBlob(bytes.into_boxed_slice()))
     }
 
-    /// The blob's bytes — what a candidate key's own row verifies.
+    /// Returns the blob's bytes, what a candidate key's own row verifies.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
-/// A blob's width and the SHA-256 of its bytes, in the flat lowercase hex a
-/// fingerprint renders in — NOT its bytes: a blob is 3,373 bytes under tag 1,
-/// which a failing assertion over two blobs would print in full, burying the
-/// difference it exists to show. The bytes are one call away,
-/// [`HybridBlob::as_bytes`], where a reader wants them.
+/// A blob's width and the SHA-256 of its bytes, never the bytes themselves.
+///
+/// The digest is in the flat lowercase hex a fingerprint renders in: a blob
+/// is 3,373 bytes under tag 1, which a failing assertion over two blobs would
+/// print in full, burying the difference it exists to show. The bytes are
+/// one call away, [`HybridBlob::as_bytes`], where a reader wants them.
 impl fmt::Debug for HybridBlob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let digest = hex_encode(&Sha256::digest(&self.0));
@@ -213,66 +239,76 @@ impl fmt::Debug for HybridBlob {
     }
 }
 
-/// One [`ALGS`] row (AUTH-1.5). Not comparable as a whole:
-/// [`AlgRow::from_raw`] is a function pointer, and its ADDRESS says nothing
-/// about which function it holds — one function may hold several addresses
-/// across codegen units, and distinct functions may be merged onto one — so a
-/// row-level `==` would answer unpredictably. The three DATA columns compare
-/// directly, which is what the AUTH-2.92 assertion does.
+/// One [`ALGS`] row (AUTH-1.5).
 ///
-/// `#[non_exhaustive]`: READ, never constructed by a caller — [`ALGS`] is the
+/// It is not comparable as a whole: [`AlgRow::from_raw`] is a function
+/// pointer, and its address says nothing about which function it holds — one
+/// function may hold several addresses across codegen units, and distinct
+/// functions may be merged onto one — so a row-level `==` would answer
+/// unpredictably. The three data columns compare directly, which is what the
+/// AUTH-2.92 assertion does.
+///
+/// `#[non_exhaustive]`: read, never constructed by a caller — [`ALGS`] is the
 /// single declared table and an I2 frozen constant (AUTH-2.90), so a foreign
-/// row is not a thing this crate wants built, and the columns grow (the fourth
-/// arrived with the CONSTRUCTOR). Field READS are unaffected, which is what
-/// the AUTH-2.92 assertion takes; a fifth column is then an addition rather
-/// than a broken build.
+/// row is not a thing this crate wants built, and the columns grow. Field
+/// reads are unaffected, which is what the AUTH-2.92 assertion takes; a fifth
+/// column is then an addition rather than a broken build.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct AlgRow {
-    /// The alg TOKEN — the value a key entry's `alg` member carries
-    /// (AUTH-1.1, AUTH-2.128).
+    /// The alg token (AUTH-1.1, AUTH-2.128).
+    ///
+    /// It is the value a key entry's `alg` member carries.
     pub token: &'static str,
-    /// The RAW KEY LENGTH in bytes (AUTH-1.2).
+    /// The raw key length in bytes (AUTH-1.2).
     pub raw_len: usize,
-    /// The KEY FAMILY — a curve, or a PQ parameter set. No two rows may
-    /// name the same family (AUTH-1.5; the assertion is AUTH-2.92's).
+    /// The key family: a curve, a PQ parameter set, or a hybrid row's pair.
+    ///
+    /// No two rows may name the same family (AUTH-1.5; the assertion is
+    /// AUTH-2.92's).
     pub family: &'static str,
-    /// AUTH-1.4 — the row's CONSTRUCTOR: this row's decoded raw bytes to a
-    /// [`PublicKey`] of THIS row's variant, `None` iff they are not this row's
-    /// raw length. Having it here is what makes [`ALGS`] the whole table —
-    /// [`PublicKey::parse`] calls it instead of matching the token a second
-    /// time, so a row with no constructor does not compile, where a `parse`
-    /// that had forgotten one would compile and refuse every key of the new
-    /// algorithm. NOT `from_bytes`, which is the signature crate's name for
-    /// the POINT DECODE this crate never performs (AUTH-1.4; `skep-signature`
-    /// performs it, called from skepd's session layer). The agreement with
-    /// `raw_len` is the AUTH-2.92 assertion's.
+    /// The row's constructor (AUTH-1.4).
+    ///
+    /// It maps this row's decoded raw bytes to a [`PublicKey`] of this row's
+    /// variant, `None` iff they are not this row's raw length. Having it here
+    /// is what makes [`ALGS`] the whole table — [`PublicKey::parse`] calls it
+    /// instead of matching the token a second time, so a row with no
+    /// constructor does not compile, where a `parse` that had forgotten one
+    /// would compile and refuse every key of the new algorithm. Not
+    /// `from_bytes`, which is the signature crate's name for the point decode
+    /// this crate never performs (AUTH-1.4; `skep-signature` performs it,
+    /// called from `skep-core`'s session layer). The agreement with `raw_len`
+    /// is the AUTH-2.92 assertion's.
     pub from_raw: fn(&[u8]) -> Option<PublicKey>,
 }
 
-/// [`ALGS`]' tag-1 hybrid constructor (AUTH-1.4) — a CHECKED conversion:
-/// exactly 1,984 bytes, so bytes of any other length answer `None`, which
-/// [`PublicKey::parse`] reports as `BadLength`, rather than panicking on a
-/// length the caller chose; no point of either half is decoded here.
+/// Builds a tag-1 hybrid key from exactly 1,984 raw bytes (AUTH-1.4).
+///
+/// It is [`ALGS`]' tag-1 hybrid constructor, a checked conversion: bytes of
+/// any other length answer `None`, which [`PublicKey::parse`] reports as
+/// `BadLength`, rather than panicking on a length the caller chose; no point
+/// of either half is decoded here.
 fn mldsa65_ed25519_from_raw(raw: &[u8]) -> Option<PublicKey> {
     <[u8; MLDSA65_ED25519_KEY_LEN]>::try_from(raw)
         .ok()
         .map(|raw| PublicKey::MlDsa65Ed25519(Box::new(raw)))
 }
 
-/// [`ALGS`]' tag-3 hybrid constructor: exactly 929 bytes, checked the same
-/// way.
+/// Builds a tag-3 hybrid key from exactly 929 raw bytes.
+///
+/// It is [`ALGS`]' tag-3 hybrid constructor, checked the same way.
 fn fndsa512_preview_ed25519_from_raw(raw: &[u8]) -> Option<PublicKey> {
     <[u8; FNDSA512_PREVIEW_ED25519_KEY_LEN]>::try_from(raw)
         .ok()
         .map(|raw| PublicKey::FnDsa512PreviewEd25519(Box::new(raw)))
 }
 
-/// Serde for the hybrid arms' boxed raw arrays, in the SAME form the derive
-/// gives a `[u8; 32]` — a tuple of `N` bytes, no length prefix — so the
-/// checkpoint-facing surface (AUTH-1.40) spells every arm's bytes one way.
-/// Serde's own array impls stop at 32; these are that impl at the hybrid
-/// widths, over the `Box` the arms hold.
+/// Serde for the hybrid arms' boxed raw arrays.
+///
+/// The form is the one the derive gives a `[u8; 32]` — a tuple of `N` bytes,
+/// no length prefix — so the checkpoint-facing surface (AUTH-1.40) spells
+/// every arm's bytes one way. Serde's own array impls stop at 32; these are
+/// that impl at the hybrid widths, over the `Box` the arms hold.
 mod raw_array {
     use core::fmt;
 
@@ -313,31 +349,32 @@ mod raw_array {
     }
 }
 
-/// The algorithm set (AUTH-1.5): the single declared table, four columns —
-/// the TOKEN (a key entry's `alg` member), the RAW LENGTH, the KEY FAMILY (at
-/// a hybrid row the PAIR), and the CONSTRUCTOR that builds the key — and no
-/// two rows may name the same family. ITS ROWS ARE THE TWO HYBRID ROWS
-/// (AUTH-1.1): tag 1's `mldsa65-ed25519` at 1,984 raw bytes and tag 3's
-/// `fndsa512-preview-ed25519` at 929; the classical `ed25519` row is DELETED
-/// (the hybrid-only launch, 2026-09-26) and tag 2's reserved token
-/// `fndsa512-ed25519` has no row, so a record naming either is `bad_record`
-/// — the frozen token set (AUTH-2.96). [`PublicKey::parse`],
-/// [`PublicKey::from_halves`] and [`PublicKey::alg`] all READ this table
-/// (AUTH-1.6), so carrying a new algorithm arm is the enum arm, its row here
-/// and its [`SIG_ALGS`] row, and the exhaustive matches (`alg`, `raw`, and
-/// [`PublicKey::sig_alg_row`], which names that `SIG_ALGS` row) the compiler
-/// names, plus the I2 agreement assertions (AUTH-2.92; every `ALGS` row signs
-/// under a marker tag). Nothing dispatches on the token a second time: the
-/// row carries its own [`AlgRow::from_raw`], so there is no admission path a
-/// new row can be left out of. The token set this table admits is an I2
-/// frozen constant (AUTH-2.90); adding a row is a coordinated grammar upgrade
-/// (AUTH-2.91) under the one-canonical-raw-form-per-token obligation
-/// (AUTH-2.99).
+/// The algorithm set (AUTH-1.5), the single declared table.
+///
+/// It has four columns — the token (a key entry's `alg` member), the raw
+/// length, the key family (at a hybrid row the pair), and the constructor
+/// that builds the key — and no two rows may name the same family. Its rows
+/// are the two hybrid rows (AUTH-1.1): tag 1's `mldsa65-ed25519` at 1,984
+/// raw bytes and tag 3's `fndsa512-preview-ed25519` at 929; the classical
+/// `ed25519` has no row (the hybrid-only launch) and tag 2's reserved token
+/// `fndsa512-ed25519` has none, so a record naming either is `bad_record`
+/// — the frozen token set (AUTH-2.96). [`PublicKey::parse`] and
+/// [`PublicKey::from_halves`] read this table, and [`PublicKey::alg`]
+/// answers its tokens (AUTH-1.6), so carrying a new algorithm arm is the
+/// enum arm, its row here and its [`SIG_ALGS`] row, and the exhaustive
+/// matches (`alg`, `raw`, and [`PublicKey::sig_alg_row`], which names that
+/// `SIG_ALGS` row) the compiler names, plus the I2 agreement assertions
+/// (AUTH-2.92; every `ALGS` row signs under a marker tag). Nothing dispatches
+/// on the token a second time: the row carries its own [`AlgRow::from_raw`],
+/// so there is no admission path a new row can be left out of. The token set
+/// this table admits is an I2 frozen constant (AUTH-2.90); adding a row is a
+/// coordinated grammar upgrade (AUTH-2.91) under the
+/// one-canonical-raw-form-per-token obligation (AUTH-2.99).
 pub const ALGS: &[AlgRow] = &[
-    // Signed ops (the seam build, 2026-09-25): the two HYBRID rows, each ONE
-    // row over ONE concatenated raw value (the design record §4.4: one sheet,
-    // one entry, one fingerprint, one label). The family names the PAIR, so
-    // no two rows share one while both carry an Ed25519 half.
+    // Signed ops: the two hybrid rows, each one row over one concatenated
+    // raw value (the design record §4.4: one sheet, one entry, one
+    // fingerprint, one label). The family names the pair, so no two rows
+    // share one while both carry an Ed25519 half.
     AlgRow {
         token: ALG_MLDSA65_ED25519,
         raw_len: MLDSA65_ED25519_KEY_LEN,
@@ -352,55 +389,64 @@ pub const ALGS: &[AlgRow] = &[
     },
 ];
 
-/// The [`ALGS`] row a token names — AUTH-1.4's FIRST check, `UnknownAlg`
-/// when no row carries it, taken by both constructors
-/// ([`PublicKey::parse`], [`PublicKey::from_halves`]) before either judges a
-/// byte.
+/// Returns the [`ALGS`] row a token names (AUTH-1.4's first check).
+///
+/// Both constructors ([`PublicKey::parse`], [`PublicKey::from_halves`]) take
+/// it before either judges a byte.
+///
+/// # Errors
+///
+/// `UnknownAlg` when no row carries the token.
 fn row_of(alg: &str) -> Result<&'static AlgRow, ParseKeyError> {
     ALGS.iter().find(|row| row.token == alg).ok_or(ParseKeyError::UnknownAlg)
 }
 
-/// A public key (AUTH-1.1): THE TWO HYBRID ARMS, each ONE key over one
-/// concatenated raw value whose halves [`PublicKey::pq_half`] and
-/// [`PublicKey::ed25519_half`] read out and [`PublicKey::from_halves`] writes
-/// (the KEY PIN: the post-quantum key FIRST, the Ed25519 key LAST) — the
-/// pin's one statement in code, so a signer composes a key without spelling
-/// it. There is no classical `Ed25519` arm — the hybrid-only launch (owner
-/// 2026-09-26, "Q1 b delete it") deleted it with its row — and the enum is
-/// the reserved slot for a future P-256 arm. Syntax-level only — this crate
-/// never decodes a curve point or a lattice key (AUTH-1.4) and no field type
-/// in the crate can carry a private key (I1, AUTH-2.89).
+/// A public key (AUTH-1.1), one of the two hybrid arms.
 ///
-/// Deliberately NOT `#[non_exhaustive]`: a consumer's exhaustive match over
+/// Each arm is one key over one concatenated raw value whose halves
+/// [`PublicKey::pq_half`] and [`PublicKey::ed25519_half`] read out and
+/// [`PublicKey::from_halves`] writes (the key pin: the post-quantum key
+/// first, the Ed25519 key last) — the pin's one statement in code, so a
+/// signer composes a key without spelling it. There is no classical
+/// `Ed25519` arm and no row for one (the hybrid-only launch), and the enum
+/// is the reserved slot for a future P-256 arm. Syntax-level only —
+/// this crate never decodes a curve point or a lattice key (AUTH-1.4) and no
+/// field type in the crate can carry a private key (I1, AUTH-2.89).
+///
+/// Deliberately not `#[non_exhaustive]`: a consumer's exhaustive match over
 /// this enum is what forces a new algorithm to be given a decode wherever a
 /// key is used, where a `_` arm would silently refuse every key of it. The
-/// break at each new arm IS AUTH-2.91's coordination, in the compiler.
+/// break at each new arm is AUTH-2.91's coordination, in the compiler.
 ///
-/// The hybrid arms are BOXED, and the enum is not `Copy`: a key of 1,984
+/// The hybrid arms are boxed, and the enum is not `Copy`: a key of 1,984
 /// bytes inline would ride every `Enrolled` value through `im`'s
-/// inline-chunked map nodes and every by-value copy — the seam build's first
-/// run overflowed a daemon worker's stack on exactly that — so a hybrid key
-/// is one allocation and the enum stays a few words wide, cloned where it
-/// would be copied. The checkpoint-facing discriminant (AUTH-1.40) counts
-/// from this arm: `0` for tag 1, `1` for tag 3 — renumbered at the classical
-/// arm's deletion, free before the first served board and never after.
+/// inline-chunked map nodes and every by-value copy — enough to overflow a
+/// daemon worker's stack — so a hybrid key is one allocation and the enum
+/// stays a few words wide, cloned where it would be copied. The
+/// checkpoint-facing discriminant (AUTH-1.40) counts from this arm: `0` for
+/// tag 1, `1` for tag 3 — a numbering free to move before the first served
+/// board and never after.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PublicKey {
-    /// Tag 1's hybrid: the ML-DSA-65 public key (1,952) ‖ the Ed25519 public
-    /// key (32) — [`ALG_MLDSA65_ED25519`].
+    /// Tag 1's hybrid, [`ALG_MLDSA65_ED25519`].
+    ///
+    /// Its raw value is the ML-DSA-65 public key (1,952) ‖ the Ed25519
+    /// public key (32).
     MlDsa65Ed25519(#[serde(with = "raw_array")] Box<[u8; MLDSA65_ED25519_KEY_LEN]>),
-    /// Tag 3's PREVIEW hybrid: the FN-DSA-512 verifying key as `fn-dsa`
-    /// 0.4.0 encodes it (897) ‖ the Ed25519 public key (32) —
-    /// [`ALG_FNDSA512_PREVIEW_ED25519`].
+    /// Tag 3's preview hybrid, [`ALG_FNDSA512_PREVIEW_ED25519`].
+    ///
+    /// Its raw value is the FN-DSA-512 verifying key as `fn-dsa` 0.4.0
+    /// encodes it (897) ‖ the Ed25519 public key (32).
     FnDsa512PreviewEd25519(
         #[serde(with = "raw_array")] Box<[u8; FNDSA512_PREVIEW_ED25519_KEY_LEN]>,
     ),
 }
 
 impl PublicKey {
-    /// AUTH-1.2 — the key's alg token, a token present in [`ALGS`] for every
-    /// variant (AUTH-1.6; the both-directions agreement is the AUTH-2.92
-    /// assertion).
+    /// Returns the key's alg token (AUTH-1.2).
+    ///
+    /// It is a token present in [`ALGS`] for every variant (AUTH-1.6; the
+    /// both-directions agreement is the AUTH-2.92 assertion).
     pub fn alg(&self) -> &'static str {
         match self {
             PublicKey::MlDsa65Ed25519(_) => ALG_MLDSA65_ED25519,
@@ -408,8 +454,10 @@ impl PublicKey {
         }
     }
 
-    /// AUTH-1.2 — the raw key bytes: the `ALGS` row's length, the PQ half
-    /// then the Ed25519 half (1,984 bytes under tag 1, 929 under tag 3).
+    /// Returns the raw key bytes (AUTH-1.2).
+    ///
+    /// They are the `ALGS` row's length, the PQ half then the Ed25519 half
+    /// (1,984 bytes under tag 1, 929 under tag 3).
     pub fn raw(&self) -> &[u8] {
         match self {
             PublicKey::MlDsa65Ed25519(raw) => &raw[..],
@@ -417,43 +465,53 @@ impl PublicKey {
         }
     }
 
-    /// THE ED25519 HALF — the last 32 raw bytes of a hybrid key, whichever
-    /// row it is: the half the Ed25519 signature of every blob — a session's
-    /// (AUTH-4.32), an entry's and a record's alike — verifies under, beside
-    /// the post-quantum half's; no half opens anything alone.
+    /// Returns the Ed25519 half, the last 32 raw bytes of the key.
+    ///
+    /// Whichever row the key is, it is the half the Ed25519 signature of every
+    /// blob — a session's (AUTH-4.32), an entry's and a record's alike —
+    /// verifies under, beside the post-quantum half's; no half opens anything
+    /// alone.
     pub fn ed25519_half(&self) -> &[u8; ED25519_KEY_LEN] {
         self.halves().1
     }
 
-    /// THE POST-QUANTUM HALF — every raw byte before the Ed25519 half: its
-    /// row's [`SigAlgRow::pq_key_len`] (1,952 under tag 1, 897 under tag 3).
+    /// Returns the post-quantum half, every raw byte before the Ed25519 half.
+    ///
+    /// Its width is its row's [`SigAlgRow::pq_key_len`] (1,952 under tag 1,
+    /// 897 under tag 3).
     pub fn pq_half(&self) -> &[u8] {
         self.halves().0
     }
 
-    /// THE KEY PIN, READ — the raw value split where the Ed25519 half begins,
-    /// its LAST [`ED25519_KEY_LEN`] bytes at every row, the post-quantum half
-    /// everything before them: std's `split_last_chunk`, whose one `None` — a
-    /// value shorter than the half — no `ALGS` row admits. Both half readers
-    /// take this one split; [`PublicKey::from_halves`] writes the same pin.
+    /// Splits the raw value where the Ed25519 half begins: the key pin, read.
+    ///
+    /// The Ed25519 half is the last [`ED25519_KEY_LEN`] bytes at every row,
+    /// the post-quantum half everything before them: std's
+    /// `split_last_chunk`, whose one `None` — a value shorter than the half —
+    /// no `ALGS` row admits. Both half readers take this one split;
+    /// [`PublicKey::from_halves`] writes the same pin.
     fn halves(&self) -> (&[u8], &[u8; ED25519_KEY_LEN]) {
         self.raw()
             .split_last_chunk::<ED25519_KEY_LEN>()
             .expect("every ALGS row's raw value ends in an Ed25519 key")
     }
 
-    /// THE KEY PIN, WRITTEN — a hybrid key from its two halves, the
-    /// post-quantum half FIRST and the Ed25519 half LAST, as the ONE raw value
-    /// of `alg`'s row (AUTH-1.1; the design record §4.4): the inverse of
-    /// [`PublicKey::pq_half`] and [`PublicKey::ed25519_half`], so
+    /// Composes a hybrid key from its two halves: the key pin, written.
+    ///
+    /// The post-quantum half goes first and the Ed25519 half last, as the one
+    /// raw value of `alg`'s row (AUTH-1.1; the design record §4.4): the
+    /// inverse of [`PublicKey::pq_half`] and [`PublicKey::ed25519_half`], so
     /// `from_halves(k.alg(), k.pq_half(), k.ed25519_half())` is `Ok(k)` for
     /// every key. A signer composes its key here and never spells the order —
     /// a key spelled with its halves swapped has the row's length, which is
     /// all [`PublicKey::parse`] and the fold judge (AUTH-1.4).
     ///
-    /// Syntax only, as `parse` is: neither half is decoded. `UnknownAlg`
-    /// where no [`ALGS`] row carries `alg`; `BadLength` where `pq` is not that
-    /// row's post-quantum width.
+    /// Syntax only, as `parse` is: neither half is decoded.
+    ///
+    /// # Errors
+    ///
+    /// `UnknownAlg` where no [`ALGS`] row carries `alg`; `BadLength` where
+    /// `pq` is not that row's post-quantum width.
     pub fn from_halves(
         alg: &str,
         pq: &[u8],
@@ -463,13 +521,14 @@ impl PublicKey {
         (row.from_raw)(&[pq, &ed25519[..]].concat()).ok_or(ParseKeyError::BadLength)
     }
 
-    /// The [`SIG_ALGS`] row this key signs under — the whole row, whose `tag`
-    /// is the marker's `sig_alg` byte. TOTAL: every key kind is a hybrid row
-    /// that signs under a marker tag (the [`ALGS`] card's edit list,
-    /// AUTH-2.92's agreement), and this match is exhaustive over the arms, so
-    /// a new arm does not compile until it names its row (AUTH-2.91). The
-    /// answer equals, as a value, the row [`SigAlgRow::of_token`] finds for
-    /// [`PublicKey::alg`].
+    /// Returns the [`SIG_ALGS`] row this key signs under.
+    ///
+    /// It is the whole row, whose `tag` is the marker's `sig_alg` byte.
+    /// Total: every key kind is a hybrid row that signs under a marker tag
+    /// (the [`ALGS`] card's edit list, AUTH-2.92's agreement), and this match
+    /// is exhaustive over the arms, so a new arm does not compile until it
+    /// names its row (AUTH-2.91). The answer equals, as a value, the row
+    /// [`SigAlgRow::of_token`] finds for [`PublicKey::alg`].
     pub fn sig_alg_row(&self) -> &'static SigAlgRow {
         match self {
             PublicKey::MlDsa65Ed25519(_) => &MLDSA65_ED25519_ROW,
@@ -477,27 +536,36 @@ impl PublicKey {
         }
     }
 
-    /// AUTH-1.3 — lowercase hex of the raw key bytes.
+    /// Returns the lowercase hex of the raw key bytes (AUTH-1.3).
     pub fn to_hex(&self) -> String {
         hex_encode(self.raw())
     }
 
-    /// AUTH-1.4 — SYNTAX-ONLY admission, the checks in THIS order with the
-    /// FIRST failure the verdict: the alg token is looked up in [`ALGS`]
-    /// (`UnknownAlg` when absent), then the hex MUST decode (`BadHex`
-    /// otherwise — case-insensitively, AUTH-1.3), then that row's own
-    /// [`AlgRow::from_raw`] must accept the decoded bytes, which it does at
-    /// exactly the row's raw length and no other (`BadLength` otherwise); the
-    /// curve point is never decoded. The order is observable and pinned:
-    /// `parse("rsa", "zz")` is `UnknownAlg` — and so is `parse("ed25519", …)`,
-    /// the deleted classical token naming no row — while
-    /// `parse("mldsa65-ed25519", "zz")` is `BadHex`; a length test hoisted
-    /// ahead of the decode would flip that last row, which is what
-    /// `parse_refuses_in_its_pinned_order_token_then_hex_then_length` watches.
+    /// Parses a key from its alg token and hex, by syntax alone (AUTH-1.4).
+    ///
+    /// The curve point is never decoded.
+    ///
+    /// # Errors
+    ///
+    /// The checks run in this order, the first failure the verdict:
+    ///
+    /// 1. the alg token is looked up in [`ALGS`] — `UnknownAlg` when absent;
+    /// 2. the hex must decode, case-insensitively (AUTH-1.3) — `BadHex`
+    ///    otherwise;
+    /// 3. that row's own [`AlgRow::from_raw`] must accept the decoded bytes,
+    ///    which it does at exactly the row's raw length and no other —
+    ///    `BadLength` otherwise.
+    ///
+    /// The order is observable and pinned: `parse("rsa", "zz")` is
+    /// `UnknownAlg` — and so is `parse("ed25519", …)`, the classical token
+    /// naming no row — while `parse("mldsa65-ed25519", "zz")` is `BadHex`; a
+    /// length test hoisted ahead of the decode would flip that last row, which
+    /// is what `parse_refuses_in_its_pinned_order_token_then_hex_then_length`
+    /// watches.
     pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, ParseKeyError> {
         let row = row_of(alg)?;
         let bytes = hex_decode(hex).ok_or(ParseKeyError::BadHex)?;
-        // The row decides the length, by its own CHECKED conversion: the row
+        // The row decides the length, by its own checked conversion: the row
         // is what says which variant these bytes are, so there is no second
         // match on `alg` and no unreachable catch-all. A row whose `from_raw`
         // disagreed with its `raw_len` would answer `BadLength` rather than
@@ -508,13 +576,15 @@ impl PublicKey {
     }
 }
 
-/// A key's two identifying facts: its [`alg`] token and its [`Fingerprint`]
-/// — the identity AUTH-1.7 names and the flat 64-hex form the daemon emits
-/// and a log reader greps for (AUTH-1.9). NOT [`to_hex`]: a hybrid key is
-/// 1,984 raw bytes under tag 1, 3,968 hex characters, which every `Debug`
-/// holding a key — `Enrolled`, `Effect`, `KeySet`, `IdentityState` — would
-/// repeat per key, burying the difference a failing assertion exists to
-/// show. The raw value is one call away, [`to_hex`], where a reader wants it.
+/// A key's two identifying facts: its [`alg`] token and its [`Fingerprint`].
+///
+/// The fingerprint is the identity AUTH-1.7 names, in the flat 64-hex form
+/// the daemon emits and a log reader greps for (AUTH-1.9). Not [`to_hex`]: a
+/// hybrid key is 1,984 raw bytes under tag 1, 3,968 hex characters, which
+/// every `Debug` holding a key — `Enrolled`, `Effect`, `KeySet`,
+/// `IdentityState` — would repeat per key, burying the difference a failing
+/// assertion exists to show. The raw value is one call away, [`to_hex`],
+/// where a reader wants it.
 ///
 /// [`alg`]: PublicKey::alg
 /// [`to_hex`]: PublicKey::to_hex
@@ -524,20 +594,23 @@ impl fmt::Debug for PublicKey {
     }
 }
 
-/// [`PublicKey::parse`]'s and [`PublicKey::from_halves`]' rejection
-/// (AUTH-1.1, AUTH-1.4).
+/// Why a key was refused (AUTH-1.1, AUTH-1.4).
+///
+/// It is [`PublicKey::parse`]'s and [`PublicKey::from_halves`]' rejection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParseKeyError {
     /// The alg token is absent from [`ALGS`].
     UnknownAlg,
     /// The hex argument does not decode.
     BadHex,
-    /// The key's bytes — the decoded hex, or the two halves together — are
-    /// not exactly the `ALGS` row's raw length.
+    /// The key's bytes are not exactly the `ALGS` row's raw length.
+    ///
+    /// They are the decoded hex, or the two halves together.
     BadLength,
 }
 
 /// Prose, never a second wire vocabulary: a `ParseKeyError` reaches no wire.
+///
 /// `parse_enroll` answers `PayloadError::BadRecord` for every one of these,
 /// and that is the fault a consumer renders (AUTH-1.28).
 impl fmt::Display for ParseKeyError {
@@ -552,17 +625,18 @@ impl fmt::Display for ParseKeyError {
 
 impl std::error::Error for ParseKeyError {}
 
-/// The algorithm-agnostic identity of a key (AUTH-1.7):
-/// `SHA-256(framed(KEY_TAG, [alg, raw]))` (AUTH-1.8). A FOLD INPUT, not
-/// merely a display form (I2, AUTH-2.90): the fingerprint is the key-set map
-/// key, the entry a retirement names, and the serialized value.
+/// The algorithm-agnostic identity of a key (AUTH-1.7).
 ///
-/// FINGERPRINT ORDER — the order `Ord` answers, the one
+/// It is `SHA-256(framed(KEY_TAG, [alg, raw]))` (AUTH-1.8). A fold input,
+/// not merely a display form (I2, AUTH-2.90): the fingerprint is the key-set
+/// map key, the entry a retirement names, and the serialized value.
+///
+/// **Fingerprint order** — the order `Ord` answers, the one
 /// [`KeySet::enrolled`](crate::KeySet::enrolled) and
 /// [`KeySet::retired`](crate::KeySet::retired) iterate (AUTH-1.31), the realm
 /// genesis-set framing reuses across implementations (AUTH-2.119, RES-1) and
-/// the wire's `key_set` read serves — is ASCENDING BY THE THIRTY-TWO DIGEST
-/// BYTES, compared lexicographically: [`Fingerprint::as_bytes`]' order, and
+/// the wire's `key_set` read serves — is ascending by the thirty-two digest
+/// bytes, compared lexicographically: [`Fingerprint::as_bytes`]' order, and
 /// equally that of [`Fingerprint::to_hex`]'s fixed-width lowercase form
 /// compared as a string. It is AUTH-1.7's declared derive over the private
 /// field, stated here because that field decides it and the interface does
@@ -572,23 +646,27 @@ impl std::error::Error for ParseKeyError {}
 pub struct Fingerprint([u8; 32]);
 
 impl Fingerprint {
-    /// AUTH-1.8 — `SHA-256(framed(KEY_TAG, [alg, raw]))`, where `alg` is the
-    /// key's alg token bytes and `raw` its raw key bytes.
+    /// Returns the fingerprint of `key` (AUTH-1.8).
+    ///
+    /// It is `SHA-256(framed(KEY_TAG, [alg, raw]))`, where `alg` is the key's
+    /// alg token bytes and `raw` its raw key bytes.
     pub fn of(key: &PublicKey) -> Fingerprint {
         let preimage = framed(KEY_TAG, &[key.alg().as_bytes(), key.raw()]);
         let digest = Sha256::digest(&preimage);
         Fingerprint(digest.into())
     }
 
-    /// AUTH-1.9 — 64 lowercase hex characters; the daemon emits this flat
-    /// form only (grouped rendering is a client display convention,
-    /// AUTH-1.10).
+    /// Returns the fingerprint as 64 lowercase hex characters (AUTH-1.9).
+    ///
+    /// The daemon emits this flat form only (grouped rendering is a client
+    /// display convention, AUTH-1.10).
     pub fn to_hex(&self) -> String {
         hex_encode(&self.0)
     }
 
-    /// AUTH-1.9 — accepts exactly 64 hex characters, case-insensitively;
-    /// `None` for anything else. The length is the FIRST test, so a caller's
+    /// Parses exactly 64 hex characters, case-insensitively (AUTH-1.9).
+    ///
+    /// `None` for anything else. The length is the first test, so a caller's
     /// string sizes no allocation here: AUTH-1.9 fixes the admitted length at
     /// a constant, and every other length answers `None` whatever its bytes.
     pub fn parse_hex(s: &str) -> Option<Fingerprint> {
@@ -600,7 +678,7 @@ impl Fingerprint {
         Some(Fingerprint(raw))
     }
 
-    /// The raw digest bytes (AUTH-1.7).
+    /// Returns the raw digest bytes (AUTH-1.7).
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -613,16 +691,18 @@ impl fmt::Debug for Fingerprint {
     }
 }
 
-/// AUTH-1.9 — the flat 64-lowercase-hex form, the only form the daemon
-/// emits; grouped rendering is a client display convention (AUTH-1.10).
+/// The flat 64-lowercase-hex form (AUTH-1.9), the only form the daemon emits.
+///
+/// Grouped rendering is a client display convention (AUTH-1.10).
 impl fmt::Display for Fingerprint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_hex())
     }
 }
 
-/// Lowercase hex (AUTH-1.3, AUTH-1.9, AUTH-2.17 — every encoder emits
-/// lowercase).
+/// Encodes `bytes` as lowercase hex (AUTH-1.3, AUTH-1.9, AUTH-2.17).
+///
+/// Every encoder emits lowercase.
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -633,9 +713,10 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Case-insensitive hex decode — a key's and a fingerprint's (AUTH-1.3,
-/// AUTH-2.17), and a hybrid blob's (AUTH-6.3); `None` on an odd length or a
-/// non-hex byte.
+/// Decodes hex, case-insensitively; `None` on an odd length or a non-hex byte.
+///
+/// It is a key's and a fingerprint's decode (AUTH-1.3, AUTH-2.17), and a
+/// hybrid blob's (AUTH-6.3).
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     fn nibble(c: u8) -> Option<u8> {
         match c {

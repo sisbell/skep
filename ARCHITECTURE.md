@@ -2273,7 +2273,10 @@ beside the mints they call so the two files depend one way — and
 off) compiles in `M3Rec`'s three test constructors, the one way another
 crate's suite constructs a record without decoding one;
 `scripts/gate-full.sh` runs its doctests — the `compile_fail` pairs on
-`M3Rec` that pin the seals a foreign crate meets.
+`M3Rec` that pin the seals a foreign crate meets — and its `fail_stops`
+tests in release, the one run that tells the fold's contiguity check and
+the range mint's zero-count check, both held on every build, from a
+`debug_assert`.
 
 Rules that hold across its files:
 
@@ -2285,8 +2288,9 @@ Rules that hold across its files:
   caller pushes it exactly as the mint built it: `Allocate`'s payload,
   `Allocation`, keeps its fields private, so no caller rewrites the address
   it carries. A mint whose record is dropped hands out the same address
-  again, and nothing reports it; a record pushed anywhere else is stale and
-  issues its address twice, refused only by a debug build's fold.
+  again, and nothing reports it; a record pushed anywhere else is stale,
+  and once its chain has moved the fold refuses it on every build — its
+  contiguity check panics at the push, before anything is journaled.
 - **An account is minted only with its seat.** `delegate` is the only op
   that allocates an account: it stages the account's `M3Rec::Allocate` and
   its principal's `M3Rec::RegisterPrincipal` in one transaction, and genesis

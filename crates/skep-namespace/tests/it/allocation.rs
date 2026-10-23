@@ -184,7 +184,6 @@ fn a_mint_whose_record_is_never_staged_re_hands_its_address() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_peeked_record_staged_in_a_later_transaction_fail_stops_the_fold() {
     // §A: the caller's half has a second clause the drop above does not
@@ -192,9 +191,9 @@ fn a_peeked_record_staged_in_a_later_transaction_fail_stops_the_fold() {
     // state the mint was called on, and nowhere else (`M3Rec::Allocate`). A
     // peek names the address the chain issues next; once another mint has
     // landed there, the peek's record names an address already issued, and
-    // nothing in the record says which state it was read from. Only the
-    // fold's contiguity check refuses it, in a debug build — this is that
-    // refusal made executable; a release build folds it and issues the
+    // nothing in the record says which state it was read from. The fold's
+    // contiguity check refuses it, on every build, at the push — this is
+    // that refusal made executable; folded, the record would issue the
     // address twice.
     let (k, _acct, doc) = kernel_with_account_and_doc();
     let (peeked, rec) = k
@@ -534,9 +533,9 @@ fn membership_is_exact_chain_membership() {
 /// and an address never minted answers `None`. Read the same off a kernel's
 /// committed world as off the pure fold, at the position the kernel
 /// committed the record at. (That an entry is written once is the fold's
-/// `contains_key` guard, which a debug build's contiguity check stands in
-/// front of: a stale record re-folded fail-stops there, so no test here
-/// re-folds one.)
+/// `contains_key` guard, which the fold's contiguity check stands in front
+/// of on every build: a stale record re-folded fail-stops there, so no test
+/// here re-folds one.)
 #[test]
 fn each_mint_enters_its_position_for_a_document_a_member_and_a_link_and_for_nothing_else() {
     let (k, acct, doc) = kernel_with_account_and_doc();

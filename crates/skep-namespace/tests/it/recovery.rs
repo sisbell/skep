@@ -2,6 +2,8 @@
 //! journaled types' serde round trips, decode doors, canonical bytes and the
 //! slice's rendering, and durable recovery by checkpoint and replay.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use crate::common::*;
 
 use serde::Serialize;
@@ -22,10 +24,9 @@ fn alloc_range(first: &[u32], count: u32) -> M3Rec {
 
 /// Outside `apply_m3`'s totality domain (§Core data model): the count
 /// representation cannot hold a gap, so a jumped ordinal would make
-/// [1,0,1]..[1,0,4] phantom entities (B1/B3). The guard is a `debug_assert`,
-/// so this states the fail-stop only where debug assertions are compiled in.
+/// [1,0,1]..[1,0,4] phantom entities (B1/B3). The fold fail-stops on it, on
+/// every build.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
     let _ = M3State::genesis().apply_m3(Seq(0), &alloc(&[1, 0, 5]));
@@ -34,7 +35,6 @@ fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
 /// The same guard in the other direction: a re-staged Allocate would
 /// silently regress the frontier and re-hand an address already minted.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
     let s = M3State::genesis()
@@ -45,9 +45,8 @@ fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
 
 /// The range mint's commit half under the same guard: a range whose first
 /// ordinal jumps past the frontier would leave a gap no count can hold (B1),
-/// so the fold fail-stops where debug assertions are compiled in.
+/// so the fold fail-stops on it, on every build.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "a range's first ordinal must equal its namespace's effective frontier + 1")]
 fn a_jumped_range_first_ordinal_fail_stops_the_fold() {
     let _ = M3State::genesis().apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 5], 3));
@@ -56,11 +55,73 @@ fn a_jumped_range_first_ordinal_fail_stops_the_fold() {
 /// …and the other direction: a re-staged range would regress the frontier
 /// past addresses already minted and re-hand them.
 #[test]
-#[cfg(debug_assertions)]
 #[should_panic(expected = "a range's first ordinal must equal its namespace's effective frontier + 1")]
 fn a_regressed_range_first_ordinal_fail_stops_the_fold() {
     let s = M3State::genesis().apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 1], 3));
     let _ = s.apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 2], 2));
+}
+
+/// A jumped `Allocate` is refused at the fold, on every build, and nowhere
+/// earlier: no field door can see contiguity — a claim about the frontier the
+/// record would advance — so the frame decodes, as a producer that decodes a
+/// record and pushes it would hold it, and the push is where it stops. The
+/// refusal is clean: nothing is journaled, the kernel is not poisoned and
+/// still commits, no document the record names or would have skipped reads
+/// registered, the account's next document is the one it was, and the panic
+/// names the record. Folded, the record would register docs 2–4 with no
+/// publication entry, each read published by the engine's exception set.
+#[test]
+fn a_jumped_allocate_decodes_and_fail_stops_at_the_push() {
+    let (k, acct, _doc) = kernel_with_account_and_doc();
+    let frame = bincode::serialize(&RawM3Rec::Allocate {
+        addr: t(&[1, 0, 1, 0, 5]),
+        published: false,
+    })
+    .expect("serialize the raw shape");
+    let jumped: M3Rec = bincode::deserialize(&frame).expect("no field door sees contiguity");
+    let before = k.current_seq();
+    let refused = catch_unwind(AssertUnwindSafe(|| {
+        k.transact::<_, MintError>(&[M3State::document_lock_key(&acct)], |stg| {
+            stg.push(jumped.into());
+            Ok(())
+        })
+    }));
+    let payload = refused.expect_err("the jumped Allocate folded and committed");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains("1.0.1.0.5 is not its chain's next"),
+        "the refusal names the record: {message:?}"
+    );
+    assert_eq!(k.current_seq(), before, "the refusal committed something");
+    assert!(!k.is_poisoned(), "the refusal poisoned the kernel");
+    let m3 = k.snapshot().world().m3().clone();
+    for skipped in 2..=5 {
+        assert!(
+            !m3.is_registered_document(&a(&[1, 0, 1, 0, skipped])),
+            "doc {skipped} reads registered"
+        );
+    }
+    // …and the kernel still commits: the account's next document is doc 2.
+    let d2 = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
+        m3.mint_document(&acct, false)
+    });
+    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+}
+
+/// The range mint's precondition, held on every build: a range of nothing
+/// moves no frontier and its record is refused at decode, so the mint refuses
+/// a zero `count` before any record exists — a caller's bug answered as one,
+/// rather than a first address handed out that the chain's next mint issues
+/// again, under a frame no replay of the journal could decode.
+#[test]
+#[should_panic(expected = "a content range mints at least one address")]
+fn a_range_of_nothing_fail_stops_at_its_mint() {
+    let (k, _acct, doc) = kernel_with_account_and_doc();
+    let m3 = k.snapshot().world().m3().clone();
+    let _ = m3.mint_content_range(&doc, &Nat::from(0u32));
 }
 
 /// RANGE ≡ SINGLES (B2: a mint is a pure function of the frontier): after

@@ -23,13 +23,15 @@
 //! address and for nothing else, and the set inherits a second case it cannot
 //! reach: a registered document M3's walk never enumerates. The set is built
 //! by addition over `M3State::documents`, which yields every registered
-//! document on any slice M3's own fold produced — and a slice outside that
-//! fold's totality domain can hold a registered document with no publication
-//! entry (a jumped `Allocate` registers the ordinals it skipped). M3 answers
-//! such a document private. This set never holds it, so it reads published
-//! here, and a registration check ahead of the call passes, because the
-//! document *is* registered. `M3State::documents` assigns exactly this
-//! statement to an index built over its walk, which is why it stands here.
+//! document on any slice M3's own fold produced — and a decoded checkpoint
+//! can hold a registered document with no publication entry (a document
+//! chain whose count runs past the documents the map holds; M3's fold
+//! refuses, on every build, the jumped `Allocate` that would build one
+//! live). M3 answers such a document private. This set never holds it, so it
+//! reads published here, and a registration check ahead of the call passes,
+//! because the document *is* registered. `M3State::documents` assigns
+//! exactly this statement to an index built over its walk, which is why it
+//! stands here.
 //! Nothing in this crate detects the shape — detecting it at load means
 //! expanding every document chain to its members, the Θ(documents) cost M3's
 //! compressed frontiers exist to avoid — and
@@ -217,11 +219,12 @@ fn draft_entry(namespace: &M3State, doc: &Address) -> Option<(Address, Address)>
 /// and `AllocateRange` — a content range — mint no document, so they take
 /// the early return.
 ///
-/// The fold asks about the one address a record names. A jumped `Allocate` —
-/// outside M3's fold's totality domain — registers the ordinals it skipped as
-/// well, and nobody here asks about those, so the fold shares the seed's
-/// blind spot: a skipped document is registered, holds no publication entry,
-/// and never joins the set (the module doc's open direction).
+/// The fold asks about the one address a record names, and that is every
+/// document the record registers: M3's fold, which runs first, refuses on
+/// every build an `Allocate` whose ordinal is not its chain's next — the one
+/// record that would register documents it does not name. The seed's blind
+/// spot (the module doc's open direction) reaches the set only off a decoded
+/// checkpoint.
 ///
 /// This runs inside `World::apply`, so the membership and the registration
 /// land in the one commit that carries the record (PUB-7.7 as RES-209 states

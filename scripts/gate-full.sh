@@ -62,6 +62,16 @@ cargo test -p skep-arrangement --doc || exit $?
 # and the type's (E0004) — and a doctest the gate never runs pins nothing.
 cargo test -p skep-namespace --doc || exit $?
 
+# …and its fail-stops in release, which no debug run can tell from a
+# `debug_assert`: M3's fold holds every allocation to its chain's next
+# ordinal on every build, and its range mint refuses a range of nothing on
+# every build, so a check that turned debug-only would pass every debug test
+# and fail here. Only the tests named `fail_stops` run: the suite's heap-cost
+# tests count the heap bytes a call asks for, which an optimized build may
+# elide (`GlobalAlloc`'s own docs), so those counts are a debug build's to
+# pin.
+cargo nextest run -p skep-namespace --release --profile full -E 'test(/fail_stops/)' || exit $?
+
 # skep-content's library without `test-hooks` — every test build turns it on
 # (the crate's self dev-dependency, and skep-retrieval's), so this is the
 # build that shows the store compiles without `write` and without the two

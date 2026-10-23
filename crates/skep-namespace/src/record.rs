@@ -121,25 +121,26 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// pair's twin below does. The one other path it can *reach* is decoding: the
 /// record derives `Deserialize`, as M2's journal requires, so bytes a foreign
 /// crate wrote decode into one, through the field doors. Such a record holds
-/// every door fact and nothing more. What its producer owes — the next
-/// ordinal, the seat beside an account, a fresh id — no door can check, so a
-/// crate that decodes a record and pushes it is a producer, owes what
-/// [`M3Rec::Allocate`] and [`M3Rec::RegisterPrincipal`] state, and is
-/// covered by none of the fold's guarantees where it falls short. What the
-/// doors and the seals settle together is the journal: in a build that
-/// compiles no test, every record any crate can push passes the doors it
-/// will be read back through, so no commit leaves an M3 frame its own replay
-/// refuses — save a range minted with a zero `count`, which
-/// [`M3State::mint_content_range`]'s precondition excludes and only a debug
-/// build refuses. None of the seals costs a reader anything: a foreign crate
-/// lifts the record whole, reads the three payloads through their accessors
-/// ([`Allocation::addr`], [`Allocation::published`], [`Principal::prefix`],
-/// [`Principal::id`], [`RangeAllocation::first`], [`RangeAllocation::count`])
-/// and `RegisterNode`'s field through a pattern with `..`, and this crate's
-/// fold matches and destructures freely. The suites that seed M3 state
-/// through the fold — states no op produces among them — build their records
-/// with the `test-hooks` constructors, which a build that compiles no test
-/// does not contain.
+/// every door fact and nothing more. What its producer owes no door can
+/// check: the next ordinal the fold checks instead, on every build, and
+/// refuses a record that does not carry it; the seat beside an account and a
+/// fresh id nothing checks. So a crate that decodes a record and pushes it is
+/// a producer, owes what [`M3Rec::Allocate`] and [`M3Rec::RegisterPrincipal`]
+/// state, and is covered by none of the fold's guarantees where it falls
+/// short of those two. What the doors and the seals settle together is the
+/// journal: in a build that compiles no test, every record any crate can push
+/// passes the doors it will be read back through, so no commit leaves an M3
+/// frame its own replay refuses: a range of nothing, the one record a door
+/// refuses that a mint could build, [`M3State::mint_content_range`] refuses
+/// first, on every build. None of the seals costs a reader anything: a
+/// foreign crate lifts the record whole, reads the three payloads through
+/// their accessors ([`Allocation::addr`], [`Allocation::published`],
+/// [`Principal::prefix`], [`Principal::id`], [`RangeAllocation::first`],
+/// [`RangeAllocation::count`]) and `RegisterNode`'s field through a pattern
+/// with `..`, and this crate's fold matches and destructures freely. The
+/// suites that seed M3 state through the fold — states no op produces among
+/// them — build their records with the `test-hooks` constructors, which a
+/// build that compiles no test does not contain.
 ///
 /// The seals as a foreign crate meets them, each a pair: the twin compiles,
 /// and the refusal differs from it in one place — a write to an allocation's
@@ -272,9 +273,9 @@ pub enum M3Rec {
     /// with: frontier key and lock key are one key.
     ///
     /// **Where it may be staged.** This is the caller's half of every mint,
-    /// and the one obligation M3 cannot check, since the record carries an
-    /// address and not the state its mint read: in the transaction whose
-    /// working state the mint was called on, under the mint's paired
+    /// and an obligation M3 checks only by its consequence, since the record
+    /// carries an address and not the state its mint read: in the transaction
+    /// whose working state the mint was called on, under the mint's paired
     /// `*_lock_key`, before any other record advances the same chain. Its
     /// address is `c_{m+1}` of *that* state, so there the record is always
     /// inside [`M3State::apply_m3`]'s totality domain. Dropped, it leaves the
@@ -284,12 +285,16 @@ pub enum M3Rec {
     /// record staged in a later transaction, a mint called on `stg.base()`
     /// after another on its chain was staged, or two mints on one chain
     /// before either record is pushed. Once another mint has landed on the
-    /// chain, a stale record issues that address a second time, and once two
-    /// have, it also sets the frontier back to its own ordinal, so the later
-    /// addresses read unallocated and are minted again. Only the fold's
-    /// contiguity `debug_assert` refuses a stale record, once its chain has
-    /// moved; a release build folds it, and once it sets a frontier back,
-    /// [`M3State::is_allocated`]'s permanent `true` fails on its chain.
+    /// chain, a stale record names an address already issued, and once two
+    /// have, one below the frontier: folded, it would issue that address a
+    /// second time, and in the second case set the frontier back to its own
+    /// ordinal, so the later addresses would read unallocated and be minted
+    /// again. The fold refuses it, on every build: its contiguity check panics
+    /// at the push, which unwinds the transaction before anything is
+    /// journaled — a caller's bug answered as one — and
+    /// [`M3State::is_allocated`]'s permanent `true` holds on its chain. A
+    /// stale record whose chain has not moved still carries the next ordinal,
+    /// and folds as the mint it is.
     ///
     /// An account's `Allocate` owes one record more, and the fold does not
     /// check it: its principal's [`M3Rec::RegisterPrincipal`], in the same
@@ -517,12 +522,12 @@ impl Principal {
 /// They are the one way a crate other than this one constructs an `M3Rec` of
 /// its own choosing without decoding bytes, for the suites that seed M3 state
 /// through the fold — states no op produces among them, an account allocated
-/// without its seat, a seat below the account tier, a range whose first
-/// ordinal jumps or regresses its frontier. Each builds its variant as given
-/// and checks nothing, as a struct literal inside this crate does. The
-/// feature is turned on only on dev-dependency lines, so a build that
-/// compiles no test holds none of them, and a production path that reached
-/// for one would not compile.
+/// without its seat, a seat below the account tier — and hand it the records
+/// it refuses, a range whose first ordinal jumps or regresses its frontier
+/// among them. Each builds its variant as given and checks nothing, as a
+/// struct literal inside this crate does. The feature is turned on only on
+/// dev-dependency lines, so a build that compiles no test holds none of
+/// them, and a production path that reached for one would not compile.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 impl M3Rec {

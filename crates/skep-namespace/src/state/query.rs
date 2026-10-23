@@ -76,9 +76,10 @@ impl M3State {
     /// byte-presence — a registered-empty document is a valid, addressable
     /// ghost; content existence is M4's separate axis, and a check that
     /// content exists asks M4, never this read. E is append-only, so a `true`
-    /// answer is permanent (B0/P1) on any slice whose every record fell
-    /// inside [`M3State::apply_m3`]'s totality domain — as each mint's record
-    /// does when staged where [`M3Rec::Allocate`] says.
+    /// answer is permanent (B0/P1) on every slice the fold produces: the one
+    /// record that could set a frontier back — an `Allocate` or a range staged
+    /// where [`M3Rec::Allocate`] forbids — [`M3State::apply_m3`] refuses, on
+    /// every build.
     ///
     /// An element is allocated only on one of two chains: its document's
     /// content chain, `d·0·1·n`, or its link chain, `d·0·2·n` — the only
@@ -215,17 +216,19 @@ impl M3State {
     /// [`M3State::is_registered_document`] first (PUB-6.37: registration
     /// precedes publication, and an unregistered address is answered by the
     /// registration check and by nothing here). On any slice M3's own fold
-    /// produced inside its totality domain, every registered document has an
-    /// entry, because the allocation record that registers it carries the bit
-    /// and the fold writes both in one step.
+    /// produced, every registered document has an entry: the allocation
+    /// record that registers it carries the bit, the fold writes both in one
+    /// step, and it refuses, on every build, the jumped `Allocate` that would
+    /// register documents no record names.
     ///
     /// `false` for a missing entry is the fail-private direction (PUB-1.1),
     /// and it answers two different absences. An unregistered address has no
     /// allocation record, so what this returns for one is no answer at all —
     /// a caller that reads it has skipped the gate. A registered document with
     /// no entry is the other, and it is not a caller's bug: it is reachable
-    /// outside [`M3State::apply_m3`]'s totality domain — a jumped `Allocate`
-    /// registers the ordinals it skipped — and is the case
+    /// only off a decoded checkpoint, a document chain whose count runs past
+    /// the documents this map holds — the fold refuses, on every build, the
+    /// jumped `Allocate` that would build one live — and is the case
     /// [`M3State::documents`] states has no remedy here. This read answers it
     /// private. A derived index that stores the unpublished side and answers
     /// by membership miss inverts that, and should say so where it is built.
@@ -242,10 +245,11 @@ impl M3State {
     ///
     /// They come in address order: the enumeration of the publication map
     /// [`M3State::published`] reads one entry of. One entry per registered
-    /// document, versions included, on any slice M3's own fold produced
-    /// inside its totality domain: the allocation record that registers a
-    /// document carries its bit and [`M3State::apply_m3`] writes both in one
-    /// step, and nothing else writes here. A checkpoint is bytes, so a reader
+    /// document, versions included, on any slice M3's own fold produced: the
+    /// allocation record that registers a document carries its bit,
+    /// [`M3State::apply_m3`] writes both in one step and refuses, on every
+    /// build, the jumped `Allocate` that would register documents no record
+    /// names, and nothing else writes here. A checkpoint is bytes, so a reader
     /// that must not fail-stop on a corrupted one re-asks
     /// [`M3State::is_registered_document`] per entry, as the engine's seed
     /// does. The order is the `OrdMap`'s — a function of the contents, so two
@@ -258,13 +262,13 @@ impl M3State {
     /// and no walk.
     ///
     /// The fold-produced scope is load-bearing in one direction only. A
-    /// checkpoint or a journal outside [`M3State::apply_m3`]'s totality domain
-    /// can hold a registered document with no entry — a jumped `Allocate`
-    /// registers the ordinals it skipped — and that direction has no remedy
-    /// here: the claim relates the frontier map to this one, which no
-    /// per-entry door can settle, and checking it at load would mean expanding
-    /// every document chain to its members, the Θ(documents) cost B1's
-    /// compression exists to avoid. What a reader owes is the polarity.
+    /// decoded checkpoint can hold a registered document with no entry — a
+    /// document chain whose count runs past the documents this map holds —
+    /// and that direction has no remedy here: the claim relates the frontier
+    /// map to this one, which no per-entry door can settle, and checking it at
+    /// load would mean expanding every document chain to its members, the
+    /// Θ(documents) cost B1's compression exists to avoid. What a reader owes
+    /// is the polarity.
     /// [`M3State::published`] answers `false` for a missing entry, which is
     /// fail-private; an index that stores the unpublished side and answers by
     /// membership miss inverts that, so a document this walk omits reads

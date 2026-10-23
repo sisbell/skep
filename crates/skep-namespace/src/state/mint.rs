@@ -225,10 +225,6 @@ impl M3State {
     /// transaction's working state, its record staged there before the next
     /// mint on the chain, which then issues `first ⊕ count`.
     ///
-    /// **Precondition.** `count ≥ 1`: a range of nothing moves no frontier,
-    /// and its record is refused at decode; the one caller passes the length
-    /// of a stretch, which is at least one.
-    ///
     /// # Errors
     ///
     /// `HomeNotRegistered` where `home` is no registered document; `Gate`
@@ -237,13 +233,21 @@ impl M3State {
     ///
     /// # Panics
     ///
-    /// Panics in a debug build on a zero `count`.
+    /// Panics on a zero `count`, on every build, against the precondition
+    /// `count ≥ 1`: a range of nothing moves no frontier, so the chain's next
+    /// mint would issue its first address again, and its record is refused at
+    /// decode, so no replay could read the journal that held it. The caller's
+    /// bug is answered before any record exists; M5's staging site passes the
+    /// length of a stretch, which is at least one.
     pub fn mint_content_range(
         &self,
         home: &Address,
         count: &Nat,
     ) -> Result<(Address, M3Rec), MintError> {
-        debug_assert!(*count != Nat::default(), "a content range mints at least one address");
+        assert!(
+            *count != Nat::default(),
+            "mint_content_range precondition: count ≥ 1 — a content range mints at least one address"
+        );
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // P6/C2
         }

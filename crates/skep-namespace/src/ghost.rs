@@ -104,9 +104,9 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// so `is_allocated` answers false at all five ghost tumblers on every board,
 /// forever, however far the chain past them has advanced. And
 /// [`M3State::apply_m3`]'s contiguity check expects
-/// `max(frontier, floor) + 1`, so a debug build's fold accepts the chain's
-/// first record — an `Allocate` or a range — at [`GHOST_POSITIONS`] + 1, and
-/// fail-stops on one inside the region.
+/// `max(frontier, floor) + 1`, so the fold accepts the chain's first record —
+/// an `Allocate` or a range — at [`GHOST_POSITIONS`] + 1, and fail-stops on
+/// one inside the region, on every build.
 ///
 /// **Non-reissue.** It is the property this floor exists for: no mint, on any
 /// board running this format, ever yields a ghost tumbler. Every mint returns
@@ -118,9 +118,9 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// could issue one. Every mint it serves carries the ordinal one past the
 /// effective frontier, and the effective frontier is `max(stored, floor)`:
 /// never below the floor whatever the stored count reads, a count regressed
-/// off a corrupted checkpoint or journal included. So every such mint has an
-/// ordinal above [`GHOST_POSITIONS`] on every build, resting on that `max`
-/// and not on the fold's contiguity check, which is a `debug_assert`.
+/// off a corrupted checkpoint included, which no fold check reads. So every
+/// such mint has an ordinal above [`GHOST_POSITIONS`] on every build, resting
+/// on that `max`.
 ///
 /// The floor is a compiled constant, not genesis state: genesis seeds the
 /// ghost home document empty, so its content chain has no frontier until a

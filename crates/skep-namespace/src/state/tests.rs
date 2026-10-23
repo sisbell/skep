@@ -132,11 +132,11 @@ fn lock_keys_distinguish_every_chain_and_key_space() {
 
 /// §1: [`M3State::effective_frontier`] takes a MAX, not a fallback — so a
 /// stored frontier BELOW the floor cannot drag a mint back into the ghost
-/// region. Only corruption or a foreign producer regresses a frontier, and
-/// the fold's contiguity guard is a `debug_assert` and absent in release,
-/// so the `max` is what carries non-reissue there. Built by hand rather
-/// than folded, because folding the regressing record is what that assert
-/// stops.
+/// region. Only a corrupted checkpoint carries a regressed frontier — the
+/// fold refuses, on every build, the record that would set one back — and no
+/// fold check reads a checkpoint's counts, so the `max` is what carries
+/// non-reissue there. Built by hand rather than folded, because a checkpoint
+/// is the one route such a frontier has.
 #[test]
 fn the_ghost_floor_holds_against_a_regressed_frontier() {
     let ghost_ns = content_ns(&ghost_home_document());
@@ -235,14 +235,15 @@ fn a_zero_frontier_is_an_empty_chain_at_both_reads() {
 }
 
 /// PUB-1.9: a document's bit is written ONCE. A second `Allocate` naming a
-/// registered document is outside [`M3State::apply_m3`]'s totality domain
-/// and the contiguity `debug_assert` is what refuses it — but that assert
-/// is absent in RELEASE, and no record door can carry the fact (whether an
-/// address is already registered is a claim about the registry, which a
-/// decoder holding one frame cannot settle). So the insert itself is
-/// write-once, and this is the shape that reaches it in a debug run: a
-/// stored ZERO makes the re-staged record CONTIGUOUS, so the assert passes
-/// and the publication insert is reached on both build profiles.
+/// registered document is outside [`M3State::apply_m3`]'s totality domain,
+/// and the contiguity check refuses it on every build while the chain's
+/// frontier stands where its records left it — but a corrupted checkpoint
+/// can carry a frontier regressed below the document, and no record door can
+/// carry the fact either (whether an address is already registered is a
+/// claim about the registry, which a decoder holding one frame cannot
+/// settle). So the insert itself is write-once, and this is the shape that
+/// reaches it: a stored ZERO makes the re-staged record CONTIGUOUS, so the
+/// check passes and the publication insert is reached.
 #[test]
 fn a_replayed_allocate_never_moves_a_documents_bit() {
     let acct = a(&[1, 0, 1]);

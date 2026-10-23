@@ -167,9 +167,8 @@ fn a_frontier_past_the_ghost_floor_survives_the_checkpoint_round_trip() {
 
 /// A ghost-ordinal `Allocate` is OUTSIDE the fold's totality domain — the
 /// contiguity fail-stop reads the effective frontier, so a record claiming a
-/// ghost tumbler is corruption caught at the fold, not an ordinal silently
-/// absorbed into membership.
-#[cfg(debug_assertions)]
+/// ghost tumbler is corruption caught at the fold, on every build, not an
+/// ordinal silently absorbed into membership.
 #[test]
 #[should_panic(expected = "effective frontier")]
 fn the_fold_fail_stops_on_an_allocate_inside_the_ghost_region() {

@@ -432,9 +432,10 @@ impl WorldState for World {
     /// # Panics
     ///
     /// Panics over a record no gate could stage, where the `expect`s and the
-    /// owner assertion reachable from its arms fail: they discharge facts
-    /// M7's fold asserts first and M3's ops establish, and
-    /// [`crate::Engine::open`] states where that lands. A debug build also
+    /// owner assertion reachable from its arms fail, and where M3's fold
+    /// refuses, on every build, an allocation that is not its chain's next:
+    /// they discharge facts M7's fold asserts first and M3's ops establish,
+    /// and [`crate::Engine::open`] states where that lands. A debug build also
     /// fail-stops on a content stretch past its document's content frontier
     /// (`stretch_within_frontier`), and where the identity hook asserts
     /// (`identity::fold` states where).

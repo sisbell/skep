@@ -203,10 +203,10 @@ fn a_draft_whose_owner_resolves_to_nobody_is_refused_rather_than_skipped() {
 /// the gap: in the ENUMERATION, not in the rule.
 ///
 /// Pinned so the direction cannot change unnoticed, not endorsed. The
-/// shape lies outside M3's fold's totality domain — a jumped `Allocate`
-/// is its live route, and M3's debug contiguity check refuses one — so it
-/// is built through M3's serde door, the checkpoint route, rather than
-/// through an op.
+/// shape lies outside M3's fold's totality domain — M3's fold refuses, on
+/// every build, the jumped `Allocate` that would be its live route — so it
+/// is built through M3's serde door, the checkpoint route, the one route it
+/// has, rather than through an op.
 #[test]
 fn a_registered_document_with_no_publication_entry_reads_published_to_the_set() {
     let (namespace, _acct, doc) = account_with_a_draft();

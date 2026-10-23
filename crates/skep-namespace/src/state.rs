@@ -481,9 +481,9 @@ impl M3State {
     /// order. So the fold is the one writer of the frontier and publication
     /// maps: each chain reaches its count by the fold's own advance to each
     /// record's ordinal, each document's bit lands in the step that registers
-    /// it, and the fold's contiguity check confirms, on every debug build,
-    /// that the account and each document is the next member of its own
-    /// chain. A document added to the seed is one more record.
+    /// it, and the fold's contiguity check confirms, on every build, that the
+    /// account and each document is the next member of its own chain. A
+    /// document added to the seed is one more record.
     ///
     /// What the seed leaves alone: node `[1]`'s own account chain — the
     /// seeded account chain is `([1.1], 2)`, not `([1], 2)` — so
@@ -558,41 +558,49 @@ impl M3State {
     /// is the state [`M3State::has_documents`] and [`M3State::latest_version`]
     /// answer by their chains.
     ///
-    /// The two conditions differ in kind, and only the first is owed to the
-    /// journal. Extending a parent is a fact about one field, so it is carried
-    /// at that field's door: the [`Address`] payloads carry T4-validity,
-    /// `Allocate`'s address door (`parented_address`) and `AllocateRange`'s
-    /// first-address door (`content_range_first`, which runs it) carry the
-    /// parent, and a record arriving from disk or a peer that lacks either is
-    /// refused at decode rather than folded into a panic. Contiguity is not
-    /// decidable from one record — it is a claim about the frontier the record
-    /// is about to advance — so no door can carry it, and it stays a stated
-    /// condition of the caller: an `Allocate` that regresses or jumps a
-    /// frontier is outside the domain — corruption, or a caller's bug, a mint's
-    /// record staged where [`M3Rec::Allocate`] forbids, rather than a live
-    /// error path. What the fold trusts for both conditions is the in-process
-    /// producer and stager of the record. [`M3Rec`]'s seals keep the producer
-    /// inside this crate in a build that compiles no test — the mints, the
-    /// ops and genesis construct every record, and no other crate constructs
-    /// one or edits the `Allocate` a mint returned, whose payload's fields are
-    /// private — but not the stager: a composite in another crate places the
-    /// record a mint returned, and contiguity rests on where it does
-    /// ([`M3Rec::Allocate`]). A record decoded from bytes rather than
-    /// constructed here carries the first condition through its door and owes
-    /// the second unchecked; [`M3Rec`] states what it costs.
+    /// The two conditions differ in kind, and each is checked where it can be.
+    /// Extending a parent is a fact about one field, so it is carried at that
+    /// field's door: the [`Address`] payloads carry T4-validity, `Allocate`'s
+    /// address door (`parented_address`) and `AllocateRange`'s first-address
+    /// door (`content_range_first`, which runs it) carry the parent, and a
+    /// record arriving from disk or a peer that lacks either is refused at
+    /// decode rather than folded into a panic. Contiguity is not decidable
+    /// from one record — it is a claim about the frontier the record is about
+    /// to advance — so no door can carry it, and the fold checks it instead,
+    /// on every build: an `Allocate` or a range whose ordinal jumps, repeats
+    /// or regresses its chain's next is outside the domain — corruption, or a
+    /// caller's bug, a mint's record staged where [`M3Rec::Allocate`] forbids
+    /// — and the fold fail-stops on it (`# Panics`) rather than register
+    /// ordinals no mint issued (B1) or issue a live address again (B8). On the
+    /// write path the fold runs at the record's push, in the transaction's
+    /// closure phase, so the panic unwinds a transaction that has journaled
+    /// nothing, drawn no position and poisoned nothing; at replay it halts the
+    /// open, as the engine's `Engine::open` states for every structural fact a
+    /// fold asserts. [`M3Rec`]'s seals keep the producer inside this crate in
+    /// a build that compiles no test — the mints, the ops and genesis
+    /// construct every record, and no other crate constructs one or edits the
+    /// `Allocate` a mint returned, whose payload's fields are private — but not
+    /// the stager: a composite in another crate places the record a mint
+    /// returned, and contiguity rests on where it does ([`M3Rec::Allocate`]),
+    /// which is why the fold is what checks it. A record decoded from bytes
+    /// rather than constructed here carries the first condition through its
+    /// door and meets the second at the fold; [`M3Rec`] states what else it
+    /// owes.
     ///
     /// `Allocate`'s publication bit is folded for a document-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
     /// the publication map and the registration reach a reader in the one
     /// commit that carries that record, never a later step). The write is
     /// insert-if-absent, so the bit a document was minted with is the bit that
-    /// stands (PUB-1.9) on every build, and not merely inside the totality
-    /// domain: the contiguity check is a `debug_assert` and cannot be what
-    /// holds an immutability a second record would otherwise overwrite in
-    /// release. Membership of the publication map is a per-arm fact no
-    /// door can carry — "this document already has a bit" is a claim about
-    /// the map, which a decoder holding one frame cannot settle — so it is
-    /// answered here, at one lookup, rather than refused at decode.
+    /// stands (PUB-1.9), and not merely inside the totality domain: the
+    /// contiguity check holds a record to the stored frontier, and a frontier
+    /// regressed off a corrupted checkpoint makes a second record for a
+    /// registered document contiguous, so the check cannot be what holds an
+    /// immutability that record would otherwise overwrite. Membership of the
+    /// publication map is a per-arm fact no door can carry — "this document
+    /// already has a bit" is a claim about the map, which a decoder holding
+    /// one frame cannot settle — so it is answered here, at one lookup, rather
+    /// than refused at decode.
     ///
     /// `RegisterNode`'s admission conditions — node level, the
     /// [`MAX_NODE_COMPONENTS`] cap, and bootstrap lineage — belong to
@@ -646,12 +654,10 @@ impl M3State {
     /// # Panics
     ///
     /// Panics where an `Allocate` address or an `AllocateRange` first address
-    /// extends no parent: the `namespace_of` `expect`. Panics in a debug build
-    /// on an `Allocate` that regresses or jumps a frontier: a debug build
-    /// fail-stops on the contiguity `debug_assert`; a release build folds the
-    /// record as written, moving the frontier to its ordinal. A range whose
-    /// first ordinal regresses or jumps meets the same check in a
-    /// `debug_assert` of its own.
+    /// extends no parent: the `namespace_of` `expect`. Panics, on every build,
+    /// where an `Allocate`'s ordinal, or a range's first ordinal, is not its
+    /// chain's effective frontier + 1 — a jump, a repeat or a regression: the
+    /// contiguity check, whose message names the record's address.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, at: Seq, r: &M3Rec) -> M3State {
         let mut s = self.clone();
@@ -661,18 +667,25 @@ impl M3State {
                     "≥ 2 components: Allocate's address door refuses a parentless address off the journal, and the totality domain asks it of an in-process producer",
                 );
                 let n = ordinal(addr.tumbler()).clone();
-                // The totality domain's contiguity condition. Its floor term
+                // The totality domain's contiguity condition, held on every
+                // build: an ordinal past the chain's next would register the
+                // ordinals between as members no mint issued (B1); one at the
+                // chain's frontier or below would issue a live address again
+                // (B8), and below it set the frontier back (B0). Its floor term
                 // matters at most once per journal: the ghost home document's
                 // first content record, an Allocate or a range, carries
                 // ordinal GHOST_POSITIONS + 1 over an absent frontier.
-                debug_assert_eq!(
-                    n,
-                    s.effective_frontier(&key) + 1u32,
-                    "Allocate ordinal must equal its namespace's effective frontier + 1"
+                let next = s.effective_frontier(&key) + 1u32;
+                assert_eq!(
+                    n, next,
+                    "Allocate ordinal must equal its namespace's effective frontier + 1: {addr} is not its chain's next"
                 );
                 s.frontiers.insert(key, n);
-                // Written once (PUB-1.9) on every build: this `contains_key`
-                // test holds it in release, where the check above is absent.
+                // Written once (PUB-1.9) on every build. The check above holds
+                // a record to the stored frontier, and a frontier regressed off
+                // a corrupted checkpoint makes a second record for a registered
+                // document contiguous: this `contains_key` test holds the bit
+                // there.
                 if addr.level() == Level::Document && !s.publication.contains_key(addr) {
                     s.publication.insert(addr.clone(), *published);
                 }
@@ -701,13 +714,13 @@ impl M3State {
                 );
                 let n = ordinal(first.tumbler()).clone();
                 // The same contiguity condition `Allocate` carries, on the
-                // range's first ordinal; the frontier then advances by the
-                // count in one record. No publication write: a range is
-                // minted on a content chain only (the element tier).
-                debug_assert_eq!(
-                    n,
-                    s.effective_frontier(&key) + 1u32,
-                    "a range's first ordinal must equal its namespace's effective frontier + 1"
+                // range's first ordinal and on every build; the frontier then
+                // advances by the count in one record. No publication write: a
+                // range is minted on a content chain only (the element tier).
+                let next = s.effective_frontier(&key) + 1u32;
+                assert_eq!(
+                    n, next,
+                    "a range's first ordinal must equal its namespace's effective frontier + 1: {first} is not its chain's next"
                 );
                 s.frontiers.insert(key, n + count - 1u32);
             }

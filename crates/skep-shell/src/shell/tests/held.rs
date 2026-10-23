@@ -2,13 +2,15 @@
 //! signed session's — a bare session reads alone: a burst held while the
 //! daemon is stopped and resent `kept` after a restart, the kernel poison
 //! holding a burst `poisoned` then `halted`, the poisoned burst that lands
-//! at the restart and is kept, the signed session's own attested row kept
-//! by the resend, a refused run with its `behind` lines and `resolve`'s two
-//! acts, the close order and the relaunch listing its held line, a second
-//! principal's file untouched and unlisted, a burst on a draft just minted
-//! kept across a restart, a relaunch with its board down listing its held
-//! line — the bare mode's resending none of it, the signed mode's keeping
-//! it — and the probe keeping its cadence while the board keeps committing.
+//! at the restart and is kept, a burst that committed and then panicked —
+//! answered `500 internal_panic` — held and kept off the read, sent once,
+//! the signed session's own attested row kept by the resend, a refused run
+//! with its `behind` lines and `resolve`'s two acts, the close order and the
+//! relaunch listing its held line, a second principal's file untouched and
+//! unlisted, a burst on a draft just minted kept across a restart, a
+//! relaunch with its board down listing its held line — the bare mode's
+//! resending none of it, the signed mode's keeping it — and the probe
+//! keeping its cadence while the board keeps committing.
 
 use super::*;
 use crate::held::Opened;
@@ -175,10 +177,57 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     let rows = changes_under(&shell.boards[0].board, &token, &draft, 0);
     assert_eq!(rows.len(), 3, "the mint, the first insert, the burst once: {rows:?}");
     assert_eq!((rows[0]["op"].as_str(), rows[1]["op"].as_str()), (Some("create_new_document"), Some("insert")), "{rows:?}");
-    // The daemon fact the read rests on: the write path records acks alone,
-    // so the replayed commit's row carries LOST testimony — its hand and kind
-    // the reserved null — and the arrangement alone could keep it.
+    // The daemon fact the read rests on: the write path records no row for a
+    // write it refused `poisoned`, so the replayed commit's row carries LOST
+    // testimony — its hand and kind the reserved null — and the arrangement
+    // alone could keep it.
     assert!(rows[2]["key"].is_null() && rows[2]["op"].is_null() && rows[2]["docs"].is_null(), "the replayed commit's testimony is lost: {:?}", rows[2]);
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// A BURST THAT COMMITTED, THEN PANICKED, IS KEPT AND SENT ONCE (§3c.2,
+/// §3c.5): the board's inline checkpoint armed to panic at its first step and
+/// forced to run on the committing thread — the checkpoint thread held, every
+/// commit crossing the cadence — so a burst's write commits and its handler
+/// panics past the commit, the board answering `500 internal_panic` and
+/// recording the position as a bare entry (`operations.md` §4 row 34). The
+/// burst is answered `held`, cause `unreachable`; the resend's read finds the
+/// bare row since the burst's base, the site holds the burst's value, and the
+/// line is kept with nothing sent again — the document's `held` events
+/// `holding` then `kept` alone, the draft reading `abc`, the board holding the
+/// burst's row once (the mutant that faces the 500 answers the page an error
+/// for text that is on the board; the one that holds it `sent: false` faces
+/// the person's own text `moved`).
+#[test]
+fn a_burst_that_committed_then_panicked_is_kept_and_sent_once() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, seen, session, draft, .. } = held_ground(&dir, &sd);
+    let insert = |ordinal: &str, value: &str| json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [value]}});
+    // The thread held and every commit crossing: the next commit sets the
+    // flag and runs nothing, the one after runs the checkpoint inline.
+    sd.daemon().hold_the_checkpoint_thread();
+    sd.daemon().set_checkpoint_bytes_bound(1);
+    let acked = shell.call("op", &insert("2", "b")).unwrap();
+    let base = acked["at"].as_u64().unwrap_or_else(|| panic!("the burst before is acked: {acked}"));
+    assert!(sd.daemon().checkpoint_is_due_now(), "the crossing's flag stands, so the next commit runs the checkpoint inline");
+    sd.daemon().panic_at_the_next_kernel_step(Step::CheckpointCreate);
+    let held = shell.call("op", &insert("3", "c")).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    assert_eq!(states, ["holding", "kept"], "kept off the read, never sent again, never faced moved");
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "the line is done kept");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "abc", "{read}");
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    let rows = changes_under(&shell.boards[0].board, &token, &draft, base);
+    assert_eq!(rows.len(), 1, "the burst's row once, nothing sent again: {rows:?}");
+    // The daemon fact the read rests on: the write path's catch records a
+    // write that panicked past its commit bare, its testimony lost.
+    assert!(rows[0]["key"].is_null() && rows[0]["op"].is_null() && rows[0]["docs"].is_null(), "the panicked commit's testimony is lost: {:?}", rows[0]);
+    sd.daemon().release_the_checkpoint_thread();
     shell.shutdown();
     sd.shutdown();
 }

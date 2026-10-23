@@ -8,13 +8,14 @@
 //! delivery past the values asked differing — with the narrative cells
 //! beside it; THE ORDER, the lines sent in `k` order across the documents;
 //! the own hand on a read; a refusal the table holds nowhere, and the death
-//! signal, leaving a resent line standing; a second window's burst resent
-//! from memory; every principal's lines resent by one probe, a bare
-//! session's line resent by none until a session of its principal's that
-//! may write stands, and a probe with no line standing dialing nothing; one
-//! drain per board at a time,
-//! and a drain that unwinds leaving the board free to drain again; a move
-//! facing its own document alone; and the own node stopped,
+//! signal, leaving a resent line standing; a resend answered
+//! `500 internal_panic` marking its line `sent: true`, its landing then kept
+//! by the read; a second window's burst resent from memory; every
+//! principal's lines resent by one probe, a bare session's line resent by
+//! none until a session of its principal's that may write stands, and a
+//! probe with no line standing dialing nothing; one drain per board at a
+//! time, and a drain that unwinds leaving the board free to drain again; a
+//! move facing its own document alone; and the own node stopped,
 //! `writes.halted` and a third `durability` holding a burst over time, a
 //! reused ordinal's reissues counted afresh.
 
@@ -89,6 +90,30 @@ fn a_death_signal_at_a_resend_leaves_its_line_standing() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 2, "the next probe sends it again");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// A RESEND ANSWERED `500 internal_panic` marks its line as one that may have
+/// landed (§3c.2): a line held `sent: false` is sent at the probe, the
+/// board's handler panics — its write perhaps committed — and the line is
+/// re-marked `sent: true`, cause `unreachable`; the next probe's read finds
+/// the row whose testimony the board lost, the line's values standing at its
+/// site, and keeps the line with nothing sent again (the mutant that faces
+/// the resend's 500 leaves the line `sent: false`, and the next read faces
+/// the person's own text `moved`).
+#[test]
+fn a_resend_answered_internal_panic_reads_before_it_sends_again() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (1, Some("unreachable"), Some(true)), "{lines:?}");
+    *g.fake.rows.lock().unwrap() = vec![lost_row()];
+    *g.fake.text.lock().unwrap() = "hello".into();
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "the landed line is not sent again");
+    let states = g.states();
+    assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
 }
 
 /// THE PROBE RESENDS EVERY PRINCIPAL's LINES (§3c.4): two principals hold a

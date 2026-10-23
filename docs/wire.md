@@ -821,12 +821,14 @@ is lost and you repeat the identical request with the same `id` on the same
 session, the daemon returns the original acknowledgment instead of
 re-executing. It is a best-effort hint: it does not survive a daemon
 restart, it is never applied to reads or rejections (a `reorder`/`retry`
-reissue always re-executes), and an `id` reused across different op kinds
-misses. One credential-path difference: a credential deposit (§The claim
-ceremony and credentials) rides its own per-session memo with the same
-contract — the original acknowledgment, byte-identical, no re-execution
-— except the hit is KIND-BLIND (`id` already ran on this session) and
-the memo dies with its session, close included.
+reissue always re-executes), an `id` reused across different op kinds
+misses, and a write answered `500 internal_panic` may have committed with
+its acknowledgment never memoized, so its retry may re-execute (§HTTP
+status codes). One credential-path difference: a credential deposit (§The
+claim ceremony and credentials) rides its own per-session memo with the
+same contract — the original acknowledgment, byte-identical, no
+re-execution — except the hit is KIND-BLIND (`id` already ran on this
+session) and the memo dies with its session, close included.
 
 ### HTTP status codes
 
@@ -875,7 +877,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
 | 503    | `write_busy`                | all write permits are in use — a write on `/op` past the write permit pool, refused before the credential lock and the guard are taken, nothing committed (§The model); carries `op`; retry shortly |
-| 500    | `internal_panic`            | a handler bug; the daemon stays up      |
+| 500    | `internal_panic`            | a handler bug; the daemon stays up. On `POST /op` the `500` is no verdict on a write, only its lost answer: the write may have committed before the panic — its position then on the change feed as a bare entry, its testimony lost (§The change feed) — or reached the journal with the kernel halting its write paths (`writes.halted` true, §The other endpoints), a restart then replaying it; or it committed nothing. Read the feed before reissuing it: its acknowledgment may never have reached the idempotency memo (§Correlation and idempotency) |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption; a history read's `history_io` carries one fixed `detail`, naming nothing on the daemon's host — no path, no file, no OS words |
 | 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
 

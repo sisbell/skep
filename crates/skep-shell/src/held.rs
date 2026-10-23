@@ -138,10 +138,10 @@ pub struct Reason {
     pub cause: String,
     /// The board's verdict verbatim beside a REFUSED run's line, for the face.
     pub refusal: Option<Value>,
-    /// Whether the burst MAY have landed: a dial made whose answer was lost
-    /// (`Timeout`/`Io`/`Truncated`), or a `poisoned` answer, whose frames the
-    /// board's journal keeps for its restart; `false` where no dial reached
-    /// the board.
+    /// Whether the burst may have landed: a dial made whose answer was lost
+    /// (`Timeout`/`Io`/`Truncated`, or the board's `500 internal_panic`), or
+    /// a `poisoned` answer, whose frames the board's journal keeps for its
+    /// restart; `false` where no dial reached the board.
     pub sent: bool,
 }
 

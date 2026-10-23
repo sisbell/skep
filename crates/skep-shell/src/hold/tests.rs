@@ -1,21 +1,21 @@
 //! THE HOLD's FENCE: the classification table (T6) — every `DialError`, every
-//! disposition, `poisoned`, `write_busy` once/twice, `durability`
-//! once/twice/three times, and an ack, each to exactly its row, the table the
-//! one owner of every reissue's bound; the five kinds are bursts and the
-//! eleven other `WRITE_KINDS` are not; the five held states are the declared
-//! ones, and the two acts of `resolve` the declared words and no other
-//! spelling. And the ground its two children stand on: a fake board (`Fake`) —
-//! its `H.1`, its `/changes` rows, a draft's text, the frames POSTed to `/op`
-//! recorded and a refusal or the death signal armed for a send — the holds
-//! over it with a session opened as the shell opens one and every line the
-//! hold says on TALK recorded (`Ground`), and each `held` event, `held` row
-//! and `held` answer held to its declaration. The ground's session is a
-//! writer's — signed, under a key its store generates, since a bare session
-//! reads alone and no probe resends under it — save where a cell asks for a
-//! bare one (`bare_ground`) or for a key no store holds (`keyed_facts`).
-//! `write` holds the one path of a session's `op` — a burst's door and its
-//! hold, and a write the hold never holds; `resend` the probe and the resend
-//! walk.
+//! disposition, `poisoned`, `internal_panic`, `write_busy` once/twice,
+//! `durability` once/twice/three times, and an ack, each to exactly its row,
+//! the table the one owner of every reissue's bound; the five kinds are
+//! bursts and the eleven other `WRITE_KINDS` are not; the five held states
+//! are the declared ones, and the two acts of `resolve` the declared words
+//! and no other spelling. And the ground its two children stand on: a fake
+//! board (`Fake`) — its `H.1`, its `/changes` rows, a draft's text, the
+//! frames POSTed to `/op` recorded and a refusal or the death signal armed
+//! for a send — the holds over it with a session opened as the shell opens
+//! one and every line the hold says on TALK recorded (`Ground`), and each
+//! `held` event, `held` row and `held` answer held to its declaration. The
+//! ground's session is a writer's — signed, under a key its store generates,
+//! since a bare session reads alone and no probe resends under it — save
+//! where a cell asks for a bare one (`bare_ground`) or for a key no store
+//! holds (`keyed_facts`). `write` holds the one path of a session's `op` — a
+//! burst's door and its hold, and a write the hold never holds; `resend` the
+//! probe and the resend walk.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -90,6 +90,10 @@ fn every_outcome_classifies_to_exactly_its_row() {
     // The codes. `poisoned` MAY have landed (§3c.2): the frames reached the
     // journal and a restart replays them, so its line says `sent: true`.
     assert_eq!(rej("poisoned", "halt"), Decision::Hold { cause: "poisoned", sent: true });
+    // The board's `500 internal_panic` may have landed too: its write may
+    // have committed before the handler panicked, its body riding no
+    // disposition — held as a lost answer is, `sent: true`.
+    assert_eq!(rej("internal_panic", ""), Decision::Hold { cause: "unreachable", sent: true });
     // `write_busy` once → reissue, after the short wait; the reissue's own →
     // the next refusal, faced.
     let busy = DialOutcome::Rejected { code: "write_busy", disposition: "retry" };

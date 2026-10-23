@@ -6,26 +6,27 @@
 //! the state of the line that stands first after it; a held line under the
 //! board's own directory; a refusal the table holds nowhere faced at the
 //! first dial, a `write_busy` and a first and second `durability` reissued
-//! within the first dial's call and a third holding the burst; a write the
-//! hold never holds taking the same path, faced where a burst is held and
-//! its ack noted for the base; the death signal at a write's dial holding
-//! nothing; `resolve(send)` answering once the lines are handed back,
-//! before any dial; a board the holds were not opened over stopped as the
-//! caller's bug; the stored frame without its attest; P38's halted file
-//! refusing every act at the principal's door, `resolve` among them, a copy
-//! the store cannot make, and a queue kept in memory for want of its file
-//! taking the file once it empties and never before; no `held` event when a
-//! session's open reads its file, and a misplaced file set aside and said
-//! on TALK alone. THE BURST's DOOR: a burst the board takes at no send
-//! refused at the act and held never — past the frame cap as sent, or as a
-//! signed resend would send it, a page-supplied attest counted out of every
-//! resend, naming no document, an insert a signed session cannot attest —
-//! the read of the board's `H.1` an attest signs over halting as the
-//! composer's own refusal, and its answer lost holding the burst unsent;
-//! one the queue has no room for, by its frames' bytes or by its lines,
-//! refused `held_full`; and each board's hold its own, a burst at one board
-//! answered while another board's hold is held, dialed and kept at the
-//! board its session stands at.
+//! within the first dial's call and a third holding the burst; a burst
+//! answered `500 internal_panic` held `sent: true` and read before it is
+//! sent again; a write the hold never holds taking the same path, faced
+//! where a burst is held and its ack noted for the base; the death signal at
+//! a write's dial holding nothing; `resolve(send)` answering once the lines
+//! are handed back, before any dial; a board the holds were not opened over
+//! stopped as the caller's bug; the stored frame without its attest; P38's
+//! halted file refusing every act at the principal's door, `resolve` among
+//! them, a copy the store cannot make, and a queue kept in memory for want
+//! of its file taking the file once it empties and never before; no `held`
+//! event when a session's open reads its file, and a misplaced file set
+//! aside and said on TALK alone. THE BURST's DOOR: a burst the board takes
+//! at no send refused at the act and held never — past the frame cap as
+//! sent, or as a signed resend would send it, a page-supplied attest counted
+//! out of every resend, naming no document, an insert a signed session
+//! cannot attest — the read of the board's `H.1` an attest signs over
+//! halting as the composer's own refusal, and its answer lost holding the
+//! burst unsent; one the queue has no room for, by its frames' bytes or by
+//! its lines, refused `held_full`; and each board's hold its own, a burst at
+//! one board answered while another board's hold is held, dialed and kept at
+//! the board its session stands at.
 
 use super::*;
 
@@ -286,14 +287,42 @@ fn a_first_and_second_durability_are_reissued_at_the_first_dial_and_a_third_hold
     assert_eq!(g.lines()[0]["sent"], false);
 }
 
+/// A BURST ANSWERED `500 internal_panic` is held as a lost answer is
+/// (§3c.2, §3c.4): its write may have committed before the board's handler
+/// panicked, so the burst is answered `held`, cause `unreachable`, its line
+/// `sent: true`; and the resend reads before it sends — a row whose testimony
+/// the board lost, the burst's values standing at its site, keeps the line
+/// with nothing sent again, and no row sends it once more (the mutant that
+/// faces the 500 hands the page a refusal for text that may be on the board,
+/// a retry of which lands it twice).
+#[test]
+fn a_burst_answered_internal_panic_is_held_sent_and_read_before_it_is_sent_again() {
+    for committed in [true, false] {
+        let g = ground();
+        g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("committed {committed}: held, not faced") };
+        assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "committed {committed}: {held}");
+        assert_eq!((g.lines()[0]["sent"].as_bool(), g.fake.sends()), (Some(true), 1), "committed {committed}: the burst may have landed");
+        if committed {
+            *g.fake.rows.lock().unwrap() = vec![lost_row()];
+            *g.fake.text.lock().unwrap() = "hello".into();
+        }
+        g.holds.probe("b-1");
+        let states = g.states();
+        assert_eq!(g.fake.sends(), if committed { 1 } else { 2 }, "committed {committed}: sent again only where nothing landed");
+        assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "committed {committed}: {states:?}");
+    }
+}
+
 /// A WRITE THE HOLD NEVER HOLDS takes the one path a burst takes
 /// (`Holds::send`; §3c.4: "a non-burst write that fails … is faced at its
-/// act"): a `permanent` refusal and a third `durability` — each of which
-/// holds a burst — are faced, the first after one send and the second after
-/// its two reissues, and nothing is held; and its ack is noted for the base,
-/// so a burst held on the document it names reads from that ack's `at` (the
-/// mutants that hold a non-burst's hold-class answer, and that leave its ack
-/// unnoted).
+/// act"): a `permanent` refusal, a third `durability` and a
+/// `500 internal_panic` — each of which holds a burst — are faced, the first
+/// and the third after one send each, the second after its two reissues, the
+/// third the board's verdict verbatim, and nothing is held; and its ack is
+/// noted for the base, so a burst held on the document it names reads from
+/// that ack's `at` (the mutants that hold a non-burst's hold-class answer, and
+/// that leave its ack unnoted).
 #[test]
 fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     let g = ground();
@@ -304,8 +333,11 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     g.fake.op_rejected.every(retry("durability"));
     let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, link.clone()) else { panic!("faced at the third") };
     assert_eq!((refused.name(), g.fake.sends()), ("durability", 4), "{refused}");
-    assert!(g.lines().is_empty() && g.states().is_empty(), "a write the hold never holds is held never");
     g.fake.op_rejected.clear();
+    g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
+    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, link.clone()) else { panic!("faced, its answer lost") };
+    assert_eq!((refused.name(), refused.to_value()["status"].as_u64(), g.fake.sends()), ("internal_panic", Some(500), 5), "{refused}");
+    assert!(g.lines().is_empty() && g.states().is_empty(), "a write the hold never holds is held never");
     let OpAnswer::Answered(Ok(ack)) = g.holds.send(&g.session, link) else { panic!("acked") };
     let held = g.hold(&insert(OTHER, json!(["a"])), "unreachable", false);
     let line = g.lines().into_iter().find(|l| l["held"] == held["held"]).expect("the burst is held");

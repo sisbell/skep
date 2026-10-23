@@ -127,9 +127,10 @@ enum DialOutcome<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Decision {
     /// HOLD the write with this cause — a burst's line; a write the hold
-    /// never holds faces it — `sent` whether the write MAY have landed
-    /// (§3c.2): a dial made whose answer was lost, or a `poisoned` answer,
-    /// whose frames the board's journal keeps for its restart.
+    /// never holds faces it — `sent` whether the write may have landed
+    /// (§3c.2): a dial made whose answer was lost, the board's
+    /// `500 internal_panic` among them, or a `poisoned` answer, whose frames
+    /// the board's journal keeps for its restart.
     Hold { cause: &'static str, sent: bool },
     /// A REFUSED run — a `permanent` or `reorder` refusal, held with the
     /// board's token for its cause and its verdict beside it where the write
@@ -212,6 +213,16 @@ fn classify(outcome: DialOutcome<'_>, given: Reissues) -> Decision {
             // sends, as after a lost answer. A `halted` hold (the feed's
             // `writes.halted` read, before any dial) stays `sent: false`.
             "poisoned" => Decision::Hold { cause: cause::POISONED, sent: true },
+            // `internal_panic` may have landed too (§3c.2): the board's catch
+            // answers it for a write whose handler panicked — past its
+            // commit, the position on the feed as a bare entry
+            // (`operations.md` §4 row 34); in the kernel's commit region, the
+            // write paths halted and the frames left for the restart; or
+            // before any commit. The `500` is no verdict on the write, only
+            // its lost answer, so a burst is held as a dial's lost answer is,
+            // and the resend reads before it sends. The body rides no
+            // `disposition`, so the code alone names the row.
+            "internal_panic" => Decision::Hold { cause: cause::UNREACHABLE, sent: true },
             // "A silent reissue after a short wait" (§3c.4), once: the
             // reissue's own `write_busy` is the next refusal, faced.
             "write_busy" => {

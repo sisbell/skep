@@ -47,9 +47,12 @@ serde_json.workspace = true
 # board; the hold, the feed, the composer and the session table are driven
 # over fakes in their own suites.
 skepd = { path = "../skepd", features = ["test-hooks"] }
-# The `Step` enum the daemon's `fail_the_next_checkpoint_step` hook takes, so
-# the shell's suite can poison the kernel (`JournalBarrier` + `JournalRepair`)
-# and watch a burst held `poisoned`, resent after a restart (§3c.4).
+# The `Step` enum the daemon's `fail_the_next_checkpoint_step` and
+# `panic_at_the_next_kernel_step` hooks take, so the shell's suite can poison
+# the kernel (`JournalBarrier` + `JournalRepair`) and watch a burst held
+# `poisoned`, resent after a restart, and panic the inline checkpoint
+# (`CheckpointCreate`) past a burst's commit and watch it held, read and kept
+# (§3c.4).
 skep-kernel = { path = "../skep-kernel" }
 # The two store budgets the attest's composer keeps as the store keeps them —
 # M7's `MAX_SLOT_SPANS` and M5's `MAX_REINSERTED_VALUES` — pinned equal by the

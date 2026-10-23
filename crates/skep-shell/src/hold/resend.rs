@@ -197,8 +197,9 @@ impl Holds {
     /// landed without its ack (§7b's single writer): a `sent` head's one row
     /// is its landing where it is of the session's own hand ([`own_row`]),
     /// its `op` the head's and its site not contradicting it, or where the
-    /// board LOST its testimony ([`testimony_lost`], the `poisoned` burst a
-    /// restart replays) and the site confirms it; any other row is (iii).
+    /// board lost its testimony ([`testimony_lost`]: the `poisoned` burst a
+    /// restart replays, a burst whose write panicked past its commit) and
+    /// the site confirms it; any other row is (iii).
     fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: Some(2) };
         let page = match session.board.changes(Some(&session.token), &query) {
@@ -224,14 +225,16 @@ impl Holds {
                 Site::Unread => ReadOutcome::Unread,
             };
         }
-        // A row whose TESTIMONY THE BOARD LOST — `docs`, `key` and `op` the
-        // reserved null (wire.md §`/changes`): a commit the daemon never
-        // recorded, re-derived from the journal at its open — which is what
-        // a `poisoned` burst's landing at the restart is (§3c.2): the write
-        // path records acks alone. The feed cannot say whose it is, so THE
-        // ARRANGEMENT ALONE decides, as on `history_reclaimed` (§3c.5), and
-        // decisively: an `insert` whose values read back equal is (ii); a
-        // kind the site read cannot confirm faces the person (iii).
+        // A row whose testimony the board lost — `docs`, `key` and `op` the
+        // reserved null (wire.md §`/changes`): a commit whose recorded row
+        // the write path never wrote — re-derived from the journal at the
+        // board's open, as a `poisoned` burst's landing at the restart is
+        // (§3c.2), or written bare by the write path's catch of a panic past
+        // the commit, as a burst answered `internal_panic` may be
+        // (`operations.md` §4 row 34). The feed cannot say whose it is, so
+        // the arrangement alone decides, as on `history_reclaimed` (§3c.5),
+        // and decisively: an `insert` whose values read back equal is (ii);
+        // a kind the site read cannot confirm faces the person (iii).
         if testimony_lost(row) {
             return match self.site(session, doc, head) {
                 Site::Equal => landed,
@@ -409,12 +412,15 @@ fn own_row(session: &SessionEntry, row: &Value) -> bool {
     row["key"].as_str() == Some(fingerprint.to_hex().as_str()) || (row.get("key").is_none() && row.get("attest").is_some())
 }
 
-/// Whether a `/changes` row's testimony is LOST — `docs`, `key` and `op` the
-/// reserved null (wire.md §`/changes`: "`null` ONLY for lost metadata"): a
-/// commit the daemon never recorded, re-derived from the journal at its open
-/// and classified to its documents, whose hand and kind the feed cannot name.
-/// A signed row has no `key` but names its `op`; a bare session's row says
-/// `bare`; neither is this.
+/// Whether a `/changes` row's testimony is lost.
+///
+/// Its `docs`, `key` and `op` are the reserved null (wire.md §`/changes`:
+/// "`null` ONLY for lost metadata"): a commit whose testimony the write path
+/// never recorded — re-derived from the journal at the board's open, or
+/// written bare by the write path's catch of a panic past the commit
+/// (`operations.md` §4 row 34) — classified to its documents, its hand and
+/// kind the feed cannot name. A signed row has no `key` but names its `op`;
+/// a bare session's row says `bare`; neither is this.
 fn testimony_lost(row: &Value) -> bool {
     row["docs"].is_null() && row["key"].is_null() && row["op"].is_null()
 }

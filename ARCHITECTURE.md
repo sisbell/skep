@@ -57,8 +57,9 @@ above it.
   caller's `.compact` twin, the bytes a cut drops kept beside the file
   first, the removal that answers what it did, and the sweep of the temps
   a dead run left — which the client's key store, bindings file and anchor
-  export, the shell's held-writes file, the dev board's manifest and the
-  blob store's two logs take. It depends on no other skep crate and on
+  export, the shell's held-writes file, the dev board's manifest, the
+  blob store's two logs and the daemon's commit log and five feed files
+  take. It depends on no other skep crate and on
   `serde_json` alone, so it may stand anywhere in the foundation; it
   stands here, above the blob store, because the blob store's two logs
   take its `file` module and a crate takes only what is listed before it —
@@ -700,8 +701,8 @@ beside their code: `store.rs`'s, `uploads.rs`'s, `lease/map.rs`'s,
 take and none owns — the daemon, the media crate, the blob store, the
 client library and the shell's core stand above it — so the media crate's
 move out of the daemon copies no helper, the daemon's five pools keep one
-permit type, and the client's, the shell's and the blob store's files
-keep one tail rule. Its modules
+permit type, and the client's, the shell's, the blob store's and the
+daemon's core's files keep one tail rule. Its modules
 are declared in `src/lib.rs`, each with a line saying what it holds, and
 the crate doc there states the rule of membership and the program-name
 decision. `permits` — the counting permit pool (`Permits`, `Permit`): a
@@ -747,21 +748,27 @@ refused write, under the one rule the daemon's logs keep: a crash's tail
 to no one — is cut off or closed at the next write and answered for the
 caller to say once, and what is not a crash's is answered as a fact and
 never destroyed unsaid. `read_lines` and the streaming `LineReader` hand
-back a file's lines as bytes and classify its tail (`Tail`); `Appender`
+back a file's lines as bytes and classify its tail (`Tail`), the reader
+lending the torn line's bytes once it has ended at one (`tail_bytes`, the
+position a torn feed line names); `Appender`
 writes a line and its newline in one write where the last whole line
 ends — found by a scan, or trusted from the caller's own read — a torn
 tail first cut off (`OnTail::Cut`, the held-writes file's way and the dev
 board's manifest's) or closed by a mark in the same write
 (`OnTail::Close`, the bindings file's, whose last line may be a person's
 own record) — or cut at the open where the caller asks it there
-(`Appender::cut`, the blob store's two logs' way, after their keep) — and
-cuts a failed write back to the whole lines, the cut's own failure named
-beside the write's, folded into one error or kept apart for a caller that
-stops on it (`AppendFailed`); `write_once` makes a new file at its name,
+(`Appender::cut`, the blob store's two logs' way and the daemon's commit
+log's and feed files', after their keep) — cuts a failed write back to
+the whole lines, the cut's own failure named beside the write's, folded
+into one error or kept apart for a caller that stops on it
+(`AppendFailed`), and hands out a second handle on the file for a sync
+the caller makes off its own lock (`sync_handle`, the attest store's);
+`write_once` makes a new file at its name,
 synced, a failed write removed; `publish` puts a file at its name whole
 or not at all — a temp beside the name held by an advisory lock for the
 write's life, synced, renamed, the directory synced — and `publish_by`
-the same through a temp the caller names (the logs' `.compact` twin) and
+the same through a temp the caller names (the logs' and the feed files'
+`.compact` twin, removed where the write fails before the rename) and
 a write it streams, each failure named by its step and the file left
 standing past the rename; `keep_beside` keeps the bytes a cut drops at
 the first free `.cut-<byte>` name beside the file, durably, a half-kept
@@ -3037,8 +3044,12 @@ it:
      share — so a page's bytes never depend on which side of the window its
      positions lie, and `410 history_reclaimed` on `/changes` names a hole
      the files opened with and never the journal's floor; beneath it,
-     `commits/feed/derived.rs` keeps the feed's derived index files — a
-     torn tail is cut at open and said with the last trusted position, the
+     `commits/feed/derived.rs` keeps the feed's derived index files — read
+     within a bound, cut at the open after their keep, appended where the
+     whole lines end and rewritten through the `.compact` twin, each
+     through `skep-util`'s `file` module (§The support crate), the one
+     tail rule the blob store's logs and the client's files keep; a torn
+     tail is cut at open and said with the last trusted position, the
      bytes and that the cut part is re-derived: a recorded position's
      entry from its own record at the open, a bare position's — one the
      index lost, a world reconstruction each — by the walk BEHIND THE
@@ -3049,14 +3060,20 @@ it:
      the region by ONE rewrite, the set a position at a time as each is
      sorted, so a kill keeps the progress; malformed names and unreadable
      slots are said once per open with a count and the first position; a
-     rewrite that fails past its rename stops its file for the uptime,
-     said once per uptime — and
-     `commits/feed/attest.rs` the attest store, the marker slot mirrored
-     per attested commit, never compacted, its missing tail rebuilt at open
-     in one scan of the kernel's markers above the store's fence;
+     rewrite that fails past its rename — its reopen, or the directory's
+     sync after it — stops its file for the uptime, said once per uptime —
+     and `commits/feed/attest.rs` the attest store, the marker slot
+     mirrored per attested commit, never compacted, its missing tail
+     rebuilt at open in one scan of the kernel's markers above the store's
+     fence, each line synced off the feed's lock through the file's second
+     handle;
    - `commits/sidecar.rs` — `commits.log`, the daemon's record of what it
      committed, for whom, and whether the entry was signed — and, on a
-     bare line, the journal's answer for the row's op and terms;
+     bare line, the journal's answer for the row's op and terms; its scan,
+     its cut at the open after its keep of a damaged cut's lines at the
+     first free `.cut-<byte>` name, its appends and its two rewrites are
+     the same module's, the bound every feed file is read under its own
+     (`MAX_LINE_BYTES`);
    - `commits/classify.rs` — which documents a commit touched, and which
      of its op's terms the journal can name for a bare position — the one
      place the feed asks the world anything.

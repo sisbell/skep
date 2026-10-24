@@ -572,7 +572,7 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     );
 
     // The condition clears: the very next append COULD succeed.
-    log.file = OpenOptions::new().append(true).open(&path).expect("a writable handle");
+    log.fail_appends = false;
 
     // The position after the gap — the one whose line would raise the
     // walk's floor over it. Accepted as an outcome, written nowhere.
@@ -1158,8 +1158,8 @@ fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
     let file: Vec<u8> = entries.iter().flat_map(|(at, meta)| entry_line(*at, meta)).collect();
     std::fs::write(dir.path().join(SIDECAR_FILE), &file).expect("the file");
     let said_by_scan = {
-        let mut f = File::open(dir.path().join(SIDECAR_FILE)).expect("open");
-        let scanned = scan(&mut f, 40, 40).expect("the scan");
+        let scanned =
+            scan(&dir.path().join(SIDECAR_FILE), 40, 40).expect("the scan").expect("the file stands");
         assert_eq!(scanned.malformed, Some((3, 24)), "three demoted, the first at 24");
         assert_eq!((scanned.count, scanned.bare), (5, 4), "every line counted, the demoted bare");
         scanned
@@ -1242,4 +1242,234 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
     // lock again for its message would deadlock instead of failing.
     let said = log.lines.said().lock().clone();
     assert_eq!(said.len(), 1, "FINDING (row 29): a second line for one stop:\n{}", said.join("\n"));
+}
+
+/// An in-memory engine whose journal holds `commits` committed positions.
+fn engine_at(commits: u64) -> Engine {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    while engine.kernel().current_seq().0 < commits {
+        engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("the mint commits");
+    }
+    engine
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("set the mode");
+}
+
+/// Whether this process opens a directory it may write and search but not
+/// read — a privileged user's, for whom the mode refuses nothing and the
+/// cases below can inject nothing.
+#[cfg(unix)]
+fn reads_any_directory(dir: &Path) -> bool {
+    set_mode(dir, 0o300);
+    let readable = File::open(dir).is_ok();
+    set_mode(dir, 0o700);
+    readable
+}
+
+/// THE KEEP THAT FAILS PAST ITS MAKING fails the open naming the step, the
+/// kept file standing: a damaged `commits.log` in a directory whose own open
+/// for its sync is refused by its mode — written and searched, not read —
+/// has its dropped lines kept whole at `commits.log.cut-{byte}`, the
+/// directory's sync refused after, and the open fails
+/// `commits.log: {kept}: fsync the directory of: {cause}`, the kind kept;
+/// the file stands as found, uncut, and no cut is said — no drop runs over a
+/// keep that did not (the module's keep tolerates no directory's answer, as
+/// the daemon's installs do).
+#[cfg(unix)]
+#[test]
+fn a_keep_the_directory_refuses_fails_the_open_naming_the_step_and_the_kept_file_stands() {
+    let engine = engine_at(6);
+    let dir = tempfile::tempdir().expect("tempdir");
+    if reads_any_directory(dir.path()) {
+        return;
+    }
+    let line = |at| entry_line(at, &recorded("insert", &["1.0.1.0.1"], 1, Some("bare")));
+    let trusted = [line(1), line(2)].concat();
+    let dropped = [b"{\"at\":3,\"docs\":[\n".to_vec(), line(4)].concat();
+    let path = dir.path().join(SIDECAR_FILE);
+    std::fs::write(&path, [trusted.clone(), dropped.clone()].concat()).expect("the file");
+    set_mode(dir.path(), 0o300);
+    let lines = Lines::new();
+    let refused = CommitsLog::open(dir.path(), &engine, &lines).err();
+    set_mode(dir.path(), 0o700);
+    let refused = refused.expect("the open refuses");
+    let kept = format!("commits.log.cut-{}", trusted.len());
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    assert_eq!(
+        refused.to_string(),
+        format!("commits.log: {kept}: fsync the directory of: Permission denied (os error 13)"),
+        "the file, the kept file and the step"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join(&kept)).expect("the kept file stands"),
+        dropped,
+        "kept whole, the directory's sync refused after"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("read"),
+        [trusted, dropped].concat(),
+        "no cut runs over a keep that did not: the file stands as found"
+    );
+    let said = lines.said().lock().clone();
+    assert!(said.iter().all(|l| !l.contains("trust ends at")), "no cut said:\n{}", said.join("\n"));
+}
+
+/// A REWRITE FAILED BEFORE ITS RENAME REMOVES ITS TWIN: with the file removed
+/// from under the landing's rewrite, the raw copy's read is refused and the
+/// rewrite fails before its rename — the twin it made, over a kill's twin
+/// that stood at the name, is removed, nothing stands at the name, and the
+/// log is not stopped by the rewrite itself (the mutant that leaves the twin
+/// keeps a `.compact` the next open says and the volume pays for).
+#[test]
+fn a_rewrite_failed_before_its_rename_removes_its_twin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(SIDECAR_FILE);
+    let twin = dir.path().join("commits.log.compact");
+    std::fs::write(&path, entry_line(20, &CommitMeta::bare())).expect("the file");
+    let entries = [(20, CommitMeta::bare()), (21, CommitMeta::bare())].into_iter().collect();
+    let mut log = CommitsLog::pending_over(dir.path(), entries, 20, 21);
+    std::fs::write(&twin, b"{\"half\":\"writ").expect("a kill's twin");
+    std::fs::remove_file(&path).expect("the file removed from under the rewrite");
+    let refused = log.rewrite_whole(21).expect_err("the copy's read is refused");
+    assert!(
+        matches!(&refused, RewriteFail::BeforeRename(e) if e.kind() == io::ErrorKind::NotFound),
+        "{refused:?}"
+    );
+    assert!(!twin.exists(), "the twin is removed, the kill's twin replaced with it");
+    assert!(!path.exists(), "nothing stands at the name");
+    assert_eq!(log.stopped_since(), None, "a rewrite failed before its rename stops nothing itself");
+    assert!(log.lines.said().lock().is_empty(), "and says nothing: the landing's caller says it");
+}
+
+/// A REWRITE WHOSE DIRECTORY SYNC IS REFUSED stands at its name and stops the
+/// log: with the directory's own open for its sync refused by its mode after
+/// the rename, the rewrite fails past its rename — the rewritten file whole at
+/// its name, the twin gone — and the log stops at the rewritten file's last
+/// entry, said once in the past-rename words with the sync's cause; a write
+/// after it is recorded in memory and reaches the file nowhere, in silence;
+/// and the next open reads the rewritten file and re-derives above the stop's
+/// position (the mutant that swallows the sync's failure keeps appending
+/// through a handle on the file the rename replaced, which no open reads).
+#[cfg(unix)]
+#[test]
+fn a_rewrite_whose_directory_sync_is_refused_stands_at_its_name_and_stops_the_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    if reads_any_directory(dir.path()) {
+        return;
+    }
+    let path = dir.path().join(SIDECAR_FILE);
+    let mut log = CommitsLog::over_unwritable(dir.path(), 9);
+    log.fail_appends = false;
+    for at in 1..=4 {
+        log.entries.insert(at, CommitMeta::bare());
+    }
+    set_mode(dir.path(), 0o300);
+    let refused = log.rewrite_whole(1);
+    set_mode(dir.path(), 0o700);
+    let refused = refused.expect_err("the directory's sync is refused");
+    assert!(
+        matches!(&refused, RewriteFail::PastRename(e) if e.kind() == io::ErrorKind::PermissionDenied),
+        "{refused:?}"
+    );
+    assert_eq!(refused.to_string(), "past its rename: Permission denied (os error 13)");
+    let rewritten = "{\"at\":1}\n{\"at\":2}\n{\"at\":3}\n{\"at\":4}\n";
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), rewritten, "whole at its name");
+    assert!(!dir.path().join("commits.log.compact").exists(), "renamed, not left");
+    assert_eq!(log.stopped_since(), Some(4), "stopped at the rewritten file's last entry");
+    let stop_line = "failure: commits.log rewrite failed past its rename: Permission denied (os \
+                     error 13); this file takes no further line, so the next open re-derives \
+                     above position 4 as bare entries; every write until then is held in memory \
+                     alone, its key and its time lost at that open — restart soon";
+    assert_eq!(log.lines.said().lock().as_slice(), [stop_line], "the stop, said once");
+    let serial = crate::serial::Serial::new();
+    let held = log.record(&serial.lock(), 10, "insert", vec![], "bare".into(), None, None);
+    assert!(matches!(held, Some(Recorded::Appended(_))), "recorded, its line not written");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), rewritten, "a stopped log writes nothing");
+    assert_eq!(log.lines.said().lock().len(), 1, "and says nothing more");
+    drop(log);
+    let lines = Lines::new();
+    let reopened = CommitsLog::open(dir.path(), &engine_at(6), &lines).expect("the next open");
+    assert_eq!(reopened.counts(), (4, 4), "the rewritten file read whole");
+    assert_eq!(reopened.pending_region(), Some((4, 6)), "re-derived above the stop's position");
+}
+
+/// A LINE AT THE BOUND REPLAYS WHOLE AND ONE PAST IT IS DAMAGE: the largest
+/// line this file's writer produces — a recorded entry whose documents run
+/// the line to the bound, the testimony padding it to the byte — is trusted
+/// and held resident, nothing cut; the same line one byte longer ends trust
+/// where it begins, as a whole line that does not parse does: cut, kept whole
+/// with the whole line after it at `commits.log.cut-{byte}`, and said as a
+/// damaged line's cut is, the whole line counted (the mutant that reads with
+/// no bound holds any line whole, however long, and trusts it).
+#[test]
+fn a_line_at_the_bound_replays_whole_and_one_past_it_is_damage() {
+    let docs = vec!["1.0.1.0.1"; (MAX_LINE_BYTES - 256) / 12];
+    let with_key = |key: &str| entry_line(2, &recorded("nullify", &docs, 1, Some(key)));
+    let short = with_key("").len() - 1;
+    let at_bound = with_key(&"k".repeat(MAX_LINE_BYTES - short));
+    assert_eq!(at_bound.len() - 1, MAX_LINE_BYTES, "the line at the bound, its newline aside");
+    let past = with_key(&"k".repeat(MAX_LINE_BYTES - short + 1));
+    assert_eq!(past.len() - 1, MAX_LINE_BYTES + 1);
+    let engine = engine_at(3);
+    let first = entry_line(1, &CommitMeta::bare());
+    let third = entry_line(3, &CommitMeta::bare());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(SIDECAR_FILE);
+    std::fs::write(&path, [first.clone(), at_bound.clone(), third.clone()].concat()).expect("the file");
+    let lines = Lines::new();
+    let log = CommitsLog::open(dir.path(), &engine, &lines).expect("the open");
+    assert!(lines.said().lock().is_empty(), "nothing cut:\n{}", lines.said().lock().join("\n"));
+    assert!(
+        matches!(log.entries().get(&2), Some(CommitMeta::Recorded { docs: d, .. }) if d.len() == docs.len()),
+        "the line at the bound is trusted and held"
+    );
+    assert_eq!((log.counts(), log.pending_region()), ((3, 2), None));
+    assert_eq!(
+        std::fs::metadata(&path).expect("stat").len() as usize,
+        first.len() + at_bound.len() + third.len(),
+        "nothing cut"
+    );
+    drop(log);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(SIDECAR_FILE);
+    std::fs::write(&path, [first.clone(), past.clone(), third.clone()].concat()).expect("the file");
+    let lines = Lines::new();
+    let log = CommitsLog::open(dir.path(), &engine, &lines).expect("the open");
+    assert!(!log.entries().contains_key(&2), "the line past the bound is no entry");
+    assert_eq!((log.counts(), log.pending_region()), ((1, 1), Some((1, 3))), "re-derived above 1");
+    assert_eq!(std::fs::read(&path).expect("read"), first, "cut where the line past the bound begins");
+    let kept = format!("commits.log.cut-{}", first.len());
+    assert_eq!(
+        std::fs::read(dir.path().join(&kept)).expect("the kept file"),
+        [past.clone(), third.clone()].concat(),
+        "the line past the bound and the whole line after it, kept whole"
+    );
+    assert_eq!(
+        lines.said().lock().as_slice(),
+        [format!(
+            "failure: commits.log: trust ends at position 1 (byte {} of {}); the {} bytes after it \
+             are cut, kept in {kept}; the cut part is re-derived as bare entries; the cut took 1 \
+             whole lines with it, positions 3–3: their keys and times are LOST to the feed and \
+             stand in {kept} alone",
+            first.len(),
+            first.len() + past.len() + third.len(),
+            past.len() + third.len()
+        )],
+        "said as a damaged line's cut, the whole line after it counted"
+    );
 }

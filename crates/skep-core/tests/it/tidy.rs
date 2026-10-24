@@ -31,9 +31,14 @@
 //!
 //! Then THE TEST HOOKS, GATED: every item this crate documents as a test
 //! hook or a test seam compiles only under the `test-hooks` feature — the
-//! second test. And THE SURFACE IS THE DAEMON's NEED: every `pub` item is
+//! second test. THE SURFACE IS THE DAEMON's NEED: every `pub` item is
 //! named in the crate's `README.md`, or is such a hook, `#[doc(hidden)]`
-//! under the feature — the third.
+//! under the feature — the third. And A LINE FILE IS READ AND APPENDED
+//! THROUGH THE SUPPORT CRATE's MODULE: `commits.log` and the five feed files
+//! take `skep_util::file` for their read, cut, keep, append and rewrite, so
+//! no code line under `src/` opens a file `append(true)` or
+//! `create_new(true)` outside a test module or the test-hooks gate — the
+//! fourth, with no site allowed.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -257,6 +262,135 @@ fn every_pub_item_is_named_in_the_readme_or_is_a_hidden_hook() {
         "every `pub` item is in the README's surface or a hidden hook; these are neither:\n{}",
         faults.join("\n")
     );
+}
+
+/// A LINE FILE IS READ AND APPENDED THROUGH THE SUPPORT CRATE's MODULE
+/// (`skep_util::file`; ARCHITECTURE.md §The daemon's core): `commits.log`
+/// and the five feed files read, cut, keep, append and rewrite through the
+/// module — the one tail rule the blob store's logs and the client's files
+/// keep — so no code line under `src/` opens a file `append(true)` or
+/// `create_new(true)`, a raw append or an exclusive create no tail rule
+/// governs. Not code here: a `tests.rs` file whole, an inline `mod tests {`
+/// from its line on, a comment line, and a line inside an item under the
+/// test-hooks gate — a gated `impl` block's, a gated item's or a gated
+/// method's, read as the hook check reads them — which the unit suites'
+/// own constructors may use. No site is allowed: the allow list is empty,
+/// the two copies that stood (`sidecar.rs`'s open and keep, `derived.rs`'s
+/// open) being the reason the check exists, and a hit is a fault. The
+/// controls: the scan read the two files that write the six,
+/// `src/commits/sidecar.rs` and `src/commits/feed/derived.rs`, and each
+/// names the module in code; and the gate's reading is held to a line of
+/// each kind — a line in the log's append helper, ungated; a line in the
+/// log's `#[cfg(test)]` constructor block, gated; a line in a gated method
+/// of an ungated `impl`, the derived file's seam, gated — so an exemption
+/// widened to the whole crate fails here.
+#[test]
+fn a_line_file_is_read_and_appended_through_the_support_crates_module() {
+    const HOMES: [&str; 2] = ["src/commits/sidecar.rs", "src/commits/feed/derived.rs"];
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut homes_naming_the_module: HashSet<&str> = HashSet::new();
+    let mut strays = Vec::new();
+    for file in &files {
+        if file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let relative = file.strip_prefix(manifest).unwrap().display().to_string();
+        let home = HOMES.iter().copied().find(|home| *home == relative);
+        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+        for (i, line) in lines[..end].iter().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if let (Some(home), true) = (home, line.contains("skep_util::file")) {
+                homes_naming_the_module.insert(home);
+            }
+            if !(line.contains(".append(true)") || line.contains(".create_new(true)")) {
+                continue;
+            }
+            if enclosing_item_is_gated(&lines, i) {
+                continue;
+            }
+            strays.push(format!("{relative}:{}: `{}`", i + 1, line.trim()));
+        }
+        if relative == HOMES[0] {
+            let line_of = |needle: &str| {
+                lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| {
+                    panic!("{relative} holds no line `{needle}`: the gate's control has moved")
+                })
+            };
+            assert!(
+                !enclosing_item_is_gated(&lines, line_of("fn append_line(")),
+                "{relative}: the log's append helper is read as gated — the exemption is wider \
+                 than the gate"
+            );
+            assert!(
+                enclosing_item_is_gated(&lines, line_of("fail_appends: true,")),
+                "{relative}: a line of the `#[cfg(test)]` constructor block is read as ungated"
+            );
+        }
+        if relative == HOMES[1] {
+            let seam = lines
+                .iter()
+                .position(|l| l.contains("self.unwritable = true;"))
+                .expect("derived.rs holds the seam's line: the gate's control has moved");
+            assert!(
+                enclosing_item_is_gated(&lines, seam),
+                "{relative}: a line of a gated method in an ungated `impl` is read as ungated"
+            );
+        }
+    }
+    for home in HOMES {
+        assert!(
+            homes_naming_the_module.contains(home),
+            "{home} was not read naming `skep_util::file` in code: the file's read and append \
+             have left the module, or the file has moved"
+        );
+    }
+    assert!(
+        strays.is_empty(),
+        "a line file is read and appended through `skep_util::file`, the one tail rule the blob \
+         store's logs and the client's files keep — never by an `append(true)` or a \
+         `create_new(true)` of its own, which cuts no torn last line; these are not:\n{}",
+        strays.join("\n")
+    );
+}
+
+/// Whether `lines[at]` lies inside an item under the gate: the enclosing
+/// column-0 item's attributes carry it (a gated free item, or a gated `impl`
+/// block — [`enclosing_impl_is_gated`]'s reading), or, inside an ungated
+/// `impl`, the method that holds the line does — the nearest line above at
+/// the block's own indentation that opens a `fn`, its attributes read as
+/// [`attributes_above`] reads them.
+fn enclosing_item_is_gated(lines: &[&str], at: usize) -> bool {
+    if enclosing_impl_is_gated(lines, at) {
+        return true;
+    }
+    let Some(head) =
+        (0..=at).rev().find(|&k| !lines[k].is_empty() && !lines[k].starts_with(char::is_whitespace))
+    else {
+        return false;
+    };
+    if attributes_above(lines, head).iter().any(|a| is_gate(a)) {
+        return true;
+    }
+    if !lines[head].starts_with("impl") {
+        return false;
+    }
+    let opens_a_method = |line: &str| {
+        line.starts_with("    ")
+            && !line.starts_with("     ")
+            && line.split_whitespace().take(3).any(|word| word == "fn")
+    };
+    (head + 1..=at)
+        .rev()
+        .find(|&k| opens_a_method(lines[k]))
+        .is_some_and(|k| attributes_above(lines, k).iter().any(|a| is_gate(a)))
 }
 
 /// What one path names.

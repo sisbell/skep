@@ -400,16 +400,11 @@ impl AttestStore {
 
     /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`.
     ///
-    /// The file's next write fails at the OS ([`LineFile::make_unwritable`]).
-    /// Not a stable API.
-    ///
-    /// # Panics
-    ///
-    /// A seam whose act failed panics here: the read-only handle on the file
-    /// could not be opened.
+    /// The file's next write is refused ([`LineFile::make_unwritable`]). Not a
+    /// stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn fail_next_write(&mut self) {
-        self.file.make_unwritable().expect("the test seam's read-only handle");
+        self.file.make_unwritable();
     }
 
     /// Returns the slot the store holds for a served position.

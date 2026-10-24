@@ -396,7 +396,7 @@ fn a_failed_append_is_said_once_through_the_door_and_the_stop_is_silent_after() 
     let (mut f, _, _) =
         LineFile::open(dir.path(), MASKED_FILE, 20, |_| true, &lines).expect("open");
     f.append(3, vec![]).expect("a writable file takes a line");
-    f.make_unwritable().expect("the read-only handle");
+    f.make_unwritable();
     f.append_or_report(7, vec![]);
     assert_eq!((f.is_stopped(), f.stopped_since()), (true, Some(7)), "stopped at the failure");
     let said = lines.said().lock().clone();
@@ -502,4 +502,185 @@ fn a_file_out_of_order_is_seen_and_rewritten_sorted_keeping_every_record() {
     let (_, entries, replayed) = open(dir.path(), STREAMS_FILE, 20, |_| true).expect("reopen");
     assert!(!replayed.disordered, "in order now");
     assert_eq!(ats(&entries), vec![3, 9, 12]);
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("set the mode");
+}
+
+/// Whether this process opens a directory it may write and search but not
+/// read — a privileged user's, for whom the mode refuses nothing and the
+/// cases below can inject nothing.
+#[cfg(unix)]
+fn reads_any_directory(dir: &Path) -> bool {
+    set_mode(dir, 0o300);
+    let readable = File::open(dir).is_ok();
+    set_mode(dir, 0o700);
+    readable
+}
+
+/// THE KEEP THAT FAILS PAST ITS MAKING fails the open naming the step, the
+/// kept file standing: a damaged file in a directory whose own open for its
+/// sync is refused by its mode — written and searched, not read — has its
+/// dropped lines kept whole at `{file}.cut-{byte}`, the directory's sync
+/// refused after, and the open fails `{file}: {kept}: fsync the directory
+/// of: {cause}`, the kind kept; the file stands as found, uncut — no drop
+/// runs over a keep that did not.
+#[cfg(unix)]
+#[test]
+fn a_keep_the_directory_refuses_fails_the_open_naming_the_step_and_the_kept_file_stands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    if reads_any_directory(dir.path()) {
+        return;
+    }
+    let path = dir.path().join(MASKED_FILE);
+    let trusted = "{\"at\":3}\n{\"covered\":9}\n";
+    let dropped = "{\"at\":1x}\n{\"at\":13}\n";
+    std::fs::write(&path, format!("{trusted}{dropped}")).expect("the file");
+    set_mode(dir.path(), 0o300);
+    let refused = open(dir.path(), MASKED_FILE, 20, |_| true).err();
+    set_mode(dir.path(), 0o700);
+    let refused = refused.expect("the open refuses");
+    let kept = format!("feed-masked.log.cut-{}", trusted.len());
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    assert_eq!(
+        refused.to_string(),
+        format!("feed-masked.log: {kept}: fsync the directory of: Permission denied (os error 13)"),
+        "the file, the kept file and the step"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(&kept)).expect("the kept file stands"),
+        dropped,
+        "kept whole, the directory's sync refused after"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        format!("{trusted}{dropped}"),
+        "no cut runs over a keep that did not: the file stands as found"
+    );
+}
+
+/// A REWRITE FAILED BEFORE ITS RENAME REMOVES ITS TWIN: with the file removed
+/// from under the landing's rewrite, the copy's read is refused and the
+/// rewrite fails before its rename — the twin it made, over a kill's twin
+/// that stood at the name, is removed, and the file is not stopped by the
+/// rewrite itself, its coverage where it was (the mutant that leaves the
+/// twin keeps a `.compact` the next open says and the volume pays for).
+#[test]
+fn a_rewrite_failed_before_its_rename_removes_its_twin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(MASKED_FILE);
+    let twin = dir.path().join(format!("{MASKED_FILE}.compact"));
+    let (mut f, _, _) = open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+    f.append(3, vec![]).expect("append");
+    std::fs::write(&twin, b"{\"half\":\"writ").expect("a kill's twin");
+    std::fs::remove_file(&path).expect("the file removed from under the rewrite");
+    let refused = f.rewrite_keeping(std::iter::empty(), 9).expect_err("the copy's read is refused");
+    assert!(
+        matches!(&refused, RewriteFail::BeforeRename(e) if e.kind() == io::ErrorKind::NotFound),
+        "{refused:?}"
+    );
+    assert!(!twin.exists(), "the twin is removed, the kill's twin replaced with it");
+    assert!(!f.is_stopped(), "a rewrite failed before its rename stops nothing itself");
+    assert_eq!(f.coverage(), 3, "the coverage stands where it was");
+}
+
+/// A REWRITE WHOSE DIRECTORY SYNC IS REFUSED stands at its name and stops the
+/// file: with the directory's own open for its sync refused by its mode after
+/// the rename, the rewrite fails past its rename — the rewritten file whole at
+/// its name, the twin gone — and the file stops at the fence it carried, said
+/// once in the past-rename words with the sync's cause; the next append and
+/// fence are no-ops in silence; and the next open replays the rewritten file
+/// and re-derives above its fence (the mutant that swallows the sync's
+/// failure keeps appending through a handle on the file the rename replaced,
+/// which no open reads).
+#[cfg(unix)]
+#[test]
+fn a_rewrite_whose_directory_sync_is_refused_stands_at_its_name_and_stops_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    if reads_any_directory(dir.path()) {
+        return;
+    }
+    let path = dir.path().join(MASKED_FILE);
+    let lines = Lines::new();
+    let (mut f, _, _) =
+        LineFile::open(dir.path(), MASKED_FILE, 20, |_| true, &lines).expect("open");
+    f.append(3, vec![]).expect("append");
+    f.append(7, vec![]).expect("append");
+    set_mode(dir.path(), 0o300);
+    let refused = f.rewrite(vec![record_object(7, vec![])], 9);
+    set_mode(dir.path(), 0o700);
+    let refused = refused.expect_err("the directory's sync is refused");
+    assert!(
+        matches!(&refused, RewriteFail::PastRename(e) if e.kind() == io::ErrorKind::PermissionDenied),
+        "{refused:?}"
+    );
+    let rewritten = "{\"at\":7}\n{\"covered\":9}\n";
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), rewritten, "whole at its name");
+    assert!(!dir.path().join(format!("{MASKED_FILE}.compact")).exists(), "renamed, not left");
+    assert_eq!((f.is_stopped(), f.stopped_since(), f.coverage()), (true, Some(9), 9));
+    let stop_line = "failure: feed-masked.log rewrite failed past its rename: Permission denied \
+                     (os error 13); this file takes no further line, so the next open re-derives \
+                     above its fence at position 9";
+    assert_eq!(lines.said().lock().as_slice(), [stop_line], "the stop, said once");
+    f.append(10, vec![]).expect("a stopped file answers Ok and writes nothing");
+    f.fence(20).expect("a fence on a stopped file is a no-op");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), rewritten, "nothing after");
+    assert_eq!(lines.said().lock().len(), 1, "and nothing more said");
+    drop(f);
+    let (reopened, entries, _) =
+        LineFile::open(dir.path(), MASKED_FILE, 20, |_| true, &lines).expect("reopen");
+    assert_eq!(entries.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![7]);
+    assert_eq!(reopened.coverage(), 9, "the next open re-derives from 10");
+    assert!(!reopened.is_stopped());
+}
+
+/// A LINE AT THE BOUND REPLAYS WHOLE AND ONE PAST IT IS DAMAGE: a record
+/// padded to the bound exactly is trusted, nothing cut; the same line one
+/// byte longer ends trust where it begins, as a whole line that does not
+/// parse does — cut, kept whole with the whole line after it at
+/// `{file}.cut-{byte}`, answered as a damaged line's cut with that line
+/// counted — and the attest store's largest line, the marker slot's blob as
+/// hex, lies under the bound with room (the mutant that reads with no bound
+/// holds any line whole, however long, and trusts it).
+#[test]
+fn a_line_at_the_bound_replays_whole_and_one_past_it_is_damage() {
+    let line_of = |pad: usize| format!("{{\"at\":3,\"pad\":\"{}\"}}", "x".repeat(pad));
+    let short = line_of(0).len();
+    let at_bound = line_of(MAX_LINE_BYTES - short);
+    assert_eq!(at_bound.len(), MAX_LINE_BYTES);
+    let past = line_of(MAX_LINE_BYTES - short + 1);
+    let first = "{\"at\":1}\n";
+    let ats = |entries: &Entries| entries.iter().map(|(at, _)| *at).collect::<Vec<_>>();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(MASKED_FILE);
+    std::fs::write(&path, format!("{first}{at_bound}\n{{\"at\":5}}\n")).expect("the file");
+    let (f, entries, replayed) = open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+    assert_eq!(ats(&entries), [1, 3, 5], "the line at the bound is trusted");
+    assert_eq!((f.coverage(), replayed.cut, replayed.kept), (5, None, None), "nothing cut");
+    drop(f);
+    std::fs::write(&path, format!("{first}{past}\n{{\"at\":5}}\n")).expect("the file");
+    let (f, entries, replayed) = open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+    assert_eq!(ats(&entries), [1], "the line past the bound ends trust");
+    let len = (first.len() + past.len() + 1 + 9) as u64;
+    let whole_after = Some(EntryLines { lines: 1, first: 5, last: 5 });
+    assert_eq!(
+        replayed.cut,
+        Some(Cut { valid_end: 9, len, trusted: 1, first: None, whole_after }),
+        "damage: cut where the long line begins, the whole line after it counted"
+    );
+    assert_eq!(replayed.kept, Some(KeptName { byte: 9, k: 0 }));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("feed-masked.log.cut-9")).expect("the kept file"),
+        format!("{past}\n{{\"at\":5}}\n"),
+        "the line past the bound and the whole line after it, kept whole"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), first, "cut at the open");
+    assert_eq!(f.coverage(), 1);
+    // The attest store's largest line — the marker slot's blob as hex, its
+    // two members and punctuation beside it — lies under the bound, held at
+    // compile time.
+    const _: () = assert!(2 * skep_kernel::MAX_SIG_BYTES + 64 < MAX_LINE_BYTES);
 }

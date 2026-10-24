@@ -1617,12 +1617,8 @@ impl Feed {
 
     /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`.
     ///
-    /// The attest store's next write fails at the OS. Not a stable API.
-    ///
-    /// # Panics
-    ///
-    /// Panics where [`AttestStore::fail_next_write`] does: the read-only
-    /// handle on the file could not be opened.
+    /// The attest store's next write is refused
+    /// ([`AttestStore::fail_next_write`]). Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn fail_the_attest_stores_next_write(&self) {
         self.inner.lock().attest.fail_next_write();

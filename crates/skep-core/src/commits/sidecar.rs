@@ -128,10 +128,20 @@
 //! clamped against the last recorded time). Appends are flushed to the OS
 //! but not fsynced — a lost tail answers bare, which is the honest trade for
 //! not doubling every write's fsync cost on testimony.
+//!
+//! **The file's acts are the support crate's** (`skep_util::file`, the one
+//! tail rule the blob store's logs and the client's files keep): the open's
+//! scan reads the file a line at a time within a bound ([`MAX_LINE_BYTES`]),
+//! the cut at the open comes after the keep, the keep takes the first free
+//! `.cut-<byte>` name beside the file, every append lands where the whole
+//! lines end with its newline in the one write, and the two rewrites go
+//! through the `.compact` twin renamed over the file, the directory synced
+//! after. What a line means, which lines are damage, the stop and every
+//! word said are this file's.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -142,6 +152,11 @@ use serde_json::Value;
 use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::{Attestation, Kernel, Seq};
+pub(super) use skep_util::file::KeptName;
+use skep_util::file::{
+    keep_beside, publish_by, Appender, Fsync, KeepStep, LineReader, Next, OnStale, OnTail,
+    PublishStep,
+};
 use skep_util::json::obj;
 use skep_util::notice::Class;
 
@@ -150,6 +165,7 @@ use super::Lines;
 use crate::codec::{j_attest, to_bytes};
 use crate::limits::{
     FEED_RESIDENT_WINDOW, FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL,
+    MAX_REQUEST_BODY,
 };
 use crate::serial::SerialGuard;
 
@@ -159,6 +175,26 @@ use crate::serial::SerialGuard;
 /// crate never touches. The feed's reader below the resident window opens
 /// it by this name (`feed.rs`).
 pub(super) const SIDECAR_FILE: &str = "commits.log";
+
+/// The most bytes one line of a feed file may hold, its `\n` aside.
+///
+/// It is the bound every feed file's open reads under
+/// (`skep_util::file::LineReader`), `commits.log`'s and the five files
+/// beside it alike: a line past it is no line this daemon wrote and no
+/// crash's tail — damage, kept and cut as a whole line that does not parse
+/// is — where a read with no bound would hold it whole. Every member of a
+/// line this daemon writes is rendered from the request that committed it,
+/// under the request-body cap (`limits::MAX_REQUEST_BODY`): the documents a
+/// commit touched are the homes of the addresses the frame named, in the
+/// frame's own dotted spelling, the op's terms its own members and the
+/// owners the drafts' accounts; beside them the fixed members — the position
+/// and the time, twenty digits each at most, the testimony's 64 hex digits,
+/// the carrier's token, the member names and the punctuation — a few hundred
+/// bytes; and the attest store's line is the marker slot's blob as hex, twice
+/// the kernel's `MAX_SIG_BYTES`, 128 KiB. The cap plus a margin for those
+/// holds every line with room. The bound governs the scan's buffer and
+/// nothing this daemon writes.
+pub(super) const MAX_LINE_BYTES: usize = MAX_REQUEST_BODY + 256 * 1024;
 
 /// Returns the wall-clock reading a commit's `time` is stamped with.
 ///
@@ -602,7 +638,12 @@ pub(super) struct Walked {
 /// bookkeeping the feed's derived structures key on; the file holds every
 /// line, and the feed reads the ones below the window from it.
 pub(super) struct CommitsLog {
-    file: File,
+    /// The append handle, open where the file's whole lines end.
+    ///
+    /// It is the module's (`skep_util::file::Appender`): opened at the
+    /// trusted end the open's scan found, the tail past it cut there, and
+    /// reopened at the new length after each rewrite's rename.
+    file: Appender,
     /// The data dir the file lives in — what a rewrite re-creates it under.
     dir: PathBuf,
     /// The resident window: every enumerable position at or above
@@ -788,6 +829,14 @@ pub(super) struct CommitsLog {
     /// that fails on cue.
     #[cfg(any(test, feature = "test-hooks"))]
     fail_next_rewrite_past_rename: bool,
+    /// The test seam that refuses this file's appends while it stands.
+    ///
+    /// It is the unit suite's: each append is refused inside the module's
+    /// own write closure ([`CommitsLog::append_line`]), the one condition
+    /// the stop rule is about and the one no portable test can produce from
+    /// a disk.
+    #[cfg(test)]
+    fail_appends: bool,
 }
 
 impl CommitsLog {
@@ -862,8 +911,10 @@ impl CommitsLog {
     /// kernel just performed is an operator condition worth reporting rather
     /// than limping past. Every failure names this file, the kind kept
     /// (`operations.md` §1.1 row 2): one closure wraps each `?` the open takes
-    /// on the file, as the blocked list's read wraps its path, so the
-    /// daemon's `change-feed sidecar: {e}` reads `commits.log: {e}`.
+    /// on the file — the scan, the keep (which names the kept file and its
+    /// act inside), the open for appending, the cut, the purge — as the
+    /// blocked list's read wraps its path, so the daemon's `change-feed
+    /// sidecar: {e}` reads `commits.log: {e}`.
     pub(super) fn open(dir: &Path, engine: &Engine, lines: &Lines) -> io::Result<CommitsLog> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{SIDECAR_FILE}: {e}"));
         let path = dir.join(SIDECAR_FILE);
@@ -872,18 +923,28 @@ impl CommitsLog {
         // region the walk re-covers is known. A look that cannot answer
         // counts as present, so it never says a loss it has not seen.
         let absent = !path.try_exists().unwrap_or(true);
-        let mut file = open_sidecar(&path).map_err(with_file)?;
         let head = engine.kernel().current_seq().0;
         let window = resident_window(dir);
-        let mut scanned = scan(&mut file, head, window).map_err(with_file)?;
+        let scanned = scan(&path, head, window).map_err(with_file)?;
+        // The append handle: at the trusted end where the file stood, the
+        // module trusting the scan's count; made where none did, born 0600.
+        let mut file = match &scanned {
+            Some(scanned) => Appender::open_at(&path, scanned.valid_end),
+            None => Appender::open(&path, 0o600),
+        }
+        .map_err(with_file)?;
+        let mut scanned = scanned.unwrap_or_default();
         // The cut's class, judged before the cut: a crash tears the last
         // line, its newline unwritten, and that line is cut and gone; a
         // whole line that does not parse, or lies below the line before it,
-        // is damage, and it and every line after it — testimony this file
-        // alone holds — are kept beside the file, durably, before the cut.
+        // or runs past the bound, is damage, and it and every line after it
+        // — testimony this file alone holds — are kept beside the file,
+        // durably, before the cut: read off the file itself from the
+        // trusted end, never held whole.
         let cut_kept = if scanned.damaged {
-            file.seek(SeekFrom::Start(scanned.valid_end)).map_err(with_file)?;
-            let dropped = (&file).take(scanned.len - scanned.valid_end);
+            let mut dropped = File::open(&path).map_err(with_file)?;
+            dropped.seek(SeekFrom::Start(scanned.valid_end)).map_err(with_file)?;
+            let dropped = dropped.take(scanned.len - scanned.valid_end);
             Some(
                 keep_dropped_lines(dir, SIDECAR_FILE, scanned.valid_end, dropped)
                     .map_err(with_file)?,
@@ -891,16 +952,13 @@ impl CommitsLog {
         } else {
             None
         };
-        let cut = if scanned.valid_end < scanned.len {
-            // The torn (or corrupt) tail: truncate at the last whole record.
-            // Anything the dropped lines described is re-covered as bare
-            // positions by the walk below — said once the walk's own fence
-            // `low` is known, which is the position trust ends at.
-            file.set_len(scanned.valid_end).map_err(with_file)?;
-            Some((scanned.valid_end, scanned.len, scanned.whole_after))
-        } else {
-            None
-        };
+        // The cut at the open, after the keep: the torn (or corrupt) tail
+        // cut back to the last whole record, through the module, and
+        // answered. Anything the dropped lines described is re-covered as
+        // bare positions by the walk below — said once the walk's own fence
+        // `low` is known, which is the position trust ends at.
+        let cut = file.cut(Fsync::None).map_err(with_file)?;
+        let cut_whole_after = scanned.whole_after;
         // Entries beyond this journal's head describe a different journal —
         // a live copy taken after its journal, an operator's swap, or the
         // testimony of commits a journal tail cut took — and are never
@@ -925,12 +983,14 @@ impl CommitsLog {
         if scanned.stale_fence {
             file = purge_the_other_journals(dir, head).map_err(with_file)?;
             rewritten = true;
-            scanned = scan(&mut file, head, window).map_err(with_file)?;
+            scanned = scan(&path, head, window).map_err(with_file)?.unwrap_or_default();
         } else if let Some(foreign) = &scanned.foreign {
-            file.set_len(foreign.first).map_err(with_file)?;
+            // Whole lines, kept above: the file cut back to the first of
+            // them, the module trusting that count from here.
+            file = Appender::open_at(&path, foreign.first).map_err(with_file)?;
+            file.cut(Fsync::None).map_err(with_file)?;
         }
         let Scanned {
-            len,
             window: entries,
             offsets,
             last_entry,
@@ -938,25 +998,28 @@ impl CommitsLog {
             bare,
             first_held,
             min_since,
-            foreign,
             malformed,
             last_time,
             ..
         } = scanned;
-        // The file's length as it stands: cut back to the first line past
-        // the head where any stood and no rewrite ran.
-        let len = match (&foreign, rewritten) {
-            (Some(f), false) => f.first,
-            _ => len,
-        };
+        // The file's length as it stands: the handle's count of its whole
+        // lines — cut back to the trusted end, or to the first line past the
+        // head where any stood, or the rewrite's.
+        let len = file.whole();
         let low = last_entry.unwrap_or(0).max(min_since);
-        if let Some((valid_end, len, whole_after)) = cut {
+        if let Some(tail) = cut {
             // Row 9 for this file: the last trusted position is the walk's
             // own fence, the highest surviving record at or below the head
             // (or the fence record), from which the cut part is re-derived —
             // whatever a torn line named; the whole lines past a damaged one
             // are counted, since their testimony no walk brings back.
-            let cut = Cut { valid_end, len, trusted: low, first: None, whole_after };
+            let cut = Cut {
+                valid_end: tail.at,
+                len: tail.len,
+                trusted: low,
+                first: None,
+                whole_after: cut_whole_after,
+            };
             lines.say(Class::Failure, LogCutLine { cut, kept: cut_kept });
         }
         // The region, pending: what the file does not cover, `(low, head]`,
@@ -993,6 +1056,8 @@ impl CommitsLog {
             stopped: None,
             #[cfg(any(test, feature = "test-hooks"))]
             fail_next_rewrite_past_rename: false,
+            #[cfg(test)]
+            fail_appends: false,
         };
         log.entries = log.entries.split_off(&resident_from);
         log.offsets = log.offsets.split_off(&resident_from);
@@ -1158,10 +1223,12 @@ impl CommitsLog {
     /// # Errors
     ///
     /// [`RewriteFail::BeforeRename`] where the rewrite failed before its
-    /// rename; [`RewriteFail::PastRename`] where it failed past it — the
-    /// stop then set at the last entry the new file holds (its fence, where it
-    /// holds none), the position the next open's walk starts above, and so
-    /// the one the stop's line and the standing line name.
+    /// rename, its twin removed; [`RewriteFail::PastRename`] where it failed
+    /// past it — the directory's sync after the rename, or the reopen — the
+    /// new file whole at its name and the stop then set at the last entry it
+    /// holds (its fence, where it holds none), the position the next open's
+    /// walk starts above, and so the one the stop's line and the standing
+    /// line name.
     fn rewrite_whole(&mut self, from: u64) -> Result<(), RewriteFail> {
         #[cfg(any(test, feature = "test-hooks"))]
         let fail_past_rename = std::mem::take(&mut self.fail_next_rewrite_past_rename);
@@ -1365,8 +1432,8 @@ impl CommitsLog {
         // owed before it, since the restart's open writes this file.
         let line = entry_line(at, &meta);
         if self.stopped.is_none() {
-            match self.file.write_all(&line) {
-                Ok(()) => self.len += line.len() as u64,
+            match self.append_line(&line) {
+                Ok(()) => self.len = self.file.whole(),
                 Err(e) => {
                     self.stopped = Some(at);
                     let cause = IoCause(&e);
@@ -1388,6 +1455,34 @@ impl CommitsLog {
         self.resident_most = self.resident_most.max(self.entries.len());
         self.evict(at.saturating_sub(self.window).saturating_add(1));
         Recorded::Appended(offset)
+    }
+
+    /// Appends `line`, newline-terminated, where the file's whole lines end.
+    ///
+    /// It is the module's append (`skep_util::file::Appender::append`): the
+    /// line and its `\n` in one write, a tail past the whole lines cut off
+    /// first — the rule's own, which a line this file writes never meets,
+    /// the open having cut the file — and a write that fails cut back to the
+    /// whole lines, so the next open reads no half-written line. Not fsynced
+    /// (the module doc). The unit suite's seam refuses the write inside the
+    /// module's own closure, so the failure takes the path a disk's takes.
+    ///
+    /// # Errors
+    ///
+    /// The write's failure, the file cut back; or the cut-back's beside it,
+    /// in the one error the module folds them into.
+    fn append_line(&mut self, line: &[u8]) -> io::Result<()> {
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        #[cfg(test)]
+        {
+            if self.fail_appends {
+                let refused = |_: &mut File, _: &[u8]| -> io::Result<()> {
+                    Err(io::Error::other("test seam: the write refused"))
+                };
+                return self.file.append_by(line, OnTail::Cut, refused).map(drop);
+            }
+        }
+        self.file.append(line, OnTail::Cut, Fsync::None).map(drop)
     }
 
     /// Returns the head position's recorded wall-clock time.
@@ -1694,34 +1789,6 @@ impl Cut {
     }
 }
 
-/// The name of a file an open kept dropped lines in (`operations.md` §3.6).
-///
-/// It is `{file}.cut-{byte}` beside the file, in the data directory, or
-/// `{file}.cut-{byte}.{k}` where that name and the `k − 1` before it
-/// already stand — the kernel's own spelling for a journal tail it keeps, so
-/// every kept file in the directory is found by one listing. `byte` is where
-/// in the file the dropped lines began: the byte trust ended at, for a cut,
-/// and the first line above the journal's head, for a purge. Rendered beside
-/// the file's name ([`KeptName::of`]); `Copy`, so the line types that carry
-/// it stay plain values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct KeptName {
-    /// The byte of the file the dropped lines began at.
-    pub byte: u64,
-    /// The name's suffix: `0` for the first name, `k` for `….{k}`.
-    pub k: u64,
-}
-
-impl KeptName {
-    /// Returns the kept file's name beside `file`.
-    pub(super) fn of(self, file: &str) -> String {
-        match self.k {
-            0 => format!("{file}.cut-{}", self.byte),
-            k => format!("{file}.cut-{}.{k}", self.byte),
-        }
-    }
-}
-
 /// Keeps the lines an open drops from `file` beside it, before they go.
 ///
 /// It is the one keep every line file's open takes — `commits.log`'s and
@@ -1729,49 +1796,83 @@ impl KeptName {
 /// (`operations.md` §3.6): a whole line that does not parse and every line
 /// after it, which a crash never leaves, and the entry lines above the
 /// journal's head, another journal's. A crash's torn last line is cut and
-/// gone. The bytes are written whole to the first of [`KeptName`]'s names
-/// that stands empty — never over a standing name, whatever it holds, so a
-/// crash between the keep and the drop leaves the first kept file beside the
-/// next open's — born `0600`, synced, and the directory synced after, so
-/// the bytes are durable before the cut or the rewrite that drops them
-/// runs. `dropped` is the bytes, read through: a slice of a file read whole,
-/// or the file itself from the byte on. Answers the name; the line that
-/// says the drop names it ([`LogCutLine`], [`ForeignLinesLine`]).
+/// gone. The keep is the module's (`skep_util::file::keep_beside`): the
+/// bytes are written whole to the first of [`KeptName`]'s names that stands
+/// empty — `{file}.cut-{byte}`, `….{k}`, the kernel's own spelling for a
+/// journal tail it keeps, so every kept file in the directory is found by
+/// one listing; never over a standing name, whatever it holds, so a crash
+/// between the keep and the drop leaves the first kept file beside the next
+/// open's — born `0600`, synced, and the directory synced after, so the
+/// bytes are durable before the cut or the rewrite that drops them runs.
+/// `dropped` is the bytes, read through: a slice of a file read whole, or
+/// the file itself from the byte on. Answers the name; the line that says
+/// the drop names it ([`LogCutLine`], [`ForeignLinesLine`]). What this
+/// file adds is the words: each step's failure named `{kept}: {act}: {e}`.
 ///
 /// # Errors
 ///
 /// The kept file's creation, write or sync, or the directory's sync,
-/// failing, each named `{kept}: {act}: {cause}` — fatal at the open, as
-/// every failure there is, so no drop runs over a keep that did not.
+/// failing, each named `{kept}: {act}: {cause}` (`create`, `write`, `fsync`,
+/// `fsync the directory of`), the kept file standing with what was written
+/// past its creation — fatal at the open, as every failure there is, so no
+/// drop runs over a keep that did not.
 pub(super) fn keep_dropped_lines(
     dir: &Path,
     file: &str,
     byte: u64,
-    mut dropped: impl io::Read,
+    dropped: impl io::Read,
 ) -> io::Result<KeptName> {
-    let mut kept = KeptName { byte, k: 0 };
-    let (mut out, name) = loop {
-        let name = kept.of(file);
-        let mut opts = OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+    keep_beside(dir, file, byte, dropped, 0o600).map_err(|failed| {
+        let act = match failed.step {
+            KeepStep::Create => "create",
+            KeepStep::Write => "write",
+            KeepStep::Fsync => "fsync",
+            KeepStep::DirSync => "fsync the directory of",
+        };
+        let name = failed.name.of(file);
+        io::Error::new(failed.error.kind(), format!("{name}: {act}: {}", failed.error))
+    })
+}
+
+/// Counts the whole entry lines at or below `head` past a damaged line.
+///
+/// The damaged line begins at `from` — a whole line that does not read, or
+/// one past the bound — and is read past, whatever its length; each whole
+/// line after it is handed to `entry`, which answers the position where the
+/// line is an entry, and those at or below the head are counted. It is the
+/// count the cut's words carry: what the cut took with it, which the kept
+/// file alone holds now ([`LogCutLine`]; the attest store's cut line). The
+/// open's scan reads lines through the module within its bound; this pass
+/// reads the lines the keep has already taken whole, and cuts nothing.
+///
+/// # Errors
+///
+/// The OS refused the open, the seek or a read.
+pub(super) fn whole_lines_after(
+    path: &Path,
+    from: u64,
+    head: u64,
+    entry: impl Fn(&[u8]) -> Option<u64>,
+) -> io::Result<Option<EntryLines>> {
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(from))?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    // The damaged line itself, read past.
+    reader.read_until(b'\n', &mut line)?;
+    let mut after = None;
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
         }
-        match opts.open(dir.join(&name)) {
-            Ok(out) => break (out, name),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => kept.k += 1,
-            Err(e) => return Err(io::Error::new(e.kind(), format!("{name}: create: {e}"))),
+        if let Some(at) = line.strip_suffix(b"\n").and_then(&entry) {
+            if at <= head {
+                after = Some(EntryLines::with(after, at));
+            }
         }
-    };
-    let named = |act: &str, e: io::Error| io::Error::new(e.kind(), format!("{name}: {act}: {e}"));
-    io::copy(&mut dropped, &mut out).map_err(|e| named("write", e))?;
-    out.sync_all().map_err(|e| named("fsync", e))?;
-    drop(out);
-    #[cfg(unix)]
-    File::open(dir).and_then(|d| d.sync_all()).map_err(|e| named("fsync the directory of", e))?;
-    Ok(kept)
+    }
+    Ok(after)
 }
 
 /// Entry lines a feed file's replay dropped, by count and position.
@@ -2532,11 +2633,12 @@ pub(super) fn fire_the_feed_walks_fault() {
 /// reports and moves on.
 #[derive(Debug)]
 pub(super) enum RewriteFail {
-    /// The temp file's creation, write or sync failed, or the rename itself.
+    /// The twin's creation, write or sync failed, or the rename itself.
     ///
-    /// The old file is whole and still the one the handle names.
+    /// The old file is whole and still the one the handle names; the twin is
+    /// removed (`skep_util::file::publish_by`).
     BeforeRename(io::Error),
-    /// The reopen of the renamed file failed.
+    /// The directory's sync after the rename failed, or the renamed file's reopen.
     ///
     /// The new file is in place and whole, and the handle names the one it
     /// replaced.
@@ -2561,51 +2663,11 @@ impl std::fmt::Display for RewriteFail {
     }
 }
 
-/// Opens `commits.log` for reading and appending, created where absent.
-///
-/// It is born `0600` on unix, the mode set at creation, which the process
-/// umask can narrow and never widen; a file that already stands keeps its
-/// mode. The one open the sidecar takes: at the daemon's open, and after a
-/// rewrite's rename.
-///
-/// # Errors
-///
-/// The OS's error where the file can be neither opened nor created.
-fn open_sidecar(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).read(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)
-}
-
-/// Creates a rewrite's temp file afresh, born `0600` on unix.
-///
-/// The mode is set at creation, and the rename carries it onto
-/// `commits.log`.
-///
-/// # Errors
-///
-/// The OS's error where the file can be neither created nor truncated.
-fn create_rewrite_temp(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)
-}
-
 /// What a rewrite hands back ([`rewrite`]).
 ///
 /// It is the reopened append handle, the offset each new line now sits at,
 /// and the file's new length.
-type Rewritten = (File, Vec<(u64, LineOffset)>, u64);
+type Rewritten = (Appender, Vec<(u64, LineOffset)>, u64);
 
 /// Rewrites `commits.log` as every line it holds, then a fence and the new lines.
 ///
@@ -2615,17 +2677,19 @@ type Rewritten = (File, Vec<(u64, LineOffset)>, u64);
 /// line the file did not hold. It hands back the reopened append handle,
 /// the offset each new line now sits at, and the new length.
 ///
-/// Written to a temp file and renamed over the original, which is what
-/// makes the landing crash-honest in the same sense the rest of this file
-/// is: a reader only ever sees the whole old file or the whole new one,
-/// and a kill between the two leaves the region to a walk behind the
-/// listener again.
+/// Written through the module's publish (`skep_util::file::publish_by`):
+/// to a twin, synced, renamed over the original, the directory synced
+/// after — which is what makes the landing crash-honest in the same sense
+/// the rest of this file is: a reader only ever sees the whole old file or
+/// the whole new one, and a kill between the two leaves the region to a
+/// walk behind the listener again. The raw copy rests on the open's cut:
+/// the file holds whole lines alone, so no torn tail is copied under the
+/// new ones.
 ///
-/// The temp is `commits.log.compact`, a fixed name — safe because
+/// The twin is `commits.log.compact`, a fixed name — safe because
 /// `skepd::Daemon::open`'s precondition admits one live kernel per data
-/// dir. It is not cleaned up: a crash or an I/O failure between the create
-/// and the rename leaves it until the next rewrite truncates it, which is
-/// the price of the rename being the only atomic step.
+/// dir. A failure before the rename removes it; a crash leaves it, said at
+/// the next open ([`say_a_compact_twin`]) and replaced by the next rewrite.
 ///
 /// `fail_past_rename` is the test seam: the reopen refused, so the
 /// past-rename arm is reachable without a disk that fails on cue; `false`
@@ -2635,10 +2699,11 @@ type Rewritten = (File, Vec<(u64, LineOffset)>, u64);
 ///
 /// Which side of the rename a failure fell on travels as [`RewriteFail`],
 /// since the two leave different files behind:
-/// [`RewriteFail::BeforeRename`] where the temp file's creation, the copy,
-/// a write or the sync, or the rename itself failed;
-/// [`RewriteFail::PastRename`] where the renamed file's reopen failed, or
-/// `fail_past_rename` refused it.
+/// [`RewriteFail::BeforeRename`] where the twin's creation, the copy, a
+/// write or the sync, or the rename itself failed, the twin removed;
+/// [`RewriteFail::PastRename`] where the directory's sync after the rename
+/// failed, the renamed file's reopen failed, or `fail_past_rename` refused
+/// it — the new file standing whole at its name in each.
 fn rewrite(
     dir: &Path,
     fence: Option<u64>,
@@ -2646,11 +2711,11 @@ fn rewrite(
     fail_past_rename: bool,
 ) -> Result<Rewritten, RewriteFail> {
     let path = dir.join(SIDECAR_FILE);
-    let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
+    let twin = dir.join(format!("{SIDECAR_FILE}.compact"));
     let mut offsets = Vec::with_capacity(new.len());
-    let renamed = (|| -> io::Result<u64> {
-        let mut out = create_rewrite_temp(&tmp)?;
-        let mut len = io::copy(&mut File::open(&path)?, &mut out)?;
+    let mut len = 0u64;
+    let published = publish_by(&path, &twin, 0o600, OnStale::Replace, |out| {
+        len = io::copy(&mut File::open(&path)?, out)?;
         if let Some(fence) = fence {
             let line = min_since_line(fence);
             out.write_all(&line)?;
@@ -2661,18 +2726,22 @@ fn rewrite(
             out.write_all(line)?;
             len += line.len() as u64;
         }
-        out.sync_all()?;
-        drop(out);
-        std::fs::rename(&tmp, &path)?;
-        Ok(len)
-    })();
-    let len = renamed.map_err(RewriteFail::BeforeRename)?;
+        Ok(())
+    });
+    if let Err(failed) = published {
+        return Err(match failed.step {
+            PublishStep::Create | PublishStep::Write | PublishStep::Sync | PublishStep::Rename => {
+                RewriteFail::BeforeRename(failed.error)
+            }
+            PublishStep::DirSync => RewriteFail::PastRename(failed.error),
+        });
+    }
     if fail_past_rename {
         return Err(RewriteFail::PastRename(io::Error::other(
             "test seam: the rewritten file's reopen refused",
         )));
     }
-    let file = open_sidecar(&path).map_err(RewriteFail::PastRename)?;
+    let file = Appender::open_at(&path, len).map_err(RewriteFail::PastRename)?;
     Ok((file, offsets, len))
 }
 
@@ -2681,40 +2750,47 @@ fn rewrite(
 /// It is the open's purge where a fence above the head stood
 /// ([`CommitsLog::open`]): every entry line at or below `head` and every
 /// fence at or below it copied verbatim, in file order, the rest left out
-/// — through `commits.log.compact` renamed over the original. The file is
-/// already cut at its trusted end, so every line read here is whole; the
-/// entry lines above the head were kept beside the file before this runs.
-/// Answers the reopened append handle; every offset moved.
+/// — through `commits.log.compact` renamed over the original and the
+/// directory synced, by the module's publish
+/// (`skep_util::file::publish_by`). The file is already cut at its trusted
+/// end, so every line read here is whole; the entry lines above the head
+/// were kept beside the file before this runs. Answers the reopened append
+/// handle; every offset moved.
 ///
 /// # Errors
 ///
-/// The OS refused the temp file's creation, a read, a write, the sync, the
-/// rename or the reopen.
-fn purge_the_other_journals(dir: &Path, head: u64) -> io::Result<File> {
+/// The OS refused the twin's creation, a read, a write, the sync, the
+/// rename, the directory's sync or the reopen — fatal at the open, where
+/// alone this runs, the twin removed where the failure fell before the
+/// rename.
+fn purge_the_other_journals(dir: &Path, head: u64) -> io::Result<Appender> {
     let path = dir.join(SIDECAR_FILE);
-    let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
-    let mut out = io::BufWriter::new(create_rewrite_temp(&tmp)?);
-    let mut reader = BufReader::new(File::open(&path)?);
-    let mut line = Vec::new();
-    while reader.read_until(b'\n', &mut line)? > 0 {
-        let kept = match line.strip_suffix(b"\n").and_then(parse_line) {
-            Some(Record::Entry(at, _)) => at <= head,
-            Some(Record::MinSince(n)) => n <= head,
-            None => false,
-        };
-        if kept {
-            out.write_all(&line)?;
+    let twin = dir.join(format!("{SIDECAR_FILE}.compact"));
+    let mut len = 0u64;
+    publish_by(&path, &twin, 0o600, OnStale::Replace, |f| {
+        let mut out = BufWriter::new(f);
+        let mut reader = BufReader::new(File::open(&path)?);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? > 0 {
+            let kept = match line.strip_suffix(b"\n").and_then(parse_line) {
+                Some(Record::Entry(at, _)) => at <= head,
+                Some(Record::MinSince(n)) => n <= head,
+                None => false,
+            };
+            if kept {
+                out.write_all(&line)?;
+                len += line.len() as u64;
+            }
+            line.clear();
         }
-        line.clear();
-    }
-    let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, &path)?;
-    open_sidecar(&path)
+        out.flush()
+    })
+    .map_err(|failed| failed.error)?;
+    Appender::open_at(&path, len)
 }
 
 /// What one scan of `commits.log` read ([`scan`]).
+#[derive(Default)]
 struct Scanned {
     /// The byte trust ends at.
     valid_end: u64,
@@ -2765,56 +2841,48 @@ struct Foreign {
 
 /// Scans the file whole, a line at a time, keeping the window.
 ///
-/// It is the open's one pass ([`CommitsLog::open`]): trust ends at the
-/// first line that is torn, does not parse, or lies below the line of this
-/// journal before it — an entry at or below the last entry, or a fence
-/// below the last position — the file being position-ordered
-/// (`feed/window.rs`). An entry above `head` is another journal's whatever
-/// its order, counted and kept for the keep and held in no count; a fence
-/// above the head, or a line of this journal past another journal's, calls
-/// for the rewrite that drops the other's lines. A fence at or below
-/// the head makes every entry before it dead to this build — a fence
-/// stands at or above every line before it — so the counts, the window and
-/// the first line held start afresh past it. Each entry with a malformed
-/// name is demoted as it is read ([`demoted`]) and counted. The window is
-/// trimmed as the scan climbs, so it holds the window's span and no more
-/// at any moment.
+/// It is the open's one pass ([`CommitsLog::open`]), through the module's
+/// streaming read (`skep_util::file::LineReader`) within the bound
+/// ([`MAX_LINE_BYTES`]): trust ends at the first line that is torn, runs
+/// past the bound, does not parse, or lies below the line of this journal
+/// before it — an entry at or below the last entry, or a fence below the
+/// last position — the file being position-ordered (`feed/window.rs`); the
+/// last three are damage. An entry above `head` is another journal's
+/// whatever its order, counted and kept for the keep and held in no count;
+/// a fence above the head, or a line of this journal past another
+/// journal's, calls for the rewrite that drops the other's lines. A fence
+/// at or below the head makes every entry before it dead to this build — a
+/// fence stands at or above every line before it — so the counts, the
+/// window and the first line held start afresh past it. Each entry with a
+/// malformed name is demoted as it is read ([`demoted`]) and counted. The
+/// window is trimmed as the scan climbs, so it holds the window's span and
+/// no more at any moment. `None` where no file stands.
 ///
 /// # Errors
 ///
-/// The OS refused a read or a seek.
-fn scan(file: &mut File, head: u64, window: u64) -> io::Result<Scanned> {
-    let len = file.metadata()?.len();
-    file.seek(SeekFrom::Start(0))?;
-    let mut reader = BufReader::with_capacity(64 * 1024, &*file);
-    let mut s = Scanned {
-        valid_end: 0,
-        len,
-        damaged: false,
-        whole_after: None,
-        window: BTreeMap::new(),
-        offsets: BTreeMap::new(),
-        last_entry: None,
-        count: 0,
-        bare: 0,
-        first_held: None,
-        min_since: 0,
-        stale_fence: false,
-        foreign: None,
-        malformed: None,
-        last_time: 0,
+/// The OS refused the open, the length or a read.
+fn scan(path: &Path, head: u64, window: u64) -> io::Result<Option<Scanned>> {
+    let Some(mut reader) = LineReader::open(path, MAX_LINE_BYTES)? else {
+        return Ok(None);
     };
-    let mut offset = 0u64;
+    let mut s = Scanned { len: fs::metadata(path)?.len(), ..Scanned::default() };
+    let mut offset: u64;
     let mut last_position: Option<u64> = None;
     let mut keep_from = 0u64;
-    let mut line = Vec::new();
     loop {
-        line.clear();
-        let read = reader.read_until(b'\n', &mut line)?;
-        if read == 0 || !line.ends_with(b"\n") {
-            break;
-        }
-        let Some(record) = parse_line(&line[..line.len() - 1]) else {
+        offset = reader.whole();
+        let line = match reader.next_line()? {
+            Next::Line(line) => line,
+            // A line past the bound is no line this daemon wrote, and no
+            // crash's tail: damage, kept and cut as a line that does not
+            // parse is.
+            Next::Long { .. } => {
+                s.damaged = true;
+                break;
+            }
+            Next::Tail(_) | Next::End => break,
+        };
+        let Some(record) = parse_line(line) else {
             s.damaged = true;
             break;
         };
@@ -2846,7 +2914,8 @@ fn scan(file: &mut File, head: u64, window: u64) -> io::Result<Scanned> {
                     bytes: Vec::new(),
                     lines: EntryLines { lines: 0, first: at, last: at },
                 });
-                foreign.bytes.extend_from_slice(&line);
+                foreign.bytes.extend_from_slice(line);
+                foreign.bytes.push(b'\n');
                 foreign.lines = EntryLines::with(Some(foreign.lines), at);
             }
             Record::Entry(at, meta) => {
@@ -2883,25 +2952,20 @@ fn scan(file: &mut File, head: u64, window: u64) -> io::Result<Scanned> {
         if position != u64::MAX {
             last_position = Some(position);
         }
-        offset += read as u64;
     }
+    // The byte trust ends at: the end of the last line read whole and
+    // judged whole — the module's count before the line the scan stopped
+    // on, which that count includes where the line was whole.
     s.valid_end = offset;
     if s.damaged {
         // The whole entry lines past the damaged one, at or below the head:
         // the testimony the cut takes, which no walk brings back.
-        loop {
-            line.clear();
-            if reader.read_until(b'\n', &mut line)? == 0 {
-                break;
-            }
-            if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line) {
-                if at <= head {
-                    s.whole_after = Some(EntryLines::with(s.whole_after, at));
-                }
-            }
-        }
+        s.whole_after = whole_lines_after(path, offset, head, |line| match parse_line(line) {
+            Some(Record::Entry(at, _)) => Some(at),
+            _ => None,
+        })?;
     }
-    Ok(s)
+    Ok(Some(s))
 }
 
 /// Returns the first position `commits.log` in `dir` holds a line for above its fence.
@@ -2910,28 +2974,21 @@ fn scan(file: &mut File, head: u64, window: u64) -> io::Result<Scanned> {
 /// (`journal.feed_from`): one scan of the file's lines, the first entry
 /// above the greatest fence line — `None` where the file is absent, holds
 /// no entry, or holds none above its fence. Trust ends where the open's
-/// scan ends it, at a torn or unparseable line, and what stands before it
-/// answers; nothing is cut or written.
+/// scan ends it — at a torn line, a line past the bound or an unparseable
+/// one, read through the module's streaming read as the open reads — and
+/// what stands before it answers; nothing is cut or written.
 ///
 /// # Errors
 ///
 /// The OS refused the open or a read, an absent file aside.
 pub(crate) fn first_held_in(dir: &Path) -> io::Result<Option<u64>> {
-    let file = match File::open(dir.join(SIDECAR_FILE)) {
-        Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
+    let Some(mut reader) = LineReader::open(&dir.join(SIDECAR_FILE), MAX_LINE_BYTES)? else {
+        return Ok(None);
     };
-    let mut reader = BufReader::new(file);
-    let mut line = Vec::new();
     let mut fence = 0u64;
     let mut first: Option<u64> = None;
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 || !line.ends_with(b"\n") {
-            break;
-        }
-        match parse_line(&line[..line.len() - 1]) {
+    while let Next::Line(line) = reader.next_line()? {
+        match parse_line(line) {
             Some(Record::MinSince(n)) => {
                 fence = fence.max(n);
                 if first.is_some_and(|f| f <= fence) {
@@ -3424,20 +3481,20 @@ pub(super) fn line_bytes(v: &Value) -> Vec<u8> {
 
 #[cfg(test)]
 impl CommitsLog {
-    /// Returns a [`CommitsLog`] whose appends fail, over a read-only handle.
+    /// Returns a [`CommitsLog`] whose appends fail, the seam refusing each.
     ///
-    /// The handle is on the file in `dir` — which is the one condition the
-    /// stop rule is about and the one no portable test can produce from
-    /// [`CommitsLog::open`]'s handle. The same seam `feed/derived.rs` keeps
-    /// for the same rule.
+    /// The file is in `dir`, made where absent, and every append is refused
+    /// inside the module's own write closure ([`CommitsLog::append_line`])
+    /// — the one condition the stop rule is about and the one no portable
+    /// test can produce from a disk; the suite clears the seam where the
+    /// condition clears. The same seam `feed/derived.rs` keeps for the same
+    /// rule.
     ///
     /// # Panics
     ///
-    /// Panics where the file in `dir` cannot be created, or opened read-only.
+    /// Panics where the file in `dir` cannot be opened for appending.
     fn over_unwritable(dir: &Path, open_head: u64) -> CommitsLog {
-        let path = dir.join(SIDECAR_FILE);
-        File::create(&path).expect("create the file to be opened read-only");
-        let file = File::open(&path).expect("a read-only handle");
+        let file = Appender::open(&dir.join(SIDECAR_FILE), 0o600).expect("the file, made where absent");
         CommitsLog {
             file,
             dir: dir.to_path_buf(),
@@ -3460,6 +3517,7 @@ impl CommitsLog {
             lines: Lines::new(),
             stopped: None,
             fail_next_rewrite_past_rename: false,
+            fail_appends: true,
         }
     }
 
@@ -3468,18 +3526,15 @@ impl CommitsLog {
     /// The file is in `dir`, the log holding `entries` and its region
     /// `(low, head]` pending — the state the open leaves a torn file in — so
     /// the landing's one rewrite is judged on the file's bytes without a
-    /// journal to walk.
+    /// journal to walk. The handle is opened where the file's whole lines
+    /// end, the module's scan finding them.
     ///
     /// # Panics
     ///
-    /// Panics where the file in `dir` cannot be opened for appending, or its
-    /// length read.
+    /// Panics where the file in `dir` cannot be opened for appending.
     fn pending_over(dir: &Path, entries: BTreeMap<u64, CommitMeta>, low: u64, head: u64) -> CommitsLog {
-        let file = OpenOptions::new()
-            .append(true)
-            .open(dir.join(SIDECAR_FILE))
-            .expect("a writable handle on the file");
-        let len = file.metadata().expect("the file's length").len();
+        let file = Appender::open(&dir.join(SIDECAR_FILE), 0o600).expect("a writable handle on the file");
+        let len = file.whole();
         let count = entries.len() as u64;
         let bare = entries.values().filter(|m| matches!(m, CommitMeta::Bare { .. })).count() as u64;
         let first_held = entries.keys().next().copied();
@@ -3505,6 +3560,7 @@ impl CommitsLog {
             lines: Lines::new(),
             stopped: None,
             fail_next_rewrite_past_rename: false,
+            fail_appends: false,
         }
     }
 }

@@ -18,7 +18,14 @@
 //! at or below `N` has been processed into this file — the record it has
 //! for a position that contributed nothing being exactly no record.
 //!
-//! One shape, one discipline, shared with `commits.log` (`sidecar.rs`):
+//! One shape, one discipline, shared with `commits.log` (`sidecar.rs`) —
+//! the read within a bound, the cut at the open after the keep, the keep at
+//! the first free `.cut-<byte>` name, the append where the whole lines end
+//! and the rewrite through the `.compact` twin, the directory synced after,
+//! each the support crate's `file` module's (`skep_util::file`, the one
+//! tail rule the blob store's logs and the client's files keep); what a
+//! line means, which lines are damage, the stop and every word said are
+//! this file's:
 //!
 //! * a line is a JSON object built through the codec's key-sorting device,
 //!   newline-terminated; trust ends at the first line that is torn or does
@@ -90,17 +97,18 @@
 //! is omitted whatever put it forward.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+use skep_util::file::{publish_by, Appender, Fsync, LineReader, Next, OnStale, OnTail, PublishStep};
 use skep_util::json::obj;
 use skep_util::notice::Class;
 
 use super::super::sidecar::{
-    keep_dropped_lines, line_bytes, say_a_compact_twin, Cut, EntryLines, IoCause, KeptName,
-    RewriteFail,
+    keep_dropped_lines, line_bytes, say_a_compact_twin, whole_lines_after, Cut, EntryLines,
+    IoCause, KeptName, RewriteFail, MAX_LINE_BYTES,
 };
 use super::super::Lines;
 use super::window::Cursor;
@@ -156,7 +164,12 @@ pub(super) enum Record {
 /// the reclaim floor, so a class word here would mislabel the one file whose
 /// lines there are an entry signature's only copy.
 pub(super) struct LineFile {
-    file: File,
+    /// The append handle, open where the file's whole lines end.
+    ///
+    /// It is the module's (`skep_util::file::Appender`): opened at the
+    /// trusted end the replay found, the tail past it cut there, and
+    /// reopened at the new length after each rewrite's rename.
+    file: Appender,
     dir: PathBuf,
     name: &'static str,
     coverage: u64,
@@ -221,6 +234,15 @@ pub(super) struct LineFile {
     /// without a disk that fails on cue.
     #[cfg(any(test, feature = "test-hooks"))]
     fail_next_rewrite_past_rename: bool,
+    /// The test seam that refuses this file's writes while it stands.
+    ///
+    /// It is behind `skepd::Daemon::fail_the_attest_stores_next_write`
+    /// ([`LineFile::make_unwritable`]) and the unit suite's: each write is
+    /// refused inside the module's own write closure ([`LineFile::write`]),
+    /// the one condition the stop rule is about and the one no portable
+    /// test can produce from a disk.
+    #[cfg(any(test, feature = "test-hooks"))]
+    unwritable: bool,
 }
 
 /// A line appended and its sync owed, [`LineFile::append_owing_sync`]'s answer.
@@ -330,8 +352,9 @@ impl LineFile {
     /// # Errors
     ///
     /// Every failure names this file, the kind kept (`operations.md` §1.1 row
-    /// 2): one closure wraps each `?` the open takes on the file — the open,
-    /// the read, the length, the truncation, the purge — as the blocked list's
+    /// 2): one closure wraps each `?` the open takes on the file — the read,
+    /// the length, the open for appending, the keep (which names the kept
+    /// file and its act inside), the cut, the purge — as the blocked list's
     /// read wraps its path, so the daemon's `change-feed sidecar: {e}` reads
     /// `{name}: {e}`.
     pub(crate) fn open(
@@ -344,7 +367,9 @@ impl LineFile {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{name}: {e}"));
         say_a_compact_twin(lines, dir, name);
         let path = dir.join(name);
-        let file = open_line_file(&path).map_err(with_file)?;
+        // The read, a line at a time within the bound, through the module's
+        // streaming read; `None` where no file stands, made below.
+        let mut reader = LineReader::open(&path, MAX_LINE_BYTES).map_err(with_file)?;
         let mut coverage = 0u64;
         let mut entries = Vec::new();
         let mut foreign = false;
@@ -355,78 +380,101 @@ impl LineFile {
         let mut valid_end = 0u64;
         let mut last_at: Option<u64> = None;
         let mut disordered = false;
-        let mut reader = BufReader::new(&file);
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            let read = reader.read_until(b'\n', &mut line).map_err(with_file)?;
-            // Trust ends at the first line that is torn — no newline, the end
-            // of the file included — or does not parse.
-            let Some(record) = line.strip_suffix(b"\n").and_then(parse_line) else { break };
-            let offset = valid_end;
-            valid_end += read as u64;
-            match record {
-                Record::Fence(n) if n <= head => coverage = coverage.max(n),
-                Record::Entry(at, m) if at <= head => {
-                    coverage = coverage.max(at);
-                    disordered |= last_at.is_some_and(|last| at < last);
-                    last_at = Some(at);
-                    if keep(at) {
-                        entries.push((at, m));
+        let mut damaged = false;
+        let mut torn = false;
+        if let Some(reader) = reader.as_mut() {
+            loop {
+                // The byte trust ends at if this line ends it: the module's
+                // count of the whole lines before it.
+                let offset = reader.whole();
+                valid_end = offset;
+                // Trust ends at the first line that is torn — no newline, the
+                // end of the file included — runs past the bound, or does not
+                // parse.
+                let line = match reader.next_line().map_err(with_file)? {
+                    Next::Line(line) => line,
+                    Next::Long { .. } => {
+                        damaged = true;
+                        break;
                     }
+                    Next::Tail(_) => {
+                        torn = true;
+                        break;
+                    }
+                    Next::End => break,
+                };
+                let Some(record) = parse_line(line) else {
+                    damaged = true;
+                    break;
+                };
+                match record {
+                    Record::Fence(n) if n <= head => coverage = coverage.max(n),
+                    Record::Entry(at, m) if at <= head => {
+                        coverage = coverage.max(at);
+                        disordered |= last_at.is_some_and(|last| at < last);
+                        last_at = Some(at);
+                        if keep(at) {
+                            entries.push((at, m));
+                        }
+                    }
+                    Record::Entry(at, _) => {
+                        foreign = true;
+                        first_foreign.get_or_insert(offset);
+                        foreign_entries = Some(EntryLines::with(foreign_entries, at));
+                    }
+                    Record::Fence(_) => foreign = true,
                 }
-                Record::Entry(at, _) => {
-                    foreign = true;
-                    first_foreign.get_or_insert(offset);
-                    foreign_entries = Some(EntryLines::with(foreign_entries, at));
-                }
-                Record::Fence(_) => foreign = true,
             }
         }
         // The line the scan stopped on, read for the caller's case: a torn
         // line — no newline, the file's end — names its own position where
-        // its `at` stands whole; a whole line that does not parse is damage,
-        // its digits no witness, and the whole lines after it are read on —
-        // and it is the cut's class: a damaged line's cut is kept, a torn
-        // line's is gone.
-        let damaged = line.ends_with(b"\n");
+        // its `at` stands whole, its bytes lent by the reader; a whole line
+        // that does not parse, or one past the bound, is damage, its digits
+        // no witness, and the whole lines after it are read on — and it is
+        // the cut's class: a damaged line's cut is kept, a torn line's is
+        // gone.
         let (first, whole_after) = if damaged {
-            let mut whole_after = None;
-            loop {
-                line.clear();
-                if reader.read_until(b'\n', &mut line).map_err(with_file)? == 0 {
-                    break;
-                }
-                if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line) {
-                    if at <= head {
-                        whole_after = Some(EntryLines::with(whole_after, at));
-                    }
-                }
-            }
-            (None, whole_after)
-        } else {
-            (torn_position(&line).filter(|&at| at > coverage && at <= head), None)
-        };
-        drop(reader);
-        let len = file.metadata().map_err(with_file)?.len();
-        let (cut, kept) = if valid_end < len {
-            // A damaged line's cut is kept first, from the file itself —
-            // the bytes from the trusted end on, never held whole in memory
-            // — durably, before the truncation; a torn line's is not.
-            let kept = if damaged {
-                (&file).seek(SeekFrom::Start(valid_end)).map_err(with_file)?;
-                let dropped = (&file).take(len - valid_end);
-                Some(keep_dropped_lines(dir, name, valid_end, dropped).map_err(with_file)?)
-            } else {
-                None
+            let entry = |line: &[u8]| match parse_line(line) {
+                Some(Record::Entry(at, _)) => Some(at),
+                _ => None,
             };
-            // Cut, and answered: the caller says it, with its own case — in
-            // the attest store the cut can take primary state with it.
-            file.set_len(valid_end).map_err(with_file)?;
-            (Some(Cut { valid_end, len, trusted: coverage, first, whole_after }), kept)
+            (None, whole_lines_after(&path, valid_end, head, entry).map_err(with_file)?)
+        } else if torn {
+            let tail = reader.as_ref().map_or(&[][..], LineReader::tail_bytes);
+            (torn_position(tail).filter(|&at| at > coverage && at <= head), None)
         } else {
             (None, None)
         };
+        // The append handle: at the trusted end where the file stood, the
+        // module trusting the scan's count; made where none did, born 0600.
+        let mut file = match &reader {
+            Some(_) => Appender::open_at(&path, valid_end),
+            None => Appender::open(&path, 0o600),
+        }
+        .map_err(with_file)?;
+        drop(reader);
+        let len = fs::metadata(&path).map_err(with_file)?.len();
+        // A damaged line's cut is kept first, from the file itself — the
+        // bytes from the trusted end on, never held whole in memory —
+        // durably, before the cut; a torn line's is not.
+        let kept = if damaged {
+            let mut dropped = File::open(&path).map_err(with_file)?;
+            dropped.seek(SeekFrom::Start(valid_end)).map_err(with_file)?;
+            let dropped = dropped.take(len - valid_end);
+            Some(keep_dropped_lines(dir, name, valid_end, dropped).map_err(with_file)?)
+        } else {
+            None
+        };
+        // Cut at the open, after the keep, through the module, and
+        // answered: the caller says it, with its own case — in the attest
+        // store the cut can take primary state with it.
+        let cut = file.cut(Fsync::None).map_err(with_file)?.map(|tail| Cut {
+            valid_end: tail.at,
+            len: tail.len,
+            trusted: coverage,
+            first,
+            whole_after,
+        });
         let mut this = LineFile {
             file,
             dir: dir.to_path_buf(),
@@ -438,6 +486,8 @@ impl LineFile {
             synced: 0,
             #[cfg(any(test, feature = "test-hooks"))]
             fail_next_rewrite_past_rename: false,
+            #[cfg(any(test, feature = "test-hooks"))]
+            unwritable: false,
         };
         let mut foreign_kept = None;
         if foreign {
@@ -449,13 +499,16 @@ impl LineFile {
         Ok((this, entries, replayed))
     }
 
-    /// Returns the file's length in bytes, as its handle reads it.
+    /// Returns the file's length in bytes, as the file stands at its name.
+    ///
+    /// After the open's cut it is the whole lines' bytes: the attest store's
+    /// open line reads it once the replay has cut the file.
     ///
     /// # Errors
     ///
-    /// The handle's metadata could not be read.
+    /// The file's metadata could not be read.
     pub(crate) fn len(&self) -> io::Result<u64> {
-        self.file.metadata().map(|m| m.len())
+        fs::metadata(self.dir.join(self.name)).map(|m| m.len())
     }
 
     /// Returns the file's coverage.
@@ -500,12 +553,41 @@ impl LineFile {
         if self.stopped.is_some() {
             return Ok(());
         }
-        if let Err(e) = self.file.write_all(&line_bytes(&record_object(at, fields))) {
+        if let Err(e) = self.write(&line_bytes(&record_object(at, fields))) {
             self.stopped = Some(at);
             return Err(e);
         }
         self.coverage = self.coverage.max(at);
         Ok(())
+    }
+
+    /// Writes `line`, newline-terminated, where the file's whole lines end.
+    ///
+    /// It is the module's append (`skep_util::file::Appender::append`): the
+    /// line and its `\n` in one write, a tail past the whole lines cut off
+    /// first — the rule's own, which a line this file writes never meets,
+    /// the open having cut the file — and a write that fails cut back to the
+    /// whole lines, so the next open reads no half-written line. Not fsynced
+    /// (the module doc); the attest store's sync follows through the file's
+    /// second handle. The test seam refuses the write inside the module's
+    /// own closure, so the failure takes the path a disk's takes.
+    ///
+    /// # Errors
+    ///
+    /// The write's failure, the file cut back; or the cut-back's beside it,
+    /// in the one error the module folds them into.
+    fn write(&mut self, line: &[u8]) -> io::Result<()> {
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        #[cfg(any(test, feature = "test-hooks"))]
+        {
+            if self.unwritable {
+                let refused = |_: &mut File, _: &[u8]| -> io::Result<()> {
+                    Err(io::Error::other("test seam: the write refused"))
+                };
+                return self.file.append_by(line, OnTail::Cut, refused).map(drop);
+            }
+        }
+        self.file.append(line, OnTail::Cut, Fsync::None).map(drop)
     }
 
     /// Appends one record and reports a failed write rather than returning it.
@@ -573,13 +655,14 @@ impl LineFile {
 
     /// Returns a second handle on this file, for its sync alone.
     ///
-    /// It is this file's open handle duplicated ([`SyncHandle`]).
+    /// It is this file's open handle duplicated ([`SyncHandle`]), the
+    /// module's second handle (`skep_util::file::Appender::sync_handle`).
     ///
     /// # Errors
     ///
     /// The OS refused to duplicate the handle.
     pub(crate) fn sync_handle(&self) -> io::Result<SyncHandle> {
-        self.file.try_clone().map(SyncHandle)
+        self.file.sync_handle().map(SyncHandle)
     }
 
     /// Settles `owed`, its sync through the file's [`SyncHandle`] made.
@@ -602,7 +685,9 @@ impl LineFile {
 
     /// Syncs the file's data to disk (`sync_data`).
     ///
-    /// Every line appended so far is made durable.
+    /// Every line appended so far is made durable — through the file's
+    /// second handle, taken for the call: the attest store's open asks it
+    /// once, for the lines it rebuilt.
     ///
     /// # Errors
     ///
@@ -610,7 +695,7 @@ impl LineFile {
     /// — whether the lines reached the disk is then unknown, and the next
     /// open's replay is what decides what it covers.
     pub(crate) fn sync(&mut self) -> io::Result<()> {
-        match self.file.sync_data() {
+        match self.file.sync_handle().and_then(|handle| handle.sync_data()) {
             Ok(()) => {
                 #[cfg(any(test, feature = "test-hooks"))]
                 {
@@ -637,17 +722,14 @@ impl LineFile {
 
     /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`.
     ///
-    /// It swaps this file's handle for a read-only one on the same file, so
-    /// its next write fails at the OS, as a full or failing disk's would, and
-    /// the failure takes the path a real one takes. Not a stable API.
-    ///
-    /// # Errors
-    ///
-    /// The OS refused to open the file read-only.
+    /// Every later write of this file is refused, inside the module's own
+    /// write closure ([`LineFile::write`]) — where the plain form writes, the
+    /// seam answers a failure — so the failure takes the path a full or
+    /// failing disk's takes: the stop, the line and, in the attest store,
+    /// the halt. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn make_unwritable(&mut self) -> io::Result<()> {
-        self.file = File::open(self.dir.join(self.name))?;
-        Ok(())
+    pub(crate) fn make_unwritable(&mut self) {
+        self.unwritable = true;
     }
 
     /// The test seam that fails the next rewrite past its rename.
@@ -729,7 +811,7 @@ impl LineFile {
         if self.stopped.is_some() || covered <= self.coverage {
             return Ok(());
         }
-        self.file.write_all(&fence_line(covered))?;
+        self.write(&fence_line(covered))?;
         self.coverage = covered;
         Ok(())
     }
@@ -764,10 +846,10 @@ impl LineFile {
 
     /// Rewrites the whole file as `records` behind a fence at `covered`.
     ///
-    /// It goes through a temp file renamed over the original — the offset
-    /// array re-derived whole at the open where `commits.log`'s offsets
-    /// moved, and the unit suite's rewrite. `records` are whole record
-    /// objects already carrying their `at`;
+    /// It goes through the `.compact` twin renamed over the original — the
+    /// offset array re-derived whole at the open where `commits.log`'s
+    /// offsets moved, and the unit suite's rewrite. `records` are whole
+    /// record objects already carrying their `at`;
     /// [`super::super::sidecar::line_bytes`] is what makes each a line. A
     /// rewrite that keeps the file's records and adds to them is
     /// [`LineFile::rewrite_keeping`].
@@ -776,18 +858,19 @@ impl LineFile {
     ///
     /// [`RewriteFail`], which carries the side of the rename a failure fell
     /// on, since the two leave different files behind: *before* it the old
-    /// file stands whole and this handle still names it, nothing lost — save
-    /// at the walk's landing, where the old file is short of the region and
-    /// the landing stops it ([`LineFile::stop_at`]); *past* it the new file
-    /// is in place and this handle names the *replaced* one, which no open
-    /// reads, so the file is stopped for the uptime as a failed append stops
-    /// it — said once per uptime, here, at the stop's transition
-    /// (`operations.md` §1.1 row 30): a stopped file rewritten again moves
-    /// its stop in silence to the newest fence where that rewrite fails past
-    /// its rename again, the standing line re-saying it — its coverage the
-    /// fence the new file carries, which the next open re-derives from. At
-    /// open either side is fatal; while serving the caller reports the
-    /// before-rename arm and moves on.
+    /// file stands whole and this handle still names it, the twin removed,
+    /// nothing lost — save at the walk's landing, where the old file is
+    /// short of the region and the landing stops it ([`LineFile::stop_at`]);
+    /// *past* it — the directory's sync after the rename refused, or the
+    /// reopen — the new file is in place and this handle names the
+    /// *replaced* one, which no open reads, so the file is stopped for the
+    /// uptime as a failed append stops it — said once per uptime, here, at
+    /// the stop's transition (`operations.md` §1.1 row 30): a stopped file
+    /// rewritten again moves its stop in silence to the newest fence where
+    /// that rewrite fails past its rename again, the standing line re-saying
+    /// it — its coverage the fence the new file carries, which the next open
+    /// re-derives from. At open either side is fatal; while serving the
+    /// caller reports the before-rename arm and moves on.
     pub(crate) fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> Result<(), RewriteFail> {
         let lines = records.iter().map(line_bytes);
         self.rewrite_with(
@@ -886,13 +969,12 @@ impl LineFile {
             return Ok(());
         }
         let path = self.dir.join(self.name);
-        let (cut_at, len) = {
-            let cursor = Cursor::open_above(&path, covered)?;
-            (cursor.offset(), self.file.metadata()?.len())
-        };
-        if cut_at < len {
-            self.file.set_len(cut_at)?;
-        }
+        let cut_at = Cursor::open_above(&path, covered)?.offset();
+        // The module's cut at the position: the handle reopened trusting
+        // the cursor's byte as the whole lines' end, the lines past it cut.
+        let mut file = Appender::open_at(&path, cut_at)?;
+        file.cut(Fsync::None)?;
+        self.file = file;
         self.coverage = match Cursor::line_before(&path, cut_at)? {
             Some(line) => super::window::position_of(&line).unwrap_or(0).min(covered),
             None => 0,
@@ -902,39 +984,41 @@ impl LineFile {
 
     /// Writes the file anew through `body`, fenced at `covered`, and reopens it.
     ///
-    /// It is the one rewrite path: the temp file created, `body` writing
-    /// the records into it, the fence last, the sync, the rename, then the
-    /// reopen — and the stop on a failure past the rename, said once
-    /// ([`LineFile::rewrite`] states both sides).
+    /// It is the one rewrite path, the module's publish
+    /// (`skep_util::file::publish_by`) through the `.compact` twin: the twin
+    /// made, `body` writing the records into it, the fence last, the sync,
+    /// the rename, the directory's sync, then the reopen — and the stop on a
+    /// failure past the rename, the directory's sync's or the reopen's, said
+    /// once ([`LineFile::rewrite`] states both sides).
     ///
     /// # Errors
     ///
     /// [`RewriteFail`], the side of the rename the failure fell on.
     fn rewrite_with(
         &mut self,
-        body: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+        body: impl FnOnce(&mut dyn Write) -> io::Result<()>,
         covered: u64,
     ) -> Result<(), RewriteFail> {
         let path = self.dir.join(self.name);
-        let tmp = self.dir.join(format!("{}.compact", self.name));
-        let renamed = (|| -> io::Result<()> {
-            let mut out = BufWriter::new(create_rewrite_temp(&tmp)?);
+        let twin = self.dir.join(format!("{}.compact", self.name));
+        let published = publish_by(&path, &twin, 0o600, OnStale::Replace, |f| {
+            let mut out = BufWriter::new(f);
             body(&mut out)?;
             out.write_all(&fence_line(covered))?;
-            let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
-            f.sync_all()?;
-            drop(f);
-            std::fs::rename(&tmp, &path)
-        })();
-        renamed.map_err(RewriteFail::BeforeRename)?;
-        #[cfg(any(test, feature = "test-hooks"))]
-        let reopened = if std::mem::take(&mut self.fail_next_rewrite_past_rename) {
-            Err(io::Error::other("test seam: the rewritten file's reopen refused"))
-        } else {
-            open_line_file(&path)
+            out.flush()
+        });
+        let reopened = match published {
+            Ok(()) => self.reopen(&path),
+            Err(failed) => match failed.step {
+                PublishStep::Create | PublishStep::Write | PublishStep::Sync | PublishStep::Rename => {
+                    return Err(RewriteFail::BeforeRename(failed.error))
+                }
+                // Past the rename: the rewrite stands whole at its name and
+                // the handle names the file it replaced — the stop, as a
+                // refused reopen's.
+                PublishStep::DirSync => Err(failed.error),
+            },
         };
-        #[cfg(not(any(test, feature = "test-hooks")))]
-        let reopened = open_line_file(&path);
         self.coverage = covered;
         match reopened {
             Ok(file) => {
@@ -965,22 +1049,26 @@ impl LineFile {
     ///
     /// Every entry line at or below `head` is copied verbatim, in file order,
     /// then one fence at the coverage — through `<file>.compact` renamed over
-    /// the original, a line at a time as [`LineFile::open`]'s scan is. A line
-    /// is copied whether or not a caller kept it: in the attest store a line
-    /// no caller keeps lies below the floor and is an entry signature's only
-    /// copy, so its bytes are moved and never re-rendered. The file is already
-    /// cut at its trusted end, so every line read here is whole. The entry
-    /// lines above `head` — another journal's, or the cut commits' own after
-    /// a journal tail cut — are kept beside the file before the rewrite
-    /// ([`keep_dropped_lines`]), named by `first_foreign`, the byte the first
-    /// of them begins at, and gathered in memory first: they are the lines a
-    /// copy holds past its journal's head, a bounded few. Answers the kept
-    /// name, `None` where no entry line lay above the head (a fence alone).
+    /// the original and the directory synced, the module's publish
+    /// (`skep_util::file::publish_by`), a line at a time as
+    /// [`LineFile::open`]'s scan is. A line is copied whether or not a caller
+    /// kept it: in the attest store a line no caller keeps lies below the
+    /// floor and is an entry signature's only copy, so its bytes are moved
+    /// and never re-rendered. The file is already cut at its trusted end, so
+    /// every line read here is whole. The entry lines above `head` — another
+    /// journal's, or the cut commits' own after a journal tail cut — are kept
+    /// beside the file before the rewrite ([`keep_dropped_lines`]), named by
+    /// `first_foreign`, the byte the first of them begins at, and gathered in
+    /// memory first: they are the lines a copy holds past its journal's head,
+    /// a bounded few. Answers the kept name, `None` where no entry line lay
+    /// above the head (a fence alone).
     ///
     /// # Errors
     ///
-    /// The OS refused the keep, the temp file's creation, a read, a write,
-    /// the sync, the rename or the reopen.
+    /// The OS refused the keep, the twin's creation, a read, a write, the
+    /// sync, the rename, the directory's sync or the reopen — fatal at the
+    /// open, where alone this runs, the twin removed where the failure fell
+    /// before the rename.
     fn purge_foreign(
         &mut self,
         head: u64,
@@ -1007,66 +1095,48 @@ impl LineFile {
             }
             None => None,
         };
-        let tmp = self.dir.join(format!("{}.compact", self.name));
-        let mut out = BufWriter::new(create_rewrite_temp(&tmp)?);
-        let mut reader = BufReader::new(File::open(&path)?);
-        let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line)? > 0 {
-            if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line) {
-                if at <= head {
-                    out.write_all(&line)?;
+        let twin = self.dir.join(format!("{}.compact", self.name));
+        let coverage = self.coverage;
+        publish_by(&path, &twin, 0o600, OnStale::Replace, |f| {
+            let mut out = BufWriter::new(f);
+            let mut reader = BufReader::new(File::open(&path)?);
+            let mut line = Vec::new();
+            while reader.read_until(b'\n', &mut line)? > 0 {
+                if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line)
+                {
+                    if at <= head {
+                        out.write_all(&line)?;
+                    }
                 }
+                line.clear();
             }
-            line.clear();
-        }
-        out.write_all(&fence_line(self.coverage))?;
-        let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, &path)?;
-        self.file = open_line_file(&path)?;
+            out.write_all(&fence_line(coverage))?;
+            out.flush()
+        })
+        .map_err(|failed| failed.error)?;
+        self.file = Appender::open_at(&path, fs::metadata(&path)?.len())?;
         Ok(kept)
     }
-}
 
-/// Opens a line file for reading and appending, created where absent.
-///
-/// It is born `0600` on unix, the mode set at creation, which the process
-/// umask can narrow and never widen; a file that already stands keeps its
-/// mode. It is the one open every line file takes, the attest store's
-/// included: at the replay, and after each rewrite's rename.
-///
-/// # Errors
-///
-/// The OS refused the open.
-fn open_line_file(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).read(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+    /// Reopens the file at its name after a rewrite's rename, at its length.
+    ///
+    /// The length is the rewrite's, read off the file that now stands at the
+    /// name, which the module trusts as its whole lines' end. The test seam
+    /// refuses it where armed (`LineFile::fail_next_rewrite_past_rename`),
+    /// and disarms.
+    ///
+    /// # Errors
+    ///
+    /// The length's read or the open failing, or the seam's refusal.
+    fn reopen(&mut self, path: &Path) -> io::Result<Appender> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        {
+            if std::mem::take(&mut self.fail_next_rewrite_past_rename) {
+                return Err(io::Error::other("test seam: the rewritten file's reopen refused"));
+            }
+        }
+        Appender::open_at(path, fs::metadata(path)?.len())
     }
-    opts.open(path)
-}
-
-/// Creates a rewrite's temp file afresh.
-///
-/// It is born `0600` on unix, the mode set at creation, which the rename
-/// carries onto the line file.
-///
-/// # Errors
-///
-/// The OS refused the creation.
-fn create_rewrite_temp(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)
 }
 
 /// Returns one record object for `at` from its fields.
@@ -1164,19 +1234,18 @@ pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
 
 #[cfg(test)]
 impl LineFile {
-    /// Returns a [`LineFile`] whose appends *fail*.
+    /// Returns a [`LineFile`] whose appends *fail*, the seam refusing each.
     ///
-    /// It holds a read-only handle on the file in `dir`, which is the one
+    /// The file is in `dir`, made where absent, and every write is refused
+    /// inside the module's own write closure ([`LineFile::write`]) — the one
     /// condition the stop rule is about and the one no portable test can
-    /// produce from [`LineFile::open`]'s handle.
+    /// produce from a disk.
     ///
     /// # Panics
     ///
-    /// Panics where the file cannot be created, or opened read-only.
+    /// Panics where the file cannot be opened for appending.
     fn over_unwritable(dir: &Path, name: &'static str, coverage: u64) -> LineFile {
-        let path = dir.join(name);
-        File::create(&path).expect("create the file to be opened read-only");
-        let file = File::open(&path).expect("a read-only handle");
+        let file = Appender::open(&dir.join(name), 0o600).expect("the file, made where absent");
         LineFile {
             file,
             dir: dir.to_path_buf(),
@@ -1186,6 +1255,7 @@ impl LineFile {
             stopped: None,
             synced: 0,
             fail_next_rewrite_past_rename: false,
+            unwritable: true,
         }
     }
 }

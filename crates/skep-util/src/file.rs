@@ -18,7 +18,8 @@
 //!
 //! * The reads: [`read_lines`], a file read whole as its lines and its
 //!   [`Tail`]; [`LineReader`], the same read one line at a time within a
-//!   bound, for a file never held whole.
+//!   bound, for a file never held whole, the torn line's bytes lent once
+//!   the read has ended at it ([`LineReader::tail_bytes`]).
 //! * The appends: [`Appender`], opened where the file's last whole line
 //!   ends — found by a scan back from the end ([`Appender::open`]) or
 //!   trusted from the caller's own read ([`Appender::open_at`]) — which
@@ -26,8 +27,10 @@
 //!   ([`OnTail::Cut`]) or closed by a mark in that same write
 //!   ([`OnTail::Close`]), then synced as asked ([`Fsync`]); a write that
 //!   fails is cut back to the whole lines, the cut's own failure answered
-//!   beside the write's ([`AppendFailed`]); and the cut a caller makes at
-//!   the open, before any write ([`Appender::cut`]).
+//!   beside the write's ([`AppendFailed`]); the cut a caller makes at the
+//!   open, before any write ([`Appender::cut`]); and a second handle on
+//!   the file, for a sync the caller makes off its own lock
+//!   ([`Appender::sync_handle`]).
 //! * The whole-file writes: [`write_once`], a new file at its name, synced,
 //!   a failed write removed; [`publish`], a file put at its name whole or
 //!   not at all — a temp beside the name, held by an advisory lock for the
@@ -129,13 +132,17 @@ pub fn read_lines(path: &Path) -> io::Result<Option<Lines>> {
 /// the read: a line past the bound ([`Next::Long`]), a tail
 /// ([`Next::Tail`]) or the file's end ([`Next::End`]). The bytes of the
 /// whole lines read so far are counted ([`LineReader::whole`]), so the
-/// caller's next append is written where the last of them ends.
+/// caller's next append is written where the last of them ends; the torn
+/// line's bytes stay lent once the read has ended at a tail
+/// ([`LineReader::tail_bytes`]).
 #[derive(Debug)]
 pub struct LineReader {
     reader: BufReader<File>,
     bound: usize,
     whole: u64,
     done: bool,
+    /// Whether the read ended at a tail, whose bytes `buf` then holds.
+    torn: bool,
     buf: Vec<u8>,
 }
 
@@ -169,7 +176,7 @@ impl LineReader {
     /// The open's I/O error, save a file not found.
     pub fn open(path: &Path, bound: usize) -> io::Result<Option<LineReader>> {
         match File::open(path) {
-            Ok(file) => Ok(Some(LineReader { reader: BufReader::new(file), bound, whole: 0, done: false, buf: Vec::new() })),
+            Ok(file) => Ok(Some(LineReader { reader: BufReader::new(file), bound, whole: 0, done: false, torn: false, buf: Vec::new() })),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
@@ -203,12 +210,30 @@ impl LineReader {
         if self.buf.len() > self.bound {
             return Ok(Next::Long { at: self.whole });
         }
+        self.torn = true;
         Ok(Next::Tail(Tail { at: self.whole, len: self.whole + read as u64 }))
     }
 
     /// Returns the bytes of the whole lines read so far, `\n`s included.
     pub fn whole(&self) -> u64 {
         self.whole
+    }
+
+    /// Returns the torn line's bytes, once the read has ended at a tail.
+    ///
+    /// They are the bytes [`Next::Tail`] stood for — the line being written
+    /// when the process died, without its `\n` — lent for a caller that reads
+    /// a figure off them, the position a torn feed line names, without a
+    /// second read of the file; they stand through every later call, which
+    /// answers [`Next::End`]. Empty before the read has ended, where it ended
+    /// at the file's end, and where it ended at a line past the bound, which
+    /// is no tail.
+    pub fn tail_bytes(&self) -> &[u8] {
+        if self.torn {
+            &self.buf
+        } else {
+            &[]
+        }
     }
 }
 
@@ -413,6 +438,24 @@ impl Appender {
     /// Returns the bytes of the file's whole lines, where the next line lands.
     pub fn whole(&self) -> u64 {
         self.whole
+    }
+
+    /// Returns a second handle on the file, for a sync off the caller's lock.
+    ///
+    /// It is the appender's own open file duplicated (`try_clone`): one open
+    /// file description, so a sync through the handle makes durable every
+    /// line the appender wrote before it, and a failure there is the file's.
+    /// The attest store's way: its line is written under the feed's lock and
+    /// made durable through this handle once that lock is released, so no
+    /// page waits on the fsync. The handle names the file the appender holds
+    /// now — the one it was opened on, which a rewrite's rename replaces — so
+    /// a caller that reopens after a rename takes the handle anew.
+    ///
+    /// # Errors
+    ///
+    /// The duplication's I/O error.
+    pub fn sync_handle(&self) -> io::Result<File> {
+        self.file.try_clone()
     }
 }
 

@@ -4,8 +4,8 @@
 //! the daemon, the media crate, the blob store, the client library and the
 //! shell's core stand above it — in one home, so the media crate's move
 //! out of the daemon copies no helper, the daemon's five pools keep one
-//! permit type, and the client's, the shell's and the blob store's files
-//! keep one tail rule:
+//! permit type, and the client's, the shell's, the blob store's and the
+//! daemon's core's files keep one tail rule:
 //!
 //! * [`permits`] — the counting permit pool: a try-acquire with no queue
 //!   and no blocking, whose guard returns its slot on drop. One mechanism
@@ -34,15 +34,17 @@
 //!   setting, so the open's report names each setting's source.
 //! * [`file`](mod@file) — a file one process writes and reads back after
 //!   a crash, a kill or a refused write, under one tail rule: a read that
-//!   hands back a file's lines as bytes and classifies its tail, an append written
-//!   where the last whole line ends with a torn tail first cut off or
-//!   closed by a mark — or cut at the open where the caller asks it there,
-//!   what the cut drops kept beside the file first — a whole file written
-//!   once or published by a locked temp and a rename, the temp the module's
-//!   or the caller's `.compact` twin, a removal that answers what it did,
-//!   and the sweep of the temps a dead run left — the client's key store,
-//!   bindings file and anchor export, the shell's held-writes file, the dev
-//!   board's manifest and the blob store's two logs take it.
+//!   hands back a file's lines as bytes and classifies its tail, the torn
+//!   line's bytes lent, an append written where the last whole line ends
+//!   with a torn tail first cut off or closed by a mark — or cut at the
+//!   open where the caller asks it there, what the cut drops kept beside
+//!   the file first — a second handle for a sync off the caller's lock, a
+//!   whole file written once or published by a locked temp and a rename,
+//!   the temp the module's or the caller's `.compact` twin, a removal that
+//!   answers what it did, and the sweep of the temps a dead run left — the
+//!   client's key store, bindings file and anchor export, the shell's
+//!   held-writes file, the dev board's manifest, the blob store's two logs
+//!   and the daemon's commit log and five feed files take it.
 //!
 //! ## The rule of membership
 //!

@@ -790,16 +790,11 @@ impl Commits {
         self.feed.attest_store_synced_through()
     }
 
-    /// The test seam that fails the attest store's next write at the OS.
+    /// The test seam that refuses the attest store's next write.
     ///
     /// It is behind `skepd::Daemon::fail_the_attest_stores_next_write`, the
     /// failure answered as any store failure is (the module doc's halt). Not
     /// a stable API.
-    ///
-    /// # Panics
-    ///
-    /// Panics where the feed's seam does: the read-only handle on the attest
-    /// store's file could not be opened.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn fail_the_attest_stores_next_write(&self) {

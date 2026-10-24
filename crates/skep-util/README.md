@@ -33,26 +33,30 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The file under the tail rule**, `file` — a file one process writes and
   reads back after a crash, a kill or a refused write: `read_lines` and
   the streaming `LineReader`, which hand back a file's lines as bytes and
-  classify its tail (`Tail`); `Appender`, which writes a line and its
-  newline in one write where the last whole line ends, a torn tail first
-  cut off (`OnTail::Cut`) or closed by a mark (`OnTail::Close`), cuts a
-  failed write back — the two failures folded into one error, or kept
-  apart for a caller that stops on the second (`append_by_telling`,
-  `AppendFailed`) — and cuts the tail at the open where the caller asks it
-  there (`cut`); `write_once`, a new file at its name, synced, a failed
-  write removed; `publish`, a file put at its name whole or not at all by
-  a locked temp, a rename and the directory's sync, and `publish_by`, the
-  same through a temp the caller names and a write it streams, each
-  failure by its step (`PublishStep`), the file left standing past the
-  rename; `keep_beside`, the bytes a cut drops kept beside the file at the
-  first free `.cut-<byte>` name (`KeptName`), durably, a half-kept file
-  left standing (`KeepStep`); `remove`, answering `Gone` or `Absent` or
-  the failure; and `stale` with `sweep_stale`, the temps a dead run left,
-  told from a live run's by the lock its writer holds. The client's key
-  store, bindings file and anchor export, the shell's held-writes file, the
-  dev board's manifest and the blob store's two logs take it; the parse of
-  a line, the policy for a whole line that does not read, when to keep and
-  when to cut, every word said and the directory's lock stay the caller's.
+  classify its tail (`Tail`), the reader lending the torn line's bytes
+  once it has ended at one (`tail_bytes`); `Appender`, which writes a
+  line and its newline in one write where the last whole line ends, a
+  torn tail first cut off (`OnTail::Cut`) or closed by a mark
+  (`OnTail::Close`), cuts a failed write back — the two failures folded
+  into one error, or kept apart for a caller that stops on the second
+  (`append_by_telling`, `AppendFailed`) — cuts the tail at the open where
+  the caller asks it there (`cut`), and hands out a second handle on the
+  file for a sync the caller makes off its own lock (`sync_handle`);
+  `write_once`, a new file at its name, synced, a failed write removed;
+  `publish`, a file put at its name whole or not at all by a locked temp,
+  a rename and the directory's sync, and `publish_by`, the same through a
+  temp the caller names and a write it streams, each failure by its step
+  (`PublishStep`), the file left standing past the rename; `keep_beside`,
+  the bytes a cut drops kept beside the file at the first free
+  `.cut-<byte>` name (`KeptName`), durably, a half-kept file left standing
+  (`KeepStep`); `remove`, answering `Gone` or `Absent` or the failure; and
+  `stale` with `sweep_stale`, the temps a dead run left, told from a live
+  run's by the lock its writer holds. The client's key store, bindings
+  file and anchor export, the shell's held-writes file, the dev board's
+  manifest, the blob store's two logs and the daemon's commit log and five
+  feed files take it; the parse of a line, the policy for a whole line
+  that does not read, when to keep and when to cut, every word said and
+  the directory's lock stay the caller's.
 
 An item lives here if and only if at least two crates take it and it has
 no subject of its own — a constant is configuration, not a utility, and

@@ -12,7 +12,10 @@
 //! the temp the caller names, each failure by its step, the file standing
 //! past the rename; a temp a live writer holds is skipped by the listing
 //! and the sweep; `keep_beside` takes the first free `.cut-` name and
-//! leaves a half-kept file standing; `remove`'s three answers.
+//! leaves a half-kept file standing; `remove`'s three answers; the torn
+//! line's bytes are lent once the read has ended at a tail and at no other
+//! end; a second handle syncs the lines the appender wrote and names the
+//! file the appender was opened on.
 
 use std::fs;
 use std::io;
@@ -107,6 +110,79 @@ fn a_line_past_the_bound_ends_the_read_naming_its_byte() {
     let mut reader = LineReader::open(&path, 8).unwrap().unwrap();
     assert_eq!(reader.next_line().unwrap(), Next::Line(b"one"));
     assert_eq!(reader.next_line().unwrap(), Next::Long { at: 4 }, "a tail past the bound is long, never a crash's");
+}
+
+/// THE TORN LINE's BYTES ARE LENT once the read has ended at a tail, and at
+/// no other end: empty before the read has ended and after each whole line,
+/// the tail's own bytes once `Tail` is answered and through the `End`s after
+/// it, over a file of one torn line too, and a line exactly at the bound
+/// left as the tail; a line past the bound ends the read as `Long` and
+/// lends nothing — it is no tail — and a file ending in `\n` lends nothing
+/// (the mutant that answers an empty slice leaves the position a torn feed
+/// line names unread).
+#[test]
+fn the_torn_lines_bytes_are_lent_once_the_read_has_ended_at_a_tail() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("lines");
+    fs::write(&path, b"one\ntwo\nthr").unwrap();
+    let mut reader = LineReader::open(&path, 8).unwrap().unwrap();
+    assert!(reader.tail_bytes().is_empty(), "nothing lent before the read");
+    assert_eq!(reader.next_line().unwrap(), Next::Line(b"one"));
+    assert!(reader.tail_bytes().is_empty(), "a whole line is no tail");
+    assert_eq!(reader.next_line().unwrap(), Next::Line(b"two"));
+    assert_eq!(reader.next_line().unwrap(), Next::Tail(Tail { at: 8, len: 11 }));
+    assert_eq!(reader.tail_bytes(), b"thr", "the torn line's bytes, once the read ended at it");
+    assert_eq!(reader.next_line().unwrap(), Next::End);
+    assert_eq!(reader.tail_bytes(), b"thr", "and through the answers after");
+    fs::write(&path, b"torn").unwrap();
+    let mut reader = LineReader::open(&path, 8).unwrap().unwrap();
+    assert_eq!(reader.next_line().unwrap(), Next::Tail(Tail { at: 0, len: 4 }));
+    assert_eq!(reader.tail_bytes(), b"torn", "a file of one torn line");
+    fs::write(&path, b"one\n12345678").unwrap();
+    let mut reader = LineReader::open(&path, 8).unwrap().unwrap();
+    assert_eq!(reader.next_line().unwrap(), Next::Line(b"one"));
+    assert_eq!(reader.next_line().unwrap(), Next::Tail(Tail { at: 4, len: 12 }), "a tail at the bound exactly");
+    assert_eq!(reader.tail_bytes(), b"12345678");
+    fs::write(&path, b"one\n123456789").unwrap();
+    let mut reader = LineReader::open(&path, 8).unwrap().unwrap();
+    assert_eq!(reader.next_line().unwrap(), Next::Line(b"one"));
+    assert_eq!(reader.next_line().unwrap(), Next::Long { at: 4 });
+    assert!(reader.tail_bytes().is_empty(), "a line past the bound is no tail: nothing lent");
+    fs::write(&path, b"one\n").unwrap();
+    let mut reader = LineReader::open(&path, 8).unwrap().unwrap();
+    assert_eq!(reader.next_line().unwrap(), Next::Line(b"one"));
+    assert_eq!(reader.next_line().unwrap(), Next::End);
+    assert!(reader.tail_bytes().is_empty(), "a file ending in a newline has no tail");
+}
+
+/// A SECOND HANDLE SYNCS THE LINES THE APPENDER WROTE: the handle is the
+/// appender's own open file duplicated, so it sees every line written
+/// before and after it was taken and its `sync_data` makes them durable
+/// (its making the OS's, which no test observes); it outlives the appender;
+/// and it names the file the appender was opened on — after a rewrite's
+/// rename it still names the replaced file, so a caller that reopens takes
+/// it anew (the mutant that opens the path afresh would sync the rewrite
+/// under a handle that still appends to the file it replaced).
+#[test]
+fn a_second_handle_syncs_the_lines_the_appender_wrote() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("feed-attest.log");
+    let mut appender = Appender::open(&path, 0o600).unwrap();
+    appender.append(b"{\"at\":1}", OnTail::Cut, Fsync::None).unwrap();
+    let handle = appender.sync_handle().unwrap();
+    assert_eq!(handle.metadata().unwrap().len(), appender.whole(), "the handle sees the line written before it");
+    handle.sync_data().unwrap();
+    appender.append(b"{\"at\":2}", OnTail::Cut, Fsync::None).unwrap();
+    assert_eq!(handle.metadata().unwrap().len(), appender.whole(), "and the line written after it: one open file");
+    handle.sync_data().unwrap();
+    drop(appender);
+    handle.sync_data().unwrap();
+    assert_eq!(lines_of(&path), ["{\"at\":1}", "{\"at\":2}"]);
+    // After a rewrite's rename the handle names the replaced file.
+    publish_by(&path, &tmp.path().join("feed-attest.log.compact"), 0o600, OnStale::Replace, |file| file.write_all(b"{\"at\":2}\n")).unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().len(), 9, "the rewrite stands at the name");
+    assert_eq!(handle.metadata().unwrap().len(), 18, "the handle still names the file the rename replaced");
+    handle.sync_data().unwrap();
 }
 
 /// EVERY TORN TAIL IS CUT at the next append and reported: over each prefix

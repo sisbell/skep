@@ -1,10 +1,11 @@
 //! # skep-util — the support crate below the daemon and the clients
 //!
 //! Five utilities two or more crates of the workspace take and none owns —
-//! the daemon, the media crate, the client library and the shell's core
-//! stand above it — in one home, so the media crate's move out of the
-//! daemon copies no helper, the daemon's five pools keep one permit type,
-//! and the client's and the shell's files keep one tail rule:
+//! the daemon, the media crate, the blob store, the client library and the
+//! shell's core stand above it — in one home, so the media crate's move
+//! out of the daemon copies no helper, the daemon's five pools keep one
+//! permit type, and the client's, the shell's and the blob store's files
+//! keep one tail rule:
 //!
 //! * [`permits`] — the counting permit pool: a try-acquire with no queue
 //!   and no blocking, whose guard returns its slot on drop. One mechanism
@@ -35,11 +36,13 @@
 //!   a crash, a kill or a refused write, under one tail rule: a read that
 //!   hands back a file's lines as bytes and classifies its tail, an append written
 //!   where the last whole line ends with a torn tail first cut off or
-//!   closed by a mark, a whole file written once or published by a locked
-//!   temp and a rename, a removal that answers what it did, and the sweep
-//!   of the temps a dead run left — the client's key store, bindings file
-//!   and anchor export and the shell's held-writes file and the dev board's
-//!   manifest take it.
+//!   closed by a mark — or cut at the open where the caller asks it there,
+//!   what the cut drops kept beside the file first — a whole file written
+//!   once or published by a locked temp and a rename, the temp the module's
+//!   or the caller's `.compact` twin, a removal that answers what it did,
+//!   and the sweep of the temps a dead run left — the client's key store,
+//!   bindings file and anchor export, the shell's held-writes file, the dev
+//!   board's manifest and the blob store's two logs take it.
 //!
 //! ## The rule of membership
 //!

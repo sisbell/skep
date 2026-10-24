@@ -39,6 +39,32 @@ above it.
 - `skep-kernel` — transactions, the journal, checkpoints and recovery. It
   knows nothing of what a transaction means; the world it stores is a
   type parameter the engine supplies. Its modules and rules: §The kernel.
+- `skep-util` — the support crate below the daemon, the media crate, the
+  blob store, the client and the shell: the five utilities two or more
+  crates take and none owns — the counting permit pool behind the daemon's
+  five bounded pools and, beside it, the edge tracker each bound that
+  refuses holds, so its saturation and its clearing are said once per
+  episode; the operator's notice line (`skepd: ` on every line; §The
+  support crate says why a library spells it); the JSON determinism
+  helpers — `obj`, the key-sorting object builder every JSON object the
+  daemon emits is built through, `hex_string` and its exact inverse
+  `parse_lower_hex` with `hex_nibble`; a setting's source; and the file
+  under one tail rule — `file`, the read that hands back a file's lines as
+  bytes and classifies its tail, the append written where the last whole
+  line ends with a crash's tail first cut off or closed by a mark, or cut
+  at the open where the caller asks it there, the whole file written once
+  or published by a locked temp and a rename, the temp the module's or the
+  caller's `.compact` twin, the bytes a cut drops kept beside the file
+  first, the removal that answers what it did, and the sweep of the temps
+  a dead run left — which the client's key store, bindings file and anchor
+  export, the shell's held-writes file, the dev board's manifest and the
+  blob store's two logs take. It depends on no other skep crate and on
+  `serde_json` alone, so it may stand anywhere in the foundation; it
+  stands here, above the blob store, because the blob store's two logs
+  take its `file` module and a crate takes only what is listed before it —
+  it holds no part of the world, and is what the crates that write files
+  lean on. No constant lives here: a constant is configuration, not a
+  utility. Its rules: §The support crate.
 - `skep-blobs` — the blob store (media lane B): the four media stores
   under one root — the files at `blobs/<designation>/<hex>`, the partials,
   the upload records and the lease log — the PUT's fsync order, REPLACE on
@@ -48,36 +74,16 @@ above it.
   every file is born with, the open's account of what it repaired, found
   and freed, the logs' sizes and their stops' figures, every I/O failure
   named by its file and its act, and the operator's two doors — the
-  read-only inspection and the pull's install by the PUT's order. It
-  depends on no other skep crate, knows a principal only as an opaque
-  string, holds no lock the daemon's write path takes, writes no operator
-  stream, and reads no limits record. One feature, default off:
+  read-only inspection and the pull's install by the PUT's order. Of the
+  skep crates it depends on `skep-util` alone, whose `file` module its two
+  logs are read, cut, appended, kept and rewritten through; it knows a
+  principal only as an opaque string, holds no lock the daemon's write
+  path takes, writes no operator stream, and reads no limits record. One
+  feature, default off:
   `test-hooks` compiles in the test seam, `store/hooks.rs` — a hold or an
   injected failure at a step of the finish, and the methods only tests
   call. `scripts/gate-full.sh` builds the library and its docs without it.
   Its modules and rules: §The blob store.
-- `skep-util` — the support crate below the daemon, the media crate, the
-  client and the shell: the five utilities two or more crates take and
-  none owns — the counting permit pool behind the daemon's five bounded
-  pools and, beside it, the edge tracker each bound that refuses holds, so
-  its saturation and its clearing are said once per episode; the
-  operator's notice line (`skepd: ` on every line; §The support crate says
-  why a library spells it); the JSON determinism helpers — `obj`, the
-  key-sorting object builder every JSON object the daemon emits is built
-  through, `hex_string` and its exact inverse `parse_lower_hex` with
-  `hex_nibble`; a setting's source; and the file under one tail rule —
-  `file`, the read that hands back a file's lines as bytes and classifies
-  its tail, the append written where the last whole line ends with a
-  crash's tail first cut off or closed by a mark, the whole file written
-  once or published by a locked temp and a rename, the removal that
-  answers what it did, and the sweep of the temps a dead run left — which
-  the client's key store, bindings file and anchor export and the shell's
-  held-writes file and the dev board's manifest take. It depends on no
-  other skep crate and on `serde_json` alone, so it may stand anywhere in
-  the foundation; it stands last because it holds no part of the world —
-  the crates above it are what a board is made of, and this one is what
-  the crates that write files lean on. No constant lives here: a constant
-  is configuration, not a utility. Its rules: §The support crate.
 - `skep-corpus` — the prose corpus a dev board is seeded from and the
   search budgets are measured over: a git repository read at one pinned
   commit through `git` alone — the records tier's filter, the paragraphs
@@ -85,8 +91,8 @@ above it.
   1–10 KiB (`cut-v1` over the tier, `cut-v2` over a chosen subtree), each
   document with the paragraphs it was joined from. It depends on no skep
   crate and on nothing but `std` and a `git` child process, so it may
-  stand anywhere; it stands here beside `skep-util` because, like it, it
-  holds no part of the world — it is what the search budgets suite
+  stand anywhere; it stands here, last of the foundation's leaves, because
+  it holds no part of the world — it is what the search budgets suite
   (`skep-search`, a dev-dependency) and the dev binary (`skep-cli`) lean
   on. Its rules: §The corpus crate.
 - `skep-http` — the plain HTTP/1.1 subset two programs speak over
@@ -98,8 +104,8 @@ above it.
   refuses with, `write_response` and `write_head`. No cap value, no CORS
   header and no event stream lives here: each is its caller's own. It
   depends on no other skep crate and on nothing but `std`, so it may stand
-  anywhere; it stands here beside `skep-util` and `skep-corpus` because,
-  like them, it holds no part of the world — it is what the dev provider
+  anywhere; it stands here beside `skep-corpus` because, like it, it holds
+  no part of the world — it is what the dev provider
   (`skep-cli`'s `skep-dev serve`) calls today and the provisioning service
   will call next. The daemon's own reader stays the daemon's and calls
   nothing here. Its rule of membership is its crate root's.
@@ -574,9 +580,14 @@ Rules that hold across its files:
   and an upload is never its chunks × the board's leases. The map and its
   index change together, by `LeaseMap`'s two acts alone, so the index holds
   the map's keys and no others.
-- **A torn line is only ever a log's tail** (`jsonl::Log`): a failed
-  append is cut back, and a log that cannot cut back, or whose compaction
-  failed past its rename, takes no append until a compaction completes.
+- **A torn line is only ever a log's tail** (`jsonl::Log`, over
+  `skep-util`'s `file` — §The support crate — through which each log is
+  read as lines, cut at the open once a damaged cut is kept beside it,
+  appended where its whole lines end and rewritten through its `.compact`
+  twin; what a line means, when to keep, the stop and every word are the
+  log's): a failed append is cut back, and a log that cannot cut back, or
+  whose compaction failed past its rename, takes no append until a
+  compaction completes.
   The store compacts at its open and at the caller's runtime compaction,
   so a log stopped while the store serves stays stopped until the next
   pass's compaction or the next open reads it afresh (`Store`). A finish
@@ -686,10 +697,11 @@ beside their code: `store.rs`'s, `uploads.rs`'s, `lease/map.rs`'s,
 ## The support crate, `skep-util`
 
 `skep-util` holds the five utilities two or more crates of the workspace
-take and none owns — the daemon, the media crate, the client library and
-the shell's core stand above it — so the media crate's move out of the
-daemon copies no helper, the daemon's five pools keep one permit type,
-and the client's and the shell's files keep one tail rule. Its modules
+take and none owns — the daemon, the media crate, the blob store, the
+client library and the shell's core stand above it — so the media crate's
+move out of the daemon copies no helper, the daemon's five pools keep one
+permit type, and the client's, the shell's and the blob store's files
+keep one tail rule. Its modules
 are declared in `src/lib.rs`, each with a line saying what it holds, and
 the crate doc there states the rule of membership and the program-name
 decision. `permits` — the counting permit pool (`Permits`, `Permit`): a
@@ -741,17 +753,25 @@ ends — found by a scan, or trusted from the caller's own read — a torn
 tail first cut off (`OnTail::Cut`, the held-writes file's way and the dev
 board's manifest's) or closed by a mark in the same write
 (`OnTail::Close`, the bindings file's, whose last line may be a person's
-own record), and cuts a failed write back to the whole lines, the cut's
-own failure named beside the write's; `write_once` makes a new file at
-its name, synced, a failed write removed; `publish` puts a file at its
-name whole or not at all — a temp beside the name held by an advisory
-lock for the write's life, synced, renamed, the directory synced;
-`remove` answers `Gone` or `Absent` or the failure, never a file
-destroyed that stands; and `stale` with `sweep_stale` list or unlink the
-temps a dead run left, told from a live run's by the lock its writer
-holds. Bytes in, bytes out: the parse of a line, the policy for a whole
-line that does not read, every word said and the directory's lock are
-each the caller's; the modes are handed in.
+own record) — or cut at the open where the caller asks it there
+(`Appender::cut`, the blob store's two logs' way, after their keep) — and
+cuts a failed write back to the whole lines, the cut's own failure named
+beside the write's, folded into one error or kept apart for a caller that
+stops on it (`AppendFailed`); `write_once` makes a new file at its name,
+synced, a failed write removed; `publish` puts a file at its name whole
+or not at all — a temp beside the name held by an advisory lock for the
+write's life, synced, renamed, the directory synced — and `publish_by`
+the same through a temp the caller names (the logs' `.compact` twin) and
+a write it streams, each failure named by its step and the file left
+standing past the rename; `keep_beside` keeps the bytes a cut drops at
+the first free `.cut-<byte>` name beside the file, durably, a half-kept
+file left standing; `remove` answers `Gone` or `Absent` or the failure,
+never a file destroyed that stands; and `stale` with `sweep_stale` list
+or unlink the temps a dead run left, told from a live run's by the lock
+its writer holds. Bytes in, bytes out: the parse of a line, the policy
+for a whole line that does not read, when to keep and when to cut, every
+word said and the directory's lock are each the caller's; the modes are
+handed in.
 
 Rules that hold across its files:
 

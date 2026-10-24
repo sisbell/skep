@@ -3,14 +3,18 @@
 //! The rule is the one the daemon's logs keep: a crash's tail — the bytes
 //! of ONE line with no `\n` at the file's end, the line being written when
 //! the process died and acknowledged to no one — is cut off or closed at
-//! the next write and answered for the caller to say once; what is not a
-//! crash's — a whole line that does not read, a temp a dead run left, a
-//! removal that fails — is answered as a fact and never destroyed unsaid.
-//! Bytes in, bytes out: a line is its bytes without the `\n`. The parse of
-//! a line, the policy for a whole line that does not read (halt on it,
-//! skip it, keep it beside the file), every word said and to whom, and the
-//! lock on the directory are each the caller's; the modes are handed in,
-//! and the module holds no constant, names no store and no engine.
+//! the next write, or cut at the open where the caller asks it there, and
+//! answered for the caller to say once; what is not a crash's — a whole
+//! line that does not read, a temp a dead run left, a removal that fails —
+//! is answered as a fact and never destroyed unsaid. Bytes in, bytes out:
+//! a line is its bytes without the `\n`. The parse of a line, the policy
+//! for a whole line that does not read (halt on it, skip it, keep it beside
+//! the file), WHEN to keep what a cut drops — the module keeps it where
+//! asked ([`keep_beside`]) and judges nothing — WHEN to cut (a daemon log
+//! cuts at the open after its keep, a client file at the next write), every
+//! word said and to whom, and the lock on the directory are each the
+//! caller's; the modes are handed in, and the module holds no constant,
+//! names no store and no engine.
 //!
 //! * The reads: [`read_lines`], a file read whole as its lines and its
 //!   [`Tail`]; [`LineReader`], the same read one line at a time within a
@@ -22,11 +26,16 @@
 //!   ([`OnTail::Cut`]) or closed by a mark in that same write
 //!   ([`OnTail::Close`]), then synced as asked ([`Fsync`]); a write that
 //!   fails is cut back to the whole lines, the cut's own failure answered
-//!   beside the write's.
+//!   beside the write's ([`AppendFailed`]); and the cut a caller makes at
+//!   the open, before any write ([`Appender::cut`]).
 //! * The whole-file writes: [`write_once`], a new file at its name, synced,
 //!   a failed write removed; [`publish`], a file put at its name whole or
 //!   not at all — a temp beside the name, held by an advisory lock for the
-//!   write's life, synced, renamed, the directory synced.
+//!   write's life, synced, renamed, the directory synced — and
+//!   [`publish_by`], the same through a temp the caller names and a write
+//!   it streams, each failure named by its step ([`PublishStep`]); and
+//!   [`keep_beside`], the bytes a cut drops kept beside the file at the
+//!   first free `.cut-<byte>` name ([`KeptName`]), durably, before they go.
 //! * The removals: [`remove`], answering whether a file went or none stood;
 //!   [`stale`] and [`sweep_stale`], the temps a dead run left, told from a
 //!   live run's by the lock its writer holds, listed or unlinked and named.
@@ -40,10 +49,11 @@
 //! without its newline may be the person's own record and must not be
 //! cut. Either way an append never changes how the bytes before it read.
 //!
-//! The one seam for a suite: [`Appender::append_by`] and [`write_once_by`]
-//! take the write as a closure, so a test — or a caller's own `cfg(test)`
-//! seam — can cut a write short or refuse its sync where the module's
-//! plain forms write and sync.
+//! The seams for a suite: [`Appender::append_by`] (and
+//! [`Appender::append_by_telling`], its typed form), [`write_once_by`] and
+//! [`publish_by`] take the write as a closure, so a test — or a caller's
+//! own `cfg(test)` seam — can cut a write short or refuse its sync where
+//! the module's plain forms write and sync.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -289,6 +299,31 @@ impl Appender {
         Ok(Appender { file, whole })
     }
 
+    /// Cuts the tail past the whole lines now, where one stands, and answers it.
+    ///
+    /// It is the daemon's logs' way, which cut at the open after their keep,
+    /// where the client's files leave the cut to the next write
+    /// ([`Appender::append`]). A cut, never a close: a file whose tail is
+    /// closed by a mark has no call here. The cut is to the count the
+    /// appender trusts — the scan's ([`Appender::open`]) or the caller's own
+    /// ([`Appender::open_at`]) — so at a count below a whole line that line
+    /// goes with the tail: what the caller keeps of the bytes past its
+    /// count, it keeps first ([`keep_beside`]). The cut is synced as `fsync`
+    /// asks. `None` where no tail stands, nothing written.
+    ///
+    /// # Errors
+    ///
+    /// The metadata read's, the cut's or the sync's I/O error.
+    pub fn cut(&mut self, fsync: Fsync) -> io::Result<Option<Tail>> {
+        let len = self.file.metadata()?.len();
+        if len <= self.whole {
+            return Ok(None);
+        }
+        self.file.set_len(self.whole)?;
+        sync(&self.file, fsync)?;
+        Ok(Some(Tail { at: self.whole, len }))
+    }
+
     /// Appends `line` and its `\n` in one write, then syncs as `fsync` asks.
     ///
     /// A tail past the last whole line is first dealt with as `on_tail`
@@ -301,11 +336,7 @@ impl Appender {
     pub fn append(&mut self, line: &[u8], on_tail: OnTail<'_>, fsync: Fsync) -> io::Result<Appended> {
         self.append_by(line, on_tail, |file, bytes| {
             file.write_all(bytes)?;
-            match fsync {
-                Fsync::All => file.sync_all(),
-                Fsync::Data => file.sync_data(),
-                Fsync::None => Ok(()),
-            }
+            sync(file, fsync)
         })
     }
 
@@ -318,7 +349,9 @@ impl Appender {
     /// as they did. `write` is given the file and the bytes, the line's
     /// `\n` among them, and makes the write and whatever sync the line owes
     /// — a suite's own seam, which cuts a write short or refuses its sync.
-    /// The whole lines' count moves only once `write` has answered.
+    /// The whole lines' count moves only once `write` has answered. It is
+    /// [`Appender::append_by_telling`] with the cut-back unsynced and its
+    /// two failures folded into one error.
     ///
     /// # Errors
     ///
@@ -329,14 +362,36 @@ impl Appender {
     /// beside the write's in the one error answered, the file then holding
     /// a tail the next append cuts.
     pub fn append_by(&mut self, line: &[u8], on_tail: OnTail<'_>, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> io::Result<Appended> {
-        let len = self.file.metadata()?.len();
+        Ok(self.append_by_telling(line, on_tail, Fsync::None, write)?)
+    }
+
+    /// Appends `line` through `write`, its failure typed, its cut-back synced.
+    ///
+    /// It is [`Appender::append_by`] with the failure kept apart
+    /// ([`AppendFailed`]) and the cut back to the whole lines synced as
+    /// `cut_back` asks — the daemon's logs sync it, the client's files do
+    /// not — for a caller that stops on a failed cut-back and words each
+    /// cause itself.
+    ///
+    /// # Errors
+    ///
+    /// [`Appender::append_by`]'s, each failure in its own field: the
+    /// metadata read's or the cut's, nothing written and no cut-back owed;
+    /// or `write`'s, the file first cut back to its whole lines (under
+    /// [`OnTail::Close`], to the bytes it held before the append, the torn
+    /// tail among them) and that cut synced — where the cut or its sync
+    /// fails too, that failure stands beside the write's, the file then
+    /// holding a tail the next append cuts.
+    pub fn append_by_telling(&mut self, line: &[u8], on_tail: OnTail<'_>, cut_back: Fsync, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> Result<Appended, AppendFailed> {
+        let before = |write: io::Error| AppendFailed { write, cut_back: None };
+        let len = self.file.metadata().map_err(before)?.len();
         let tail = (len > self.whole).then_some(Tail { at: self.whole, len });
         let mut bytes = Vec::with_capacity(line.len() + 1);
         let mut closed = false;
         let mut start = self.whole.min(len);
         if tail.is_some() {
             match on_tail {
-                OnTail::Cut => self.file.set_len(self.whole)?,
+                OnTail::Cut => self.file.set_len(self.whole).map_err(before)?,
                 OnTail::Close(mark) => {
                     bytes.extend_from_slice(mark);
                     bytes.push(b'\n');
@@ -347,11 +402,9 @@ impl Appender {
         }
         bytes.extend_from_slice(line);
         bytes.push(b'\n');
-        if let Err(e) = write(&mut self.file, &bytes) {
-            return Err(match self.file.set_len(start) {
-                Ok(()) => e,
-                Err(cut) => io::Error::new(e.kind(), format!("{e}; and the cut back to the last whole line failed too: {cut}")),
-            });
+        if let Err(write) = write(&mut self.file, &bytes) {
+            let cut = self.file.set_len(start).and_then(|()| sync(&self.file, cut_back));
+            return Err(AppendFailed { write, cut_back: cut.err() });
         }
         self.whole = start + bytes.len() as u64;
         Ok(Appended { tail, closed })
@@ -360,6 +413,32 @@ impl Appender {
     /// Returns the bytes of the file's whole lines, where the next line lands.
     pub fn whole(&self) -> u64 {
         self.whole
+    }
+}
+
+/// What a failed append left: the write's failure and the cut-back's.
+///
+/// The write's is the failure the append answered — `write`'s, or, before
+/// any write, the metadata read's or the tail's cut's. The cut-back's
+/// stands beside it where the cut back to the whole lines, or its sync,
+/// failed too, the file then holding a tail the next append cuts: a caller
+/// that stops on that second failure reads each cause on its own. Through
+/// `From`, the two are one `io::Error` of the write's kind naming both.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct AppendFailed {
+    /// The failure the append answered: `write`'s, or an act's before it.
+    pub write: io::Error,
+    /// The cut-back's failure, where the cut back to the whole lines failed too.
+    pub cut_back: Option<io::Error>,
+}
+
+impl From<AppendFailed> for io::Error {
+    fn from(failed: AppendFailed) -> io::Error {
+        match failed.cut_back {
+            None => failed.write,
+            Some(cut) => io::Error::new(failed.write.kind(), format!("{}; and the cut back to the last whole line failed too: {cut}", failed.write)),
+        }
     }
 }
 
@@ -474,35 +553,114 @@ pub fn temp_of(path: &Path) -> PathBuf {
 /// `path` removed. A removal that fails after a failure is named beside
 /// it in the one error answered.
 pub fn publish(path: &Path, bytes: &[u8], mode: u32, stale: OnStale) -> io::Result<()> {
-    let tmp = temp_of(path);
-    let mut file = match create_new(&tmp, mode) {
+    match publish_by(path, &temp_of(path), mode, stale, |file| file.write_all(bytes)) {
+        Ok(()) => Ok(()),
+        // Past the rename a new file stands at its name with the directory
+        // unsynced: removed, since it was never there to lose.
+        Err(PublishFail { step: PublishStep::DirSync, error }) => Err(match fs::remove_file(path) {
+            Ok(()) => error,
+            Err(rm) if rm.kind() == io::ErrorKind::NotFound => error,
+            Err(rm) => io::Error::new(error.kind(), format!("{error}; and the file could not be removed after it: {rm}")),
+        }),
+        Err(PublishFail { error, .. }) => Err(error),
+    }
+}
+
+/// A step of [`publish_by`], where it fell.
+///
+/// Before the rename — the temp's making, the write, the sync, the rename
+/// itself — the temp is removed and the name is as it was; at the
+/// directory's sync, past the rename, the file stands at its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PublishStep {
+    /// The temp's making: its `create_new` at the caller's name, a stale
+    /// temp's removal before it, or the lock taken on it.
+    Create,
+    /// The write through the caller's closure.
+    Write,
+    /// The temp's `sync_all`.
+    Sync,
+    /// The rename of the temp onto the name.
+    Rename,
+    /// The directory's sync after the rename: the file stands at its name.
+    DirSync,
+}
+
+/// A failed publish: the step it fell at, and the failure.
+///
+/// Where the temp's removal after a failure before the rename fails too,
+/// that failure is named inside the error's text, as [`publish`] names it.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PublishFail {
+    /// The step that failed.
+    pub step: PublishStep,
+    /// Its I/O error.
+    pub error: io::Error,
+}
+
+/// Puts a file at `path` whole or not at all, through the caller's temp.
+///
+/// It is [`publish`] with three things the caller's: the temp's name —
+/// `temp`, the daemon's `<name>.compact` twins beside the client's
+/// [`temp_of`] — the write, which `write` streams into the open temp, and
+/// the failure, typed by its step ([`PublishFail`]). The temp is made under
+/// `create_new` at `mode` (a standing one as `stale` says), held by an
+/// advisory lock for the write's life, written through `write`, synced,
+/// renamed onto `path` — over a file that stands there, where the caller
+/// rewrites one whole — and the directory synced. A failure before the
+/// rename removes the temp, so the name is as it was; a failure past it,
+/// the directory's sync, leaves the file standing at `path`, whole, and
+/// names the step — the caller's to stop on, a name that may yet be lost
+/// to a power cut being no reason to destroy the bytes under it. `publish`
+/// is this with [`temp_of`]'s name, the bytes written whole, and the
+/// removal a new file's failure past the rename owes.
+///
+/// # Errors
+///
+/// [`PublishStep::Create`]: the temp's open — `AlreadyExists` for a
+/// standing temp a live writer holds, or one no writer holds under
+/// [`OnStale::Refuse`] — a stale temp's removal, or the lock; nothing
+/// made. [`PublishStep::Write`], [`PublishStep::Sync`] and
+/// [`PublishStep::Rename`]: `write`'s, the sync's or the rename's
+/// failure, the temp removed — a removal that fails is named beside it in
+/// the one error. [`PublishStep::DirSync`]: the directory's sync failing,
+/// the file standing at `path`.
+pub fn publish_by(path: &Path, temp: &Path, mode: u32, stale: OnStale, write: impl FnOnce(&mut File) -> io::Result<()>) -> Result<(), PublishFail> {
+    let fail = |step: PublishStep, error: io::Error| PublishFail { step, error };
+    let mut file = match create_new(temp, mode) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists && stale == OnStale::Replace => {
-            replace_stale(&tmp)?;
-            create_new(&tmp, mode)?
+            replace_stale(temp).and_then(|()| create_new(temp, mode)).map_err(|e| fail(PublishStep::Create, e))?
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(fail(PublishStep::Create, e)),
     };
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("another process holds {}", tmp.display()))),
-        Err(TryLockError::Error(e)) => return Err(e),
-    }
-    let undone = |e: io::Error, leftover: &Path| -> io::Error {
-        match fs::remove_file(leftover) {
+    let undone = |e: io::Error| -> io::Error {
+        match fs::remove_file(temp) {
             Ok(()) => e,
             Err(rm) if rm.kind() == io::ErrorKind::NotFound => e,
-            Err(rm) => io::Error::new(e.kind(), format!("{e}; and {} could not be removed after it: {rm}", leftover.display())),
+            Err(rm) => io::Error::new(e.kind(), format!("{e}; and the temp could not be removed after it: {rm}")),
         }
     };
-    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-        return Err(undone(e, &tmp));
+    let locked = match file.try_lock() {
+        Ok(()) => Ok(()),
+        Err(TryLockError::WouldBlock) => Err(io::Error::new(io::ErrorKind::WouldBlock, format!("another process holds {}", temp.display()))),
+        Err(TryLockError::Error(e)) => Err(e),
+    };
+    if let Err(e) = locked {
+        return Err(fail(PublishStep::Create, undone(e)));
     }
-    if let Err(e) = fs::rename(&tmp, path) {
-        return Err(undone(e, &tmp));
+    if let Err(e) = write(&mut file) {
+        return Err(fail(PublishStep::Write, undone(e)));
+    }
+    if let Err(e) = file.sync_all() {
+        return Err(fail(PublishStep::Sync, undone(e)));
+    }
+    if let Err(e) = fs::rename(temp, path) {
+        return Err(fail(PublishStep::Rename, undone(e)));
     }
     if let Err(e) = sync_parent(path) {
-        return Err(undone(e, path));
+        return Err(fail(PublishStep::DirSync, e));
     }
     drop(file);
     Ok(())
@@ -530,6 +688,102 @@ fn replace_stale(tmp: &Path) -> io::Result<()> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// The name a keep gave the bytes it kept: `{file}.cut-{byte}`, `….{k}`.
+///
+/// It is the spelling the kernel gives a journal tail it keeps and the
+/// daemon's logs give a damaged cut, so one listing of a data directory
+/// finds every kept file. `k` is `0` for the bare name and `k` for the
+/// `.{k}` beside it — the first free name [`keep_beside`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct KeptName {
+    /// The byte of the file the kept bytes started at.
+    pub byte: u64,
+    /// Which free name the keep took: `0` the bare name, else the `.{k}`.
+    pub k: u64,
+}
+
+impl KeptName {
+    /// Returns the kept file's name beside `file`.
+    ///
+    /// `file` is spelled as the caller names the file the kept one sits
+    /// beside — its bare name for the path on disk, or its name within a
+    /// data directory for a line that says it (`blobs/leases.log.cut-8`).
+    pub fn of(self, file: &str) -> String {
+        match self.k {
+            0 => format!("{file}.cut-{}", self.byte),
+            k => format!("{file}.cut-{}.{k}", self.byte),
+        }
+    }
+}
+
+/// A step of [`keep_beside`], where it fell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeepStep {
+    /// The kept file's making: `create_new` at the first free name.
+    Create,
+    /// The copy of the dropped bytes into it: the reader's or the write's failure.
+    Write,
+    /// The kept file's `sync_all`.
+    Fsync,
+    /// The directory's sync after it.
+    DirSync,
+}
+
+/// A failed keep: the step it fell at, the name it was at, and the failure.
+///
+/// Past the making, the kept file stands with what was written — a
+/// half-kept file beside the log is a fact for the caller to say, never a
+/// loss made larger by a removal — so the name is answered with the step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct KeepFail {
+    /// The step that failed.
+    pub step: KeepStep,
+    /// The name the keep was at: the one it made, or the one it could not.
+    pub name: KeptName,
+    /// Its I/O error.
+    pub error: io::Error,
+}
+
+/// Keeps `dropped` beside `file` in `dir`, durably, before a cut drops it.
+///
+/// The bytes go to the first free name of `{file}.cut-{byte}`,
+/// `{file}.cut-{byte}.{k}` ([`KeptName`]) under `create_new` at `mode` — a
+/// standing name is never written over, whatever it holds — copied through
+/// from `dropped`, synced, and the directory synced after, so the kept
+/// file outlives a power cut as the cut it precedes does. WHEN to keep is
+/// the caller's: a whole line that does not read and the lines after it,
+/// which a crash never leaves, the daemon's logs keep before their open
+/// cuts them; a crash's tail, acknowledged to no one, is kept by nobody.
+/// The directory's sync is refused as the daemon's installs refuse one —
+/// no filesystem's answer is tolerated — where [`publish`] tolerates a
+/// directory that takes no sync. Answers the name taken.
+///
+/// # Errors
+///
+/// Each step's I/O error with the step and the name ([`KeepFail`]): the
+/// making's, nothing made; the copy's — `dropped`'s read or the write —
+/// the sync's or the directory's sync's, the kept file standing with what
+/// was written.
+pub fn keep_beside(dir: &Path, file: &str, byte: u64, dropped: impl io::Read, mode: u32) -> Result<KeptName, KeepFail> {
+    let mut dropped = dropped;
+    let mut k = 0u64;
+    let (mut out, name) = loop {
+        let name = KeptName { byte, k };
+        match create_new(&dir.join(name.of(file)), mode) {
+            Ok(out) => break (out, name),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => k += 1,
+            Err(error) => return Err(KeepFail { step: KeepStep::Create, name, error }),
+        }
+    };
+    let fail = |step: KeepStep, error: io::Error| KeepFail { step, name, error };
+    io::copy(&mut dropped, &mut out).map_err(|e| fail(KeepStep::Write, e))?;
+    out.sync_all().map_err(|e| fail(KeepStep::Fsync, e))?;
+    drop(out);
+    sync_dir(dir).map_err(|e| fail(KeepStep::DirSync, e))?;
+    Ok(name)
 }
 
 /// What a removal did.
@@ -664,6 +918,19 @@ fn create_new(path: &Path, mode: u32) -> io::Result<File> {
     opts.open(path)
 }
 
+/// Syncs `file` as `fsync` asks.
+///
+/// # Errors
+///
+/// The sync's I/O error.
+fn sync(file: &File, fsync: Fsync) -> io::Result<()> {
+    match fsync {
+        Fsync::All => file.sync_all(),
+        Fsync::Data => file.sync_data(),
+        Fsync::None => Ok(()),
+    }
+}
+
 /// Syncs the directory holding `path`, so a rename into it is durable.
 ///
 /// A directory that takes no sync is no failure: a filesystem that
@@ -691,6 +958,31 @@ fn sync_parent(path: &Path) -> io::Result<()> {
 /// Never.
 #[cfg(not(unix))]
 fn sync_parent(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// Syncs the directory `dir`, tolerating nothing.
+///
+/// It is the sync the daemon's installs make after a creation inside
+/// `dir`, which [`keep_beside`] takes: whatever the filesystem answers is
+/// the failure, where [`sync_parent`] tolerates a directory that takes no
+/// sync.
+///
+/// # Errors
+///
+/// An I/O error opening or syncing the directory.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
+/// Syncs nothing: on this platform a directory opens as no file.
+///
+/// # Errors
+///
+/// Never.
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 

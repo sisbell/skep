@@ -6,7 +6,11 @@
 //! appended, a figure that must be durable fsynced with its line; read whole
 //! at open, trust ending at the first torn line, which is cut off the file;
 //! and compacted by the blob's own install order, so a crash mid-compaction
-//! leaves the old log whole or the new one, never a mix.
+//! leaves the old log whole or the new one, never a mix. The read, the cut,
+//! the append with its cut-back, the keep and the rewrite are the support
+//! crate's `file` module's (`skep_util::file`), the one tail rule the
+//! client's and the shell's files keep; what a line means, when to keep and
+//! when to cut, the stop and every word answered are this log's.
 //!
 //! **A torn line is only ever the tail.** Open's tail check cuts the file at
 //! the first torn line and everything after it, so a whole line written past
@@ -45,14 +49,23 @@
 //! them, and names the file ([`LogRead::kept`]); a crash's torn line is cut
 //! and gone. The inspection keeps nothing, and answers the class alone.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use skep_util::file::{keep_beside, publish_by, read_lines, AppendFailed, Appender, Fsync, KeepStep, Lines, OnStale, OnTail, PublishStep};
 
-use crate::blobs::{dir_label, file_options, fsync_dir, label, named, not_found_as_none, Cause};
+use crate::blobs::{dir_label, label, named, Cause};
+
+/// The mode a log, its twin and a kept file are born with: owner-only.
+///
+/// It is the value `blobs::file_options` carries on the options of every
+/// file the store makes (`blobs::FILE_MODE`), handed to the module as a
+/// figure; `tests/it/modes.rs` holds every entry the store makes to these
+/// bits.
+const MODE: u32 = 0o600;
 
 /// What one reading of a log found.
 ///
@@ -223,11 +236,15 @@ pub struct LogStop {
 
 /// One JSON-lines log, with the figures its appends and rewrites move.
 ///
-/// It holds its path and its name, its append-mode file, the byte length
-/// and the count of the whole lines the file at its name holds, and the
-/// stop where it has stopped. The length is what a failed append is cut
-/// back to, and the count the one figure the compaction weighs against the
-/// current records; this type's own appends and rewrites alone move them.
+/// It holds its path and its name, its append handle
+/// (`skep_util::file::Appender`, open where its whole lines end), the byte
+/// length and the count of the whole lines the file at its name holds, and
+/// the stop where it has stopped. The length is the handle's count of the
+/// whole lines — what a failed append is cut back to — kept here too, since
+/// a rewrite that fails past its rename moves it while the handle is still
+/// the replaced file's; the count is the one figure the compaction weighs
+/// against the current records. This type's own appends and rewrites alone
+/// move them.
 pub(crate) struct Log {
     path: PathBuf,
     /// The log as a line names it ([`LogRead::name`]).
@@ -236,7 +253,7 @@ pub(crate) struct Log {
     /// compaction's names its twin or its directory where its act fell
     /// there.
     name: String,
-    file: File,
+    file: Appender,
     len: u64,
     lines: usize,
     /// The log's stop, where it has stopped.
@@ -268,23 +285,24 @@ struct Stop {
 impl Log {
     /// Opens the log at `path`, created where absent, its torn tail cut off.
     ///
-    /// The log is read whole, trust ending at the first line that is no JSON
-    /// object or that lacks its newline (a torn tail), which is truncated
-    /// off the file there and never read past (the honest-null arm's tail
-    /// check). Answers the log, the values of its lines in order, and what
-    /// the reading found — its `unread` the store's to count, as it folds the
-    /// values.
+    /// The log is read whole as lines (`skep_util::file::read_lines`), trust
+    /// ending at the first line that is no JSON object or that lacks its
+    /// newline (a torn tail), which is truncated off the file there at the
+    /// open and never read past (the honest-null arm's tail check). Answers
+    /// the log, the values of its lines in order, and what the reading
+    /// found — its `unread` the store's to count, as it folds the values.
     ///
     /// # Errors
     ///
-    /// The read failing, save for the log's absence; the cut of a torn tail
-    /// failing; or the open for appending failing — each named, the log and
-    /// the act (`read`, `cut back`, `open`).
+    /// The read failing, save for the log's absence; the keep of a damaged
+    /// cut failing; the open for appending failing; or the cut of a torn
+    /// tail failing — each named, the log or the kept file and the act
+    /// (`read`, the kept file's acts, `open`, `cut back`).
     pub fn open(path: PathBuf) -> io::Result<(Log, Vec<Value>, LogRead)> {
         let name = label(&path, 2);
-        let (values, found, len) = read_log(&path, &name)?;
-        let file = open_append(&path).map_err(|e| named(e, &name, "open"))?;
+        let (values, found, file) = read_log(&path, &name)?;
         let lines = values.len();
+        let len = file.whole();
         Ok((Log { path, name, file, len, lines, stopped: None }, values, found))
     }
 
@@ -302,8 +320,8 @@ impl Log {
     /// The read failing, save for the log's absence, named (`read`).
     pub fn read_as_found(path: &Path) -> io::Result<(Vec<Value>, LogRead)> {
         let name = label(path, 2);
-        let bytes = not_found_as_none(fs::read(path)).map_err(|e| named(e, &name, "read"))?;
-        let (values, found, _) = reading(name, bytes.as_deref());
+        let read = read_lines(path).map_err(|e| named(e, &name, "read"))?;
+        let (values, found, _) = reading(name, read.as_ref());
         Ok((values, found))
     }
 
@@ -373,8 +391,10 @@ impl Log {
     /// Appends `v` through `write`, the append's one body.
     ///
     /// Its write — and its sync, where the line owes one — is handed in as
-    /// `write`: the line and its newline in one write. The unit suite drives
-    /// it with a write that fails partway.
+    /// `write`: the line and its newline in one write, through the module's
+    /// append (`skep_util::file::Appender::append_by_telling`), which lands
+    /// it where the whole lines end. The unit suite drives it with a write
+    /// that fails partway.
     ///
     /// # Errors
     ///
@@ -390,28 +410,28 @@ impl Log {
     /// append, naming the cause, and counts it ([`Log::stop`]).
     fn append_by(&mut self, v: &Value, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> io::Result<()> {
         self.refuse_if_stopped()?;
-        let line = line_of(v);
-        if let Err(e) = write(&mut self.file, &line) {
-            return Err(match self.file.set_len(self.len).and_then(|()| self.file.sync_all()) {
-                Ok(()) => named(e, &self.name, "append"),
-                Err(cut) => {
-                    let cause = format!(
-                        "its append failed ({}) and the cut back to its last whole line failed too ({})",
-                        Cause(&e),
-                        Cause(&cut)
-                    );
-                    let stopped = io::Error::new(
-                        e.kind(),
-                        format!("{}: append: {cause}, so it takes no append until a compaction completes", self.name),
-                    );
-                    self.stop_by(cause);
-                    stopped
-                }
-            });
+        let json = serde_json::to_vec(v).expect("a JSON value renders");
+        match self.file.append_by_telling(&json, OnTail::Cut, Fsync::All, write) {
+            Ok(_) => {
+                self.len = self.file.whole();
+                self.lines += 1;
+                Ok(())
+            }
+            Err(AppendFailed { write: e, cut_back: None, .. }) => Err(named(e, &self.name, "append")),
+            Err(AppendFailed { write: e, cut_back: Some(cut), .. }) => {
+                let cause = format!(
+                    "its append failed ({}) and the cut back to its last whole line failed too ({})",
+                    Cause(&e),
+                    Cause(&cut)
+                );
+                let stopped = io::Error::new(
+                    e.kind(),
+                    format!("{}: append: {cause}, so it takes no append until a compaction completes", self.name),
+                );
+                self.stop_by(cause);
+                Err(stopped)
+            }
         }
-        self.len += line.len() as u64;
-        self.lines += 1;
-        Ok(())
     }
 
     /// Judges the stop's refusal ahead of an act.
@@ -439,9 +459,11 @@ impl Log {
     /// whose count equals its current records' holds nothing else, and is
     /// left as it is. The rewrite is written to a `.compact` twin beside the
     /// log, fsynced, renamed over it, the directory fsynced — the same
-    /// install order a blob takes; it writes the file whole, so once it
-    /// completes it lifts a stop. Answers the size it rewrote the log from
-    /// ([`LogSize`]), `None` where it left the log as it was.
+    /// install order a blob takes, made by the module's publish
+    /// (`skep_util::file::publish_by`) through the twin this log names; it
+    /// writes the file whole, so once it completes it lifts a stop. Answers
+    /// the size it rewrote the log from ([`LogSize`]), `None` where it left
+    /// the log as it was.
     ///
     /// **Precondition.** `current` is what the log's store folds the log's
     /// lines to — each value one a line the log holds reads as, none twice —
@@ -459,19 +481,21 @@ impl Log {
     ///
     /// A rewrite that fails before its rename — the twin's creation, write
     /// or sync, or the rename — leaves the log as it was and removes its
-    /// twin, best effort, so a rewrite that met a volume with less room than
-    /// it needs keeps none of that room once the twin is gone; one that fails
-    /// past it — the directory's fsync, or the log's open for appending —
-    /// stops the log until a compaction completes, its size the rewrite's,
-    /// which stands at the name.
+    /// twin, so a rewrite that met a volume with less room than it needs
+    /// keeps none of that room once the twin is gone (a removal that fails
+    /// too is named beside the failure); one that fails past it — the
+    /// directory's fsync, or the log's open for appending — stops the log
+    /// until a compaction completes, its size the rewrite's, which stands at
+    /// the name.
     pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<Option<LogSize>> {
         self.compact_by(current, |file, line| file.write_all(line))
     }
 
     /// Runs the compaction's one body, writing the twin's lines by `write`.
     ///
-    /// Each line of the rewrite is written to the twin by `write` — the act
-    /// the unit suite cuts short in its place ([`Log::compact`]).
+    /// Each line of the rewrite is written to the twin by `write`, inside the
+    /// module's publish — the act the unit suite cuts short in its place
+    /// ([`Log::compact`]).
     ///
     /// # Errors
     ///
@@ -479,7 +503,7 @@ impl Log {
     fn compact_by(
         &mut self,
         current: impl ExactSizeIterator<Item = Value>,
-        write: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
+        mut write: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
     ) -> io::Result<Option<LogSize>> {
         if self.stopped.is_none() && current.len() == self.lines {
             return Ok(None);
@@ -487,31 +511,41 @@ impl Log {
         let from = self.size();
         let dir = self.path.parent().expect("a log sits in a directory");
         let twin = self.path.with_extension("compact");
-        let rewritten = write_twin(&twin, current, write).and_then(|counts| {
-            fs::rename(&twin, &self.path).map_err(|e| named(e, &self.name, "rename its rewrite over it"))?;
-            Ok(counts)
-        });
-        // Short of the rename the log stands as it was, and the twin goes
-        // with the failure: whatever room its bytes took is the volume's
-        // again. Best effort, as the pull's temp file is: a twin that cannot
-        // be removed is written over by the next compaction.
-        let (len, lines) = match rewritten {
-            Ok(counts) => counts,
-            Err(e) => {
-                let _ = fs::remove_file(&twin);
-                return Err(e);
+        let (mut len, mut lines) = (0u64, 0usize);
+        let published = publish_by(&self.path, &twin, MODE, OnStale::Replace, |f| {
+            for v in current {
+                let line = line_of(&v);
+                write(f, &line)?;
+                len += line.len() as u64;
+                lines += 1;
             }
-        };
-        // Past the rename the rewrite stands at the path, its length and its
-        // count the log's, while the open file is still the one it replaced:
-        // stopped, the cause kept, until the install order completes and the
-        // open file is the rewrite's too.
+            Ok(())
+        });
+        // Short of the rename the log stands as it was, and the twin went
+        // with the failure: whatever room its bytes took is the volume's
+        // again. Past the rename the rewrite stands at the path, its length
+        // and its count the log's, while the open file is still the one it
+        // replaced: stopped, the cause kept, until the install order
+        // completes and the open file is the rewrite's too.
+        if let Err(failed) = published {
+            let twin_name = label(&twin, 2);
+            return Err(match failed.step {
+                PublishStep::Create => named(failed.error, twin_name, "create"),
+                PublishStep::Write => named(failed.error, twin_name, "write"),
+                PublishStep::Sync => named(failed.error, twin_name, "sync"),
+                PublishStep::Rename => named(failed.error, &self.name, "rename its rewrite over it"),
+                PublishStep::DirSync => {
+                    self.len = len;
+                    self.lines = lines;
+                    let e = named(failed.error, dir_label(dir, 1), "fsync");
+                    self.stop_by(format!("its rewrite failed past its rename ({e}): the rewrite stands at its name"));
+                    e
+                }
+            });
+        }
         self.len = len;
         self.lines = lines;
-        let installed = fsync_dir(dir)
-            .map_err(|e| named(e, dir_label(dir, 1), "fsync"))
-            .and_then(|()| open_append(&self.path).map_err(|e| named(e, &self.name, "open")));
-        match installed {
+        match Appender::open_at(&self.path, len).map_err(|e| named(e, &self.name, "open")) {
             Ok(file) => {
                 self.file = file;
                 self.stopped = None;
@@ -536,163 +570,115 @@ impl Log {
     }
 }
 
-/// Writes `current` to the `.compact` file at `twin`, and fsyncs it.
-///
-/// The lines go one by one through `write`, the twin born owner-only
-/// (`blobs::file_options`), the mode the rename carries onto the log.
-/// Answers the rewrite's bytes and lines.
-///
-/// # Errors
-///
-/// The twin's creation, a line's write or the sync failing, named as the
-/// twin's (`create`, `write`, `sync`).
-fn write_twin(
-    twin: &Path,
-    current: impl Iterator<Item = Value>,
-    mut write: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
-) -> io::Result<(u64, usize)> {
-    let at_twin = |e: io::Error, act: &str| named(e, label(twin, 2), act);
-    let mut f = file_options().write(true).create(true).truncate(true).open(twin).map_err(|e| at_twin(e, "create"))?;
-    let (mut len, mut lines) = (0, 0);
-    for v in current {
-        let line = line_of(&v);
-        write(&mut f, &line).map_err(|e| at_twin(e, "write"))?;
-        len += line.len() as u64;
-        lines += 1;
-    }
-    f.sync_all().map_err(|e| at_twin(e, "sync"))?;
-    Ok((len, lines))
-}
-
 /// Reads a log for [`Log::open`], its torn tail cut off the file.
 ///
-/// Answers the values of its whole lines in order, what the reading found
-/// and the bytes trusted, the cut made there. An absent log holds none, and
-/// is found absent. A cut that is damage ([`TailCut::damage`]) is kept
-/// first ([`keep_cut`]), the kept file named in the reading.
+/// Answers the values of its whole lines in order, what the reading found,
+/// and the log's append handle, open where trust ends — the file cut there
+/// at the open, unsynced (`skep_util::file::Appender::cut`) — or made
+/// empty, born owner-only, where no log stood. A cut that is damage
+/// ([`TailCut::damage`]) is kept first ([`keep_cut`]), the bytes read off
+/// the log itself from the cut to its end, the kept file named in the
+/// reading.
 ///
 /// # Errors
 ///
-/// The read failing, save for the log's absence, the keep failing, or the
-/// cut failing, named (`read`, the kept file's acts, `cut back`).
-fn read_log(path: &Path, name: &str) -> io::Result<(Vec<Value>, LogRead, u64)> {
-    let bytes = not_found_as_none(fs::read(path)).map_err(|e| named(e, name, "read"))?;
-    let (values, mut found, good) = reading(name.to_string(), bytes.as_deref());
-    if let Some(cut) = found.cut {
-        if cut.damage() {
-            let dropped = bytes.as_deref().map_or(&[][..], |bytes| &bytes[good as usize..]);
-            found.kept = Some(keep_cut(path, name, good, dropped)?);
-        }
-        OpenOptions::new()
-            .write(true)
-            .open(path)
-            .and_then(|f| f.set_len(good))
-            .map_err(|e| named(e, name, "cut back"))?;
+/// The read failing, save for the log's absence, the keep failing, the open
+/// for appending failing, or the cut failing, named (`read`, the kept
+/// file's acts, `open`, `cut back`).
+fn read_log(path: &Path, name: &str) -> io::Result<(Vec<Value>, LogRead, Appender)> {
+    let read = read_lines(path).map_err(|e| named(e, name, "read"))?;
+    let (values, mut found, good) = reading(name.to_string(), read.as_ref());
+    if found.cut.is_some_and(|cut| cut.damage()) {
+        let mut dropped = File::open(path).map_err(|e| named(e, name, "read"))?;
+        dropped.seek(SeekFrom::Start(good)).map_err(|e| named(e, name, "read"))?;
+        found.kept = Some(keep_cut(path, name, good, &mut dropped)?);
     }
-    Ok((values, found, good))
+    let mut file = match read {
+        Some(_) => Appender::open_at(path, good),
+        None => Appender::open(path, MODE),
+    }
+    .map_err(|e| named(e, name, "open"))?;
+    file.cut(Fsync::None).map_err(|e| named(e, name, "cut back"))?;
+    Ok((values, found, file))
 }
 
 /// Keeps a damaged cut's bytes beside the log, durably, before the cut.
 ///
 /// They go to `{log}.cut-{at}` beside the log — `….{k}` where that name and
 /// the `k − 1` before it already stand; a standing name is never written
-/// over, whatever it holds — born owner-only ([`file_options`]), written
-/// whole, synced, the directory synced after. The kernel's own spelling for
-/// a journal tail it keeps, so every kept file in the data directory is
-/// found by one listing. Answers the kept file's name within the data
-/// directory, as [`LogRead::name`] names the log.
+/// over, whatever it holds — born owner-only, copied through from
+/// `dropped`, synced, the directory synced after, by the module's keep
+/// (`skep_util::file::keep_beside`). The kernel's own spelling for a
+/// journal tail it keeps, so every kept file in the data directory is found
+/// by one listing. Answers the kept file's name within the data directory,
+/// as [`LogRead::name`] names the log.
 ///
 /// # Errors
 ///
 /// The kept file's creation, write or sync, or the directory's sync,
-/// failing, named `{kept}: {act}: {cause}`.
-fn keep_cut(path: &Path, name: &str, at: u64, dropped: &[u8]) -> io::Result<String> {
+/// failing, named `{kept}: {act}: {cause}` (`create`, `write`, `fsync`; the
+/// directory's `fsync`) — the kept file standing with what was written past
+/// its creation, a half-kept file being a fact beside the log, never a loss
+/// to make larger.
+fn keep_cut(path: &Path, name: &str, at: u64, dropped: impl io::Read) -> io::Result<String> {
     let dir = path.parent().expect("a log sits in a directory");
-    let mut k = 0u64;
-    let (mut out, kept) = loop {
-        let file_name = match k {
-            0 => format!("{}.cut-{at}", label(path, 1)),
-            k => format!("{}.cut-{at}.{k}", label(path, 1)),
-        };
-        let kept =
-            format!("{name}.cut-{at}{}", if k == 0 { String::new() } else { format!(".{k}") });
-        match file_options().write(true).create_new(true).open(dir.join(&file_name)) {
-            Ok(out) => break (out, kept),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => k += 1,
-            Err(e) => return Err(named(e, &kept, "create")),
-        }
-    };
-    out.write_all(dropped).map_err(|e| named(e, &kept, "write"))?;
-    out.sync_all().map_err(|e| named(e, &kept, "fsync"))?;
-    drop(out);
-    fsync_dir(dir).map_err(|e| named(e, dir_label(dir, 1), "fsync"))?;
-    Ok(kept)
+    match keep_beside(dir, &label(path, 1), at, dropped, MODE) {
+        Ok(kept) => Ok(kept.of(name)),
+        Err(failed) => Err(match failed.step {
+            KeepStep::Create => named(failed.error, failed.name.of(name), "create"),
+            KeepStep::Write => named(failed.error, failed.name.of(name), "write"),
+            KeepStep::Fsync => named(failed.error, failed.name.of(name), "fsync"),
+            KeepStep::DirSync => named(failed.error, dir_label(dir, 1), "fsync"),
+        }),
+    }
 }
 
-/// Reads a log's bytes, `None` where no file stood.
+/// Reads what a log's lines hold, `None` where no file stood.
 ///
-/// It is the one reading both [`read_log`] and [`Log::read_as_found`] make:
-/// it answers the values of its whole lines ([`whole_lines`]), what it
+/// It is the one reading both [`read_log`] and [`Log::read_as_found`] make,
+/// over the lines the module read whole (`skep_util::file::read_lines`): it
+/// answers the values of the lines trusted ([`whole_lines`]), what it
 /// found, and the bytes trusted. Where trust ends short of the end, the cut
-/// ([`TailCut`]) says whether the first untrusted line was whole — ended by
-/// its newline — and counts the whole lines past it: the bytes from that
-/// line's newline, or the end where it has none, to the end. Nothing is
+/// ([`TailCut`]) says whether the first untrusted line was whole — a line
+/// the module read, ended by its newline — or the module's tail, the bytes
+/// past the last newline, and counts the whole lines past it. Nothing is
 /// kept here: the keep is the open's ([`read_log`]).
-fn reading(name: String, bytes: Option<&[u8]>) -> (Vec<Value>, LogRead, u64) {
-    let Some(bytes) = bytes else {
+fn reading(name: String, read: Option<&Lines>) -> (Vec<Value>, LogRead, u64) {
+    let Some(read) = read else {
         let found = LogRead { name, absent: true, lines: 0, cut: None, kept: None, unread: 0 };
         return (Vec::new(), found, 0);
     };
-    let (values, good) = whole_lines(bytes);
-    let cut = (good < bytes.len()).then(|| {
-        let rest = &bytes[good..];
-        let newline = rest.iter().position(|&b| b == b'\n');
-        let first = newline.map_or(rest.len(), |at| at + 1);
-        TailCut {
-            at: good as u64,
-            len: bytes.len() as u64,
-            lines_after: rest[first..].iter().filter(|&&b| b == b'\n').count(),
-            first_whole: newline.is_some(),
-        }
-    });
+    let (values, good, untrusted) = whole_lines(&read.lines);
+    let len = read.tail.map_or(read.whole, |tail| tail.len);
+    let cut = match untrusted {
+        Some(first) => Some(TailCut { at: good, len, lines_after: read.lines.len() - first - 1, first_whole: true }),
+        None => read.tail.map(|tail| TailCut { at: tail.at, len: tail.len, lines_after: 0, first_whole: false }),
+    };
     let lines = values.len();
     let found = LogRead { name, absent: false, lines, cut, kept: None, unread: 0 };
-    (values, found, good as u64)
+    (values, found, good)
 }
 
-/// Returns the values of `bytes`' whole lines in order, and their byte length.
+/// Returns the values of the lines trusted, their bytes, and where trust ended.
 ///
-/// Trust ends at the first torn line — one with no newline, being written
-/// when the process died, or one that is no JSON object — and nothing past
-/// it is read. The one reading both [`read_log`] and [`Log::read_as_found`]
-/// make; whether the tail is then cut is theirs.
-fn whole_lines(bytes: &[u8]) -> (Vec<Value>, usize) {
-    let mut values = Vec::new();
-    let mut good = 0;
-    for line in bytes.split_inclusive(|&b| b == b'\n') {
-        let Some(v) = line
-            .strip_suffix(b"\n")
-            .and_then(|body| serde_json::from_slice::<Value>(body).ok())
-            .filter(Value::is_object)
-        else {
-            break;
+/// Trust ends at the first line that is no JSON object — damage to a line
+/// the store answered over, or another build's — and nothing past it is
+/// read; the module's tail, bytes with no newline, is no line and never
+/// reaches here. Answers the values in order, the bytes of the lines
+/// trusted with their newlines, and the index of the first untrusted line,
+/// `None` where every line read. The one reading both [`read_log`] and
+/// [`Log::read_as_found`] make; whether the rest is then cut is theirs.
+fn whole_lines(lines: &[Vec<u8>]) -> (Vec<Value>, u64, Option<usize>) {
+    let mut values = Vec::with_capacity(lines.len());
+    let mut good = 0u64;
+    for (i, line) in lines.iter().enumerate() {
+        let Some(v) = serde_json::from_slice::<Value>(line).ok().filter(Value::is_object) else {
+            return (values, good, Some(i));
         };
         values.push(v);
-        good += line.len();
+        good += line.len() as u64 + 1;
     }
-    (values, good)
-}
-
-/// Opens the log at `path` for appending, creating it where absent.
-///
-/// A log it creates is born owner-only (`blobs::file_options`); a log that
-/// already stands keeps its mode.
-///
-/// # Errors
-///
-/// The open's failure, the OS's alone: the caller names it.
-fn open_append(path: &Path) -> io::Result<File> {
-    file_options().create(true).append(true).open(path)
+    (values, good, None)
 }
 
 /// Returns one JSON object as its line, newline and all.

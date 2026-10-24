@@ -37,6 +37,14 @@ rustix = { version = "1", features = ["fs"] }
 # Non-poisoning locks, for the reason skepd's manifest gives: a panic under
 # one releases it with the data as it stands.
 parking_lot.workspace = true
+# The file under the tail rule (`skep_util::file`): the two logs' read as
+# lines, their cut at the open once a damaged cut is kept beside the log,
+# their append where the last whole line ends with a failed write cut back,
+# and their rewrite through the `.compact` twin renamed over the log. The
+# support crate stands below every crate of the workspace and names no store
+# (ARCHITECTURE.md §The support crate); the parse of a line, the stop and
+# every word said stay here.
+skep-util = { path = "../skep-util" }
 
 [dev-dependencies]
 # This crate with its test seam on, so its integration tests reach the hold,

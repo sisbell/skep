@@ -1,6 +1,6 @@
 //! THE TEST HOOKS, GATED: every item this crate documents as a test hook or
-//! a test seam compiles only under the `test-hooks` feature — the one check
-//! of this suite, in the media crate's form
+//! a test seam compiles only under the `test-hooks` feature — the first
+//! check of this suite, in the media crate's form
 //! (`crates/skep-media/tests/it/tidy.rs`) with its helpers carried here, so
 //! each crate's suite stands alone, and with the kernel suite's two further
 //! readings: an `impl` block that holds an item may carry the gate, and a
@@ -11,6 +11,18 @@
 //! `lib.rs` declares the store's modules in dependency order and
 //! `ARCHITECTURE.md` §The blob store states the rules across them, and the
 //! crate's surface is its `README.md`'s prose.
+//!
+//! A LINE FILE IS READ AND APPENDED THROUGH THE SUPPORT CRATE's MODULE: the
+//! second check. The two logs take `skep_util::file` for their read, cut,
+//! append, keep and rewrite — the one tail rule the client's and the shell's
+//! files keep — so no code line under `src/` opens a file `append(true)` or
+//! `create_new(true)`, a raw append or an exclusive create no tail rule
+//! governs, save the sites allowed by path and reason. Test modules are not
+//! code here: an inline one from its `mod tests {` on, a `tests.rs` file
+//! whole. The scan proves it read the forms it refuses by the control that
+//! it read the logs' home, `src/jsonl.rs`, naming the module, and by each
+//! allowed file still holding a hit, so a scan gone blind — or an allow list
+//! wider than the code — fails rather than passing a clean tree.
 
 use std::path::{Path, PathBuf};
 
@@ -90,6 +102,78 @@ fn every_test_hook_compiles_only_under_test_hooks() {
         "every test hook compiles only under `test-hooks`; these do not:\n{}",
         ungated.join("\n")
     );
+}
+
+/// A LINE FILE IS READ AND APPENDED THROUGH THE SUPPORT CRATE's MODULE
+/// (`skep_util::file`; ARCHITECTURE.md §The blob store, "A torn line is only
+/// ever a log's tail"): the two logs read, cut, append, keep and rewrite
+/// through the module, so no code line under `src/` opens a file
+/// `append(true)` or `create_new(true)` — a raw append or an exclusive
+/// create no tail rule governs — save the sites allowed here by path and
+/// reason, each of which must still hold one (an allow list widened to a
+/// file with no hit fails). Test modules are not read: an inline one from
+/// its `mod tests {` on, and a `tests.rs` file whole. The control: the scan
+/// read `src/jsonl.rs`, the logs' home, and that file names the module in
+/// code.
+#[test]
+fn a_line_file_is_read_and_appended_through_the_support_crates_module() {
+    /// The files allowed a raw append or an exclusive create, each with
+    /// its reason.
+    const ALLOWED: [(&str, &str); 1] = [(
+        "src/blobs.rs",
+        "the hard-link probe's `create_new` of its own file under `.link-probe/` — a body of no lines, linked and \
+         removed by the probe, no line file",
+    )];
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut hits: Vec<(String, usize, String)> = Vec::new();
+    let mut the_logs_home_names_the_module = false;
+    for file in &files {
+        if file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let relative = file.strip_prefix(manifest).unwrap().display().to_string();
+        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+        for (i, line) in lines[..end].iter().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if relative == "src/jsonl.rs" && line.contains("skep_util::file") {
+                the_logs_home_names_the_module = true;
+            }
+            if line.contains(".append(true)") || line.contains(".create_new(true)") {
+                hits.push((relative.clone(), i + 1, line.trim().to_string()));
+            }
+        }
+    }
+    assert!(
+        the_logs_home_names_the_module,
+        "src/jsonl.rs, the logs' home, was not read naming `skep_util::file` in code: the logs' read and append \
+         have left the module, or the file has moved"
+    );
+    let strays: Vec<String> = hits
+        .iter()
+        .filter(|(file, _, _)| !ALLOWED.iter().any(|(allowed, _)| allowed == file))
+        .map(|(file, line, code)| format!("{file}:{line}: `{code}`"))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "a line file is read and appended through `skep_util::file`, the one tail rule the client's and the \
+         shell's files keep — never by an `append(true)` or a `create_new(true)` of its own, which cuts no torn \
+         last line; these are not:\n{}",
+        strays.join("\n")
+    );
+    for (allowed, why) in ALLOWED {
+        assert!(
+            hits.iter().any(|(file, _, _)| file == allowed),
+            "{allowed} is allowed a raw open ({why}) and holds none: the allow list is wider than the code"
+        );
+    }
 }
 
 /// A file's first line opening with the seam's words, as an inner doc: the

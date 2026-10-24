@@ -1,13 +1,18 @@
 //! THE TAIL RULE's FENCE: a read over a file ending without `\n` answers
 //! the lines and the tail; the streaming read answers each line then what
 //! ends it, a line past the bound named by its byte; every torn tail is
-//! cut or closed at the next append and reported in `Appended`; a failed
+//! cut or closed at the next append and reported in `Appended`, or cut at
+//! the open where the caller asks it (`cut`) and answered there; a failed
 //! append is cut back to the whole lines, and a failed cut-back answered
-//! beside the write; `write_once` makes a new file and removes what a
+//! beside the write — folded into one error, or kept apart
+//! (`append_by_telling`); `write_once` makes a new file and removes what a
 //! failed write made, the removal's failure named beside it; `publish` at
 //! each step of a simulated kill leaves the final name whole or absent,
-//! and a kill's temp is listed and swept; a temp a live writer holds is
-//! skipped by the listing and the sweep; `remove`'s three answers.
+//! and a kill's temp is listed and swept; `publish_by` puts a file through
+//! the temp the caller names, each failure by its step, the file standing
+//! past the rename; a temp a live writer holds is skipped by the listing
+//! and the sweep; `keep_beside` takes the first free `.cut-` name and
+//! leaves a half-kept file standing; `remove`'s three answers.
 
 use std::fs;
 use std::io;
@@ -247,6 +252,245 @@ fn a_failed_cut_back_is_answered_beside_the_write() {
     assert_eq!(refused.kind(), io::ErrorKind::StorageFull, "the write's kind");
     let text = refused.to_string();
     assert!(text.contains("the volume is full") && text.contains("the cut back to the last whole line failed too"), "{text}");
+}
+
+/// THE CUT AT THE OPEN takes the tail now and answers it: over every prefix
+/// of a line left as the file's tail, `open_at` at the whole lines' count
+/// then `cut` leaves the whole lines on disk — the file's length read right
+/// after — and answers the tail with its bytes; a file with no tail answers
+/// `None` and is not written; the next append then finds no tail; at a
+/// trusted count below a whole line the cut takes that line too, the count
+/// being the caller's and what it keeps of the bytes past it kept first;
+/// and the scan's count serves as well as the caller's (the mutant that
+/// defers the cut to the next append leaves the torn bytes on disk at the
+/// open, where the daemon's words say they are cut).
+#[test]
+fn a_cut_at_the_open_takes_the_tail_now_and_answers_it() {
+    let line = b"{\"n\":3}";
+    for cut in 0..=line.len() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("log");
+        let mut before = b"{\"n\":1}\n{\"n\":2}\n".to_vec();
+        before.extend_from_slice(&line[..cut]);
+        fs::write(&path, &before).unwrap();
+        let mut appender = Appender::open_at(&path, 16).unwrap();
+        let want = (cut > 0).then_some(Tail { at: 16, len: 16 + cut as u64 });
+        assert_eq!(appender.cut(Fsync::None).unwrap(), want, "cut {cut}");
+        assert_eq!(fs::metadata(&path).unwrap().len(), 16, "cut {cut}: the file is at its whole lines right after the cut");
+        assert_eq!(fs::read(&path).unwrap(), b"{\"n\":1}\n{\"n\":2}\n", "cut {cut}: the whole lines stand");
+        assert_eq!(appender.cut(Fsync::All).unwrap(), None, "cut {cut}: nothing left to cut");
+        let appended = appender.append(b"{\"n\":3}", OnTail::Cut, Fsync::None).unwrap();
+        assert_eq!(appended, Appended { tail: None, closed: false }, "cut {cut}: the next append finds no tail");
+        assert_eq!(lines_of(&path), ["{\"n\":1}", "{\"n\":2}", "{\"n\":3}"], "cut {cut}");
+    }
+    // A trusted count below a whole line: the line goes with the tail.
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("log");
+    let damaged = b"{\"n\":1}\ngarbage\n{\"n\":3}\n{\"n";
+    fs::write(&path, damaged).unwrap();
+    let mut appender = Appender::open_at(&path, 8).unwrap();
+    assert_eq!(appender.cut(Fsync::Data).unwrap(), Some(Tail { at: 8, len: damaged.len() as u64 }));
+    assert_eq!(fs::read(&path).unwrap(), b"{\"n\":1}\n", "the whole lines past the count went with the tail");
+    // The scan's count: a tail the scan found is cut the same way.
+    fs::write(&path, b"one\ntwo").unwrap();
+    let mut appender = Appender::open(&path, 0o600).unwrap();
+    assert_eq!(appender.cut(Fsync::None).unwrap(), Some(Tail { at: 4, len: 7 }));
+    assert_eq!(fs::read(&path).unwrap(), b"one\n");
+}
+
+/// A FAILED APPEND TELLS ITS TWO FAILURES APART (`append_by_telling`): a
+/// write cut short on a handle that still truncates answers the write's
+/// failure alone, the file cut back to its whole lines, the cut synced as
+/// asked (its making the OS's, which no test observes); a write that fails
+/// on a handle swapped inside the closure for one that cannot truncate
+/// answers the cut-back's failure beside the write's, each its own error;
+/// and the one error `From` folds them into carries the write's kind and
+/// names both (the mutant that folds them before the caller sees them
+/// leaves a log's stop without its second cause).
+#[test]
+fn a_failed_append_tells_the_writes_failure_and_the_cut_backs_apart() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("log");
+    fs::write(&path, b"first\n").unwrap();
+    let mut appender = Appender::open_at(&path, 6).unwrap();
+    let failed = appender
+        .append_by_telling(b"second", OnTail::Cut, Fsync::All, |file, bytes| {
+            file.write_all(&bytes[..3])?;
+            Err(io::Error::new(io::ErrorKind::StorageFull, "the volume is full"))
+        })
+        .unwrap_err();
+    assert_eq!(failed.write.kind(), io::ErrorKind::StorageFull);
+    assert!(failed.cut_back.is_none(), "the cut back succeeded: {failed:?}");
+    assert_eq!(fs::read(&path).unwrap(), b"first\n", "cut back to the whole lines");
+    assert_eq!(appender.whole(), 6, "the count did not move");
+    let one: io::Error = failed.into();
+    assert_eq!((one.kind(), one.to_string()), (io::ErrorKind::StorageFull, "the volume is full".to_string()), "folded: the write's failure alone");
+    // The handle swapped for one that cannot truncate: both failures, apart.
+    let read_only = tmp.path().join("other");
+    fs::write(&read_only, b"").unwrap();
+    let failed = appender
+        .append_by_telling(b"second", OnTail::Cut, Fsync::All, |file, _| {
+            *file = File::open(&read_only)?;
+            Err(io::Error::new(io::ErrorKind::StorageFull, "the volume is full"))
+        })
+        .unwrap_err();
+    assert_eq!(failed.write.kind(), io::ErrorKind::StorageFull, "the write's own");
+    assert_eq!(failed.write.to_string(), "the volume is full", "the write's words alone");
+    assert!(failed.cut_back.is_some(), "the cut back failed too: {failed:?}");
+    let one: io::Error = failed.into();
+    assert_eq!(one.kind(), io::ErrorKind::StorageFull, "the write's kind");
+    let text = one.to_string();
+    assert!(text.starts_with("the volume is full; and the cut back to the last whole line failed too: "), "{text}");
+}
+
+/// `publish_by` PUTS THE FILE THROUGH THE TEMP THE CALLER NAMES: the twin at
+/// `<name>.compact` while the caller's closure writes, renamed onto the
+/// name and gone, the file at the mode; a write cut short removes the twin
+/// and names the step `Write`, the name as it was; a directory at the
+/// twin's name names `Create` and moves nothing, under either stale policy;
+/// a twin a kill left is listed by its suffix, refused under `Refuse` and
+/// replaced under `Replace`; and no `.tmp` is ever made (the mutant that
+/// spells the temp `.tmp` leaves the twin the daemon's runbook names
+/// standing beside a renamed `.tmp`).
+#[test]
+fn publish_by_puts_the_file_through_the_temp_the_caller_names() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("uploads.log");
+    let twin = tmp.path().join("uploads.compact");
+    fs::write(&path, b"{\"n\":1}\n{\"n\":2}\n").unwrap();
+    let mut seen = Vec::new();
+    publish_by(&path, &twin, 0o600, OnStale::Refuse, |file| {
+        seen = fs::read_dir(tmp.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        file.write_all(b"{\"n\":2}\n")
+    })
+    .unwrap();
+    seen.sort();
+    assert_eq!(seen, ["uploads.compact", "uploads.log"], "the twin at the caller's name while the write runs");
+    assert_eq!(fs::read(&path).unwrap(), b"{\"n\":2}\n", "renamed onto the name");
+    assert!(!twin.exists(), "and gone");
+    #[cfg(unix)]
+    assert_eq!(mode(&path), 0o600);
+    // A write cut short: the twin removed, the step named, the name as it was.
+    let failed = publish_by(&path, &twin, 0o600, OnStale::Refuse, |file| {
+        file.write_all(b"{\"n\"")?;
+        Err(io::Error::new(io::ErrorKind::StorageFull, "the volume is full"))
+    })
+    .unwrap_err();
+    assert_eq!((failed.step, failed.error.kind()), (PublishStep::Write, io::ErrorKind::StorageFull));
+    assert_eq!(failed.error.to_string(), "the volume is full", "the removal succeeded: the write's words alone");
+    assert!(!twin.exists(), "the twin removed");
+    assert_eq!(fs::read(&path).unwrap(), b"{\"n\":2}\n", "the name as it was");
+    // A directory at the twin's name: nothing made, nothing moved.
+    fs::create_dir(&twin).unwrap();
+    for stale_policy in [OnStale::Refuse, OnStale::Replace] {
+        let failed = publish_by(&path, &twin, 0o600, stale_policy, |file| file.write_all(b"x")).unwrap_err();
+        assert_eq!(failed.step, PublishStep::Create, "{stale_policy:?}: {}", failed.error);
+        assert!(twin.is_dir(), "{stale_policy:?}: the directory stands");
+        assert_eq!(fs::read(&path).unwrap(), b"{\"n\":2}\n", "{stale_policy:?}: nothing moved");
+    }
+    fs::remove_dir(&twin).unwrap();
+    // A twin a kill left: listed, refused under Refuse, replaced under Replace.
+    fs::write(&twin, b"{\"half\":\"writ").unwrap();
+    assert_eq!(stale(tmp.path(), ".compact").unwrap(), std::slice::from_ref(&twin), "a kill's twin is listed by its suffix");
+    let failed = publish_by(&path, &twin, 0o600, OnStale::Refuse, |file| file.write_all(b"x")).unwrap_err();
+    assert_eq!((failed.step, failed.error.kind()), (PublishStep::Create, io::ErrorKind::AlreadyExists));
+    assert_eq!(fs::read(&twin).unwrap(), b"{\"half\":\"writ", "refused: the stale twin stands");
+    publish_by(&path, &twin, 0o600, OnStale::Replace, |file| file.write_all(b"{\"n\":3}\n")).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"{\"n\":3}\n", "replaced: written afresh and renamed");
+    assert!(!twin.exists());
+    let names: Vec<String> = fs::read_dir(tmp.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    assert_eq!(names, ["uploads.log"], "no `.tmp` was ever made");
+}
+
+/// A PUBLISH THAT FAILS PAST ITS RENAME LEAVES THE FILE STANDING: with the
+/// directory's own open for its sync refused by its mode — written and
+/// searched, not read — `publish_by` renames the twin onto the name, meets
+/// the refusal at the directory's sync, names the step `DirSync` and leaves
+/// the file whole at its name, the caller's to stop on; `publish`, whose
+/// file is new, removes it there (the mutant that removes the file in
+/// `publish_by` destroys a log at its name).
+#[cfg(unix)]
+#[test]
+fn a_publish_that_fails_past_its_rename_leaves_the_file_standing() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("blobs");
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("leases.log");
+    fs::write(&path, b"{\"n\":1}\n{\"n\":2}\n").unwrap();
+    set_mode(&dir, 0o300);
+    let published = publish_by(&path, &dir.join("leases.compact"), 0o600, OnStale::Replace, |file| file.write_all(b"{\"n\":2}\n"));
+    let new = publish(&dir.join("x.key"), b"{\"v\":1}\n", 0o600, OnStale::Refuse);
+    set_mode(&dir, 0o700);
+    let Err(failed) = published else {
+        return; // a privileged process reads any directory: nothing to inject
+    };
+    assert_eq!(failed.step, PublishStep::DirSync, "{}", failed.error);
+    assert_eq!(failed.error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(fs::read(&path).unwrap(), b"{\"n\":2}\n", "the file stands whole at its name");
+    assert!(!dir.join("leases.compact").exists(), "the twin was renamed, not left");
+    assert_eq!(new.unwrap_err().kind(), io::ErrorKind::PermissionDenied, "the new file's publish fails past its rename too");
+    assert!(!dir.join("x.key").exists(), "and the new file is removed: it was never there to lose");
+    assert!(!dir.join("x.key.tmp").exists());
+}
+
+/// `keep_beside` TAKES THE FIRST FREE NAME AND LEAVES A HALF-KEPT FILE: the
+/// dropped bytes go to `{file}.cut-{byte}` at the mode, byte for byte, the
+/// name answered in `KeptName`'s spelling; a standing name is never written
+/// over, whatever it holds — the next keep takes the first free `.{k}`; a
+/// reader that fails midway leaves the kept file standing with the bytes it
+/// had, the step `Write` named with the name (a half-kept file is a fact,
+/// never a loss made larger); and a directory whose own open for its sync
+/// is refused names `DirSync`, the kept file standing whole (the mutant
+/// that drops `create_new` writes a standing kept file over).
+#[test]
+fn keep_beside_takes_the_first_free_name_and_leaves_a_half_kept_file() {
+    struct FailsAfter<'a>(&'a [u8]);
+    impl io::Read for FailsAfter<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(io::Error::other("the device fell away"));
+            }
+            let n = self.0.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_eq!(KeptName { byte: 8, k: 0 }.of("leases.log"), "leases.log.cut-8");
+    assert_eq!(KeptName { byte: 8, k: 2 }.of("blobs/leases.log"), "blobs/leases.log.cut-8.2");
+    let kept = keep_beside(dir, "x.log", 8, &b"garbage\n{\"n\":3}\n"[..], 0o600).unwrap();
+    assert_eq!(kept, KeptName { byte: 8, k: 0 });
+    assert_eq!(fs::read(dir.join("x.log.cut-8")).unwrap(), b"garbage\n{\"n\":3}\n", "byte for byte");
+    #[cfg(unix)]
+    assert_eq!(mode(&dir.join("x.log.cut-8")), 0o600);
+    // A standing name is never written over, whatever it holds.
+    fs::write(dir.join("x.log.cut-8.1"), b"a hand's own file").unwrap();
+    let kept = keep_beside(dir, "x.log", 8, &b"later\n"[..], 0o600).unwrap();
+    assert_eq!(kept, KeptName { byte: 8, k: 2 }, ".cut-8 and .cut-8.1 stand");
+    assert_eq!(fs::read(dir.join("x.log.cut-8.2")).unwrap(), b"later\n");
+    assert_eq!(fs::read(dir.join("x.log.cut-8")).unwrap(), b"garbage\n{\"n\":3}\n", "the first keep stands");
+    assert_eq!(fs::read(dir.join("x.log.cut-8.1")).unwrap(), b"a hand's own file", "and the hand's file");
+    // A reader that fails midway: the step and the name, the half-kept file standing.
+    let failed = keep_beside(dir, "y.log", 0, FailsAfter(b"abc"), 0o600).unwrap_err();
+    assert_eq!((failed.step, failed.name), (KeepStep::Write, KeptName { byte: 0, k: 0 }), "{}", failed.error);
+    assert_eq!(failed.error.to_string(), "the device fell away");
+    assert_eq!(fs::read(dir.join("y.log.cut-0")).unwrap(), b"abc", "the half-kept file stands with what was written");
+    // The directory's own open for its sync refused: DirSync, the kept file whole.
+    #[cfg(unix)]
+    {
+        let sealed = dir.join("sealed");
+        fs::create_dir(&sealed).unwrap();
+        set_mode(&sealed, 0o300);
+        let kept = keep_beside(&sealed, "z.log", 4, &b"tail\n"[..], 0o600);
+        set_mode(&sealed, 0o700);
+        if let Err(failed) = kept {
+            // A privileged process reads any directory: then nothing was injected.
+            assert_eq!((failed.step, failed.name), (KeepStep::DirSync, KeptName { byte: 4, k: 0 }), "{}", failed.error);
+            assert_eq!(fs::read(sealed.join("z.log.cut-4")).unwrap(), b"tail\n", "kept whole, the directory's sync refused");
+        }
+    }
 }
 
 /// `write_once` MAKES A NEW FILE at the mode, synced, and refuses a standing

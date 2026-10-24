@@ -1,5 +1,8 @@
-use super::*;
+use std::fs::{self, OpenOptions};
+
 use serde_json::json;
+
+use super::*;
 
 /// The log reads back what it appended, in order, and a torn tail is
 /// cut off the file at open, the lines before it standing.
@@ -143,6 +146,44 @@ fn each_reading_answers_where_trust_ended_and_the_whole_lines_the_cut_took() {
     assert_eq!(fs::read_to_string(dir.path().join("x.log.cut-8.1")).unwrap(), "garbage\n");
 }
 
+/// THE KEEP's WRITE MADE TO FAIL MIDWAY leaves the half-kept file standing,
+/// and the open fails naming the step: the keep copies the dropped bytes off
+/// the log itself, and a reader that fails partway — as a failing device
+/// gives — answers `{kept}: write: {cause}`, the open's own refusal, the
+/// kept file standing with the bytes it had and never removed (a half-kept
+/// file is a fact for the operator, not a loss to make larger), the log
+/// uncut since the keep comes first; the next open keeps beside it, never
+/// over it. Driven at the keep's seam, as the suite drives the append's and
+/// the compaction's.
+#[test]
+fn a_keep_whose_write_fails_midway_leaves_the_half_kept_file_standing() {
+    struct FailsAfter(&'static [u8]);
+    impl io::Read for FailsAfter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(io::Error::other("the device fell away"));
+            }
+            let n = self.0.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("x.log");
+    fs::write(&path, "{\"n\":1}\ngarbage\n").unwrap();
+    let name = label(&path, 2);
+    let failed = keep_cut(&path, &name, 8, FailsAfter(b"garb")).expect_err("the keep's write fails midway");
+    assert_eq!(failed.to_string(), format!("{name}.cut-8: write: the device fell away"), "the step named at the kept file");
+    assert_eq!(fs::read(dir.path().join("x.log.cut-8")).unwrap(), b"garb", "the half-kept file stands with what was written");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\ngarbage\n", "the log uncut: the keep comes first");
+    let (_, _, opened) = Log::open(path.clone()).unwrap();
+    assert_eq!(opened.kept.as_deref(), Some(format!("{name}.cut-8.1").as_str()), "the next open keeps beside the half-kept file");
+    assert_eq!(fs::read(dir.path().join("x.log.cut-8")).unwrap(), b"garb", "never over it");
+    assert_eq!(fs::read_to_string(dir.path().join("x.log.cut-8.1")).unwrap(), "garbage\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "and cuts");
+}
+
 /// AN APPEND THAT FAILS is cut back off the file: a write cut short —
 /// part of the line on disk, then an error, as a full disk gives —
 /// leaves the file at its whole lines, the next append lands on a whole
@@ -236,12 +277,14 @@ fn a_full_volumes_append_and_stop_read_the_volume_is_full() {
     assert_eq!(full.kind(), io::ErrorKind::StorageFull, "the kind kept");
     assert_eq!(full.to_string(), format!("{}: append: the volume is full ({})", label(&path, 2), enospc()));
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "cut back off the file");
-    // The cut back refused too: a read-only file, as in the stop's own test.
-    log.file = File::open(&path).unwrap();
-    let mut other = open_append(&path).unwrap();
+    // The cut back refused too: the appender's handle swapped inside the
+    // write for a read-only one, as in the stop's own test, the torn bytes
+    // landing through a second open file.
+    let mut other = OpenOptions::new().append(true).open(&path).unwrap();
     let stopping = log
-        .append_by(&json!({"n": 3}), |_, line| {
+        .append_by(&json!({"n": 3}), |file, line| {
             other.write_all(&line[..4])?;
+            *file = File::open(&path)?;
             Err(enospc())
         })
         .expect_err("the volume full, the cut back refused");
@@ -268,13 +311,14 @@ fn a_failed_cut_back_stops_the_log_until_a_compaction() {
     let path = dir.path().join("x.log");
     let (mut log, _, _) = Log::open(path.clone()).unwrap();
     log.append_synced(&json!({"n": 1})).unwrap();
-    // A read-only file, as a failing disk leaves the log's: the rest of
+    // A read-only file, as a failing disk leaves the log's: the appender's
+    // handle is swapped inside the write for a read-only one, so the rest of
     // the write fails at the OS, and so does the cut. The torn bytes land
     // through a second open file, as a write cut short leaves them.
-    log.file = File::open(&path).unwrap();
-    let mut other = open_append(&path).unwrap();
+    let mut other = OpenOptions::new().append(true).open(&path).unwrap();
     let failed = log.append_by(&json!({"n": 2}), |file, line| {
         other.write_all(&line[..4])?;
+        *file = File::open(&path)?;
         file.write_all(&line[4..])
     });
     let failed = failed.expect_err("the write and its cut back both refused");
@@ -289,7 +333,6 @@ fn a_failed_cut_back_stops_the_log_until_a_compaction() {
         "the stop keeps both causes: {cause}"
     );
     assert_eq!(log.stop().map(|s| s.refused), Some(0), "no append refused yet");
-    log.file = open_append(&path).unwrap();
     let refused = log.append_synced(&json!({"n": 3})).expect_err("a stopped log takes no append");
     assert_eq!(
         refused.to_string(),

@@ -3614,4 +3614,7 @@ imports it.
   behind each crate and each rule above.
 
 This file changes when the layout changes: a new crate, a moved module, a
-new cross-cutting rule. It does not record history.
+new cross-cutting rule. It does not record history. The rules of
+mechanism — what every site of a kind must do, and the one component that
+does it for all of them — live in `PATTERNS.md`, numbered `SP-n`, each
+with the component that holds it and the test that checks it.

@@ -12,7 +12,10 @@ or more it lives in the module's own `tests.rs` — `foo/tests.rs` beside
 
 ## skepd
 
-skepd is layered; imports point down. The layers are drawn in
+`PATTERNS.md` holds the rules of mechanism the code keeps, numbered
+`SP-n`: read it before a change, cite the rule a change keeps or moves
+onto, and change a rule there, with the reason, rather than work around
+it. skepd is layered; imports point down. The layers are drawn in
 `ARCHITECTURE.md` §The daemon, and `crates/skepd/tests/it/tidy.rs` checks
 them; the media resource beside its write path is the crate `skep-media`,
 whose two layers — the resource over its two leaf cells — are drawn in

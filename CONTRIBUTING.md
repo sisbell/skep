@@ -106,7 +106,9 @@ and the label of the crate it touches, spelled as the commit scope is.
 ## Code and comments
 
 Code keeps to the layering [ARCHITECTURE.md](ARCHITECTURE.md) states under
-§Rules that hold across files. The compiler enforces it between crates,
+§Rules that hold across files, and to the rules of mechanism
+[PATTERNS.md](PATTERNS.md) numbers (`SP-n`): a change that touches a
+rule's sites keeps the rule or changes it there, with the reason. The compiler enforces it between crates,
 and a crate's `tests/it/tidy.rs`, where it has one, enforces it inside
 the crate.
 

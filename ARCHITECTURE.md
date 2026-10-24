@@ -865,8 +865,9 @@ each naming only those above it:
   written once, in `moment`, against a `Screen` that says its lines and
   reads its answers; `has_terminal`, the person doors' check; `talk`, the
   one writer of a line on stderr, and `show`, each through `write_inert`,
-  and `clear`, the dismissal's one escape; and `answer`, the one reader
-  every prompt goes through.
+  and `clear`, the dismissal's one escape; `Drawing`, every text it draws,
+  which its `drawing` module alone makes (SP-16); and `answer`, the one
+  reader every prompt goes through.
 - `shared.rs` what both binaries share: DATA's writers (`data` and
   `data_verbatim`), the stops and their exit codes (`Stop`, which `finish`
   renders under a `Program`), `help`, and the plumbing from the flags to a

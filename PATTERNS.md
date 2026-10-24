@@ -170,13 +170,14 @@ says "from" it at its end.
   **Checked by:** `crates/skep-shell/src/shell/tests/modes.rs` (`a_paper_claim_hands_the_page_no_seed_and_no_path`); `crates/skep-shell/src/shell/tests/door.rs` (`a_shells_options_print_no_seed`); `crates/skep-mcp/tests/it/mcp.rs` (`no_session_token_and_no_key_seed_reaches_a_tool_result_or_a_log_line`); `crates/skep-provision/src/flow/status_map/tests.rs` (`the_maps_debug_shows_no_token`); `crates/skepd/tests/it/volume.rs` (`a_write_refused_at_a_rotation_hands_its_writer_no_path`).
   **Closed:** #244, #329, #331, #354, #361, #382, #422, #517, #541, #592.
 - **SP-16 A secret lives in a type that wipes on drop.** A seed, a
-  signing key and every text a rendering makes of one are born into a
-  value that overwrites itself when dropped, and leave it only as the
-  signer derived from it; a copy in a plain string or a JSON value is a
-  copy left in freed memory.
-  **Holds it:** `skep_signature::signer` and `skep_signature::kdf`, `skep_client::sheet` (`Seed`, `SeedText`), `skep_client::sign`, `skep_client::store` (the seed leaves only as the signer).
-  **Checked by:** `crates/skep-client/src/sheet/tests.rs` (`the_seed_and_the_sheets_text_of_it_wipe_on_drop`); no test yet holds the key file's export and read or the CLI's drawing — one would read the freed pages after each.
-  **Closed:** #88, #249, #261, #445; open: #598, #599, #600, #601.
+  signing key and every text a rendering makes of one are born, at their
+  final size, into a value that overwrites itself when dropped, and leave
+  it only as the signer derived from it; a copy in a plain string or a
+  JSON value, or in a buffer grown past its birth, is a copy left in freed
+  memory.
+  **Holds it:** `skep_signature::signer` and `skep_signature::kdf`, `skep_client::sheet` (`Seed`, `SeedText`), `skep_client::sign`, `skep_client::store` (the seed leaves only as the signer), `skep_cli::terminal` (`Drawing`: the sheet's rows, its box and each line's inert rendering).
+  **Checked by:** `crates/skep-client/src/sheet/tests.rs` (`the_seed_and_the_sheets_text_of_it_wipe_on_drop`); `crates/skep-cli/src/terminal/tests.rs` (`the_sheets_drawing_holds_the_seed_only_in_buffers_born_at_their_size_that_wipe`); no test yet holds the key file's export and read — one would read the freed pages after each.
+  **Closed:** #88, #249, #261, #445, #598; open: #599, #600, #601.
 
 ## What comes in from outside
 

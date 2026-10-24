@@ -1265,6 +1265,7 @@ dependencies = [
  "skep-util",
  "skepd",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

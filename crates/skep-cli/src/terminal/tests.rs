@@ -1,11 +1,13 @@
 use std::collections::VecDeque;
 
-use skep_client::sheet::{KeyFile, Label, Seed};
+use skep_client::sheet::{Facts, KeyFile, Label, Seed};
+use skep_client::Origin;
+use zeroize::ZeroizeOnDrop;
 
 use super::*;
 
 /// A screen whose answers are scripted, keeping every line said, prompt
-/// and text shown, in order — the person gone once the script is.
+/// and drawing shown, in order — the person gone once the script is.
 struct ScriptedScreen {
     answers: VecDeque<String>,
     said: Vec<String>,
@@ -25,8 +27,8 @@ impl Screen for ScriptedScreen {
         self.said.push(line.to_string());
     }
 
-    fn show(&mut self, text: &str) {
-        self.said.push(text.to_string());
+    fn show(&mut self, drawing: Drawing) {
+        self.said.push(drawing.as_str().to_string());
     }
 
     fn clear(&mut self) {
@@ -51,26 +53,33 @@ fn received_seed() -> String {
 /// return, a bell, DEL, a C1 control and a bidi control each shown as its
 /// code point, the line breaks kept; the box's rules and its padding pass
 /// whole; and a text rendered once passes as it stands, so a label a walk
-/// rendered already is never rendered into another spelling.
+/// rendered already is never rendered into another spelling. Each rendering
+/// is one buffer born at its final size, a control that widens its line
+/// among them.
 #[test]
 fn every_line_the_terminal_is_handed_is_inert() {
-    assert_eq!(inert("a\x1b[2Jb\rc\nd\u{202e}e\x07"), "a<U+001B>[2Jb<U+000D>c\nd<U+202E>e<U+0007>");
-    assert_eq!(inert("f\u{9b}2Jg\u{7f}h\u{85}"), "f<U+009B>2Jg<U+007F>h<U+0085>", "the 8-bit CSI, DEL and NEL");
-    let ruled = boxed(&["the seed".into(), "é—".into()]);
-    assert_eq!(inert(&ruled), ruled, "the box passes whole");
-    assert_eq!(inert(&inert("\x1b]52;c;cHduZWQ=\x07")), inert("\x1b]52;c;cHduZWQ=\x07"), "rendered twice, the same");
-    assert_eq!(inert(&inert("\u{9d}0;title\u{9c}")), inert("\u{9d}0;title\u{9c}"), "C1 rendered twice, the same");
+    let rendered = |text: &str| {
+        let drawing = inert(text);
+        assert_eq!(drawing.buffer().capacity(), drawing.buffer().len(), "born at its final size: {text:?}");
+        drawing.as_str().to_owned()
+    };
+    assert_eq!(rendered("a\x1b[2Jb\rc\nd\u{202e}e\x07"), "a<U+001B>[2Jb<U+000D>c\nd<U+202E>e<U+0007>");
+    assert_eq!(rendered("f\u{9b}2Jg\u{7f}h\u{85}"), "f<U+009B>2Jg<U+007F>h<U+0085>", "the 8-bit CSI, DEL and NEL");
+    let ruled = boxed(vec!["the seed", "é—"]);
+    assert_eq!(rendered(ruled.as_str()), ruled.as_str(), "the box passes whole");
+    assert_eq!(rendered(&rendered("\x1b]52;c;cHduZWQ=\x07")), rendered("\x1b]52;c;cHduZWQ=\x07"), "rendered twice, the same");
+    assert_eq!(rendered(&rendered("\u{9d}0;title\u{9c}")), rendered("\u{9d}0;title\u{9c}"), "C1 rendered twice, the same");
 }
 
 /// Every line of the box is padded to the widest, measured in chars: a
 /// line holding multi-byte text lines up with one that holds none.
 #[test]
 fn the_box_is_ruled_to_the_widest_line() {
-    let b = boxed(&["ab".into(), "abcd".into(), "é—".into()]);
-    let lines: Vec<&str> = b.lines().collect();
+    let b = boxed(vec!["ab", "abcd", "é—"]);
+    let lines: Vec<&str> = b.as_str().lines().collect();
     assert_eq!(lines.len(), 5);
     assert!(lines[0].starts_with('┌') && lines[4].starts_with('└'));
-    assert!(lines.iter().all(|l| l.chars().count() == lines[0].chars().count()), "{b}");
+    assert!(lines.iter().all(|l| l.chars().count() == lines[0].chars().count()), "{}", b.as_str());
     assert_eq!(lines[3], format!("│ é—{} │", " ".repeat(18)), "padded to the 20-char floor");
 }
 
@@ -211,6 +220,7 @@ fn the_sheet_is_shown_boxed_and_held_until_answered_and_the_dismissal_clears_it(
     let mut screen = script(&[""]);
     assert_eq!(moment::sheet(&mut screen, &Sheet { fields: fields.clone() }), Ok(()));
     let shown = &screen.said[0];
+    assert_eq!(shown.as_str(), boxed(sheet_rows(&fields)).as_str(), "the box of the sheet's rows");
     assert!(shown.starts_with('┌') && shown.contains("skep anchor sheet — print this; the seed below is the key"), "{shown}");
     for (name, value) in fields.lines() {
         assert!(shown.contains(&name) && value.lines().all(|part| shown.contains(part)), "`{name}` in the box: {shown}");
@@ -222,4 +232,132 @@ fn the_sheet_is_shown_boxed_and_held_until_answered_and_the_dismissal_clears_it(
     let mut screen = script(&[]);
     moment::dismiss(&mut screen);
     assert_eq!(screen.said, ["\x1b[2J\x1b[3J\x1b[H"]);
+}
+
+/// The two lines of the counting seed's text, as the sheet shows them.
+const COUNTING_SEED_LINES: [&str; 2] = ["00010203 04050607 08090a0b 0c0d0e0f", "10111213 14151617 18191a1b 1c1d1e1f"];
+
+/// Returns three anchors' sheets over the counting seed.
+///
+/// The first carries no facts, the second the three facts, and the third a
+/// label holding a C1 control, which the library's rendering leaves and
+/// `inert` spells, widening the label's line.
+fn counting_sheets() -> [SheetFields; 3] {
+    let counting = || Seed::new(std::array::from_fn(|i| i as u8));
+    let facts = Facts { account: "1.0.1".into(), principal: 1, origin: Origin::parse("http://127.0.0.1:8642").unwrap() };
+    [
+        KeyFile::new(counting(), true, Some(Label::new("paper a").unwrap()), None).sheet(),
+        KeyFile::new(counting(), true, Some(Label::new("paper b").unwrap()), Some(&facts)).sheet(),
+        KeyFile::new(counting(), true, Some(Label::new("paper\u{85}c").unwrap()), None).sheet(),
+    ]
+}
+
+/// The sheet's drawing holds the seed only in buffers born at their size
+/// that wipe when freed (SP-16; `client.md` §3.4: the drop AUTH-5.54 step 3
+/// owes is a wipe).
+///
+/// For each of three sheets, every row, the box and the box's inert
+/// rendering is a buffer whose type wipes on drop, read off the drawing
+/// that holds it, and whose capacity is its length; the seed's two lines
+/// are in the rows, the box and the rendering; and each of the two lines of
+/// the box that hold one comes back from the library's `render_inert`, as
+/// `inert` holds it until it is wiped, in one such buffer of its own.
+#[test]
+fn the_sheets_drawing_holds_the_seed_only_in_buffers_born_at_their_size_that_wipe() {
+    /// Reads the wipe off a buffer's type: one that does not wipe on drop
+    /// fails to compile here.
+    fn wipes_on_drop<T: ZeroizeOnDrop>(_: &T) {}
+    fn born_whole(buffer: &Zeroizing<String>, what: &str) {
+        wipes_on_drop(buffer);
+        assert_eq!(buffer.capacity(), buffer.len(), "{what} born at its final size, never grown");
+    }
+    let sheets = counting_sheets();
+    for fields in &sheets {
+        let rows = sheet_rows(fields);
+        for row in &rows {
+            born_whole(row.buffer(), "a row");
+        }
+        for line in COUNTING_SEED_LINES {
+            assert!(rows.iter().any(|row| row.as_str().ends_with(line)), "the seed's line `{line}` is a row's value");
+        }
+        let drawn = boxed(rows);
+        let rendered = inert(drawn.as_str());
+        born_whole(drawn.buffer(), "the box");
+        born_whole(rendered.buffer(), "the box's rendering");
+        for line in COUNTING_SEED_LINES {
+            assert!(drawn.as_str().contains(line) && rendered.as_str().contains(line), "the seed's line `{line}` in the box and its rendering");
+        }
+        let copies = rendered_lines(drawn.as_str());
+        let held: Vec<&Zeroizing<String>> = copies.iter().filter(|copy| COUNTING_SEED_LINES.iter().any(|line| copy.contains(line))).collect();
+        assert_eq!(held.len(), 2, "the box holds the seed on two lines");
+        for copy in held {
+            born_whole(copy, "a line's `render_inert` copy");
+        }
+    }
+    let widened = inert(boxed(sheet_rows(&sheets[2])).as_str());
+    assert!(widened.as_str().contains("label       paper<U+0085>c"), "the third sheet's label widens its line");
+}
+
+/// The rows, the box and its rendering are what `format!`'s padding draws.
+///
+/// `format!` pads by characters, as the box's rule does, and spells a code
+/// point as the rendering does; the drawing it spells — each row and each
+/// line of the box padded by `format!`, each control spelled by it — is the
+/// reference here, byte for byte, over the three sheets and over rows that
+/// hold no field: rows of one-byte and of several-byte characters, a row
+/// past the box's 20-character floor, a row of controls, and none at all.
+#[test]
+fn the_box_and_its_rendering_draw_what_the_formatter_draws() {
+    fn formatted_rows(fields: &SheetFields) -> Vec<String> {
+        let mut rows = vec!["skep anchor sheet — print this; the seed below is the key".to_string(), String::new()];
+        for (name, value) in fields.lines() {
+            let mut parts = value.lines();
+            rows.push(format!("{name:<12}{}", parts.next().unwrap_or("")));
+            for rest in parts {
+                rows.push(format!("{:<12}{rest}", ""));
+            }
+        }
+        rows
+    }
+    fn formatted_box(rows: &[String]) -> String {
+        let width = rows.iter().map(|row| row.chars().count()).max().unwrap_or(0).max(20);
+        let bar = "─".repeat(width + 2);
+        let mut out = format!("┌{bar}┐\n");
+        for row in rows {
+            out.push_str(&format!("│ {row:<width$} │\n"));
+        }
+        out.push_str(&format!("└{bar}┘\n"));
+        out
+    }
+    fn formatted_inert(text: &str) -> String {
+        let mut out = String::new();
+        for (i, line) in text.split('\n').enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            for c in render_inert(line).chars() {
+                if c.is_control() {
+                    out.push_str(&format!("<U+{:04X}>", u32::from(c)));
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+        out
+    }
+    let mut row_sets = Vec::new();
+    for fields in &counting_sheets() {
+        let expected = formatted_rows(fields);
+        assert_eq!(sheet_rows(fields).iter().map(|row| row.as_str().to_owned()).collect::<Vec<_>>(), expected, "the sheet's rows");
+        row_sets.push(expected);
+    }
+    for rows in [&["ab", "abcd", "é—"][..], &["the seed", "é—"], &["a row longer than the box's twenty-character floor"], &["f\u{9b}2Jg\u{7f}h\u{85}"], &[]] {
+        row_sets.push(rows.iter().map(|row| row.to_string()).collect());
+    }
+    for rows in &row_sets {
+        let expected = formatted_box(rows);
+        let drawn = boxed(rows.clone());
+        assert_eq!(drawn.as_str(), expected, "the box");
+        assert_eq!(inert(drawn.as_str()).as_str(), formatted_inert(&expected), "its rendering");
+    }
 }

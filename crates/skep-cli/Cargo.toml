@@ -87,6 +87,12 @@ skep-util = { path = "../skep-util" }
 # the suites', unchanged.
 skepd = { path = "../skepd", features = ["test-hooks"], optional = true }
 serde_json.workspace = true
+# The wipe of what the terminal draws (`Zeroizing`): the backup sheet's rows,
+# its box and their inert rendering hold an anchor's seed, and AUTH-5.54
+# step 3's drop is owed as a wipe (client.md §3.4; PATTERNS.md SP-16). Its
+# default `alloc` feature holds `Zeroizing<String>`; naming it compiles no
+# crate the build would not, since skep-client's `acting` half takes it.
+zeroize = "1"
 
 [dev-dependencies]
 # The library with its test support on: the ceremonies suite drives a walk

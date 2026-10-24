@@ -26,13 +26,28 @@
 //! dismissal's clear, the one escape this binary means, is `clear`'s
 //! constant, written raw. Both writers drop a write stderr refuses rather
 //! than panic.
+//!
+//! Every text the terminal draws — each line's inert rendering, and the
+//! sheet's rows and its box — is a [`Drawing`], which [`drawing`] alone can
+//! make: one buffer born at its final size, so no growth leaves a copy of it
+//! behind in freed memory, and overwritten when it is freed. The sheet
+//! carries an anchor's seed, lent from the library's `SeedText`, and every
+//! copy this module makes of it — a row, the box, a line's rendering —
+//! wipes when freed (SP-16; `client.md` §3.4: the drop AUTH-5.54 step 3 owes
+//! is a wipe). The box takes the rows and the screen takes the box, so each
+//! is wiped once the box is shown, before the person is asked whether the
+//! sheet is printed: while the person prints it, nothing this module made
+//! holds the seed.
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
-use skep_client::sheet::render_inert;
+use skep_client::sheet::{render_inert, SheetFields};
+use zeroize::Zeroizing;
+
+use drawing::{Drawing, Pen};
 
 /// The one escape sequence this binary means: the dismissal's clear.
 ///
@@ -45,6 +60,94 @@ pub fn has_terminal() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
+/// The text the terminal draws, made where nothing else can make it.
+///
+/// A [`Drawing`]'s buffer is private here, so [`Drawing::draw`] is the one
+/// way the rest of the module gets one: every drawing is born at its final
+/// size and wipes when freed.
+mod drawing {
+    use zeroize::Zeroizing;
+
+    /// A text the terminal draws, in one buffer of its exact size that wipes.
+    ///
+    /// Its one constructor, [`Drawing::draw`], measures the text before it
+    /// writes it, so the buffer is born at its final size and no piece grows
+    /// it and leaves a copy of the text behind in freed memory; the buffer is
+    /// a `Zeroizing<String>`, overwritten when it is freed (SP-16).
+    pub struct Drawing(Zeroizing<String>);
+
+    impl Drawing {
+        /// Returns the text `writer` writes, in a buffer of exactly its size.
+        ///
+        /// The writer runs twice over the same pieces: to a `Measure`, then
+        /// into the buffer born at the size measured, which wipes from its
+        /// birth.
+        pub fn draw(writer: impl Fn(&mut dyn Pen)) -> Drawing {
+            let mut measure = Measure(0);
+            writer(&mut measure);
+            let mut text = Zeroizing::new(String::with_capacity(measure.0));
+            writer(&mut Buffer(&mut text));
+            Drawing(text)
+        }
+
+        /// Returns the text, lent.
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+
+        /// Returns the buffer, lent, for the suite to read its type and size.
+        #[cfg(test)]
+        pub fn buffer(&self) -> &Zeroizing<String> {
+            &self.0
+        }
+    }
+
+    impl AsRef<str> for Drawing {
+        fn as_ref(&self) -> &str {
+            self.as_str()
+        }
+    }
+
+    /// Where a drawing's pieces go: a `Measure` of their size, or the buffer
+    /// born at it.
+    pub trait Pen {
+        /// Takes the next piece of the text.
+        fn put(&mut self, piece: &str);
+
+        /// Takes the next character of the text.
+        fn put_char(&mut self, c: char) {
+            self.put(c.encode_utf8(&mut [0; 4]));
+        }
+    }
+
+    /// The size of a drawing's text in bytes, as [`Drawing::draw`] measures
+    /// it.
+    struct Measure(usize);
+
+    impl Pen for Measure {
+        fn put(&mut self, piece: &str) {
+            self.0 += piece.len();
+        }
+    }
+
+    /// The buffer [`Drawing::draw`] writes into, born at the size measured.
+    struct Buffer<'a>(&'a mut String);
+
+    impl Pen for Buffer<'_> {
+        /// Pushes `piece` into the room the size measured left for it.
+        ///
+        /// # Panics
+        ///
+        /// Panics in a debug build where `piece` would grow the buffer past
+        /// the size measured: a writer that writes other pieces than it
+        /// measured.
+        fn put(&mut self, piece: &str) {
+            debug_assert!(piece.len() <= self.0.capacity() - self.0.len(), "a drawing grows past the size it measured");
+            self.0.push_str(piece);
+        }
+    }
+}
+
 /// Returns `text` as the terminal may be handed it, each line rendered inert.
 ///
 /// Every character AUTH-5.2 names — a control character (C0, DEL and C1)
@@ -54,22 +157,35 @@ pub fn has_terminal() -> bool {
 /// text holds that the rendering would otherwise touch. Rendered twice, the
 /// same: the rendering's output holds nothing it renders, so a label a walk
 /// rendered already passes as it stands.
-fn inert(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (i, line) in text.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        // What `render_inert` leaves of the control characters: C1.
-        for c in render_inert(line).chars() {
-            if c.is_control() {
-                out.push_str(&format!("<U+{:04X}>", u32::from(c)));
-            } else {
-                out.push(c);
+///
+/// The rendering is a [`Drawing`], and each line's `render_inert` copy is
+/// held wiping until the rendering is written ([`rendered_lines`]).
+fn inert(text: &str) -> Drawing {
+    let lines = rendered_lines(text);
+    Drawing::draw(|pen| {
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                pen.put_char('\n');
+            }
+            // What `render_inert` leaves of the control characters: C1. A
+            // code point's spelling holds none of the line's text.
+            for c in line.chars() {
+                if c.is_control() {
+                    pen.put(&format!("<U+{:04X}>", u32::from(c)));
+                } else {
+                    pen.put_char(c);
+                }
             }
         }
-    }
-    out
+    })
+}
+
+/// Returns each line of `text` as `render_inert` renders it, held wiping.
+///
+/// Each copy is a `Zeroizing<String>`, overwritten when freed, so a line of
+/// the sheet's seed leaves no copy behind it (SP-16).
+fn rendered_lines(text: &str) -> Vec<Zeroizing<String>> {
+    text.split('\n').map(|line| Zeroizing::new(render_inert(line))).collect()
 }
 
 /// Writes one line of talk (§2.4) on stderr, through [`write_inert`].
@@ -94,10 +210,10 @@ fn show(text: &str) {
 ///
 /// It is the door every line and prompt passes, so no caller hands stderr a
 /// byte the rendering has not seen; a write stderr refuses is dropped,
-/// never a panic.
+/// never a panic. The rendering is wiped once written, taken or refused.
 fn write_inert(text: &str) {
     let mut err = io::stderr().lock();
-    let _ = err.write_all(inert(text).as_bytes()).and_then(|()| err.flush());
+    let _ = err.write_all(inert(text).as_str().as_bytes()).and_then(|()| err.flush());
 }
 
 /// Writes the dismissal's clear on stderr, flushed.
@@ -145,8 +261,9 @@ trait Screen {
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned>;
     /// Says one line.
     fn talk(&mut self, line: &str);
-    /// Shows `text`, a prompt's or the sheet's.
-    fn show(&mut self, text: &str);
+    /// Shows `drawing`, the sheet's box, taking it: a moment keeps nothing
+    /// of what it has shown.
+    fn show(&mut self, drawing: Drawing);
     /// Clears the screen and its scrollback (§5.2; §4.2 step 6).
     fn clear(&mut self);
 }
@@ -183,8 +300,8 @@ impl Screen for Terminal {
         talk(line);
     }
 
-    fn show(&mut self, text: &str) {
-        show(text);
+    fn show(&mut self, drawing: Drawing) {
+        show(drawing.as_str());
     }
 
     fn clear(&mut self) {
@@ -303,20 +420,73 @@ fn arm(text: &str) -> Option<Arm> {
     }
 }
 
-/// Returns the ruled box around `lines` that stderr shows.
+/// Returns the ruled box around `rows` that stderr shows.
 ///
 /// The terminal adds the box and its width to the sheet's field list, the
-/// fields the library's (§5.2). Each line is padded to the widest — `fmt`'s
-/// width counts chars, as the rule's does.
-fn boxed(lines: &[String]) -> String {
-    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0).max(20);
-    let bar = "─".repeat(width + 2);
-    let mut out = format!("┌{bar}┐\n");
-    for l in lines {
-        out.push_str(&format!("│ {l:<width$} │\n"));
+/// fields the library's (§5.2). Each row is padded to the widest, counted in
+/// characters as the rule is, with a floor of 20; the box is a [`Drawing`].
+/// The rows are taken, and freed once the box is drawn.
+fn boxed(rows: Vec<impl AsRef<str>>) -> Drawing {
+    let width = rows.iter().map(|row| row.as_ref().chars().count()).max().unwrap_or(0).max(20);
+    Drawing::draw(|pen| {
+        put_rule(pen, '┌', '┐', width);
+        for row in &rows {
+            let row = row.as_ref();
+            pen.put("│ ");
+            pen.put(row);
+            for _ in row.chars().count()..width {
+                pen.put_char(' ');
+            }
+            pen.put(" │\n");
+        }
+        put_rule(pen, '└', '┘', width);
+    })
+}
+
+/// Puts one of the box's rules: its two corners, `width + 2` bars between.
+fn put_rule(pen: &mut dyn Pen, left: char, right: char, width: usize) {
+    pen.put_char(left);
+    for _ in 0..width + 2 {
+        pen.put_char('─');
     }
-    out.push_str(&format!("└{bar}┘\n"));
-    out
+    pen.put_char(right);
+    pen.put_char('\n');
+}
+
+/// The sheet's title, the first row of its box.
+const SHEET_TITLE: &str = "skep anchor sheet — print this; the seed below is the key";
+
+/// The characters a field's name takes on the sheet, its value beside them.
+const NAME_COLUMN: usize = 12;
+
+/// Returns the sheet's rows: its title, a blank row and the library's fields.
+///
+/// Each value stands beside its name, padded to [`NAME_COLUMN`] characters,
+/// and each further line of a value — the seed's second, the fingerprint's —
+/// beneath it under an empty name. The values are lent by
+/// `SheetFields::lines`, the seed's from the library's `SeedText`, and each
+/// row is a [`Drawing`], so the two that carry the seed wipe when freed.
+fn sheet_rows(fields: &SheetFields) -> Vec<Drawing> {
+    let mut rows = vec![Drawing::draw(|pen| pen.put(SHEET_TITLE)), Drawing::draw(|_| {})];
+    for (name, value) in fields.lines() {
+        let mut parts = value.lines();
+        rows.push(field_row(name, parts.next().unwrap_or("")));
+        for rest in parts {
+            rows.push(field_row("", rest));
+        }
+    }
+    rows
+}
+
+/// Returns one row of the sheet: `name` padded to the name column, `value`.
+fn field_row(name: &str, value: &str) -> Drawing {
+    Drawing::draw(|pen| {
+        pen.put(name);
+        for _ in name.chars().count()..NAME_COLUMN {
+            pen.put_char(' ');
+        }
+        pen.put(value);
+    })
 }
 
 /// The moments, each written once against any [`Screen`].
@@ -329,7 +499,7 @@ mod moment {
 
     use skep_client::person::{Abandoned, Confirmation, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Question, Retype, Retyped, Sheet, Statement};
 
-    use super::{arm, boxed, path_line, prefix_line, seed_line, Arm, Screen};
+    use super::{arm, boxed, path_line, prefix_line, seed_line, sheet_rows, Arm, Screen};
 
     /// Says a statement, with the rule it renders.
     pub fn say(screen: &mut impl Screen, s: &Statement) {
@@ -386,21 +556,15 @@ mod moment {
 
     /// Shows the sheet as a ruled box (§5.2), its field list the library's.
     ///
-    /// It is held until the person answers that it is printed.
+    /// It is held until the person answers that it is printed. The box takes
+    /// the rows and the screen takes the box, so each is wiped once the box
+    /// is shown, and none is held while the person prints the sheet (SP-16).
     ///
     /// # Errors
     ///
     /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn sheet(screen: &mut impl Screen, s: &Sheet) -> Result<(), Abandoned> {
-        let mut lines = vec!["skep anchor sheet — print this; the seed below is the key".to_string(), String::new()];
-        for (name, value) in s.fields.lines() {
-            let mut parts = value.lines();
-            lines.push(format!("{name:<12}{}", parts.next().unwrap_or("")));
-            for rest in parts {
-                lines.push(format!("{:<12}{rest}", ""));
-            }
-        }
-        screen.show(&boxed(&lines));
+        screen.show(boxed(sheet_rows(&s.fields)));
         screen.answer("press return once the sheet is printed: ")?;
         Ok(())
     }

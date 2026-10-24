@@ -3,8 +3,9 @@
 This file holds skep's rules of MECHANISM: what every site of a kind must
 do, and what one component does for all of them. Each rule has a number
 so a brief can cite it and a check can hold a change to it. A rule that
-turns out wrong is changed here, with the reason in the commit, not
-worked around.
+turns out wrong is never worked around: the change that meets it
+proposes the fix in its report, and the owner changes the rule here,
+with the reason in the commit.
 
 The rules of LAYOUT stay in `ARCHITECTURE.md` §Rules that hold across
 files and are not repeated here: crate dependencies point down; inside

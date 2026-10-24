@@ -13,8 +13,11 @@ its `//!` doc. History lives in the commit. Nothing else goes in
 `ARCHITECTURE.md`: not how a function works, not a figure, not a dated
 aside, not a rule that binds more than one site — that is a pattern.
 Before a change, read `PATTERNS.md` and cite the rule it keeps or moves
-onto; change a rule there, with the reason in the commit, never work
-around it.
+onto; never work around it. A change never adds a rule or changes one's
+words: where a rule is missing or wrong, its report proposes one under
+a heading `## Proposed rule` — what must hold, and the sites it binds —
+and the owner adds it. Only a brief that names the rule to land
+lands it.
 
 ## Tests
 

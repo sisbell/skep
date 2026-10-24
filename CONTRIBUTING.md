@@ -108,9 +108,11 @@ and the label of the crate it touches, spelled as the commit scope is.
 Code keeps to the layering [ARCHITECTURE.md](ARCHITECTURE.md) states under
 §Rules that hold across files, and to the rules of mechanism
 [PATTERNS.md](PATTERNS.md) numbers (`SP-n`): a change that touches a
-rule's sites keeps the rule or changes it there, with the reason. The compiler enforces it between crates,
-and a crate's `tests/it/tidy.rs`, where it has one, enforces it inside
-the crate.
+rule's sites keeps the rule. Where the rule is missing or wrong, the
+change proposes one in its report under a heading `## Proposed rule`,
+and the owner changes the file; only a brief that names the rule lands
+it. The compiler enforces the layering between crates, and a crate's
+`tests/it/tidy.rs`, where it has one, enforces it inside the crate.
 
 Doc comments cite the design rule the code implements, by id (`AUTH-2.2`,
 `PUB-6.30`, `M-I5`). A change that implements or extends a rule carries

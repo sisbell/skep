@@ -194,7 +194,7 @@ fn catch_up_over(head: u64, script: impl Fn(u64, bool, Option<u64>) -> Response 
     let fake = Arc::new(Scripted { head, script: Box::new(script), asked: Mutex::new(Vec::new()) });
     let entry = Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&fake))) });
     let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare };
-    let session = Sessions::new(None).register(&entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
+    let session = Sessions::new(None, Arc::new(|_: &str| {})).register(&entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
     let read = changes_since(&session, since, limit);
     let asked = fake.asked.lock().unwrap().clone();
     (read, asked)

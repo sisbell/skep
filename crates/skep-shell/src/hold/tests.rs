@@ -511,7 +511,7 @@ fn ground_in(store: TempDir, facts: Facts, opened_at: u64) -> Ground {
 /// `opened_at`.
 fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) -> Ground {
     let entry = Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:1").unwrap(), Arc::clone(&fake))) });
-    let sessions = Arc::new(Sessions::new(None));
+    let sessions = Arc::new(Sessions::new(None, Arc::new(|_: &str| {})));
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
     let keys = Arc::new(FileStore::open(store.path().join("store")));

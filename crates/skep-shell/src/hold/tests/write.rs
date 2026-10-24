@@ -796,7 +796,7 @@ fn two_boards() -> TwoBoards {
         .enumerate()
         .map(|(i, fake)| Arc::new(BoardEntry { reference: format!("b-{}", i + 1), board: Arc::new(Board::new(Origin::parse(&format!("http://127.0.0.1:{}", i + 1)).unwrap(), Arc::clone(fake))) }))
         .collect();
-    let table = Arc::new(Sessions::new(None));
+    let table = Arc::new(Sessions::new(None, Arc::new(|_: &str| {})));
     let keys = Arc::new(FileStore::open(store.path().join("store")));
     let holds = Holds::new(Arc::clone(&table), Arc::new(EventBus::new()), keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), boards.iter().cloned());
     let facts = writer_facts(&store);

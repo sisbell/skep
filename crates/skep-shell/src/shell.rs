@@ -613,7 +613,7 @@ impl Shell {
         // mode's, none under the bare mode (a bare session is never
         // re-opened silently).
         let reopen_store = matches!(opts.session_mode, SessionMode::Signed { .. }).then(|| Arc::clone(&store));
-        let sessions = Arc::new(Sessions::new(reopen_store));
+        let sessions = Arc::new(Sessions::new(reopen_store, Arc::clone(&opts.talk)));
         let arm = Arc::new(match opts.arm {
             // The auto arm places each anchor beside the store, never under it
             // (§3.4 refuses a destination under the store): `<store>-anchors/`.

@@ -141,8 +141,8 @@ says "from" it at its end.
   volume refuses: each is said where the operator or the person reads,
   once, with its cause; a refusal answered to a client or a page is
   never the only record of it.
-  **Holds it:** `skep_core::commits` (a storage failure said with its file), `skep_core::commits::feed::derived` (a stopped file said once), skepd `server::listen` (a thread's death with its consequence), `skep_util::file` (every failure answered for the caller to say), `skep_client::store` (an unappended binding line is a warning carrying the line).
-  **Checked by:** `crates/skepd/tests/it/volume.rs` (`a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_its_own_line`); `crates/skepd/tests/it/threads.rs` (`the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted`, `the_pruners_death_is_said_once_and_the_standing_line_names_it`); `crates/skep-client/src/store/tests.rs` (`a_read_only_store_warns_with_the_line`).
+  **Holds it:** `skep_core::commits` (a storage failure said with its file), `skep_core::commits::feed::derived` (a stopped file said once), skepd `server::listen` (a thread's death with its consequence), `skep_util::file` (every failure answered for the caller to say), `skep_client::store` (an unappended binding line is a warning carrying the line), `skep_shell::sessions` (a key store a death cannot list said on `Talk` with its file).
+  **Checked by:** `crates/skepd/tests/it/volume.rs` (`a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_its_own_line`); `crates/skepd/tests/it/threads.rs` (`the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted`, `the_pruners_death_is_said_once_and_the_standing_line_names_it`); `crates/skep-client/src/store/tests.rs` (`a_read_only_store_warns_with_the_line`); `crates/skep-shell/src/shell/tests/ceremonies.rs` (`a_self_retirement_is_the_own_hands_arm_though_the_store_cannot_be_listed`).
   **Closed:** #290, #399, #428, #619; open: #500, #501, #497, #493, #620, #550, #552.
 - **SP-13 Every failure names its file, its act and the position it is
   about.** An I/O error reads the file as it stands within the data
@@ -157,9 +157,9 @@ says "from" it at its end.
   is not "no file", a setting given badly is not a setting absent, a
   directory that cannot be read is not "no board", a free space that
   cannot be read is not zero, a file in another encoding is not missing.
-  **Holds it:** `skep_blobs::store` (the open's acts and the size read), `skep_util::file` (`remove`), `skep_cli::args` (a setting refused), `skep_client::store` (the bindings file's read), `skep_media::gate` (a free-space read refused binds the floor), `skep_kernel::checkpoint` (a base that cannot be read), skepd `tools`, `skep_corpus` (an error per cause).
-  **Checked by:** `crates/skep-blobs/tests/it/blobs.rs` (`an_unreadable_size_is_a_failure_never_an_absence`); `crates/skep-cli/tests/it/cli.rs` (`a_refused_setting_is_never_read_as_an_absent_one`); `crates/skep-util/src/file/tests.rs` (`remove_answers_gone_absent_or_the_failure`); `crates/skep-kernel/src/checkpoint/tests.rs` (`a_base_that_cannot_be_read_says_so_rather_than_looking_damaged`).
-  **Closed:** #35, #126, #401, #405, #416, #504, #589; open: #478, #498, #583, #594, #596.
+  **Holds it:** `skep_blobs::store` (the open's acts and the size read), `skep_util::file` (`remove`), `skep_cli::args` (a setting refused), `skep_client::store` (the bindings file's read), `skep_media::gate` (a free-space read refused binds the floor), `skep_kernel::checkpoint` (a base that cannot be read), skepd `tools`, `skep_corpus` (an error per cause), `skep_shell::sessions` (a death's listing of its key store refused, its fork left unsaid and never read as a store holding no keys).
+  **Checked by:** `crates/skep-blobs/tests/it/blobs.rs` (`an_unreadable_size_is_a_failure_never_an_absence`); `crates/skep-cli/tests/it/cli.rs` (`a_refused_setting_is_never_read_as_an_absent_one`); `crates/skep-util/src/file/tests.rs` (`remove_answers_gone_absent_or_the_failure`); `crates/skep-kernel/src/checkpoint/tests.rs` (`a_base_that_cannot_be_read_says_so_rather_than_looking_damaged`); `crates/skep-shell/src/shell/tests/ceremonies.rs` (`another_hands_retirement_is_answered_own_unknown_where_the_store_cannot_be_listed`).
+  **Closed:** #35, #126, #401, #405, #416, #504, #583, #589; open: #478, #498, #594, #596.
 - **SP-15 No secret reaches a line, an answer or the page.** A token, a
   seed, a key, an invite code, a person's address and the data
   directory's path are written to no log, no error, no page and no

@@ -210,7 +210,7 @@ fn an_updates_class_is_published_or_a_sessions_drafts() {
     let entry = entry_over(skep_client::PlainHttp::new());
     let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
     let open = crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
-    let session = Sessions::new(None).register(&entry, open, &mut NoSupplements);
+    let session = Sessions::new(None, Arc::new(|_: &str| {})).register(&entry, open, &mut NoSupplements);
     assert_eq!((UpdateClass::Published.as_str(), UpdateClass::Drafts(&session).as_str()), ("published", "drafts"));
 }
 
@@ -311,7 +311,7 @@ fn a_board_committing_faster_than_the_feed_thread_reads_costs_a_read_per_turn() 
     let fake = Committing::new(Some(events.into_bytes()), &drained, Duration::from_millis(2));
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
-    let shared = shared_over(&entry, &Arc::new(Sessions::new(None)), &Arc::new(EventBus::new()), &store);
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &Arc::new(EventBus::new()), &store);
     let threads = FeedThreads::spawn(entry, shared);
     let deadline = Instant::now() + Duration::from_secs(10);
     while !drained.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -339,7 +339,7 @@ fn the_feed_thread_reads_health_once_at_its_start() {
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
-    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store));
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store));
     let deadline = Instant::now() + Duration::from_secs(10);
     let announced = loop {
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
@@ -369,7 +369,7 @@ fn an_outage_is_said_once_and_announced_where_no_stop_stands() {
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
-    let shared = shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store);
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store);
     let holds = Arc::clone(&shared.holds);
     let lines = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&lines);
@@ -434,7 +434,7 @@ fn a_search_or_a_listing_dials_nothing_where_no_index_stands() {
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
-    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store));
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), &bus, &store));
     // The feed thread's start runs before its first command: once the
     // stream's failure is announced, the start's one try at the index is made.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -519,7 +519,7 @@ fn a_drafts_cursor_the_floor_passed_reads_on_from_the_floor() {
     let fake = Arc::new(Reclaiming { events: Mutex::new(Some(b"event: commit\ndata: {\"log_position\": 11}\n\n".to_vec())) });
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
-    let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
     let rx = bus.subscribe();
     let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
     let session = sessions.register(&entry, crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
@@ -586,7 +586,7 @@ fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'stat
     let session = drafts.then(|| {
         let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
         let open = crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
-        Sessions::new(None).register(&entry, open, &mut NoSupplements)
+        Sessions::new(None, Arc::new(|_: &str| {})).register(&entry, open, &mut NoSupplements)
     });
     let board = Arc::clone(&entry.board);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -679,7 +679,7 @@ fn a_drafts_row_is_named_under_every_session_of_its_principal() {
     let entry = entry_over(Paging { script: Box::new(one_drafts_row), asked: Mutex::new(Vec::new()) });
     for closing in [false, true] {
         let store = TempDir::new().unwrap();
-        let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
+        let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
         let rx = bus.subscribe();
         let first = session_of(&sessions, &entry, 1, "9f", 0);
         let second = session_of(&sessions, &entry, 1, "8e", 0);
@@ -733,7 +733,7 @@ fn a_principals_drafts_read_on_through_the_restarts_reopen() {
     let fake = Arc::new(Moving { head: AtomicU64::new(6) });
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
-    let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
     let rx = bus.subscribe();
     let mut feeder = Feeder::new(&entry, shared_over(&entry, &sessions, &bus, &store));
     let dying = session_of(&sessions, &entry, 1, "9f", 0);

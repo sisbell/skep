@@ -3,11 +3,12 @@
 //! the death — a second caller answering the first's reason, two callers at
 //! once one derivation, a caller that panics mid-end leaving the end to the
 //! next — and a signed session's death read off its set and its account,
-//! the retirement ahead of the genesis; a principal's supplement following
-//! its standing sessions, a key's diagnosis named by the list it stands in,
-//! a session's key attesting the ten kinds with an entry frame alone and a
-//! write going out under a signed session alone, and a frame no attest is
-//! owed for borrowed as it stands, never copied.
+//! the retirement ahead of the genesis, its hand this store's own only where
+//! that can be said; a principal's supplement following its standing
+//! sessions, a key's diagnosis named by the list it stands in, a session's
+//! key attesting the ten kinds with an entry frame alone and a write going
+//! out under a signed session alone, and a frame no attest is owed for
+//! borrowed as it stands, never copied.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -86,7 +87,7 @@ impl Dialer for Gated {
 /// set, never is.
 #[test]
 fn the_table_registers_sessions_under_fresh_references() {
-    let (board, sessions) = (nowhere(), Sessions::new(None));
+    let (board, sessions) = (nowhere(), Sessions::new(None, Arc::new(|_: &str| {})));
     let mut supplements = Recorded::default();
     let one = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1.1", "1.0.1"), &mut supplements);
     let two = sessions.register(&at("b-2", nowhere()), signed_open(2, "1.0.1.1", "1.0.1.1"), &mut supplements);
@@ -108,7 +109,7 @@ fn the_table_registers_sessions_under_fresh_references() {
 /// the close answers the reason the page's own close carries.
 #[test]
 fn a_session_ends_once_and_a_second_caller_answers_the_first_reason() {
-    let (board, sessions, bus) = (nowhere(), Sessions::new(None), EventBus::new());
+    let (board, sessions, bus) = (nowhere(), Sessions::new(None, Arc::new(|_: &str| {})), EventBus::new());
     let rx = bus.subscribe();
     let mut supplements = Recorded::default();
     let entry = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
@@ -139,7 +140,7 @@ fn a_session_ends_once_and_a_second_caller_answers_the_first_reason() {
 /// same way.
 #[test]
 fn a_principals_supplement_follows_its_standing_sessions() {
-    let (board, sessions, bus) = (nowhere(), Sessions::new(None), EventBus::new());
+    let (board, sessions, bus) = (nowhere(), Sessions::new(None, Arc::new(|_: &str| {})), EventBus::new());
     let mut supplements = Recorded::default();
     let first = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     let second = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
@@ -168,7 +169,7 @@ fn a_second_caller_waits_for_the_reason_the_first_derives() {
     let (entered, at_the_dial) = channel();
     let gated = Arc::new(Gated { calls: AtomicUsize::new(0), entered: Mutex::new(entered), gate: (Mutex::new(false), Condvar::new()) });
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&gated)));
-    let (sessions, bus) = (Sessions::new(None), EventBus::new());
+    let (sessions, bus) = (Sessions::new(None, Arc::new(|_: &str| {})), EventBus::new());
     let rx = bus.subscribe();
     let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let (mut first_caller, mut second_caller) = (Recorded::default(), Recorded::default());
@@ -258,10 +259,47 @@ fn a_signed_sessions_death_is_read_off_its_set_and_its_account() {
     ];
     for (cell, open, sets, reason) in cells {
         let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), KeySets(sets.into_iter().collect())));
-        let sessions = Sessions::new(None);
+        let sessions = Sessions::new(None, Arc::new(|_: &str| {}));
         let entry = sessions.register(&at("b-1", board), open, &mut Recorded::default());
         assert_eq!(sessions.end(&entry, &mut Recorded::default(), &EventBus::new()), reason, "{cell}");
         assert_eq!(sessions.len(), 0, "{cell}: the session left the table");
+    }
+}
+
+/// A retirement's hand is this store's own only where that can be said.
+///
+/// It is the fork of AUTH-5.28 and AUTH-5.77, cell by cell: the session's
+/// own key is this store's whether or not the store could be listed, or
+/// listed without that key's file (AUTH-5.28: "the token's own key as its
+/// hand"); another key is this store's where the listing holds it and not
+/// where it does not; a bare row and the board's daemon are no key's either
+/// way; and another key, or a hand the read could not name, beside a store
+/// that could not be listed is unsaid — never `false`, a store holding no
+/// keys (SP-14; the mutants that read a failed listing as an empty one,
+/// drop the session's own key, never consult the listing, or read every
+/// hand beside a failed listing as this store's own each answer a cell
+/// otherwise).
+#[test]
+fn a_retirements_hand_is_this_stores_own_only_where_that_can_be_said() {
+    let session = Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let public = skep_client::sign::signer_from_seed(&[7; 32]).public_key().clone();
+    let other = Fingerprint::of(&public);
+    let holding: &[(Fingerprint, PublicKey)] = &[(other, public)];
+    let empty: &[(Fingerprint, PublicKey)] = &[];
+    let unread = Hand::Unreadable("below the retention floor".into());
+    let cells = [
+        ("the session's key, the store unlisted", Some(Hand::Key(session)), None, Some(true)),
+        ("the session's key, listed without its file", Some(Hand::Key(session)), Some(empty), Some(true)),
+        ("another key the listing holds", Some(Hand::Key(other)), Some(holding), Some(true)),
+        ("another key the listing does not hold", Some(Hand::Key(other)), Some(empty), Some(false)),
+        ("another key, the store unlisted", Some(Hand::Key(other)), None, None),
+        ("a bare row, the store unlisted", Some(Hand::Bare), None, Some(false)),
+        ("the daemon's own, the store unlisted", Some(Hand::System), None, Some(false)),
+        ("no record read, the store listed", None, Some(empty), Some(false)),
+        ("a hand not read, the store unlisted", Some(unread), None, None),
+    ];
+    for (cell, hand, own_keys, own) in cells {
+        assert_eq!(hand_is_own(hand.as_ref(), &session, own_keys), own, "{cell}");
     }
 }
 
@@ -270,7 +308,7 @@ fn a_signed_sessions_death_is_read_off_its_set_and_its_account() {
 #[test]
 fn a_caller_that_panics_mid_end_leaves_the_end_to_the_next() {
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), PanicsOnce(AtomicUsize::new(0))));
-    let (sessions, bus) = (Sessions::new(None), EventBus::new());
+    let (sessions, bus) = (Sessions::new(None, Arc::new(|_: &str| {})), EventBus::new());
     let rx = bus.subscribe();
     let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sessions.end(&entry, &mut Recorded::default(), &bus)));
@@ -313,7 +351,7 @@ fn a_keys_diagnosis_is_named_by_the_list_it_stands_in() {
 /// key signed).
 #[test]
 fn a_sessions_key_attests_the_checked_kinds_alone() {
-    let sessions = Sessions::new(None);
+    let sessions = Sessions::new(None, Arc::new(|_: &str| {}));
     let signed = sessions.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let SessionKind::Signed { fingerprint, .. } = &signed.facts.kind else { panic!("a signed session holds a key") };
     assert_eq!((signed.attesting_key("insert"), signed.attesting_key("delete")), (Some(fingerprint), None));
@@ -332,7 +370,7 @@ fn a_sessions_key_attests_the_checked_kinds_alone() {
 /// reads the board's `H.1` first refuses a frame it was never to sign).
 #[test]
 fn a_frame_no_attest_is_owed_for_is_borrowed_as_it_stands() {
-    let (sessions, store) = (Sessions::new(None), FileStore::open("/nonexistent/store"));
+    let (sessions, store) = (Sessions::new(None, Arc::new(|_: &str| {})), FileStore::open("/nonexistent/store"));
     let signed = sessions.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
     let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());

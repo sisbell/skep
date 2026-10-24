@@ -45,7 +45,13 @@
 //! `ENFORCING` died at the flip; a signed session whose key now stands in the
 //! retired list died at a retirement — AUTH-5.28's own-hand arm where this
 //! store's key wrote it, AUTH-5.77's where another did, the hand named by its
-//! position and label off the admitted record read; a session opened by
+//! position and label off the admitted record read. The fork is the reason's
+//! `own`: the session's own key is this store's whatever the store answers
+//! (AUTH-5.28: "the token's own key as its hand"), and another key is this
+//! store's where the store's listing holds it. A store that cannot be listed
+//! leaves the fork on another key unsaid, `own` null — the face that asserts
+//! neither arm (AUTH-5.77) — its failure said on `Talk` with its file and
+//! never read as a store holding no keys (SP-14, SP-12). A session opened by
 //! reference whose acted-as account now holds a set of its own died at a
 //! genesis (the `seeded` arm); else the shell re-opens where it holds a key —
 //! `403 prefix_blocked` is the block's arm, a session that opens is the
@@ -54,6 +60,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -67,12 +74,13 @@ use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 use skep_client::{Board, Origin};
-use skep_identity::Fingerprint;
+use skep_identity::{Fingerprint, PublicKey};
 
 use crate::attest::{in_checked_set, wants_attest, Composer, Unattested};
 use crate::events::{EventBus, EventName};
 use crate::refs::{session_reference, BoardEntry};
 use crate::refusal::{Name, Refusal};
+use crate::Talk;
 
 /// A session's kind: the bare bind, which reads alone, or the signed one.
 ///
@@ -221,17 +229,28 @@ pub trait Supplements {
 ///
 /// The store is the one the restart arm re-opens a session under — the
 /// signed mode's, none under the bare mode, whose sessions no end re-opens
-/// silently — and whose own keys name a retirement's own hand.
-#[derive(Debug)]
+/// silently — and whose own keys name a retirement's own hand. Where a
+/// death's derivation cannot list that store, it says so on the table's
+/// `Talk` sink, the shell's own window and never the page (SP-12). Its
+/// `Debug` leaves out the sink, a closure.
 pub struct Sessions {
     entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
     reopen_store: Option<Arc<FileStore>>,
+    talk: Talk,
+}
+
+impl fmt::Debug for Sessions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sessions").field("entries", &self.entries).field("reopen_store", &self.reopen_store).finish_non_exhaustive()
+    }
 }
 
 impl Sessions {
     /// Returns a table of no session, every end derived under `reopen_store`.
-    pub fn new(reopen_store: Option<Arc<FileStore>>) -> Sessions {
-        Sessions { entries: Mutex::new(HashMap::new()), reopen_store }
+    ///
+    /// What a death's derivation cannot read of that store is said on `talk`.
+    pub fn new(reopen_store: Option<Arc<FileStore>>, talk: Talk) -> Sessions {
+        Sessions { entries: Mutex::new(HashMap::new()), reopen_store, talk }
     }
 
     /// Returns the session `reference` names, where this shell holds one.
@@ -301,7 +320,7 @@ impl Sessions {
             .get_or_init(|| {
                 ended_here = true;
                 self.remove(&entry.reference);
-                let death = derive_death(self.reopen_store.as_deref(), entry);
+                let death = derive_death(self.reopen_store.as_deref(), &self.talk, entry);
                 let mut reason = death.reason;
                 reopened = death.reopened.map(|open| self.enter(&entry.board_reference, Arc::clone(&entry.board), open));
                 if let Some(r) = &reopened {
@@ -513,10 +532,12 @@ pub fn closed() -> Value {
 ///
 /// Its reason is derived from the reads made now at its board (the module
 /// doc), and on the restart arm the session is re-opened in its place;
-/// `store` is given where the shell holds a key store for that re-open. It
-/// runs inside [`Sessions::end`] alone, in the entry's `OnceLock`: the
-/// re-open it makes is a session no other caller registers.
-fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
+/// `store` is given where the shell holds a key store for that re-open, and
+/// where the retirement's arm cannot list that store's keys the failure is
+/// said on `talk`. It runs inside [`Sessions::end`] alone, in the entry's
+/// `OnceLock`: the re-open it makes is a session no other caller registers,
+/// and what it says is said once per death.
+fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) -> Death {
     let board: &Board = &entry.board;
     let not_reopened = |reason: Value| Death { reason, reopened: None };
     let health = match board.health() {
@@ -535,23 +556,33 @@ fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
     // against and the admitted record read.
     if let Ok(KeySetAnswer::Set(set)) = board.key_set(set_account) {
         if set.retired(fp).is_some() {
-            let own: Vec<(Fingerprint, skep_identity::PublicKey)> =
-                store.and_then(|s| s.device_keys().ok()).into_iter().flatten().map(|k| (k.fingerprint, k.public)).collect();
-            let records = credential_records(board, set_account, &own).ok();
+            // This store's keys, tried first at the record's signature. A
+            // listing the store refuses is said with its file and leaves the
+            // fork on another hand unsaid, never read as a store holding no
+            // keys (SP-14, SP-12).
+            let own_keys = match store.map(FileStore::device_keys).transpose() {
+                Ok(keys) => Some(keys.into_iter().flatten().map(|k| (k.fingerprint, k.public)).collect::<Vec<_>>()),
+                Err(e) => {
+                    let reference = &entry.reference;
+                    talk(&format!("session-died: {reference}'s key {fp} stands retired, and the key store could not be listed to tell this store's keys from another's ({e})"));
+                    None
+                }
+            };
+            let records = credential_records(board, set_account, own_keys.as_deref().unwrap_or_default()).ok();
             let retirement = records.as_ref().and_then(|r| r.retirement_of(fp));
-            let (hand, position, label, own_hand) = match retirement.map(|rec| (&rec.hand, rec.position)) {
+            let own = hand_is_own(retirement.map(|rec| &rec.hand), fp, own_keys.as_deref());
+            let (hand, position, label) = match retirement.map(|rec| (&rec.hand, rec.position)) {
                 Some((Hand::Key(hand), position)) => {
                     let label = records.as_ref().and_then(|r| r.label_of(hand)).map(|l| render_inert(&l));
-                    let own_hand = own.iter().any(|(f, _)| f == hand);
-                    (Some(hand.to_string()), position, label, own_hand)
+                    (Some(hand.to_string()), position, label)
                 }
-                Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None, false),
-                _ => (None, None, None, false),
+                Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None),
+                _ => (None, None, None),
             };
             return not_reopened(json!({
                 "arm": "retired",
                 "fingerprint": fp.to_string(),
-                "own": own_hand,
+                "own": own,
                 "hand": hand,
                 "position": position,
                 "label": label,
@@ -576,6 +607,28 @@ fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
         Ok(open) => Death { reason: json!({"arm": "restart", "reopened": true}), reopened: Some(open) },
         Err(Refusal::Blocked(b)) => not_reopened(json!({"arm": "blocked", "record": b.record, "ground": b.ground})),
         Err(other) => not_reopened(json!({"arm": "restart", "reopened": false, "refused": other.name()})),
+    }
+}
+
+/// Returns whether a retirement's hand is this store's own key.
+///
+/// It is the fork of AUTH-5.28 and AUTH-5.77 the reason's `own` carries
+/// (`client.md` §4b.2: "where this store's own key retired itself"). The
+/// session's own `key` is this store's whatever the store answers
+/// (AUTH-5.28: "the token's own key as its hand"); a bare row and the
+/// board's own daemon are no key's; another key is this store's where
+/// `own_keys` holds it. Where the store could not list its keys, `own_keys`
+/// none, whether another hand is its own cannot be said: the answer is none,
+/// the face that asserts neither arm (AUTH-5.77), never the answer a store
+/// holding no keys would give (SP-14). A hand the read could not name
+/// answers `false` beside a listed store and none beside an unlisted one.
+fn hand_is_own(hand: Option<&Hand>, key: &Fingerprint, own_keys: Option<&[(Fingerprint, PublicKey)]>) -> Option<bool> {
+    match (hand, own_keys) {
+        (Some(Hand::Key(hand)), _) if hand == key => Some(true),
+        (Some(Hand::Bare | Hand::System), _) => Some(false),
+        (Some(Hand::Key(hand)), Some(keys)) => Some(keys.iter().any(|(f, _)| f == hand)),
+        (_, Some(_)) => Some(false),
+        (_, None) => None,
     }
 }
 

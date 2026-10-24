@@ -1,5 +1,21 @@
 # Agent instructions for this workspace
 
+## The two files that describe the code
+
+`ARCHITECTURE.md` is the layout: the crates and what each owns, their
+modules and which names which, the direction of every dependency, and
+the rules of layout that hold across files. It changes only when the
+layout changes: a crate added, a module moved, an owner changed, a
+layering rule made or lifted. `PATTERNS.md` holds the rules of
+mechanism, numbered `SP-n`: what every site of a kind must do and the
+one component that does it for all. A module's own behaviour lives in
+its `//!` doc. History lives in the commit. Nothing else goes in
+`ARCHITECTURE.md`: not how a function works, not a figure, not a dated
+aside, not a rule that binds more than one site — that is a pattern.
+Before a change, read `PATTERNS.md` and cite the rule it keeps or moves
+onto; change a rule there, with the reason in the commit, never work
+around it.
+
 ## Tests
 
 Unit tests live in the module they test, under `#[cfg(test)] mod tests`.
@@ -12,10 +28,7 @@ or more it lives in the module's own `tests.rs` — `foo/tests.rs` beside
 
 ## skepd
 
-`PATTERNS.md` holds the rules of mechanism the code keeps, numbered
-`SP-n`: read it before a change, cite the rule a change keeps or moves
-onto, and change a rule there, with the reason, rather than work around
-it. skepd is layered; imports point down. The layers are drawn in
+skepd is layered; imports point down. The layers are drawn in
 `ARCHITECTURE.md` §The daemon, and `crates/skepd/tests/it/tidy.rs` checks
 them; the media resource beside its write path is the crate `skep-media`,
 whose two layers — the resource over its two leaf cells — are drawn in

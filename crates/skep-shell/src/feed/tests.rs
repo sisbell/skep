@@ -8,8 +8,10 @@
 //! faster than the feed thread reads costing it a read per turn, never a
 //! read per commit, with a search queued behind them answered after one
 //! read at most. ONE READ TO THE HEAD meeting every answer as its paging
-//! rule says, and A DRAFTS CURSOR THE RETENTION FLOOR PASSED resumed at the
-//! floor, its rows still fed.
+//! rule says; A DRAFTS CURSOR THE RETENTION FLOOR PASSED resumed at the
+//! floor, its rows still fed; A DRAFTS ROW NAMED UNDER EVERY SESSION OF ITS
+//! PRINCIPAL, a closing session's last read among them; and A PRINCIPAL's
+//! DRAFTS READ ON THROUGH THE RESTART's RE-OPEN, one cursor per principal.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -24,6 +26,7 @@ use skep_search::{Chain, ChainAt};
 use tempfile::TempDir;
 
 use super::*;
+use crate::events::Event;
 
 /// The board `b-1` under test: a board at `127.0.0.1:9` dialed through
 /// `dialer`, under the reference its sessions and its holds name it by.
@@ -631,4 +634,115 @@ fn a_read_to_the_head_meets_every_answer_as_its_paging_rule_says() {
     let closed = |_: u64, _: Option<u64>| Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() };
     let (rows, to, _) = read_over(closed, 10, true);
     assert_eq!((rows, to), (vec![], None), "the death signal on a session's token is the death");
+}
+
+/// A bare session of `principal` registered at `entry` in `sessions`, its
+/// token `token` sixteen times over, opened at `opened_at`.
+fn session_of(sessions: &Sessions, entry: &BoardEntry, principal: u64, token: &str, opened_at: u64) -> Arc<SessionEntry> {
+    let facts = crate::sessions::Facts { principal, account: Some(format!("1.0.{principal}")), kind: crate::sessions::SessionKind::Bare };
+    let open = crate::sessions::Open { token: Token::parse(&token.repeat(16)).unwrap(), facts, opened_at };
+    sessions.register(entry, open, &mut NoSupplements)
+}
+
+/// The drafts rows `rx` has seen since the last look, each as its position
+/// and the session its event names, sorted.
+fn drafts_named(rx: &Receiver<Event>) -> Vec<(u64, String)> {
+    let mut named: Vec<(u64, String)> = rx
+        .try_iter()
+        .filter(|e| e.name == EventName::Feed && e.data["update"]["class"] == "drafts")
+        .map(|e| (e.data["update"]["at"].as_u64().unwrap_or(0), e.data["update"]["session"].as_str().unwrap_or("?").to_string()))
+        .collect();
+    named.sort();
+    named
+}
+
+/// A board whose drafts feed holds one row, at 6: a read from below it
+/// answers the row, one from at or past it the empty page.
+fn one_drafts_row(since: u64, _: Option<u64>) -> Response {
+    if since < 6 {
+        page(&[6], 6, false)
+    } else {
+        page(&[], since, false)
+    }
+}
+
+/// A DRAFTS ROW IS NAMED UNDER EVERY SESSION OF ITS PRINCIPAL (S-24 (b);
+/// `client.md` §4e.3, one supplement per principal): two sessions of
+/// principal 1 — two tabs — and one of principal 2; the row principal 1's
+/// read meets goes out once under each of its sessions, whichever of them
+/// read it, and principal 2's once under its own; and a closing session's
+/// last read names the row under it and under the tab still standing (the
+/// mutant that names a row under the session that read it alone leaves the
+/// other tab's page stale, its index short of a draft with nothing said).
+#[test]
+fn a_drafts_row_is_named_under_every_session_of_its_principal() {
+    let entry = entry_over(Paging { script: Box::new(one_drafts_row), asked: Mutex::new(Vec::new()) });
+    for closing in [false, true] {
+        let store = TempDir::new().unwrap();
+        let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
+        let rx = bus.subscribe();
+        let first = session_of(&sessions, &entry, 1, "9f", 0);
+        let second = session_of(&sessions, &entry, 1, "8e", 0);
+        let other = session_of(&sessions, &entry, 2, "7d", 0);
+        let mut feeder = Feeder::new(&entry, shared_over(&entry, &sessions, &bus, &store));
+        let mut owed: Vec<(u64, String)> = vec![(6, first.reference.clone()), (6, second.reference.clone())];
+        if closing {
+            assert!(sessions.close(&first.reference).is_some(), "the closing session leaves the table");
+            feeder.read_drafts(&first);
+        } else {
+            feeder.read_feed();
+            owed.push((6, other.reference.clone()));
+        }
+        owed.sort();
+        assert_eq!(drafts_named(&rx), owed, "closing {closing}");
+    }
+}
+
+/// A board whose drafts feed holds rows at 6 and 8, shown up to a head the
+/// test moves; every other read answered with an empty delivery, as a board
+/// with no `H.1` answers the read of its head.
+struct Moving {
+    head: AtomicU64,
+}
+
+impl Dialer for Moving {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if req.method == Method::Get && req.path.starts_with("/changes") {
+            let (since, head) = (since_of(&req.path), self.head.load(Ordering::SeqCst));
+            let ats: Vec<u64> = [6, 8].into_iter().filter(|at| since < *at && *at <= head).collect();
+            return Ok(page(&ats, since.max(head), false));
+        }
+        Ok(ok(json!({"resp": "delivery", "items": []})))
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// A PRINCIPAL's DRAFTS READ ON THROUGH THE RESTART's RE-OPEN (`client.md`
+/// §4e.3: the supplement "re-mounted with the re-opened session"): a session
+/// reads the row at 6, the board commits the row at 8, the session leaves
+/// the table with no narrow, as the restart arm leaves it, and the session
+/// re-opened at 10 reads on from where its principal's read stopped — the
+/// row at 8, committed between the two reads, reaches the page under it (the
+/// mutant that keeps a cursor per session starts the re-opened one at its
+/// own open, past the row at 8, which then never reaches the page).
+#[test]
+fn a_principals_drafts_read_on_through_the_restarts_reopen() {
+    let fake = Arc::new(Moving { head: AtomicU64::new(6) });
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let mut feeder = Feeder::new(&entry, shared_over(&entry, &sessions, &bus, &store));
+    let dying = session_of(&sessions, &entry, 1, "9f", 0);
+    Supplements::widen(&mut feeder, &dying);
+    feeder.read_drafts(&dying);
+    fake.head.store(8, Ordering::SeqCst);
+    assert!(sessions.close(&dying.reference).is_some(), "the dying session leaves the table");
+    let reopened = session_of(&sessions, &entry, 1, "8e", 10);
+    Supplements::widen(&mut feeder, &reopened);
+    feeder.read_drafts(&reopened);
+    assert_eq!(drafts_named(&rx), [(6, dying.reference.clone()), (8, reopened.reference.clone())]);
 }

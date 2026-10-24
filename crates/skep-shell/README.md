@@ -44,13 +44,18 @@ This crate's definition (S-24 (b)): the `/changes` row VERBATIM — every
 member the declared `FeedUpdate` (`shapes`) names beside the three below,
 and any later member by the wire's forward rule — plus `position` (the
 row's `at`, named once more) and `class` — `published` for a row of the
-guest's feed, `drafts` for one of a session's supplement, the latter with
-`session`, the reference it was read under. The event carries `board`, the
-reference, beside `update`. The published feed starts at the head the board
-first answers with — at the thread's start, or at its first `/health` after
-it, never at 0 for a board not yet up — and a session's drafts at the
-position the session opened at: a page re-reads what it shows on open and
-takes the updates from there.
+guest's feed, `drafts` for one of a principal's supplement, the latter with
+`session`, the session the event goes to. The event carries `board`, the
+reference, beside `update`. A drafts supplement and an index face are a
+principal's, not a session's, so a drafts row goes out once per session of
+its principal at the board, and an `index` event once per such session,
+each naming its own: every tab of a principal hears its drafts and its
+face. The published feed starts at the head the board first answers with —
+at the thread's start, or at its first `/health` after it, never at 0 for a
+board not yet up — and a principal's drafts at the position its first
+session opened at, read on through its other sessions and its restart's
+re-open: a page re-reads what it shows on open and takes the updates from
+there.
 
 ## The `changes` call
 

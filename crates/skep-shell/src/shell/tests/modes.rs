@@ -20,8 +20,9 @@
 //! own `signed_session_required` under a bare session's token; a closed
 //! session's drafts rows ahead of its `session-died`, a released supplement
 //! keeping its drafts cursor, a session opened after its principal's narrow
-//! fed from its own open, and the document index listed at the call's
-//! class; the daemon's restart: the session it ended, ended once, re-opened
+//! fed from its own open, every session of a principal hearing its face and
+//! its drafts rows, and the document index listed at the call's class; the
+//! daemon's restart: the session it ended, ended once, re-opened
 //! under a fresh reference its arm names, and written under; a `write_busy`
 //! reissued once within the call; and a death signal met at a read the
 //! attest needs ending the session. Beside them: a session's open position
@@ -850,11 +851,13 @@ fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
 /// Checks that a released supplement keeps its drafts cursor.
 ///
 /// It is `Sessions::release`'s: two signed sessions of one principal — two
-/// tabs — and the first, having minted a draft and written it, closes; the
-/// supplement handed to the second reads on from where the reads left it,
-/// so each drafts row reaches the page once (the mutant whose widen resets
-/// the cursor to the second session's open feeds the first's rows again — a
-/// duplicate at every subscriber whenever one of two tabs closes).
+/// tabs — and the first, having minted a draft and written it, closes; each
+/// of those rows reaches each tab once, and the supplement handed to the
+/// second reads on from where the principal's reads left it, so the second's
+/// own row reaches it once and the closed tab never (the mutant whose widen
+/// resets the cursor to the second session's open feeds the first's rows to
+/// the second again — a duplicate at every subscriber whenever one of two
+/// tabs closes).
 #[test]
 fn a_released_supplement_keeps_its_drafts_cursor() {
     let dir = TempDir::new().unwrap();
@@ -868,22 +871,25 @@ fn a_released_supplement_keeps_its_drafts_cursor() {
     let board = shell.board_references().remove(0);
     let open = || shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let (first, second) = (open(), open());
-    let drafts_row = |at: &Value| {
-        let at = at.clone();
-        move |e: &Event| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at
+    let drafts_row = |at: &Value, session: &str| {
+        let (at, session) = (at.clone(), session.to_string());
+        move |e: &Event| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at && e.data["update"]["session"] == session
     };
     let minted = shell.call("op", &json!({"session": first, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
     let draft = minted["addr"].as_str().unwrap().to_string();
     let inserted = shell.call("op", &json!({"session": first, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap();
-    wait_for(&seen, drafts_row(&minted["at"]));
-    wait_for(&seen, drafts_row(&inserted["at"]));
+    for at in [&minted["at"], &inserted["at"]] {
+        for session in [&first, &second] {
+            wait_for(&seen, drafts_row(at, session));
+        }
+    }
     assert_eq!(shell.call("close", &json!({"session": first})).unwrap(), json!({}));
     let again = shell.call("op", &json!({"session": second, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
-    wait_for(&seen, drafts_row(&again["at"]));
-    let fed: Vec<u64> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Feed && e.data["update"]["class"] == "drafts").filter_map(|e| e.data["update"]["at"].as_u64()).collect();
-    for at in [&minted["at"], &inserted["at"], &again["at"]] {
-        let at = at.as_u64().unwrap();
-        assert_eq!(fed.iter().filter(|row| **row == at).count(), 1, "the drafts row at {at} reaches the page once: {fed:?}");
+    wait_for(&seen, drafts_row(&again["at"], &second));
+    let fed = |at: &Value, session: &str| seen.lock().unwrap().iter().filter(|e| drafts_row(at, session)(e)).count();
+    let owed = [(&minted["at"], &first, 1), (&minted["at"], &second, 1), (&inserted["at"], &first, 1), (&inserted["at"], &second, 1), (&again["at"], &second, 1), (&again["at"], &first, 0)];
+    for (at, session, times) in owed {
+        assert_eq!(fed(at, session), times, "the drafts row at {at} reaches {session} {times} time(s)");
     }
     shell.shutdown();
     sd.shutdown();
@@ -923,6 +929,49 @@ fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
     assert_eq!(fed.data["update"]["session"], second, "{fed:?}");
     let fed_before = seen.lock().unwrap().iter().filter(|e| drafts_row(before)(e)).count();
     assert_eq!(fed_before, 1, "the first draft's row reaches the page once");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that every session of a principal hears its face and its drafts rows.
+///
+/// The drafts supplement and the index face are the principal's (`client.md`
+/// §4e.3; §4b.2's `index`, "the session reference it is about"), and a page
+/// knows its own events by the session they name: two signed sessions of one
+/// principal — two tabs — and a draft minted under the first; each session
+/// hears the draft's row named under itself, once, and its face moved to
+/// `complete` at or past the draft's position (the mutants that name a
+/// principal's row under the session that read it alone, or its face under
+/// the session widened last, leave one tab's page stale with nothing said).
+#[test]
+fn every_session_of_a_principal_hears_its_face_and_its_drafts_rows() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let open = || shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let (first, second) = (open(), open());
+    let at = shell.call("op", &json!({"session": first, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["at"].as_u64().unwrap();
+    let row_to = |session: &str| {
+        let session = session.to_string();
+        move |e: &Event| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at && e.data["update"]["session"] == session
+    };
+    let face_to = |session: &str| {
+        let session = session.to_string();
+        move |e: &Event| e.name == EventName::Index && e.data["session"] == session && e.data["state"]["arm"] == "complete" && e.data["state"]["as_of"].as_u64().is_some_and(|as_of| as_of >= at)
+    };
+    for session in [&first, &second] {
+        wait_for(&seen, row_to(session));
+        wait_for(&seen, face_to(session));
+    }
+    let rows = |session: &str| seen.lock().unwrap().iter().filter(|e| row_to(session)(e)).count();
+    assert_eq!((rows(&first), rows(&second)), (1, 1), "the draft's row reaches each session once");
+    assert_events_declared(&seen.lock().unwrap());
     shell.shutdown();
     sd.shutdown();
 }

@@ -39,19 +39,35 @@
 //! never a read per commit, and a call queued behind them waits one read at
 //! most.
 //!
-//! **The `feed` update's shape**, this crate's definition, the shell's: the
-//! `/changes` row verbatim — every member the declared `FeedUpdate`
-//! (`shapes`) names beside the three below, and any later member by the
-//! wire's forward rule — plus `position` (the row's `at`, named once more so
-//! a consumer reading the shell's shape need not know the wire's), and
-//! `class` — `published` for a row of the guest's feed, `drafts` for one of
-//! a session's supplement, the latter with `session`, the reference it was
-//! read under. The event carries `board`, the reference, beside `update`.
+//! **The `feed` update's shape**, this crate's definition, the shell's
+//! (S-24 (b)): the `/changes` row verbatim — every member the declared
+//! `FeedUpdate` (`shapes`) names beside the three below, and any later member
+//! by the wire's forward rule — plus `position` (the row's `at`, named once
+//! more so a consumer reading the shell's shape need not know the wire's),
+//! and `class` — `published` for a row of the guest's feed, `drafts` for one
+//! of a principal's supplement, the latter with `session`, the session the
+//! event goes to. The event carries `board`, the reference, beside `update`.
 //! The published feed starts at the head the board first answers with — at
 //! the thread's start, or at its first `/health` after it, never at 0 for a
-//! board not yet up — and a session's drafts at the position the session
-//! opened at: a page re-reads what it shows on open and takes the updates
-//! from there.
+//! board not yet up.
+//!
+//! **What is a principal's is said under each of its sessions.** The drafts
+//! supplement is one per principal, read under any of its sessions' tokens
+//! (`client.md` §4e.3), and a session's index face is its principal's state,
+//! composed from the published index's and that principal's supplement's
+//! (§4b.2's `index`); a page knows its own events by the session they name.
+//! So each drafts row goes out once per session of its principal at the
+//! board — under the session whose token read it first, then under each
+//! other — every event naming its own session ([`Feeder::emit_drafts`]), and
+//! each face's state goes out once per session whose principal's supplement
+//! is mounted ([`Feeder::emit_index`]): every tab of a principal hears its
+//! drafts and its face. A principal's drafts rows are each read once — one
+//! cursor per principal, whichever of its sessions reads — from where its
+//! last read stopped: at first, the position its first session opened at,
+//! then on through another tab's open, a release to another of its sessions
+//! and the restart's re-open; the cursor is dropped at the narrow, once none
+//! of its sessions stands. A page re-reads what it shows on open and takes
+//! the updates from there, a row its open re-read perhaps among them.
 //!
 //! **The catch-up** ([`changes_since`], the `changes` call): what a client
 //! that comes back to a board missed — the same feed, read once from a
@@ -130,8 +146,9 @@ enum Cmd {
     Narrow(u64),
     /// A session the page is closing, its token still standing.
     ///
-    /// Its drafts rows are read to the head, then its supplement released;
-    /// answered.
+    /// Its drafts rows are read to the head under its token, each said under
+    /// it and under every other session of its principal, then its
+    /// supplement released; answered.
     Closing(Arc<SessionEntry>, Sender<()>),
     /// The probe handed over: run at the feed thread's next turn, unanswered.
     Probe,
@@ -174,7 +191,8 @@ impl Feed {
     ///
     /// The session is out of the table, its token still standing at the
     /// board: its drafts rows are read to the head under that token, each a
-    /// `feed` event, then its supplement released (`Sessions::release`),
+    /// `feed` event under it and under every other session of its principal
+    /// at the board, then its supplement released (`Sessions::release`),
     /// answered once both are done, so every `feed` row of the session
     /// precedes the `session-died` its close emits next. A thread that has
     /// stopped answers at once.
@@ -364,17 +382,25 @@ struct Feeder<'b> {
     /// It is the head the board first answered with, then each page's last —
     /// none until the board answers.
     published_since: Option<u64>,
-    /// Where each mounted principal's drafts read starts.
+    /// Where each principal's drafts read starts.
     ///
-    /// It is its session's open position, then each page's last.
+    /// It is one cursor per principal, whichever of its sessions reads: the
+    /// position its first session opened at, then each page's last — kept
+    /// through a release to another of its sessions and through the
+    /// restart's re-open (`widen`), dropped at the narrow.
     drafts_since: HashMap<u64, u64>,
     last_mode: Option<Mode>,
-    /// The `index` state last emitted per face.
+    /// The `index` state last sent each face.
     ///
-    /// The guest's stands under `None` and each mounted principal's under its
-    /// own, so the event goes out only where the state moved.
-    last_index_state: BTreeMap<Option<u64>, Value>,
-    /// The session reference per mounted principal, for the `index` event.
+    /// The guest's stands under `None` and each session's under its
+    /// reference, so an event goes out only where the state that face was
+    /// last sent moved; a face whose session no longer stands at the board
+    /// is dropped.
+    last_index_state: BTreeMap<Option<String>, Value>,
+    /// The session whose token each mounted principal's supplement holds.
+    ///
+    /// It is the session widened last, the one ended where the consumer's
+    /// read meets the death signal ([`Feeder::died`]).
     session_references: HashMap<u64, String>,
     /// The `/events` stream's outage as this thread has said it.
     ///
@@ -589,20 +615,38 @@ impl<'b> Feeder<'b> {
     ///
     /// The read goes to the head of the board it stands at ([`read_to_head`]),
     /// from where its principal's last read stopped — at first, the position
-    /// the session opened at — each row a `feed` event of the `drafts` class;
-    /// a cursor the board's retention floor passed, as a long-open session's
+    /// its first session opened at — each row a `feed` event of the `drafts`
+    /// class under every session of the principal ([`Feeder::emit_drafts`]); a
+    /// cursor the board's retention floor passed, as a long-open session's
     /// with no drafts row of its own is, resumed at the floor. The death
     /// signal ends the session (`Sessions::end`, which answers a session the
     /// page already closed with that arm and does nothing more).
     fn read_drafts(&mut self, session: &SessionEntry) {
         let principal = session.facts.principal;
         let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
-        let class = UpdateClass::Drafts(session);
-        match read_to_head(&session.board, class, since, |row| self.emit_feed(row, class)) {
+        match read_to_head(&session.board, UpdateClass::Drafts(session), since, |row| self.emit_drafts(row, session)) {
             ReadTo::At(at) => {
                 self.drafts_since.insert(principal, at);
             }
             ReadTo::Died => self.end(session),
+        }
+    }
+
+    /// Emits one drafts row under every session of its principal at the board.
+    ///
+    /// The row goes out first under `read_under`, the session whose token read
+    /// it — out of the table already where it is closing — then once under
+    /// each other session of the same principal at the board, every event
+    /// naming its own session (the module doc). The table is read as each row
+    /// goes out, so a session that registers while a long read runs hears
+    /// every row said after it stands.
+    fn emit_drafts(&self, row: &Value, read_under: &SessionEntry) {
+        self.emit_feed(row, UpdateClass::Drafts(read_under));
+        let principal = read_under.facts.principal;
+        for other in self.sessions.on_board(&self.entry.reference) {
+            if other.facts.principal == principal && other.reference != read_under.reference {
+                self.emit_feed(row, UpdateClass::Drafts(&other));
+            }
         }
     }
 
@@ -636,23 +680,30 @@ impl<'b> Feeder<'b> {
         }
     }
 
-    /// Emits the `index` event for the guest face and each mounted principal.
+    /// Emits the `index` event for the guest face and each session's face.
     ///
-    /// It goes out where the state moved.
+    /// A session's face is its principal's state (the module doc), composed
+    /// once per principal and sent under every session at the board whose
+    /// principal's supplement is mounted, each event naming its own session
+    /// (§4b.2's `index`: "the session reference it is about"). Each goes out
+    /// where the state that face was last sent moved, and a face whose
+    /// session no longer stands is dropped.
     fn emit_index(&mut self) {
         let Some(c) = &self.consumer else { return };
-        let mut faces: Vec<(Option<u64>, Value)> = vec![(None, state_json(&c.state(Who::Guest)))];
+        let mut faces: Vec<(Option<String>, Value)> = vec![(None, state_json(&c.state(Who::Guest)))];
+        let mut composed: HashMap<u64, Value> = HashMap::new();
         for session in self.sessions.on_board(&self.entry.reference) {
             let principal = session.facts.principal;
             if c.mounted(principal) {
-                faces.push((Some(principal), state_json(&c.state(Who::Session(session.search_view())))));
+                let state = composed.entry(principal).or_insert_with(|| state_json(&c.state(Who::Session(session.search_view()))));
+                faces.push((Some(session.reference.clone()), state.clone()));
             }
         }
-        for (principal, state) in faces {
-            if self.last_index_state.get(&principal) != Some(&state) {
-                let session = principal.and_then(|p| self.session_references.get(&p).cloned());
-                self.bus.emit(EventName::Index, json!({"board": self.entry.reference, "session": session, "state": state}));
-                self.last_index_state.insert(principal, state);
+        self.last_index_state.retain(|face, _| faces.iter().any(|(standing, _)| standing == face));
+        for (face, state) in faces {
+            if self.last_index_state.get(&face) != Some(&state) {
+                self.bus.emit(EventName::Index, json!({"board": self.entry.reference, "session": face, "state": state}));
+                self.last_index_state.insert(face, state);
             }
         }
     }
@@ -716,8 +767,8 @@ enum ReadTo {
 /// A `feed` update's class (the module doc).
 ///
 /// It is a row of the guest's feed, `published`, read token-free; or a row
-/// of a session's drafts supplement, `drafts`, read under its token and
-/// carrying its reference.
+/// of a principal's drafts supplement, `drafts`, under one of its sessions:
+/// the session whose token a read presents, or the one an update names.
 #[derive(Debug, Clone, Copy)]
 enum UpdateClass<'s> {
     Published,
@@ -737,8 +788,8 @@ impl UpdateClass<'_> {
 /// Returns one `/changes` row in the update's shape (the module doc).
 ///
 /// It is the row verbatim, plus `position` (its `at`), `class` — `class`'s
-/// word — and, a drafts row's, the `session` it was read under: what a
-/// `feed` event carries as `update` and a `changes` entry is.
+/// word — and, a drafts row's, the `session` the class names: what a `feed`
+/// event carries as `update` and a `changes` entry is.
 fn update_of(row: &Value, class: UpdateClass<'_>) -> Value {
     let mut update = row.clone();
     update["position"] = row["at"].clone();
@@ -953,15 +1004,15 @@ impl Supplements for Feeder<'_> {
         let principal = session.facts.principal;
         self.session_references.insert(principal, session.reference.clone());
         self.drafts_since.entry(principal).or_insert(session.opened_at);
-        // The face is announced afresh under the reference it now stands
-        // under — a re-opened session's as much as a new one's.
-        self.last_index_state.remove(&Some(principal));
         self.open_consumer();
         if let Some(c) = &self.consumer {
             if let Err(h) = c.widen(session.search_view()) {
                 self.say(format_args!("the supplement for principal {principal} could not widen: {h}"));
             }
         }
+        // A session new to the board — a tab's, a re-opened one's — is sent
+        // its face here; one handed the supplement at a release was sent it
+        // already, and hears it again only where the state moved.
         self.emit_index();
     }
 
@@ -973,7 +1024,6 @@ impl Supplements for Feeder<'_> {
         }
         self.session_references.remove(&principal);
         self.drafts_since.remove(&principal);
-        self.last_index_state.remove(&Some(principal));
     }
 }
 

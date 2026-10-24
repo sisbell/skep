@@ -191,11 +191,11 @@ impl JournalWriter {
     ///
     /// # Errors
     ///
-    /// A listing that fails, named `{dir}: list`; a last segment that cannot
-    /// be opened for append or sized, named `{segment}: open`; and, where
-    /// this creates one, a segment that cannot be created or sized, named
-    /// `{segment}: create`, or a directory sync that fails, named
-    /// `{dir}: sync`.
+    /// A listing that fails, named `the journal directory: list`; a last
+    /// segment that cannot be opened for append or sized, named
+    /// `{segment}: open`; and, where this creates one, a segment that cannot
+    /// be created or sized, named `{segment}: create`, or a directory sync
+    /// that fails, named `the journal directory: sync`.
     pub(crate) fn open_active(
         dir: &Path,
         next_seq: u64,
@@ -397,8 +397,9 @@ impl JournalWriter {
     ///
     /// A new segment that cannot be created or sized, named
     /// `{segment}: create`, or a directory sync that fails, named
-    /// `{dir}: sync`; on failure nothing of the txn is on disk (the §3
-    /// pre-append discipline applies) and the next attempt re-enters
+    /// `the journal directory: sync` — the account a refused writer is
+    /// handed, so it names no path; on failure nothing of the txn is on disk
+    /// (the §3 pre-append discipline applies) and the next attempt re-enters
     /// rotation.
     fn maybe_rotate(&mut self, first_seq: u64) -> io::Result<()> {
         // The first disjunct is redundant while the threshold is a positive

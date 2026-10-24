@@ -1628,11 +1628,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    ```
 
    Every other I/O refusal of the journal's names its file, by its
-   name in the data directory (the directory itself by its path),
-   and the act that failed, the OS's cause last: `journal
-   open/recovery I/O failure: {file}: {act}: {error}`. A refusal
-   that the journal's data cannot be read is answered at the head
-   of Restore.
+   name in the data directory (the directory itself as `the journal
+   directory`, never by its path), and the act that failed, the OS's
+   cause last: `journal open/recovery I/O failure: {file}: {act}:
+   {error}`. A refusal that the journal's data cannot be read is
+   answered at the head of Restore.
 
    Every other refusal names what refused, after the `skepd: `:
    `registry seeding:`, `blob store:`, `change-feed sidecar:` or

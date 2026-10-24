@@ -149,9 +149,9 @@ says "from" it at its end.
   directory, the act that failed and the OS's cause, composed where the
   fact is known and carried whole; a refusal about history names the
   position it refused; and a client is never handed the directory's path.
-  **Holds it:** `skep_blobs::blobs` (the file, the act, the cause), `skep_kernel::error` (the file and the act), `skep_core::commits::sidecar` and `skep_core::commits::feed::derived` (the file and the last trusted position), skepd `server::reply` (no path to a client), `skep_client::store` (a halt names the path).
-  **Checked by:** `crates/skep-blobs/tests/it/reopen.rs` (`an_open_refused_at_a_log_names_the_log_and_its_act_and_keeps_the_kind`); `crates/skepd/tests/it/volume.rs` (`a_refused_open_names_its_file_and_keeps_the_kind`); `crates/skep-core/src/commits/feed/tests.rs` (`a_derived_cut_says_it_is_re_derived_and_a_failure_names_its_file`); `crates/skep-client/src/store/tests.rs` (`a_file_cut_short_in_the_store_halts_its_listing_naming_the_file_to_move`).
-  **Closed:** #292, #386, #422, #428; open: #423, #492, #505, #536, #555, #565, #566, #592, #593, #596.
+  **Holds it:** `skep_blobs::blobs` (the file, the act, the cause), `skep_kernel::error` (the file and the act, the journal directory by its name alone), `skep_core::commits::sidecar` and `skep_core::commits::feed::derived` (the file and the last trusted position), skepd `server::reply` (no path to a client), `skep_client::store` (a halt names the path).
+  **Checked by:** `crates/skep-blobs/tests/it/reopen.rs` (`an_open_refused_at_a_log_names_the_log_and_its_act_and_keeps_the_kind`); `crates/skepd/tests/it/volume.rs` (`a_refused_open_names_its_file_and_keeps_the_kind`, `a_write_refused_at_a_rotation_hands_its_writer_no_path`); `crates/skep-kernel/src/journal/writer/tests.rs` (`a_rotation_refused_its_directory_sync_names_the_journal_directory_and_never_its_path`); `crates/skep-kernel/tests/it/tidy.rs` (`every_account_names_a_file_never_a_path`); `crates/skep-core/src/commits/feed/tests.rs` (`a_derived_cut_says_it_is_re_derived_and_a_failure_names_its_file`); `crates/skep-client/src/store/tests.rs` (`a_file_cut_short_in_the_store_halts_its_listing_naming_the_file_to_move`).
+  **Closed:** #292, #386, #422, #428, #592; open: #423, #492, #505, #536, #555, #565, #566, #593, #596.
 - **SP-14 A failure is never read as an absence.** Not-found is absent;
   every other failure is answered as itself: a size that cannot be read
   is not "no file", a setting given badly is not a setting absent, a
@@ -166,9 +166,9 @@ says "from" it at its end.
   tool result; a reference minted per process stands in for a token,
   a log keeps sizes and routes, and a value that holds a secret shows
   none of it in its debug form.
-  **Holds it:** `skep_shell::refs`, `skep_shell::log` and `skep_shell::person`, `skep_provision` (the log and every `Debug`), `skep_mcp::log`, `skep_cli::args` (a token is never an argv value), skepd `server::reply` (no directory path to a client).
-  **Checked by:** `crates/skep-shell/src/shell/tests/modes.rs` (`a_paper_claim_hands_the_page_no_seed_and_no_path`); `crates/skep-shell/src/shell/tests/door.rs` (`a_shells_options_print_no_seed`); `crates/skep-mcp/tests/it/mcp.rs` (`no_session_token_and_no_key_seed_reaches_a_tool_result_or_a_log_line`); `crates/skep-provision/src/flow/status_map/tests.rs` (`the_maps_debug_shows_no_token`).
-  **Closed:** #244, #329, #331, #354, #361, #382, #422, #517, #541; open: #592.
+  **Holds it:** `skep_shell::refs`, `skep_shell::log` and `skep_shell::person`, `skep_provision` (the log and every `Debug`), `skep_mcp::log`, `skep_cli::args` (a token is never an argv value), skepd `server::reply` (no directory path to a client), `skep_kernel::error` (no directory path in an account).
+  **Checked by:** `crates/skep-shell/src/shell/tests/modes.rs` (`a_paper_claim_hands_the_page_no_seed_and_no_path`); `crates/skep-shell/src/shell/tests/door.rs` (`a_shells_options_print_no_seed`); `crates/skep-mcp/tests/it/mcp.rs` (`no_session_token_and_no_key_seed_reaches_a_tool_result_or_a_log_line`); `crates/skep-provision/src/flow/status_map/tests.rs` (`the_maps_debug_shows_no_token`); `crates/skepd/tests/it/volume.rs` (`a_write_refused_at_a_rotation_hands_its_writer_no_path`).
+  **Closed:** #244, #329, #331, #354, #361, #382, #422, #517, #541, #592.
 - **SP-16 A secret lives in a type that wipes on drop.** A seed, a
   signing key and every text a rendering makes of one are born into a
   value that overwrites itself when dropped, and leave it only as the

@@ -678,13 +678,16 @@ fn each_checkpoint_step_fires_its_arm_once_and_leaves_what_its_card_says() {
         };
         assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind armed");
         assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
-        // …named as the real step's failure is: the file, then the act.
+        // …named as the real step's failure is: the file, then the act — the
+        // directory by its name, never its path.
         let named = match step {
-            Step::CheckpointCreate => "checkpoint.tmp: create: ".to_string(),
-            Step::CheckpointSync => "checkpoint.tmp: fsync: ".to_string(),
-            _ => format!("{}: sync: ", dir.path().display()),
+            Step::CheckpointCreate => "checkpoint.tmp: create: ",
+            Step::CheckpointSync => "checkpoint.tmp: fsync: ",
+            _ => "the journal directory: sync: ",
         };
-        assert!(e.to_string().starts_with(&named), "{step:?}: names the file and the act: {e}");
+        assert!(e.to_string().starts_with(named), "{step:?}: names the file and the act: {e}");
+        let path = dir.path().display().to_string();
+        assert!(!e.to_string().contains(&path), "{step:?}: no byte of the path: {e}");
         assert!(!tmp.exists(), "{step:?}: no temp file survives a failure");
         assert_eq!(base.exists(), landed, "{step:?}: the base is on disk iff the rename ran");
         assert!(seam.armed_steps().is_empty(), "{step:?}: fired and disarmed");

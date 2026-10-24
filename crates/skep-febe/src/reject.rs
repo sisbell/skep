@@ -55,6 +55,11 @@ pub struct Rejection {
     /// Where in the request the fault landed, or which document it is about.
     pub site: Option<FaultSite>,
     /// Any message: `code`'s standing explanation, or one a call site threaded.
+    ///
+    /// It is marshaled — the client reads it, as it never reads `io_kind` —
+    /// so nothing threads into it what a client may not read: the I/O text a
+    /// `Durability` refusal carries is the kernel's account of the file and
+    /// the act, which names no path (PATTERNS SP-13).
     pub detail: Option<String>,
     /// The I/O kind behind a `Durability` refusal, for the daemon alone.
     ///

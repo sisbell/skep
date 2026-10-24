@@ -33,20 +33,22 @@ pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
 /// in full, so a caller reading them sees what each holds.
 pub(crate) type Cause = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// An I/O failure at one of the journal directory's files.
+/// An I/O failure at the journal directory or one of its files.
 ///
-/// As an operator reads it: `{file}: {act}: {the OS's words}` — the file by
+/// As an operator reads it: `{file}: {act}: {the OS's words}` — a file by
 /// its name in the journal directory (`seg-5.wal`, `checkpoint.tmp`,
-/// `kernel.lock`), the directory itself by its path, the act that failed, and
-/// the OS's own account last: the convention every other writer of the
-/// daemon's data directory keeps (`operations.md` §1.1 row 2), so a line says
-/// which file, on which volume, under which act, where a bare
-/// `Input/output error` says none of the three. Made only by [`at_file`],
-/// which carries it as the payload of an `io::Error` of the same kind as the
-/// failure it names, so a caller that answers by kind — the lock race by
-/// `WouldBlock`, the full volume by `StorageFull` — answers as it would to
-/// the bare error; and the OS's error itself is this one's `source`, so a
-/// reporter walking the chain reaches it, its OS code with it.
+/// `kernel.lock`), the directory itself by [`JOURNAL_DIR`], the act that
+/// failed, and the OS's own account last: the convention every other writer
+/// of the daemon's data directory keeps (`operations.md` §1.1 row 2), so a
+/// line says which file under which act, where a bare `Input/output error`
+/// says neither. No path is in it: the account can reach a client whole, as
+/// a refused write's `durability` detail, and where the directory lives is
+/// the embedder's to say, once (PATTERNS SP-13, SP-15). Made only by
+/// [`at_file`], which carries it as the payload of an `io::Error` of the same
+/// kind as the failure it names, so a caller that answers by kind — the lock
+/// race by `WouldBlock`, the full volume by `StorageFull` — answers as it
+/// would to the bare error; and the OS's error itself is this one's
+/// `source`, so a reporter walking the chain reaches it, its OS code with it.
 #[derive(Debug)]
 pub(crate) struct FileFailure {
     file: String,
@@ -66,18 +68,31 @@ impl std::error::Error for FileFailure {
     }
 }
 
+/// The journal directory's name in the account of each of its own acts.
+///
+/// The acts are its creation and its path's resolution at the open, its
+/// listing and its sync. It is never the directory's path: an account can
+/// reach a client whole, and the embedder says once where the directory
+/// lives — the daemon's `open: data-dir` line (PATTERNS SP-13, SP-15).
+pub(crate) const JOURNAL_DIR: &str = "the journal directory";
+
 /// Returns the `map_err` that names `file` and `act` on an I/O failure.
 ///
 /// It is the one door to a [`FileFailure`], applied once, at the file
 /// operation that failed, and rendered only where one does: the failure
 /// keeps its kind, and gains the file and the act ahead of the OS's words.
+/// `file` is a name — a file's in the journal directory, or [`JOURNAL_DIR`]
+/// — taken as text, so a `Path` and its `display()` are refused at compile
+/// time; `tests/it/tidy.rs` holds every call to a name rather than a path
+/// made into text.
 pub(crate) fn at_file(
-    file: impl fmt::Display,
+    file: impl AsRef<str>,
     act: impl fmt::Display,
 ) -> impl FnOnce(io::Error) -> io::Error {
     move |error| {
         let kind = error.kind();
-        io::Error::new(kind, FileFailure { file: file.to_string(), act: act.to_string(), error })
+        let file = file.as_ref().to_owned();
+        io::Error::new(kind, FileFailure { file, act: act.to_string(), error })
     }
 }
 
@@ -194,13 +209,14 @@ pub enum OpenError {
     /// own failure.
     ///
     /// The error names its file and its act ahead of the OS's words —
-    /// `seg-5.wal: read: Input/output error (os error 5)`, the directory by
-    /// its path where the directory's own act failed — and keeps the OS
-    /// error's kind, so a caller that answers by kind answers as it would to
-    /// the bare error. The held lock is `WouldBlock`, worded as the act that
-    /// clears it: `kernel.lock: lock: another process holds it — a second
-    /// kernel open over this journal directory, a daemon or a tool; stop it,
-    /// or open another directory: {the OS's words}`.
+    /// `seg-5.wal: read: Input/output error (os error 5)`, and
+    /// `the journal directory: list: …` where the directory's own act failed,
+    /// never its path — and keeps the OS error's kind, so a caller that
+    /// answers by kind answers as it would to the bare error. The held lock
+    /// is `WouldBlock`, worded as the act that clears it: `kernel.lock: lock:
+    /// another process holds it — a second kernel open over this journal
+    /// directory, a daemon or a tool; stop it, or open another directory:
+    /// {the OS's words}`.
     Io(io::Error),
     /// No retained checkpoint loads and seeds, and genesis cannot stand in.
     ///
@@ -941,10 +957,12 @@ pub enum TxnError<E> {
     /// would let a successor collide on recovery).
     ///
     /// The error names the segment and the act that failed ahead of the OS's
-    /// words — `seg-5.wal: fsync: Input/output error (os error 5)`, the
-    /// directory by its path where a rotation's directory sync failed — and
-    /// keeps the OS error's kind, so a full volume is `StorageFull` whatever
-    /// step met it; the entropy refusal alone names no file, saying
+    /// words — `seg-5.wal: fsync: Input/output error (os error 5)`, and
+    /// `the journal directory: sync: …` where a rotation's directory sync
+    /// failed, never the directory's path, since the account reaches the
+    /// refused writer whole as M10's `durability` detail (PATTERNS SP-13) —
+    /// and keeps the OS error's kind, so a full volume is `StorageFull`
+    /// whatever step met it; the entropy refusal alone names no file, saying
     /// `OS entropy unavailable: …`, of kind `Other`.
     ///
     /// [`Poisoned`]: TxnError::Poisoned

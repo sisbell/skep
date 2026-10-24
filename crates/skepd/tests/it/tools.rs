@@ -611,7 +611,8 @@ fn the_binary_runs_the_inventory_and_the_pull_as_subcommands() {
 /// `seg-01.wal` — which the kernel would not read back — is refused as no
 /// board, as an empty one is, and nothing is created beside it; a directory
 /// the process cannot read is refused as the read's own failure, naming the
-/// directory and the act, never as a directory with no board in it. The
+/// directory by its name and the act — the kernel's account, which carries
+/// no path (PATTERNS SP-13) — never as a directory with no board in it. The
 /// binary's inventory exits 1 with each line.
 #[cfg(unix)]
 #[test]
@@ -644,9 +645,10 @@ fn the_board_check_reads_only_the_kernels_spelling_and_an_unreadable_directory_i
         Err(ToolError::Io(e)) => {
             assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{e}");
             assert!(
-                e.to_string().starts_with(&format!("{}: list: ", board.display())),
+                e.to_string().starts_with("the journal directory: list: "),
                 "the directory and the act: {e}"
             );
+            assert!(!e.to_string().contains(&board.display().to_string()), "no path: {e}");
         }
         other => panic!("FINDING (#504): an unreadable directory answered {other:?}"),
     }
@@ -658,7 +660,7 @@ fn the_board_check_reads_only_the_kernels_spelling_and_an_unreadable_directory_i
     assert_eq!(out.status.code(), Some(1));
     let line = String::from_utf8_lossy(&out.stderr);
     assert!(
-        line.starts_with(&format!("skepd inventory: {}: list: ", board.display()))
+        line.starts_with("skepd inventory: the journal directory: list: ")
             && !line.contains("no board at"),
         "the read's own failure, never no board: {line}"
     );

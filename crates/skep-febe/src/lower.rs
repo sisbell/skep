@@ -75,15 +75,19 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 /// and the I/O kind rides beside it in [`Rejection::io_kind`], for the
 /// daemon: the journal's append and barrier failures, the rotation's segment
 /// creation and the salt's entropy refusal share this one code, and only the
-/// kind tells a full volume from the rest. The two
-/// encoding refusals are both `Permanent`, and each carries its own code
-/// because they ask different things of an operator: `TxnUnencodable` names
-/// records M2 could not frame — one its serializer refused, or one past the
-/// journal's frame cap (the records are staged by the owning store, so the
-/// same request re-presented stages the same record — nothing the client
-/// can reframe), while `TxnOverBudget` names records that all encode but
-/// overrun the journal's per-transaction budget, and carries the remedy —
-/// split the request. `Poisoned` is `Halt`.
+/// kind tells a full volume from the rest. The text is marshaled to the
+/// client as it stands, M10 stripping nothing from it, so what it may name
+/// is the kernel's account's to keep — `TxnError::Durability`'s card names
+/// the file and the act, never a path — and a host path in it would reach
+/// the client (PATTERNS SP-13). The two encoding refusals are both
+/// `Permanent`, and each carries its own code because they ask different
+/// things of an operator: `TxnUnencodable` names records M2 could not frame
+/// — one its serializer refused, or one past the journal's frame cap (the
+/// records are staged by the owning store, so the same request re-presented
+/// stages the same record — nothing the client can reframe), while
+/// `TxnOverBudget` names records that all encode but overrun the journal's
+/// per-transaction budget, and carries the remedy — split the request.
+/// `Poisoned` is `Halt`.
 ///
 /// **The door (the operations design §1.1 row 38).** It is public, so a
 /// caller that drives a store itself — the daemon's head writer, which meets

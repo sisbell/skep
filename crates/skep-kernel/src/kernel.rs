@@ -28,7 +28,7 @@ use crate::checkpoint::{self, CheckpointHeader};
 use crate::config::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Reclaim, SaltSource,
 };
-use crate::error::{at_file, CheckpointError, LandedStep, OpenError, TxnError};
+use crate::error::{at_file, CheckpointError, LandedStep, OpenError, TxnError, JOURNAL_DIR};
 use crate::journal::{
     self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
 };
@@ -992,8 +992,8 @@ impl<W: WorldState> Kernel<W> {
                 // resolved against the working directory once, here, so every
                 // file the kernel touches afterwards lies under the directory
                 // it named at the open, wherever that working directory moves.
-                let dir = std::path::absolute(journal_path)
-                    .map_err(at_file(journal_path.display(), "resolve"))?;
+                let dir =
+                    std::path::absolute(journal_path).map_err(at_file(JOURNAL_DIR, "resolve"))?;
                 let recovered =
                     Self::recover(&dir, &genesis, cfg.salt, *cut_damaged_tail, seam.clone())?;
                 // The names the open passed over, for retention to pass over
@@ -1057,7 +1057,7 @@ impl<W: WorldState> Kernel<W> {
         journal::dir_builder()
             .recursive(true)
             .create(dir)
-            .map_err(at_file(dir.display(), "create"))?;
+            .map_err(at_file(JOURNAL_DIR, "create"))?;
         let lock = journal::acquire_journal_lock(dir)?;
         // The stray temp file, removed under the flock before anything is
         // listed: a checkpoint a crash or a failed write left half-written

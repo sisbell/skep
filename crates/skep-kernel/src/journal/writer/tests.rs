@@ -272,3 +272,57 @@ fn each_journal_step_fires_its_arm_once_and_the_step_then_runs_for_real() {
     }
     assert!(seam.armed_steps().is_empty());
 }
+
+/// Checks that a rotation refused its directory sync names no path.
+///
+/// A commit that finds its segment at `SEGMENT_ROTATE_BYTES` creates the
+/// next segment and syncs the directory before a byte of it is appended. A
+/// directory of mode `0300` takes the create and refuses the sync's open, so
+/// the commit is answered `CommitFail::Clean` of kind `PermissionDenied`,
+/// named `the journal directory: sync: …` with no byte of the directory's
+/// path — the account M10 hands a refused writer whole (PATTERNS SP-13) —
+/// and nothing of the transaction is on disk. Restored, the same commit
+/// lands in the new segment. A process that lists a mode-`0300` directory
+/// (root) stages no refusal, and the claim is not run.
+#[cfg(unix)]
+#[test]
+fn a_rotation_refused_its_directory_sync_names_the_journal_directory_and_never_its_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    let fill = vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]];
+    writer.commit_txn(1, fill, None, |_| {}).expect("the fill commits");
+    let seg1 = segment_path(dir.path(), 1);
+    let seg2 = segment_path(dir.path(), 2);
+    let mark = fs::metadata(&seg1).unwrap().len();
+    assert!(mark >= SEGMENT_ROTATE_BYTES, "premise: the next commit rotates");
+    let mode = |bits| fs::set_permissions(dir.path(), fs::Permissions::from_mode(bits)).unwrap();
+    mode(0o300);
+    if fs::read_dir(dir.path()).is_ok() {
+        mode(0o700);
+        eprintln!("a privileged process lists a mode-0300 directory: the claim is not run");
+        return;
+    }
+    let mut installed = false;
+    let out = writer.commit_txn(2, vec![rec(20)], None, |_| installed = true);
+    mode(0o700);
+    let e = match out {
+        Err(CommitFail::Clean(e)) => e,
+        other => panic!("the rotation's refusal is a clean failure: {other:?}"),
+    };
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "the OS's kind kept: {e}");
+    let text = e.to_string();
+    assert!(text.starts_with("the journal directory: sync: "), "the directory by its name: {text}");
+    let path = dir.path().display().to_string();
+    let leaf = dir.path().file_name().unwrap().to_string_lossy().into_owned();
+    assert!(!text.contains(&path) && !text.contains(&leaf), "no byte of the path: {text}");
+    assert!(!installed, "nothing installed");
+    assert_eq!(fs::metadata(&seg1).unwrap().len(), mark, "the full segment untouched");
+    assert_eq!(fs::metadata(&seg2).map_or(0, |m| m.len()), 0, "no byte in the next segment");
+
+    writer
+        .commit_txn(2, vec![rec(20)], None, |_| installed = true)
+        .expect("the directory syncs: the commit lands");
+    assert!(installed);
+    assert_eq!(frame_starts(&seg2).len(), 2, "in the new segment: a record and a marker");
+}

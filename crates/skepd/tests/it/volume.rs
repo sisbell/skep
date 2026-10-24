@@ -16,6 +16,11 @@
 //!   `QuotaExceeded` — is refused `durability`, `retry`, as at a full
 //!   volume, and said by its own line, naming the cause and the acts that
 //!   clear it, as RUNBOOK §1 step 1 says.
+//! * A write refused at a segment rotation — the data directory unreadable,
+//!   which takes the next segment's create and refuses the directory's sync
+//!   — is refused `durability`, `retry`, its detail naming
+//!   `the journal directory` and no byte of the directory's path (PATTERNS
+//!   SP-13, SP-15), and said by that same line.
 //! * ROW 2 — A REFUSED OPEN NAMES ITS FILE: a data directory whose
 //!   `feed-attest.log` (then `commits.log`) is unreadable refuses the open
 //!   `change-feed sidecar: feed-attest.log: Permission denied (os error
@@ -32,7 +37,7 @@ use skepd::{AuthOptions, Daemon, DaemonError, Skepd};
 
 use crate::common;
 use common::{
-    acked_at, get, json, op, open_session, spawn, spawn_unclaimed, WalkUnheld,
+    acked_addr, acked_at, get, json, op, open_session, spawn, spawn_unclaimed, WalkUnheld,
     ALLOW_PREVIEW_KEYS_IN_FIXTURES, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
 };
 
@@ -44,6 +49,18 @@ fn full_volume_line(at: u64, detail: &str) -> String {
          lands until room is freed on the volume; reads serve; the next write succeeds by itself \
          once room stands, and no restart is owed — a restart before room stands runs its open \
          into the full volume, and where the open refuses, reads stop with it"
+    )
+}
+
+/// The line a write refused `durability` for a cause but room is said by.
+///
+/// It names position `at` with the refusal's `detail`, and its class word.
+fn durability_refused_line(at: u64, detail: &str) -> String {
+    format!(
+        "failure: a write was refused durability at position {at} ({detail}): no write lands \
+         until its cause clears; reads serve; check the volume, its device and the board user's \
+         quota — the next write succeeds by itself once the cause clears; a restart before then \
+         runs its open into the same cause, and where the open refuses, reads stop with it"
     )
 }
 
@@ -235,16 +252,91 @@ fn a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_its_ow
         .collect();
     assert_eq!(
         failures,
-        [format!(
-            "failure: a write was refused durability at position {} ({detail}): no write lands \
-             until its cause clears; reads serve; check the volume, its device and the board \
-             user's quota — the next write succeeds by itself once the cause clears; a restart \
-             before then runs its open into the same cause, and where the open refuses, reads \
-             stop with it",
-            head + 1
-        )],
+        [durability_refused_line(head + 1, detail)],
         "RUNBOOK §1 step 1: one line, its own cause and acts"
     );
+    sd.shutdown();
+}
+
+/// Checks that a write refused at a segment rotation hands its writer no path.
+///
+/// The data directory is made unreadable (mode `0300`) and bulk prepends are
+/// written until one reaches the kernel's segment rotation, which creates the
+/// next segment — the mode takes the create — and syncs the directory, which
+/// the mode refuses. That write is refused `durability`, `retry`, its detail
+/// the kernel's account naming the directory by its name alone,
+/// `the journal directory: sync: …`, and no byte of the directory's path is
+/// in the answer (PATTERNS SP-13, SP-15); nothing commits, the operator's
+/// line says the refusal once with that detail, and restored, the write
+/// lands. A process that lists a mode-`0300` directory (root) stages no
+/// refusal, and the claim is not run.
+#[cfg(unix)]
+#[test]
+fn a_write_refused_at_a_rotation_hands_its_writer_no_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    sd.daemon().park_the_cadence();
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let doc = acked_addr(&op(port, Some(&owner), &create_frame()));
+    let bulk = "z".repeat(262_144);
+    // A prepend, so the ordinal is in bounds whatever the draft holds.
+    let prepend = format!(
+        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["{bulk}"]}}"#
+    );
+    let path = dir.path().display().to_string();
+    let leaf = dir.path().file_name().expect("a leaf").to_string_lossy().into_owned();
+    let unreadable = common::Unreadable::new(dir.path());
+    if std::fs::read_dir(dir.path()).is_ok() {
+        drop(unreadable);
+        eprintln!("a privileged process lists a mode-0300 directory: the claim is not run");
+        sd.shutdown();
+        return;
+    }
+    let said_before = sd.daemon().lines_said().len();
+
+    // Each prepend lands, filling the segment, until one meets the rotation.
+    let mut landed = 0;
+    let (v, head) = loop {
+        let (_, head) = health(port);
+        let v = op(port, Some(&owner), &prepend);
+        if v["resp"].as_str() == Some("rejected") {
+            break (v, head);
+        }
+        acked_at(&v);
+        landed += 1;
+        assert!(landed < 64, "no prepend met the rotation: the segment never filled");
+    };
+    assert_eq!(
+        (v["code"].as_str(), v["disposition"].as_str()),
+        (Some("durability"), Some("retry")),
+        "the rotation's refusal, a true no-op: {v}"
+    );
+    let detail = v["detail"].as_str().unwrap_or_else(|| panic!("a detail: {v}"));
+    assert!(
+        detail.starts_with("the journal directory: sync: "),
+        "the kernel's account, the directory by its name: {v}"
+    );
+    let answer = v.to_string();
+    assert!(
+        !answer.contains(&path) && !answer.contains(&leaf),
+        "FINDING (#592): the refused writer is handed the directory's path: {v}"
+    );
+    assert_eq!(health(port), (false, head), "no halt, nothing committed");
+    let failures: Vec<String> = sd.daemon().lines_said()[said_before..]
+        .iter()
+        .filter(|l| l.starts_with("failure:"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        failures,
+        [durability_refused_line(head + 1, detail)],
+        "one line, the kernel's account as its detail"
+    );
+
+    // Restored, the rotation's sync passes and the write lands.
+    drop(unreadable);
+    assert!(acked_at(&op(port, Some(&owner), &prepend)) > head, "the next write lands");
     sd.shutdown();
 }
 

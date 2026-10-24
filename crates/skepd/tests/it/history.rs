@@ -1030,13 +1030,14 @@ fn journal_damage_a_checkpoint_lands_above_is_passed_over_by_the_next_open() {
 ///
 /// The data directory is made unreadable while the board serves, so every
 /// history read's listing of the journal directory fails, and the kernel's
-/// account of the failure names the directory by its absolute path
-/// (`{path}: list: …`). A guest's `/chain?at=0`, the owner's `/op-at` and,
-/// in `observe` builds, `/dump?at` each answer `500 history_io` with the one
-/// fixed detail and no byte of the path. The operator stream says one
-/// `failure: history:` line carrying the account, the path included, and no
-/// second at the later reads; a read at the head and a write serve on,
-/// neither listing the directory.
+/// account of the failure names the directory by its name alone
+/// (`the journal directory: list: …`). A guest's `/chain?at=0`, the owner's
+/// `/op-at` and, in `observe` builds, `/dump?at` each answer
+/// `500 history_io` with the one fixed detail and no byte of the path. The
+/// operator stream says one `failure: history:` line carrying the account,
+/// no byte of the path in it either (PATTERNS SP-15), and no second at the
+/// later reads; a read at the head and a write serve on, neither listing the
+/// directory.
 #[cfg(unix)]
 #[test]
 fn a_history_reads_io_failure_carries_no_path_to_its_client_and_its_account_to_the_operator() {
@@ -1072,7 +1073,8 @@ fn a_history_reads_io_failure_carries_no_path_to_its_client_and_its_account_to_t
         assert_eq!((st, text(&body).as_str()), (500, expected), "a /dump?at");
     }
 
-    // The account is the operator's: one line, the path and the act in it.
+    // The account is the operator's: one line, the directory and the act in
+    // it, and no path.
     let said: Vec<String> = sd
         .daemon()
         .lines_said()
@@ -1081,9 +1083,12 @@ fn a_history_reads_io_failure_carries_no_path_to_its_client_and_its_account_to_t
         .collect();
     assert_eq!(said.len(), 1, "said once for the uptime: {said:?}");
     assert!(
-        said[0].starts_with(&format!("failure: history: history read I/O failure: {path}: list: ")),
+        said[0].starts_with(
+            "failure: history: history read I/O failure: the journal directory: list: "
+        ),
         "the operator's line carries the kernel's account: {said:?}"
     );
+    assert!(!said[0].contains(&path), "no byte of the path in the operator's line: {said:?}");
 
     // Neither a read at the head nor the write path lists the directory.
     let v = op(port, Some(&scenario.token), &retrieve(&scenario.doc1, 3));

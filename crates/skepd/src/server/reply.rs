@@ -1063,12 +1063,12 @@ pub(super) fn refuse_feed_rebuilding(low: u64, head: u64, walk: FeedWalk) -> Rep
 /// perfectly good and the daemon momentarily saturated.
 ///
 /// **The I/O arm answers one fixed sentence.** The kernel's account of a
-/// failed read names the file and the OS's words, and at the journal
-/// directory's own acts — the listing every history read takes before it
-/// selects a base — the directory by its absolute path (`skep-kernel`'s
-/// `FileFailure`). A guest may ask every history read, and every answer is
-/// readable cross-origin (wire.md §Cross-origin access), so that account is
-/// the operator's alone:
+/// failed read names the file, the act and the OS's words, and at the
+/// journal directory's own acts — the listing every history read takes
+/// before it selects a base — the directory by its name
+/// (`skep-kernel`'s `FileFailure`). A guest may ask every history read, and
+/// every answer is readable cross-origin (wire.md §Cross-origin access), so
+/// that account is the operator's alone:
 /// [`Daemon::refuse_history`](super::Daemon::refuse_history) says it on the
 /// operator stream where it is the journal's damage, and a client is
 /// answered what failed, never where on the host or what the OS said.

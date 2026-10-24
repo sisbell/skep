@@ -81,10 +81,10 @@ use chain::{slot_digest, ChainLink};
 ///
 /// # Errors
 ///
-/// The directory could not be listed, named `{dir}: list`, the kind kept: a
-/// directory that does not exist is `NotFound` and one the process may not
-/// read `PermissionDenied` — each told from an empty directory, which
-/// answers `false`.
+/// The directory could not be listed, named `the journal directory: list`,
+/// never by its path, the kind kept: a directory that does not exist is
+/// `NotFound` and one the process may not read `PermissionDenied` — each
+/// told from an empty directory, which answers `false`.
 pub fn journal_stands(dir: &Path) -> io::Result<bool> {
     Ok(!list_segments(dir)?.is_empty())
 }

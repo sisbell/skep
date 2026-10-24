@@ -137,8 +137,9 @@ pub enum ToolError {
     /// The data directory, the blob store or the file could not be read.
     ///
     /// The data directory's listing failing other than for its absence —
-    /// a permission, a device — is this, named `{dir}: list: {cause}`, and
-    /// never [`ToolError::NoBoard`]: the board may well stand there.
+    /// a permission, a device — is this, named as the kernel names it,
+    /// `the journal directory: list: {cause}`, and never
+    /// [`ToolError::NoBoard`]: the board may well stand there.
     Io(io::Error),
     /// The pull: a hex that is not 64 lowercase hexadecimal characters.
     NotAHash(String),
@@ -516,10 +517,11 @@ pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pull
 ///
 /// # Errors
 ///
-/// The directory could not be listed, named `{dir}: list: {cause}`, the
-/// kind kept: `NotFound` where it does not stand, which the callers read
-/// as no board, and every other kind — a permission, a device — as the
-/// read's own failure, never as a directory with no board in it.
+/// The directory could not be listed, named as the kernel names it,
+/// `the journal directory: list: {cause}`, with no path, the kind kept:
+/// `NotFound` where it does not stand, which the callers read as no board,
+/// and every other kind — a permission, a device — as the read's own
+/// failure, never as a directory with no board in it.
 pub fn board_stands(dir: &Path) -> io::Result<bool> {
     skep_kernel::journal_stands(dir)
 }

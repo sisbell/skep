@@ -8,7 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::error::at_file;
+use crate::error::{at_file, JOURNAL_DIR};
 
 /// A journal segment file, named by its `firstSeq` (§1).
 ///
@@ -79,11 +79,11 @@ fn parse_segment_name(name: &str) -> Option<u64> {
 /// # Errors
 ///
 /// A directory that cannot be listed, or an entry of it that cannot be read,
-/// named `{dir}: list`.
+/// named `the journal directory: list`.
 pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
     let mut segs = Vec::new();
-    for entry in fs::read_dir(dir).map_err(at_file(dir.display(), "list"))? {
-        let entry = entry.map_err(at_file(dir.display(), "list"))?;
+    for entry in fs::read_dir(dir).map_err(at_file(JOURNAL_DIR, "list"))? {
+        let entry = entry.map_err(at_file(JOURNAL_DIR, "list"))?;
         let name = entry.file_name();
         let Some(first_seq) = name.to_str().and_then(parse_segment_name) else {
             continue;
@@ -156,10 +156,11 @@ pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
 ///
 /// # Errors
 ///
-/// A failure answers the error alone — the listing's, named `{dir}: list`, a
-/// segment's length or removal, named `{segment}: remove`, or the
-/// directory's sync, named `{dir}: sync`: what it removed before failing is
-/// gone, uncounted and not synced, and the next landing's walk starts over.
+/// A failure answers the error alone — the listing's, named
+/// `the journal directory: list`, a segment's length or removal, named
+/// `{segment}: remove`, or the directory's sync, named
+/// `the journal directory: sync`: what it removed before failing is gone,
+/// uncounted and not synced, and the next landing's walk starts over.
 pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
     let segs = list_segments(dir)?;
     let mut reclaimed = 0u64;
@@ -184,11 +185,12 @@ pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
 ///
 /// # Errors
 ///
-/// A failure names the directory by its path and the act, `sync`.
+/// A failure is named `the journal directory: sync`, the directory by its
+/// name and never its path.
 pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(dir).and_then(|d| d.sync_all()).map_err(at_file(dir.display(), "sync"))?;
+        File::open(dir).and_then(|d| d.sync_all()).map_err(at_file(JOURNAL_DIR, "sync"))?;
     }
     #[cfg(not(unix))]
     {
@@ -385,5 +387,29 @@ mod tests {
         // read.
         assert_eq!(read_above(100), vec![(2, 9)], "the active segment is always read");
         assert_eq!(probed(100), FirstSyncWord::Scan);
+    }
+
+    /// Checks that the directory's own acts name it and never its path.
+    ///
+    /// Over a directory that does not stand, the listing and the sync each
+    /// answer `the journal directory: {act}: …` with the OS's kind kept and no
+    /// byte of the path — the account a refused writer and a history read's
+    /// operator meet whole (PATTERNS SP-13). An absent directory is absent to
+    /// every process, root among them, so this holds where a mode could not
+    /// stage the refusal.
+    #[cfg(unix)]
+    #[test]
+    fn the_directorys_own_acts_name_it_and_never_its_path() {
+        let parent = tempdir().unwrap();
+        let dir = parent.path().join("absent");
+        let listed = list_segments(&dir).err().expect("an absent directory is not listed");
+        let synced = fsync_dir(&dir).expect_err("an absent directory is not synced");
+        let path = parent.path().display().to_string();
+        for (act, e) in [("list", listed), ("sync", synced)] {
+            assert_eq!(e.kind(), io::ErrorKind::NotFound, "{act}: the kind kept: {e}");
+            let text = e.to_string();
+            assert!(text.starts_with(&format!("the journal directory: {act}: ")), "{act}: {text}");
+            assert!(!text.contains(&path) && !text.contains("absent"), "{act}: a path: {text}");
+        }
     }
 }

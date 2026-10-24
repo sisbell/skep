@@ -248,16 +248,20 @@ fn feed_rebuilding_names_the_retry_while_the_walk_runs_and_the_restart_once_it_d
 
 /// Checks that a history read's I/O failure answers one fixed detail.
 ///
-/// The detail is the same whatever the kernel's account: a listing of the
-/// journal directory, which names the directory by its absolute path; a
-/// segment's read, which names the file and the OS's words; a segment a
-/// reclamation removed. The client is answered `500 history_io` and the
-/// sentence alone, byte for byte; the account is the operator's
-/// (`Daemon::refuse_history`).
+/// The detail is the same whatever the account: a listing of the journal
+/// directory, which the kernel names by its name; a segment's read, which
+/// names the file and the OS's words; a segment a reclamation removed; and
+/// an account carrying a host path, which no account of the kernel's does.
+/// The client is answered `500 history_io` and the sentence alone, byte for
+/// byte; the account is the operator's (`Daemon::refuse_history`).
 #[test]
 fn a_history_reads_io_failure_answers_one_fixed_detail_whatever_the_kernels_account() {
     use std::io::{Error, ErrorKind};
     for account in [
+        Error::new(
+            ErrorKind::PermissionDenied,
+            "the journal directory: list: Permission denied (os error 13)",
+        ),
         Error::new(
             ErrorKind::PermissionDenied,
             "/srv/skep/board: list: Permission denied (os error 13)",

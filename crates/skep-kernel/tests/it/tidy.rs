@@ -1,6 +1,6 @@
-//! Two checks of the library's source text.
+//! Three checks of the library's source text.
 //!
-//! THE TEST HOOKS, GATED: every item this crate documents as a test hook or
+//! **The test hooks, gated.** Every item this crate documents as a test hook or
 //! a test seam compiles only under the `test-hooks` feature — in the media
 //! crate's form (`crates/skep-media/tests/it/tidy.rs`) with its helpers
 //! carried here, so each crate's suite stands alone. Two readings the
@@ -14,9 +14,13 @@
 //! and `ARCHITECTURE.md` §The kernel states the rules across them, and the
 //! crate's surface is its `README.md`'s prose.
 //!
-//! THE MODES HAVE ONE HOME: every directory and file the library makes is
+//! **The modes have one home.** Every directory and file the library makes is
 //! born through `src/journal/segment.rs`'s `dir_builder` and `file_options`,
 //! which carry the owner-only modes.
+//!
+//! **Every account names a file, never a path.** Every call of `at_file`, the
+//! one door to an account of an I/O failure, names a file or the journal
+//! directory by its name, and none makes a path into text (PATTERNS SP-13).
 
 use std::path::{Path, PathBuf};
 
@@ -178,6 +182,96 @@ fn every_entry_the_library_makes_is_born_through_one_home_for_its_modes() {
         home.display(),
         strays.join("\n")
     );
+}
+
+/// What an argument of `at_file` may not hold: a path made into text.
+///
+/// They are the standard library's three ways from a `Path` or an `OsStr` to
+/// text; `at_file` takes text, so a path itself cannot be handed in.
+const PATH_AS_TEXT: [&str; 3] = [".display()", ".to_str()", ".to_string_lossy()"];
+
+/// Checks that every account names a file, never a path (PATTERNS SP-13).
+///
+/// `at_file` is the one door to an account of an I/O failure, and the account
+/// can reach a client whole — a refused write's `durability` detail. Its
+/// signature takes text, so a `Path` is refused at compile time; this holds
+/// every call to a name rather than a path made into text ([`PATH_AS_TEXT`]),
+/// the sites no behaviour test reaches among them — the path's resolution and
+/// the directory's creation at the open, the checkpoints' listing. Test
+/// modules and comment lines are not read, an argument list that spans lines
+/// is read whole, and at least one call must be found, so a renamed door
+/// fails here rather than leaving the check unread.
+#[test]
+fn every_account_names_a_file_never_a_path() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut calls = 0;
+    let mut strays = Vec::new();
+    for file in &files {
+        if file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let code: Vec<&str> = text
+            .lines()
+            .take_while(|l| l.trim() != "mod tests {")
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect();
+        let code = code.join("\n");
+        let relative = file.strip_prefix(manifest).unwrap().display();
+        let mut from = 0;
+        while let Some(at) = code[from..].find("at_file(") {
+            let start = from + at;
+            from = start + "at_file(".len();
+            if code[..start].ends_with("fn ") {
+                continue;
+            }
+            calls += 1;
+            let arguments = arguments_of(&code[from..]);
+            for token in PATH_AS_TEXT.iter().filter(|token| arguments.contains(**token)) {
+                strays.push(format!("{relative}: `{token}` in `at_file({arguments})`"));
+            }
+        }
+    }
+    assert!(calls > 0, "no `at_file` call found under {}: the door has moved", src.display());
+    assert!(
+        strays.is_empty(),
+        "every account names a file or the journal directory by its name; these make a path \
+         into text:\n{}",
+        strays.join("\n")
+    );
+}
+
+/// The text of a call's argument list, `rest` beginning just past its `(`.
+///
+/// It runs to the `)` that closes it: brackets nested inside it, and every
+/// bracket inside a string literal, are stepped over.
+fn arguments_of(rest: &str) -> &str {
+    let mut depth = 0i64;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, c) in rest.char_indices() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => return &rest[..i],
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    rest
 }
 
 /// A file's first line opening with the seam's words, as an inner doc: the

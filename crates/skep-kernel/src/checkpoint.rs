@@ -34,7 +34,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::error::{at_file, stamp_text, Cause, NO_MIGRATION_REMEDY};
+use crate::error::{at_file, stamp_text, Cause, JOURNAL_DIR, NO_MIGRATION_REMEDY};
 use crate::journal::{codec, file_options, fsync_dir};
 use crate::{Seam, Seq, Step};
 
@@ -571,11 +571,11 @@ pub(crate) fn newest_header(dir: &Path) -> Option<CheckpointHeader> {
 /// # Errors
 ///
 /// A directory that cannot be listed, or an entry of it that cannot be read,
-/// named `{dir}: list`.
+/// named `the journal directory: list`.
 pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     let mut checkpoints = Vec::new();
-    for entry in fs::read_dir(dir).map_err(at_file(dir.display(), "list"))? {
-        let entry = entry.map_err(at_file(dir.display(), "list"))?;
+    for entry in fs::read_dir(dir).map_err(at_file(JOURNAL_DIR, "list"))? {
+        let entry = entry.map_err(at_file(JOURNAL_DIR, "list"))?;
         let name = entry.file_name();
         let Some(seq) = name.to_str().and_then(parse_checkpoint_name) else {
             continue;
@@ -852,7 +852,7 @@ pub(crate) fn write<W: Serialize>(
     // a failure from here answers over (`WriteFail::Landed`'s card). The
     // seam's failure is named as the directory's own sync names its own.
     seam.before(Step::CheckpointDirSync)
-        .map_err(at_file(dir.display(), "sync"))
+        .map_err(at_file(JOURNAL_DIR, "sync"))
         .and_then(|()| fsync_dir(dir))
         .map_err(WriteFail::Landed)
 }

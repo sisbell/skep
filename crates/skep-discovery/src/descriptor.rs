@@ -8,15 +8,15 @@
 //!
 //! The family's request lives here too — [`FourSet`] and its [`SlotSpec`]s —
 //! with the two readings of its slots only this family asks: the constraint
-//! list M7's AND-of-ORs takes, and the residence test the home slot answers,
-//! both private beside the reads that ask them.
+//! list M7's AND-of-ORs takes, and the home slot, which M7 answers home by
+//! home off its own key order, both private beside the reads that ask them.
 
 use im::OrdSet;
 use skep_address::Address;
 use skep_kernel::Snapshot;
 use skep_links::{Endset, LinkState, View, FROM, TO, TYPE};
 
-use crate::home::{home_of, home_readable};
+use crate::home::{home_admitted, home_readable};
 use crate::sets::window_over;
 use crate::types::{Cursor, Window};
 use crate::DiscoveryWorld;
@@ -42,9 +42,9 @@ pub enum SlotSpec {
 /// SLOT, which ASN-0132 calls structurally different from the three link
 /// slots: it is matched against `home(a)` — an M1 `document_of` address
 /// projection — so it is NOT a link slot (it never reaches M7's AND-of-ORs;
-/// M8 tests it on each link M7 returns) and NOT an arrangement-presence test
-/// (ASN-0132 CN-STAB: a reverse-orphaned link still satisfies a home-bounded
-/// query).
+/// M7 answers it home by home, off the key order that keeps a home's links
+/// together) and NOT an arrangement-presence test (ASN-0132 CN-STAB: a
+/// reverse-orphaned link still satisfies a home-bounded query).
 ///
 /// WHAT SATISFIES IT (ASN-0121's `sat`): a link `a` satisfies `q` when every
 /// slot holds — `Any` always (FL-WILD), the zero never (FL-EMP):
@@ -123,7 +123,8 @@ impl FourSet {
     /// endset to hand M7, so a list built without first asking
     /// [`FourSet::is_unsatisfiable`] would drop that slot exactly as it drops
     /// `Any` and silently widen the query. Every endset in a `Some` list is
-    /// non-empty.
+    /// non-empty, and so — the home slot being read by the same test — is a
+    /// `Spans` the home slot carries beside a `Some`.
     ///
     /// In FROM/TO/TYPE order: the descriptor answers what its slots say; the
     /// order M7 is asked in is `candidates`' to decide, beside its call to M7.
@@ -139,23 +140,6 @@ impl FourSet {
         }
         Some(constraints)
     }
-
-    /// `athome(a, H)` — ASN-0121/0132's residence test, the companion of
-    /// `touch`: does the home slot admit the link at `a`? It is the home
-    /// slot's clause of `sat`, as [`FourSet`] states it.
-    ///
-    /// Total: an address with no home — a node or an account — is at no home
-    /// a `Spans` names, even one whose coverage reaches the address itself.
-    /// Every address reaching it comes off M7's `match_links` and so is a link,
-    /// which has a home; the test answers for the projection's partiality
-    /// rather than assuming it away.
-    fn at_home(&self, a: &Address) -> bool {
-        match &self.home {
-            SlotSpec::Any => true,
-            SlotSpec::Empty => false,
-            SlotSpec::Spans(h) => home_of(a).is_some_and(|home| h.covers(home.tumbler())),
-        }
-    }
 }
 
 /// `FourSet::default()` IS [`FourSet::any()`] — the unit descriptor, so
@@ -167,54 +151,137 @@ impl Default for FourSet {
     }
 }
 
-/// ASN-0121's CANDIDATE set: the descriptor's constrained LINK slots handed
-/// to M7's AND-of-ORs over the ACTIVE view, and no constraints at all
-/// (`(∗,∗,∗)`) reading as the whole active slice. It is not yet the match —
-/// the home slot is not a link slot, and narrowing by it is the residence
-/// post-filter [`satisfying`] applies. The descriptor reads its own slots —
-/// which are the zero, which drop out — in [`FourSet::link_constraints`].
+/// The most links a TYPE constraint's class may hold and still drive M7's
+/// `stab` ahead of the other constrained slots.
+///
+/// A TYPE constraint's hits are counted exactly before any stab, off M7's
+/// typed slices (`LinkState::type_hits`); a FROM or TO constraint's are known
+/// only by the stab itself, no bounded probe of the coverage index existing
+/// at this build. So the choice is made on the one side it can see: a class
+/// this small drives, and a wrong guess — the other slot would have found
+/// fewer — costs at most this many lifts, where the guess the other way costs
+/// the whole population the other slot reaches, which one passage can set in
+/// the tens of thousands. Past it the slots stand in FROM, TO, TYPE order.
+const TYPE_DRIVES_UP_TO: usize = 1024;
+
+/// Moves the constraint that should drive M7's `stab` to the front of the
+/// list: the TYPE constraint, where the class it names holds at most
+/// [`TYPE_DRIVES_UP_TO`] links. `match_links` answers its FIRST constraint by
+/// one `stab` of M7's coverage index and narrows what it finds with the rest,
+/// at `|query spans| × |slot spans|` per survivor, so the constraint with the
+/// fewest hits costs the fewest lifts up front and the fewest survivors to
+/// test — which of the constraints that is, this element decides, because it
+/// is the one that asks M7. The others keep their slot order, and an AND is
+/// order-free, so this moves work and never the answer: one descriptor still
+/// names one constraint list.
+fn cheapest_first(l: &LinkState, constraints: &mut Vec<(usize, &Endset)>) {
+    if constraints.len() < 2 {
+        return;
+    }
+    let small_class = constraints.iter().position(|&(slot, e)| {
+        slot == TYPE && l.type_hits(e).is_some_and(|hits| hits <= TYPE_DRIVES_UP_TO)
+    });
+    if let Some(i) = small_class {
+        let ty = constraints.remove(i);
+        constraints.insert(0, ty);
+    }
+}
+
+/// ASN-0121's CANDIDATE set as one read-out walks it: the links in address
+/// order, and whether the reader has admitted them yet.
+///
+/// Where the home slot drove, the home rule ran once per home ahead of that
+/// home's range (PUB-7.18) and every link here is admitted; where a link
+/// slot drove, no home has been asked, and each read-out asks it of the links
+/// it walks, lazily, so a window asks no further than it pages (PUB-6.14).
+struct Candidates {
+    links: OrdSet<Address>,
+    admitted: bool,
+}
+
+impl Candidates {
+    /// `sat` under the reader for one link of the set: the home rule where it
+    /// has not run — the link slots and the home slot are answered by the set
+    /// itself.
+    fn admits(&self, readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
+        self.admitted || home_readable(readable, a)
+    }
+}
+
+/// ASN-0121's CANDIDATE set: the links the descriptor's slots admit, as M7
+/// answers them over the ACTIVE view, under the reader where the home slot
+/// drove. The descriptor reads its own slots — which are the zero, which drop
+/// out — in [`FourSet::link_constraints`].
 ///
 /// The unsatisfiable case returns without touching the store. M7 would answer
 /// the same way if it could be asked — `stab(slot, ⟨⟩, ·) = ∅` empties the
 /// AND — but an `Empty` slot carries no endset to ask WITH, so this is where
 /// FL-EMP is answered for the link slots, not merely where it is anticipated.
 ///
-/// The constraints are handed to M7 SMALLEST FIRST, which is a cost decision
-/// and not a semantic one, and this element's because it is the one that asks
-/// M7: `match_links` answers the FIRST constraint by one `stab` of M7's
-/// coverage index, a probe per query span, and narrows what it finds with the
-/// rest, at `|query spans| × |slot spans|` per survivor, so the constraint
-/// with the fewest spans costs the fewest probes up front. An AND is
-/// order-free, so this moves work and never the answer — and the sort is
-/// stable, so equal spellings keep FROM/TO/TYPE order and one descriptor still
-/// names one constraint list.
-fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
-    match q.link_constraints() {
-        None => OrdSet::new(), // FL-EMP: some slot is the zero
-        Some(mut constraints) => {
-            constraints.sort_by_key(|(_, e)| e.len()); // the cheapest conjunct drives M7's stab
-            l.match_links(&constraints, View::Active)
+/// THE HOME SLOT DRIVES WHERE IT IS CONSTRAINED (PUB-7.18). A link's address
+/// is its home's with three components after it, so M7 keeps a home's links
+/// together in its key order: `homes_under` names each home the slot's
+/// coverage contains that holds links, found by one seek apiece, and the
+/// reader's predicate is asked of each home ONCE, through [`home_admitted`],
+/// ahead of its links — an unreadable home's whole candidate list is dropped
+/// on that one test and never walked per link. Each admitted home's links are
+/// then read by `homed_in`, its own key range, each tested against the
+/// link-slot constraints as `match_links` tests its later constraints. So a
+/// home-constrained descriptor costs the homes it names and the readable
+/// ones' links: a document's or a member's at one seek, an account's or the
+/// node's at one seek per home under it, never the links of a home it does
+/// not name. The home slot's clause of `sat` — `h` covers `home(a)` — is what
+/// `homes_under` decides, of the home rather than of each link, so no link
+/// here is tested for it again.
+///
+/// WHERE THE HOME SLOT IS `Any`, the link slots are handed to M7 CHEAPEST
+/// FIRST, which is a cost decision and not a semantic one, and this element's
+/// because it is the one that asks M7 — [`cheapest_first`] states the rule
+/// and its limit. With no constraint at all (`(∗,∗,∗)`), M7 walks the whole
+/// active slice.
+fn candidates(l: &LinkState, q: &FourSet, readable: &dyn Fn(&Address) -> bool) -> Candidates {
+    let Some(mut constraints) = q.link_constraints() else {
+        return Candidates {
+            links: OrdSet::new(), // FL-EMP: some slot is the zero
+            admitted: true,
+        };
+    };
+    if let SlotSpec::Spans(h) = &q.home {
+        let mut links = OrdSet::new();
+        for home in l.homes_under(h) {
+            if home_admitted(readable, &home) {
+                links = links.union(l.homed_in(&home, &constraints, View::Active));
+            }
         }
+        return Candidates {
+            links,
+            admitted: true,
+        };
+    }
+    cheapest_first(l, &mut constraints);
+    Candidates {
+        links: l.match_links(&constraints, View::Active),
+        admitted: false,
     }
 }
 
-/// `sat(·, q, Σ)` — THE one definition of "matches" for the descriptor
-/// family. ASN-0132's CN-ENUM forces exactly one, consumed by enumeration and
-/// by count alike, so [`findlinks_ftt_on`] and [`count_ftt_on`] are two
-/// read-outs of this one sequence and cannot disagree about which links
-/// match. It is walked by reference, so nothing is copied until a link ships.
+/// `sat(·, q, Σ)` under the reader — THE one definition of "matches" for the
+/// descriptor family. ASN-0132's CN-ENUM forces exactly one, consumed by
+/// enumeration and by count alike, so [`findlinks_ftt_on`] and
+/// [`count_ftt_on`] are two read-outs of this one sequence and cannot
+/// disagree about which links match. It is walked by reference, so nothing
+/// is copied until a link ships.
 ///
 /// ASN-0121's [`candidates`] — `cand`, computed for the same `q` — narrowed
-/// by the residence post-filter [`FourSet::at_home`]: the home-bound placement
-/// M8 chose, since M8 owns no index dimension keyed on `home(a)` (Conflicts
-/// #7: a home-only query degrades to a full active scan, accepted). The
-/// post-filter reads the candidates in place, so the survivors are never
-/// gathered into a set of their own.
+/// by what the set has not yet asked: the home rule at link identity where a
+/// link slot drove, nothing where the home slot drove and admitted each home
+/// ahead of its links. The filter reads the candidates in place, so the
+/// survivors are never gathered into a set of their own.
 fn satisfying<'c>(
-    cand: &'c OrdSet<Address>,
-    q: &'c FourSet,
+    cand: &'c Candidates,
+    readable: &'c dyn Fn(&Address) -> bool,
 ) -> impl Iterator<Item = &'c Address> + 'c {
-    cand.iter().filter(move |&a| q.at_home(a))
+    cand.links.iter().filter(move |&a| cand.admits(readable, a))
 }
 
 /// FINDLINKS over the four-set descriptor (ASN-0121): the links satisfying
@@ -225,7 +292,9 @@ fn satisfying<'c>(
 /// held fixed, a found link stays found unless nullified.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3): every satisfying link
-/// whose HOME `readable` refuses is dropped at its identity. The descriptor's
+/// whose HOME `readable` refuses is dropped at its identity — or, where the
+/// descriptor's `home` slot drives, never read at all, the rule having been
+/// asked of its home ahead of the home's links (PUB-7.18). The descriptor's
 /// own `home` slot is a COVERAGE constraint (CN-STAB); `readable` is the
 /// authorization one, orthogonal to it.
 pub fn findlinks_ftt_on<W: DiscoveryWorld>(
@@ -233,11 +302,8 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<Address> {
-    let cand = candidates(s.world().links(), q);
-    satisfying(&cand, q)
-        .filter(|&a| home_readable(readable, a))
-        .cloned()
-        .collect()
+    let cand = candidates(s.world().links(), q, readable);
+    satisfying(&cand, readable).cloned().collect()
 }
 
 /// The count operation over the descriptor family (ASN-0132 CN-*): the
@@ -265,10 +331,8 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
 ) -> usize {
-    let cand = candidates(s.world().links(), q);
-    satisfying(&cand, q)
-        .filter(|&a| home_readable(readable, a))
-        .count()
+    let cand = candidates(s.world().links(), q, readable);
+    satisfying(&cand, readable).count()
 }
 
 /// Windowed enumeration over the descriptor family (ASN-0108, the
@@ -289,9 +353,10 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// crate header states.
 ///
 /// The home rule (PUB round 2, lane 3.3, §3) is applied LAZILY during the
-/// key-cut, beside the residence post-filter and BEFORE the window slice
-/// (PUB-6.14), so a link it refuses is skipped rather than counted against
-/// `n`.
+/// key-cut, BEFORE the window slice (PUB-6.14), so a link it refuses is
+/// skipped rather than counted against `n` — where a link slot drove; where
+/// the home slot drove, it was applied to each home ahead of the home's
+/// links, and the page is cut from links already admitted.
 pub fn window_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
@@ -302,10 +367,10 @@ pub fn window_ftt_on<W: DiscoveryWorld>(
     // The one place `sat` is spelled apart rather than composed: the window
     // seeks by key — `range` strictly past the cursor — which the candidate
     // SET supports and `satisfying`'s filtered sequence does not, so it walks
-    // `candidates` itself and applies the same residence post-filter LAZILY
-    // in its `keep`.
-    let cand = candidates(s.world().links(), q);
-    window_over(&cand, cur, n, |a| q.at_home(a) && home_readable(readable, a))
+    // the candidates itself and applies the same reader test LAZILY in its
+    // `keep`.
+    let cand = candidates(s.world().links(), q, readable);
+    window_over(&cand.links, cur, n, |a| cand.admits(readable, a))
 }
 
 #[cfg(test)]
@@ -319,51 +384,51 @@ mod tests {
         validate(t).expect("test addresses are T4-valid")
     }
 
-    /// The descriptor answers what its slots say, in slot order: which
-    /// constraint M7 is asked with first is `candidates`' decision, beside its
-    /// call to M7, so a wide FROM beside a narrow TO comes back FROM first.
+    /// The descriptor answers what its slots say, in slot order, whatever a
+    /// constraint would cost M7: which constraint M7 is asked with first is
+    /// `candidates`' decision, beside its call to M7, so a FROM beside a TYPE
+    /// — the one constraint that may be moved ahead of it — comes back FROM
+    /// first, and a wide FROM beside a narrow TO comes back FROM first too.
     #[test]
-    fn link_constraints_answer_in_slot_order_whatever_their_size() {
+    fn link_constraints_answer_in_slot_order_whatever_their_cost() {
         let wide = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 5])]);
         let narrow = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 2])]);
+        let ty = enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, 10])]);
         assert!(wide.len() > narrow.len(), "a size order would reverse them");
         let q = FourSet {
             from: SlotSpec::Spans(wide.clone()),
             to: SlotSpec::Spans(narrow.clone()),
+            ty: SlotSpec::Spans(ty.clone()),
             ..FourSet::any()
         };
         assert_eq!(
             q.link_constraints(),
-            Some(vec![(FROM, &wide), (TO, &narrow)])
+            Some(vec![(FROM, &wide), (TO, &narrow), (TYPE, &ty)])
         );
     }
 
-    /// The residence test is TOTAL on an address with no home — a node or an
-    /// account — which `Any` admits and a `Spans` places at no home, even the
-    /// account's own subtree, which COVERS the account address: the slot is
-    /// matched against `home(a)`, never against `a`. A residence test that
-    /// read a home it assumed would fault here, and one that matched `a`
-    /// itself would admit the account.
+    /// The home slot is read beside the link slots by the one zero test, so a
+    /// descriptor whose home slot carries the zero hands M7 no constraint
+    /// list at all, and one whose home slot carries spans hands over the link
+    /// slots alone: the home is no link slot, and `candidates` answers it
+    /// from M7's home ranges rather than from the list.
     #[test]
-    fn at_home_places_an_address_with_no_home_at_no_home() {
-        let account = a(&[1, 0, 1]);
-        let under_account = FourSet {
-            home: SlotSpec::Spans(enc([&account])),
+    fn link_constraints_leave_the_home_slot_out_and_answer_none_for_its_zero() {
+        let home = enc(&[a(&[1, 0, 1, 0, 2])]);
+        let from = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 2])]);
+        let homed = FourSet {
+            home: SlotSpec::Spans(home),
+            from: SlotSpec::Spans(from.clone()),
             ..FourSet::any()
         };
-        assert!(
-            under_account.at_home(&a(&[1, 0, 1, 0, 1, 0, 2, 1])),
-            "a link homed under it"
-        );
-        for homeless in [a(&[1]), account] {
-            assert!(
-                FourSet::any().at_home(&homeless),
-                "{homeless:?}: the unit admits it"
-            );
-            assert!(
-                !under_account.at_home(&homeless),
-                "{homeless:?}: it has no home"
-            );
+        assert_eq!(homed.link_constraints(), Some(vec![(FROM, &from)]));
+        for zero in [SlotSpec::Empty, SlotSpec::Spans(Endset::empty())] {
+            let q = FourSet {
+                home: zero,
+                from: SlotSpec::Spans(from.clone()),
+                ..FourSet::any()
+            };
+            assert_eq!(q.link_constraints(), None, "{q:?}: the zero");
         }
     }
 }

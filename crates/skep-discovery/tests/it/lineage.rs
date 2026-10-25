@@ -1,17 +1,20 @@
-//! §7 — archival supersession lineage: the flipped probes behind the
-//! resident-key gate, the class they restrict to, what one claim says, the
-//! claims of that class with an undefined endpoint, the claims that only
-//! cover a key they do not name, the endpoint no probe asks about, and the
-//! home every claim has, which the store's fold guarantees.
+//! §7 — archival supersession lineage: the flipped probes and the residence
+//! clause asked only of a key a claim names, the class they restrict to, what
+//! one claim says, the claims of that class with an undefined endpoint, the
+//! claims that only cover a key they do not name, the endpoint no probe asks
+//! about, the home every claim has, which the store's fold guarantees, and
+//! what a probe costs, counted: the claims naming the key and never the
+//! class.
 
 use crate::common;
+use crate::heap::settled_heap_bytes;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use common::*;
 use serde::Serialize;
 use skep_address::{document_of, is_prefix, subtree_of, validate, Address, Tumbler};
-use skep_discovery::{in_claims_on, SupClaim, FROM, TO};
+use skep_discovery::{in_claims_on, out_claims_on, SupClaim, FROM, TO};
 use skep_kernel::{Kernel, TxnError};
 use skep_links::{
     enc, EditLinkError, Endset, HasLinks, Link, LinkRec, LinkWriter, MakeLinkError, Pattern,
@@ -19,7 +22,7 @@ use skep_links::{
 };
 
 #[test]
-fn lineage_probes_flipped_slots_with_residence_gate() {
+fn lineage_probes_flipped_slots_and_asks_residence_only_of_a_key_a_claim_names() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
@@ -45,14 +48,16 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     // separates them follows the retraction.
     assert_eq!(reads.in_claims(&e1, View::Default), vec![expected]);
 
-    // Resident-key gate. A non-link key under e1 or e2 is COVERED by the
-    // claim's F (or G), `enc([endpoint])`, so `observe` reaches the claim
-    // through it, and it answers [] twice over: the gate refuses the key
-    // before the class is walked, and the read-out's equality would refuse
-    // the claim, whose endpoint is not that key. Where the gate ALONE
-    // decides is a claim whose endpoint IS a non-link key, which no writer
-    // deposits; a decoded-deposit test below folds one. doc1 and ca(1), above
-    // and beside the endpoints, reach no claim at all.
+    // The residence clause, asked of a key the stab finds a claim for. A
+    // non-link key under e1 or e2 is COVERED by the claim's F (or G),
+    // `enc([endpoint])`, so the stab at the key's span reaches the claim
+    // through it, and it answers [] twice over: the key is no resident link,
+    // and the read-out's equality would refuse the claim, whose endpoint is
+    // not that key. Where the residence clause ALONE decides is a claim whose
+    // endpoint IS a non-link key, which no writer deposits; a decoded-deposit
+    // test below folds one. doc1 and ca(1), above and beside the endpoints,
+    // reach no claim at all — a key no claim covers answers [] off the stab
+    // alone, before anything asks whether a link resides there.
     let under_e1 = a(&[1, 0, 1, 0, 1, 0, 2, 1, 1]);
     let under_e2 = a(&[1, 0, 1, 0, 1, 0, 2, 2, 1]);
     assert!(is_prefix(e1.tumbler(), under_e1.tumbler()));
@@ -82,6 +87,85 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     // "Default reads as Active" can be told from "Default reads as Audit".
     assert_eq!(reads.in_claims(&e1, View::Default), vec![]);
     assert_eq!(reads.out_claims(&e2, View::Default), vec![]);
+}
+
+/// A world of `claims` supersession claims over links of doc2 — the class a
+/// lineage probe must not pay for — beside doc1's `e1`, `e2` and `e3`, with
+/// `e1` superseded by `e2` and `e3` superseded by both: the fixture the cost
+/// law reads at two class sizes.
+fn with_a_class_of(claims: u32) -> Kernel<World> {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let e3 = link(&store, &doc1(), &[ca(1)], &[ca(103)]);
+    store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds");
+    store.assert_sup(SYS, &doc1(), &e3, &e1).expect("assert_sup succeeds");
+    store.assert_sup(SYS, &doc1(), &e3, &e2).expect("assert_sup succeeds");
+    for i in 0..claims {
+        let old = link(&store, &doc2(), &[ca(1)], &[ca(1_000 + 2 * i)]);
+        let new = link(&store, &doc2(), &[ca(1)], &[ca(1_001 + 2 * i)]);
+        store.assert_sup(SYS, &doc2(), &old, &new).expect("assert_sup succeeds");
+    }
+    k
+}
+
+/// §7 — THE LINEAGE PAIR PAYS FOR THE CLAIMS NAMING THE KEY AND NEVER FOR THE
+/// CLASS, counted (#647): a probe costs the index's one stab and the claims
+/// it finds, so a key no claim names — a resident link with no claims, or an
+/// address holding no link — costs the SAME, and costs it whether the
+/// supersession class holds ten claims or two hundred; a key `c` claims name
+/// costs those `c`, and no more beside a larger class. The two branches that
+/// once cost differently — an empty address answered at once, a resident
+/// link walking the class — are the residence oracle S40 measured: a guest
+/// read which of a private document's link addresses held a link by the
+/// walk's cost, and so the document's link count, through an answer that was
+/// `[]` either way. The clock would show the walk at a hundred claims and
+/// hide it at one; the heap shows the class's absence at every size.
+#[test]
+fn the_lineage_pair_pays_for_the_claims_naming_the_key_and_not_for_the_class() {
+    let (fewer, more) = (with_a_class_of(10), with_a_class_of(200));
+    // la(1..=3) are e1..e3; la(4) and la(5) are the first two claims of doc1;
+    // la(90) is minted by nothing.
+    let (resident_unclaimed, resident_two, resident_one, unminted) = (la(2), la(3), la(1), la(90));
+    for k in [&fewer, &more] {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert!(links.readlink(&resident_unclaimed).is_some() && links.readlink(&unminted).is_none());
+        let reads = Reads(k);
+        assert_eq!(reads.in_claims(&resident_unclaimed, View::Active), vec![], "e2 supersedes nothing");
+        assert_eq!(reads.in_claims(&unminted, View::Active), vec![]);
+        assert_eq!(claims_of(reads.in_claims(&resident_two, View::Active)), vec![la(5), la(6)]);
+        assert_eq!(claims_of(reads.in_claims(&resident_one, View::Active)), vec![la(4)]);
+        assert_eq!(claims_of(reads.out_claims(&resident_unclaimed, View::Active)), vec![la(4), la(6)]);
+        assert_eq!(reads.out_claims(&resident_two, View::Active), vec![], "nothing supersedes to e3");
+    }
+    let heap_in = |k: &Kernel<World>, key: &Address| {
+        settled_heap_bytes(|| in_claims_on(&k.snapshot(), key, View::Active, &every_home).len()).1
+    };
+    let heap_out = |k: &Kernel<World>, key: &Address| {
+        settled_heap_bytes(|| out_claims_on(&k.snapshot(), key, View::Active, &every_home).len()).1
+    };
+    for k in [&fewer, &more] {
+        // The residence oracle, closed: the two branches cost alike.
+        assert_eq!(
+            heap_in(k, &resident_unclaimed),
+            heap_in(k, &unminted),
+            "a resident key no claim names costs what an empty address costs"
+        );
+        assert_eq!(heap_out(k, &resident_two), heap_out(k, &unminted), "and out() too");
+    }
+    // The class-size baseline, flat: the same probes cost the same beside
+    // twenty times the class.
+    for key in [&resident_unclaimed, &unminted, &resident_one, &resident_two] {
+        assert_eq!(heap_in(&more, key), heap_in(&fewer, key), "in({key}) pays nothing for the class");
+        assert_eq!(heap_out(&more, key), heap_out(&fewer, key), "out({key}) pays nothing for the class");
+    }
+    // And a key `c` claims name costs those claims: two cost more than one,
+    // one more than none.
+    assert!(heap_in(&fewer, &resident_two) > heap_in(&fewer, &resident_one));
+    assert!(heap_in(&fewer, &resident_one) > heap_in(&fewer, &resident_unclaimed));
 }
 
 /// §7 — `home` is the CLAIM's own attribution (EL8b), never an endpoint's.
@@ -119,9 +203,9 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
 /// §7 — the view filters CLAIMS, never their endpoints: under any view a
 /// claim's `old`/`new` are the addresses it NAMES, read out as recorded, so a
 /// live claim can name a nullified link and `active` stays the claim's own.
-/// And the enumeration's gate asks RESIDENT, not active — a nullified link
-/// is still resident, so it is still a legal probe key. Every other lineage
-/// case nullifies the claim; neither promise is watched by that.
+/// And the enumeration's residence clause asks RESIDENT, not active — a
+/// nullified link is still resident, so it is still a legal probe key. Every
+/// other lineage case nullifies the claim; neither promise is watched by that.
 #[test]
 fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     let k = kernel();
@@ -151,7 +235,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
         }]
     );
     // A nullified link is resident, so it is still a legal probe key: the
-    // gate asks resident, not active.
+    // residence clause asks resident, not active.
     assert_eq!(claims_of(reads.out_claims(&e2, View::Active)), vec![claim]);
 }
 
@@ -444,9 +528,10 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
 /// conforming claim and answer the conforming claim alone, where a read-out
 /// that took coverage for denotation would report a claim whose `old` and
 /// `new` are doc1. Beside it, a claim naming a link address no deposit
-/// minted is the resident-key gate's alone to refuse: its endpoint IS the key
-/// it is probed by, and that key is no resident link. The home rule is asked
-/// past both, so only of the claim reported.
+/// minted is the residence clause's alone to refuse: its endpoint IS the key
+/// it is probed by, and that key is no resident link — the one clause the
+/// equality does not imply, kept because this claim exists. The home rule is
+/// asked past both, so only of the claim reported.
 #[test]
 fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     let fixture = OneClaim::new();
@@ -518,7 +603,8 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     // would show as a second ask of doc1.
     fixture.assert_answered_alone();
     // And a probe of the unminted address answers no claim, though one names
-    // it: the resident-key gate refuses a key that is no resident link.
+    // it: the residence clause refuses a key that is no resident link, asked
+    // of it because the stab found the claim.
     let reads = Reads(&fixture.k);
     for view in [View::Active, View::Audit] {
         assert_eq!(
@@ -541,7 +627,7 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
 /// (`assert_sup` asks both endpoints' residence and their distinctness, and
 /// `editlink`'s DC guard asks the same of a caller's successor), but M7's fold
 /// admits both, as a restored checkpoint or a replayed journal frame reaches
-/// it. The unminted endpoint, probed in its turn, is the resident-key gate's
+/// it. The unminted endpoint, probed in its turn, is the residence clause's
 /// to refuse; the reflexive claim answers both probes of the key.
 #[test]
 fn lineage_checks_the_endpoint_its_probe_names_and_not_the_other() {

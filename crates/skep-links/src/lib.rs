@@ -10,7 +10,9 @@
 //! assert_sup/editlink \[ASN-0125\]), the raw reads (READLINK/FOLLOWLINK
 //! \[ASN-0111/0114\]), the typed-relation observers (Observe + the behavior
 //! atoms BH1–BH4 \[ASN-0128\]), the immutable type/shape registry, idempotent
-//! de-duplication, and the spanfilade discovery primitives for M8.
+//! de-duplication, and the discovery primitives for M8: the spanfilade's
+//! `stab` and `match_links`, and the home ranges `homes_under` and
+//! `homed_in`, which answer a home's links off the map's own key order.
 //!
 //! The Lampson spine (§Core data model): the journal (via M2) is truth; the
 //! authoritative state is one append-only map; everything else is a

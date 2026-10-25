@@ -4045,18 +4045,22 @@ and `to` all `"any"` — enumerates a whole type class: the design's
 directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
 siblings (PUB-6.55, PUB-6.56), where the daemon pays a per-candidate home
 test over every link of the class. THE COST AS BUILT: constraining `home`
-narrows none of that walk. A home-constrained `find_links_ftt`,
-`count_ftt` or `window_ftt` is served by the same candidate set — the
-ACTIVE links its link-slot constraints match (`from`, `to`, `ty`),
-answered from the link store's coverage index, or the whole active slice
-when none is constrained — the `home` slot a per-link residence
-post-filter behind it, so its cost is the class's links where `ty` is
-constrained and the board's active links where nothing is, never the
-home's.
-No home-granular skip exists at this build — an index of links by home,
-and the skip in the descriptor scan, is not built — and until one is, a
-home-constrained query pays what the class scan pays while the bound
-below counts the SHAPE alone. Such a request —
+narrows that walk to the homes it names. A home-constrained
+`find_links_ftt`, `count_ftt` or `window_ftt` is served home by home —
+the link store keeps a home's links together under the home's own keys,
+so each home the `home` slot covers that holds links is found by one
+seek, the read predicate is asked of it ONCE ahead of its links, and an
+admitted home's links are read as one key range and tested against the
+link-slot constraints (`from`, `to`, `ty`) — so its cost is the asked
+homes' own links: a `home` slot naming a document or a version member
+reads that home's links alone, whatever the board or the class holds,
+and an unreadable home's links are never read. A `home` slot naming an
+account or the node reads every home under it, one range apiece, so its
+cost is still the account's or the board's links. No index of links by
+home exists at this build for the reads whose constrained slot is not
+the home — those pay for every link their driving slot reaches, the
+cheapest constraint driving — and the bound below counts the SHAPE
+alone. Such a request —
 `ty` constrained, the rest `"any"` — is a CLASS SCAN, and it is a SHAPE,
 not a type list: any class queried that way is one, and the all-`"any"`
 query — the whole store — is one too, being that shape's superset. `/op`

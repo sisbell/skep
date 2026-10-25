@@ -25,8 +25,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   replaced a link; the walk follows the chain and stops at a fork
   rather than choosing.
 - **Queries** — `readlink`, `followlink`, the typed reads over active
-  and audit views, and the overlap matcher
-  [skep-discovery](../skep-discovery) presents.
+  and audit views, a home's links read as one key range of the store,
+  and the overlap matcher [skep-discovery](../skep-discovery) presents.
 
 State rides the kernel; span algebra comes from
 [skep-address](../skep-address).

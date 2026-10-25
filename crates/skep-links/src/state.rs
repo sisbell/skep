@@ -388,7 +388,10 @@ impl LinkState {
     /// It is `home · 0 · s_L · (1 + f_d^Σ)`, assembled off M7's own frontier
     /// and equal to M3's by construction (FrontierUnification; Conflicts §7 —
     /// no upward M3 read). An absent frontier gives ordinal 1, the first
-    /// emission itself.
+    /// emission itself. The shape is what makes a home's links one key range
+    /// of `links` in T1 order, which the read surface's `homes_under` and
+    /// `homed_in` answer a home-constrained query from without an index of
+    /// their own.
     ///
     /// # Panics
     ///

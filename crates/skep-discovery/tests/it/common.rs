@@ -323,13 +323,41 @@ pub fn rel_ty() -> Endset {
     enc(&[rel()])
 }
 
+/// A SECOND relation type, as unregistered as [`rel`] and as ordinary: content
+/// element 11 of the ghost home document. The cost tests deposit a flood of
+/// [`rel`]-typed links beside a few of this type, so a descriptor naming it
+/// has a small class to drive from where the flood's slot would walk the
+/// whole passage.
+pub fn rel2() -> Address {
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, 11])
+}
+
 /// Deposit one link of the suite's relation type in `home`, FROM naming
 /// `from` and TO naming `to`, as the automation caller — the fixture nearly
 /// every test here needs — and answer its address.
 pub fn link(store: &LinkWriter<'_, World>, home: &Address, from: &[Address], to: &[Address]) -> Address {
+    typed_link(store, home, from, to, &rel())
+}
+
+/// [`link`] with the type the caller names — the one way a fixture deposits a
+/// link outside the suite's relation type, through MAKELINK's open surface,
+/// which admits any address as a type.
+pub fn typed_link(
+    store: &LinkWriter<'_, World>,
+    home: &Address,
+    from: &[Address],
+    to: &[Address],
+    ty: &Address,
+) -> Address {
     store
-        .makelink(SYS, home, SlotArg::Addrs(from.to_vec()), SlotArg::Addrs(to.to_vec()), SlotArg::Addrs(vec![rel()]))
-        .expect("a fixture link of the suite's relation type is admitted")
+        .makelink(
+            SYS,
+            home,
+            SlotArg::Addrs(from.to_vec()),
+            SlotArg::Addrs(to.to_vec()),
+            SlotArg::Addrs(vec![ty.clone()]),
+        )
+        .expect("a fixture link is admitted through the open surface")
         .0
 }
 

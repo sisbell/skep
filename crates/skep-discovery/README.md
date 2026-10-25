@@ -12,6 +12,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   store-wide); results in permanent address order.
 - **Windows and counts** — a stateless cursor over the same answer;
   a window bounds what comes back, not what is computed.
+- **Reads that pay for what they name** — a descriptor naming a home
+  reads that home's links by their key range, asking the reader once
+  per home and never reading a home it may not; a descriptor naming a
+  small type class drives from the class; the claims naming a link are
+  read off the coverage index, never by a walk of the supersession
+  class.
 - **Orphan preview and lineage** — what a proposed delete would
   strand from a document; the supersession claims naming a link
   (one hop — the walks are the link store's).

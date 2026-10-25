@@ -3,11 +3,18 @@
 //! It holds the raw reads (READLINK / FOLLOWLINK), the typed-relation
 //! observers (Observe + the default predicates + BH1–BH4), ASN-0125
 //! currency, and the discovery primitives for M8 (`stab` / `match_links` /
-//! `type_slice`), `stab` answering from the spanfilade beside this file. All
-//! `&self` over any M2 `Snapshot`; nothing here writes.
+//! `type_slice`, the home ranges `homes_under` / `homed_in` / `homed_under`,
+//! the typed stab `stab_typed` and the type-slot count `type_hits`), `stab`
+//! answering from the spanfilade beside this file and the home ranges from
+//! the map's own key order. All `&self` over any M2 `Snapshot`; nothing here
+//! writes.
+
+use std::ops::Bound::{Excluded, Included, Unbounded};
 
 use im::OrdSet;
-use skep_address::{document_of, is_prefix, ordinal, validate, Address, SpanSet, Tumbler};
+use skep_address::{
+    document_of, is_prefix, link_subspace, ordinal, validate, Address, Nat, SpanSet, Tumbler,
+};
 
 use super::spanfilade::overlaps;
 use super::{lift, LinkState};
@@ -160,6 +167,41 @@ fn default_to_active(view: View) -> View {
         View::Default => View::Active,
         other => other,
     }
+}
+
+/// Returns the home of a key of `links`.
+///
+/// Every stored key is an element-level address (the hint fold's two
+/// `expect`s), so its home Document exists; the `expect` restates that fact
+/// where a read reads it back.
+fn home_of_key(t: &Tumbler) -> Address {
+    document_of(&lift(t)).expect(
+        "a stored link key is element-level, so its home Document exists: the hint fold \
+         fail-stopped on exactly this",
+    )
+}
+
+/// Returns the bounds of `home`'s link chain in the key order of `links`.
+///
+/// A link's address is `home · 0 · s_L · n`
+/// ([`LinkState::next_link_address`]), so in T1 order — lexicographic,
+/// prefix-smaller — the home's own links are exactly the keys at or past
+/// `home · 0 · s_L` and short of `home · 0 · (s_L + 1)`: the first bound is a
+/// prefix of every one of them and of nothing else in the map, and a
+/// version member's links, `home · k · 0 · s_L · n` for a `k ≥ 1`, sort past
+/// the second. The bounds are carrier tumblers, never addresses: a range is
+/// cut at them, nothing is minted.
+fn link_chain_bounds(home: &Address) -> (Tumbler, Tumbler) {
+    let chain = |last: Nat| {
+        Tumbler::new(
+            home.tumbler()
+                .iter()
+                .cloned()
+                .chain([Nat::from(0u32), last]),
+        )
+        .expect("a home's tumbler is nonempty, so the chain's bound is")
+    };
+    (chain(link_subspace()), chain(link_subspace() + 1u32))
 }
 
 impl LinkState {
@@ -694,13 +736,16 @@ impl LinkState {
     ///
     /// It carries [`stab`](LinkState::stab)'s cost for its first constraint
     /// and `|query spans| × |slot spans|` per survivor for each later one.
-    /// The unconstrained branch is the one store walk left: with no constraint
-    /// to answer from the index, every link the view admits is lifted into the
-    /// returned set, one `Tumbler` clone apiece, before any caller-side filter
-    /// or window applies. That branch is reachable from a descriptor naming
-    /// only non-slot fields — `home` is not a link slot — so a request that
-    /// constrains nothing this module can index still materializes an address
-    /// per link in the store.
+    /// Which constraint comes first is the caller's cost decision, never a
+    /// semantic one. The unconstrained branch is the one store walk left:
+    /// with no constraint to answer from the index, every link the view
+    /// admits is lifted into the returned set, one `Tumbler` clone apiece,
+    /// before any caller-side filter or window applies. That branch is
+    /// reachable from a descriptor constraining nothing — the all-`"any"`
+    /// query — so such a request materializes an address per link in the
+    /// store; a descriptor constraining the home alone is a different read,
+    /// [`LinkState::homed_in`] over each home's own key range, since `home`
+    /// is not a link slot and this combiner never sees it.
     ///
     /// Each query is borrowed, as [`stab`](LinkState::stab) borrows its own:
     /// a constraint is read and dropped, never kept, so a caller assembling
@@ -745,6 +790,214 @@ impl LinkState {
     pub fn type_slice(&self, ty: &Endset, view: View) -> OrdSet<Address> {
         let class = coverage_class(ty);
         self.type_slice_class(&class, view).map(lift).collect()
+    }
+
+    /// Returns the homes holding a link whose address `home` covers.
+    ///
+    /// They are the documents — version members among them, a member being a
+    /// home exactly as its document is — under which some resident link,
+    /// nullified or not, is homed, and which some span of `home` contains:
+    /// the homes a four-set's `home` slot admits (ASN-0121's `athome`, asked
+    /// of each home once rather than of each link), in M1's address order,
+    /// each once however many spans cover it. A span at an account or at the
+    /// node names every such home under it; a span beneath a document names
+    /// none, since it contains no home.
+    ///
+    /// **What this costs.** One seek per home found and one per span, never a
+    /// step per link. A link's address is `home · 0 · s_L · n`
+    /// ([`LinkState::next_link_address`]), so in T1 order a home's links are
+    /// one key range of `links` and the keys' homes ascend with the keys:
+    /// per span the walk seeks the first key at or past the span's start,
+    /// reads that key's home, and seeks again past the home's link chain —
+    /// `O(log n)` apiece — until the home it reaches lies at or past the
+    /// span's reach, which no later key's home can precede. A span at a
+    /// document or a member costs one seek and finds one home; at an account,
+    /// one per document under it that holds links; at the node, one per such
+    /// home on the board. The store's size enters only as the logarithm
+    /// inside each seek. `tests/it/discovery.rs` holds this to answer exactly
+    /// the homes a scan of the store filtered by coverage of each key's home
+    /// would.
+    pub fn homes_under(&self, home: &Endset) -> OrdSet<Address> {
+        let mut homes = OrdSet::new();
+        for span in home.spans() {
+            let (start, reach) = (span.start(), span.reach());
+            let mut cursor = start.clone();
+            while let Some((key, _)) = self.links.range((Included(&cursor), Unbounded)).next() {
+                let at = home_of_key(key);
+                if *at.tumbler() >= reach {
+                    break; // every later key is homed at or past this one
+                }
+                if *at.tumbler() >= *start {
+                    homes.insert(at.clone());
+                }
+                cursor = link_chain_bounds(&at).1;
+            }
+        }
+        homes
+    }
+
+    /// Returns `home`'s own links that satisfy every per-slot overlap
+    /// constraint.
+    ///
+    /// They are the links homed in `home` itself — its link chain
+    /// `home · 0 · s_L · n`, never its members', which are homes of their
+    /// own — that `view` admits and whose every constrained slot overlaps its
+    /// constraint, under the relation [`LinkState::match_links`] tests its
+    /// later constraints by. `constraints` lists only constrained slots, as
+    /// `match_links` takes them, and an empty list is the home's whole
+    /// `view` slice. `view ∈ {Audit, Active}` only (`Default` reads as
+    /// `Active`). In M1's address order, as every §G result is.
+    ///
+    /// **What this costs.** One range over `links` — the home's own key
+    /// range, which a link's address shape makes contiguous — and, per link in
+    /// it, the view's membership test and `|query spans| × |slot spans|` per
+    /// constraint; never a probe of the index and never a step outside the
+    /// home. With [`LinkState::homes_under`] it is the home-first read of a
+    /// four-set whose `home` slot is constrained (M8's descriptor family;
+    /// PUB-7.18): the caller asks its reader of each home once, ahead of this
+    /// range, and skips the range of a home it may not read, so an unreadable
+    /// home costs one test whatever it holds, and a readable one costs its own
+    /// links and no other home's.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `home` is not a document address — the caller's bug, since a
+    /// home is one [`LinkState::homes_under`] answered or M1's `document_of`
+    /// of a link; an account or an element here would name a key range that
+    /// is no home's chain, and an answer off it would read as that home's
+    /// links.
+    pub fn homed_in(
+        &self,
+        home: &Address,
+        constraints: &[(usize, &Endset)],
+        view: View,
+    ) -> OrdSet<Address> {
+        assert!(
+            document_of(home).as_ref() == Some(home),
+            "homed_in: `home` is a document address — one `homes_under` answered"
+        );
+        let active = default_to_active(view) == View::Active;
+        let (lo, hi) = link_chain_bounds(home);
+        self.links
+            .range((Included(&lo), Excluded(&hi)))
+            .filter(|(t, _)| !(active && self.nullified(t)))
+            .filter(|(_, link)| {
+                constraints
+                    .iter()
+                    .all(|&(slot, query)| slot_overlaps(link, slot, query))
+            })
+            .map(|(t, _)| lift(t))
+            .collect()
+    }
+
+    /// Returns the links homed where `home` covers — the home slot's clause of
+    /// a four-set, answered for every home at once.
+    ///
+    /// It is [`LinkState::homes_under`] composed with
+    /// [`LinkState::homed_in`] under no link-slot constraint: the links whose
+    /// home some span of `home` contains and `view` admits, in M1's address
+    /// order — which is the order of the homes with each home's chain inside
+    /// it, so the ranges concatenate and nothing is merged. Exactly what a
+    /// walk of the store filtered by coverage of each key's home would
+    /// answer, at the cost of the covered homes' seeks and their links alone;
+    /// `tests/it/discovery.rs` holds the two to agree. A caller that reads
+    /// for a reader composes the two primitives itself, asking its predicate
+    /// of each home between them.
+    pub fn homed_under(&self, home: &Endset, view: View) -> OrdSet<Address> {
+        self.homes_under(home)
+            .iter()
+            .fold(OrdSet::new(), |acc, at| acc.union(self.homed_in(at, &[], view)))
+    }
+
+    /// Returns how many links a `stab` at `TYPE` with `ty` would reach,
+    /// nullified or not — `None` where `ty` is not address-denoting.
+    ///
+    /// Counted off the typed slices, never off the index or the store. A
+    /// link's address-denoting type slot overlaps `ty` exactly when some
+    /// address its class denotes is a prefix of, or extends, some address
+    /// `ty` denotes — the named type itself, the subtypes beneath it and the
+    /// wider types above it — so the count is the sum of the sizes of the
+    /// classes in that relation, one prefix test per denoted address per
+    /// class. A class that denotes no address (a type slot built from a
+    /// content extent) is counted whole: whether its spans overlap `ty` is
+    /// not decided here, and an over-count errs toward another slot driving.
+    /// `O(classes)`, a class being a distinct type the board has deposited;
+    /// the audit count, so a nullified link counts as the stab would reach
+    /// it before a view dropped it.
+    ///
+    /// For M8's choice of which constraint drives a four-set's
+    /// [`match_links`](LinkState::match_links): a TYPE constraint's hits are
+    /// known here at the cost of the class count, where a FROM or TO
+    /// constraint's are known only by the stab itself.
+    /// `tests/it/discovery.rs` holds this to the stab's own count.
+    pub fn type_hits(&self, ty: &Endset) -> Option<usize> {
+        if !ty.is_address_denoting() {
+            return None;
+        }
+        let named: Vec<&Tumbler> = ty.addrs().collect();
+        let related = |class: &CoverageClass| {
+            class.denoted().is_none_or(|minimal| {
+                minimal
+                    .iter()
+                    .any(|u| named.iter().any(|t| is_prefix(u, t) || is_prefix(t, u)))
+            })
+        };
+        Some(
+            self.hints
+                .type_slices
+                .iter()
+                .filter(|(class, _)| related(class))
+                .map(|(_, slice)| slice.len())
+                .sum(),
+        )
+    }
+
+    /// Returns the `ty`-typed tuples whose `slot` overlaps `query` — Observe
+    /// answered from the index.
+    ///
+    /// It is [`stab`](LinkState::stab)'s hits restricted to the typed slice
+    /// `ty` names, each as the [`Tuple`] [`LinkState::observe`] hands over, in
+    /// ascending tuple-address order. The relation is the index's overlap,
+    /// not `observe`'s coverage of a probe: a probe `p` asked as the unit
+    /// query `enc([p])` reaches every tuple whose slot covers `p` and, beside
+    /// them, the tuples whose slot starts strictly inside `p`'s subtree, which
+    /// a reader after coverage drops by a test of its own. `view ∈ {Audit,
+    /// Active}` only (`Default` reads as `Active`).
+    ///
+    /// **What this costs.** The stab's probes and hits — `O(log n)` plus a
+    /// step per link whose `slot` overlaps the query, whatever its type —
+    /// then one slice-membership test per hit, and a lift and two endset
+    /// clones per member; never a walk of the class, which `observe` pays
+    /// for every probe. M8's lineage pair asks it at a link's unit span, so a
+    /// claim's enumeration costs the links naming that link and not the
+    /// supersession class. `tests/it/discovery.rs` holds it to `observe`'s
+    /// own answer after the reader's coverage test.
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
+    pub fn stab_typed(&self, ty: &Endset, slot: usize, query: &Endset, view: View) -> Vec<Tuple> {
+        let class = coverage_class(ty);
+        let active = default_to_active(view) == View::Active;
+        let slice = self.hints.type_slices.get(&class);
+        self.hints
+            .spanfilade
+            .stab(slot, query)
+            .into_iter()
+            .filter(|t| !(active && self.nullified(t)))
+            .filter(|t| slice.is_some_and(|s| s.contains(*t)))
+            .map(|t| {
+                let link = self.link_at(t);
+                Tuple {
+                    addr: lift(t),
+                    from: link.from_slot().clone(),
+                    to: link.to_slot().clone(),
+                }
+            })
+            .collect()
     }
 
     // ───────────────────────── internal helpers ─────────────────────────

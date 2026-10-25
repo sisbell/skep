@@ -1,12 +1,19 @@
 //! The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4 §2)
 //! through the assembled engine: `World::edition_claims` composes M7's audit
-//! reads over the pinned edition class — a `to`-range lookup over
-//! UNSUPERSEDED claims WHETHER OR NOT RETRACTED, each row naming its home
-//! (the edition) and stating its retraction. The home rule is M10's and the
-//! wire shapes are the daemon's (their suites); what is tested here is the
-//! CLASS the world answers, and that it is the class and nothing narrower.
+//! reads over the pinned edition class — the class driving, the `to` range
+//! narrowing it to the claims on the target — over UNSUPERSEDED claims
+//! WHETHER OR NOT RETRACTED, each row naming its home (the edition) and
+//! stating its retraction. The home rule is M10's and the wire shapes are the
+//! daemon's (their suites); what is tested here is the CLASS the world
+//! answers, that it is the class and nothing narrower, and that the class is
+//! what the lookup pays for — counted on the heap, by the allocator this
+//! module installs for the binary, which counts the bytes each thread asks
+//! for so a cost claim is a number rather than a clock reading.
 
 use crate::common;
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 
 use common::*;
 use skep_address::{document_of, parent, subtree_of, Address, Span};
@@ -14,7 +21,7 @@ use skep_arrangement::{deposit_class_types, Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
-use skep_links::{enc, Endset, HasLinks, Link, SlotArg, View, TYPE};
+use skep_links::{enc, Endset, HasLinks, Link, SlotArg, View, TO, TYPE};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 /// The EDITION class type address (commons-seeding.md row `3.14 | edition`,
@@ -37,6 +44,69 @@ fn t_edition_abridged() -> Address {
 /// The GRANTS class — a foreign type, outside the edition class.
 fn t_grant() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90])
+}
+
+/// An ordinary commons type nothing in the engine reads — the type of the
+/// flood of links the cost law deposits TO the target, outside the edition
+/// class and outside every class a fold interprets.
+fn t_foreign() -> Address {
+    addr(&[1, 1, 0, 1, 0, 1, 0, 3, 91])
+}
+
+thread_local! {
+    // `const`-initialized, and a `Cell<u64>` needs no destructor, so the slot
+    // is a plain thread-local with no lazy initializer and no destructor to
+    // register: the allocator can touch it without reentering itself.
+    static HEAP_BYTES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Wrapping, so the count can never panic inside the allocator, which must
+/// not unwind.
+fn count(bytes: usize) {
+    HEAP_BYTES.with(|n| n.set(n.get().wrapping_add(bytes as u64)));
+}
+
+/// `System`, counting the heap bytes each thread asks for — the test
+/// binary's global allocator, installed here because this is the one suite
+/// of the binary that counts, and `main.rs` holds module declarations alone.
+struct CountingSystem;
+
+// SAFETY: every method forwards its own arguments to `System` unchanged; the
+// one addition, a thread-local wrapping add, neither allocates nor unwinds.
+unsafe impl GlobalAlloc for CountingSystem {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        count(layout.size());
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        count(layout.size());
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        count(new_size);
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static COUNTING_SYSTEM: CountingSystem = CountingSystem;
+
+/// The heap bytes `f`'s SECOND run asks for on this thread: `f` runs once
+/// unmeasured and then once measured, so nothing its first run sets up is
+/// counted against the call. Two such numbers taken of one read over two
+/// worlds differ by the work the read does differently in them, and by
+/// nothing else.
+fn settled_heap_bytes<T>(f: impl Fn() -> T) -> (T, u64) {
+    let _ = f();
+    let before = HEAP_BYTES.with(Cell::get);
+    let value = f();
+    (value, HEAP_BYTES.with(Cell::get).wrapping_sub(before))
 }
 
 const A: PrincipalId = PrincipalId(1);
@@ -488,6 +558,58 @@ fn a_claim_naming_an_ancestor_of_the_target_is_a_row_of_its_lookup() {
             "{target}: the claims naming its account and its node are rows of its lookup"
         );
     }
+}
+
+/// THE CLASS DRIVES, counted — the cost paragraph's first term: the lookup
+/// pays for the edition class and not for the links the target draws from
+/// other hands. Two edition claims on the target sit beside a flood of
+/// foreign-typed links TO the same target — fifty in one world, five hundred
+/// in the other — and the lookup's heap is the same in both, where a lookup
+/// that stabbed the `to` range first lifts every link of the flood and tests
+/// its type. The answer is the same two rows in both worlds, and the control
+/// — the same two constraints with the flood's type in the class's place —
+/// grows with the flood, so the equality is the order's doing.
+#[test]
+fn the_lookup_pays_for_the_class_and_not_for_the_links_the_target_draws() {
+    let board_with = |flood: u32| {
+        let engine = mem_engine();
+        let board = board(&engine);
+        let c1 = claim(&engine, &board.e1, &board.target, &t_edition());
+        let c2 = claim(&engine, &board.e2, &board.target, &t_edition_expanded());
+        for _ in 0..flood {
+            claim(&engine, &board.e1, &board.target, &t_foreign());
+        }
+        (engine, board, c1, c2)
+    };
+    let (fewer, more) = (board_with(50), board_with(500));
+    for (engine, board, c1, c2) in [&fewer, &more] {
+        assert_eq!(
+            world(engine).edition_claims(&board.target),
+            vec![row(c1, &board.e1, &board.target, true), row(c2, &board.e2, &board.target, true)],
+            "the two claims, whatever the flood"
+        );
+    }
+    let heap_of = |(engine, board, _, _): &(Engine, Board, Address, Address)| {
+        let w = world(engine);
+        settled_heap_bytes(|| w.edition_claims(&board.target).len()).1
+    };
+    assert_eq!(
+        heap_of(&more),
+        heap_of(&fewer),
+        "the class drives: a link the target draws from another type costs the lookup nothing"
+    );
+    // The control: the same `to` range narrowed by the flood's own type pays
+    // for the flood, whichever side drives.
+    let flood_of = |(engine, board, _, _): &(Engine, Board, Address, Address)| {
+        let w = world(engine);
+        let to_range = Endset::from_spans([subtree_of(board.target.tumbler())]);
+        let type_range = Endset::from_spans([subtree_of(t_foreign().tumbler())]);
+        settled_heap_bytes(|| {
+            w.links().match_links(&[(TYPE, &type_range), (TO, &to_range)], View::Audit).len()
+        })
+        .1
+    };
+    assert!(flood_of(&more) > flood_of(&fewer), "the control pays for the flood");
 }
 
 /// …and the ANSWER's size is the DEPOSITOR's, not the request's: a row

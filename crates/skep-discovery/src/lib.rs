@@ -4,9 +4,10 @@
 //! a content region it answers *which links touch here*; given a four-set
 //! descriptor it answers *which links match*; and it counts, paginates,
 //! projects, retrieves endsets, previews delete-orphaning, and traces
-//! supersession lineage — all by composing M7's spanfilade and typed reads
-//! (`stab`/`match_links`/`observe`), M5's arrangement, and M3's registry
-//! over ONE M2 snapshot per operation. One thing well: **turn upstream
+//! supersession lineage — all by composing M7's spanfilade, home-range and
+//! typed reads (`stab`/`match_links`, `homes_under`/`homed_in`,
+//! `stab_typed`), M5's arrangement, and M3's registry over ONE M2 snapshot
+//! per operation. One thing well: **turn upstream
 //! link/arrangement/registry state into the answers readers ask, owning no
 //! authoritative state and no index** — every answer is recomputed from
 //! upstream on each call, so present-tense correctness (ASN-0108 W7) is free
@@ -131,10 +132,15 @@
 //!
 //! THE PREDICATE'S CONTRACT. M8 asks `readable` only about DOCUMENT
 //! addresses: the home of each candidate link a result-set read admits past
-//! its other filters, and the home of the pointwise pair's `a`, asked before
-//! anything has established that `a` is a link. It asks at most ONCE per
-//! candidate — a window no further than it walks — and never to judge a
-//! named `d`; collapsing repeated homes is the caller's (PUB-7.15,
+//! its other filters; each home a descriptor's `home` slot covers that holds
+//! links, asked ONCE ahead of that home's links (PUB-7.18) and ahead of the
+//! link-slot tests, so an unreadable home's links are never read and a
+//! window with a home slot asks of every home under it however far it pages;
+//! and the home of the pointwise pair's `a`, asked before anything has
+//! established that `a` is a link. It asks at most ONCE per candidate where a
+//! region or a link slot drives — a window no further than it walks — and
+//! once per distinct home where the home slot drives, and never to judge a
+//! named `d`; collapsing repeated homes is otherwise the caller's (PUB-7.15,
 //! PUB-7.16). In return, `readable` must answer each document the same way
 //! for as long as a law here compares its answers: every identity stated
 //! "under the same `readable`" — `count = |findlinks|`, a window that drains
@@ -191,10 +197,12 @@
 //!
 //! What each read walks: M7's link store, counted in M7's primitives — M7
 //! answers a `stab` from its coverage index, one probe per query span plus
-//! one step per link it finds, and `match_links` answers its first constraint
-//! by a `stab` and its unconstrained form by a walk of the whole store — and
-//! M5's arrangement, where a read walks one document's runs or joins against
-//! them.
+//! one step per link it finds; `match_links` answers its first constraint by
+//! a `stab` and its unconstrained form by a walk of the whole store;
+//! `homes_under` seeks the store's key order once per home it finds, and
+//! `homed_in` reads one home's links as one key range; `stab_typed` is a
+//! `stab` cut to one typed slice — and M5's arrangement, where a read walks
+//! one document's runs or joins against them.
 //! A caller that admission-controls these reads — the daemon's scan pool
 //! does — prices every one of them from this list, those that walk no link
 //! store included, so a change to what any line says of either store is a
@@ -220,11 +228,20 @@
 //!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
 //!   adds one `readlink` per candidate the home rule admits.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
-//!   [`window_ftt_on`]) — one `match_links`, the smallest constraint driving
-//!   its `stab` and the rest narrowing what that finds (a walk of the whole
-//!   active slice when nothing is constrained); none when the descriptor is
-//!   unsatisfiable. The home slot is a post-filter and narrows nothing M7
-//!   walks.
+//!   [`window_ftt_on`]) — with the home slot constrained: one `homes_under`,
+//!   a seek per home holding links under the slot's spans, then one test of
+//!   the reader's predicate per such home and, for each home it admits, one
+//!   `homed_in` — that home's own key range, each link in it tested against
+//!   the link-slot constraints — so a home slot naming a document or a member
+//!   reads that home's links alone, and one naming an account or the node
+//!   reads every home's under it, one range apiece, never the links of a
+//!   home it does not name. With the home slot `any`: one `match_links`, the
+//!   cheapest constraint driving its `stab` and the rest narrowing what that
+//!   finds — a TYPE constraint whose class holds at most 1024 links,
+//!   counted off the typed slices by `type_hits`, drives ahead of the other
+//!   slots, which otherwise stand in FROM, TO, TYPE order — and a walk of the
+//!   whole active slice when nothing is constrained. None when the
+//!   descriptor is unsatisfiable.
 //! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
 //!   over the retained (none when nothing is retained), and none at all for a
 //!   request past the run budget. Ahead of every one, each request past the
@@ -233,12 +250,13 @@
 //!   beside it, two reads of M5's `#runs` when `d` alone is past it and the
 //!   resolution of `d`'s content otherwise.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
-//!   `readlink`, which answers `[]` for a non-link key and stops there;
-//!   otherwise one `observe` of the supersession class — a walk of that
-//!   class's typed slice, one coverage test per claim, and no store walk —
-//!   then, per observed claim whose `old` and `new` are defined, one
-//!   `is_active` and one comparison of the probed endpoint with the key,
-//!   ahead of the home rule.
+//!   `stab_typed` at the key's own span on the claim's slot, cut to the
+//!   supersession class: one probe of the coverage index and a step per link
+//!   naming or covering the key at that slot, no walk of the class and none
+//!   of the store, so a key no claim names costs the probe alone, resident or
+//!   not; where it finds a claim, one `readlink` of the key, then, per claim
+//!   whose `old` and `new` are defined, one `is_active` and one comparison of
+//!   the probed endpoint with the key, ahead of the home rule.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's `#runs` for the
@@ -258,8 +276,9 @@
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * the spanfilade / coverage index, the per-slot matcher, the AND-of-ORs
-//!   combiner and the typed observation — M7's `stab`/`match_links`/`observe`
-//!   (Conflicts #1); `coverage(a, i)` is NOT re-exposed — it is exactly M7's
+//!   combiner, the home ranges and the typed stab — M7's
+//!   `stab`/`match_links`/`homes_under`/`homed_in`/`stab_typed` (Conflicts
+//!   #1); `coverage(a, i)` is NOT re-exposed — it is exactly M7's
 //!   `followlink(a, i)`;
 //! * content bytes (M4); provenance R and every R-keyed query —
 //!   SHOWDELETIONS / FINDDOCSCONTAINING are M6's; the global-ghost / LP17

@@ -1,13 +1,17 @@
 //! §3 — the four-set descriptor query: its unit, zero and conjunction over
 //! the four slots, the home slot's prefix coverage, the one `sat` every
-//! read-out shares, and its census against the region family's.
+//! read-out shares, its census against the region family's, and what each
+//! shape of it costs, counted: a home slot reads the home's links alone, and
+//! a small type class drives ahead of a flooded slot.
 
 use crate::common;
+use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::Address;
 use skep_arrangement::Vstream;
-use skep_discovery::{FourSet, SlotSpec};
+use skep_discovery::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec};
+use skep_kernel::Kernel;
 use skep_links::{enc, Endset, HasLinks, LinkWriter};
 
 #[test]
@@ -90,46 +94,181 @@ fn the_descriptor_states_its_own_zero() {
     }
 }
 
-/// §3 — the conjunction is handed to M7 smallest constraint first, because
-/// M7 answers the first by one probe of its coverage index per query span and
+/// §3 — the conjunction is handed to M7 cheapest constraint first — a TYPE
+/// constraint whose class is small moves ahead of the slots written before
+/// it, because M7 answers the first by one probe of its coverage index and
 /// narrows what it finds with the rest. That order is cost, and no answer
-/// shows it. What an answer
-/// can show is the one way a reordering could move it: by parting an endset
-/// from its slot. A descriptor whose big constraint is FROM and small is TO
-/// answers the links it would answer unsorted, and its MIRROR — the same two
-/// endsets in the other slots — answers different links, not the same ones.
-/// A sort that lost the pairing would make the two agree.
+/// shows it. What an answer can show is the one way a reordering could move
+/// it: by parting an endset from its slot. A descriptor whose FROM is a
+/// content address and whose TYPE is a type address answers the link it would
+/// answer unsorted, and its MIRROR — the same two endsets in the other slots —
+/// answers a different link, not the same one. A reordering that lost the
+/// pairing would make the two agree.
 #[test]
 fn ftt_orders_its_constraints_without_parting_an_endset_from_its_slot() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let reads = Reads(&k);
-    link(&store, &doc1(), &[ca(1)], &[ca(2)]); // la(1): from ca(1), to ca(2)
-    link(&store, &doc1(), &[ca(2)], &[ca(1)]); // la(2): the mirror
+    let straight = link(&store, &doc1(), &[ca(1)], &[ca(2)]); // from ca(1), typed rel
+    let mirror = typed_link(&store, &doc1(), &[rel()], &[ca(2)], &ca(1)); // from rel, typed ca(1)
 
-    // A many-span constraint and a one-span one, so the sort actually
-    // reorders rather than leaving the list as written.
-    let wide = enc(&[ca(1), ca(101), ca(102), ca(103), ca(104)]);
-    let narrow = enc(&[ca(2)]);
-    assert!(wide.len() > narrow.len(), "the sort has something to do");
+    // Each type names a class of one link, so the TYPE constraint is the one
+    // that moves to the front, ahead of the FROM written before it: the
+    // reordering has something to do.
+    let snap = k.snapshot();
+    for ty in [rel(), ca(1)] {
+        assert_eq!(
+            snap.world().links().type_hits(&enc([&ty])),
+            Some(1),
+            "{ty}: a class of one, which drives"
+        );
+    }
 
-    let wide_from = FourSet {
-        from: SlotSpec::Spans(wide.clone()),
-        to: SlotSpec::Spans(narrow.clone()),
+    let content_from = FourSet {
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ty: SlotSpec::Spans(rel_ty()),
         ..FourSet::any()
     };
-    let wide_to = FourSet {
-        from: SlotSpec::Spans(narrow),
-        to: SlotSpec::Spans(wide),
+    let type_from = FourSet {
+        from: SlotSpec::Spans(rel_ty()),
+        ty: SlotSpec::Spans(enc([&ca(1)])),
         ..FourSet::any()
     };
     // Each descriptor names exactly one of the two links, and they are
     // different links: the endsets stayed with the slots they were written in
     // however the list was ordered on the way to M7.
-    assert_eq!(reads.findlinks_ftt(&wide_from), vec![la(1)]);
-    assert_eq!(reads.findlinks_ftt(&wide_to), vec![la(2)]);
-    assert_eq!(reads.count_ftt(&wide_from), 1);
+    assert_eq!(reads.findlinks_ftt(&content_from), vec![straight]);
+    assert_eq!(reads.findlinks_ftt(&type_from), vec![mirror]);
+    assert_eq!(reads.count_ftt(&content_from), 1);
+}
+
+/// A world of `flood` links of the suite's relation type homed in doc2, each
+/// FROM doc1's position 1, beside what `seed` deposits — the fixture the cost
+/// laws read twice, at two floods, so the one thing that differs between the
+/// two worlds is the population a read must not pay for.
+fn flooded(flood: u32, seed: impl Fn(&LinkWriter<'_, World>)) -> Kernel<World> {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    seed(&store);
+    for i in 0..flood {
+        link(&store, &doc2(), &[ca(1)], &[ca(1_000 + i)]);
+    }
+    k
+}
+
+/// The heap bytes a read of `k`'s current state asks for, on its second run,
+/// so nothing a first call sets up is counted against it.
+fn heap_of<T>(k: &Kernel<World>, read: impl Fn(&Kernel<World>) -> T) -> u64 {
+    settled_heap_bytes(|| read(k)).1
+}
+
+/// §3 — THE HOME SLOT DRIVES, counted (PUB-7.18; #468): a home-constrained
+/// descriptor — the home alone, or the home beside a link slot — costs the
+/// home's own links and nothing of a passage's flood homed elsewhere. The
+/// home with twenty links on position 1 is read beside a thousand links on
+/// the same position homed in another document, and the read's heap is the
+/// same as beside a hundred: a read that stabbed the position first and
+/// dropped the flood by home afterwards, or walked the store, pays for every
+/// one of them, which the counts show at once where a clock would not. The
+/// enumeration, the count and the window are each held, and the answer is
+/// the same twenty links in both worlds.
+#[test]
+fn a_home_constrained_descriptor_pays_for_the_homes_links_and_not_for_the_passages() {
+    const HOMED: u32 = 20;
+    let twenty_in_doc1 = |store: &LinkWriter<'_, World>| {
+        for i in 0..HOMED {
+            link(store, &doc1(), &[ca(1)], &[ca(100 + i)]);
+        }
+    };
+    let (fewer, more) = (flooded(100, twenty_in_doc1), flooded(1_000, twenty_in_doc1));
+    let home_only = FourSet {
+        home: SlotSpec::Spans(enc([&doc1()])),
+        ..FourSet::any()
+    };
+    let home_and_from = FourSet {
+        home: SlotSpec::Spans(enc([&doc1()])),
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ..FourSet::any()
+    };
+    for q in [&home_only, &home_and_from] {
+        let expected: Vec<Address> = (1..=HOMED).map(la).collect();
+        for k in [&fewer, &more] {
+            assert_eq!(Reads(k).findlinks_ftt(q), expected, "the home's twenty, {q:?}");
+        }
+        for (what, read) in [
+            ("findlinks_ftt", &(|k: &Kernel<World>| {
+                findlinks_ftt_on(&k.snapshot(), q, &every_home).len()
+            }) as &dyn Fn(&Kernel<World>) -> usize),
+            ("count_ftt", &|k: &Kernel<World>| count_ftt_on(&k.snapshot(), q, &every_home)),
+            ("window_ftt", &|k: &Kernel<World>| {
+                window_ftt_on(&k.snapshot(), q, None, 5, &every_home).batch.len()
+            }),
+        ] {
+            assert_eq!(
+                heap_of(&more, read),
+                heap_of(&fewer, read),
+                "{what} over {q:?}: a link homed elsewhere costs the home's read nothing"
+            );
+        }
+    }
+    // The control: a descriptor that does not name the home stabs the
+    // position and pays for the flood, so the equality above is the home
+    // slot's doing and not a read that allocates nothing.
+    let from_only = FourSet {
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ..FourSet::any()
+    };
+    let read = |k: &Kernel<World>| findlinks_ftt_on(&k.snapshot(), &from_only, &every_home).len();
+    assert!(
+        heap_of(&more, read) > heap_of(&fewer, read),
+        "the control pays for the flood"
+    );
+}
+
+/// §3 — THE CHEAPEST CONSTRAINT DRIVES, counted (#650): a descriptor naming
+/// a flooded position in `from` and a type of two links in `ty` costs the
+/// type's class, not the position's flood. A thousand links of the suite's
+/// relation type FROM position 1 sit beside two of a second type FROM the
+/// same position; the read for the second type answers the two in both
+/// worlds, and its heap beside a thousand is its heap beside a hundred. The
+/// same two slots with the flood's own type in `ty` is the control: that
+/// class IS the flood, so the read pays for it whichever slot drives.
+#[test]
+fn a_type_constraint_with_a_small_class_drives_ahead_of_a_flooded_from_slot() {
+    let two_of_the_second_type = |store: &LinkWriter<'_, World>| {
+        typed_link(store, &doc1(), &[ca(1)], &[ca(101)], &rel2());
+        typed_link(store, &doc1(), &[ca(1)], &[ca(102)], &rel2());
+    };
+    let (fewer, more) = (
+        flooded(100, two_of_the_second_type),
+        flooded(1_000, two_of_the_second_type),
+    );
+    let read_with = FourSet {
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ty: SlotSpec::Spans(enc([&rel2()])),
+        ..FourSet::any()
+    };
+    for k in [&fewer, &more] {
+        assert_eq!(Reads(k).findlinks_ftt(&read_with), vec![la(1), la(2)]);
+    }
+    let read = |k: &Kernel<World>| findlinks_ftt_on(&k.snapshot(), &read_with, &every_home).len();
+    assert_eq!(
+        heap_of(&more, read),
+        heap_of(&fewer, read),
+        "the two-link class drives: the flood from the same position costs nothing"
+    );
+    let flooded_type = FourSet {
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ty: SlotSpec::Spans(rel_ty()),
+        ..FourSet::any()
+    };
+    let read = |k: &Kernel<World>| findlinks_ftt_on(&k.snapshot(), &flooded_type, &every_home).len();
+    assert!(
+        heap_of(&more, read) > heap_of(&fewer, read),
+        "the control: the flood's own type is the flood"
+    );
 }
 
 /// §3 — Θ constrains like the other link slots: a descriptor naming a type

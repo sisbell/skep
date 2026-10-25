@@ -173,16 +173,20 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
 /// one: asked only of a candidate's HOME, at most once per candidate
 /// (PUB-7.15, PUB-7.16) — a window asks no further than it walks, neither
 /// beyond its `n` nor behind its cursor, and a read asks only past its OTHER
-/// filters — and of the pointwise pair's `a` alone, never of a named `d`.
-/// Under the pure predicates every other test passes, a read that asked a
-/// link, asked once per slot, asked the named document, or asked ahead of the
-/// residence test answers exactly as the right one does; a predicate that
-/// records what it is asked is where each shows.
+/// filters — and of the pointwise pair's `a` alone, never of a named `d`;
+/// and, where a descriptor's HOME SLOT drives, once per distinct home under
+/// the slot that holds links, AHEAD of that home's links and of the link-slot
+/// tests (PUB-7.18), a window included. Under the pure predicates every other
+/// test passes, a read that asked a link, asked once per slot, asked the named
+/// document, asked ahead of the residence test, or asked a home once per link
+/// it holds answers exactly as the right one does; a predicate that records
+/// what it is asked is where each shows.
 ///
 /// Each link here touches the region through FROM and TO both, which is what
-/// separates one ask per candidate from one ask per `(candidate, slot)`; and
-/// `d` is itself a home, so a preview that consulted its `d` shows as a
-/// fourth ask rather than as a different address.
+/// separates one ask per candidate from one ask per `(candidate, slot)`; doc1
+/// holds two of the three links, which is what separates one ask per home
+/// from one per candidate; and `d` is itself a home, so a preview that
+/// consulted its `d` shows as a fourth ask rather than as a different address.
 #[test]
 fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     let k = kernel();
@@ -277,6 +281,38 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         vec![la2(1)]
     );
     assert_eq!(asked.take(), vec![doc2()]);
+    // Where the HOME SLOT drives, the rule is asked once per distinct home
+    // under it, in home order, ahead of that home's links (PUB-7.18) — never
+    // once per candidate: doc1 holds two of the three links and is asked
+    // once, in the enumeration, the count and the window alike; and the
+    // window of one asks of both homes though it pages one link, each home
+    // being admitted before its links are read.
+    let under_the_account = FourSet {
+        home: SlotSpec::Spans(enc(&[a(&[1, 0, 1])])),
+        ..FourSet::any()
+    };
+    assert_eq!(findlinks_ftt_on(&snap, &under_the_account, &recorder), candidates);
+    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    assert_eq!(count_ftt_on(&snap, &under_the_account, &recorder), 3);
+    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    assert_eq!(
+        window_ftt_on(&snap, &under_the_account, None, 1, &recorder).batch,
+        vec![la(1)]
+    );
+    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    // …and AHEAD of the link-slot tests: a home none of whose links meets the
+    // FROM constraint is asked all the same, once, before its links are
+    // tested, so an unreadable home's links are never read at all.
+    let under_the_account_from_elsewhere = FourSet {
+        home: SlotSpec::Spans(enc(&[a(&[1, 0, 1])])),
+        from: SlotSpec::Spans(enc(&[ca(2)])),
+        ..FourSet::any()
+    };
+    assert_eq!(
+        findlinks_ftt_on(&snap, &under_the_account_from_elsewhere, &recorder),
+        vec![]
+    );
+    assert_eq!(asked.take(), vec![doc1(), doc2()]);
     // The pointwise pair asks `a`'s home once, and of a homeless `a` nothing.
     project_on(&snap, &la2(1), FROM, &doc1(), &recorder).expect("project");
     assert_eq!(asked.take(), vec![doc2()]);

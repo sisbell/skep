@@ -22,10 +22,17 @@
 //!
 //! ## The lookup
 //!
-//! A `to`-range lookup — the target's subtree, M1's `subtree_of` span — and
-//! a type-range lookup over the class's subtree, both through `match_links`
-//! under `View::Audit` (M7's public reads alone: `match_links`, then
-//! `readlink`, `succs` and `is_active` per hit).
+//! A type-range lookup over the class's subtree, narrowed by a `to`-range
+//! lookup — the target's subtree, M1's `subtree_of` span — both through
+//! `match_links` under `View::Audit` (M7's public reads alone: `match_links`,
+//! then `readlink`, `succs` and `is_active` per hit). The type range is
+//! handed to M7 first, so it drives the stab and the `to` range narrows what
+//! it finds: the class is the smaller side — every edition claim on the board
+//! is in it, where the `to` range reaches every link whose `to` touches the
+//! target, edition claim or not, from every hand — and the cheapest
+//! constraint driving is the rule M8's descriptor family applies to the same
+//! combiner, so the lookup pays for the class and never for the links the
+//! target draws. An AND is order-free: the order moves work, never a row.
 //!
 //! The `to` test is M7's overlap regime and not denotation, which is what
 //! makes a document name every claim on it or on any version of it, and a
@@ -81,32 +88,37 @@ impl World {
     /// answer is the answer for a target nothing claims.
     ///
     /// **Cost.** Per call and uncached, it comes in four terms — the first
-    /// paid whatever `target` names, the second the caller's and every
+    /// the board's whatever `target` names, the second the caller's and every
     /// depositor's together, the last two the store's — so this figure is not
     /// read off the request:
     ///
-    /// * The probe: `match_links` answers its first constraint, the `to`
+    /// * The probe: `match_links` answers its first constraint, the type
     ///   range, by one `stab` of M7's coverage index — a probe for the range's
-    ///   one span, logarithmic in the store — and narrows what that finds by
-    ///   the type range, one overlap test per type-slot span of each link it
-    ///   found, retracted links included, each slot up to
-    ///   `skep_links::MAX_SLOT_SPANS` spans. So a call pays for the links its
-    ///   `to` range reaches, never for the store's size.
-    /// * The hits. The `to` range is `target`'s whole subtree and `target`'s
-    ///   level is unrestricted here, so the breadth is the caller's: a version
-    ///   member ranges over itself, a document over its versions, an account
-    ///   over every document under it and a node over every account under
-    ///   that — one address of a few components asking after every edition
-    ///   claim in the store. Nothing below narrows by level, because the
-    ///   containment regime that makes a document name its versions' claims is
-    ///   the same arithmetic at every tier. The account- and node-tier
-    ///   breadths are a direct caller's alone: M10's `PublicationWorld` seam
-    ///   asks only after its own registration check, so through it `target` is
-    ///   one registered document. That bounds the caller's share of the hits
-    ///   and nothing more: overlap admits every claim whose `to` names an
-    ///   ancestor of `target` too, so one address-form deposit naming a node is
-    ///   a hit of every lookup beneath it, and how many hits a registered
-    ///   document draws is the depositors' choice, board-wide
+    ///   one span, logarithmic in the store, and a step per link whose type
+    ///   slot overlaps the class, its subtypes' included — and narrows what
+    ///   that finds by the `to` range, one overlap test per `to`-slot span of
+    ///   each link it found, retracted links included, each slot up to
+    ///   `skep_links::MAX_SLOT_SPANS` spans. So a call pays for the edition
+    ///   class — every claim of it on the board, whatever target each names,
+    ///   which is the depositors' choice board-wide — never for the links the
+    ///   target draws from other hands and never for the store's size
+    ///   (`the_lookup_pays_for_the_class_and_not_for_the_links_the_target_draws`).
+    /// * The rows. The `to` range is `target`'s whole subtree and `target`'s
+    ///   level is unrestricted here, so which of the class's claims survive
+    ///   the narrowing is the caller's: a version member keeps the claims on
+    ///   itself, a document those on it and its versions, an account those on
+    ///   every document under it and a node those on every account under that
+    ///   — one address of a few components asking after every edition claim
+    ///   in the store. Nothing below narrows by level, because the containment
+    ///   regime that makes a document name its versions' claims is the same
+    ///   arithmetic at every tier. The account- and node-tier breadths are a
+    ///   direct caller's alone: M10's `PublicationWorld` seam asks only after
+    ///   its own registration check, so through it `target` is one registered
+    ///   document. That bounds the caller's share of the rows and nothing
+    ///   more: overlap admits every claim whose `to` names an ancestor of
+    ///   `target` too, so one address-form deposit naming a node is a row of
+    ///   every lookup beneath it, and how many rows a registered document
+    ///   draws is the depositors' choice, board-wide
     ///   (`a_claim_naming_an_ancestor_of_the_target_is_a_row_of_its_lookup`).
     /// * Per hit, one `readlink`, one `in_edition_class` walk, one `succs` over
     ///   the shipped supersession class, one `document_of` and one
@@ -136,8 +148,10 @@ impl World {
         let to_range = Endset::from_spans([subtree_of(target.tumbler())]);
         let type_range = Endset::from_spans([subtree_of(edition_class.tumbler())]);
         let supersedes = links.reserved_type(ShippedType::Supersedes);
+        // The class drives the stab and the target narrows it: the smaller
+        // side first, as the module docs state.
         links
-            .match_links(&[(TO, &to_range), (TYPE, &type_range)], View::Audit)
+            .match_links(&[(TYPE, &type_range), (TO, &to_range)], View::Audit)
             .into_iter()
             .filter_map(|claim| {
                 // Residency is M7's stated postcondition on `match_links` —

@@ -1,9 +1,11 @@
 //! §Internal design — the home projection and the home rule: the one place a
 //! link's HOME is computed — `home(a)`, M1's `document_of` (EL8b) — and the
 //! one place the caller's DOCUMENT predicate is asked about it. Every read
-//! that answers for a reader asks through [`home_readable`]; asked of a link
-//! directly, the predicate admits every link, which is why the composition
-//! has an address of its own.
+//! that answers for a reader asks through [`home_readable`], at a link's
+//! identity, or through [`home_admitted`], of a home the descriptor's `home`
+//! slot names ahead of that home's links; asked of a link directly, the
+//! predicate admits every link, which is why the composition has an address
+//! of its own.
 
 use skep_address::{document_of, Address};
 
@@ -39,4 +41,24 @@ pub(crate) fn home_of(a: &Address) -> Option<Address> {
 /// exactly `readable(home(a))`.
 pub(crate) fn home_readable(readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
     home_of(a).is_none_or(|home| readable(&home))
+}
+
+/// THE HOME RULE ASKED OF A HOME (PUB-6.13, at the grain PUB-7.18 pins): may
+/// the reader read `home` — a document the descriptor's `home` slot covers
+/// and the store says holds links — asked ONCE, ahead of that home's links?
+/// The predicate's own question, so no projection composes with it: the one
+/// place it is asked of a document that is not a link's home read off the
+/// link.
+///
+/// Where [`home_readable`] runs at a link's identity, after every other
+/// filter, this runs before the home's links are read at all, so an
+/// unreadable home's whole candidate list is dropped on one test and never
+/// walked per link — which is what keeps the answer's timing from counting
+/// the links of a home the reader may not read, and what asks the predicate
+/// once per distinct home rather than once per candidate. Every home the
+/// store names is a document address, so there is nothing to withhold from
+/// the projection and nothing for it to answer: the question is the
+/// predicate's, whole.
+pub(crate) fn home_admitted(readable: &dyn Fn(&Address) -> bool, home: &Address) -> bool {
+    readable(home)
 }

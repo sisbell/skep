@@ -1,5 +1,6 @@
 //! THE EDGE PAIRS (`operations.md` §1.1 m12; §4 rows 27 and 33; §6's three
-//! rows): the five permit pools — the reconstruction, the class scan, the
+//! rows): the six permit pools — the reconstruction, the class scan and the
+//! per-document pool (one pair between them: the two share `scan_busy`), the
 //! fetch, the upload and the write — the worker pool, the live-stream
 //! budget, the live streams' threads, the challenge store and the workers'
 //! `accept` each say their condition at its EDGES, once per episode, on the
@@ -121,7 +122,7 @@ fn wait_until(what: &str, holds: impl Fn() -> bool) {
     }
 }
 
-// ── P1: the five pools ───────────────────────────────────────────────────
+// ── P1: the six pools' five pairs ────────────────────────────────────────
 
 /// One pool under the fence: the word its lines name it by (the refusal's
 /// own, `{word}_busy`), the hook that holds one of its permits exactly as

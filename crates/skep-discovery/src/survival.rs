@@ -23,7 +23,7 @@ use skep_links::{LinkState, Touch, View};
 use crate::budget::MAX_IMAGE_RUNS;
 use crate::home::home_admitted;
 use crate::image::content_vspan;
-use crate::region::{extents, V1_SLOTS};
+use crate::sets::{extents, V1_SLOTS};
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
 

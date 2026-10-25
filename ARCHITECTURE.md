@@ -42,7 +42,7 @@ above it.
 - `skep-util` — the support crate below the daemon, the media crate, the
   blob store, the client and the shell: the five utilities two or more
   crates take and none owns — the counting permit pool behind the daemon's
-  five bounded pools and, beside it, the edge tracker each bound that
+  six bounded pools and, beside it, the edge tracker each bound that
   refuses holds, so its saturation and its clearing are said once per
   episode; the operator's notice line (`skepd: ` on every line; §The
   support crate says why a library spells it); the JSON determinism
@@ -431,7 +431,7 @@ client library and the shell's core stand above it. Its modules are
 declared in `src/lib.rs`, each with a line saying what it holds, and the
 crate doc there states the rule of membership and the program-name
 decision: `permits` — the counting permit pool (`Permits`, `Permit`), the
-one mechanism behind the daemon's five bounded pools, and beside it the
+one mechanism behind the daemon's six bounded pools, and beside it the
 edge tracker (`EdgeTracker`, `Edge`), the once-per-episode memory of a
 bound that refuses, with the one rendering of a pool's two lines
 (`PoolEdgeLine`) and the one clock the hold-down is judged against
@@ -1301,8 +1301,10 @@ Rules that hold across its files:
 
 - **The home rule has one address.** Under `src/`, only `home.rs` projects
   a link's home or calls the caller's reader predicate; every other file
-  there goes through its `home_of` and `home_readable`. `tests/it/tidy.rs`
-  checks it.
+  there goes through its `home_of` and `home_readable`, and the homes-first
+  reads through its `home_admitted`, asked of a candidate home ahead of the
+  home's links, and `home_behind`, the cursor's home a window resumes in.
+  `tests/it/tidy.rs` checks it.
 - **`_on` marks a snapshot.** A function under `src/` ends its name in `_on`
   exactly when its first parameter is the `&Snapshot` it reads; a helper
   over one store carries no suffix. `tests/it/tidy.rs` checks it.
@@ -1692,7 +1694,7 @@ through the store's install — nothing above their own layer.
 1. **The transport** — `server/listen.rs` (sockets — the listener bound
    BEFORE the open, `bind` then `serve_bound`, `serve` the two in
    sequence; the worker threads, their default count and the minimum, one
-   more than the five permit pools' slots together; the event streams'
+   more than the six permit pools' slots together; the event streams'
    loop and budget; the pruner's cadence thread; THE CHECKPOINT THREAD,
    the kernel's deferred trigger serviced off the write path's guard; and,
    after a blob reply is written, the replaced file's deferred unlink) and
@@ -1748,7 +1750,7 @@ through the store's install — nothing above their own layer.
    `skep-media`'s `limits`, the daemon taking the ones it reads from
    there, each `pub` for it). Neither knows anything about the daemon; a
    leaf imports only leaves — and a leaf in another crate is a leaf: the
-   counting permit the five bounded pools use and the operator's log line
+   counting permit the six bounded pools use and the operator's log line
    are `skep-util`'s `permits` and `notice`, the support crate below this
    one (§The support crate); the codec and the serialization lock are
    `skep-core`'s, and the two cells `skep-media`'s.

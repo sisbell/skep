@@ -42,9 +42,9 @@ use skep_core::limits::STANDING_INTERVAL;
 use skep_util::notice::{self, Class};
 use skep_util::source::Source;
 // `DEFAULT_WORKERS` and `MIN_WORKERS` are the library's, not this binary's:
-// the default is the sixth term of a relation whose other five are the
+// the default is the seventh term of a relation whose other six are the
 // daemon's permit pools, the minimum is that relation's own floor — one more
-// than the five pools' slots together — and the library holds the assertion
+// than the six pools' slots together — and the library holds the assertion
 // that keeps them in step. The parse below refuses a count under the floor,
 // and the help renders both figures from the constants. The default
 // per-account limit's two constants are the media resource's, re-exported

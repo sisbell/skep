@@ -1,9 +1,11 @@
-//! §Internal design — M7's link sets as every read here builds and walks
-//! them: the run-set stab that turns arrangement runs into the links touching
-//! them — one stab per v1 slot, kept apart for slot attribution and OR'd into
-//! ASN-0127's disjunctive `findlinks` over them — and the one windowing
-//! combinator that pages such a set by key. All pure over borrowed state;
-//! nothing here snapshots (callers thread ONE snapshot per operation).
+//! §Internal design — the pieces every link-set read shares, as M7's link
+//! sets are built and walked here: the v1 slot list a per-slot read is exact
+//! over, the lift of arrangement runs to the query endset M7's homes-first
+//! reads take, the per-slot union that is ASN-0127's disjunctive `findlinks`,
+//! and the two windowing combinators — the window over homes that pages a
+//! family's candidate homes in address order, paying for `n` and the homes it
+//! passes, and the key-cut within one home's set. All pure over borrowed
+//! state; nothing here snapshots (callers thread ONE snapshot per operation).
 //!
 //! Every read walks M7's `OrdSet`s by reference — `iter`, `range`,
 //! `contains` — and clones only the addresses it hands back. `im` 15's
@@ -19,59 +21,41 @@ use std::ops::Bound::{Excluded, Unbounded};
 use im::OrdSet;
 use skep_address::Address;
 use skep_arrangement::Run;
-use skep_links::{Endset, LinkState, View, FROM, TO, TYPE};
+use skep_links::{Endset, FROM, TO, TYPE};
 
+use crate::home::{home_admitted, home_behind};
 use crate::types::{Cursor, Window};
 
 /// The slots a v1 link has: every v1 link-creation path deposits an arity-3
 /// link, so a disjunction over these three is exact over ALL slots and a
-/// per-slot read misses nothing. Nothing in M8 can check that — `stab`
-/// is per-slot and M8 owns no index — so it is stated once, here, and every
-/// slot-indexed read reaches the store through this list.
-const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
+/// per-home read of the three misses nothing. Nothing in M8 can check that —
+/// `stab_in` is per-slot and M8 owns no index — so it is stated once, here,
+/// and every homes-first region read reaches the store through this list.
+pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 
-/// The links whose coverage overlaps `runs`, PAIRED with the slot each set
-/// was stabbed at and kept SEPARATE (slot attribution reads them —
-/// [`crate::retrieve_endsets_on`]), so no consumer re-derives which position
-/// means which numeral.
-/// `View::Active` discharges addressability — nullified links never match.
+/// Lifts arrangement runs to M7's query endset: each run's I-extent, whose
+/// coverage holds the run's addresses and every address extending one of
+/// them (the crate header's one shape).
 ///
-/// The lift from arrangement runs to M7's query `Endset` lives here, so every
-/// region-shaped query reaches the spanfilade through one reading of its
-/// I-extents. That reading is WIDER than the image ASN-0127 names, on the one
-/// shape the crate header states: an extent covers every address extending
-/// one its run arranges, so a coverage strictly beneath an arranged address
-/// overlaps it. The query endset aggregates iextents across origin documents
-/// and is therefore MIXED-LENGTH by construction; no partition by level class
-/// is owed because its only consumer is M7's `classify_spans` overlap, which
-/// is gate-free — any level-gated operation added here (normalizing the
-/// query, keying a cache on `canonical_key`) would owe the partition
-/// `Run::iextent` names. Empty `runs` skip the store: M7 answers
-/// `stab(slot, ⟨⟩, ·) = ∅` for the endset they lift to, so the short-circuit
-/// saves three stabs rather than changing an answer — asked of the lifted
-/// endset, which is empty exactly when the runs were, every run lifting to one
-/// span.
+/// Every homes-first region-shaped query reaches the spanfilade through
+/// this reading of its I-extents. The query aggregates iextents across
+/// origin documents and is therefore MIXED-LENGTH by construction; no
+/// partition by level class is owed because its only consumer is M7's
+/// `classify_spans` overlap, which is gate-free. Empty `runs` lift to the
+/// empty endset, for which M7 names no candidate home, so an empty image
+/// costs no probe.
 ///
 /// The runs are taken as a SEQUENCE rather than a slice, because that is all
 /// the lift reads: a caller whose runs are already contiguous passes the
 /// `&Vec<Run>` it holds, and one whose runs come from two arrangements —
 /// the preview's surviving content beside `d`'s link runs — chains M5's loan
 /// on rather than copying it into a vector to be read once.
-pub(crate) fn stab_runs_by_slot<'r>(
-    l: &LinkState,
-    runs: impl IntoIterator<Item = &'r Run>,
-) -> [(usize, OrdSet<Address>); 3] {
-    // Each run lifts to its I-extent, whose coverage holds the run's addresses
-    // and every address extending one of them (the crate header's one shape).
-    let query = Endset::from_spans(runs.into_iter().map(Run::iextent));
-    if query.is_empty() {
-        return V1_SLOTS.map(|i| (i, OrdSet::new()));
-    }
-    V1_SLOTS.map(|i| (i, l.stab(i, &query, View::Active)))
+pub(crate) fn extents<'r>(runs: impl IntoIterator<Item = &'r Run>) -> Endset {
+    Endset::from_spans(runs.into_iter().map(Run::iextent))
 }
 
 /// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots
-/// (M7 has no slot-collapsed primitive).
+/// (M7 has no slot-collapsed primitive), over one home's per-slot sets.
 ///
 /// The one consuming set operation a read keeps, because its answer IS a new
 /// set: `im`'s `union` keeps its larger operand and inserts the smaller into
@@ -87,21 +71,58 @@ pub(crate) fn union_slots(by_slot: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Add
         .fold(OrdSet::new(), |acc, (_, hits)| acc.union(hits.clone()))
 }
 
-/// `findlinks(coverage of runs)` ∩ the active view, as M7's native
-/// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key).
-/// Over a region's image it is the region family's selection index (ASN-0131's
-/// `sel`); over the deleted and the retained runs it is the two sides of the
-/// preview's last-witness identity (ASN-0117).
-pub(crate) fn stab_runs<'r>(
-    l: &LinkState,
-    runs: impl IntoIterator<Item = &'r Run>,
-) -> OrdSet<Address> {
-    union_slots(&stab_runs_by_slot(l, runs))
+/// THE WINDOW OVER HOMES (ASN-0108), driving both `window_v` and
+/// `window_ftt`: a stateless key-cut over admitted homes in address order,
+/// paying for `n` links and the homes it passes.
+///
+/// `homes` yields the candidate homes in address order — a `Touch`, or a
+/// home the home slot or the store names — `home` reads the address off one
+/// and `links` reads a home's own answer, in address order, which the walk
+/// asks of the homes it admits alone and no further than it pages. A home
+/// behind the cursor ([`home_behind`]) is passed unasked and unread; the
+/// cursor's own home is cut strictly past the cursor by [`window_over`], and
+/// every later home is taken whole, until `n` links are in hand — so resume
+/// is a key-cut and never a lookup of the cursor (W8), no
+/// continuously-matching link is duplicated or skipped (W4/W5), `n` is
+/// clamped to ≥ 1 (W9), `exhausted = batch.len() < n` and `next` is the
+/// ≺-max of the batch, else the cursor unchanged. A home the reader refuses
+/// is passed before the slice and never counted against `n` (PUB-6.14).
+pub(crate) fn window_homes<H>(
+    homes: impl Iterator<Item = H>,
+    home: impl Fn(&H) -> &Address,
+    links: impl Fn(H) -> OrdSet<Address>,
+    readable: &dyn Fn(&Address) -> bool,
+    cur: Cursor,
+    n: usize,
+) -> Window {
+    let n = n.max(1);
+    let mut batch: Vec<Address> = Vec::new();
+    for candidate in homes {
+        if cur.as_ref().is_some_and(|c| home_behind(home(&candidate), c)) {
+            continue; // every link of it sorts at or before the cursor
+        }
+        if !home_admitted(readable, home(&candidate)) {
+            continue;
+        }
+        let page = window_over(&links(candidate), cur.clone(), n - batch.len(), |_| true);
+        batch.extend(page.batch);
+        if batch.len() == n {
+            break;
+        }
+    }
+    let exhausted = batch.len() < n;
+    let next = batch.last().cloned().or(cur);
+    Window {
+        batch,
+        next,
+        exhausted,
+    }
 }
 
-/// The one windowing combinator (ASN-0108) driving both `window_v` and
-/// `window_ftt`: a stateless key-cut over `candidates` in address order,
-/// admitting those `keep` accepts.
+/// THE KEY-CUT WITHIN ONE HOME (ASN-0108): a stateless cut over
+/// `candidates` — one home's share of a selection index — in address order,
+/// admitting those `keep` accepts, which [`window_homes`] applies to each
+/// home it admits.
 ///
 /// * Resume is `range(Excluded(cursor)..)` — a key-cut, never an exact-match
 ///   scan, so the cursor survives orphaning by construction (W8), and no
@@ -109,11 +130,12 @@ pub(crate) fn stab_runs<'r>(
 /// * `n` is clamped to ≥ 1 (W9 totality): an unclamped `n = 0` would yield
 ///   `exhausted = (0 < 0) = false` with an empty batch and an unchanged
 ///   cursor — a silent non-terminating signal.
-/// * `keep` is the caller's post-filter over the candidate set, applied
-///   LAZILY during the range walk: a link it refuses is skipped BEFORE the
-///   slice and never counted against `n` — what PUB-6.14 asks of the home
-///   rule — and a narrow filter never materializes the filtered set. Each
-///   window read states what it passes.
+/// * `keep` is a post-filter over the candidate set, applied LAZILY during
+///   the range walk: a link it refuses is skipped BEFORE the slice and never
+///   counted against `n`, and a narrow filter never materializes the
+///   filtered set. The window over homes passes the total filter: the home
+///   rule is asked of a home ahead of its links (PUB-6.14), so within an
+///   admitted home nothing is refused.
 /// * `exhausted = batch.len() < n` (a short window, zero included, W9);
 ///   `next` = the ≺-max of the batch, else the cursor unchanged.
 pub(crate) fn window_over(

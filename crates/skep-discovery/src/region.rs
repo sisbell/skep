@@ -15,46 +15,23 @@
 //! reader is asked of each once ahead of its links, and an admitted home is
 //! stabbed at each slot over the spans that named it. The per-home answers
 //! concatenated in home order are the selection index in address order, so
-//! nothing is merged and a window resumes in its cursor's home. The home
-//! window and the extents' lift are this module's, shared with the
-//! descriptor family's window and the delete preview beneath it.
+//! nothing is merged and a window resumes in its cursor's home. The pieces
+//! the composition shares with the descriptor family and the delete preview
+//! — the slot list, the extents' lift, the window over homes — are `sets`'.
 
 use std::collections::HashSet;
 
 use im::OrdSet;
 use skep_address::{Address, Span};
-use skep_arrangement::Run;
 use skep_kernel::Snapshot;
-use skep_links::{Endset, LinkState, Touch, View, FROM, TO, TYPE};
+use skep_links::{Endset, LinkState, Touch, View};
 
 use crate::budget::MAX_ANSWER_SPANS;
-use crate::home::{home_admitted, home_behind};
+use crate::home::home_admitted;
 use crate::image::image_on;
-use crate::sets::{union_slots, window_over};
+use crate::sets::{extents, union_slots, window_homes, V1_SLOTS};
 use crate::types::{Cursor, QueryError, Window};
 use crate::DiscoveryWorld;
-
-/// The slots a v1 link has: every v1 link-creation path deposits an arity-3
-/// link, so a disjunction over these three is exact over ALL slots and a
-/// per-home read of the three misses nothing. Nothing in M8 can check that —
-/// `stab_in` is per-slot and M8 owns no index — so it is stated once, here,
-/// and every homes-first region read reaches the store through this list.
-pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
-
-/// Lifts arrangement runs to M7's query endset: each run's I-extent, whose
-/// coverage holds the run's addresses and every address extending one of
-/// them (the crate header's one shape).
-///
-/// Every homes-first region-shaped query reaches the spanfilade through
-/// this reading of its I-extents. The query aggregates iextents across
-/// origin documents and is therefore MIXED-LENGTH by construction; no
-/// partition by level class is owed because its only consumer is M7's
-/// `classify_spans` overlap, which is gate-free. Empty `runs` lift to the
-/// empty endset, for which M7 names no candidate home, so an empty image
-/// costs no probe.
-pub(crate) fn extents<'r>(runs: impl IntoIterator<Item = &'r Run>) -> Endset {
-    Endset::from_spans(runs.into_iter().map(Run::iextent))
-}
 
 /// The candidate homes of `query` at every v1 slot, in address order, each
 /// with the spans that named it per slot — M7's walk over the three
@@ -96,54 +73,6 @@ fn selection<'a>(
     touching(l, query)
         .filter(move |touch| home_admitted(readable, touch.home()))
         .flat_map(move |touch| touched(l, &touch))
-}
-
-/// THE WINDOW OVER HOMES (ASN-0108), driving both `window_v` and
-/// `window_ftt`: a stateless key-cut over admitted homes in address order,
-/// paying for `n` links and the homes it passes.
-///
-/// `homes` yields the candidate homes in address order — a [`Touch`], or a
-/// home the home slot or the store names — `home` reads the address off one
-/// and `links` reads a home's own answer, in address order, which the walk
-/// asks of the homes it admits alone and no further than it pages. A home
-/// behind the cursor ([`home_behind`]) is passed unasked and unread; the
-/// cursor's own home is cut strictly past the cursor by `window_over`, and
-/// every later home is taken whole, until `n` links are in hand — so resume
-/// is a key-cut and never a lookup of the cursor (W8), no
-/// continuously-matching link is duplicated or skipped (W4/W5), `n` is
-/// clamped to ≥ 1 (W9), `exhausted = batch.len() < n` and `next` is the
-/// ≺-max of the batch, else the cursor unchanged. A home the reader refuses
-/// is passed before the slice and never counted against `n` (PUB-6.14).
-pub(crate) fn window_homes<H>(
-    homes: impl Iterator<Item = H>,
-    home: impl Fn(&H) -> &Address,
-    links: impl Fn(H) -> OrdSet<Address>,
-    readable: &dyn Fn(&Address) -> bool,
-    cur: Cursor,
-    n: usize,
-) -> Window {
-    let n = n.max(1);
-    let mut batch: Vec<Address> = Vec::new();
-    for candidate in homes {
-        if cur.as_ref().is_some_and(|c| home_behind(home(&candidate), c)) {
-            continue; // every link of it sorts at or before the cursor
-        }
-        if !home_admitted(readable, home(&candidate)) {
-            continue;
-        }
-        let page = window_over(&links(candidate), cur.clone(), n - batch.len(), |_| true);
-        batch.extend(page.batch);
-        if batch.len() == n {
-            break;
-        }
-    }
-    let exhausted = batch.len() < n;
-    let next = batch.last().cloned().or(cur);
-    Window {
-        batch,
-        next,
-        exhausted,
-    }
 }
 
 /// Links touching `region` (ASN-0127 findlinks over the image, disjunctive

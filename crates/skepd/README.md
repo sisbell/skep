@@ -119,7 +119,7 @@ an embedder or a test. Everything it serves is the operation surface
 of [skep-febe](../skep-febe) over the world of
 [skep-engine](../skep-engine); its core — the session layer, the commits
 and the codec — is [skep-core](../skep-core)'s, the crate below it; the
-counting permit its five pools are built on, the operator's notice line
+counting permit its six pools are built on, the operator's notice line
 and the codec's key-sorting `obj` are [skep-util](../skep-util)'s, the
 support crate below both that the media crate shares; how its modules
 are layered is in [ARCHITECTURE.md](../../ARCHITECTURE.md).

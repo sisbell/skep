@@ -21,7 +21,6 @@ use super::reply::{
     registry_refused, with_signal, Reply,
 };
 use super::request::HttpRequest;
-use super::scan::ScanBusy;
 use super::{ClaimLine, Daemon, WRITE_POOL};
 use skep_core::auth::key_set_of;
 use skep_core::auth::policy::{
@@ -166,16 +165,18 @@ impl Daemon {
             }
             Ok(DaemonOp::Febe { request: frame, presented }) => match write_meta(&frame.op) {
                 // Reads execute directly and take no lock (AUTH-3.36) — under
-                // a class-scan permit where the frame is class-scan-shaped
-                // (wire v7.9), taken here: after the parse and the session
-                // read, before M10 is asked. The guard lives to the end of
-                // this arm, so the permit spans the whole answer — M10's own
-                // doc-argument consult and the store call inside `execute`,
-                // and the marshal — and returns on every exit.
+                // a permit of the class-scan bound where the frame is
+                // class-scan-shaped or a region read (wire v7.9; the
+                // home-index record's D3), taken here: after the parse and
+                // the session read, before M10 is asked; a refusal names the
+                // bound that refused in its `detail`. The guard lives to the
+                // end of this arm, so the permit spans the whole answer —
+                // M10's own doc-argument consult and the store call inside
+                // `execute`, and the marshal — and returns on every exit.
                 None => {
                     let _scan = match self.scans.admit(&frame.op) {
                         Ok(permit) => permit,
-                        Err(ScanBusy) => return refuse_scan_busy(frame.op.kind()),
+                        Err(busy) => return refuse_scan_busy(frame.op.kind(), busy),
                     };
                     self.read_reply(self.febe.execute(resolved.sid(), *frame))
                 }

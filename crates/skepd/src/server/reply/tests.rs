@@ -196,17 +196,34 @@ fn the_fetch_preflight_and_each_refusals_status_and_body() {
     assert_eq!(refuse_fetch(FetchRefusal::NotACell).status, 404);
 }
 
-/// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,
+/// The `scan_busy` refusal's exact bodies: a transport refusal (no `resp`,
 /// no `code`) at 503, naming the op it refused beside the detail — the
-/// bytes wire.md shows.
+/// bytes wire.md shows for the class pool, and the width's and the
+/// ceiling's sentences wire.md quotes beside them, one fixed sentence per
+/// bound and no figure in any.
 #[test]
-fn scan_busy_names_the_op_in_a_transport_refusal() {
-    let r = refuse_scan_busy(OpKind::CountFtt);
-    assert_eq!(r.status, 503);
-    assert_eq!(
-        String::from_utf8(r.bytes().to_vec()).expect("json"),
-        r#"{"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"count_ftt"}"#
-    );
+fn scan_busy_names_the_op_and_the_bound_in_a_transport_refusal() {
+    for (bound, kind, body) in [
+        (
+            ScanBusy::Class,
+            OpKind::CountFtt,
+            r#"{"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"count_ftt"}"#,
+        ),
+        (
+            ScanBusy::Document,
+            OpKind::FindLinksV,
+            r#"{"detail":"all region-read permits of this document are in use; retry shortly","error":"scan_busy","op":"find_links_v"}"#,
+        ),
+        (
+            ScanBusy::Ceiling,
+            OpKind::DeleteOrphans,
+            r#"{"detail":"all region-read permits across every document are in use; retry shortly","error":"scan_busy","op":"delete_orphans"}"#,
+        ),
+    ] {
+        let r = refuse_scan_busy(kind, bound);
+        assert_eq!(r.status, 503, "{bound:?}");
+        assert_eq!(String::from_utf8(r.bytes().to_vec()).expect("json"), body, "{bound:?}");
+    }
 }
 
 /// The `write_busy` refusal's exact body (the write permit pool): a

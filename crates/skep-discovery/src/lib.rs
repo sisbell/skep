@@ -222,12 +222,13 @@
 //! admitted homes' links alone, so a read pays for its candidate homes and
 //! the readable homes' links, never for the links of a home the reader may
 //! not read; the count of unreadable candidate homes is its residual.
-//! A caller that admission-controls these reads — the daemon's scan pool
-//! does — prices every one of them from this list, those that walk no link
-//! store included, so a change to what any line says of either store is a
-//! change to this interface. The scan pool links this section by its heading
-//! (`skep_discovery#cost`), an anchor no build checks, so the heading is part
-//! of the interface as well. `tests/it/tidy.rs` holds the heading, and holds
+//! A caller that admission-controls these reads — the daemon's class-scan
+//! bound does, deciding by a four-set's shape and by the document a region
+//! read names — prices every one of them from this list, those that walk no
+//! link store included, so a change to what any line says of either store is
+//! a change to this interface. That bound's card links this section by its
+//! heading (`skep_discovery#cost`), an anchor no build checks, so the heading
+//! is part of the interface as well. `tests/it/tidy.rs` holds the heading, and holds
 //! this list to naming every read the crate publishes. Of what a line says a
 //! read walks, a test holds only what the heap shows: that the touch test
 //! builds nothing per pair, that `image_on`'s run budget and its square,
@@ -367,17 +368,16 @@ mod home;
 // The plain values the reads take and return — the window pair, the lineage
 // claim, the orphan report — and the two typed rejections.
 mod types;
-// M7's link sets as the reads build and walk them: the run-set stab, the one
-// window combinator, and the rule every read walks a set by.
+// M7's link sets as the reads build and walk them: the v1 slot list, the
+// extents' lift, the per-slot union, the window over homes with the key-cut
+// within one, and the rule every read walks a set by.
 mod sets;
 // A region's shape — its constructor and its gate — and `image_on`, its V→I
 // resolution: the region resolver every region-family read chains into M7's
 // matcher.
 mod image;
 // The region family: `findlinks_v`, `count_v`, `window_v` and
-// RETRIEVEENDSETS, read out of one selection index home by home; the
-// extents' lift and the window over homes both families and the preview
-// share.
+// RETRIEVEENDSETS, read out of one selection index home by home.
 mod region;
 // The descriptor family: the four-set request, its candidates and `sat`, and
 // its three read-outs.

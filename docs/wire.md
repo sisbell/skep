@@ -875,7 +875,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 503    | `upload_busy`               | all upload permits are in use — the blob upload's creation or resume past the upload pool, before any body byte; retry shortly (§Media, THE PERMIT) |
 | 410    | `history_reclaimed`         | the position (`/op-at`) predates retained history — never where the journal is kept whole (`--reclaim-journal never`) — or the `since` fence (`/changes`) lies below the first line the change feed's files hold — a hole an earlier build's compaction or an un-re-coverable lost region left, never the journal's reclamation, which the feed outlives (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
-| 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
+| 503    | `scan_busy`                 | the class-scan bound refused the read — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set is a class scan (`ty` alone, all-`"any"`, or a `home` at an account or the node) with every class-scan permit in use, or a `find_links_v`/`count_v`/`window_v`/`retrieve_endsets`/`delete_orphans` whose document holds its two region reads or whose board holds its six (§Link discovery reads); `detail` names the bound that refused — the class pool, the document's width or the ceiling — in one fixed sentence each, the three §Link discovery reads quotes; carries `op`; retry shortly |
 | 503    | `write_busy`                | all write permits are in use — a write on `/op` past the write permit pool, refused before the credential lock and the guard are taken, nothing committed (§The model); carries `op`; retry shortly |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up. On `POST /op` the `500` is no verdict on a write, only its lost answer: the write may have committed before the panic — its position then on the change feed as a bare entry, its testimony lost (§The change feed) — or reached the journal with the kernel halting its write paths (`writes.halted` true, §The other endpoints), a restart then replaying it; or it committed nothing. Read the feed before reissuing it: its acknowledgment may never have reached the idempotency memo (§Correlation and idempotency) |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption; a history read's `history_io` carries one fixed `detail`, naming nothing on the daemon's host — no path, no file, no OS words |
@@ -3276,10 +3276,12 @@ confirmed at the media round (the board's sm-Q8):
 * the upload pool, 4 (`MAX_CONCURRENT_UPLOADS`) — the most creations and
   resumes streaming a body at once, a bound on worker occupancy and not
   memory (a stream holds one chunk, where a fetch holds its whole file);
-  counted into the worker minimum, `MIN_WORKERS`, 15 — one more than the
-  five pools' slots together, the write permit pool's 4
-  (`MAX_CONCURRENT_WRITES`, §The model) among them — and the default
-  worker count, `DEFAULT_WORKERS`, 16, one above it;
+  counted into the worker minimum, `MIN_WORKERS`, 21 — one more than the
+  six pools' slots together, the write permit pool's 4
+  (`MAX_CONCURRENT_WRITES`, §The model) and the per-document pool's
+  ceiling (`MAX_CONCURRENT_REGION_READS`, §Link discovery reads) among
+  them — and the default worker count, `DEFAULT_WORKERS`, 22, one above
+  it;
 * the per-file cap, 64 MiB — the route's own, a venue's below it; sized
   for v1's images (ms5-V1) and bounding disk and transfer, never memory;
 * the chunk, 64 KiB — the streaming arm's one buffer per in-flight upload;
@@ -4039,12 +4041,8 @@ at those positions). → `runs`.
 {"op":"find_links_ftt","q":{"from":[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],"home":"any","to":"any","ty":"empty"}}
 ```
 
-**The class-scan bound** (PUB-8.36, PUB-8.37).
-A query whose four-set constrains `ty` and NO other slot — `home`, `from`
-and `to` all `"any"` — enumerates a whole type class: the design's
-directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
-siblings (PUB-6.55, PUB-6.56), where the daemon pays one home test per
-home holding a link of the class. THE COST AS BUILT: the link store's
+**The class-scan bound** (PUB-8.36, PUB-8.37; the home-index record's D3
+and D4). THE COST AS BUILT: the link store's
 coverage index is grouped by HOME and carries a directory of the homes a
 query could meet, so every link read — `find_links_ftt`, `count_ftt` and
 `window_ftt` in every shape, the region family, `retrieve_endsets` and
@@ -4069,40 +4067,76 @@ in. The residual an answer's timing carries is the count of homes the
 reader may not read that hold a filing in the query's blocks — the
 directory groups a content axis by blocks of sixty-four positions — at
 one directory step and one predicate test each: draft existence under
-the queried span and nothing finer (PUB-7.18). The bound below counts
-the SHAPE alone. Such a request —
-`ty` constrained, the rest `"any"` — is a CLASS SCAN, and it is a SHAPE,
-not a type list: any class queried that way is one, and the all-`"any"`
-query — the whole store — is one too, being that shape's superset. `/op`
-admits at most
+the queried span and nothing finer (PUB-7.18).
+
+The bound counts the SHAPE of a request alone, by two pools. THE CLASS
+POOL bounds the CLASS SCANS — a `find_links_ftt`, `count_ftt` or
+`window_ftt` whose four-set still walks every home of a class or of the
+board: `ty` constrained and `home`, `from` and `to` all `"any"` (the
+design's directory shape, `{ty: T_grant, home/from/to: any}`, PUB-6.54,
+and its siblings, PUB-6.55, PUB-6.56; a `ty` of `"empty"` is the same
+shape, answered off its own slots); the all-`"any"` four-set, the whole
+store, that shape's superset; and a four-set whose `home` slot names an
+ACCOUNT or the NODE, which walks every home under it whatever its other
+slots hold, since the `home` slot drives wherever it is constrained. A
+class scan is a SHAPE, not a type list: any class queried that way is
+one, and the cursor and `n` of a `window_ftt` narrow the page, never the
+population. `/op` admits at most
 **`MAX_CONCURRENT_CLASS_SCANS` = 2** class scans at once, across
 `find_links_ftt`, `count_ftt` and `window_ftt` alike, across every type
 class, and across every session and the guest — one pool for the board,
-no per-principal quota. A class scan that finds every permit taken is
-refused at once with
+no per-principal quota. THE PER-DOCUMENT POOL bounds the REGION READS —
+`find_links_v`, `count_v`, `window_v`, `retrieve_endsets` and
+`delete_orphans`, each of whose frames names the document `d` whose
+spans it walks, and each of which costs the homes touching that page and
+their readable links: a flooded PUBLIC page costs its population, which
+satisfies the request, so the read is sized by its page. It is keyed by
+`d`: at most **`MAX_REGION_READS_PER_DOCUMENT` = 2** region reads of one
+document at once, inside a ceiling of
+**`MAX_CONCURRENT_REGION_READS` = 6** region reads across every document,
+so one page's readers contend among themselves — the readers of a flooded
+page never refuse a read of any other page, which has its own two — and
+the pools cannot multiply past the workers, the ceiling being the term
+the worker minimum counts. Every other link read takes NO permit: a
+four-set constraining a `from` or a `to`, with or without `ty` — the
+narrowest-slot pins bound it, the constraint naming fewer homes driving —
+or a `home` naming a document or a version member, which reads one
+chain; `in_claims` and `out_claims`, answered off the index at the key's
+own span; `edition_claims`; and `image`, `project`, `discoverable_from`,
+`read_link` and `follow_link`, which walk no link store.
+
+A read that finds no permit in the pool it draws on — every class-scan
+permit in use, or its document holding its two region reads, or the
+board holding its six — is refused at once with
 
 ```json
 {"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"find_links_ftt"}
 ```
 
 at `503` — a retry-class refusal, never a queue, its `op` naming the
-refused frame — and costs the parse alone; an admitted scan holds its
+refused frame, its `detail` one fixed sentence naming the bound that
+refused: `all class-scan permits are in use; retry shortly` for the
+class pool, as above; `all region-read permits of this document are in
+use; retry shortly` for a document holding its width; and `all
+region-read permits across every document are in use; retry shortly`
+for the ceiling — and costs the parse alone; an admitted read holds its
 permit for the WHOLE answer and returns it on every exit, an answer the
-read predicate filtered to empty or a rejection included. This is a
-CONCURRENCY bound and NOT a rate statement (PUB-8.37): a refused scan may
-be reissued at once, and an admitted scan's answer is byte-for-byte what
-the same frame answers unbounded — the bound admits or refuses a request
-and never alters an answer, and the stores are not told a query is
-bounded. The pool is DISJOINT from the reconstruction pool (§Reading
-history, whose width `MAX_CONCURRENT_RECONSTRUCTIONS` states beside
-`history_busy`): a scan spends no reconstruction permit and a reconstruction
-spends no scan permit, so history panes and mirror bootstraps are never
-starved by directory scans, nor the reverse. A query constraining any
-second slot is not a class scan and takes no permit — the narrowest-slot
-pins bound it — and `/op-at` takes no scan permit: a historical scan is
-bounded by the reconstruction permit its whole answer already holds. The
-count is a daemon constant this document names; raising it is a
-configuration question, not a change to this contract.
+read predicate
+filtered to empty or a rejection included. This is a CONCURRENCY bound
+and NOT a rate statement (PUB-8.37): a refused read may be reissued at
+once, and an admitted read's answer is byte-for-byte what the same frame
+answers unbounded — the bound admits or refuses a request and never
+alters an answer, and the stores are not told a query is bounded. The
+pool is DISJOINT from the reconstruction pool (§Reading history, whose
+width `MAX_CONCURRENT_RECONSTRUCTIONS` states beside `history_busy`), and
+the two pools here are disjoint from each other: a scan spends no
+reconstruction permit, a reconstruction spends no scan permit, and a
+region read spends no class permit, so history panes and mirror
+bootstraps are never starved by directory scans, nor the reverse, nor a
+directory by a flooded page. `/op-at` takes no permit of either pool: a
+historical read is bounded by the reconstruction permit its whole answer
+already holds. The three counts are daemon constants this document names;
+raising one is a configuration question, not a change to this contract.
 
 **The name of a type** (the link-type registry, §Registry). Every type
 the build knows has one `defines` link in the registry document
@@ -4140,7 +4174,7 @@ everywhere).
 **`count_v`** / **`count_ftt`** — the census forms of the two queries.
 → `count`. `count_ftt` takes the class-scan bound above exactly as
 `find_links_ftt` does: a `ty`-only (or all-`"any"`) four-set is a class
-scan.
+scan. `count_v` draws on the per-document pool as `find_links_v` does.
 
 <!-- wire: request count_v -->
 ```json
@@ -4156,7 +4190,8 @@ scan.
 addresses past cursor `cur`. → `page`. `window_ftt` takes the class-scan
 bound above too — the cursor narrows the page, never the population, so
 a `ty`-only (or all-`"any"`) four-set is a class scan whatever `cur` and
-`n` say.
+`n` say; `window_v` draws on the per-document pool as `find_links_v`
+does.
 
 <!-- wire: request window_v -->
 ```json
@@ -4169,7 +4204,8 @@ a `ty`-only (or all-`"any"`) four-set is a class scan whatever `cur` and
 ```
 
 **`retrieve_endsets`** — the endset fragments of active links falling in
-the region, per slot. → `endsets`.
+the region, per slot. → `endsets`. It draws on the per-document pool as
+`find_links_v` does.
 
 <!-- wire: request retrieve_endsets -->
 ```json
@@ -4193,7 +4229,8 @@ from `d`? → `bool`.
 ```
 
 **`delete_orphans`** — preview: which links would the delete of `width`
-positions at `p` in `d` orphan? Nothing is written. → `orphans`.
+positions at `p` in `d` orphan? Nothing is written. → `orphans`. It draws
+on the per-document pool above as `find_links_v` does, keyed by `d`.
 
 <!-- wire: request delete_orphans -->
 ```json

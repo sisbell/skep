@@ -1,9 +1,11 @@
 //! A counting permit pool — a try-acquire with no queue and no blocking,
 //! whose guard returns its slot on drop — the ONE mechanism behind the
-//! daemon's five bounded pools: the reconstruction budget (`history.rs`),
-//! the class-scan pool (`server/scan.rs`), the fetch pool and the upload
-//! pool (`skep-media`'s `pools.rs`) and the write pool (the daemon's
-//! `server.rs`). A permit is a slot of the pool that minted
+//! daemon's six bounded pools: the reconstruction budget (`history.rs`),
+//! the class-scan pool and the per-document pool's ceiling
+//! (`server/scan.rs`; the per-document widths are a keyed table inside
+//! that ceiling, whose permit returns both its slots on drop), the fetch
+//! pool and the upload pool (`skep-media`'s `pools.rs`) and the write pool
+//! (the daemon's `server.rs`). A permit is a slot of the pool that minted
 //! it, so no bound can spend another's.
 //!
 //! Beside it, THE EDGE TRACKER ([`EdgeTracker`]; `operations.md` §1.1 m12):
@@ -12,7 +14,8 @@
 //! stood clear for a hold-down the holder names — so what a saturated pool,
 //! a full stream budget, a spent nonce or a failing `accept` says on the
 //! operator stream is two lines per episode and never one per request. One
-//! type the five pools, the worker pool, the live-stream budget, the live
+//! type the six pools — the class and the per-document pool holding one
+//! between them — the worker pool, the live-stream budget, the live
 //! streams' threads, the challenge store and the accept loop each hold; the
 //! words are each holder's, a pool's being [`PoolEdgeLine`]'s; the clock the
 //! hold-down is judged against is [`edge_clock_now`], one reading the
@@ -31,11 +34,12 @@ use crate::notice::Class;
 ///
 /// The bound behind `history.rs`'s `MAX_CONCURRENT_RECONSTRUCTIONS`, and —
 /// as further, separate instances — behind `server/scan.rs`'s
-/// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9), the fetch pool and the upload
-/// pool of `skep-media`'s `pools.rs` and the write pool of the daemon's
-/// `server.rs` (`MAX_CONCURRENT_WRITES`): one mechanism, five
-/// pools. A permit belongs to the pool it came from, so no bound can spend
-/// another's slots.
+/// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9) and `MAX_CONCURRENT_REGION_READS`
+/// (the per-document pool's ceiling, its widths a table inside it), the
+/// fetch pool and the upload pool of `skep-media`'s `pools.rs` and the write
+/// pool of the daemon's `server.rs` (`MAX_CONCURRENT_WRITES`): one
+/// mechanism, six pools. A permit belongs to the pool it came from, so no
+/// bound can spend another's slots.
 #[derive(Debug)]
 pub struct Permits {
     available: AtomicUsize,
@@ -266,8 +270,9 @@ impl EdgeTracker {
 /// episode's count. NOTHING ELSE ON A LINE: no count otherwise, no path,
 /// query, principal, peer, position or reader (D9, read loose: a pool
 /// saying "full" names no reader). The class word is the door's
-/// ([`Edge::class`]). One rendering for the five permit pools and the
-/// daemon's worker pool, so the two crates that say them cannot drift apart.
+/// ([`Edge::class`]). One rendering for the six permit pools' five pairs and
+/// the daemon's worker pool, so the two crates that say them cannot drift
+/// apart.
 pub struct PoolEdgeLine<'a> {
     pool: &'a str,
     edge: Edge,

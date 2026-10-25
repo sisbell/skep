@@ -24,7 +24,7 @@ use skep_kernel::Snapshot;
 use skep_links::{Endset, LinkState, Touch, View, FROM, TO, TYPE};
 
 use crate::home::home_admitted;
-use crate::region::window_homes;
+use crate::sets::window_homes;
 use crate::types::{Cursor, Window};
 use crate::DiscoveryWorld;
 

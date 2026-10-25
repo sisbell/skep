@@ -10,8 +10,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 - **The permit pool**, `permits` — a counting try-acquire with no queue
   and no blocking, whose guard returns its slot on drop: the one
-  mechanism behind the daemon's five bounded pools — the reconstruction
-  budget, the class scan, the fetch, the upload and the write. A permit is
+  mechanism behind the daemon's six bounded pools — the reconstruction
+  budget, the class scan, the per-document pool (a table of widths inside
+  a ceiling of this type), the fetch, the upload and the write. A permit is
   a slot of the pool that minted it, so no bound can spend another's.
 - **The notice line**, `notice` — the operator's stream: one line, or one
   notice of several, every line opening `skepd: ` so a shared stream

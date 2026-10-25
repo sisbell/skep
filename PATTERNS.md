@@ -273,12 +273,13 @@ says "from" it at its end.
   **Checked by:** `crates/skep-util/src/json/tests.rs` (`obj_is_order_insensitive`, `obj_keeps_the_last_of_duplicate_keys`); `crates/skepd/tests/it/wire_doc.rs` (`doc_states_the_writes_member_and_the_health_examples_keys_are_the_daemons_in_its_order`).
   **Closed:** none yet.
 - **SP-27 Every bounded pool is one permit type.** A bound on concurrent
-  work is a counting pool whose permit returns its slot on drop, taken
-  before the lock or the body it protects, refused by a retry-class name
-  past the pool, and counted into the worker minimum; a permit is a slot
-  of the pool that minted it, so no bound can spend another's.
-  **Holds it:** `skep_util::permits` (`Permits`, `Permit`), held by skepd `history` (reconstructions), `server::scan` (class scans) and `server` (writes), and by `skep_media::pools` (fetches, uploads).
-  **Checked by:** `crates/skep-util/src/permits/tests.rs` (`a_pool_hands_out_exactly_its_count_and_a_drop_returns_one_slot`); `crates/skepd/tests/it/write_pool.rs` (`parked_writers_hold_their_permits_and_the_one_past_the_pool_is_refused_before_the_lock`); `crates/skepd/tests/it/wire_doc.rs` (`doc_states_the_write_permit_pool_and_its_token`).
+  work is a counting pool, or a keyed table of widths inside one, whose
+  permit returns every slot it holds on drop, taken before the lock or
+  the body it protects, refused by a retry-class name past the pool, and
+  counted into the worker minimum; a permit is a slot of the pool that
+  minted it, so no bound can spend another's.
+  **Holds it:** `skep_util::permits` (`Permits`, `Permit`), held by skepd `history` (reconstructions), `server::scan` (class scans; the per-document pool: `ClassScans::take_region`, `RegionPermit`) and `server` (writes), and by `skep_media::pools` (fetches, uploads).
+  **Checked by:** `crates/skep-util/src/permits/tests.rs` (`a_pool_hands_out_exactly_its_count_and_a_drop_returns_one_slot`); `crates/skepd/tests/it/write_pool.rs` (`parked_writers_hold_their_permits_and_the_one_past_the_pool_is_refused_before_the_lock`); `crates/skepd/tests/it/scan_bound.rs` (`a_documents_region_reads_contend_only_among_themselves`); `crates/skepd/tests/it/wire_doc.rs` (`doc_states_the_write_permit_pool_and_its_token`, `doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_reader`).
   **Closed:** #87, #293.
 
 ## The builds and the checks

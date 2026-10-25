@@ -105,22 +105,29 @@
 //! by what the browser lets it read back, which is why a narrower ACAO is
 //! declined.
 //!
-//! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37)**: `/op` admits at
-//! most [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
-//! class-scan-shaped reads at once — the link-discovery reads the wire names,
-//! each costing what the world sets rather than the request: the whole active
-//! slice, the whole supersession class, or every link a region or a class
-//! reaches (`scan::is_class_scan` enumerates them and states what each reads).
-//! [`ClassScans`] is the whole bound on one card — the op test, the pool, and
-//! the admission that takes the permit after the parse and the session read and
-//! before M10 is asked, so a refused request costs the parse and the session
-//! read alone and an admitted one holds its slot for the whole answer. The pool
-//! is a second instance of [`skep_util::permits::Permits`], disjoint from the
-//! reconstruction pool — a scan spends no reconstruction permit and a
-//! reconstruction spends no scan permit. The bound admits or refuses a request
-//! (`503 scan_busy`, retry-class, the body naming the op) and never alters an
-//! answer: M7 and M8 are not told a query is bounded. A concurrency bound,
-//! never a rate statement.
+//! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37; the home-index
+//! record's D3)**: `/op` bounds the link-discovery reads by two pools on one
+//! card, [`ClassScans`]. The class pool admits at most
+//! [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
+//! class-scan-SHAPED reads at once — the four-sets whose shape is
+//! world-sized: `ty` alone, nothing at all, or a `home` at an account or the
+//! node (`scan::is_class_scan` states the shapes and what each walks). The
+//! per-document pool admits at most
+//! [`MAX_REGION_READS_PER_DOCUMENT`](scan::MAX_REGION_READS_PER_DOCUMENT)
+//! region reads of one document at once — the region family and
+//! `delete_orphans`, keyed by the `d` their frame names — inside a ceiling of
+//! [`MAX_CONCURRENT_REGION_READS`](scan::MAX_CONCURRENT_REGION_READS) across
+//! every document, so one page's readers contend among themselves and the
+//! pools cannot multiply past the workers. Every other link read takes no
+//! permit. The admission takes the permit after the parse and the session
+//! read and before M10 is asked, so a refused request costs the parse and the
+//! session read alone and an admitted one holds its slot for the whole
+//! answer. The pools are instances of [`skep_util::permits::Permits`],
+//! disjoint from the reconstruction pool and from each other — a scan spends
+//! no reconstruction permit and a reconstruction spends no scan permit. The
+//! bound admits or refuses a request (`503 scan_busy`, retry-class, the body
+//! naming the op) and never alters an answer: M7 and M8 are not told a query
+//! is bounded. A concurrency bound, never a rate statement.
 //!
 //! **Writes go through one card** (`skep-core`'s `commits`): `POST /op` —
 //! the daemon's only write route — hands each write its sequence admits to
@@ -744,7 +751,7 @@ fn path_is_known(path: &str) -> bool {
 /// It is the most write requests admitted onto the write path at once
 /// (`operations.md` §4 rows 25, 27; the spike S25's measurement), every
 /// other refused `503 write_busy` at once, retry-class — a pool and never a
-/// queue (P29), as the four other pools are.
+/// queue (P29), as the five other pools are.
 ///
 /// **Why a pool on writes at all.** The write path serializes writes under
 /// one guard, and the kernel's backstop runs a checkpoint inline on the
@@ -762,15 +769,15 @@ fn path_is_known(path: &str) -> bool {
 /// writes a second) and parks three writers through one, each answered
 /// inside a client's ten-second patience on a quiet machine; and it keeps
 /// the default's "two free" with every pool saturated —
-/// [`DEFAULT_WORKERS`] 16 less the five pools' fourteen slots. A width of
+/// [`DEFAULT_WORKERS`] 22 less the six pools' twenty slots. A width of
 /// one refuses every overlapping write, backstop or none; two moves the
 /// same pins for less.
 ///
 /// It is crate-internal — `pub` in a private module the crate root does not
-/// re-export — and [`MIN_WORKERS`] is derived from the five pools' counts by
+/// re-export — and [`MIN_WORKERS`] is derived from the six pools' counts by
 /// path, as this crate's own and `skep-media`'s are named there, so the
 /// minimum moves with this figure and no reader does the sum. The daemon's
-/// own pool, held on [`Daemon`] beside the four.
+/// own pool, held on [`Daemon`] beside the five.
 pub const MAX_CONCURRENT_WRITES: usize = 4;
 
 /// The daemon's state.
@@ -813,12 +820,13 @@ pub struct Daemon {
     /// and replay is per-call uncached, so without that budget any local
     /// caller could pin every worker on reconstruction.
     history: History,
-    /// The class-scan bound behind `/op`'s class-scan-shaped reads.
+    /// The class-scan bound behind `/op`'s link reads.
     ///
-    /// It holds its own shape test and its own pool (wire v7.9; PUB-8.36) —
-    /// a second instance of [`skep_util::permits`]'s mechanism, and so
-    /// disjoint from the reconstruction pool `history` holds. Lives in the
-    /// serving path and nowhere lower (doctrine D9: the meter is an
+    /// It holds its own shape test, its class pool and its per-document
+    /// pool under a ceiling (wire v7.9; PUB-8.36; the home-index record's
+    /// D3) — two further instances of [`skep_util::permits`]'s mechanism,
+    /// and so disjoint from the reconstruction pool `history` holds. Lives
+    /// in the serving path and nowhere lower (doctrine D9: the meter is an
     /// attribute of a gate, never of the substrate): M8 and M7 are asked or
     /// not asked, and never told.
     scans: ClassScans,
@@ -864,8 +872,8 @@ pub struct Daemon {
     uploads: UploadPool,
     /// The write permit pool (`operations.md` §4 rows 25, 27).
     ///
-    /// It is the fifth instance of [`skep_util::permits`]'s mechanism, of
-    /// width [`MAX_CONCURRENT_WRITES`], disjoint from the four others by the
+    /// It is an instance of [`skep_util::permits`]'s mechanism, of width
+    /// [`MAX_CONCURRENT_WRITES`], disjoint from the five others by the
     /// borrow. Every write request on `/op` that reaches a lock — the plain,
     /// the credential and the registry sequence alike — takes one permit
     /// before the credential lock and the serialization guard (`op.rs`): the
@@ -888,8 +896,8 @@ pub struct Daemon {
     /// `the write pool is saturated` at the first refusal of an episode,
     /// `the write pool has room again after {n} refusals` at the first permit
     /// taken a hold-down past its last — once per episode and nothing per
-    /// request; the pool's twin of the tracker each of the four other pools
-    /// holds for itself.
+    /// request; the pool's twin of the tracker each of the other pools
+    /// holds for itself, the class-scan bound's two pools sharing one.
     write_edge: EdgeTracker,
     /// The checkpoint thread's memory between its wakes ([`CheckpointMemory`]).
     ///
@@ -4315,7 +4323,8 @@ impl fmt::Display for RegistrySeededLine<'_> {
 // ── the edge pairs' words ────────────────────────────────────────────────
 //
 // What the ten pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
-// §6's three rows): the five permit pools and the worker pool in one form —
+// §6's three rows): the six permit pools — the class-scan bound's two under
+// one pair, sharing the refusal — and the worker pool in one form —
 // `skep_util::permits`'s `PoolEdgeLine`, under the word each pool names
 // itself by — the live-stream budget in that form too, the live streams'
 // threads, the challenge store and the accept loop in their own words. Each
@@ -4333,7 +4342,9 @@ impl fmt::Display for RegistrySeededLine<'_> {
 /// same in both lines).
 pub(super) const HISTORY_POOL: &str = "history";
 
-/// The word the class-scan pool's two lines name it by.
+/// The word the class-scan bound's two lines name it by — its class pool's
+/// and its per-document pool's alike, the two sharing one refusal and so one
+/// edge pair.
 ///
 /// It is the refusal's own, `scan_busy`.
 pub(super) const SCAN_POOL: &str = "scan";
@@ -4345,7 +4356,7 @@ pub(super) const WRITE_POOL: &str = "write";
 
 /// The word the worker pool's two lines name it by.
 ///
-/// The pool is the request workers, the budget the five permit pools are
+/// The pool is the request workers, the budget the six permit pools are
 /// sized against (`listen.rs`'s `DEFAULT_WORKERS`). Nothing is refused at
 /// it — a connection that finds every worker busy waits in the listen
 /// backlog — so its word is no refusal's but the threads' own,

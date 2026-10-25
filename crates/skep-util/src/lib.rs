@@ -3,20 +3,21 @@
 //! Five utilities two or more crates of the workspace take and none owns —
 //! the daemon, the media crate, the blob store, the client library and the
 //! shell's core stand above it — in one home, so the media crate's move
-//! out of the daemon copies no helper, the daemon's five pools keep one
+//! out of the daemon copies no helper, the daemon's six pools keep one
 //! permit type, and the client's, the shell's, the blob store's and the
 //! daemon's core's files keep one tail rule:
 //!
 //! * [`permits`] — the counting permit pool: a try-acquire with no queue
 //!   and no blocking, whose guard returns its slot on drop. One mechanism
-//!   behind the daemon's five bounded pools; a permit is a slot of the pool
+//!   behind the daemon's six bounded pools; a permit is a slot of the pool
 //!   that minted it, so no bound can spend another's. Beside it, the edge
 //!   tracker: the once-per-episode memory of a bound that refuses — the
 //!   first refusal an edge, the clearing an edge once the condition has
-//!   stood clear for a hold-down — which the five pools, the daemon's
-//!   worker pool, its stream budget and its streams' threads, its challenge
-//!   store and its accept loop each hold, and the one clock their hold-down
-//!   is judged against.
+//!   stood clear for a hold-down — which the six pools, one tracker between
+//!   the class and the per-document pool, the daemon's worker pool, its
+//!   stream budget and its streams' threads, its challenge store and its
+//!   accept loop each hold, and the one clock their hold-down is judged
+//!   against.
 //! * [`notice`] — the operator's stream: one line, or one notice of several
 //!   lines, every line opening with the program's name and the head carrying
 //!   its time, handed to one thread that writes them in order — so that a

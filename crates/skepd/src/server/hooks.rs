@@ -11,6 +11,7 @@ use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
+use skep_address::Address;
 use skep_engine::{HistoryError, Recovery};
 #[cfg(feature = "test-hooks")]
 use skep_kernel::Step;
@@ -24,6 +25,7 @@ use skep_media::MediaOptions;
 use skep_util::notice::{self, Class};
 use skep_util::permits::Permit;
 
+use super::scan::RegionPermit;
 use super::{Daemon, DaemonError};
 use skep_core::auth::AuthOptions;
 
@@ -861,10 +863,11 @@ impl Daemon {
     /// [`Daemon::advance_media_clock_ms`] drives an expiry. The clock is the
     /// *process's* and not this daemon's: one offset every holder in the
     /// process reads, which is what makes it one clock for the ten pairs —
-    /// the five permit pools', the worker pool's, the live-stream budget's,
-    /// the live streams' threads', the accept loop's and the challenge
-    /// store's, whose mint reads it for the nonces' time to live as well, so
-    /// an expiry and the hold-down move together.
+    /// the six permit pools' five (the class and the per-document pool share
+    /// one), the worker pool's, the live-stream budget's, the live streams'
+    /// threads', the accept loop's and the challenge store's, whose mint
+    /// reads it for the nonces' time to live as well, so an expiry and the
+    /// hold-down move together.
     #[doc(hidden)]
     pub fn advance_edge_clock_ms(&self, ms: u64) {
         skep_util::permits::advance_edge_clock_ms(ms);
@@ -986,6 +989,25 @@ impl Daemon {
     #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold_scan_permit(&self) -> Option<Permit<'_>> {
         self.scans.try_hold()
+    }
+
+    /// Holds one region-read permit of `d` exactly as an in-flight region
+    /// read of `d` does.
+    ///
+    /// **Test hook** (the same standing as [`Daemon::try_hold_scan_permit`]:
+    /// `#[doc(hidden)]`, not a stable API). It answers `None` when `d` holds
+    /// its `MAX_REGION_READS_PER_DOCUMENT` region reads or the board its
+    /// `MAX_CONCURRENT_REGION_READS` across every document. A real region
+    /// read over a test-sized world finishes in microseconds, so the
+    /// integration tests pin the two counts through this instead of racing
+    /// the store. A permit from here is a slot of `d`'s width and one of the
+    /// ceiling, and a slot of no other pool: holding every one leaves the
+    /// class scans, `/op-at`, `/dump?at` and `/chain?at` untouched — and
+    /// holds no worker.
+    #[doc(hidden)]
+    #[must_use = "a permit dropped at once holds nothing"]
+    pub fn try_hold_region_permit(&self, d: &Address) -> Option<RegionPermit<'_>> {
+        self.scans.try_hold_region(d)
     }
 
     /// Fixes the head writer's clock at `millis`.

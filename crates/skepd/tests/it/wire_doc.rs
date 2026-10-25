@@ -1110,7 +1110,7 @@ fn doc_states_the_feed_walk_behind_the_listener_and_its_token() {
 /// committed; §HTTP status codes carries the token at 503 in the pool
 /// family's voice — all write permits in use, the `op` carried, retry
 /// shortly; and §Media's pins passage counts the pool into the worker
-/// minimum — `MIN_WORKERS` one more than the FIVE pools' slots together, the
+/// minimum — `MIN_WORKERS` one more than the SIX pools' slots together, the
 /// write pool's 4 among them, the default one above it — the two counts
 /// read through the constants, and the vector set pins the same two. The
 /// daemon's answers are pinned end to end in `write_pool.rs`; this pins
@@ -1149,11 +1149,9 @@ fn doc_states_the_write_permit_pool_and_its_token() {
         assert!(row.contains(fact), "the row says {fact:?}: {row}");
     }
     let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
-    for fact in [
-        "five pools' slots together",
-        "the write permit pool's 4",
-        "`MAX_CONCURRENT_WRITES`",
-    ] {
+    for fact in
+        ["six pools' slots together", "the write permit pool's 4", "`MAX_CONCURRENT_WRITES`"]
+    {
         assert!(media.contains(fact), "§Media's pins say {fact:?}");
     }
     for pin in [
@@ -1281,10 +1279,12 @@ fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
 /// only — no longer "the embedded authoring client". The width is
 /// `history.rs`'s crate-private constant, pinned as its literal and held
 /// by arithmetic the test CAN reach: `MIN_WORKERS` is one more than the
-/// five pools' slots together, so the two widths this document spells and
-/// the write pool's figure (§The model), with the two media pools'
-/// constants, must sum to it — a pool whose constant moved without its
-/// sentence fails here.
+/// six pools' slots together, so the three widths this document spells —
+/// the two here and the per-document pool's ceiling,
+/// `MAX_CONCURRENT_REGION_READS`, read off §Link discovery reads as the
+/// class-scan pool's is — and the write pool's figure (§The model), with
+/// the two media pools' constants, must sum to it — a pool whose constant
+/// moved without its sentence fails here.
 #[test]
 fn doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_reader() {
     let history = prose("\n## Reading history", &["\n## The commit stream"]);
@@ -1309,16 +1309,18 @@ fn doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_rea
     let model = prose("\n## The model", &["\n### Endpoints"]);
     let reconstructions = figure_after(&history, "**`MAX_CONCURRENT_RECONSTRUCTIONS` = ");
     let class_scans = figure_after(&scans, "**`MAX_CONCURRENT_CLASS_SCANS` = ");
+    let region_reads = figure_after(&scans, "**`MAX_CONCURRENT_REGION_READS` = ");
     let writes = figure_after(&model, "`MAX_CONCURRENT_WRITES` (");
     assert_eq!(
         reconstructions
             + class_scans
+            + region_reads
             + writes
             + skep_media::limits::MAX_CONCURRENT_FETCHES
             + skep_media::limits::MAX_CONCURRENT_UPLOADS
             + 1,
         skepd::MIN_WORKERS,
-        "the five pools' widths as the document spells them, plus one, are `MIN_WORKERS`"
+        "the six pools' widths as the document spells them — the per-document pool's by its ceiling — plus one, are `MIN_WORKERS`"
     );
     let endpoints = prose("\n### Endpoints", &["\n### Transport"]);
     let row = endpoints

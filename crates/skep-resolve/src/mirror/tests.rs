@@ -1,64 +1,114 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::io;
+use std::net::IpAddr;
 use std::rc::Rc;
 
 use serde_json::json;
-use skep_identity::{entry_body_record, entry_frame, DocTerm, RecordRows};
-use skep_registry::{encode, Binding};
-use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+use skep_registry::{t_binding, t_endpoint};
+use skep_signature::HybridSigner;
 
 use super::*;
 use crate::board::unit_span_json;
 use crate::http::{Method, Transport, TransportError};
-use crate::mirror::testing::{answer, hint, over, span};
+use crate::mirror::testing::{
+    answer, binding_text, endpoint_text, enroll_text, hint, hint_of, over, over_hint, realm_of, retire_text, signer, span,
+    KeySetArm, Script, TERM,
+};
+use crate::origin::{NameResolver, Transports};
+use crate::walk::resolve;
 
 fn a(s: &str) -> Address {
     parse_address(s).unwrap()
 }
 
-/// The board term every record below is signed under.
-const TERM: BoardTerm = BoardTerm { log_position: 1, chain: [7; 32] };
+/// The registrar's account and doc 1, and an org's.
+const CLAIMANT: &str = "1.0.1";
+const REGISTRY: &str = "1.0.1.0.1";
+const ORG: &str = "1.0.2";
+const ORG_DOC1: &str = "1.0.2.0.1";
 
-/// A binding of `prefix` naming `to`, deposited in `home` and signed by
-/// `signer` over the record frame the home's account composes under
-/// [`TERM`].
-fn signed_binding(signer: &HybridSigner, home: &Address, prefix: &Address, to: &[Address]) -> String {
-    let body = Body::Binding(Binding { prefix: prefix.clone(), replaces: None });
-    let sigless = encode(&body, None);
-    let rows = RecordRows {
-        ty: t_binding(),
-        to,
-        replaces: None,
-        lineage_fork_point: None,
-        sigless_canonical_record: sigless.as_bytes(),
-    };
-    let account = account_of_document(home).expect("a doc 1's account");
-    let frame = entry_frame(signer.public_key().alg(), TERM, &account, DocTerm::One(home), &entry_body_record(rows));
-    encode(&body, Some(&signer.sign(&frame).iter().map(|b| format!("{b:02x}")).collect::<String>()))
+fn fp(signer: &HybridSigner) -> Fingerprint {
+    Fingerprint::of(signer.public_key())
 }
 
-/// A stored link at `at`, homed in `home`, typed `ty`, from `from` to `to`.
-fn stored(at: u64, address: &str, home: &Address, ty: &Address, from: &str, to: &[Address]) -> StoredLink {
-    StoredLink { at, address: a(address), home: home.clone(), ty: Some(ty.clone()), from: vec![a(from)], to: to.to_vec() }
+/// A copy held under `dir` for an OFFLINE rebuild: the feed's rows and the
+/// fetch cache's lines a mirror wrote — every stored link and every atom,
+/// the credential records the table is folded from among them — built by
+/// the same deposits a [`Script`] takes.
+struct Copy {
+    kept: Fetched,
+    lines: Vec<Value>,
+    rows: Vec<Value>,
+    ordinals: BTreeMap<String, u64>,
+    link_ordinals: BTreeMap<String, u64>,
+    position: u64,
 }
 
-/// `signer`'s table, the one key it holds, as `account`'s before any act.
-fn table(account: &str, signer: &HybridSigner) -> KeysAsOf {
-    KeysAsOf { account: a(account), epoch: Epoch(0), at: 0, enrolled: vec![Enrolled { key: signer.public_key().clone(), anchor: true }] }
+impl Copy {
+    fn new() -> Copy {
+        let mut kept = Fetched::default();
+        let lines = vec![kept.keep_board(TERM, &"07".repeat(32)).expect("the term's line")];
+        Copy { kept, lines, rows: Vec::new(), ordinals: BTreeMap::new(), link_ordinals: BTreeMap::new(), position: 0 }
+    }
+
+    fn bump(of: &mut BTreeMap<String, u64>, home: &Address) -> u64 {
+        let n = of.entry(home.to_string()).or_insert(0);
+        *n += 1;
+        *n
+    }
+
+    /// `text` deposited as the next atom of `home` and linked, typed `ty`,
+    /// to `to` at the next position, its lines kept; the link's address.
+    fn deposit(&mut self, home: &Address, ty: &Address, to: &[Address], text: &str) -> Address {
+        let ordinal = Copy::bump(&mut self.ordinals, home);
+        let atom = a(&format!("{home}.0.1.{ordinal}"));
+        self.lines.extend(self.kept.keep_atom(atom.clone(), text.to_string()));
+        self.link(home, ty, vec![atom], to.to_vec())
+    }
+
+    /// A claim link in the claimant's own doc 1, no atom.
+    fn claim(&mut self, claimant: &Address) -> Address {
+        let home = a(&format!("{claimant}.0.1"));
+        self.link(&home, &commons_type(&[3]), vec![claimant.clone()], Vec::new())
+    }
+
+    fn link(&mut self, home: &Address, ty: &Address, from: Vec<Address>, to: Vec<Address>) -> Address {
+        let k = Copy::bump(&mut self.link_ordinals, home);
+        let address = a(&format!("{home}.0.2.{k}"));
+        self.position += 1;
+        let stored = StoredLink { at: self.position, address: address.clone(), home: home.clone(), ty: Some(ty.clone()), from, to };
+        self.lines.extend(self.kept.keep_link(stored));
+        self.rows.push(json!({ "at": self.position, "op": "make_link", "link": address.to_string(), "docs": [home.to_string()] }));
+        address
+    }
+
+    /// A row at the next position whose link the cache holds at ANOTHER
+    /// position and home — the courier's line — the row's home `home`.
+    fn row_for(&mut self, link: &Address, home: &Address) {
+        self.position += 1;
+        self.rows.push(json!({ "at": self.position, "op": "make_link", "link": link.to_string(), "docs": [home.to_string()] }));
+    }
+
+    /// The copy written under `dir` and rebuilt offline.
+    fn rebuilt(&self, dir: &Path) -> Mirror {
+        let header = json!({ "skep-resolve": FEED_FORMAT, "realm": hint().realm().genesis.to_hex(), "root": null });
+        let rows = self.rows.iter().map(|row| json!({ "row": row }));
+        let feed: String = std::iter::once(&header).cloned().chain(rows).map(|line| format!("{line}\n")).collect();
+        fs::write(dir.join(FEED_COPY), feed).expect("the feed copy");
+        fs::write(dir.join(FETCH_CACHE), self.lines.iter().map(|line| format!("{line}\n")).collect::<String>()).expect("the cache");
+        Mirror::rebuild_offline(&hint(), dir).expect("rebuilt")
+    }
 }
 
-/// A copy under `dir` — its header naming [`hint`]'s genesis fingerprint, a
-/// `make_link` row at each `(at, link, home)` — and a fetch cache of
-/// `lines`, rebuilt offline.
-fn rebuilt(dir: &Path, rows: &[(u64, &str, &Address)], lines: &[Value]) -> Mirror {
-    let header = json!({ "skep-resolve": FEED_FORMAT, "realm": hint().realm().genesis.to_hex(), "root": null });
-    let rows: Vec<Value> = rows
-        .iter()
-        .map(|(at, link, home)| json!({ "row": { "at": at, "op": "make_link", "link": link, "docs": [home.to_string()] } }))
-        .collect();
-    let feed: String = std::iter::once(&header).chain(&rows).map(|line| format!("{line}\n")).collect();
-    fs::write(dir.join(FEED_COPY), feed).expect("the feed copy");
-    fs::write(dir.join(FETCH_CACHE), lines.iter().map(|line| format!("{line}\n")).collect::<String>()).expect("the cache");
-    Mirror::rebuild_offline(&hint(), dir).expect("rebuilt")
+/// A copy whose registrar `1.0.1` holds `registrar`'s key from its genesis
+/// at 1 and claimed at 2.
+fn claimed_copy(registrar: &HybridSigner) -> Copy {
+    let (registry, claimant) = (a(REGISTRY), a(CLAIMANT));
+    let mut copy = Copy::new();
+    copy.deposit(&registry, &commons_type(&[1]), &[claimant.clone()], &enroll_text(None, &registry, &claimant, &[(registrar.public_key(), true)]));
+    copy.claim(&claimant);
+    copy
 }
 
 /// THE BINDING-WRITING ACCOUNT (R5 (g); REG-2.8, REG-2.6): a binding-typed
@@ -67,35 +117,26 @@ fn rebuilt(dir: &Path, rows: &[(u64, &str, &Address)], lines: &[Value]) -> Mirro
 /// it is counted apart, never judged, and its prefix has no standing; the
 /// registrar's own binding, deposited the same way in the claimant's doc 1,
 /// is SIGNED and stands. The copy is rebuilt offline, every fetch served
-/// from a cache written by `Fetched`.
+/// from a cache written by `Fetched` — the two accounts' credential records
+/// among them, the table folded from the cache alone.
 #[test]
 fn a_binding_typed_record_outside_the_claimants_doc_one_binds_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let registrar = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[1; 32]).expect("tag 1");
-    let org = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1");
-    let bound = [a("1.0.2")];
-    let (registry, own) = (a("1.0.1.0.1"), a("1.0.2.0.1"));
-    let mut kept = Fetched::default();
-    let lines: Vec<Value> = [
-        kept.keep_link(stored(1, "1.0.1.0.1.0.2.1", &registry, &commons_type(&[3]), "1.0.1", &[])),
-        kept.keep_link(stored(2, "1.0.2.0.1.0.2.1", &own, t_binding(), "1.0.2.0.1.0.1.1", &bound)),
-        kept.keep_link(stored(3, "1.0.1.0.1.0.2.2", &registry, t_binding(), "1.0.1.0.1.0.1.1", &bound)),
-        kept.keep_atom(a("1.0.2.0.1.0.1.1"), signed_binding(&org, &own, &a("1.9"), &bound)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.1"), signed_binding(&registrar, &registry, &a("1.8"), &bound)),
-        kept.keep_board(TERM, &"07".repeat(32)),
-        kept.keep_keys(table("1.0.1", &registrar)),
-        kept.keep_keys(table("1.0.2", &org)),
-    ]
-    .into_iter()
-    .map(|line| line.expect("a value not held writes its line"))
-    .collect();
-    let rows = [(1, "1.0.1.0.1.0.2.1", &registry), (2, "1.0.2.0.1.0.2.1", &own), (3, "1.0.1.0.1.0.2.2", &registry)];
-    let mirror = rebuilt(dir.path(), &rows, &lines);
-    let verdict = mirror.index().standing(&a("1.8")).map(|s| s.current.verdict);
-    assert_eq!(verdict, Some(Verdict::Signed(Fingerprint::of(registrar.public_key()))), "the registrar's binding stands");
+    let (registrar, org) = (signer(1), signer(2));
+    let (registry, own, bound) = (a(REGISTRY), a(ORG_DOC1), a(ORG));
+    let mut copy = claimed_copy(&registrar);
+    copy.deposit(&registry, &commons_type(&[1]), &[bound.clone()], &enroll_text(Some(&registrar), &registry, &bound, &[(org.public_key(), true)]));
+    copy.deposit(&own, t_binding(), &[bound.clone()], &binding_text(&org, &own, &[bound.clone()], &a("1.9")));
+    copy.deposit(&registry, t_binding(), &[bound.clone()], &binding_text(&registrar, &registry, &[bound.clone()], &a("1.8")));
+    let mut mirror = copy.rebuilt(dir.path());
+    let verdict = mirror.index().standing(&a("1.8")).map(|s| s.current.verdict.clone());
+    assert_eq!(verdict, Some(Verdict::Signed(fp(&registrar))), "the registrar's binding stands");
     assert_eq!(mirror.index().standing(&a("1.9")), None, "the org's binding-typed record binds nothing");
     assert_eq!(mirror.stats().binding_typed_outside_home, 1, "counted apart");
     assert!(mirror.index().suppressed().is_empty(), "and never judged: {:?}", mirror.index().suppressed());
+    assert_eq!(mirror.stats().reads.total(), 0, "no wire read");
+    let org_keys = mirror.current_keys(&bound).expect("read").expect("the org's table, folded from the cache");
+    assert_eq!(org_keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>(), [fp(&org)]);
 }
 
 /// A RECORD'S POSITION AND HOME ARE ITS ROW'S (R5 (g); REG-1.10): a cache
@@ -107,27 +148,28 @@ fn a_binding_typed_record_outside_the_claimants_doc_one_binds_nothing() {
 #[test]
 fn a_records_position_and_home_are_its_rows_never_a_cache_lines() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let registrar = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[1; 32]).expect("tag 1");
-    let org = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1");
-    let bound = [a("1.0.2")];
-    let (registry, own) = (a("1.0.1.0.1"), a("1.0.2.0.1"));
-    let mut kept = Fetched::default();
-    let lines: Vec<Value> = [
-        kept.keep_link(stored(1, "1.0.1.0.1.0.2.1", &registry, &commons_type(&[3]), "1.0.1", &[])),
-        kept.keep_link(stored(7, "1.0.1.0.1.0.2.2", &own, t_binding(), "1.0.2.0.1.0.1.1", &bound)),
-        kept.keep_atom(a("1.0.2.0.1.0.1.1"), signed_binding(&org, &own, &a("1.9"), &bound)),
-        kept.keep_board(TERM, &"07".repeat(32)),
-        kept.keep_keys(table("1.0.1", &registrar)),
-        kept.keep_keys(table("1.0.2", &org)),
-    ]
-    .into_iter()
-    .map(|line| line.expect("a value not held writes its line"))
-    .collect();
-    let rows = [(1, "1.0.1.0.1.0.2.1", &registry), (2, "1.0.1.0.1.0.2.2", &registry)];
-    let mirror = rebuilt(dir.path(), &rows, &lines);
+    let (registrar, org) = (signer(1), signer(2));
+    let (registry, own, bound) = (a(REGISTRY), a(ORG_DOC1), a(ORG));
+    let mut copy = claimed_copy(&registrar);
+    // The courier's line: the org's own binding, kept at position 7 in the
+    // org's doc 1 — while the row puts a link of that address in the
+    // registrar's doc 1 at 3.
+    let orgs_binding = binding_text(&org, &own, &[bound.clone()], &a("1.9"));
+    let moved = StoredLink {
+        at: 7,
+        address: a("1.0.1.0.1.0.2.9"),
+        home: own.clone(),
+        ty: Some(t_binding().clone()),
+        from: vec![a("1.0.2.0.1.0.1.1")],
+        to: vec![bound],
+    };
+    copy.lines.extend(copy.kept.keep_link(moved));
+    copy.lines.extend(copy.kept.keep_atom(a("1.0.2.0.1.0.1.1"), orgs_binding));
+    copy.row_for(&a("1.0.1.0.1.0.2.9"), &registry);
+    let mirror = copy.rebuilt(dir.path());
     assert_eq!(mirror.index().standing(&a("1.9")), None, "the org's record binds nothing");
     let kept_out: Vec<(u64, Cause)> = mirror.index().suppressed().iter().map(|s| (s.position, s.cause.clone())).collect();
-    assert_eq!(kept_out, [(2, Cause::Verdict(Verdict::Unsigned))], "judged at the row's position, in the row's home");
+    assert_eq!(kept_out, [(3, Cause::Verdict(Verdict::Unsigned))], "judged at the row's position, in the row's home");
 }
 
 /// AN ADDRESS PAST A MACHINE WORD IS AN ADDRESS (wire.md §Value encodings:
@@ -141,8 +183,8 @@ fn a_records_position_and_home_are_its_rows_never_a_cache_lines() {
 #[test]
 fn a_record_naming_an_address_past_a_machine_word_stands_signed() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let registrar = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[1; 32]).expect("tag 1");
-    let registry = a("1.0.1.0.1");
+    let registrar = signer(1);
+    let registry = a(REGISTRY);
     let (word, wide_account) = (a("1.18446744073709551616"), a("1.0.18446744073709551616"));
     // Past the wire's digit cap, so built from its components: `a` reads
     // what a board serves, and no board serves it.
@@ -150,37 +192,189 @@ fn a_record_naming_an_address_past_a_machine_word_stands_signed() {
         Tumbler::new([Nat::from(1u8), "9".repeat(4097).parse().expect("a natural")]).expect("a tumbler"),
     )
     .expect("an address");
-    let (to_org, to_wide) = ([a("1.0.2")], [wide_account.clone()]);
-    let mut kept = Fetched::default();
-    let lines: Vec<Value> = [
-        kept.keep_link(stored(1, "1.0.1.0.1.0.2.1", &registry, &commons_type(&[3]), "1.0.1", &[])),
-        kept.keep_link(stored(2, "1.0.1.0.1.0.2.2", &registry, t_binding(), "1.0.1.0.1.0.1.1", &to_org)),
-        kept.keep_link(stored(3, "1.0.1.0.1.0.2.3", &registry, t_binding(), "1.0.1.0.1.0.1.2", &to_wide)),
-        kept.keep_link(stored(4, "1.0.1.0.1.0.2.4", &registry, t_binding(), "1.0.1.0.1.0.1.3", &to_org)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.1"), signed_binding(&registrar, &registry, &word, &to_org)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.2"), signed_binding(&registrar, &registry, &a("1.8"), &to_wide)),
-        kept.keep_atom(a("1.0.1.0.1.0.1.3"), signed_binding(&registrar, &registry, &past_the_wire, &to_org)),
-        kept.keep_board(TERM, &"07".repeat(32)),
-        kept.keep_keys(table("1.0.1", &registrar)),
-    ]
-    .into_iter()
-    .map(|line| line.expect("a value not held writes its line"))
-    .collect();
-    let rows = [
-        (1, "1.0.1.0.1.0.2.1", &registry),
-        (2, "1.0.1.0.1.0.2.2", &registry),
-        (3, "1.0.1.0.1.0.2.3", &registry),
-        (4, "1.0.1.0.1.0.2.4", &registry),
-    ];
-    let mirror = rebuilt(dir.path(), &rows, &lines);
+    let (to_org, to_wide) = ([a(ORG)], [wide_account.clone()]);
+    let mut copy = claimed_copy(&registrar);
+    copy.deposit(&registry, t_binding(), &to_org, &binding_text(&registrar, &registry, &to_org, &word));
+    copy.deposit(&registry, t_binding(), &to_wide, &binding_text(&registrar, &registry, &to_wide, &a("1.8")));
+    copy.deposit(&registry, t_binding(), &to_org, &binding_text(&registrar, &registry, &to_org, &past_the_wire));
+    let mirror = copy.rebuilt(dir.path());
     assert!(mirror.index().suppressed().is_empty(), "{:?}", mirror.index().suppressed());
-    let signed = Verdict::Signed(Fingerprint::of(registrar.public_key()));
+    let signed = Verdict::Signed(fp(&registrar));
     let past_a_word = mirror.index().standing(&word).expect("a prefix past a machine word");
     assert_eq!(past_a_word.current.verdict, signed);
     let naming = mirror.index().standing(&a("1.8")).expect("a binding naming an account past a machine word");
     assert_eq!((naming.current.verdict, naming.current.record.account), (signed.clone(), Some(wide_account)));
     let past_the_cap = mirror.index().standing(&past_the_wire).expect("a prefix past the wire's cap");
     assert_eq!(past_the_cap.current.verdict, signed);
+}
+
+/// This resolver's own resolution of a name, fixed: `org.example` at a
+/// public address, every other name at none.
+struct Names;
+
+impl NameResolver for Names {
+    fn resolve(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+        Ok(if host == "org.example" { vec!["93.184.216.34".parse().unwrap()] } else { Vec::new() })
+    }
+}
+
+/// The verdict beside the binding at `prefix`, where the index holds one.
+fn verdict_at(mirror: &Mirror, prefix: &str) -> Option<Verdict> {
+    mirror.index().standing(&a(prefix)).map(|s| s.current.verdict.clone())
+}
+
+/// The fingerprints of the set that opens `account` at the head, sorted.
+fn current(mirror: &mut Mirror, account: &str) -> Option<Vec<Fingerprint>> {
+    mirror.current_keys(&a(account)).expect("no wire read").map(|keys| {
+        let mut v: Vec<Fingerprint> = keys.iter().map(|e| Fingerprint::of(&e.key)).collect();
+        v.sort_by_key(Fingerprint::to_hex);
+        v
+    })
+}
+
+fn sorted(signers: &[&HybridSigner]) -> Vec<Fingerprint> {
+    let mut v: Vec<Fingerprint> = signers.iter().map(|s| fp(s)).collect();
+    v.sort_by_key(Fingerprint::to_hex);
+    v
+}
+
+/// A claimed board with one org hired: the registrar `1.0.1`'s genesis at 1
+/// (an anchor and a device key), its claim at 2, the org `1.0.2`'s genesis
+/// at 3 — homed in the claimant's doc 1, the device key's hand — and the
+/// org's doc 1 holding its endpoint at 4, signed by the org's own key;
+/// `1.5` bound to the org at 5 by the device key.
+struct Fixture {
+    anchor: HybridSigner,
+    device: HybridSigner,
+    org: HybridSigner,
+    script: Script,
+    org_genesis: Address,
+    endpoint: Address,
+}
+
+fn fixture() -> Fixture {
+    let (anchor, device, org) = (signer(1), signer(2), signer(3));
+    let (registry, own, claimant, bound) = (a(REGISTRY), a(ORG_DOC1), a(CLAIMANT), a(ORG));
+    let mut script = Script::new();
+    script.deposit(&registry, &commons_type(&[1]), &[claimant.clone()], &enroll_text(None, &registry, &claimant, &[(anchor.public_key(), true), (device.public_key(), false)]));
+    script.claim(&claimant);
+    let org_genesis = script.deposit(&registry, &commons_type(&[1]), &[bound.clone()], &enroll_text(Some(&device), &registry, &bound, &[(org.public_key(), true)]));
+    let endpoint = script.deposit(&own, t_endpoint(), &[], &endpoint_text(&org, &own, &["https://org.example"]));
+    script.deposit(&registry, t_binding(), &[bound.clone()], &binding_text(&device, &registry, &[bound], &a("1.5")));
+    Fixture { anchor, device, org, script, org_genesis, endpoint }
+}
+
+/// THE FORGED ROTATION (REG-5.9; REG-3.39, REG-2.33): the party that runs
+/// the board plants a key into the claimant's doc 1 past the write path — an
+/// enroll record with no `sig`, and one self-signed by the key it enrolls,
+/// which no table holds — and serves `key_set` with the plant among the
+/// claimant's keys; a binding the planted key signs is judged UNSIGNED and
+/// suppressed, the plant enters no table at this reader, and the board was
+/// never asked for a key set. A reader taking the board's `key_set` would
+/// have called that binding SIGNED.
+#[test]
+fn a_rotation_the_board_planted_past_the_write_path_enrolls_no_key_at_this_reader() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Fixture { anchor, device, org, mut script, .. } = fixture();
+    let (registry, claimant) = (a(REGISTRY), a(CLAIMANT));
+    let (plant, plant_two) = (signer(9), signer(8));
+    script.deposit(&registry, &commons_type(&[1]), &[claimant.clone()], &enroll_text(None, &registry, &claimant, &[(plant.public_key(), true)]));
+    script.deposit(&registry, t_binding(), &[a("1.0.3")], &binding_text(&plant, &registry, &[a("1.0.3")], &a("1.6")));
+    script.deposit(&registry, &commons_type(&[1]), &[claimant.clone()], &enroll_text(Some(&plant_two), &registry, &claimant, &[(plant_two.public_key(), true)]));
+    script.deposit(&registry, t_binding(), &[a("1.0.4")], &binding_text(&plant_two, &registry, &[a("1.0.4")], &a("1.7")));
+    let served = vec![anchor.public_key().clone(), device.public_key().clone(), plant.public_key().clone(), plant_two.public_key().clone()];
+    let board = Rc::new(script.board(KeySetArm::Served(served)));
+    let mut mirror = over_hint(board.clone(), dir.path(), &hint_of(realm_of(&[anchor.public_key(), device.public_key()])));
+    assert_eq!(mirror.sync(), Ok(9));
+    assert_eq!(verdict_at(&mirror, "1.5"), Some(Verdict::Signed(fp(&device))), "the registrar's own binding stands");
+    assert_eq!(verdict_at(&mirror, "1.6"), None, "the sig-less plant's binding binds nothing");
+    assert_eq!(verdict_at(&mirror, "1.7"), None, "the self-signed plant's binding binds nothing");
+    let kept_out: Vec<Cause> = mirror.index().suppressed().iter().map(|s| s.cause.clone()).collect();
+    assert_eq!(kept_out, [Cause::Verdict(Verdict::Unsigned), Cause::Verdict(Verdict::Unsigned)], "UNSIGNED, never undeterminable");
+    assert_eq!(current(&mut mirror, CLAIMANT), Some(sorted(&[&anchor, &device])), "no plant in the claimant's table");
+    assert_eq!(current(&mut mirror, ORG), Some(sorted(&[&org])));
+    let s = mirror.stats();
+    assert_eq!(s.reads.key_set, 0, "the board's key set was never asked");
+    assert_eq!((s.credential_records, s.records), (4, 4), "the genesis, the hire and the two plants; the binding, the endpoint and the two forged bindings");
+    assert!(s.credential_verifies >= 2, "the hire's and the self-signed plant's sigs were tried: {}", s.credential_verifies);
+}
+
+/// A GENUINE ROTATION (REG-1.86 (e); the signed-ops design record §4.5's
+/// clause (b)): the registrar enrolls a third key by its device key's hand
+/// and retires the device key by the new key's; a binding the device key
+/// signed before its retirement is SIGNED, one it signed after is UNSIGNED,
+/// one the new key signs is SIGNED, and the walk's current keys are the
+/// anchor and the new key alone.
+#[test]
+fn a_genuine_rotation_judges_each_record_as_of_its_position() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Fixture { anchor, device, mut script, .. } = fixture();
+    let (registry, claimant) = (a(REGISTRY), a(CLAIMANT));
+    let third = signer(4);
+    script.deposit(&registry, &commons_type(&[1]), &[claimant.clone()], &enroll_text(Some(&device), &registry, &claimant, &[(third.public_key(), false)]));
+    script.deposit(&registry, t_binding(), &[a("1.0.3")], &binding_text(&device, &registry, &[a("1.0.3")], &a("1.6")));
+    script.deposit(&registry, &commons_type(&[2]), &[claimant.clone()], &retire_text(&third, &registry, &claimant, &[fp(&device)]));
+    script.deposit(&registry, t_binding(), &[a("1.0.4")], &binding_text(&device, &registry, &[a("1.0.4")], &a("1.7")));
+    script.deposit(&registry, t_binding(), &[a("1.0.5")], &binding_text(&third, &registry, &[a("1.0.5")], &a("1.8")));
+    let board = Rc::new(script.board(KeySetArm::Refused));
+    let mut mirror = over_hint(board, dir.path(), &hint_of(realm_of(&[anchor.public_key(), device.public_key()])));
+    assert_eq!(mirror.sync(), Ok(10));
+    assert_eq!(verdict_at(&mirror, "1.5"), Some(Verdict::Signed(fp(&device))));
+    assert_eq!(verdict_at(&mirror, "1.6"), Some(Verdict::Signed(fp(&device))), "signed before the retirement");
+    assert_eq!(verdict_at(&mirror, "1.7"), None, "signed by the retired key after it");
+    assert_eq!(verdict_at(&mirror, "1.8"), Some(Verdict::Signed(fp(&third))), "signed by the new key");
+    let kept_out: Vec<(u64, Cause)> = mirror.index().suppressed().iter().map(|s| (s.position, s.cause.clone())).collect();
+    assert_eq!(kept_out, [(9, Cause::Verdict(Verdict::Unsigned))]);
+    assert_eq!(current(&mut mirror, CLAIMANT), Some(sorted(&[&anchor, &third])), "the device key retired");
+}
+
+/// NO BOARD KEY READ (REG-3.39): over a board that refuses `key_set` on
+/// `/op` and `/op-at` alike — a read it answers with a panic — a full sync
+/// and a resolve pass: the binding and the endpoint SIGNED, the walk's face
+/// BOUND with the org's key set off the table, and no `key_set` counted.
+#[test]
+fn a_mirror_asks_the_board_for_no_key_set() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Fixture { anchor, device, org, script, endpoint, .. } = fixture();
+    let board = Rc::new(script.board(KeySetArm::Refused));
+    let mut mirror = over_hint(board.clone(), dir.path(), &hint_of(realm_of(&[anchor.public_key(), device.public_key()])));
+    assert_eq!(mirror.sync(), Ok(5));
+    assert!(mirror.index().suppressed().is_empty(), "{:?}", mirror.index().suppressed());
+    match resolve(&mut mirror, &a("1.5"), &Names, &Transports::default()).expect("resolved") {
+        crate::state::Resolution::Bound { standing, keys, endpoint: current_endpoint, dial, .. } => {
+            assert_eq!(standing.current.verdict, Verdict::Signed(fp(&device)));
+            assert_eq!(keys.map(|k| k.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>()), Some(vec![fp(&org)]), "the org's set off the table");
+            assert_eq!((current_endpoint.link, current_endpoint.verdict), (endpoint, Verdict::Signed(fp(&org))));
+            assert_eq!(dial.origin.as_str(), "https://org.example");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(mirror.stats().reads.key_set, 0);
+    assert!(board.asked.borrow().iter().all(|r| !r.ends_with(" key_set")), "{:?}", board.asked.borrow());
+}
+
+/// UNDETERMINABLE HERE (the signed-ops design record §7.2's REFUSE
+/// disposition): a credential record the transport will not serve — the
+/// org's genesis — makes the org's table undeterminable from that position:
+/// its endpoint, judged under the set that opens the org's doc 1, is
+/// UNDETERMINABLE HERE and never UNSIGNED, the walk answers no key set for
+/// it, and the registrar's binding — under the claimant's table, which the
+/// gap does not touch — stands SIGNED.
+#[test]
+fn a_credential_record_the_board_will_not_serve_leaves_its_account_undeterminable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Fixture { anchor, device, script, org_genesis, endpoint, .. } = fixture();
+    let board = Rc::new(script.board(KeySetArm::Refused));
+    let atom = a("1.0.1.0.1.0.1.2");
+    board.withhold(&atom);
+    let mut mirror = over_hint(board.clone(), dir.path(), &hint_of(realm_of(&[anchor.public_key(), device.public_key()])));
+    assert_eq!(mirror.sync(), Ok(5));
+    assert_eq!(verdict_at(&mirror, "1.5"), Some(Verdict::Signed(fp(&device))), "the claimant's table is whole");
+    let kept_out: Vec<(Address, Cause)> = mirror.index().suppressed().iter().map(|s| (s.link.clone(), s.cause.clone())).collect();
+    assert_eq!(kept_out, [(endpoint, Cause::Verdict(Verdict::UndeterminableHere))], "never UNSIGNED: {org_genesis}");
+    assert_eq!(current(&mut mirror, ORG), None, "the org's set is undeterminable here");
+    assert_eq!(current(&mut mirror, CLAIMANT), Some(sorted(&[&anchor, &device])));
+    assert_eq!(mirror.stats().credential_records, 1, "the genesis alone reached the table");
 }
 
 /// The address arithmetic the fold rests on: a doc 1's account.

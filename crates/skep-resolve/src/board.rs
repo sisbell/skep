@@ -9,13 +9,18 @@
 //! after them re-derives — are typed here, each where the wire spells it:
 //! the live head pair off `/health` ([`Board::head_pair`]), the board term
 //! off `H.1` ([`Board::board_term`]), a stored link's type and slots
-//! ([`Board::link_slots`]), an account's key set live and as of a position
-//! ([`Board::key_set`], [`Board::key_set_at`]), whether a deposit stands on
-//! the board's active view ([`Board::stands_active`]), the links a class
-//! scan lists ([`Board::class_window`]), and the floor a reclaimed read
-//! names ([`BoardError::Reclaimed`]). What each caller makes of them — the
-//! copy's head pair, the verdict's frame, the table a record is judged
-//! under, the candidates a scan reads — is the caller's. The feed's rows are
+//! ([`Board::link_slots`]), an account's live key set ([`Board::key_set`]),
+//! whether a deposit stands on the board's active view
+//! ([`Board::stands_active`]), the links a class scan lists
+//! ([`Board::class_window`]), and the floor a reclaimed read names
+//! ([`BoardError::Reclaimed`]). What each caller makes of them — the copy's
+//! head pair, the verdict's frame, the candidates a scan reads — is the
+//! caller's. The live key set is the FOLD's table, the board operator's to
+//! write (REG-5.9): the guest-reading resolve alone reads it, for the face
+//! it renders beside verdicts UNDETERMINABLE HERE (REG-3.33); the mirror
+//! judges no record under it, live or as of a position — the table a record
+//! is judged under is the one the mirror folds for itself from the
+//! credential records (`mirror/keys.rs`; REG-3.39). The feed's rows are
 //! checked by the base's provenance and a record's bytes by the verify, so
 //! the reads that only locate those bytes (the span set, `image`,
 //! `retrieve_v`) stay with their callers.
@@ -80,7 +85,8 @@ static HEAD_MEMBER_1: LazyLock<Address> =
 
 /// THE COUNT OF EVERY READ a board was asked, by kind — the fetch count a
 /// resolve's cost is stated in (the investigation §3.1). Reads over `/op-at`
-/// are counted under their own kind AND under `op_at`.
+/// are counted under their own kind AND under `op_at`. A mirror asks no
+/// `key_set`: under one its count stays zero, and a suite pins it there.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Reads {
@@ -178,7 +184,8 @@ impl From<TransportError> for BoardError {
     }
 }
 
-/// An account's key set as `key_set` answers it (wire.md §Identity reads).
+/// An account's key set as `key_set` answers it (wire.md §Identity reads):
+/// the fold's table, which the guest-reading resolve alone takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KeySetAnswer {
     /// The position the table answers as of — the live read's snapshot;
@@ -601,17 +608,11 @@ impl Board {
         Ok(Some(LinkSlots { ty: Some((*ty).clone()), from: link_slot(&v, 0), to: link_slot(&v, 1) }))
     }
 
-    /// `key_set` of `account`, live; `None` where the answer is no `key_set`
-    /// this build can read whole.
+    /// `key_set` of `account`, live — the fold's table, the guest-reading
+    /// resolve's read for the face it renders and no verdict's input; `None`
+    /// where the answer is no `key_set` this build can read whole.
     pub(crate) fn key_set(&self, account: &Address) -> Result<Option<KeySetAnswer>, BoardError> {
         Ok(key_set_answer(&self.op(&key_set_frame(account))?))
-    }
-
-    /// `key_set` of `account` AS OF `at` (wire.md §Reading history); `None`
-    /// where the answer is no `key_set` this build can read whole, and a
-    /// reclaimed position [`BoardError::Reclaimed`].
-    pub(crate) fn key_set_at(&self, at: u64, account: &Address) -> Result<Option<KeySetAnswer>, BoardError> {
-        Ok(key_set_answer(&self.op_at(at, &key_set_frame(account))?))
     }
 }
 
@@ -655,9 +656,7 @@ fn key_set_frame(account: &Address) -> Value {
 /// named, is the oldest position still answerable (wire.md §Reading
 /// history), so a floor at or below the position asked — `at` itself
 /// answerable — is no refusal the wire gives, and is
-/// [`BoardError::Malformed`]; the floor clause the mirror reads it by
-/// (`mirror/keys.rs`) counts acts in `(at, floor]` and is sound only past
-/// `at`. Every other answer passes as it is.
+/// [`BoardError::Malformed`]. Every other answer passes as it is.
 fn floor_past<T>(at: u64, answer: Result<T, BoardError>) -> Result<T, BoardError> {
     match answer {
         Err(BoardError::Reclaimed { floor: Some(floor) }) if floor <= at => {
@@ -782,8 +781,8 @@ pub(crate) fn content_ordinal_in(home: &Address, addr: &Address) -> Option<u64> 
 }
 
 /// One `key_set` entry as an [`Enrolled`]: `alg`, `key` (hex), `anchor` —
-/// the wire's spelling, read whole or not at all, by [`Board::key_set`] and
-/// [`Board::key_set_at`] alone.
+/// the wire's spelling, read whole or not at all, by [`Board::key_set`]
+/// alone.
 fn enrolled_of(e: &Value) -> Option<Enrolled> {
     let key = PublicKey::parse(e["alg"].as_str()?, e["key"].as_str()?).ok()?;
     Some(Enrolled { key, anchor: e["anchor"].as_bool()? })

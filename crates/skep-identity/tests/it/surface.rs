@@ -17,9 +17,11 @@ use common::{
 use sha2::{Digest, Sha256};
 use skep_identity::{
     canonical_record, doc_1_of, entry_body_publish, framed, parse_enroll, parse_record_value,
-    parse_retire, record_bytes, single_address, AlgRow, BoardTerm, CredentialKind, Enrollment,
-    Fingerprint, FoldCtx, HasIdentity, HybridBlob, IdentityState, Inert, LabelError, ParseKeyError,
-    PayloadError, PublicKey, PublishBody, PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
+    parse_retire, record_bytes, signer_of, single_address, Admission, AlgRow, BoardTerm,
+    CredentialKind, CredentialRecord, Enrolled, Enrollment, FilteredTable, Fingerprint, FoldCtx,
+    HasIdentity, HybridBlob, IdentityState, Inert, LabelError, Outcome, ParseKeyError,
+    PayloadError, PublicKey, PublishBody, PublishRefusal, RecordKind, RecordValue, Refused,
+    RefusedCause, SigAlgRow, Until, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
     MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
@@ -933,6 +935,33 @@ fn the_items_published_for_the_readers_the_spec_names_are_public() {
     let _ = (parse_enroll(b""), parse_retire(b""));
     let _: Result<RecordValue<Enrollment>, PayloadError> = parse_record_value(b"");
     let _: Result<RecordValue<Fingerprint>, PayloadError> = parse_record_value(b"");
+    // The verifier's signature-filtered key table beside the fold (AUTH-2.94;
+    // the design record §4.5's table paragraph), its signature check the
+    // caller's: the table, the record shape it reads, what it keeps and what
+    // it refuses, each record's outcome, and the one trial.
+    let table = FilteredTable::new(Some((2, addr(ACCT_A))));
+    let _: (Option<(u64, &skep_address::Address)>, &[Admission], &[Refused]) = (table.claim(), table.admissions(&addr(ACCT_A)), table.refused());
+    let _: Option<Vec<Enrolled>> = table.opening_at(&addr(ACCT_A), 3);
+    let _: Option<Vec<Enrolled>> = table.opening_now(&addr(ACCT_A));
+    let _ = (table.as_of(&addr(ACCT_A), 3).count(), table.current(&addr(ACCT_A)).count(), table.accounts().count());
+    let _: (Option<Until>, Option<RefusedCause>, Option<Outcome>) = (None, None, None);
+    let (account, home) = (addr(ACCT_A), doc1(ACCT_A));
+    let record = CredentialRecord {
+        kind: RecordKind::Enroll,
+        link: &home,
+        home: &home,
+        home_account: &account,
+        subject: &account,
+        ty: &home,
+        sigless: b"",
+        sig: None,
+        enrolled: &[],
+        retired: &[],
+        position: None,
+    };
+    let term = BoardTerm { log_position: 1, chain: [0; 32] };
+    let candidates: Vec<(&Fingerprint, &PublicKey)> = Vec::new();
+    let _: Option<Fingerprint> = signer_of(&record, term, &[], candidates, |_, _, _, _| false);
     // A non-folding reader, which LINKS the read (AUTH-2.37); a discovery
     // caller, beside `kind_of` (AUTH-2.28); a host that seats the slice
     // (AUTH-2.60); bebe (AUTH-2.118).

@@ -27,24 +27,40 @@ parts, each under the design rule it realizes:
 - **The mirror** (`Mirror`) — a `/changes` consumer from the floor
   (REG-3.10: no TTL, no negative cache) that fetches every row's bytes it
   needs — the stored link, the atom the link names (read where its home
-  arranges it), the home's credential table AS OF the record's position:
-  the live `key_set` where the credential acts the mirror holds prove it
-  the same table, `/op-at` otherwise — and keeps a journal copy from
-  genesis under a caller-given directory: `feed.jsonl`, the copy of the
-  feed the check covers, and `fetched.jsonl`, the mirror's own fetch cache
-  the rebuild reads, both begun afresh by a new base, so a cache that
-  outlived its feed copy is never read as this mirror's own; a cache line
-  that does not read — a write a crash cut short — is absent, never a
-  refusal. A sync that fails leaves its rows held, and the next takes them
-  up where it stopped. A key table holding a key this build cannot read is
-  no table, never a smaller one.
+  arranges it), and every credential record the feed names, the enroll
+  and retire atoms in any home — and keeps a journal copy from genesis
+  under a caller-given directory: `feed.jsonl`, the copy of the feed the
+  check covers, and `fetched.jsonl`, the mirror's own fetch cache the
+  rebuild reads, both begun afresh by a new base, so a cache that outlived
+  its feed copy is never read as this mirror's own; a cache line that does
+  not read — a write a crash cut short, or a key table a build before this
+  one kept — is absent, never a refusal. A sync that fails leaves its rows
+  held, and the next takes them up where it stopped.
+  **The key table is the mirror's own** (REG-3.39, REG-2.33, REG-5.9; the
+  signed-ops design record §7.2): the SIGNATURE-FILTERED KEY TABLE
+  [skep-identity](../skep-identity)'s `FilteredTable` folds, this crate
+  handing it each credential record — parsed by `parse_record_value`, with
+  its home, its home's account by address arithmetic, its subject and its
+  position — in journal order, and the signature check as a closure over
+  `skep_signature::verify`. The table's rules are the table's: the
+  claimant's own genesis at or below the claim alone host-trusted, every
+  other genesis judged under its delegator's set, a record admitted only
+  where its own `sig` verifies under the set that opens its home's account
+  as the table stood at the record's base, at the grade the act needs. The
+  board's `key_set`, live or on `/op-at`, is the fold's table — writable
+  without a key by the party that runs the daemon — and the mirror never
+  asks it: a key planted past the write path enters no table here, and a
+  record it signs reads UNSIGNED. A credential record this reader cannot
+  fetch makes its account's table UNDETERMINABLE HERE from that position
+  on, and every verdict read through it with it — never the board's word,
+  never an empty set.
   The base is from genesis at the root the hint names (REG-3.12); a
   held copy is CHECKED against the source read from genesis and resumed
   only where every held position comes back identical and every held head
   pair answers the same (REG-3.18); on either, the realm id's genesis
   fingerprint is compared at the claim's row — for the board's own
-  claimant at the board's own genesis act, never the fetch cache's —
-  against the genesis set the source answers (REG-3.42), the mirror
+  claimant against the keys its genesis record enrolls, that record read
+  off the board and never the fetch cache (REG-3.42) — the mirror
   honoring one claim, and no line reaches the copy before it is; a record
   is judged at its row's position, in its row's home, never a cache
   line's; a copy rebuilt offline is held to the feed's own order; a hint
@@ -72,7 +88,8 @@ parts, each under the design rule it realizes:
   `skep_registry::parse` — its address members, of any size, the addresses
   they name, never judged again — the record frame rebuilt from the row's
   own members, the signer found in the set that opens the home's account as
-  of the position, both halves verified. The verdict is one of the
+  of the position, read off the mirror's own filtered table, both halves
+  verified. The verdict is one of the
   signed-ops record §3.5's five values (`Verdict`) and stands beside every
   record the index holds; a record not SIGNED is suppressed and counted
   (`Index::suppressed`), never consulted at a resolve.
@@ -120,11 +137,14 @@ by name, and it reads no answer past the feed's 2 MiB page budget and its
 envelope (`TransportError::TooLarge`).
 The board's typed reads (`Board`) run over any `Transport` — that client,
 or a suite's replay of a recording — and count every read by kind
-(`Reads`), reported in `Stats`; every value the resolver takes on the
-board's word (the head pair, the board term, a link's type and slots, a
-key set, a deposit's standing on the active view, the links a class
-scan's window lists, a reclaimed read's floor, held past the position
-asked) is typed there, every answer held there to the shape the wire
+(`Reads`), reported in `Stats` beside the table's own figures (the
+credential records handed to it, the signature checks it ran, the time
+inside it); every value the resolver takes on the board's word (the head
+pair, the board term, a link's type and slots, the live key set the
+guest-reading resolve alone reads, a deposit's standing on the active
+view, the links a class scan's window lists, a reclaimed read's floor,
+held past the position asked) is typed there, every answer held there to
+the shape the wire
 promises — a page or a window that does not advance refused, a page past
 the byte budget re-asked once at the limit the feed names — and an `/op`
 answer past the cap is one no typed read takes. A link's slots are read

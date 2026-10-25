@@ -12,7 +12,7 @@ use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::credential_records;
 use skep_client::dial::Request;
 use skep_client::store::FileStore;
-use skep_client::verify::{Bounds, Entry, FilteredTable, Verdict};
+use skep_client::verify::{filtered_table, Bounds, Entry, Verdict};
 use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm};
 
 use crate::common::{board, claim, keygen, spawn};
@@ -82,29 +82,40 @@ fn the_verdict_follows_the_daemons_admission_and_an_unattested_entry_reads_unsig
     assert!(draft_row.get("attest").is_none());
     full.close().unwrap();
 
-    // THE READER: the filtered table over the admitted read, as of the
-    // entry's base; the frame re-composed from the row and the parent.
+    // THE READER: the shared signature-filtered table over the admitted
+    // read, built under the board's claim — the claimant `/health` names,
+    // the account this ceremony claimed with — as of the entry's base; the
+    // frame re-composed from the row and the parent.
     let records = credential_records(&board, &done.account, &[]).unwrap();
     let boundary = records.claim_entry.expect("the claim entry");
     assert!(boundary < attested_at);
-    let table = FilteredTable::build(&records, Some(term));
-    assert_eq!(table.current().count(), 3, "two anchors and the device key, host-trusted at the genesis");
-    assert!(table.inert.is_empty());
+    let claimant = board.health().unwrap().claimant().map(str::to_string).expect("a claimed board names its claimant");
+    assert_eq!(claimant, done.account, "the account the ceremony claimed with");
+    let table = filtered_table(&records, Some(&claimant), Some(term));
+    assert_eq!(table.current(&account).count(), 3, "two anchors and the device key, host-trusted at the genesis");
+    assert!(table.refused().is_empty(), "{:?}", table.refused());
     let blob = unhex(attest["sig"].as_str().unwrap());
     let entry = Entry { position: attested_at, frame: &frame, attest: Some((attest["alg"].as_str().unwrap(), &blob)) };
-    assert_eq!(Verdict::Signed(fp), skep_client::verify::verdict(&entry, &table, Bounds::from(&records)), "the reader's verdict equals the daemon's admission");
+    assert_eq!(Verdict::Signed(fp), skep_client::verify::verdict(&entry, &table, &account, Bounds::from(&records)), "the reader's verdict equals the daemon's admission");
     // The draft: no attest ⇒ UNSIGNED above the claim.
     let entry = Entry { position: draft_at, frame: &frame, attest: None };
-    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, Bounds::from(&records)));
+    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, &account, Bounds::from(&records)));
     // At and below the claim: BEFORE ATTESTATION.
     let entry = Entry { position: boundary, frame: &frame, attest: None };
-    assert_eq!(Verdict::BeforeAttestation, skep_client::verify::verdict(&entry, &table, Bounds::from(&records)));
+    assert_eq!(Verdict::BeforeAttestation, skep_client::verify::verdict(&entry, &table, &account, Bounds::from(&records)));
     // A key outside the filtered set signing the same frame: UNSIGNED — the
     // verifier judges against the FILTERED set, never the served `key_set`.
     let stranger = skep_client::sign::signer_from_seed(&[8; 32]);
     let forged = stranger.sign(&frame);
     let entry = Entry { position: attested_at, frame: &frame, attest: Some((stranger.public_key().alg(), &forged)) };
-    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, Bounds::from(&records)));
+    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, &account, Bounds::from(&records)));
     // No boundary derivable: UNDETERMINABLE, never judged.
-    assert!(matches!(skep_client::verify::verdict(&entry, &table, Bounds::default()), Verdict::Undeterminable(_)));
+    assert!(matches!(skep_client::verify::verdict(&entry, &table, &account, Bounds::default()), Verdict::Undeterminable(_)));
+    // Under another claimant the same genesis is a stranger's unsigned
+    // record: nothing is host-trusted and the daemon's own admission reads
+    // UNSIGNED here — the claimant is an input, never inferred from the read.
+    let other = filtered_table(&records, Some("1.0.9"), Some(term));
+    assert_eq!(other.current(&account).count(), 0);
+    let entry = Entry { position: attested_at, frame: &frame, attest: Some((attest["alg"].as_str().unwrap(), &blob)) };
+    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &other, &account, Bounds::from(&records)));
 }

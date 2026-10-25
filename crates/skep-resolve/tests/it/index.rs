@@ -46,19 +46,21 @@ fn the_index_holds_the_verified_records_and_suppresses_the_tampered() {
 
 /// A READER MISSING AN INPUT judges no record UNSIGNED (REG-1.86 (e): the
 /// verdict is manufactured from no missing input): rebuilt from a copy whose
-/// cache lacks every key table, or the board term, or every record's bytes,
-/// each record the fold reaches is UNDETERMINABLE HERE — 1.4's zeroed `sig`
-/// among them, a signature this reader cannot check — and none UNSIGNED;
-/// 1.14's spaced body, where its bytes are held, is no record at all and
-/// MALFORMED, as it is to every reader; and nothing enters the index.
+/// cache lacks every credential record — the key table's inputs, the atoms
+/// whose `type` is a credential kind's — or the board term, or every
+/// record's bytes, each record the fold reaches is UNDETERMINABLE HERE —
+/// 1.4's zeroed `sig` among them, a signature this reader cannot check — and
+/// none UNSIGNED; 1.14's spaced body, where its bytes are held, is no record
+/// at all and MALFORMED, as it is to every reader; and nothing enters the
+/// index.
 #[test]
 fn a_reader_missing_an_input_judges_undeterminable_here_never_unsigned() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (fixture, mirror) = open_fixture_mirror(dir.path());
     drop(mirror);
     let cache = fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache");
-    for (missing, malformed, undeterminable) in [(r#"{"keys":"#, 1, 33), (r#"{"board":"#, 1, 33), (r#"{"atom":"#, 0, 34)] {
-        let without: String = cache.lines().filter(|l| !l.starts_with(missing)).map(|l| format!("{l}\n")).collect();
+    for (missing, malformed, undeterminable) in [(r#"\"type\":\"skep-"#, 1, 33), (r#"{"board":"#, 1, 33), (r#"{"atom":"#, 0, 34)] {
+        let without: String = cache.lines().filter(|l| !l.contains(missing)).map(|l| format!("{l}\n")).collect();
         assert_ne!(without, cache, "the cache holds {missing}");
         fs::write(dir.path().join(FETCH_CACHE), &without).expect("the cache without them");
         let offline = Mirror::rebuild_offline(&fixture.hint, dir.path()).expect("rebuilt");

@@ -425,7 +425,8 @@ fn the_fixture_board_resolves_live_and_is_recorded_on_demand() {
         }
     }
     // THE SET AS OF THE POSITION: every binding was signed by the device key
-    // the registrar has since retired; the claimant's current set holds the
+    // the registrar has since retired; the claimant's current set — off the
+    // mirror's own filtered table, never the board's `key_set` — holds the
     // anchor and the rotated key alone.
     let device = Fingerprint::of(&public_key_of(&device_key()));
     for (prefix, face) in &faces {
@@ -540,6 +541,28 @@ fn the_resolvers_verdict_equals_the_daemons_admission_on_every_row() {
         assert!(index.all_endpoints().any(|e| e.home == addr(&org.doc1) && e.verdict == Verdict::Signed(Fingerprint::of(&public_key_of(&org.key)))));
     }
     assert!(!index.bindings().any(|b| b.record.prefix == addr("1.9")), "the refused binding's orphan reaches no index");
+    // THE TABLE EQUALS THE FOLD on a conforming board (the signed-ops design
+    // record §4.5's induction): the signature-filtered table the mirror
+    // folded for itself from the credential records — the claimant's
+    // genesis, each org's hire and each org's own key act — holds, at the
+    // head, exactly the set the board's fold serves under `key_set`, for the
+    // claimant and every org; and the board was never asked for a key set.
+    let mut mirror = mirror;
+    let live_set = |account: &str| -> Vec<String> {
+        let live = op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
+        let mut fps: Vec<String> = live["enrolled"].as_array().unwrap().iter().map(|e| e["fingerprint"].as_str().unwrap().to_string()).collect();
+        fps.sort();
+        fps
+    };
+    for account in std::iter::once(CLAIMANT_ACCOUNT.to_string()).chain(orgs.iter().map(|o| o.account.clone())) {
+        let keys = mirror.current_keys(&addr(&account)).expect("no wire read").expect("the table at the head");
+        let mut table: Vec<String> = keys.iter().map(|e| Fingerprint::of(&e.key).to_hex()).collect();
+        table.sort();
+        assert_eq!(table, live_set(&account), "{account}: the filtered table equals the fold's set");
+    }
+    let s = mirror.stats();
+    assert_eq!(s.reads.key_set, 0, "the board's key set was never asked");
+    assert_eq!(s.credential_records, 1 + 2 * orgs.len() as u64, "the claimant's genesis, each org's hire and each org's one key act");
     sd.shutdown();
 }
 
@@ -770,7 +793,10 @@ fn un_arrange_bindings(port: u16, console: &str, bindings: &[&str]) -> (String, 
 /// un-arranged at the registrar's doc 1's head is recovered by the walk
 /// down the home's chain — the head missed, `D.2` missed, `D.1` held it —
 /// never off the arranged head and never by the position read; every
-/// binding resolves as before.
+/// binding resolves as before. The two hires' enroll atoms — the credential
+/// records the mirror's key table is folded from, arranged in neither member
+/// — are walked too, both members missed, and recovered by the position read
+/// (REG-3.26), the walk's last recourse.
 #[test]
 fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -786,10 +812,14 @@ fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
     let mdir = tempfile::tempdir().expect("tempdir");
     let mut mirror = cold_mirror(port, mdir.path());
     let walk = mirror.stats().chain_walk;
-    assert_eq!(walk.atoms, 2, "{walk:?}");
-    assert_eq!(walk.versions_visited, 4, "D.2 missed and D.1 held it, twice: {walk:?}");
-    assert_eq!(walk.position_reads, 0, "never the position read where a version holds it");
+    assert_eq!(walk.atoms, 2, "the two bindings, held by D.1: {walk:?}");
+    assert_eq!(walk.versions_visited, 8, "D.2 missed and D.1 held it, twice; both missed, twice, for the hires' enroll atoms: {walk:?}");
+    assert_eq!(walk.position_reads, 2, "the position read for the two enroll atoms no version holds, and never where one does: {walk:?}");
     assert!(walk.reads >= 4, "{walk:?}");
+    for org in &orgs {
+        let keys = mirror.current_keys(&addr(&org.account)).expect("no wire read").expect("the org's table, its genesis recovered by the position read");
+        assert_eq!(keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>(), [Fingerprint::of(&public_key_of(&org.key))], "{}", org.prefix);
+    }
     assert_eq!(mirror.chain_members_of(&addr(CLAIMANT_DOC1)), [addr(&d1), addr(&d2)]);
     for org in &orgs {
         assert!(matches!(resolve_prefix(&mut mirror, &org.prefix), Resolution::Bound { .. }), "{}", org.prefix);
@@ -802,8 +832,9 @@ fn an_un_arranged_atom_is_recovered_by_the_homes_chain_walk() {
 /// org registered by the registrar's console — its account hired, its prefix
 /// bound, its doc 1 minted, its endpoint deposited — resolved from the ROOT
 /// HINT alone by a cold resolver in a fresh directory: BOUND, with the
-/// account's key set as the board folds it, the endpoint current, the member
-/// it would dial and the verdicts beside every record.
+/// account's key set off the mirror's own signature-filtered table — equal,
+/// on a conforming board, to the set the board folds — the endpoint current,
+/// the member it would dial and the verdicts beside every record.
 #[test]
 fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -825,7 +856,7 @@ fn one_org_registered_by_the_console_resolves_from_the_hint_by_a_cold_resolver()
             let live = op(port, None, &format!(r#"{{"op":"key_set","account":"{}"}}"#, org.account));
             let live: Vec<String> = live["enrolled"].as_array().unwrap().iter().map(|e| e["fingerprint"].as_str().unwrap().to_string()).collect();
             let keys = keys.as_ref().expect("the table at the head");
-            assert_eq!(keys.iter().map(|e| Fingerprint::of(&e.key).to_hex()).collect::<Vec<_>>(), live, "the key set as the board folds it");
+            assert_eq!(keys.iter().map(|e| Fingerprint::of(&e.key).to_hex()).collect::<Vec<_>>(), live, "the filtered table equals the set the board folds");
             assert_eq!(endpoint.link, addr(org.endpoint.as_ref().unwrap()));
             assert_eq!(endpoint.verdict, Verdict::Signed(Fingerprint::of(&public_key_of(&org.key))));
             assert_eq!(endpoint.record.origins, ["https://acme.example", "https://acme.example.net"]);
@@ -1104,6 +1135,9 @@ fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
 /// ONE MEASUREMENT CELL (the investigation §3.1, §3.3, §3.4), debug build:
 /// the board generated; a cold mirror from the hint alone — the feed's rows,
 /// bytes and pages, every fetch by kind, the verify time per record, the
+/// signature-filtered table's cost (the credential records handed to it,
+/// the signature checks it ran, the time inside it and per check — a
+/// verify per credential record at bootstrap, N orgs × k acts), the
 /// fold, the wall time to the first resolve; the warm `since=N` delta for
 /// one endpoint change; the guest-reading resolve of one prefix with no
 /// mirror (REG-3.24); and, where `chain_walk` is asked, the registrar's doc
@@ -1143,8 +1177,9 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
     let first_resolve = t.elapsed();
     assert!(matches!(first, Resolution::Bound { .. }), "{}", first.face());
     let per_record = if s.records > 0 { s.verify_time / s.records as u32 } else { Duration::ZERO };
+    let per_credential_verify = if s.credential_verifies > 0 { s.credential_time / s.credential_verifies as u32 } else { Duration::ZERO };
     report(&format!(
-        "N={n} k={k} | generated in {} ({feed_rows} positions; {retried} writes retried past the pool) | COLD: rows={} pages={} bytes={} fetches={} (read_link={} retrieve={} image={} span_set={} key_set={} find_links={} op_at={} chain={} health={}) records={} verify={} total ({} per record) fold={} bootstrap={} first_resolve={} copy_bytes={} suppressed={}",
+        "N={n} k={k} | generated in {} ({feed_rows} positions; {retried} writes retried past the pool) | COLD: rows={} pages={} bytes={} fetches={} (read_link={} retrieve={} image={} span_set={} key_set={} find_links={} op_at={} chain={} health={}) records={} verify={} total ({} per record) | TABLE: credential_records={} verifies={} time={} ({} per verify) | fold={} bootstrap={} first_resolve={} copy_bytes={} suppressed={}",
         secs(generated),
         s.rows,
         s.pages,
@@ -1162,6 +1197,10 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
         s.records,
         ms(s.verify_time),
         ms(per_record),
+        s.credential_records,
+        s.credential_verifies,
+        ms(s.credential_time),
+        ms(per_credential_verify),
         ms(s.fold_time),
         secs(cold),
         ms(first_resolve),
@@ -1255,7 +1294,7 @@ fn measure_n10_k8() {
 
 #[test]
 fn measure_n1000_k0() {
-    measure(1_000, 0, true);
+    measure(1_000, 0, false);
 }
 
 #[test]
@@ -1263,19 +1302,30 @@ fn measure_n1000_k2() {
     measure(1_000, 2, false);
 }
 
-/// The two cells too heavy for the gate, run ALONE by their own command:
+/// The cells too heavy for the gate, run ALONE by their own command:
 /// `SKEP_RESOLVE_MEASURE_ALONE=1 cargo nextest run -p skepd --profile full
 /// -E 'test(/^resolve::measure_alone_/)'`. Without the variable each passes
 /// at once, saying so. An `#[ignore]` would not keep them out: the gate of
 /// record runs with `--run-ignored all`, and the `full` profile caps a test
 /// at 600 s — N = 1,000 at eight key acts is daemon-bound at eight minutes
-/// alone on this Mac, and N = 100,000's generation is hours.
+/// alone on this Mac, N = 100,000's generation is hours, and the chain walk
+/// at N = 1,000 pays a position read — three `/op-at` reconstructions over a
+/// twenty-thousand-position journal — for each of the thousand hires' enroll
+/// records the rearranged board arranges in no member, which the mirror's
+/// key table is folded from.
 fn alone() -> bool {
     if std::env::var_os("SKEP_RESOLVE_MEASURE_ALONE").is_some() {
         return true;
     }
     report("  (a measurement cell run alone by its own command: set SKEP_RESOLVE_MEASURE_ALONE=1)");
     false
+}
+
+#[test]
+fn measure_alone_n1000_k0_chain_walk() {
+    if alone() {
+        measure(1_000, 0, true);
+    }
 }
 
 #[test]

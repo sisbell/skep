@@ -10,9 +10,12 @@
 //! the hand: at a record carrying its own `sig` — every record above the
 //! claim — the key that verifies it over the `record` frame, this store's
 //! own keys first, then a trial over the set that opens the home's account
-//! as of the record's base (AUTH-2.94; P12), the anchors alone at an
-//! anchor-grade act; at a record with no `sig` — the ceremony's own genesis
-//! — `/changes.key` at that position. Below the retention floor a
+//! as of the record's base as the board serves it (AUTH-2.94; P12) — an
+//! ATTRIBUTION, who signed, never a verdict: whether the record counts is
+//! the signature-filtered table's to say (`crate::verify`), which judges
+//! every record of this read under its own candidates and grades; at a
+//! record with no `sig` — the ceremony's own genesis — `/changes.key` at
+//! that position. Below the retention floor a
 //! position-addressed read answers `history_reclaimed` — an answer, never an
 //! exit (§2.3) — and the order is derived position-free, genesis-first
 //! (AUTH-2.100) plus link-address order (AUTH-5.69); the position and the
@@ -22,20 +25,22 @@
 //!
 //! `H.1`'s pair is the record frame's `board` term and every entry frame's,
 //! read once per board by [`Board::board_term`]; the frame itself is
-//! [`RecordFrame`]'s, the bytes the writing hand signed.
+//! `skep_identity::RecordFrame`'s, the bytes the writing hand signed,
+//! composed by the shared table's trial ([`signer_of`]) over the record as
+//! the table reads it ([`CredentialRecord`]).
 
 use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_identity::{parse_record_value, BoardTerm, Enrollment, Fingerprint, HybridBlob, PublicKey};
+use skep_address::Address;
+use skep_identity::{parse_record_value, signer_of, BoardTerm, CredentialRecord, Enrollment, Fingerprint, HybridBlob, PublicKey, RecordKind};
 
-use crate::address::{document_of, parent_account, within_principal_depth};
+use crate::address::{document_of, parent_account, parse_address, within_principal_depth};
 use crate::board::answers::IRun;
 use crate::board::{answers, frames, guest_closed, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
-use crate::sign::RecordFrame;
 
 #[cfg(test)]
 mod tests;
@@ -58,6 +63,14 @@ impl Kind {
         match self {
             Kind::Enroll => T_ENROLL,
             Kind::Retire => T_RETIRE,
+        }
+    }
+
+    /// Returns the kind as the shared table names it.
+    pub fn record_kind(self) -> RecordKind {
+        match self {
+            Kind::Enroll => RecordKind::Enroll,
+            Kind::Retire => RecordKind::Retire,
         }
     }
 }
@@ -116,11 +129,25 @@ pub struct Record {
     pub base: Option<u64>,
     /// The hand.
     pub hand: Hand,
-    /// Whether the act is anchor-grade.
+    /// Whether the act is anchor-grade by its own entries: an anchor-flagged
+    /// enrollment (AUTH-3.20, AUTH-3.22).
     ///
-    /// It is an anchor-flagged enrollment, a retirement naming an anchor (the
-    /// `anchor_session_required` cases).
+    /// A retirement's grade — whether it names an anchor of the set as of its
+    /// base — is read off the signature-filtered table at that base and never
+    /// off the board's served set (the signed-ops design record §4.5's clause
+    /// (a)), so it is the table's to read (`crate::verify`) and `false` here.
     pub anchor_grade: bool,
+}
+
+/// A record's addresses as [`skep_address::Address`]es — the members the
+/// record frame and the shared table take typed, parsed from the read's
+/// dotted spellings.
+pub(crate) struct RecordAddresses {
+    link: Address,
+    home: Address,
+    home_account: Address,
+    subject: Address,
+    ty: Address,
 }
 
 /// The read's answer.
@@ -268,32 +295,49 @@ pub fn compare_whole_set(records: &Records, current: &KeySet, held: &[Held]) -> 
 }
 
 impl Record {
+    /// Returns the record's addresses parsed, `None` where one the board
+    /// served does not parse — a record that cannot be framed.
+    pub(crate) fn addresses(&self) -> Option<RecordAddresses> {
+        Some(RecordAddresses {
+            link: parse_address(&self.link)?,
+            home: parse_address(&self.home)?,
+            home_account: parse_address(&self.home_account)?,
+            subject: parse_address(&self.subject)?,
+            ty: parse_address(self.kind.type_address())?,
+        })
+    }
+
+    /// Returns the record as the shared table reads it, over `addresses`,
+    /// its own ([`Record::addresses`]).
+    pub(crate) fn as_credential<'a>(&'a self, addresses: &'a RecordAddresses) -> CredentialRecord<'a> {
+        CredentialRecord {
+            kind: self.kind.record_kind(),
+            link: &addresses.link,
+            home: &addresses.home,
+            home_account: &addresses.home_account,
+            subject: &addresses.subject,
+            ty: &addresses.ty,
+            sigless: self.sigless.as_bytes(),
+            sig: self.sig.as_deref(),
+            enrolled: &self.enrolled,
+            retired: &self.retired,
+            position: self.position,
+        }
+    }
+
     /// Returns the first candidate whose own row verifies `blob` — the trial.
     ///
-    /// Both halves of `blob` verify over this record's `record` frame under
-    /// that row (AUTH-4.32's rule, as `skep_signature::verify` holds it) —
-    /// the frame composed from the record's own home, home account, kind,
-    /// subject and sig-less body, and re-composed per candidate since `alg`
-    /// names the signing key's token.
+    /// It is the shared table's trial ([`signer_of`]), run over candidates
+    /// of this reader's choosing: both halves of `blob` verify over this
+    /// record's `record` frame under that candidate's row (AUTH-4.32's rule,
+    /// as `skep_signature::verify` holds it) — the frame composed from the
+    /// record's own home, home account, kind, subject and sig-less body, and
+    /// re-composed per candidate since `alg` names the signing key's token.
+    /// `None` where no candidate verifies, or an address of the record does
+    /// not parse and no frame can be composed.
     pub fn signed_by<'a>(&self, term: BoardTerm, blob: &[u8], candidates: impl IntoIterator<Item = (&'a Fingerprint, &'a PublicKey)>) -> Option<Fingerprint> {
-        let to = [self.subject.as_str()];
-        for (fp, key) in candidates {
-            let row = key.sig_alg_row();
-            let frame = RecordFrame {
-                alg: row.token,
-                board: term,
-                home_account: &self.home_account,
-                home: &self.home,
-                ty: self.kind.type_address(),
-                to: &to,
-                sigless: self.sigless.as_bytes(),
-            }
-            .compose()?;
-            if skep_signature::verify(row.tag, key, &frame, blob).is_ok() {
-                return Some(*fp);
-            }
-        }
-        None
+        let addresses = self.addresses()?;
+        signer_of(&self.as_credential(&addresses), term, blob, candidates, |tag, key, message, blob| skep_signature::verify(tag, key, message, blob).is_ok())
     }
 }
 
@@ -579,15 +623,11 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
                 Some(p) => base_of(board, p)?,
                 None => None,
             };
-            // A retirement is anchor-grade where it names an anchor of the
-            // set as of its base (the `anchor_session_required` cases).
-            let anchor_grade = match (kind, base) {
-                (Kind::Retire, Some(b)) => match set_opening_at(board, &home_account, b)? {
-                    Some(set) => retired.iter().any(|fp| set.enrolled(fp).is_some_and(|e| e.anchor)),
-                    None => false,
-                },
-                _ => anchor_grade,
-            };
+            // A retirement's grade is the signature-filtered table's to read,
+            // at the record's base and off that table alone — never off the
+            // board's served set, the fold's (the signed-ops design record
+            // §4.5's clause (a)): `anchor_grade` carries the enrollment
+            // reading alone, and `false` at a retirement.
             let mut record = Record {
                 kind,
                 link: link.clone(),
@@ -629,7 +669,13 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
 /// Returns the hand of one record.
 ///
 /// A signed record's comes by the trial, an unsigned one's by
-/// `/changes.key` at its position; unreadable where the inputs are not.
+/// `/changes.key` at its position; unreadable where the inputs are not. The
+/// hand is WHO SIGNED — this store's own keys tried first, then every key of
+/// the set the board serves as opening the home's account at the record's
+/// base — and never whether the record counts: that is the
+/// signature-filtered table's verdict (`crate::verify`), under its own
+/// candidates and at the act's grade, so a key that signed outside its
+/// grade is named here and inert there.
 ///
 /// # Errors
 ///
@@ -647,7 +693,7 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
             let Some(set) = set_opening_at(board, &record.home_account, base)? else {
                 return Ok(Hand::Unreadable("the set as of the record's base is not readable at this board".into()));
             };
-            let candidates = set.enrolled.iter().filter(|e| !record.anchor_grade || e.anchor).map(|e| (&e.fingerprint, &e.key));
+            let candidates = set.enrolled.iter().map(|e| (&e.fingerprint, &e.key));
             Ok(match record.signed_by(term, blob.as_bytes(), candidates) {
                 Some(fp) => Hand::Key(fp),
                 None => Hand::NoKeyVerifies,

@@ -11,5 +11,6 @@ mod keyset;
 mod props;
 mod read;
 mod surface;
+mod table;
 mod tidy;
 mod write_types;

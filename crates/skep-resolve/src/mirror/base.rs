@@ -6,8 +6,8 @@
 //! comes back identical through its own head and the head pairs it held
 //! answer the same at the source's recomputation (`/chain?at=N`); and the
 //! realm is compared at the claim's row on every open that holds a board,
-//! for the board's own claimant at the board's own genesis act, against the
-//! genesis set the source answers there. An image that OMITS, RE-ORDERS or
+//! for the board's own claimant against the keys the board's own genesis
+//! record of it enrolls. An image that OMITS, RE-ORDERS or
 //! REPLAYS genuinely signed rows fails that check at the first position that
 //! differs and is REFUSED by provenance, as a signature could never refuse
 //! it (REG-3.13, the courier vector).
@@ -21,18 +21,19 @@
 //! ([`Refusal::RealmMismatch`]; REG-3.42's comparison at the base, made on
 //! the id's genesis fingerprint) — under a held copy as under a fresh base:
 //! the copy's header naming the hint's genesis fingerprint is the copy's
-//! word and never the root's, and the claimant and its genesis act are the
-//! board's, never the fetch cache's. A claim row past the one the realm was
-//! compared for moves nothing. A hint RE-POINTED to another genesis
-//! re-bootstraps afresh from the new root's genesis and resumes nothing
-//! (REG-3.17): the old copy is retired beside the new.
+//! word and never the root's, and the claimant, its genesis act and the
+//! record that act deposited are the board's, never the fetch cache's. A
+//! claim row past the one the realm was compared for moves nothing. A hint
+//! RE-POINTED to another genesis re-bootstraps afresh from the new root's
+//! genesis and resumes nothing (REG-3.17): the old copy is retired beside
+//! the new.
 //!
 //! An `impl Mirror` child of `mirror`: the open, the resume's check, the
 //! realm check, the sync and the pull, reading the mirror's private state
 //! the way a child does — and THE FEED COPY's every line, the header, the
 //! rows and the head pairs, written here and read back by [`read_copy`]
-//! alone. The fold calls one method here, [`Mirror::realm_check`], at the
-//! claim's row.
+//! alone. The credential pass calls one method here,
+//! [`Mirror::realm_check`], at the claim's row.
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -124,8 +125,10 @@ impl Mirror {
     /// REBUILD the index from the copy under `dir` alone, no board dialed
     /// (REG-3.25: the rebuild is a re-read of the feed at the deposits' own
     /// positions): every fetch served from the cache; a record whose bytes
-    /// the cache lacks is UNDETERMINABLE HERE, and so is a table the walk
-    /// asks for that the cache lacks. Nothing is checked against a source
+    /// the cache lacks is UNDETERMINABLE HERE, and a credential record whose
+    /// bytes it lacks makes its account's table undeterminable from its
+    /// position on — a cache a build before this one wrote holds none, and
+    /// is read as absent. Nothing is checked against a source
     /// and the genesis fingerprint is the one the copy's header names
     /// ([`Opened::Rebuilt`]); a copy of no format this build writes is
     /// refused, as at the open, and so is one whose rows do not hold the
@@ -272,17 +275,17 @@ impl Mirror {
     }
 
     /// THE REALM CHECK at the base (REG-3.42; REG-3.39), for `claimant` —
-    /// the account the board's own claim link names, the fold having read
-    /// it off the board ([`Mirror::fold_claim`]): its genesis set
-    /// ([`Mirror::genesis_keys`], at the genesis act the board answered,
-    /// read exactly and never off the fetch cache), fingerprinted and
-    /// compared to the GENESIS FINGERPRINT the hint's realm id carries, its
-    /// first half — the fork point is not compared here; a mismatch is
-    /// REG-3.19's refusal, and no genesis to read [`MirrorError::NoGenesis`].
-    /// Compared, every line that waited reaches the copy, the genesis
-    /// table's among them.
+    /// the account the board's own claim link names, the credential pass
+    /// having read it off the board ([`Mirror::take_claim`]): its genesis set
+    /// ([`Mirror::genesis_keys`] — the keys its genesis record enrolls, that
+    /// record read off the board and never off the fetch cache),
+    /// fingerprinted and compared to the GENESIS FINGERPRINT the hint's realm
+    /// id carries, its first half — the fork point is not compared here; a
+    /// mismatch is REG-3.19's refusal, and no genesis to read
+    /// [`MirrorError::NoGenesis`]. Compared, every line that waited reaches
+    /// the copy, the genesis record's among them.
     pub(super) fn realm_check(&mut self, claimant: &Address) -> Result<(), MirrorError> {
-        let keys = self.genesis_keys(claimant)?.ok_or(MirrorError::NoGenesis)?;
+        let keys = self.genesis_keys(claimant).ok_or(MirrorError::NoGenesis)?;
         let found = RealmId::genesis_fingerprint(&keys.iter().map(|e| Fingerprint::of(&e.key)).collect::<Vec<_>>());
         let expected = self.hint.realm().genesis;
         if found != expected {

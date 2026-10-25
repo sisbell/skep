@@ -166,12 +166,13 @@ fn the_onion_transport_held_dials_the_onion_member() {
     }
 }
 
-/// The set AS OF the position (REG-1.86 (e); the mirror reads `key_set` on
-/// `/op-at`, never the live table): every binding on the fixture board was
-/// signed by the registrar's device key, which the registrar retired after
-/// enrolling a third — each is SIGNED under that fingerprint, which the
-/// claimant's current set no longer holds; a live-table verifier would have
-/// called every one of them unsigned.
+/// The set AS OF the position (REG-1.86 (e); the mirror reads the
+/// signature-filtered table it folded as of each record's position, never
+/// the live table): every binding on the fixture board was signed by the
+/// registrar's device key, which the registrar retired after enrolling a
+/// third — each is SIGNED under that fingerprint, which the claimant's
+/// current set no longer holds; a live-table verifier would have called
+/// every one of them unsigned.
 #[test]
 fn the_set_as_of_the_position_judges_the_record() {
     let dir = tempfile::tempdir().expect("tempdir");

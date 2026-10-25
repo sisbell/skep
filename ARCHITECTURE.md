@@ -155,10 +155,13 @@ foundation and on the stores above it.
   index, and every link read takes the caller's reader predicate. Its
   modules and rules: §The link reads.
 - `skep-coordination` — predicate definitions and the coordinator.
-- `skep-identity` — credential records, key sets, the identity fold. Pure;
-  of the skep crates it depends only on `skep-address`. The engine depends
-  on it: `World` seats the fold as its identity slice, stepped at each
-  credential deposit's commit and checkpointed with the world (AUTH-2.79).
+- `skep-identity` — credential records, key sets, the identity fold, and
+  the signature-filtered key table a verifying reader keeps beside the fold,
+  its signature check handed in by the caller (`table`). Pure; of the skep
+  crates it depends only on `skep-address`. The engine depends on it:
+  `World` seats the fold as its identity slice, stepped at each credential
+  deposit's commit and checkpointed with the world (AUTH-2.79); the client
+  and the resolver take the table.
 - `skep-signature` — the hybrid signature's frozen rules: the KDF, keygen
   and signing (behind its `sign` feature), the key and blob layouts, the
   verify. The one crate that links the signature libraries; skepd calls its
@@ -542,9 +545,12 @@ trait; `board.rs` the typed reads over any transport (`Board`), every
 read counted by kind; `mirror.rs` the `/changes` consumer's types and
 state, the journal copy and the fetch cache under the caller's directory,
 and the fold, with four children — `mirror/base.rs` the base's check, its
-refusals and the sync, `mirror/keys.rs` the key set as of a position,
-`mirror/atoms.rs` a record's bytes and the chain walk, `mirror/cache.rs`
-the fetch cache's format; `verify.rs` the record grade for registry
+refusals and the sync, `mirror/keys.rs` the credential pass that folds
+`skep-identity`'s signature-filtered key table from the credential records
+the feed names and reads the set that opens an account as of a position
+off it, `mirror/atoms.rs` a record's bytes and the chain walk,
+`mirror/cache.rs` the fetch cache's format; `verify.rs` the record grade
+for registry
 records, client-side; `index.rs` the ledger of the rules and the verified
 prefix → binding index behind the mirror's gate; `walk.rs` the resolve,
 and its child `walk/guest.rs` the guest-reading resolve that scans with no
@@ -669,8 +675,9 @@ each ceremony:
   `person/scripted.rs`, the scripted person a suite drives;
   `derive/records.rs` the one admitted read of an account's credential
   records, its unit suite in `derive/records/tests.rs`; `verify.rs` the
-  reader's verifier over the signature-filtered set, its unit suite in
-  `verify/tests.rs`; `resolve.rs` the registry walk's `Transport` over a
+  reader's verifier — `skep-identity`'s signature-filtered key table built
+  over the admitted read, and the entry verdict beside it — its unit suite
+  in `verify/tests.rs`; `resolve.rs` the registry walk's `Transport` over a
   dialer; `share.rs` the grant — `share`, `privash` (PUB-5.108), `revoke`,
   the reads `issued`, `held` and `privashed`, and `Ledger::fold` — its unit
   suite in `share/tests.rs` and its daemon suite in `tests/it/share.rs`.

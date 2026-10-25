@@ -12,39 +12,41 @@
 //! * [`base`] — the base: the open, the resume's check and its refusals,
 //!   the realm check, the sync and the pull (REG-3.12, REG-3.13, REG-3.17
 //!   to REG-3.19, REG-3.42).
-//! * [`keys`] — the set that opens an account as of a position, and the
-//!   credential acts that set is read by.
+//! * [`keys`] — the credential pass: the claim taken, the credential
+//!   records fetched and handed to the signature-filtered key table
+//!   `skep-identity` folds, and the set that opens an account as of a
+//!   position read off that table (REG-3.39, REG-5.9).
 //! * [`atoms`] — a record's bytes: the head, the chain walk, the position
 //!   read (REG-3.25, REG-3.26), and the walk's memory between two pulls.
 //! * [`cache`] — the fetch cache's format: each kind of line's one writer
 //!   and its one reader, and the file's loader.
 //!
 //! Their tests and this file's share one more child, `testing`, compiled for
-//! the tests alone: the hint, a key, and a mirror over a board a test holds
-//! fixed, with that board's answers.
+//! the tests alone: the hint, a key, a mirror over a board a test holds
+//! fixed, and a scripted board whose records a test signs.
 //!
 //! One ordering crosses them: every row is held before any is folded (the
 //! pull, in [`base`]), and the fold takes the held rows in two passes
-//! ([`Mirror::fold_pending`]) — every credential act among them recorded
-//! first, then each row folded — because the fold's as-of reads lean on the
-//! acts AFTER a record's position (the floor's clause, in [`keys`]). So
-//! three positions are read off the held rows, each for its own use: where
-//! the copy ends ([`Mirror::held_through`], the next pull's start), how far
-//! the credential pass has read ([`Mirror::acts_through`], how far a live
-//! table can be proven), and the head (the last row folded). A sync that
-//! fails leaves the copy's end ahead of the head and the credential pass
-//! anywhere between the two; the next sync takes each up where it stopped.
+//! ([`Mirror::fold_pending`]) — the credential pass first over every held
+//! row, then each row folded — so when a record is judged the table holds
+//! every credential act the feed carries, before and after it, and answers
+//! the set as of the record's position from them. Two positions are read
+//! off the held rows, each for its own use: where the copy ends
+//! ([`Mirror::held_through`], the next pull's start) and the head (the last
+//! row folded). A sync that fails leaves the copy's end ahead of the head
+//! and the credential pass anywhere between the two; the next sync takes
+//! each up where it stopped.
 //!
 //! FETCH-AND-FOLD. The mirror reads every row of the feed as the GUEST and
 //! fetches the bytes a row's record needs — the stored link (`read_link`),
 //! the binding's or the endpoint's atom (`retrieve_v` at the V-ordinal of
-//! the address the link's `from` names), and the credential table of the
-//! home it verifies against, AS OF the record's position and never the live
-//! table for a historical verdict: the live `key_set` where the credential
-//! acts the mirror holds prove none of the account's lies between the
-//! position and the live answer's `as_of` (the same table, by the mirror's
-//! own evidence), the historical `key_set` on `/op-at` otherwise — then
-//! verifies the record ([`crate::verify`]) and folds it into the index
+//! the address the link's `from` names), and, for every credential act the
+//! feed carries, that act's own record — the atom its link names, read the
+//! same way — from which the SIGNATURE-FILTERED KEY TABLE is folded
+//! ([`keys`]): the table a record is judged under is read off it AS OF the
+//! record's position, never off the board's `key_set`, live or on `/op-at`,
+//! which is the fold's table and the board operator's to write (REG-5.9) —
+//! then verifies the record ([`crate::verify`]) and folds it into the index
 //! ([`crate::index`]). Every read is the board's own journal (R5 (a)).
 //!
 //! THE JOURNAL COPY (the copy's on-disk form, an interim pin), under the
@@ -66,15 +68,17 @@
 //! * `fetched.jsonl` — THIS MIRROR'S OWN FETCH CACHE, what the fold read off
 //!   the board, its every line written and read back in [`cache`]. The
 //!   REBUILD of the index is a re-read of the feed copy at the deposits' own
-//!   positions (REG-3.25) with every fetch served from this cache, so it
-//!   reads no wire; where a line is absent, or does not read — a write a
-//!   crash cut short among them — the fold fetches afresh. A cache adopted
-//!   from a stranger is that stranger's word (REG-3.14's residue): only the
-//!   feed copy is checked against the root, and the realm is never read off
-//!   the cache — neither the claimant, nor its genesis act, nor its genesis
-//!   set — and a record's position and home are its row's, never a cache
-//!   line's. Until the realm is compared, the fold reads every link row off
-//!   the board.
+//!   positions (REG-3.25) with every fetch served from this cache — the
+//!   credential records the table is folded from among them — so it reads
+//!   no wire; where a line is absent, or does not read — a write a crash
+//!   cut short among them, or a key table a build before this one kept — the
+//!   fold fetches afresh. A cache adopted from a stranger is that stranger's
+//!   word (REG-3.14's residue): only the feed copy is checked against the
+//!   root, and the realm is never read off the cache — neither the claimant,
+//!   nor its genesis act, nor the record that act deposited — and a record's
+//!   position and home are its row's, never a cache line's. Until the realm
+//!   is compared, the credential pass reads every link row and every record
+//!   value off the board.
 //!
 //! THE BINDING-WRITING ACCOUNT (R5 (g); REG-2.8): on an unforked lineage the
 //! bindings the walk reads are the CLAIMANT's — the claim the fold honors,
@@ -99,10 +103,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use skep_address::{document_of, Address, Nat, Tumbler};
-use skep_identity::{doc_1_of, BoardTerm, Enrolled, Fingerprint};
-use skep_registry::{commons_type, parse, t_binding, t_endpoint, Body, BodyKind};
+use skep_identity::{doc_1_of, BoardTerm, FilteredTable, Fingerprint};
+use skep_registry::{commons_type, parse, t_binding, t_endpoint, Body, BodyKind, MAX_REGISTRY_RECORD_BYTES};
 
 use atoms::Chains;
+use keys::HeldAct;
 use crate::board::{Board, BoardError, Reads};
 use crate::hint::RootHint;
 use crate::index::{Cause, Index, Suppressed};
@@ -272,15 +277,15 @@ pub struct Stats {
     /// claimant's doc 1 on an unforked lineage: each that account's own
     /// content and no binding (REG-2.6), entering no index.
     pub binding_typed_outside_home: u64,
-    /// As-of reads answered off the live table where the held feed proved
-    /// it the table as of the position.
-    pub reads_live_proven: u64,
-    /// As-of reads made at the reclaim floor in place of a reclaimed
-    /// position, the feed showing no act of the account between.
-    pub reads_at_floor: u64,
-    /// Records whose table as of their position is gone with the journal: a
-    /// credential act lay between the position and the floor.
-    pub reclaimed_undeterminable: u64,
+    /// Credential records the pass fetched, parsed and handed to the
+    /// signature-filtered key table, admitted or refused.
+    pub credential_records: u64,
+    /// Signature checks the table ran over them — one per candidate key
+    /// tried, both halves of the hybrid blob each.
+    pub credential_verifies: u64,
+    /// Time inside the table's admission of those records, the checks
+    /// included.
+    pub credential_time: Duration,
     /// Bytes of the two copy files.
     pub copy_bytes: u64,
 }
@@ -300,33 +305,12 @@ struct StoredLink {
     to: Vec<Address>,
 }
 
-/// AN EPOCH of an account's credential table: the position of the account's
-/// latest credential act at or below the position a table is read for — 0
-/// before its first act — the key a table is kept under and found by, the
-/// table being constant across an epoch. A type of its own: the epoch a
-/// table is kept under and the position it is read for are both positions
-/// on the feed, and swapped they would keep a table under another epoch's
-/// key and judge records by it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Epoch(u64);
-
-/// A credential table kept under the epoch it belongs to: the account, the
-/// epoch, the position it was read for, and the enrolled keys.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct KeysAsOf {
-    account: Address,
-    epoch: Epoch,
-    at: u64,
-    enrolled: Vec<Enrolled>,
-}
-
 /// The fetch cache in memory — what `fetched.jsonl` holds — its lines
 /// written and read in [`cache`] alone.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Fetched {
     links: BTreeMap<Address, StoredLink>,
     atoms: BTreeMap<Address, String>,
-    keys: BTreeMap<(Address, Epoch), KeysAsOf>,
     retracted: BTreeMap<u64, Vec<Address>>,
     board_term: Option<BoardTerm>,
     /// The claim line the cache holds, so a resume writes no second — never
@@ -471,29 +455,29 @@ pub struct Mirror {
     head: u64,
     /// Whether this mirror compared the claimant's genesis set against the
     /// hint (REG-3.42) — the gate every line passes to reach the copy: until
-    /// it, lines wait in `pending_feed` and `pending_cache`, and the fold
-    /// reads every link row off the board.
+    /// it, lines wait in `pending_feed` and `pending_cache`, and the
+    /// credential pass reads every link row and record value off the board.
     realm_compared: bool,
-    /// THE CLAIM THE FOLD HONORS: the first claim row it takes — its
-    /// position and its claimant, off the board's own link where a board is
-    /// held (REG-3.42), off the copy's on an offline rebuild — a board
-    /// admitting one claim (AUTH-2.68: a second is `already_claimed`), so a
-    /// claim row after it moves nothing. Its claimant's doc 1 is the binding
-    /// home (R5 (g)).
+    /// THE CLAIM THE FOLD HONORS: the first claim row the credential pass
+    /// takes — its position and its claimant, off the board's own link where
+    /// a board is held (REG-3.42), off the copy's on an offline rebuild — a
+    /// board admitting one claim (AUTH-2.68: a second is `already_claimed`),
+    /// so a claim row after it moves nothing. Its claimant's doc 1 is the
+    /// binding home (R5 (g)).
     claim: Option<(u64, Address)>,
-    /// THE GENESES THE BOARD ANSWERED: the first credential act naming each
-    /// account among the link rows the fold read off the board before the
-    /// realm was compared — where the claimant's genesis act is read, never
-    /// off the fetch cache. Unclaimed, a board admits no deposit but the
-    /// ceremony's own genesis and claim (wire.md §Credential refusals:
-    /// `claim_first`), a genesis fires once per account (AUTH-2.70), and a
-    /// keyless claimant cannot claim, so each is that account's genesis and
-    /// the claimant's lies before its claim.
-    geneses: BTreeMap<Address, u64>,
-    /// Every credential act's position, per account the act names, among the
-    /// held rows, in position order — the acts the as-of reads are proven
-    /// by, each the start of an [`Epoch`].
-    credential_acts: BTreeMap<Address, Vec<u64>>,
+    /// THE SIGNATURE-FILTERED KEY TABLE (REG-3.39; the signed-ops design
+    /// record §4.5's table paragraph): `skep-identity`'s, folded by the
+    /// credential pass over every credential record the feed names, in
+    /// journal order, under the claim — born at the claim's row, since the
+    /// one record it host-trusts is the claimant's own genesis at or below
+    /// it; `None` until then. Every registry record is judged under the set
+    /// this table opens as of the record's position ([`keys`]), never under
+    /// the board's `key_set`.
+    table: Option<FilteredTable>,
+    /// The credential acts the pass met before the claim was taken, in
+    /// journal order — a conforming board's claimant's genesis alone — each
+    /// admitted into the table the moment it is born.
+    pending_acts: Vec<HeldAct>,
     /// THIS PASS's asks of the active view, per home: how many of the home's
     /// deposits a `nullify` row of the pass has had the board answer for.
     /// Every row a pass folds was held before the pass asks anything, so a
@@ -547,8 +531,8 @@ impl Mirror {
             head: 0,
             realm_compared: false,
             claim: None,
-            geneses: BTreeMap::new(),
-            credential_acts: BTreeMap::new(),
+            table: None,
+            pending_acts: Vec::new(),
             asked: BTreeMap::new(),
             chains: Chains::default(),
             stats: Stats::default(),
@@ -589,7 +573,7 @@ impl Mirror {
     /// THE CLAIM the fold honors (AUTH-2.67, AUTH-2.68: a board admits one):
     /// its position and the claimant — the binding-writing account on an
     /// unforked lineage — read off the board's own claim link where a board
-    /// is held (REG-3.42); `None` where the fold took none.
+    /// is held (REG-3.42); `None` where the credential pass took none.
     pub fn claim(&self) -> Option<(u64, &Address)> {
         self.claim.as_ref().map(|(at, a)| (*at, a))
     }
@@ -620,14 +604,6 @@ impl Mirror {
     /// next fold and are never asked for again.
     fn held_through(&self) -> u64 {
         self.rows.last().and_then(position).unwrap_or(self.head)
-    }
-
-    /// How far THE CREDENTIAL ACTS are known: the position of the last row
-    /// the credential pass read — the bound inside which the held feed proves
-    /// a table unchanged. Behind [`Mirror::held_through`] where a sync failed
-    /// inside that pass.
-    fn acts_through(&self) -> u64 {
-        self.scanned.checked_sub(1).and_then(|last| position(&self.rows[last])).unwrap_or(self.head)
     }
 
     // ── the copy's lines ────────────────────────────────────────────────────
@@ -672,11 +648,12 @@ impl Mirror {
     // ── the fold ────────────────────────────────────────────────────────────
 
     /// Fold every held row the fold has not consumed, in two passes: the
-    /// credential pass first ([`Mirror::scan_credential_acts`]), so every act
-    /// among the held rows is recorded before any record is judged; then each
-    /// row folded, in order — read into what the fold takes ([`Row::of`]),
-    /// the held row staying where the copy's positions are read off it. A
-    /// pass begins with no deposit asked of the active view (`asked`).
+    /// credential pass first ([`Mirror::scan_credential_acts`]), so the claim
+    /// is taken and every credential act among the held rows is in the table
+    /// before any record is judged under it; then each row folded, in order
+    /// — read into what the fold takes ([`Row::of`]), the held row staying
+    /// where the copy's positions are read off it. A pass begins with no
+    /// deposit asked of the active view (`asked`).
     fn fold_pending(&mut self) -> Result<(), MirrorError> {
         let t = Instant::now();
         self.asked.clear();
@@ -730,25 +707,14 @@ impl Mirror {
         }
     }
 
-    /// One link row: the claim ([`Mirror::fold_claim`]), or a binding or an
-    /// endpoint, judged and folded. Until the realm is compared on a mirror
-    /// that holds a board, the row's link is read off the board and never
-    /// off the fetch cache (REG-3.42) — the claim the realm is compared for,
-    /// and the genesis act it is compared at, being the board's own wherever
-    /// an adopted cache stands — and a credential act among those links is
-    /// kept as its account's genesis ([`Mirror::note_genesis`]). Every other
-    /// credential act moves nothing here: the first pass recorded it.
+    /// One link row: a binding or an endpoint, judged and folded; the claim
+    /// and every credential act move nothing here — the credential pass took
+    /// them ([`Mirror::scan_credential_acts`]), the claim before any row is
+    /// folded, so the link is read from the cache where the pass kept it.
     fn fold_link(&mut self, at: u64, link: &Address, home: &Address) -> Result<(), MirrorError> {
-        let off_board = !self.realm_compared && self.board.is_some();
-        let stored = if off_board { self.read_link_off_board(at, link, home)? } else { self.read_link(at, link, home)? };
-        let Some(stored) = stored else { return Ok(()) };
-        if off_board {
-            self.note_genesis(at, &stored);
-        }
+        let Some(stored) = self.read_link(at, link, home)? else { return Ok(()) };
         let Some(ty) = stored.ty.clone() else { return Ok(()) };
-        if ty == self.types.claim {
-            self.fold_claim(at, &stored)?;
-        } else if ty == self.types.binding {
+        if ty == self.types.binding {
             match &self.claim {
                 Some((_, claimant)) if doc_1_of(claimant) == *home => {
                     self.fold_record(BodyKind::Binding, &ty, &stored)?;
@@ -758,28 +724,6 @@ impl Mirror {
         } else if ty == self.types.endpoint {
             self.fold_record(BodyKind::Endpoint, &ty, &stored)?;
         }
-        Ok(())
-    }
-
-    /// A claim row (AUTH-2.67): the first the fold takes is the claim it
-    /// honors ([`Mirror::claim`]), its claimant the account the row's link
-    /// names in its `from` — on a mirror that holds a board, the board's own
-    /// link, and the realm compared for that claimant
-    /// ([`Mirror::realm_check`]) before the claim is taken. A claim row after
-    /// it moves nothing: a board admits one claim (AUTH-2.68 — a second is
-    /// `already_claimed`), so a second served names no binding home and
-    /// compares no realm.
-    fn fold_claim(&mut self, at: u64, stored: &StoredLink) -> Result<(), MirrorError> {
-        if self.claim.is_some() {
-            return Ok(());
-        }
-        let Some(claimant) = stored.from.first().cloned() else { return Ok(()) };
-        let line = self.fetched.keep_claim(at, claimant.clone());
-        self.append_cache(line)?;
-        if self.board.is_some() {
-            self.realm_check(&claimant)?;
-        }
-        self.claim = Some((at, claimant));
         Ok(())
     }
 
@@ -797,7 +741,7 @@ impl Mirror {
             suppress(self, Cause::Verdict(Verdict::UndeterminableHere));
             return Ok(());
         };
-        let Some(text) = self.fetch_atom(stored.at, &stored.home, &atom)? else {
+        let Some(text) = self.fetch_atom(stored.at, &stored.home, &atom, MAX_REGISTRY_RECORD_BYTES)? else {
             suppress(self, Cause::Verdict(Verdict::UndeterminableHere));
             return Ok(());
         };
@@ -811,7 +755,11 @@ impl Mirror {
         };
         self.stats.records += 1;
         let board = self.board_term()?;
-        let keys = self.keys_opening(&home_account, stored.at)?;
+        // THE CANDIDATES (REG-1.86 (e)): the set that opens the home's
+        // account as of the record's own position, read off the
+        // signature-filtered table — `None`, UNDETERMINABLE HERE, where the
+        // held feed cannot complete it.
+        let keys = self.opening_keys_at(&home_account, stored.at);
         let verdict = match (board, keys) {
             (Some(board), Some(keys)) => {
                 let t = Instant::now();
@@ -880,7 +828,8 @@ impl Mirror {
     /// cache — and kept; `None` where no link stands there, or no board is
     /// held. Its slots are read for a link of a type the fold reads
     /// ([`Types::named`]) alone, a link of any other type held with none
-    /// ([`Board::link_slots`]).
+    /// ([`Board::link_slots`]). The credential pass reads every link so until
+    /// the realm is compared (REG-3.42).
     fn read_link_off_board(&mut self, at: u64, link: &Address, home: &Address) -> Result<Option<StoredLink>, MirrorError> {
         let Some(board) = self.board.as_ref() else { return Ok(None) };
         let Some(slots) = board.link_slots(link, &self.types.named())? else { return Ok(None) };

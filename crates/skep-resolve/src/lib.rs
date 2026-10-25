@@ -29,11 +29,16 @@
 //!   the root the hint names or a CHECKED image, the realm compared at the
 //!   claim's row on either (REG-3.42); a root move resumed by the
 //!   byte-identical check; a re-pointed hint re-bootstrapped; the two
-//!   refusals; no TTL and no negative cache.
+//!   refusals; no TTL and no negative cache. Beneath it the credential pass
+//!   folds `skep-identity`'s SIGNATURE-FILTERED KEY TABLE from the credential
+//!   records the feed names (REG-3.39, REG-5.9), the one table every record
+//!   is judged under and the walk's key set is read off — never the board's
+//!   `key_set`.
 //! * `verify` — THE VERIFY (rm-2; REG-1.86 (e)): the body parsed under the
 //!   canonical rule by `skep_registry::parse`, the record frame rebuilt from
 //!   the row's own members, the signer found in the set that opens the
-//!   home's account as of the record's position, both halves verified.
+//!   home's account as of the record's position — read off the filtered
+//!   table — both halves verified.
 //! * `index` — THE INDEX (REG-3.21 to REG-3.26; REG-2.8 to REG-2.11,
 //!   REG-2.24): the position-annotated prefix → binding index over the
 //!   verified bindings, the mirror's gate its one writer; beneath it the

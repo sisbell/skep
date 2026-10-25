@@ -19,6 +19,18 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   of an account a credential link is honored in.
   [skep-namespace](../skep-namespace)'s `first_document_address` names
   the same address; skepd's suite holds the two equal.
+- **The signature-filtered key table** — `FilteredTable`, the second
+  table a verifying reader keeps beside the fold's: per account, the keys
+  the credential records whose own `sig` verifies have enrolled and not
+  retired, each record judged in journal order under the set that opens
+  its home's account as the table stood at the record's base, at the
+  grade the act needs, the claimant's own genesis alone host-trusted; a
+  record a reader could not fetch makes its account's table
+  undeterminable, never the board's word. The signature check is the
+  caller's, handed in as a closure of
+  [skep-signature](../skep-signature)'s `verify` shape — the signing
+  client and the registry resolver each pass theirs — so this crate still
+  verifies nothing.
 - **`Values` / `FoldCtx`** — the crate defines its own minimal
   world-fact traits and consumes only
   [skep-address](../skep-address) types: no I/O, no clock, no
@@ -41,8 +53,9 @@ Pure enough for a mirror or an audit tool to embed directly. The
 engine seats the fold as its world's identity slice; skepd, the
 signing client ([skep-client](../skep-client)) and the registry
 resolver ([skep-resolve](../skep-resolve)) build on its keys, records
-and frames, and the `skep` command ([skep-cli](../skep-cli)) on its
-keys and records.
+and frames — the client and the resolver both take the
+signature-filtered key table from here — and the `skep` command
+([skep-cli](../skep-cli)) on its keys and records.
 
 ## License
 

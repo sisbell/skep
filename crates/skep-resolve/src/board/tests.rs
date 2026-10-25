@@ -424,7 +424,6 @@ fn an_answer_past_the_cap_is_no_answer_a_typed_read_takes() {
     assert_eq!(board.op(&json!({ "op": "read_link", "a": link.to_string() })), Ok(Value::Null));
     assert_eq!(board.link_slots(&link, &[t_endpoint()]), Ok(None), "no link");
     assert_eq!(board.key_set(&account), Ok(None), "no key set");
-    assert_eq!(board.key_set_at(5, &account), Ok(None), "no key set as of a position");
     assert_eq!(board.board_term(), Ok(None), "no board term");
     assert_eq!(board.stands_active(&link, &a("1.0.2.0.1"), t_endpoint(), &a("1.0.2.0.1.0.1.1")), Ok(true), "a deposit left standing");
     let refused = BoardError::Transport(TransportError::TooLarge { cap: 1 });

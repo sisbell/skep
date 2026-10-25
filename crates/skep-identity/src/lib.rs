@@ -53,11 +53,14 @@
 //!   verify; the daemon's core, the signing client and the resolver call its
 //!   verify.
 //! * `skep-client`, the signing client, holds keys, spells credential records
-//!   and composes the frames it signs; its reader's verifier composes the
-//!   same frames back and checks each record's `sig` over them.
-//! * `skep-resolve`, the registry resolver, reads the key set that opens an
-//!   account as of a record's log position, finds an account's doc 1, and
-//!   checks each registry record's `sig` over its frame.
+//!   and composes the frames it signs; its reader's verifier takes the
+//!   signature-filtered key table from here ([`FilteredTable`]), folded over
+//!   the credential records it reads with its own signature check handed in,
+//!   and judges each entry's `attest` beside it.
+//! * `skep-resolve`, the registry resolver, takes the same table from here,
+//!   folded over the credential records its mirror holds, judges each
+//!   registry record's `sig` under the set that opens its home's account as
+//!   of the record's position, and finds an account's doc 1.
 //! * `skep-cli`, the `skep` command, names keys by their fingerprints and
 //!   spells the enrollment records its key commands print.
 //! * `skep-shell`, the shell's core, composes the entry frames its signed
@@ -85,6 +88,12 @@
 //! [`parse_record_value`] with its [`RecordValue`] for the signing client and
 //! the verifier beside the table, which parses a committed record, reads its
 //! `sig` and composes its sig-less projection (the design record §4.2 (C));
+//! [`FilteredTable`] over [`CredentialRecord`]s, with its [`Admission`]s,
+//! their [`Until`], the [`Refused`] records and their [`RefusedCause`], each
+//! record's [`Outcome`], the [`RecordKind`] and the trial [`signer_of`], for
+//! that same verifier — the signature-filtered key table AUTH-2.94 lets any
+//! reader or mirror keep beside the fold's, its signature check handed in
+//! (the design record §4.5's table paragraph; REG-3.39);
 //! [`record_bytes`] for a non-folding reader, which links the read rather
 //! than re-implementing it (AUTH-2.37); [`single_address`] for every
 //! discovery caller, beside [`TypeAddrs::kind_of`] (AUTH-2.28);
@@ -154,6 +163,13 @@
 //!   (AUTH-2.29–2.34);
 //! * `verdict`: the fold's answers — [`Verdict`], [`Effect`], [`Inert`]
 //!   (AUTH-2.51–2.55);
+//! * `table`: the signature-filtered key table a verifying reader keeps
+//!   beside the fold — [`FilteredTable`] over [`CredentialRecord`]s of either
+//!   [`RecordKind`], its [`Admission`]s and their [`Until`], the records it
+//!   [`Refused`] with their [`RefusedCause`], each record's [`Outcome`], and
+//!   the one trial [`signer_of`], the signature check its caller's (AUTH-2.94,
+//!   AUTH-4.30 (i), AUTH-3.20–3.22, AUTH-4.55; the design record §4.5's
+//!   table paragraph; REG-3.39, REG-5.9); it names no fold state;
 //! * `state`: the fold itself — [`IdentityState`] with `classify`/`step`,
 //!   [`HasIdentity`], the doc-1 address [`doc_1_of`], and the fold's ω
 //!   projections, private to it (AUTH-1.38–1.41, AUTH-2.35, AUTH-2.56–2.60,
@@ -215,6 +231,7 @@ mod read;
 mod seam;
 mod shape;
 mod state;
+mod table;
 mod verdict;
 mod write_types;
 
@@ -244,6 +261,10 @@ pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};
 pub use shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
 pub use state::{doc_1_of, HasIdentity, IdentityState};
+pub use table::{
+    signer_of, Admission, CredentialRecord, FilteredTable, Outcome, RecordKind, Refused,
+    RefusedCause, Until,
+};
 pub use verdict::{Effect, Inert, Verdict};
 pub use write_types::{AuditClass, TargetClass, WriteTypes};
 
@@ -258,10 +279,12 @@ pub use write_types::{AuditClass, TargetClass, WriteTypes};
 /// or the daemon core's build at its `static` or its `WorldState` impl, never
 /// naming the field that caused it. The promises are checked here instead,
 /// covering `KeySet`, `Enrolled`, `PublicKey`, `Fingerprint`, `Address` and
-/// `Span` transitively.
+/// `Span` transitively; and a verifying reader hands its [`FilteredTable`]
+/// across threads as it hands a key set.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<IdentityState>();
     assert_send_sync::<TypeAddrs>();
     assert_send_sync::<WriteTypes>();
+    assert_send_sync::<FilteredTable>();
 };

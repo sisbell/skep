@@ -7,21 +7,28 @@
 //! enrollment whatever its `sig` holds (AUTH-2.13), so `key_set` over
 //! `/op-at` fixes a position and never this input's members.
 //!
-//! **The filter.** It is derived from the account's credential records and
-//! their `sig`s: a record is admitted only where its own `sig` verifies over
-//! its `record` frame under the filtered set as of *that* record's base, at
-//! the act's grade — an anchor of that set where the act is anchor-grade,
-//! any enrolled key of it otherwise; the pre-claim genesis is admitted
-//! unsigned and host-trusted (AUTH-4.55 (3); AUTH-4.58); a record whose
-//! `sig` fails is inert to this table. The attestation boundary is an input
-//! beside the set — the board's claim entry — so
-//! [`Verdict::BeforeAttestation`] is told from [`Verdict::Unsigned`]. A
-//! missing input is a verdict and never a fallback: where the caller cannot
-//! derive it, the entry reads [`Verdict::Undeterminable`] here, never judged
-//! against the served `key_set`. Below the retention floor the records are
-//! still read, position-free, and the filter builds in record order; what
-//! the floor loses is the entry and its base, and
-//! [`Verdict::Undeterminable`] here is that entry's verdict.
+//! **The table.** It is `skep_identity`'s [`FilteredTable`], the one table
+//! every verifying reader keeps beside the fold (REG-3.39; the signed-ops
+//! design record §4.5's table paragraph), built here over the admitted read
+//! ([`filtered_table`]): each credential record, with its home, its home's
+//! account, its subject and its position as the read answered them, handed
+//! to the table in the read's order, and the signature check handed in as
+//! this crate's — `skep_signature::verify`, both halves. The table's rules
+//! are the table's: a record admitted only where its own `sig` verifies over
+//! its `record` frame under the set that opens its home's account as the
+//! table stood at *that* record's base, at the act's grade read off the
+//! table itself; one record alone host-trusted, the board claimant's own
+//! genesis at or below the claim (AUTH-4.55 (3); AUTH-4.58), so the
+//! claimant is an input beside the read; every record the fold refuses out
+//! whatever its `sig` says. The attestation boundary is an input beside the
+//! set — the board's claim entry — so [`Verdict::BeforeAttestation`] is told
+//! from [`Verdict::Unsigned`]. A missing input is a verdict and never a
+//! fallback: where the caller cannot derive it, the entry reads
+//! [`Verdict::Undeterminable`] here, never judged against the served
+//! `key_set`. Below the retention floor the records are still read,
+//! position-free, and the table builds in record order; what the floor
+//! loses is the entry and its base, and [`Verdict::Undeterminable`] here is
+//! that entry's verdict.
 //!
 //! **A pure function of its caller's reads.** The entry, the frame its
 //! caller composed through `skep_identity::entry_frame`, the table, `H.1`'s
@@ -29,160 +36,48 @@
 //! `skep_signature::verify`'s; nothing here reads a board. The session
 //! verify is the daemon's, in `skep_core::auth` (AUTH-2.2).
 
-use skep_identity::{BoardTerm, Fingerprint, HybridBlob, PublicKey, SigAlgRow};
+use skep_address::Address;
+use skep_identity::{BoardTerm, FilteredTable, Fingerprint, SigAlgRow};
 
-use crate::derive::records::{Kind, Records};
+use crate::address::parse_address;
+use crate::derive::records::Records;
 
 #[cfg(test)]
 mod tests;
 
-/// One admission of the filtered table.
+/// Returns the signature-filtered key table over the admitted read.
 ///
-/// It is a key, from the record that admitted it, until the record that
-/// retired it — positions where known.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Admission {
-    /// The key's fingerprint.
-    pub fingerprint: Fingerprint,
-    /// The admitted key.
-    pub key: PublicKey,
-    /// Whether the key is an anchor.
-    pub anchor: bool,
-    /// The label the admitting record carried (AUTH-5.69).
-    pub label: Option<String>,
-    /// The admitting record's position; `None` position-free.
-    pub since: Option<u64>,
-    /// Where the admission's lifecycle stands.
-    pub until: Until,
-}
-
-/// Where an admission's lifecycle stands.
-///
-/// There is one lifecycle per fingerprint and set (I4, AUTH-2.98).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Until {
-    /// No admitted retirement names it: it stands enrolled.
-    Enrolled,
-    /// Retired by an admitted record at this position.
-    RetiredAt(u64),
-    /// Retired by an admitted record read position-free.
-    ///
-    /// The record lies below the retention floor: no base reads it as
-    /// enrolled.
-    RetiredPositionFree,
-}
-
-/// One record the filter refused, and why — inert to the table.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Inert {
-    /// The record's link address.
-    pub link: String,
-    /// Why the filter refused it.
-    pub why: String,
-}
-
-/// The filtered table and the records it left inert.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FilteredTable {
-    /// The table's admissions.
-    pub admissions: Vec<Admission>,
-    /// The records the filter refused.
-    pub inert: Vec<Inert>,
-}
-
-impl FilteredTable {
-    /// Runs the filter over `records` (genesis-first, record order).
-    ///
-    /// The genesis is host-trusted; every later record is admitted iff its
-    /// `sig` verifies under the table as it stands at that record's base, at
-    /// the act's grade.
-    pub fn build(records: &Records, board: Option<BoardTerm>) -> FilteredTable {
-        let mut table = FilteredTable::default();
-        let mut genesis_seen = false;
-        for r in &records.records {
-            if r.kind == Kind::Enroll && !genesis_seen {
-                genesis_seen = true;
-                // AUTH-4.55 (3): the pre-claim genesis, host-trusted.
-                for e in &r.enrolled {
-                    table.admissions.push(Admission {
-                        fingerprint: Fingerprint::of(&e.key),
-                        key: e.key.clone(),
-                        anchor: e.anchor,
-                        label: e.label().map(str::to_string),
-                        since: r.position,
-                        until: Until::Enrolled,
-                    });
-                }
-                continue;
+/// It is the shared table ([`FilteredTable`]) built under the board's claim
+/// — `records`' claim entry and `claimant`, the account `/health` names as
+/// the board's — so the claimant's own genesis at or below the claim is
+/// host-trusted and no other record is (AUTH-4.55 (3)); with either absent
+/// the table is built under no claim and trusts nothing, every record judged
+/// by its `sig`. Each record is handed to the table in the read's order —
+/// genesis-first, position order where positions are known, link-address
+/// order below the floor (AUTH-5.69) — with `board`, `H.1`'s pair, as the
+/// record frame's term, and this crate's signature check. A record whose
+/// board-served addresses do not parse cannot be framed: it is a gap in its
+/// account's table from its position on, never a record admitted or passed
+/// over in silence.
+pub fn filtered_table(records: &Records, claimant: Option<&str>, board: Option<BoardTerm>) -> FilteredTable {
+    let claim = match (records.claim_entry, claimant.and_then(parse_address)) {
+        (Some(at), Some(claimant)) => Some((at, claimant)),
+        _ => None,
+    };
+    let mut table = FilteredTable::new(claim);
+    for r in &records.records {
+        match r.addresses() {
+            Some(addresses) => {
+                table.admit(&r.as_credential(&addresses), board, |tag, key, message, blob| skep_signature::verify(tag, key, message, blob).is_ok());
             }
-            let inert = |why: &str| Inert { link: r.link.clone(), why: why.to_string() };
-            let Some(sig) = &r.sig else {
-                table.inert.push(inert("no `sig` above the claim"));
-                continue;
-            };
-            let Some(board) = board else {
-                table.inert.push(inert("no H.1: the record frame cannot be composed"));
-                continue;
-            };
-            let Some(blob) = HybridBlob::parse_hex(sig) else {
-                table.inert.push(inert("the `sig` is no hybrid blob's hex"));
-                continue;
-            };
-            // The table as it stands at this record's base — record order
-            // being position order where positions are known.
-            let candidates = table
-                .admissions
-                .iter()
-                .filter(|a| a.until == Until::Enrolled && (!r.anchor_grade || a.anchor))
-                .map(|a| (&a.fingerprint, &a.key));
-            match r.signed_by(board, blob.as_bytes(), candidates) {
-                None => table.inert.push(inert("signed by no key of this account's filtered set")),
-                Some(_) => match r.kind {
-                    Kind::Enroll => {
-                        for e in &r.enrolled {
-                            let fp = Fingerprint::of(&e.key);
-                            if table.admissions.iter().any(|a| a.fingerprint == fp) {
-                                continue; // I4: a fingerprint has one lifecycle per set.
-                            }
-                            table.admissions.push(Admission {
-                                fingerprint: fp,
-                                key: e.key.clone(),
-                                anchor: e.anchor,
-                                label: e.label().map(str::to_string),
-                                since: r.position,
-                                until: Until::Enrolled,
-                            });
-                        }
-                    }
-                    Kind::Retire => {
-                        for fp in &r.retired {
-                            if let Some(a) = table.admissions.iter_mut().find(|a| a.fingerprint == *fp && a.until == Until::Enrolled) {
-                                a.until = r.position.map_or(Until::RetiredPositionFree, Until::RetiredAt);
-                            }
-                        }
-                    }
-                },
+            None => {
+                if let Some(subject) = parse_address(&r.subject) {
+                    table.missing(&subject, r.position.unwrap_or(0));
+                }
             }
         }
-        table
     }
-
-    /// Returns the admissions enrolled as of an entry's base (P12).
-    ///
-    /// For an entry at `position`, they are those admitted at a position
-    /// below it (or position-free) and not yet retired at one below it.
-    pub fn as_of(&self, position: u64) -> impl Iterator<Item = &Admission> + '_ {
-        self.admissions.iter().filter(move |a| a.since.is_none_or(|s| s < position)).filter(move |a| match a.until {
-            Until::Enrolled => true,
-            Until::RetiredAt(r) => r >= position,
-            Until::RetiredPositionFree => false,
-        })
-    }
-
-    /// Returns the table's current members — every admission not retired.
-    pub fn current(&self) -> impl Iterator<Item = &Admission> + '_ {
-        self.admissions.iter().filter(|a| a.until == Until::Enrolled)
-    }
+    table
 }
 
 /// One committed entry under trial.
@@ -220,8 +115,9 @@ pub enum Verdict {
     BeforeAttestation,
     /// A missing input — never judged against the served `key_set`.
     ///
-    /// It is no boundary derivable, the entry below the floor, or the
-    /// records unfetchable.
+    /// It is no boundary derivable, the entry below the floor, the records
+    /// unfetchable, or the set that opens the account undeterminable at the
+    /// entry's base.
     Undeterminable(&'static str),
 }
 
@@ -249,7 +145,12 @@ impl From<&Records> for Bounds {
 }
 
 /// Returns the verdict of `entry` under `table`, at `bounds`.
-pub fn verdict(entry: &Entry<'_>, table: &FilteredTable, bounds: Bounds) -> Verdict {
+///
+/// The set the `attest` is judged under is the one that opens `account` —
+/// the account the entry's frame names, AUTH-4.30 (i)'s walk — as of the
+/// entry's base (P12): [`FilteredTable::opening_at`], `None` where a table
+/// on the walk is undeterminable there, which is the entry's verdict too.
+pub fn verdict(entry: &Entry<'_>, table: &FilteredTable, account: &Address, bounds: Bounds) -> Verdict {
     let Some(boundary) = bounds.boundary else { return Verdict::Undeterminable("the attestation boundary could not be derived here") };
     if entry.position <= boundary {
         return Verdict::BeforeAttestation;
@@ -259,12 +160,15 @@ pub fn verdict(entry: &Entry<'_>, table: &FilteredTable, bounds: Bounds) -> Verd
     }
     let Some((alg, blob)) = entry.attest else { return Verdict::Unsigned };
     let Some(row) = SigAlgRow::of_token(alg) else { return Verdict::Unsigned };
-    for a in table.as_of(entry.position) {
-        if a.key.alg() != alg {
+    let Some(set) = table.opening_at(account, entry.position) else {
+        return Verdict::Undeterminable("the set that opens the account as of the entry's base is not determinable here");
+    };
+    for e in &set {
+        if e.key.alg() != alg {
             continue;
         }
-        if skep_signature::verify(row.tag, &a.key, entry.frame, blob).is_ok() {
-            return Verdict::Signed(a.fingerprint);
+        if skep_signature::verify(row.tag, &e.key, entry.frame, blob).is_ok() {
+            return Verdict::Signed(Fingerprint::of(&e.key));
         }
     }
     Verdict::Unsigned

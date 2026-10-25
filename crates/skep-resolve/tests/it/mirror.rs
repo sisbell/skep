@@ -12,7 +12,7 @@ use std::fs;
 use std::io::Write;
 
 use serde_json::{json, Value};
-use skep_identity::Fingerprint;
+use skep_identity::{canonical_record, Enrollment, Fingerprint};
 use skep_resolve::{
     Method, Mirror, MirrorError, Opened, Origin, RealmId, Refusal, RootHint, Transport, TransportError, FEED_COPY,
     FETCH_CACHE,
@@ -24,14 +24,15 @@ use crate::{fixture, open_fixture_mirror, replay_dial, Replay};
 /// THE REBUILD (REG-3.25; R5 (h)): the index rebuilt from the copy alone —
 /// no board dialed, every fetch served from the cache — equals the live
 /// one, standing for standing and deposit for deposit, and names itself a
-/// rebuild, nothing checked against a source; a table the cache never held
-/// — the registrar's own, rotated after every binding — is one it could not
-/// read, never an empty set; and the copy re-opened against the source is
-/// checked and RESUMED (REG-3.18).
+/// rebuild, nothing checked against a source; the registrar's key set at
+/// the head — the anchor and the key it rotated to, the device key that
+/// signed every binding retired — is folded from the credential records the
+/// cache holds, the same table the live mirror answers; and the copy
+/// re-opened against the source is checked and RESUMED (REG-3.18).
 #[test]
 fn the_rebuild_from_the_copy_reads_no_wire_and_equals_the_live_index() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (fixture, live) = open_fixture_mirror(dir.path());
+    let (fixture, mut live) = open_fixture_mirror(dir.path());
     let rows = live.stats().rows;
     let mut offline = Mirror::rebuild_offline(&fixture.hint, dir.path()).expect("rebuilt from the copy");
     assert_eq!(*offline.opened(), Opened::Rebuilt);
@@ -43,7 +44,9 @@ fn the_rebuild_from_the_copy_reads_no_wire_and_equals_the_live_index() {
     assert_eq!(offline.index().suppressed(), live.index().suppressed());
     assert_eq!(offline.index(), live.index(), "every deposit and its verdict, not their counts alone");
     let claimant = offline.claim().map(|(_, c)| c.clone()).expect("the claim, from the cache");
-    assert_eq!(offline.current_keys(&claimant), Ok(None), "the table at the head was never fetched");
+    let keys = offline.current_keys(&claimant).expect("no wire read").expect("the table at the head, folded from the cache");
+    assert_eq!(keys.len(), 2, "the anchor and the rotated key");
+    assert_eq!(Some(keys), live.current_keys(&claimant).expect("read"), "the live mirror's own table");
     assert_eq!(offline.stats().reads.total(), 0, "no wire read");
     drop(live);
     let dial = replay_dial(fixture.clone());
@@ -95,13 +98,13 @@ fn a_hint_naming_another_realm_is_refused_at_the_base() {
 /// REG-3.42 UNDER A HELD COPY: what the copy says of its genesis is the
 /// copy's word, never the root's. A courier's feed copy of this root's
 /// journal, its header rewritten to another genesis fingerprint and shipped
-/// with a fetch cache whose every table for the claimant — at the epoch the
-/// mirror keeps its genesis set under, and at 0 — agrees with that
-/// fingerprint, matches the source row for row and head pair for pair — and
-/// is refused at the claim's row all the same, the realm compared against
-/// the genesis set the source answers and never the cache's; the two genesis
-/// fingerprints named, and nothing written: the feed copy and the cache as
-/// they were shipped.
+/// with a fetch cache in which the claimant's genesis record — the atom its
+/// genesis link names — enrolls the key that fingerprint names, matches the
+/// source row for row and head pair for pair — and is refused at the
+/// claim's row all the same, the realm compared against the genesis record
+/// the source answers and never the cache's; the two genesis fingerprints
+/// named, and nothing written: the feed copy and the cache as they were
+/// shipped.
 #[test]
 fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -114,22 +117,25 @@ fn a_held_copy_naming_another_realm_is_refused_at_the_claim() {
     let shipped_feed = feed.replacen(&fixture.hint.realm().genesis.to_hex(), &other.to_hex(), 1);
     assert_ne!(shipped_feed, feed, "the header names the genesis fingerprint");
     fs::write(dir.path().join(FEED_COPY), &shipped_feed).expect("the courier's header");
-    let forge = |epoch: &Value, at: &Value| {
-        json!({ "keys": {
-            "account": claimant, "epoch": epoch, "at": at,
-            "enrolled": [{ "alg": forged.alg(), "key": forged.to_hex(), "anchor": true }],
-        }})
-    };
+    // The claimant's genesis atom: the one the first enroll link naming the
+    // claimant carries in its `from`.
     let cache = fs::read_to_string(dir.path().join(FETCH_CACHE)).expect("the fetch cache");
-    let mut forgeries: Vec<Value> = cache
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("a cache line is JSON"))
-        .filter(|line| line["keys"]["account"] == claimant.as_str())
-        .map(|line| forge(&line["keys"]["epoch"], &line["keys"]["at"]))
+    let lines: Vec<Value> = cache.lines().map(|line| serde_json::from_str::<Value>(line).expect("a cache line is JSON")).collect();
+    let enroll = skep_registry::commons_type(&[1]).to_string();
+    let genesis_atom = lines
+        .iter()
+        .filter(|l| l["link"]["ty"] == enroll.as_str() && l["link"]["to"] == json!([claimant.as_str()]))
+        .min_by_key(|l| l["link"]["at"].as_u64())
+        .and_then(|l| l["link"]["from"][0].as_str().map(str::to_string))
+        .expect("the cache holds the claimant's genesis link");
+    let entries = [Enrollment::new(forged, true, None).expect("no label")];
+    let forgery = canonical_record(&entries, None);
+    let shipped_cache: String = lines
+        .iter()
+        .map(|l| if l["atom"]["address"] == genesis_atom.as_str() { json!({ "atom": { "address": genesis_atom, "text": forgery } }) } else { l.clone() })
+        .map(|l| format!("{l}\n"))
         .collect();
-    assert!(!forgeries.is_empty(), "the cache holds the claimant's genesis table");
-    forgeries.push(forge(&json!(0), &json!(0)));
-    let shipped_cache = format!("{cache}{}", forgeries.iter().map(|f| format!("{f}\n")).collect::<String>());
+    assert_ne!(shipped_cache, cache, "the cache holds the claimant's genesis record");
     fs::write(dir.path().join(FETCH_CACHE), &shipped_cache).expect("the courier's cache");
     let hint = RootHint::new(fixture.hint.origins().to_vec(), other, None).unwrap();
     let dial = replay_dial(fixture.clone());

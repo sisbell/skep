@@ -73,9 +73,11 @@
 //!   secret, consent and public, as types — a secret payload printing no key
 //!   material; behind `test-hooks`, `person::scripted`, the scripted person
 //!   a test drives.
-//! * [`verify`] — the reader's verifier: a committed signature judged against
-//!   the signature-filtered key set as of the entry's base (AUTH-2.94;
-//!   D14), a pure function of its caller's reads.
+//! * [`verify`] — the reader's verifier: `skep_identity`'s signature-filtered
+//!   key table built over the admitted read under the board's claim, with
+//!   this crate's signature check handed in, and a committed signature
+//!   judged against the set that table opens as of the entry's base
+//!   (AUTH-2.94; D14), a pure function of its caller's reads.
 //! * [`resolve`] — `skep_resolve::Transport` over this crate's dialer.
 //! * [`ceremony`] — the ceremonies in two layers: the compositions every
 //!   walk runs over (P28) — `handshake`, `deposit`, `first_session`,

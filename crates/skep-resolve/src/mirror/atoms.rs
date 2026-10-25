@@ -12,16 +12,17 @@
 //!
 //! An `impl Mirror` child of `mirror`: a record's bytes from the cache, the
 //! head, the chain walk or the position read, reading the mirror's private
-//! state the way a child does. The fold calls one method here,
-//! [`Mirror::fetch_atom`]; [`Chains`] is the walk's memory between two
-//! pulls, which the fold teaches the members a `publish` or a `version` row
-//! names and whose stale part the pull forgets.
+//! state the way a child does. The fold and the credential pass each call
+//! one method here, [`Mirror::fetch_atom`] — the pass
+//! [`Mirror::fetch_atom_off_board`] until the realm is compared; [`Chains`]
+//! is the walk's memory between two pulls, which the fold teaches the
+//! members a `publish` or a `version` row names and whose stale part the
+//! pull forgets.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use skep_address::{document_of, Address, Nat, Tumbler};
-use skep_registry::MAX_REGISTRY_RECORD_BYTES;
 
 use super::{Mirror, MirrorError};
 use crate::board::{
@@ -93,21 +94,32 @@ impl Chains {
 }
 
 impl Mirror {
-    /// THE ATOM at `addr` in `home`: the cache; the head where it is arranged
-    /// there (the append-only guess, then the head's whole image); THE CHAIN
-    /// WALK down the home's members (REG-3.25); the position read off the
-    /// feed (REG-3.26); else `None`.
-    pub(super) fn fetch_atom(&mut self, at: u64, home: &Address, addr: &Address) -> Result<Option<String>, MirrorError> {
+    /// THE ATOM at `addr` in `home`: the cache, else off the board
+    /// ([`Mirror::fetch_atom_off_board`]), kept where its bytes are at most
+    /// `cap`, the largest record of its kind.
+    pub(super) fn fetch_atom(&mut self, at: u64, home: &Address, addr: &Address, cap: usize) -> Result<Option<String>, MirrorError> {
         if let Some(text) = self.fetched.atoms.get(addr) {
             return Ok(Some(text.clone()));
         }
+        self.fetch_atom_off_board(at, home, addr, cap)
+    }
+
+    /// THE ATOM at `addr` in `home`, off the board and never off the cache:
+    /// the head where it is arranged there (the append-only guess, then the
+    /// head's whole image); THE CHAIN WALK down the home's members
+    /// (REG-3.25); the position read off the feed (REG-3.26); else `None` —
+    /// and `None` where no board is held. Kept ([`Mirror::keep_atom`]) under
+    /// `cap`, the largest record of its kind: a registry body's
+    /// (`MAX_REGISTRY_RECORD_BYTES`) or a credential record's
+    /// (`MAX_RECORD_BYTES`).
+    pub(super) fn fetch_atom_off_board(&mut self, at: u64, home: &Address, addr: &Address, cap: usize) -> Result<Option<String>, MirrorError> {
         if self.board.is_none() {
             return Ok(None);
         }
         // The head, through its cached image where one is held.
         if let Some(ordinal) = self.chains.images.get(home).and_then(|i| i.v_ordinal_of(addr)) {
             if let Some(text) = self.retrieve(home, ordinal)? {
-                return self.keep_atom(addr, text);
+                return self.keep_atom(addr, text, cap);
             }
         }
         // The append-only guess: a doc 1 written only by deposits arranges
@@ -117,7 +129,7 @@ impl Mirror {
                 if let Some(runs) = self.image(home, n, 1)? {
                     if runs.len() == 1 && runs[0].0 == *addr && runs[0].1 == 1 {
                         if let Some(text) = self.retrieve(home, n)? {
-                            return self.keep_atom(addr, text);
+                            return self.keep_atom(addr, text, cap);
                         }
                     }
                 }
@@ -127,7 +139,7 @@ impl Mirror {
         if let Some(image) = self.image_of(home)? {
             if let Some(ordinal) = image.v_ordinal_of(addr) {
                 if let Some(text) = self.retrieve(home, ordinal)? {
-                    return self.keep_atom(addr, text);
+                    return self.keep_atom(addr, text, cap);
                 }
             }
         }
@@ -156,23 +168,23 @@ impl Mirror {
         }
         if let Some(text) = found {
             self.stats.chain_walk.atoms += 1;
-            return self.keep_atom(addr, text);
+            return self.keep_atom(addr, text, cap);
         }
         // THE POSITION READ (REG-3.26), where the reader holds the feed.
         if let Some(text) = self.position_read(at, home, addr)? {
             self.stats.chain_walk.position_reads += 1;
-            return self.keep_atom(addr, text);
+            return self.keep_atom(addr, text, cap);
         }
         Ok(None)
     }
 
     /// A record's bytes, kept: held, and its line written to the fetch cache
-    /// — where they can be a record at all. Bytes past the largest record
-    /// the canonical rule admits (`MAX_REGISTRY_RECORD_BYTES`) are handed to
-    /// the parse, which refuses them before it reads one, and never held: a
-    /// board sizes neither the cache nor its file past a record.
-    fn keep_atom(&mut self, addr: &Address, text: String) -> Result<Option<String>, MirrorError> {
-        if text.len() > MAX_REGISTRY_RECORD_BYTES {
+    /// — where they can be a record at all. Bytes past `cap` — the largest
+    /// record its parse admits — are handed to that parse, which refuses them
+    /// before it reads one, and never held: a board sizes neither the cache
+    /// nor its file past a record.
+    fn keep_atom(&mut self, addr: &Address, text: String, cap: usize) -> Result<Option<String>, MirrorError> {
+        if text.len() > cap {
             return Ok(Some(text));
         }
         let line = self.fetched.keep_atom(addr.clone(), text.clone());
@@ -269,6 +281,7 @@ fn trunk_of(doc: &Address) -> Option<Address> {
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
+    use skep_registry::MAX_REGISTRY_RECORD_BYTES;
 
     use super::*;
     use crate::http::{Method, Transport, TransportError};
@@ -360,11 +373,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (home, atom) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.1.2"));
         let mut mirror = over(Unarranged { places: true }, dir.path());
-        assert_eq!(mirror.fetch_atom(7, &home, &atom), Ok(Some("the bytes as of 7".to_string())));
+        assert_eq!(mirror.fetch_atom(7, &home, &atom, MAX_REGISTRY_RECORD_BYTES), Ok(Some("the bytes as of 7".to_string())));
         assert_eq!(mirror.stats.chain_walk.position_reads, 1);
         assert_eq!(mirror.fetched.atoms.get(&atom).map(String::as_str), Some("the bytes as of 7"), "kept");
         let mut mirror = over(Unarranged { places: false }, dir.path());
-        assert_eq!(mirror.fetch_atom(7, &home, &atom), Ok(None), "the home as of 7 arranges nothing");
+        assert_eq!(mirror.fetch_atom(7, &home, &atom, MAX_REGISTRY_RECORD_BYTES), Ok(None), "the home as of 7 arranges nothing");
         assert_eq!(mirror.stats.chain_walk.position_reads, 0);
     }
 
@@ -386,19 +399,23 @@ mod tests {
     }
 
     /// BYTES PAST ANY RECORD ARE NEVER HELD: an atom longer than the largest
-    /// record the canonical rule admits is handed to the parse, which refuses
-    /// it, and kept neither in the cache nor in its file; a record's own bytes,
-    /// at that length, are kept.
+    /// record the caller's parse admits is handed to that parse, which
+    /// refuses it, and kept neither in the cache nor in its file; a record's
+    /// own bytes, at that length, are kept — and the cap is the caller's, a
+    /// credential record's being eight times a registry body's.
     #[test]
     fn bytes_past_any_record_are_handed_to_the_parse_and_never_held() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (home, atom) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.1.1"));
         let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES + 1 }, dir.path());
-        let bytes = mirror.fetch_atom(5, &home, &atom).expect("read").expect("the bytes");
+        let bytes = mirror.fetch_atom(5, &home, &atom, MAX_REGISTRY_RECORD_BYTES).expect("read").expect("the bytes");
         assert_eq!(bytes.len(), MAX_REGISTRY_RECORD_BYTES + 1, "handed to the parse");
         assert!(mirror.fetched.atoms.is_empty() && mirror.pending_cache.is_empty(), "never held");
         let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES }, dir.path());
-        mirror.fetch_atom(5, &home, &atom).expect("read").expect("the bytes");
+        mirror.fetch_atom(5, &home, &atom, MAX_REGISTRY_RECORD_BYTES).expect("read").expect("the bytes");
         assert_eq!((mirror.fetched.atoms.len(), mirror.pending_cache.len()), (1, 1), "a record's bytes, held");
+        let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES + 1 }, dir.path());
+        mirror.fetch_atom(5, &home, &atom, skep_identity::MAX_RECORD_BYTES).expect("read").expect("the bytes");
+        assert_eq!(mirror.fetched.atoms.len(), 1, "a credential record past a registry body's cap, held under its own");
     }
 }

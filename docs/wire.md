@@ -4043,24 +4043,34 @@ at those positions). → `runs`.
 A query whose four-set constrains `ty` and NO other slot — `home`, `from`
 and `to` all `"any"` — enumerates a whole type class: the design's
 directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
-siblings (PUB-6.55, PUB-6.56), where the daemon pays a per-candidate home
-test over every link of the class. THE COST AS BUILT: constraining `home`
-narrows that walk to the homes it names. A home-constrained
-`find_links_ftt`, `count_ftt` or `window_ftt` is served home by home —
-the link store keeps a home's links together under the home's own keys,
-so each home the `home` slot covers that holds links is found by one
-seek, the read predicate is asked of it ONCE ahead of its links, and an
-admitted home's links are read as one key range and tested against the
-link-slot constraints (`from`, `to`, `ty`) — so its cost is the asked
-homes' own links: a `home` slot naming a document or a version member
-reads that home's links alone, whatever the board or the class holds,
-and an unreadable home's links are never read. A `home` slot naming an
-account or the node reads every home under it, one range apiece, so its
-cost is still the account's or the board's links. No index of links by
-home exists at this build for the reads whose constrained slot is not
-the home — those pay for every link their driving slot reaches, the
-cheapest constraint driving — and the bound below counts the SHAPE
-alone. Such a request —
+siblings (PUB-6.55, PUB-6.56), where the daemon pays one home test per
+home holding a link of the class. THE COST AS BUILT: the link store's
+coverage index is grouped by HOME and carries a directory of the homes a
+query could meet, so every link read — `find_links_ftt`, `count_ftt` and
+`window_ftt` in every shape, the region family, `retrieve_endsets` and
+`delete_orphans` — is served home by home. The homes some link of which
+could meet the query are named without visiting a link: off the
+directory for a `from` or `to` constraint and a region's spans, off the
+typed slices for `ty`, off the store's own key order for a `home` slot
+and for the all-`"any"` query; the read predicate is asked of each ONCE,
+ahead of its links; and an admitted home's links alone are read — stabbed
+within the home for a link slot or a region, read as one key range and
+tested against the link-slot constraints for a `home` slot. Where two
+link slots are constrained, the one naming fewer homes drives, found by
+a bounded walk of the directory. So a read's cost is its candidate homes
+and the readable homes' links, and an unreadable home's links are never
+read, whatever the board or the class holds: a `home` slot naming a
+document or a version member reads that home's links alone, one naming
+an account or the node still walks every home under it, one test apiece,
+and a `ty`-only or all-`"any"` four-set still walks every home of the
+class or the board, one test apiece. A window pays for the links it
+returns and the homes it passes, its cursor naming the home it resumes
+in. The residual an answer's timing carries is the count of homes the
+reader may not read that hold a filing in the query's blocks — the
+directory groups a content axis by blocks of sixty-four positions — at
+one directory step and one predicate test each: draft existence under
+the queried span and nothing finer (PUB-7.18). The bound below counts
+the SHAPE alone. Such a request —
 `ty` constrained, the rest `"any"` — is a CLASS SCAN, and it is a SHAPE,
 not a type list: any class queried that way is one, and the all-`"any"`
 query — the whole store — is one too, being that shape's superset. `/op`

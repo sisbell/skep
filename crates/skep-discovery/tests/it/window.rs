@@ -1,11 +1,14 @@
 //! §2 — windowed enumeration: the stateless key-cut both families page by,
-//! its clamp, and the cursor that survives its link's departure.
+//! its clamp, the cursor that survives its link's departure, and what a page
+//! costs, counted: its links and the homes it passes.
 
 use crate::common;
+use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_arrangement::Vstream;
-use skep_discovery::{window_ftt_on, window_v_on, FourSet, SlotSpec};
+use skep_discovery::{findlinks_v_on, window_ftt_on, window_v_on, FourSet, SlotSpec};
+use skep_kernel::Kernel;
 use skep_links::{enc, HasLinks, LinkWriter};
 
 /// §2 — the key-cut pages, and its cursor survives its link's departure from
@@ -174,6 +177,56 @@ fn a_pass_misses_a_link_minted_behind_its_cursor() {
         reads.findlinks_ftt(&FourSet::any()).contains(&behind),
         "it exists when the pass ends"
     );
+}
+
+/// §2 — A WINDOW PAYS FOR ITS PAGE AND THE HOMES IT PASSES, counted (D5 of the
+/// home-index record): a passage of readable links homed ten apiece in many
+/// documents, read by a window of ten from the start, costs the heap beside a
+/// thousand homes that it costs beside a hundred — the first home fills the
+/// page, and the homes past it are never asked, never stabbed, and their
+/// directory entries never stepped — in both families. `findlinks_v`, which
+/// takes the whole passage, is the control and grows with the homes.
+#[test]
+fn a_window_pays_for_its_page_and_the_homes_it_passes() {
+    let world_of = |homes: u32| {
+        let k = kernel_with_documents(1 + homes);
+        seed_content(&k, &doc1(), 1);
+        let store = LinkWriter::new(&k, &EVERYONE);
+        for h in 0..homes {
+            for i in 0..10 {
+                link(&store, &doc(2 + h), &[ca(1)], &[ca(100 + i)]);
+            }
+        }
+        k
+    };
+    let (fewer, more) = (world_of(100), world_of(1_000));
+    let region = [vspan(1, 1, 1)];
+    let from_the_position = FourSet {
+        from: SlotSpec::Spans(enc(&[ca(1)])),
+        ..FourSet::any()
+    };
+    let heap_of = |k: &Kernel<World>, read: &dyn Fn(&Kernel<World>) -> usize| settled_heap_bytes(|| read(k)).1;
+    let page_v = |k: &Kernel<World>| {
+        let page = window_v_on(&k.snapshot(), &doc1(), &region, None, 10, &every_home).expect("window_v");
+        assert_eq!(page.batch, (1..=10).map(|i| a(&[1, 0, 1, 0, 2, 0, 2, i])).collect::<Vec<_>>());
+        assert!(!page.exhausted);
+        page.batch.len()
+    };
+    let page_ftt = |k: &Kernel<World>| {
+        let page = window_ftt_on(&k.snapshot(), &from_the_position, None, 10, &every_home);
+        assert_eq!(page.batch.len(), 10);
+        page.batch.len()
+    };
+    for (what, read) in [("window_v", &page_v as &dyn Fn(&Kernel<World>) -> usize), ("window_ftt", &page_ftt)] {
+        assert_eq!(
+            heap_of(&more, read),
+            heap_of(&fewer, read),
+            "{what}: a page of ten costs the first home, whatever lies past it"
+        );
+    }
+    let whole = |k: &Kernel<World>| findlinks_v_on(&k.snapshot(), &doc1(), &region, &every_home).expect("findlinks_v").len();
+    assert_eq!(whole(&more), 10_000);
+    assert!(heap_of(&more, &whole) > heap_of(&fewer, &whole), "the control: the whole passage pays for every home");
 }
 
 /// §2 — one selection index, read out three ways: `count_v`, `findlinks_v`

@@ -4,10 +4,11 @@
 //! a content region it answers *which links touch here*; given a four-set
 //! descriptor it answers *which links match*; and it counts, paginates,
 //! projects, retrieves endsets, previews delete-orphaning, and traces
-//! supersession lineage — all by composing M7's spanfilade, home-range and
-//! typed reads (`stab`/`match_links`, `homes_under`/`homed_in`,
-//! `stab_typed`), M5's arrangement, and M3's registry over ONE M2 snapshot
-//! per operation. One thing well: **turn upstream
+//! supersession lineage — all by composing M7's homes-first spanfilade
+//! reads, home-range and typed reads (`homes_touching`/`stab_in`/
+//! `match_links_in`, `homes_under`/`homed_in`/`homes`, `stab_typed`), M5's
+//! arrangement, and M3's registry over ONE M2 snapshot per operation. One
+//! thing well: **turn upstream
 //! link/arrangement/registry state into the answers readers ask, owning no
 //! authoritative state and no index** — every answer is recomputed from
 //! upstream on each call, so present-tense correctness (ASN-0108 W7) is free
@@ -67,9 +68,10 @@
 //! a change that test is told about.
 //!
 //! Windowing (ASN-0108) is a stateless key-cut over M7's native
-//! `OrdSet<Address>` — address order IS the permanent enumeration key
-//! (Conflicts #3), so the cursor survives orphaning and M8 pages with no
-//! index of its own.
+//! `OrdSet<Address>`, home by home — address order IS the permanent
+//! enumeration key (Conflicts #3), and a link's address leads with its home,
+//! so the cursor names the home to resume in, survives orphaning, and M8
+//! pages with no index of its own.
 //!
 //! Every arrangement read here but one is of `d`'s READING SURFACE — M5's
 //! `reading_surface`, the one place HEAD-FLOAT is decided (PUB-2.49,
@@ -103,14 +105,16 @@
 //!
 //! It is orthogonal to `View::Active`, and to the descriptor's own `home`
 //! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization.
-//! It is applied at link IDENTITY, in the two shapes PUB names, by the
-//! twelve reads that take the predicate as their last argument:
+//! It is applied in the two shapes PUB names, by the twelve reads that take
+//! the predicate as their last argument:
 //!
 //! * the RESULT-SET FILTER (PUB-6.13), on the ten RESULT-SET reads —
 //!   `findlinks`, `count` and `window` in both families,
 //!   [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage pair —
-//!   which drop every result link the rule refuses, and count and page the
-//!   survivors;
+//!   which admit no link the rule refuses, and count and page the survivors:
+//!   the eight that answer sets of links ask it of each candidate HOME ahead
+//!   of the home's links (PUB-7.18), the lineage pair of each claim's home
+//!   at the claim's identity;
 //! * the ABSENCE RULE (PUB-6.6), on the POINTWISE pair's `a` ARGUMENT, since
 //!   neither answer names a link: an `a` the rule refuses is ABSENT, which
 //!   both [`project_on`] and [`addressably_discoverable_from_on`] answer
@@ -131,24 +135,28 @@
 //! every claim naming it that the rule admits.
 //!
 //! THE PREDICATE'S CONTRACT. M8 asks `readable` only about DOCUMENT
-//! addresses: the home of each candidate link a result-set read admits past
-//! its other filters; each home a descriptor's `home` slot covers that holds
-//! links, asked ONCE ahead of that home's links (PUB-7.18) and ahead of the
-//! link-slot tests, so an unreadable home's links are never read and a
-//! window with a home slot asks of every home under it however far it pages;
-//! and the home of the pointwise pair's `a`, asked before anything has
-//! established that `a` is a link. It asks at most ONCE per candidate where a
-//! region or a link slot drives — a window no further than it walks — and
-//! once per distinct home where the home slot drives, and never to judge a
-//! named `d`; collapsing repeated homes is otherwise the caller's (PUB-7.15,
-//! PUB-7.16). In return, `readable` must answer each document the same way
-//! for as long as a law here compares its answers: every identity stated
-//! "under the same `readable`" — `count = |findlinks|`, a window that drains
-//! `findlinks` — holds exactly that far. M8 cannot check it, since a `Fn`
-//! may read state that moves, so it is written here, where the laws that
-//! rest on it are. A predicate closed over one committed state meets it;
-//! which state is the caller's to choose — M10 closes it over the read's own
-//! snapshot, or over the head's for a historical read (PUB-6.48).
+//! addresses: each CANDIDATE HOME a result-set read's enumeration names —
+//! a home the link store's directory says could hold a link meeting the
+//! query at some slot, a home the descriptor's `home` slot covers that
+//! holds links, a home of the whole store under the unit descriptor — asked
+//! ONCE per distinct home for the read's life (PUB-7.15's memo, PUB-7.18),
+//! AHEAD of that home's links and of every slot test, so an unreadable
+//! home's links are never read at all and a read's timing counts the homes
+//! the reader may not read and nothing finer; the home of each claim the
+//! lineage pair reads out, past its other filters; and the home of the
+//! pointwise pair's `a`, asked before anything has established that `a` is
+//! a link. A window asks no further than it walks: of the homes from its
+//! cursor's own home to the one that fills its `n`, and of none behind the
+//! cursor. It never asks to judge a named `d`. A candidate home may hold no
+//! link the query meets — the directory answers at block grain — and is
+//! asked all the same. In return, `readable` must answer each document the
+//! same way for as long as a law here compares its answers: every identity
+//! stated "under the same `readable`" — `count = |findlinks|`, a window
+//! that drains `findlinks` — holds exactly that far. M8 cannot check it,
+//! since a `Fn` may read state that moves, so it is written here, where the
+//! laws that rest on it are. A predicate closed over one committed state
+//! meets it; which state is the caller's to choose — M10 closes it over the
+//! read's own snapshot, or over the head's for a historical read (PUB-6.48).
 //!
 //! THE FAMILIES' LAWS UNDER A READER. ASN-0121/0127/0132 state their laws of
 //! the unfiltered answer, which is what the total predicate reads; a
@@ -195,14 +203,25 @@
 //!
 //! ## Cost
 //!
-//! What each read walks: M7's link store, counted in M7's primitives — M7
-//! answers a `stab` from its coverage index, one probe per query span plus
-//! one step per link it finds; `match_links` answers its first constraint by
-//! a `stab` and its unconstrained form by a walk of the whole store;
-//! `homes_under` seeks the store's key order once per home it finds, and
-//! `homed_in` reads one home's links as one key range; `stab_typed` is a
-//! `stab` cut to one typed slice — and M5's arrangement, where a read walks
-//! one document's runs or joins against them.
+//! What each read walks: M7's link store, counted in M7's primitives — M7's
+//! `homes_touching` names the candidate homes of a query at a slot off its
+//! coverage index's directory of homes, one step per directory entry a
+//! query's blocks and nodes hold and one lift per candidate home, lazily
+//! and in address order, and off the typed slices for a type query, one
+//! seek per home a related class holds; `stab_in` stabs one home, `O(log n)`
+//! per probe plus that home's hits, over the spans that named it;
+//! `match_links_in` is one home's `stab_in` on the driving constraint and a
+//! test of every survivor against the rest; `fewest_homes` picks the driver
+//! by stepping the constraints' candidate homes in lockstep until one runs
+//! out; `homes_under` and `homes` seek the store's key order once per home
+//! they find, and `homed_in` reads one home's links as one key range;
+//! `stab_typed` is a `stab` cut to one typed slice — and M5's arrangement,
+//! where a read walks one document's runs or joins against them. Every
+//! result-set read here enumerates candidate homes before it reads a link,
+//! asks the reader's predicate once per distinct home, and reads the
+//! admitted homes' links alone, so a read pays for its candidate homes and
+//! the readable homes' links, never for the links of a home the reader may
+//! not read; the count of unreadable candidate homes is its residual.
 //! A caller that admission-controls these reads — the daemon's scan pool
 //! does — prices every one of them from this list, those that walk no link
 //! store included, so a change to what any line says of either store is a
@@ -211,9 +230,11 @@
 //! of the interface as well. `tests/it/tidy.rs` holds the heading, and holds
 //! this list to naming every read the crate publishes. Of what a line says a
 //! read walks, a test holds only what the heap shows: that the touch test
-//! builds nothing per pair, and that `image_on`'s run budget and its square,
+//! builds nothing per pair, that `image_on`'s run budget and its square,
 //! both pointwise budgets and the preview's refusal of a `d` whose own runs
-//! are past the budget each refuse before the work they exist to refuse. The
+//! are past the budget each refuse before the work they exist to refuse, and
+//! that a region read, a descriptor and a window pay nothing for the links
+//! of an unreadable home, the window nothing past the homes it passes. The
 //! rest, no test can check.
 //!
 //! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
@@ -224,9 +245,13 @@
 //!   and the runs it pulls to `MAX_IMAGE_RUNS`, the one past that refused
 //!   before the next is built.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
-//!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
-//!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
-//!   adds one `readlink` per candidate the home rule admits.
+//!   [`retrieve_endsets_on`]) — one `homes_touching` over the image's
+//!   extents at the three v1 slots, then, per candidate home, one test of
+//!   the reader's predicate and, for each home it admits, three `stab_in`s
+//!   over the spans that named it; none when the image is empty. The window
+//!   walks the homes from its cursor's own home to the one that fills its
+//!   `n`, no further. [`retrieve_endsets_on`] adds one `readlink` per link
+//!   of an admitted home.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — with the home slot constrained: one `homes_under`,
 //!   a seek per home holding links under the slot's spans, then one test of
@@ -235,15 +260,19 @@
 //!   the link-slot constraints — so a home slot naming a document or a member
 //!   reads that home's links alone, and one naming an account or the node
 //!   reads every home's under it, one range apiece, never the links of a
-//!   home it does not name. With the home slot `any`: one `match_links`, the
-//!   cheapest constraint driving its `stab` and the rest narrowing what that
-//!   finds — a TYPE constraint whose class holds at most 1024 links,
-//!   counted off the typed slices by `type_hits`, drives ahead of the other
-//!   slots, which otherwise stand in FROM, TO, TYPE order — and a walk of the
-//!   whole active slice when nothing is constrained. None when the
-//!   descriptor is unsatisfiable.
-//! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
-//!   over the retained (none when nothing is retained), and none at all for a
+//!   home it does not name. With the home slot `any` and a link slot
+//!   constrained: `fewest_homes` over the constraints, then one
+//!   `homes_touching` on the one with the fewest candidate homes, and per
+//!   candidate one predicate test and, admitted, one `match_links_in`. With
+//!   nothing constrained: `homes`, a seek per home the store holds, one test
+//!   apiece and the admitted homes' chains — the class scans, grouped by
+//!   home. The window walks the homes from its cursor's own home to the one
+//!   that fills its `n`. None when the descriptor is unsatisfiable.
+//! * [`delete_orphans_on`] — one `homes_touching` over the deleted and the
+//!   retained runs at the three v1 slots, six pairs in one walk, then, per
+//!   home the deleted side names, one test of the reader's predicate and,
+//!   admitted, six `stab_in`s, three a side, over the spans that named it;
+//!   a home the retained side alone names is passed, and none at all for a
 //!   request past the run budget. Ahead of every one, each request past the
 //!   width check reads M5's `n_C` for its bounds check — a sum over `d`'s
 //!   content runs, reading each — and a request past the run budget has paid,
@@ -251,12 +280,13 @@
 //!   resolution of `d`'s content otherwise.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `stab_typed` at the key's own span on the claim's slot, cut to the
-//!   supersession class: one probe of the coverage index and a step per link
-//!   naming or covering the key at that slot, no walk of the class and none
-//!   of the store, so a key no claim names costs the probe alone, resident or
-//!   not; where it finds a claim, one `readlink` of the key, then, per claim
-//!   whose `old` and `new` are defined, one `is_active` and one comparison of
-//!   the probed endpoint with the key, ahead of the home rule.
+//!   supersession class: the directory's candidate homes for that span and a
+//!   step per link naming or covering the key at that slot, no walk of the
+//!   class and none of the store, so a key no claim names costs the
+//!   directory alone, resident or not; where it finds a claim, one
+//!   `readlink` of the key, then, per claim whose `old` and `new` are
+//!   defined, one `is_active` and one comparison of the probed endpoint with
+//!   the key, ahead of the home rule, asked of each claim's home.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's `#runs` for the
@@ -269,16 +299,21 @@
 //!   product is held at the square of [`MAX_IMAGE_RUNS`] and the projection's
 //!   at [`MAX_ANSWER_SPANS`], for the reasons those constants state.
 //!
-//! A window computes its family's whole candidate set before it cuts,
-//! whatever `n` and wherever the cursor: paging bounds the answer, never the
-//! work.
+//! A window pays for the links it returns and the homes it passes: the
+//! cursor names the home to resume in and the position within it, the homes
+//! behind it are passed unasked and unread, and the walk stops at the home
+//! that fills `n`. Within one home the window reads that home's whole share
+//! and cuts it, so a home holding more links on the query than `n` costs its
+//! share once.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
-//! * the spanfilade / coverage index, the per-slot matcher, the AND-of-ORs
-//!   combiner, the home ranges and the typed stab — M7's
-//!   `stab`/`match_links`/`homes_under`/`homed_in`/`stab_typed` (Conflicts
-//!   #1); `coverage(a, i)` is NOT re-exposed — it is exactly M7's
+//! * the spanfilade / coverage index and its directory of homes, the
+//!   per-slot per-home matcher, the AND-of-ORs combiner, the driver's
+//!   choice, the home ranges and the typed stab — M7's
+//!   `homes_touching`/`stab_in`/`match_links_in`/`fewest_homes`/
+//!   `homes_under`/`homed_in`/`homes`/`stab_typed` (Conflicts #1);
+//!   `coverage(a, i)` is NOT re-exposed — it is exactly M7's
 //!   `followlink(a, i)`;
 //! * content bytes (M4); provenance R and every R-keyed query —
 //!   SHOWDELETIONS / FINDDOCSCONTAINING are M6's; the global-ghost / LP17
@@ -326,7 +361,8 @@
 // the answer's span budget.
 mod budget;
 // The home projection and the home rule: the one place a link's home is
-// computed and the caller's predicate asked about it.
+// computed and the caller's predicate asked about it — the reader that
+// answers once per home, and the cursor's home a window resumes in.
 mod home;
 // The plain values the reads take and return — the window pair, the lineage
 // claim, the orphan report — and the two typed rejections.
@@ -339,7 +375,9 @@ mod sets;
 // matcher.
 mod image;
 // The region family: `findlinks_v`, `count_v`, `window_v` and
-// RETRIEVEENDSETS, read out of one selection index.
+// RETRIEVEENDSETS, read out of one selection index home by home; the
+// extents' lift and the window over homes both families and the preview
+// share.
 mod region;
 // The descriptor family: the four-set request, its candidates and `sat`, and
 // its three read-outs.

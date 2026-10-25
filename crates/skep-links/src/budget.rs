@@ -42,10 +42,15 @@
 /// at the shallow end and ~70 MB at the deep one (~21 MB journaled), and a
 /// three-slot MAKELINK stores up to ~200 MB from a ~6 MB frame; M10's
 /// `Codec::parse` doc carries the arithmetic. The spanfilade files every kept
-/// span once more — its start, a pointer to its link and its coordinates — at
-/// order 0.4 KB a span at the shallow end and 6 KB at the deep one, about as
-/// much again as the span and about half as much, so the index adds ~2 MB and
-/// ~26 MB a slot at budget, live and never journaled. `MAX_TXN_BYTES` does not
+/// span once more — its start, a pointer to its link, a pointer to its home
+/// (the home's tumbler held once per index, whatever the link count) and its
+/// coordinates — at order 0.4 KB a span at the shallow end and 6 KB at the
+/// deep one, about as much again as the span and about half as much; and its
+/// directory of homes takes at most two entries per span, one for the block
+/// its start falls in and one for the node it files at, each written once per
+/// home and so in practice a few per home per slot, at order 0.1 KB apiece —
+/// so the index adds ~3 MB and ~27 MB a slot at budget, live and never
+/// journaled. `MAX_TXN_BYTES` does not
 /// bound the live figure: it is charged against the encoded transaction after
 /// the closure returns, and a span's encoded form is a fraction of its live
 /// one, so the deep three-slot MAKELINK journals inside it. MAKELINK's three

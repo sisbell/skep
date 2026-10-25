@@ -1,8 +1,11 @@
 //! The home rule (PUB-6.13), the reader argument every link read takes:
 //! each read drops exactly the links homed where its reader may not read,
-//! and asks its predicate only of homes, once per candidate.
+//! asks its predicate only of homes, once per distinct home, ahead of the
+//! home's links — and, counted, pays nothing for the links of a home it may
+//! not read.
 
 use crate::common;
+use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::{document_of, Address};
@@ -12,6 +15,7 @@ use skep_discovery::{
     window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM, MAX_ANSWER_SPANS,
     TO,
 };
+use skep_kernel::Kernel;
 use skep_links::{enc, LinkWriter, View};
 
 /// Every result-set read drops EXACTLY the links homed where the reader may
@@ -170,23 +174,23 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
 }
 
 /// The home rule's contract with its predicate, over every read that takes
-/// one: asked only of a candidate's HOME, at most once per candidate
-/// (PUB-7.15, PUB-7.16) — a window asks no further than it walks, neither
-/// beyond its `n` nor behind its cursor, and a read asks only past its OTHER
-/// filters — and of the pointwise pair's `a` alone, never of a named `d`;
-/// and, where a descriptor's HOME SLOT drives, once per distinct home under
-/// the slot that holds links, AHEAD of that home's links and of the link-slot
-/// tests (PUB-7.18), a window included. Under the pure predicates every other
-/// test passes, a read that asked a link, asked once per slot, asked the named
-/// document, asked ahead of the residence test, or asked a home once per link
-/// it holds answers exactly as the right one does; a predicate that records
+/// one: asked only of a candidate HOME, once per distinct home for a read's
+/// life (PUB-7.15's memo, PUB-7.16, PUB-7.18), in home order, AHEAD of that
+/// home's links and of every slot test — a window asks no further than it
+/// walks, of its cursor's own home and the homes past it up to the one that
+/// fills its `n`, and of none behind the cursor — the lineage pair of each
+/// claim's home past its other filters, and the pointwise pair of `a`'s home
+/// alone, never of a named `d`. Under the pure predicates every other test
+/// passes, a read that asked a link, asked once per slot, asked once per
+/// link of a home, asked the named document, or asked of the homes behind a
+/// cursor answers exactly as the right one does; a predicate that records
 /// what it is asked is where each shows.
 ///
 /// Each link here touches the region through FROM and TO both, which is what
-/// separates one ask per candidate from one ask per `(candidate, slot)`; doc1
-/// holds two of the three links, which is what separates one ask per home
-/// from one per candidate; and `d` is itself a home, so a preview that
-/// consulted its `d` shows as a fourth ask rather than as a different address.
+/// separates one ask per home from one ask per `(home, slot)`; doc1 holds two
+/// of the three links, which is what separates one ask per home from one per
+/// link; and `d` is itself a home, so a preview that consulted its `d` shows
+/// as a repeated ask rather than as a different address.
 #[test]
 fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     let k = kernel();
@@ -198,34 +202,23 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     let snap = k.snapshot();
     let asked = Asked::default();
     let recorder = asked.recorder();
-    let homes_of = |links: &[Address]| -> Vec<Address> {
-        links
-            .iter()
-            .map(|l| document_of(l).expect("a link has a home"))
-            .collect()
-    };
-    let sorted = |mut links: Vec<Address>| {
-        links.sort();
-        links
-    };
-    // The three candidates' homes, derived rather than spelled, so every
-    // assertion below reads "once per candidate" and not "three times".
-    let candidates = findlinks_ftt_on(&snap, &FourSet::any(), &every_home);
-    let homes = sorted(homes_of(&candidates));
+    let homes = vec![doc1(), doc2()];
     let region = [vspan(1, 1, 1)];
 
+    // The three links' two homes, each once, in home order — never a home
+    // per link, never a home per slot.
     let found = findlinks_v_on(&snap, &doc1(), &region, &recorder).expect("findlinks_v");
     assert_eq!(found.len(), 3);
-    assert_eq!(sorted(asked.take()), homes.clone());
+    assert_eq!(asked.take(), homes);
     let found = findlinks_ftt_on(&snap, &FourSet::any(), &recorder);
     assert_eq!(found.len(), 3);
-    assert_eq!(sorted(asked.take()), homes.clone());
+    assert_eq!(asked.take(), homes);
     // The counts ask exactly what their enumerations ask.
     assert_eq!(count_v_on(&snap, &doc1(), &region, &recorder), Ok(3));
-    assert_eq!(sorted(asked.take()), homes.clone());
+    assert_eq!(asked.take(), homes);
     assert_eq!(count_ftt_on(&snap, &FourSet::any(), &recorder), 3);
-    assert_eq!(sorted(asked.take()), homes.clone());
-    // A window of one asks of the one candidate it admits, and stops.
+    assert_eq!(asked.take(), homes);
+    // A window of one asks of the one home that fills it, and stops.
     assert_eq!(
         window_ftt_on(&snap, &FourSet::any(), None, 1, &recorder).batch,
         vec![la(1)]
@@ -238,33 +231,49 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         vec![la(1)]
     );
     assert_eq!(asked.take(), vec![doc1()]);
-    // … and a window RESUMED past a cursor asks of the candidates past it
-    // alone: the links behind the cursor are never walked, so never asked.
+    // … a window RESUMED past a cursor asks of the cursor's own home — cut
+    // past the cursor, which here leaves it nothing — and of the homes past
+    // it that it reaches …
     assert_eq!(
         window_ftt_on(&snap, &FourSet::any(), Some(la(2)), 1, &recorder).batch,
         vec![la2(1)]
     );
-    assert_eq!(asked.take(), vec![doc2()]);
+    assert_eq!(asked.take(), homes);
     assert_eq!(
         window_v_on(&snap, &doc1(), &region, Some(la(2)), 1, &recorder)
             .expect("window_v")
             .batch,
         vec![la2(1)]
     );
+    assert_eq!(asked.take(), homes);
+    // … and of none BEHIND the cursor: resumed in doc2, doc1 is passed
+    // unasked, in both families.
+    assert_eq!(
+        window_ftt_on(&snap, &FourSet::any(), Some(doc2()), 1, &recorder).batch,
+        vec![la2(1)]
+    );
     assert_eq!(asked.take(), vec![doc2()]);
-    // RETRIEVEENDSETS asks at the CANDIDATE's identity, ONCE, before its slots
+    assert_eq!(
+        window_v_on(&snap, &doc1(), &region, Some(doc2()), 1, &recorder)
+            .expect("window_v")
+            .batch,
+        vec![la2(1)]
+    );
+    assert_eq!(asked.take(), vec![doc2()]);
+    // RETRIEVEENDSETS asks of each HOME, ONCE, before any of its links' slots
     // are read: each link reaches the region through FROM and TO, so a rule
-    // asked per (candidate, slot) asks twice for each.
+    // asked per (link, slot) asks twice for each link.
     assert_eq!(
         retrieve_endsets_on(&snap, &doc1(), &region, &recorder),
         Ok(vec![(FROM, enc(&[ca(1)])), (TO, enc(&[ca(1)]))])
     );
-    assert_eq!(sorted(asked.take()), homes.clone());
-    // The preview asks about the ORPHANS and never about the `d` it is asked
-    // at.
+    assert_eq!(asked.take(), homes);
+    // The preview asks about the homes of the links touching the deleted
+    // range and never about the `d` it is asked at — which is doc1 here, so a
+    // consult of `d` would show as doc1 twice.
     let report = delete_orphans_on(&snap, &doc1(), &vp(1, 1), &n(1), &recorder).expect("preview");
     assert_eq!(report.orphaned.len(), 3);
-    assert_eq!(sorted(asked.take()), sorted(homes_of(&report.orphaned)));
+    assert_eq!(asked.take(), homes);
     // "Past its OTHER filters": under a home-bound descriptor only the
     // residing candidate's home is asked, in the enumeration, the count and
     // the window's lazy key-cut alike.
@@ -282,24 +291,22 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     );
     assert_eq!(asked.take(), vec![doc2()]);
     // Where the HOME SLOT drives, the rule is asked once per distinct home
-    // under it, in home order, ahead of that home's links (PUB-7.18) — never
-    // once per candidate: doc1 holds two of the three links and is asked
-    // once, in the enumeration, the count and the window alike; and the
-    // window of one asks of both homes though it pages one link, each home
-    // being admitted before its links are read.
+    // under it, in home order, ahead of that home's links (PUB-7.18): doc1
+    // holds two of the three links and is asked once, in the enumeration and
+    // the count alike; the window of one asks of doc1 alone, which fills it.
     let under_the_account = FourSet {
         home: SlotSpec::Spans(enc(&[a(&[1, 0, 1])])),
         ..FourSet::any()
     };
-    assert_eq!(findlinks_ftt_on(&snap, &under_the_account, &recorder), candidates);
-    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    assert_eq!(findlinks_ftt_on(&snap, &under_the_account, &recorder), found);
+    assert_eq!(asked.take(), homes);
     assert_eq!(count_ftt_on(&snap, &under_the_account, &recorder), 3);
-    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    assert_eq!(asked.take(), homes);
     assert_eq!(
         window_ftt_on(&snap, &under_the_account, None, 1, &recorder).batch,
         vec![la(1)]
     );
-    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    assert_eq!(asked.take(), vec![doc1()]);
     // …and AHEAD of the link-slot tests: a home none of whose links meets the
     // FROM constraint is asked all the same, once, before its links are
     // tested, so an unreadable home's links are never read at all.
@@ -312,7 +319,32 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         findlinks_ftt_on(&snap, &under_the_account_from_elsewhere, &recorder),
         vec![]
     );
-    assert_eq!(asked.take(), vec![doc1(), doc2()]);
+    assert_eq!(asked.take(), homes);
+    // Where a LINK SLOT drives, the candidate homes its directory names are
+    // asked, once each, ahead of their links — a home with a link at the
+    // position though none meets the other constraint included.
+    let from_the_position_typed_otherwise = FourSet {
+        from: SlotSpec::Spans(enc(&[ca(1)])),
+        ty: SlotSpec::Spans(enc(&[rel2()])),
+        ..FourSet::any()
+    };
+    assert_eq!(
+        findlinks_ftt_on(&snap, &from_the_position_typed_otherwise, &recorder),
+        vec![]
+    );
+    assert_eq!(asked.take(), vec![], "a type no link carries names no home");
+    let from_the_position = FourSet {
+        from: SlotSpec::Spans(enc(&[ca(1)])),
+        to: SlotSpec::Spans(enc(&[ca(1)])),
+        ..FourSet::any()
+    };
+    assert_eq!(findlinks_ftt_on(&snap, &from_the_position, &recorder), found);
+    assert_eq!(asked.take(), homes);
+    // The lineage pair asks of each claim's home, at the claim's identity.
+    let (claim, _) = store.assert_sup(SYS, &doc2(), &la(1), &la(2)).expect("assert_sup succeeds");
+    let snap = k.snapshot();
+    assert_eq!(claims_of(in_claims_on(&snap, &la(1), View::Active, &recorder)), vec![claim]);
+    assert_eq!(asked.take(), vec![doc2()]);
     // The pointwise pair asks `a`'s home once, and of a homeless `a` nothing.
     project_on(&snap, &la2(1), FROM, &doc1(), &recorder).expect("project");
     assert_eq!(asked.take(), vec![doc2()]);
@@ -323,21 +355,27 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     assert_eq!(asked.take(), vec![]);
 }
 
-/// §6 — the preview asks the home rule (PUB-6.13) PAST its own filter, the
-/// relative complement — the rule runs AFTER the set identity, in the
-/// preview's own words — so the home of a link the delete leaves witnessed is
-/// never asked (PUB-7.15, PUB-7.16). The once-per-candidate law's fixture
-/// orphans every link it holds, where asking before the complement and after
-/// it ask alike; here one link survives, homed in a document that is neither
-/// `d` nor the orphan's home, so an ask of its home cannot pass for an ask of
-/// `d`.
+/// §6 — the preview asks the home rule (PUB-6.13) of the homes the link
+/// store names for the DELETED range, once each, ahead of their links — and
+/// never of a home named for the retained content alone, which the delete
+/// leaves witnessed whatever it holds (PUB-7.15, PUB-7.16). The once-per-home
+/// law's fixture orphans every link it holds, where a home touching only the
+/// retained side cannot show; here one home's link survives at the retained
+/// position beside a deleted one and is asked, as the deleted side names it,
+/// and a third home links a retained position in another block of the
+/// content axis alone and is never asked. Neither is `d`, which is the
+/// orphan's home here and would show as a repeat. The store names homes at
+/// block grain — a home linking a retained position in the deleted
+/// position's own block of sixty-four is named and asked all the same, the
+/// residual PUB-7.18 accepts — which is why the third home links far away.
 #[test]
 fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
     let k = kernel();
-    seed_content(&k, &doc1(), 2);
+    seed_content(&k, &doc1(), 70);
     let store = LinkWriter::new(&k, &EVERYONE);
     let orphan = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1): position 1 alone
-    link(&store, &doc2(), &[ca(1)], &[ca(2)]); // la2(1): witnessed at position 2 too
+    link(&store, &doc2(), &[ca(1)], &[ca(2)]); // la2(1): deleted position 1, witnessed at position 2 too
+    link(&store, &pdoc(), &[ca(70)], &[ca(102)]); // retained position 70 alone, in the next block
     let snap = k.snapshot();
     let asked = Asked::default();
     let recorder = asked.recorder();
@@ -345,9 +383,91 @@ fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
     assert_eq!(report.orphaned, vec![orphan]);
     assert_eq!(
         asked.take(),
-        vec![doc1()],
-        "the orphan's home alone — the survivor's, doc2, is never asked"
+        vec![doc1(), doc2()],
+        "the homes named for the deleted position, once each — the home linking a retained position alone is never asked"
     );
+}
+
+/// A world of `flood` links FROM doc1's position 1, homed round-robin in
+/// `homes` documents past doc2, beside two of doc1's own on the same position
+/// and one of doc2's on position 70 alone — another block of the content
+/// axis, so the passage's directory never names doc2 — the fixture the home
+/// rule's cost laws read at two floods and two home counts.
+fn flooded_homes(flood: u32, homes: u32) -> Kernel<World> {
+    let k = kernel_with_documents(2 + homes);
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    link(&store, &doc2(), &[ca(70)], &[ca(103)]); // off the passage, in another block
+    for i in 0..flood {
+        link(&store, &doc(3 + i % homes), &[ca(1)], &[ca(1_000 + i)]);
+    }
+    k
+}
+
+/// The heap bytes a read of `k`'s current state asks for, on its second run.
+fn heap_of<T>(k: &Kernel<World>, read: impl Fn(&Kernel<World>) -> T) -> u64 {
+    settled_heap_bytes(|| read(k)).1
+}
+
+/// A read of a kernel's current state answering a count, as the cost laws
+/// compare them.
+type Counted<'a> = dyn Fn(&Kernel<World>) -> usize + 'a;
+
+/// THE WORK MOVES, counted (PUB-7.18 at the region family; S36 (a)): a region
+/// read over a passage holding a flood of links homed where the reader may
+/// not read asks of those homes once each and reads none of their links. A
+/// thousand flooding links in ten homes cost the reader's `findlinks_v`,
+/// `count_v` and `window_v` the heap a hundred do — the homes are the same
+/// ten, and the links in them are never visited — and the same thousand in
+/// ONE home cost what a hundred in one do: one home test. The reader of every
+/// home is the control and pays for every hit. A home whose links lie off
+/// the passage is never asked, so the homes asked are the passage's
+/// candidates and not the board's.
+#[test]
+fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_links() {
+    let region = [vspan(1, 1, 1)];
+    let only_doc1 = |d: &Address| *d == doc1();
+    let reads: [(&str, &Counted<'_>); 3] = [
+        ("findlinks_v", &|k| {
+            findlinks_v_on(&k.snapshot(), &doc1(), &region, &only_doc1).expect("findlinks_v").len()
+        }),
+        ("count_v", &|k| count_v_on(&k.snapshot(), &doc1(), &region, &only_doc1).expect("count_v")),
+        ("window_v", &|k| {
+            window_v_on(&k.snapshot(), &doc1(), &region, None, 5, &only_doc1).expect("window_v").batch.len()
+        }),
+    ];
+    for homes in [1, 10] {
+        let (fewer, more) = (flooded_homes(100, homes), flooded_homes(1_000, homes));
+        for k in [&fewer, &more] {
+            assert_eq!(
+                findlinks_v_on(&k.snapshot(), &doc1(), &region, &only_doc1),
+                Ok(vec![la(1), la(2)]),
+                "doc1's two, whatever the flood"
+            );
+            // The homes asked: doc1 and the flood's, once each, in home order
+            // — never doc2, whose link lies off the passage and outside its
+            // block.
+            let asked = Asked::default();
+            let recorder = asked.recording(only_doc1);
+            findlinks_v_on(&k.snapshot(), &doc1(), &region, &recorder).expect("findlinks_v");
+            let expected: Vec<Address> = std::iter::once(doc1()).chain((0..homes).map(|i| doc(3 + i))).collect();
+            assert_eq!(asked.take(), expected, "once per home the passage names");
+        }
+        for (what, read) in reads {
+            assert_eq!(
+                heap_of(&more, read),
+                heap_of(&fewer, read),
+                "{what} beside {homes} unreadable home(s): the flood's links cost nothing"
+            );
+        }
+    }
+    // The control: the reader of every home pays for every hit.
+    let (fewer, more) = (flooded_homes(100, 10), flooded_homes(1_000, 10));
+    let everyone = |k: &Kernel<World>| findlinks_v_on(&k.snapshot(), &doc1(), &region, &every_home).expect("findlinks_v").len();
+    assert_eq!(everyone(&more), 1_002);
+    assert!(heap_of(&more, everyone) > heap_of(&fewer, everyone), "the control pays for the flood");
 }
 
 /// §4 — PUB-6.15: filtered at link HOME, UNFILTERED at origin. The home rule

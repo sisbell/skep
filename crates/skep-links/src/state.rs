@@ -35,7 +35,26 @@ mod reads;
 mod spanfilade;
 
 pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
+pub use spanfilade::Touch;
 use spanfilade::Spanfilade;
+
+// The 1-based standard slot numerals (ASN-0043 L6: slot index is a
+// primitive). M7 owns them — it is the store whose `Link` is a positional
+// sequence — and they are named here, beside the hints that index each slot,
+// so the read surface beneath can ask which slot the typed slices cover; the
+// crate root re-exports them for everyone who indexes a slot, M8's region
+// and descriptor queries included. The subspace numerals `s_C` and `s_L` are
+// M1's, named there as `content_subspace`/`link_subspace`.
+
+/// `FROM` = 1 — the slot holding `e₁` ([`Link::from_slot`]).
+pub const FROM: usize = 1;
+
+/// `TO` = 2 — the slot holding `e₂` ([`Link::to_slot`]).
+pub const TO: usize = 2;
+
+/// `TYPE` = 3 — the slot holding `e₃` ([`Link::type_slot`]), the one slot
+/// the typed slices index.
+pub const TYPE: usize = 3;
 
 /// The one authoritative delta.
 ///
@@ -125,10 +144,13 @@ struct Hints {
     /// emission lands at `chain_d(f_d^Σ)`, and BH4 age is measured back from
     /// it.
     home_frontier: HashMap<Tumbler, u64>,
-    /// The spanfilade (§6): every span of every slot, filed under its link.
+    /// The spanfilade (§6): every span of every slot, filed under its link
+    /// and the link's home, with the directory of homes beside it.
     ///
-    /// `stab` answers from it rather than from a walk of `links`. It covers
-    /// the audit slice, and a read applies its view to the answer.
+    /// `stab` answers from it rather than from a walk of `links`, home by
+    /// home: the directory names the homes a query could meet, and the
+    /// per-home stab reads one home's filings. It covers the audit slice,
+    /// and a read applies its view to the answer.
     spanfilade: Spanfilade,
 }
 
@@ -210,8 +232,9 @@ impl LinkState {
     /// idempotent).
     ///
     /// Filing the value into the spanfilade is a few `O(log n)` ordered-set
-    /// inserts per stored span, paid here: on a live write, inside the
-    /// transaction and so under M2's applier lock.
+    /// inserts per stored span, and a directory lookup — an insert too at the
+    /// home's first filing in a block or at a node — paid here: on a live
+    /// write, inside the transaction and so under M2's applier lock.
     ///
     /// Totality domain over `addr`, all three clauses owed by M3's `mint_link`
     /// and held by every record M7's own paths stage: `addr` is T4-valid, is
@@ -270,7 +293,8 @@ impl LinkState {
     /// `#[serde(skip)]` — M2's default identity would leave it empty, and
     /// replay's `apply_link` folds maintain exactly these hints. The pass
     /// files every stored span into the spanfilade, a few `O(log n)` inserts
-    /// apiece, so an open pays for the index once per span.
+    /// apiece and the directory's lookup beside them, so an open pays for
+    /// the index and its directory once per span.
     ///
     /// # Panics
     ///
@@ -366,11 +390,11 @@ impl LinkState {
 
     /// Returns the link an index key names.
     ///
-    /// Every key in `type_slices`/`dedup`, and every key `stab` returns, is a
-    /// key of `links` — [`fold_hints`] indexes there only the address it is
-    /// inserting; `sup_fwd`'s endpoints are keys of `links` by the claim
-    /// schema. `readlink` is the fallible form, for an address a caller
-    /// supplies.
+    /// Every key in `type_slices`/`dedup`, and every key `stab` or `stab_in`
+    /// returns, is a key of `links` — [`fold_hints`] indexes there only the
+    /// address it is inserting; `sup_fwd`'s endpoints are keys of `links` by
+    /// the claim schema. `readlink` is the fallible form, for an address a
+    /// caller supplies.
     ///
     /// # Panics
     ///
@@ -566,9 +590,10 @@ fn fold_hints(out: &mut Hints, addr: &Tumbler, value: &Link) {
     .expect("link addresses are element-level, so their home Document exists");
     *out.home_frontier.entry(home.tumbler().clone()).or_insert(0) += 1;
 
-    // spanfilade — every span of every slot, filed under this link (§6), so
-    // `stab` answers from the index rather than from a walk of `links`.
-    out.spanfilade.file(addr, value);
+    // spanfilade — every span of every slot, filed under this link and its
+    // home (§6), so `stab` answers from the index rather than from a walk of
+    // `links`, and home by home.
+    out.spanfilade.file(addr, home.tumbler(), value);
 }
 
 #[cfg(test)]

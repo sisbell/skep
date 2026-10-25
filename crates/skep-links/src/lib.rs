@@ -11,8 +11,10 @@
 //! \[ASN-0111/0114\]), the typed-relation observers (Observe + the behavior
 //! atoms BH1–BH4 \[ASN-0128\]), the immutable type/shape registry, idempotent
 //! de-duplication, and the discovery primitives for M8: the spanfilade's
-//! `stab` and `match_links`, and the home ranges `homes_under` and
-//! `homed_in`, which answer a home's links off the map's own key order.
+//! `stab` and `match_links`, the homes-first pair beneath them —
+//! `homes_touching`, the candidate homes a query could meet, and `stab_in`,
+//! one home's hits — and the home ranges `homes_under` and `homed_in`, which
+//! answer a home's links off the map's own key order.
 //!
 //! The Lampson spine (§Core data model): the journal (via M2) is truth; the
 //! authoritative state is one append-only map; everything else is a
@@ -106,9 +108,9 @@ mod budget;
 // hoists, and FOLLOWLINK's ⊥.
 mod error;
 // M7's slice: `LinkState` (the authoritative map and the hints folded from
-// it), the one delta `LinkRec`, the fold; beneath it `state/reads.rs`, the
-// read surface, and `state/spanfilade.rs`, the coverage index `stab` answers
-// from.
+// it), the one delta `LinkRec`, the fold, the slot numerals; beneath it
+// `state/reads.rs`, the read surface, and `state/spanfilade.rs`, the
+// coverage index `stab` answers from, grouped by home.
 mod state;
 // `LinkWriter` and what its ops share — `emit_core`, the one deposit gate,
 // the lock set, the `replaces` class; one file per op family beneath, each
@@ -129,7 +131,9 @@ pub use error::{
 pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
 };
-pub use state::{CurrentMember, LinkRec, LinkState, Pattern, Tip, Tuple, View};
+pub use state::{
+    CurrentMember, LinkRec, LinkState, Pattern, Tip, Touch, Tuple, View, FROM, TO, TYPE,
+};
 pub use writes::{
     emit_tuple, is_replaces_class, replaces_type, retraction_tuple, slot_endset,
     supersession_claim, Edit, LinkWriter, SlotArg, Visibility,
@@ -192,17 +196,3 @@ pub trait HasLinks {
 pub trait LinkWorld: WorldState + HasLinks + HasM3 {}
 impl<W: WorldState + HasLinks + HasM3> LinkWorld for W {}
 
-// The 1-based standard slot numerals (ASN-0043 L6: slot index is a
-// primitive). M7 owns them — it is the store whose `Link` is a positional
-// sequence — so they are named here and read by everyone who indexes a slot,
-// M8's region and descriptor queries included. The subspace numerals `s_C`
-// and `s_L` are M1's, named there as `content_subspace`/`link_subspace`.
-
-/// `FROM` = 1 — the slot holding `e₁` ([`Link::from_slot`]).
-pub const FROM: usize = 1;
-
-/// `TO` = 2 — the slot holding `e₂` ([`Link::to_slot`]).
-pub const TO: usize = 2;
-
-/// `TYPE` = 3 — the slot holding `e₃` ([`Link::type_slot`]).
-pub const TYPE: usize = 3;

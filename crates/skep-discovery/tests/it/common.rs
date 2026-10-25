@@ -174,9 +174,15 @@ impl Asked {
     /// A reader that admits every home and records each document it is asked
     /// about.
     pub fn recorder(&self) -> impl Fn(&Address) -> bool + '_ {
+        self.recording(|_| true)
+    }
+
+    /// A reader that answers as `admit` does and records each document it is
+    /// asked about.
+    pub fn recording<'a>(&'a self, admit: impl Fn(&Address) -> bool + 'a) -> impl Fn(&Address) -> bool + 'a {
         move |d: &Address| {
             self.0.borrow_mut().push(d.clone());
-            true
+            admit(d)
         }
     }
 
@@ -393,12 +399,45 @@ pub fn genesis_world() -> World {
 /// An in-memory kernel over the seeded genesis world (MIC-faithful; no
 /// journal, no recovery).
 pub fn kernel() -> Kernel<World> {
+    kernel_over(genesis_world())
+}
+
+/// An in-memory kernel over `world`.
+fn kernel_over(world: World) -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0),
     };
-    Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail")
+    Kernel::open(cfg, world).expect("in-memory open cannot fail")
+}
+
+/// Document `d` of the account: `[1,0,1,0,d]` — doc1 at 1, doc2 at 2, pdoc
+/// at 3, and the homes [`kernel_with_documents`] registers past them.
+pub fn doc(d: u32) -> Address {
+    a(&[1, 0, 1, 0, d])
+}
+
+/// An in-memory kernel over a world registering `count` PRIVATE documents
+/// under the account, `[1,0,1,0,1]` through `[1,0,1,0,count]`, each allocated
+/// at its chain's next ordinal as M3's fold requires — the many-homes fixture
+/// the cost laws read, where [`seeded_m3`]'s three documents cannot spread
+/// links over a thousand homes. Doc1 and doc2 are the first two, so every
+/// fixture address holds; the third is private here where [`pdoc`] is
+/// published.
+pub fn kernel_with_documents(count: u32) -> Kernel<World> {
+    let mut m3 = M3State::genesis()
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)));
+    for d in 1..=count {
+        m3 = m3.apply_m3(Seq(0), &M3Rec::allocate(doc(d), false));
+    }
+    kernel_over(World {
+        m3,
+        content: ContentStore::default(),
+        m5: M5State::genesis(),
+        links: LinkState::genesis(),
+    })
 }
 
 /// The write-fixture caller (ownership ruling, 2026-08-16): this crate

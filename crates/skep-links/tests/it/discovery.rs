@@ -5,9 +5,11 @@
 //! of a constraint pool in both views, the three primitives' `Default → Active`
 //! coercion, `stab`'s empty-query floor and its absent-slot rule, the home
 //! ranges against a scan of the store filtered by each key's home — and what
-//! they cost, counted — the type-slot count against the stab it predicts, the
-//! typed stab against the stab cut to the slice, and the verbatim order
-//! FOLLOWLINK folds.
+//! they cost, counted — the homes-first pair against the stab they compose
+//! (every hit's home named once, ascending; the per-home shares concatenated
+//! in that order the stab's own answer) and what a read composed over
+//! readable homes pays, counted, the typed stab against the stab cut to the
+//! slice, and the verbatim order FOLLOWLINK folds.
 
 use crate::common;
 use crate::heap::settled_heap_bytes;
@@ -17,9 +19,7 @@ use im::OrdSet;
 use skep_address::{document_of, Address, Span, SpanSet};
 use skep_arrangement::Vstream;
 use skep_kernel::Kernel;
-use skep_links::{
-    enc, Caller, Endset, HasLinks, Link, Pattern, SlotArg, Tuple, View, FROM, TO, TYPE,
-};
+use skep_links::{enc, Endset, HasLinks, Link, Pattern, SlotArg, Tuple, View, FROM, TO, TYPE};
 use skep_namespace::PrincipalId;
 
 #[test]
@@ -282,22 +282,6 @@ fn stab_matches_nothing_at_a_slot_the_link_does_not_have() {
     );
 }
 
-/// A system-caller deposit into `home` of one link FROM `from` TO `to`, typed
-/// `ty` — the way the home-range fixtures populate homes the suite's owner
-/// does not own: the sibling's document and a version member of it.
-fn deposit_in(k: &Kernel<World>, home: &Address, from: &[Address], to: &[Address], ty: &Address) -> Address {
-    writer(k)
-        .makelink(
-            Caller::System,
-            home,
-            SlotArg::Addrs(from.to_vec()),
-            SlotArg::Addrs(to.to_vec()),
-            SlotArg::Addrs(vec![ty.clone()]),
-        )
-        .expect("a system deposit into a registered home")
-        .0
-}
-
 /// The home of a key of the store, as the oracle reads it.
 fn home_of(a: &Address) -> Address {
     document_of(a).expect("a link has a home")
@@ -499,68 +483,174 @@ fn homed_under_does_not_pay_for_the_links_homed_elsewhere() {
     assert!(walk_of(&more) > walk_of(&fewer), "the control: the store walk pays for the store");
 }
 
-/// §G — `type_hits` COUNTS WHAT A STAB AT TYPE WOULD REACH: for every
-/// address-denoting query, the sum of the sizes of the classes standing in the
-/// prefix relation — the type itself, its subtypes beneath it, the wider types
-/// above it and the classes denoting it beside another — equals the stab's
-/// own hit count, nullified links included; a query that is not
-/// address-denoting is `None`; and a class that denotes nothing, a type slot
-/// built from a content extent, is counted whole, which is exact where the
-/// extent overlaps the query and an over-count where it does not.
+/// The homes of a stab's hits, as the oracle reads them: each hit's
+/// `document_of`, once, ascending.
+fn homes_of_hits(hits: &OrdSet<Address>) -> Vec<Address> {
+    let homes: OrdSet<Address> = hits.iter().map(home_of).collect();
+    homes.into_iter().collect()
+}
+
+/// §G — `homes_touching` NAMES EVERY HOME OF EVERY HIT, once, ascending, and
+/// `stab_in` over the spans it names answers each home's share of the stab:
+/// over every slot and a pool of queries of every shape — unit spans at every
+/// level, extents, a two-span query, the off-contract witness and the empty
+/// endset — the candidate homes are a superset of the hits' homes in address
+/// order with no repeat, the per-home stabs concatenated in that order are
+/// the stab's own answer in its own order, and a home the walk leaves
+/// unstabbed holds no hit. The links are homed in four homes of every shape
+/// the mint produces — two documents of one account, a sibling account's
+/// document and a version member of it — so the concatenation argument is
+/// pinned where a member's address extends its document's. At the type slot
+/// the candidates come off the typed slices rather than the directory: a
+/// type named only by links homed in one document names that home alone,
+/// though a sibling type of the same block types a link homed elsewhere.
 #[test]
-fn type_hits_counts_what_a_type_stab_reaches() {
+fn homes_touching_names_every_home_of_every_hit_and_stab_in_concatenates_in_address_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let w = writer(&k);
-    let (t, u) = (unregistered_ta(1), unregistered_ta(2));
-    let sub = a(&[1, 0, 9, 0, 9, 0, 1, 1, 1]); // beneath t
-    let above = a(&[1, 0, 9, 0, 9]); // the document t and u are elements of
-    let two_t: Vec<Address> = (0..2).map(|_| open_deposit(&w, &[ca(1)], &[ca(2)], std::slice::from_ref(&t))).collect();
-    open_deposit(&w, &[ca(1)], &[], std::slice::from_ref(&sub));
-    open_deposit(&w, &[ca(1)], &[], std::slice::from_ref(&above));
-    for _ in 0..3 {
-        open_deposit(&w, &[ca(1)], &[], std::slice::from_ref(&u));
-    }
-    open_deposit(&w, &[ca(1)], &[], &[t.clone(), u.clone()]);
-    w.nullify(P1, &doc1(), &two_t[0]).expect("retract one t-typed link: still counted");
-    let queries = [enc([&t]), enc([&u]), enc([&sub]), enc([&above]), enc(&[ca(9)]), enc([&t, &u])];
-    {
-        let snap = k.snapshot();
-        let links = snap.world().links();
-        for q in &queries {
-            assert_eq!(
-                links.type_hits(q),
-                Some(links.stab(TYPE, q, View::Audit).len()),
-                "{q:?}"
-            );
-        }
-        // The pins behind the agreement: t reaches its two, its subtype, the
-        // document above and the two-address class — five — and u reaches
-        // its three, the document and the two-address class.
-        assert_eq!(links.type_hits(&enc([&t])), Some(5));
-        assert_eq!(links.type_hits(&enc([&u])), Some(5));
-        assert_eq!(links.type_hits(&enc([&above])), Some(8));
-        assert_eq!(links.type_hits(&enc(&[ca(9)])), Some(0));
-        assert_eq!(links.type_hits(&Endset::from_spans([iext(1, 3)])), None, "not address-denoting");
-    }
-    // An extent-typed link, through editlink's open gate: its class denotes
-    // nothing and is counted whole — exact for a query it overlaps, one over
-    // for one it does not.
-    let successor = Link::triple(enc(&[ca(1)]), enc(&[ca(2)]), Endset::from_spans([iext(1, 3)]));
-    w.editlink(P1, &two_t[1], successor, &doc1(), &doc1())
-        .expect("a level-uniform successor");
+    let (t, u) = (unregistered_ta(1), unregistered_ta(2)); // siblings in one directory block
+    let gone = open_deposit(&w, &[ca(1)], &[ca(2), la(1)], std::slice::from_ref(&t));
+    open_deposit(&w, &[ca(2)], &[doc2()], std::slice::from_ref(&t));
+    open_deposit(&w, &[doc1(), ca(3)], &[a(&[1, 0, 2])], &[a(&[1, 0, 9, 0, 9])]); // the document above t and u
+    let successor = Link::triple(
+        Endset::from_spans([iext(1, 3)]),
+        Endset::from_spans([iext(2, 4), iext(60, 70)]),
+        Endset::from_spans([iext(1, 3)]),
+    );
+    w.editlink(P1, &gone, successor, &doc1(), &doc1()).expect("an extent-slotted successor");
+    w.nullify(P1, &doc1(), &gone).expect("retract one");
+    deposit_in(&k, &doc2(), &[ca(1)], &[ca(4)], &u);
+    deposit_in(&k, &doc2(), &[ca(70)], &[ca(1)], &a(&[1, 0, 9, 0, 9, 0, 1, 1, 1])); // beneath t
+    deposit_in(&k, &sib_doc(), &[ca(1), ca(5)], &[], &t);
+    let (member, _) = Vstream::new(&k)
+        .version(PrincipalId(2), &sib_doc(), None)
+        .expect("the owner versions its published document");
+    assert_eq!(member, a(&[1, 0, 2, 0, 1, 1]), "the chain's first member");
+    deposit_in(&k, &member, &[ca(1)], &[ca(2)], &t);
+    deposit_in(&k, &member, &[ca(65)], &[ca(2)], &u);
+
     let snap = k.snapshot();
     let links = snap.world().links();
-    let overlapping = enc(&[ca(2)]);
-    assert!(links.stab(TYPE, &overlapping, View::Audit).len() == 1, "the extent is the one hit");
-    assert_eq!(links.type_hits(&overlapping), Some(1), "exact where the extent overlaps");
-    for q in &queries {
-        assert_eq!(
-            links.type_hits(q),
-            Some(links.stab(TYPE, q, View::Audit).len() + 1),
-            "{q:?}: one over, the extent's class counted whole"
-        );
+    let pool = [
+        enc(&[ca(1)]),
+        enc(&[ca(2)]),
+        enc(&[ca(70)]),
+        enc(&[doc1()]),
+        enc(&[doc2()]),
+        enc(&[sib_doc()]),
+        enc(&[a(&[1, 0, 2])]),
+        enc(&[a(&[1])]),
+        enc(&[la(1)]),
+        enc([&t]),
+        enc([&u]),
+        enc(&[a(&[1, 0, 9, 0, 9])]),
+        enc(&[ca(1), ca(70)]),
+        Endset::from_spans([iext(1, 3)]),
+        Endset::from_spans([iext(2, 100)]),
+        skew(),
+        Endset::empty(),
+    ];
+    let (mut homes_seen, mut spared) = (OrdSet::new(), 0);
+    for slot in [FROM, TO, TYPE] {
+        for q in &pool {
+            for view in [View::Audit, View::Active] {
+                let hits = links.stab(slot, q, view);
+                let mut candidates = Vec::new();
+                let mut concatenated = Vec::new();
+                for touch in links.homes_touching([(slot, q)]) {
+                    let share = links.stab_in(touch.home(), slot, touch.spans(0), view);
+                    assert_eq!(
+                        share,
+                        links.stab_in(touch.home(), slot, q.spans(), view),
+                        "the spans named answer the home's whole share: slot {slot}, {q:?}"
+                    );
+                    spared += usize::from(share.is_empty());
+                    concatenated.extend(share);
+                    candidates.push(touch.into_home());
+                }
+                let sorted: Vec<Address> = hits.iter().cloned().collect();
+                assert_eq!(concatenated, sorted, "slot {slot}, {view:?}, {q:?}: concatenated in home order");
+                assert!(candidates.windows(2).all(|p| p[0] < p[1]), "ascending, once each: {candidates:?}");
+                let of_hits = homes_of_hits(&hits);
+                assert!(
+                    of_hits.iter().all(|h| candidates.contains(h)),
+                    "slot {slot}, {q:?}: every hit's home is a candidate: {of_hits:?} ⊄ {candidates:?}"
+                );
+                homes_seen = homes_seen.union(of_hits.into_iter().collect());
+            }
+        }
     }
+    assert_eq!(
+        homes_seen,
+        OrdSet::from(vec![doc1(), doc2(), sib_doc(), member.clone()]),
+        "every home of every shape is some query's"
+    );
+    assert!(spared > 0, "some candidate holds no hit, so the superset is not the hits' homes restated");
+    // The type slot's candidates are the typed slices', exact to the class
+    // relation: `t` is homed in doc1, the sibling document and its member,
+    // and its subtype in doc2, so `t` names all four; `u` — a sibling type
+    // of `t` in the same directory block — is homed in doc2 and the member,
+    // and names those two and not the sibling document, which holds `t`
+    // alone. doc1 is named for every type query, holding the extent-typed
+    // successor, whose class denotes no address and is answered whole.
+    let named = |ty: &Endset| -> Vec<Address> {
+        links.homes_touching([(TYPE, ty)]).map(|touch| touch.into_home()).collect()
+    };
+    assert_eq!(named(&enc([&t])), vec![doc1(), doc2(), sib_doc(), member.clone()]);
+    assert_eq!(named(&enc([&u])), vec![doc1(), doc2(), member]);
+    assert_eq!(named(&enc(&[ca(9)])), vec![doc1()], "the extent-typed class, answered whole");
+}
+
+/// §G — THE COMPOSED STAB PAYS NOTHING FOR THE LINKS HOMED WHERE THE READER
+/// MAY NOT READ, counted: twenty links in doc1 beside a flood on the same
+/// position homed in doc2, which the reader may not read. The read a caller
+/// composes — the candidate homes, each asked of the reader once, the
+/// readable ones stabbed — costs the same heap beside a thousand flooding
+/// links as beside a hundred; the whole stab, which lifts every hit, is the
+/// control and pays for the flood. The directory step the unreadable home
+/// costs is one entry per block it starts in, which a flood at one position
+/// keeps at one.
+#[test]
+fn a_stab_composed_over_readable_homes_does_not_pay_for_the_links_homed_where_the_reader_may_not_read() {
+    let world_of = |n: u32| {
+        let k = kernel();
+        let w = writer(&k);
+        for i in 1..=20 {
+            open_deposit(&w, &[ca(1)], &[ca(100 + i)], &[unregistered_ta(1)]);
+        }
+        for i in 1..=n {
+            deposit_in(&k, &doc2(), &[ca(1)], &[ca(1000 + i)], &unregistered_ta(1));
+        }
+        k
+    };
+    let (fewer, more) = (world_of(100), world_of(1_000));
+    let query = enc(&[ca(1)]);
+    let composed = |k: &Kernel<World>| {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        let (found, bytes) = settled_heap_bytes(|| {
+            let mut found = Vec::new();
+            for touch in links.homes_touching([(FROM, &query)]) {
+                if *touch.home() != doc2() {
+                    found.extend(links.stab_in(touch.home(), FROM, touch.spans(0), View::Active));
+                }
+            }
+            found
+        });
+        assert_eq!(found.len(), 20, "doc1's twenty, and nothing of doc2's");
+        bytes
+    };
+    assert_eq!(
+        composed(&more),
+        composed(&fewer),
+        "a link homed where the reader may not read costs the composed read nothing"
+    );
+    let whole = |k: &Kernel<World>| {
+        let snap = k.snapshot();
+        settled_heap_bytes(|| snap.world().links().stab(FROM, &query, View::Active)).1
+    };
+    assert!(whole(&more) > whole(&fewer), "the control: the whole stab pays for the flood");
 }
 
 /// §G — `stab_typed` IS THE STAB CUT TO THE SLICE: over every slot, view and

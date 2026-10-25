@@ -11,13 +11,16 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `findlinks_ftt_on` by four-set descriptor (conjunctive,
   store-wide); results in permanent address order.
 - **Windows and counts** — a stateless cursor over the same answer;
-  a window bounds what comes back, not what is computed.
-- **Reads that pay for what they name** — a descriptor naming a home
-  reads that home's links by their key range, asking the reader once
-  per home and never reading a home it may not; a descriptor naming a
-  small type class drives from the class; the claims naming a link are
-  read off the coverage index, never by a walk of the supersession
-  class.
+  a window pays for the links it returns and the homes it passes, the
+  cursor naming the home it resumes in.
+- **Reads that pay for what the reader may read** — every read of a
+  set of links names the homes its query could meet off the link
+  store's directory, asks the reader once per home, and reads only the
+  homes it may read, so the links of other people's private documents
+  cost it nothing; a descriptor constraining two slots drives from the
+  one naming fewer homes; a descriptor naming a home reads that home's
+  links by their key range; the claims naming a link are read off the
+  coverage index, never by a walk of the supersession class.
 - **Orphan preview and lineage** — what a proposed delete would
   strand from a document; the supersession claims naming a link
   (one hop — the walks are the link store's).

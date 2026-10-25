@@ -350,6 +350,61 @@ pub fn sib_doc() -> Address {
     a(&[1, 0, 2, 0, 1])
 }
 
+/// Document `d` of the owner's account: `[1,0,1,0,d]` — doc1 at 1, doc2 at
+/// 2, and the homes [`many_documents`] registers past them.
+pub fn doc(d: u32) -> Address {
+    a(&[1, 0, 1, 0, d])
+}
+
+/// An M3 slice registering `count` private documents under the owner's
+/// account, `[1,0,1,0,1]` through `[1,0,1,0,count]`, each allocated at its
+/// chain's next ordinal as M3's fold requires — the many-homes fixture the
+/// cost laws and the open's timing read, where [`seeded_m3`]'s two documents
+/// cannot spread links over a thousand homes. Doc1 and doc2 are the first two,
+/// so every fixture address holds.
+pub fn many_documents(count: u32) -> M3State {
+    let mut m3 = M3State::genesis()
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)));
+    for d in 1..=count {
+        m3 = m3.apply_m3(Seq(0), &M3Rec::allocate(doc(d), false));
+    }
+    m3
+}
+
+/// An in-memory kernel over a world of [`many_documents`], its content and
+/// links at genesis.
+pub fn kernel_with_documents(count: u32) -> Kernel<World> {
+    kernel_over(World {
+        m3: many_documents(count),
+        content: ContentStore::default(),
+        m5: M5State::genesis(),
+        links: LinkState::genesis(),
+    })
+}
+
+/// A system-caller deposit into `home` of one link FROM `from` TO `to`, typed
+/// `ty` — how a fixture populates a home the suite's owner does not own, or
+/// many homes at once.
+pub fn deposit_in(
+    k: &Kernel<World>,
+    home: &Address,
+    from: &[Address],
+    to: &[Address],
+    ty: &Address,
+) -> Address {
+    writer(k)
+        .makelink(
+            Caller::System,
+            home,
+            SlotArg::Addrs(from.to_vec()),
+            SlotArg::Addrs(to.to_vec()),
+            SlotArg::Addrs(vec![ty.clone()]),
+        )
+        .expect("a system deposit into a registered home")
+        .0
+}
+
 pub fn genesis_world() -> World {
     World {
         m3: seeded_m3(),

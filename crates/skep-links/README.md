@@ -26,7 +26,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   rather than choosing.
 - **Queries** — `readlink`, `followlink`, the typed reads over active
   and audit views, a home's links read as one key range of the store,
-  and the overlap matcher [skep-discovery](../skep-discovery) presents.
+  and the overlap matcher [skep-discovery](../skep-discovery) presents:
+  a coverage index grouped by home, with a directory naming the homes a
+  query could meet before any link is touched, so a reader stabs the
+  homes it may read and pays nothing for the links of the rest.
 
 State rides the kernel; span algebra comes from
 [skep-address](../skep-address).

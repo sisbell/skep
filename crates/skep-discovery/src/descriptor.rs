@@ -3,21 +3,28 @@
 //! retraction under one predicate held fixed (FL-MON/CN-MONO; the crate
 //! header states what a reader does to each law). Not a restriction of the
 //! region family and not built on it (ASN-0121 is explicit; Conflicts #2) —
-//! the same per-slot `stab` combined oppositely (AND vs OR), with the AND
-//! owned by M7's `match_links` (Conflicts #1: M8 implements no combiner).
+//! the same per-slot stab combined oppositely (AND vs OR), with the AND
+//! owned by M7's `match_links_in` over each home (Conflicts #1: M8 implements
+//! no combiner).
 //!
 //! The family's request lives here too — [`FourSet`] and its [`SlotSpec`]s —
 //! with the two readings of its slots only this family asks: the constraint
 //! list M7's AND-of-ORs takes, and the home slot, which M7 answers home by
 //! home off its own key order, both private beside the reads that ask them.
+//! Every shape of the descriptor is read home by home: the candidate homes
+//! are enumerated in address order, the reader asked of each once ahead of
+//! its links, and an admitted home's satisfying links read from the store's
+//! key range or the coverage index within that home alone.
+
+use std::rc::Rc;
 
 use im::OrdSet;
 use skep_address::Address;
 use skep_kernel::Snapshot;
-use skep_links::{Endset, LinkState, View, FROM, TO, TYPE};
+use skep_links::{Endset, LinkState, Touch, View, FROM, TO, TYPE};
 
-use crate::home::{home_admitted, home_readable};
-use crate::sets::window_over;
+use crate::home::home_admitted;
+use crate::region::window_homes;
 use crate::types::{Cursor, Window};
 use crate::DiscoveryWorld;
 
@@ -33,8 +40,8 @@ pub enum SlotSpec {
     Empty,
     /// Populated address-spans (M7's readable [`Endset`]). An EMPTY `Endset`
     /// is accepted and read as [`SlotSpec::Empty`] — the same zero
-    /// ([`FourSet::is_unsatisfiable`] answers for both), so M7's `match_links`
-    /// is never handed an empty constraint.
+    /// ([`FourSet::is_unsatisfiable`] answers for both), so M7's matcher is
+    /// never handed an empty constraint.
     Spans(Endset),
 }
 
@@ -151,67 +158,53 @@ impl Default for FourSet {
     }
 }
 
-/// The most links a TYPE constraint's class may hold and still drive M7's
-/// `stab` ahead of the other constrained slots.
-///
-/// A TYPE constraint's hits are counted exactly before any stab, off M7's
-/// typed slices (`LinkState::type_hits`); a FROM or TO constraint's are known
-/// only by the stab itself, no bounded probe of the coverage index existing
-/// at this build. So the choice is made on the one side it can see: a class
-/// this small drives, and a wrong guess — the other slot would have found
-/// fewer — costs at most this many lifts, where the guess the other way costs
-/// the whole population the other slot reaches, which one passage can set in
-/// the tens of thousands. Past it the slots stand in FROM, TO, TYPE order.
-const TYPE_DRIVES_UP_TO: usize = 1024;
-
-/// Moves the constraint that should drive M7's `stab` to the front of the
-/// list: the TYPE constraint, where the class it names holds at most
-/// [`TYPE_DRIVES_UP_TO`] links. `match_links` answers its FIRST constraint by
-/// one `stab` of M7's coverage index and narrows what it finds with the rest,
-/// at `|query spans| × |slot spans|` per survivor, so the constraint with the
-/// fewest hits costs the fewest lifts up front and the fewest survivors to
-/// test — which of the constraints that is, this element decides, because it
-/// is the one that asks M7. The others keep their slot order, and an AND is
-/// order-free, so this moves work and never the answer: one descriptor still
-/// names one constraint list.
-fn cheapest_first(l: &LinkState, constraints: &mut Vec<(usize, &Endset)>) {
-    if constraints.len() < 2 {
-        return;
-    }
-    let small_class = constraints.iter().position(|&(slot, e)| {
-        slot == TYPE && l.type_hits(e).is_some_and(|hits| hits <= TYPE_DRIVES_UP_TO)
-    });
-    if let Some(i) = small_class {
-        let ty = constraints.remove(i);
-        constraints.insert(0, ty);
-    }
+/// One candidate home of a descriptor, and how its satisfying links are read:
+/// ASN-0121's CANDIDATE set as the read-outs walk it, home by home in
+/// address order, the home rule not yet asked.
+enum Candidate<'q> {
+    /// A home the home slot covers that holds links, or a home of the whole
+    /// store under the unit descriptor: its links are its key range, each
+    /// tested against the link-slot constraints.
+    Chain {
+        home: Address,
+        constraints: Rc<[(usize, &'q Endset)]>,
+    },
+    /// A home the driving link slot's directory walk named, with the spans
+    /// that named it: its links are the per-home stab of the driver over
+    /// those spans, narrowed by the other constraints.
+    Driven {
+        touch: Touch<'q>,
+        slot: usize,
+        rest: Rc<[(usize, &'q Endset)]>,
+    },
 }
 
-/// ASN-0121's CANDIDATE set as one read-out walks it: the links in address
-/// order, and whether the reader has admitted them yet.
-///
-/// Where the home slot drove, the home rule ran once per home ahead of that
-/// home's range (PUB-7.18) and every link here is admitted; where a link
-/// slot drove, no home has been asked, and each read-out asks it of the links
-/// it walks, lazily, so a window asks no further than it pages (PUB-6.14).
-struct Candidates {
-    links: OrdSet<Address>,
-    admitted: bool,
-}
+impl Candidate<'_> {
+    /// The candidate home.
+    fn home(&self) -> &Address {
+        match self {
+            Candidate::Chain { home, .. } => home,
+            Candidate::Driven { touch, .. } => touch.home(),
+        }
+    }
 
-impl Candidates {
-    /// `sat` under the reader for one link of the set: the home rule where it
-    /// has not run — the link slots and the home slot are answered by the set
-    /// itself.
-    fn admits(&self, readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
-        self.admitted || home_readable(readable, a)
+    /// `sat` within this home: the home's addressable links satisfying every
+    /// link-slot constraint, in address order — the home slot's clause
+    /// having been decided by the enumeration that named the home.
+    fn satisfying(self, l: &LinkState) -> OrdSet<Address> {
+        match self {
+            Candidate::Chain { home, constraints } => l.homed_in(&home, &constraints, View::Active),
+            Candidate::Driven { touch, slot, rest } => {
+                l.match_links_in(touch.home(), (slot, touch.spans(0)), &rest, View::Active)
+            }
+        }
     }
 }
 
-/// ASN-0121's CANDIDATE set: the links the descriptor's slots admit, as M7
-/// answers them over the ACTIVE view, under the reader where the home slot
-/// drove. The descriptor reads its own slots — which are the zero, which drop
-/// out — in [`FourSet::link_constraints`].
+/// ASN-0121's CANDIDATE set, home by home: the homes whose links the
+/// descriptor's slots could admit, in address order, lazily, each knowing how
+/// its satisfying links are read. The descriptor reads its own slots — which
+/// are the zero, which drop out — in [`FourSet::link_constraints`].
 ///
 /// The unsatisfiable case returns without touching the store. M7 would answer
 /// the same way if it could be asked — `stab(slot, ⟨⟩, ·) = ∅` empties the
@@ -221,67 +214,82 @@ impl Candidates {
 /// THE HOME SLOT DRIVES WHERE IT IS CONSTRAINED (PUB-7.18). A link's address
 /// is its home's with three components after it, so M7 keeps a home's links
 /// together in its key order: `homes_under` names each home the slot's
-/// coverage contains that holds links, found by one seek apiece, and the
-/// reader's predicate is asked of each home ONCE, through [`home_admitted`],
-/// ahead of its links — an unreadable home's whole candidate list is dropped
-/// on that one test and never walked per link. Each admitted home's links are
-/// then read by `homed_in`, its own key range, each tested against the
-/// link-slot constraints as `match_links` tests its later constraints. So a
-/// home-constrained descriptor costs the homes it names and the readable
-/// ones' links: a document's or a member's at one seek, an account's or the
-/// node's at one seek per home under it, never the links of a home it does
-/// not name. The home slot's clause of `sat` — `h` covers `home(a)` — is what
+/// coverage contains that holds links, found by one seek apiece, and each is
+/// a candidate whose links are read by `homed_in`, its own key range, each
+/// tested against the link-slot constraints. So a home-constrained
+/// descriptor costs the homes it names and the admitted ones' links: a
+/// document's or a member's at one seek, an account's or the node's at one
+/// seek per home under it, never the links of a home it does not name. The
+/// home slot's clause of `sat` — `h` covers `home(a)` — is what
 /// `homes_under` decides, of the home rather than of each link, so no link
 /// here is tested for it again.
 ///
-/// WHERE THE HOME SLOT IS `Any`, the link slots are handed to M7 CHEAPEST
-/// FIRST, which is a cost decision and not a semantic one, and this element's
-/// because it is the one that asks M7 — [`cheapest_first`] states the rule
-/// and its limit. With no constraint at all (`(∗,∗,∗)`), M7 walks the whole
-/// active slice.
-fn candidates(l: &LinkState, q: &FourSet, readable: &dyn Fn(&Address) -> bool) -> Candidates {
-    let Some(mut constraints) = q.link_constraints() else {
-        return Candidates {
-            links: OrdSet::new(), // FL-EMP: some slot is the zero
-            admitted: true,
-        };
+/// WHERE THE HOME SLOT IS `Any` AND A LINK SLOT IS CONSTRAINED, the
+/// constraint with the fewest candidate homes drives — M7's `fewest_homes`,
+/// the rule its own `match_links` chooses by, a bounded walk of directory
+/// entries and a cost decision, not a semantic one: its candidate homes come
+/// off M7's `homes_touching` — the coverage index's directory for `from` and
+/// `to`, the typed slices for `ty` — each a candidate whose links are read
+/// by `match_links_in`, the driver's per-home stab over the spans that named
+/// the home, narrowed by the other constraints. WITH NO CONSTRAINT AT ALL
+/// (`(∗,∗,∗)`), every home holding links is a candidate, its whole chain the
+/// answer — the store's homes, one seek apiece, where the unfiltered walk of
+/// the whole slice was.
+///
+/// In every shape the reader is asked of a home ONCE, ahead of its links,
+/// by the read-outs that walk this: an unreadable home's whole candidate list
+/// is dropped on that one test and never walked per link.
+fn candidates<'q>(l: &'q LinkState, q: &'q FourSet) -> Box<dyn Iterator<Item = Candidate<'q>> + 'q> {
+    let Some(constraints) = q.link_constraints() else {
+        return Box::new(std::iter::empty()); // FL-EMP: some slot is the zero
     };
     if let SlotSpec::Spans(h) = &q.home {
-        let mut links = OrdSet::new();
-        for home in l.homes_under(h) {
-            if home_admitted(readable, &home) {
-                links = links.union(l.homed_in(&home, &constraints, View::Active));
-            }
-        }
-        return Candidates {
-            links,
-            admitted: true,
-        };
+        let constraints: Rc<[(usize, &'q Endset)]> = constraints.into();
+        return Box::new(l.homes_under(h).into_iter().map(move |home| Candidate::Chain {
+            home,
+            constraints: Rc::clone(&constraints),
+        }));
     }
-    cheapest_first(l, &mut constraints);
-    Candidates {
-        links: l.match_links(&constraints, View::Active),
-        admitted: false,
+    if constraints.is_empty() {
+        let none: Rc<[(usize, &'q Endset)]> = Rc::from([]);
+        return Box::new(l.homes().into_iter().map(move |home| Candidate::Chain {
+            home,
+            constraints: Rc::clone(&none),
+        }));
     }
+    let driver = l.fewest_homes(&constraints);
+    let (slot, query) = constraints[driver];
+    let rest: Rc<[(usize, &'q Endset)]> = constraints
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != driver)
+        .map(|(_, c)| *c)
+        .collect();
+    Box::new(l.homes_touching([(slot, query)]).map(move |touch| Candidate::Driven {
+        touch,
+        slot,
+        rest: Rc::clone(&rest),
+    }))
 }
 
 /// `sat(·, q, Σ)` under the reader — THE one definition of "matches" for the
 /// descriptor family. ASN-0132's CN-ENUM forces exactly one, consumed by
 /// enumeration and by count alike, so [`findlinks_ftt_on`] and
 /// [`count_ftt_on`] are two read-outs of this one sequence and cannot
-/// disagree about which links match. It is walked by reference, so nothing
-/// is copied until a link ships.
+/// disagree about which links match.
 ///
-/// ASN-0121's [`candidates`] — `cand`, computed for the same `q` — narrowed
-/// by what the set has not yet asked: the home rule at link identity where a
-/// link slot drove, nothing where the home slot drove and admitted each home
-/// ahead of its links. The filter reads the candidates in place, so the
-/// survivors are never gathered into a set of their own.
-fn satisfying<'c>(
-    cand: &'c Candidates,
-    readable: &'c dyn Fn(&Address) -> bool,
-) -> impl Iterator<Item = &'c Address> + 'c {
-    cand.links.iter().filter(move |&a| cand.admits(readable, a))
+/// ASN-0121's [`candidates`] — `cand`, computed for the same `q` — each home
+/// admitted by the reader once ahead of its links, and each admitted home's
+/// [`Candidate::satisfying`] links in turn; the per-home sets concatenated in
+/// home order are address order, a home's links being one key range.
+fn satisfying<'a>(
+    l: &'a LinkState,
+    q: &'a FourSet,
+    readable: &'a dyn Fn(&Address) -> bool,
+) -> impl Iterator<Item = Address> + 'a {
+    candidates(l, q)
+        .filter(move |cand| home_admitted(readable, cand.home()))
+        .flat_map(move |cand| cand.satisfying(l))
 }
 
 /// FINDLINKS over the four-set descriptor (ASN-0121): the links satisfying
@@ -291,19 +299,18 @@ fn satisfying<'c>(
 /// `[]` (FL-EMP). Monotone absent retraction (FL-MON): under one predicate
 /// held fixed, a found link stays found unless nullified.
 ///
-/// The result-set filter (PUB round 2, lane 3.3, §3): every satisfying link
-/// whose HOME `readable` refuses is dropped at its identity — or, where the
-/// descriptor's `home` slot drives, never read at all, the rule having been
-/// asked of its home ahead of the home's links (PUB-7.18). The descriptor's
-/// own `home` slot is a COVERAGE constraint (CN-STAB); `readable` is the
-/// authorization one, orthogonal to it.
+/// The result-set filter (PUB round 2, lane 3.3, §3; PUB-7.18): every
+/// satisfying link whose HOME `readable` refuses is never read at all, the
+/// rule having been asked of its home ahead of the home's links, once per
+/// home whatever the descriptor's shape. The descriptor's own `home` slot is
+/// a COVERAGE constraint (CN-STAB); `readable` is the authorization one,
+/// orthogonal to it.
 pub fn findlinks_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<Address> {
-    let cand = candidates(s.world().links(), q, readable);
-    satisfying(&cand, readable).cloned().collect()
+    satisfying(s.world().links(), q, readable).collect()
 }
 
 /// The count operation over the descriptor family (ASN-0132 CN-*): the
@@ -331,8 +338,7 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
 ) -> usize {
-    let cand = candidates(s.world().links(), q, readable);
-    satisfying(&cand, readable).count()
+    satisfying(s.world().links(), q, readable).count()
 }
 
 /// Windowed enumeration over the descriptor family (ASN-0108, the
@@ -352,11 +358,13 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// returns under the same `readable`, given the predicate's contract the
 /// crate header states.
 ///
-/// The home rule (PUB round 2, lane 3.3, §3) is applied LAZILY during the
-/// key-cut, BEFORE the window slice (PUB-6.14), so a link it refuses is
-/// skipped rather than counted against `n` — where a link slot drove; where
-/// the home slot drove, it was applied to each home ahead of the home's
-/// links, and the page is cut from links already admitted.
+/// LAZY (D5 of the home-index record): the cursor names the home to resume
+/// in, so the window passes the candidate homes behind it unasked, cuts the
+/// cursor's home past it, and walks on home by home until `n` links are in
+/// hand — paying for `n` and the homes it passes. The home rule (PUB round
+/// 2, lane 3.3, §3) is asked of each home it reaches, once, BEFORE the
+/// window slice (PUB-6.14), so a refused home's links are skipped unread
+/// rather than counted against `n`.
 pub fn window_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
@@ -364,13 +372,15 @@ pub fn window_ftt_on<W: DiscoveryWorld>(
     n: usize,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Window {
-    // The one place `sat` is spelled apart rather than composed: the window
-    // seeks by key — `range` strictly past the cursor — which the candidate
-    // SET supports and `satisfying`'s filtered sequence does not, so it walks
-    // the candidates itself and applies the same reader test LAZILY in its
-    // `keep`.
-    let cand = candidates(s.world().links(), q, readable);
-    window_over(&cand.links, cur, n, |a| cand.admits(readable, a))
+    let l = s.world().links();
+    window_homes(
+        candidates(l, q),
+        |cand| cand.home(),
+        |cand| cand.satisfying(l),
+        readable,
+        cur,
+        n,
+    )
 }
 
 #[cfg(test)]
@@ -385,10 +395,10 @@ mod tests {
     }
 
     /// The descriptor answers what its slots say, in slot order, whatever a
-    /// constraint would cost M7: which constraint M7 is asked with first is
-    /// `candidates`' decision, beside its call to M7, so a FROM beside a TYPE
-    /// — the one constraint that may be moved ahead of it — comes back FROM
-    /// first, and a wide FROM beside a narrow TO comes back FROM first too.
+    /// constraint would cost M7: which constraint drives is `candidates`'
+    /// decision, beside its call to M7, so a FROM beside a TYPE comes back
+    /// FROM first, and a wide FROM beside a narrow TO comes back FROM first
+    /// too.
     #[test]
     fn link_constraints_answer_in_slot_order_whatever_their_cost() {
         let wide = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 5])]);

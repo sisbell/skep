@@ -1,11 +1,18 @@
-//! The spanfilade (§6): the per-slot coverage index `stab` answers from.
+//! The spanfilade (§6): the per-slot coverage index `stab` answers from,
+//! grouped by home, with a directory of the homes a query could meet.
 //!
 //! [`Spanfilade`] holds one [`SlotIndex`] per slot position a stored link has,
 //! and the hint fold files every span of every slot there under the link that
-//! holds it. A stab asks the index which links' slot overlaps a query instead
-//! of testing every link in the store, so it costs its probes and its hits;
+//! holds it and the link's home. A stab asks the index which links' slot
+//! overlaps a query instead of testing every link in the store, and it asks
+//! home by home: the directory names the homes some filing of which could
+//! meet the query, without visiting a link, and the stab of one home is the
+//! stab of today's two halves within that home's keys alone. So a read costs
+//! the directory entries it steps, one lift per candidate home, and the hits
+//! of the homes it stabs; a home it leaves unstabbed — one its reader may not
+//! read — costs it one directory step and nothing of that home's links, and
 //! the store's size enters only as the logarithm inside each ordered-set
-//! range.
+//! range (PUB-7.18, at every slot).
 //!
 //! Overlap is [`overlaps`], which comes to `max start < min reach`. For a
 //! stored span `[s, r)` and a query span `[q, e)` that is `s < e ∧ q < r`, and
@@ -24,6 +31,33 @@
 //! residue, tested whole against every query span; no deposit path the wire
 //! reaches stores one.
 //!
+//! **The home-first keys.** Every part of a slot's index carries the link's
+//! home as the leading key component — `starts` is `(home, start, link)`, the
+//! axis parts `(home, axis, level, coordinate, link)`, the residue keyed by
+//! `(home, link)` — the home an interned `Arc` every filing of that home
+//! shares. One ordered set per part still, never a set per home: `im`
+//! allocates a whole B-tree node for every set, however few keys it holds.
+//! The stab of one home prefixes the home to every range bound, so it is
+//! today's two halves over that home's keys, `O(log n + the home's hits)`.
+//!
+//! **The directory.** Two more ordered sets per slot answer which homes have
+//! a filing a query could meet, without visiting a link. For the half that
+//! starts inside the query, `starting_homes` holds `(axis, block, home)` once
+//! for every home with a run starting in that block of its axis, a block
+//! being `2^BLOCK_BITS` coordinates on a content axis ([`BLOCK_BITS`]) and
+//! one coordinate on any other; for the half that contains the query start,
+//! `containing_homes` holds `(axis, level, node, home)` once for every home
+//! with a run filed at that node of the axis index. Each entry is written at a home's first filing in its key, a
+//! `contains` then an insert, as `levels` is kept. The enumeration for a
+//! query span `[s, r)` is one range per block its coordinates cross on each
+//! axis holding starts inside it — the axes that are prefixes of `s`, over
+//! the coordinates between `s` and `r`, and every axis between `s` and `r`
+//! in T1 order, whole — and one range per `(axis, level, node)` of the
+//! containing probe set, which is today's; every home holding residue is a
+//! candidate for every query. A directory range names a home with a run in
+//! the block or at the node, which may yet miss the span: the candidate set
+//! over-includes at block grain, and the per-home stab is exact.
+//!
 //! **The axis index.** Each sibling run on an axis is filed at one node of
 //! its coordinates' binary partition: its level `ℓ = bits(x ⊕ (y − 1))`,
 //! which is 0 for a width-1 run, and its block `m = x >> ℓ`. A level-0 node
@@ -36,15 +70,29 @@
 //! `y > c`. On the query start's own axis a run with `x = c` starts at the
 //! query start, which the first half holds, so there the second half takes
 //! `x < c` and skips level 0, and each hit is visited once.
+//!
+//! **The candidates, lazily and in address order.** [`Touching`] merges every
+//! directory range a query opens — and, for the type slot, the typed slices'
+//! homes the read surface seeks — into one walk yielding each candidate home
+//! once, ascending, with the query spans whose ranges named it: each range
+//! yields its homes ascending, a heap of the ranges yields the least next home
+//! across them, and the ranges naming one home are drained together. A
+//! caller stabs a home over the spans that named it and no other, so the
+//! probes a read runs are the directory entries it stepped, not the product
+//! of its homes and its spans; and a caller that stops early — a window past
+//! its `n` — steps no entry past the homes it passed.
 
-use std::collections::BTreeSet;
-use std::ops::Bound::{Excluded, Included};
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap};
+use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::{Arc, LazyLock};
 
-use im::{OrdMap, OrdSet, Vector};
-use skep_address::{classify_spans, Nat, Span, SpanRel, Tumbler};
+use im::{OrdMap, OrdSet};
+use skep_address::{
+    classify_spans, content_subspace, validate, Address, Nat, Span, SpanRel, Tumbler,
+};
 
-use crate::endset::{Endset, Link};
+use crate::endset::Link;
 
 /// Returns whether two spans overlap, as the spanfilade counts it (§6).
 ///
@@ -52,7 +100,7 @@ use crate::endset::{Endset, Link};
 /// (abutting spans share no tumbler; matching them would false-positive every
 /// link whose slot coverage merely abuts the query) and never M1's
 /// `intersect` (which faults on the mixed-length endpoints M5's resolve runs
-/// routinely produce). [`Spanfilade::stab`] answers by it — its two halves
+/// routinely produce). [`SlotIndex::stab_in`] answers by it — its two halves
 /// split it on the stored start, and it tests the residue directly — and so
 /// does every later conjunct of `match_links`.
 pub(super) fn overlaps(a: &Span, b: &Span) -> bool {
@@ -62,14 +110,39 @@ pub(super) fn overlaps(a: &Span, b: &Span) -> bool {
     )
 }
 
+/// A home: a link's home document, as the hint fold computes it.
+///
+/// A [`Spanfilade`] holds each one once, and every filing of a link homed
+/// there shares that allocation.
+pub(super) type Home = Arc<Tumbler>;
+
 /// An axis: a sibling run's start less its last component.
 ///
 /// A [`SlotIndex`] holds each one once, and every filing on it shares that
 /// allocation.
 type Axis = Arc<[Nat]>;
 
-/// One filing of a sibling run: `(axis, level, coordinate, link)`.
-type Filing = (Axis, u64, Nat, Arc<Tumbler>);
+/// One filing of a sibling run under its home: `(home, axis, level,
+/// coordinate, link)`.
+type Filing = (Home, Axis, u64, Nat, Arc<Tumbler>);
+
+/// The width of a directory block on a content axis, as a power of two:
+/// `2^BLOCK_BITS` positions share one `(axis, block, home)` entry per home.
+///
+/// Chosen by a counted measurement over two boards. At a document of 10⁴
+/// linking homes, each with one link at its own position, a short passage
+/// of ten positions steps as many directory entries as the block holds homes
+/// — ten at a block of one, about sixty-four here, over a thousand at 2^10 —
+/// against the ten links it answers, so a wider block costs a popular
+/// document's short reads homes they never stab. At an ordinary passage —
+/// a hundred homes with ten links apiece, at distinct positions inside a
+/// passage of a hundred — the read steps one entry per home and position at
+/// a block of one, a thousand, and one or two per home here, so a narrower
+/// block prices an unreadable home's whole passage by its links again, the
+/// cost this index exists to close. Sixty-four positions is the grain at
+/// which a passage's links in one home collapse to one or two entries while
+/// a ten-position read over-includes at most the block's other homes.
+pub(super) const BLOCK_BITS: u64 = 6;
 
 /// `[0]`, the least tumbler and so below every link address.
 ///
@@ -82,6 +155,34 @@ fn below_every_link() -> Arc<Tumbler> {
     Arc::clone(&BELOW_EVERY_LINK)
 }
 
+/// Returns the directory block of coordinate `c` on `axis`.
+///
+/// A content axis — one whose last two components are `0 · s_C`, the
+/// content subspace of a document or a member — is where passages lie and
+/// where a home's links cluster, so its coordinates share blocks of
+/// `2^BLOCK_BITS`. Every other axis files at the coordinate itself: a link
+/// ordinal is a name a claim gives one link and never a position a query
+/// ranges over, a document or account number likewise, and grouping them
+/// would name a home for the claims on a key's sixty-three neighbours — a
+/// probe at an address no claim names would then cost what its block holds,
+/// and tell a reader that claims lie nearby.
+fn block_of(axis: &[Nat], c: &Nat) -> Nat {
+    match axis {
+        [.., separator, subspace] if separator.bits() == 0 && *subspace == content_subspace() => {
+            c >> BLOCK_BITS
+        }
+        _ => c.clone(),
+    }
+}
+
+/// Lifts a home from the index's tumbler to an `Address`.
+///
+/// A home here is `document_of` a link key, computed by the hint fold, so it
+/// is T4-valid; the `expect` restates that where it leaves the index.
+fn lift_home(home: &Home) -> Address {
+    validate((**home).clone()).expect("a filed home is document_of a T4-valid link key")
+}
+
 /// The spanfilade: one [`SlotIndex`] per slot position a stored link has.
 ///
 /// The hint fold files every span of a deposit here ([`Spanfilade::file`]),
@@ -91,41 +192,51 @@ fn below_every_link() -> Arc<Tumbler> {
 pub(super) struct Spanfilade {
     /// Slot `i + 1`'s index at position `i`, for the widest arity filed.
     slots: Vec<SlotIndex>,
+    /// Every home a filed link has, held once.
+    homes: OrdMap<Home, ()>,
 }
 
 impl Spanfilade {
-    /// Files every span of `value`'s slots under the link at `addr`.
+    /// Files every span of `value`'s slots under the link at `addr`, homed
+    /// at `home`.
     ///
-    /// It costs a few ordered-set inserts per span, `O(log n)` each.
-    pub(super) fn file(&mut self, addr: &Tumbler, value: &Link) {
+    /// It costs a few ordered-set inserts per span, `O(log n)` each, and a
+    /// directory lookup per span — an insert too at a home's first filing in
+    /// a block or at a node.
+    pub(super) fn file(&mut self, addr: &Tumbler, home: &Tumbler, value: &Link) {
+        let home = self.intern(home);
         let link = Arc::new(addr.clone());
         for (position, endset) in value.slots().enumerate() {
             if position == self.slots.len() {
                 self.slots.push(SlotIndex::default());
             }
-            for span in endset.spans() {
-                self.slots[position].file(&link, span);
+            for (index, span) in endset.spans().enumerate() {
+                self.slots[position].file(&home, &link, index, span);
             }
         }
     }
 
-    /// Returns the links whose coverage at `slot` overlaps `query`.
-    ///
-    /// They are exactly the filed links some span of whose `slot` [`overlaps`]
-    /// some span of `query`. A slot no filed link has — `0`, below the 1-based
-    /// floor, or one past every arity filed — answers none, as an empty query
-    /// does.
-    pub(super) fn stab(&self, slot: usize, query: &Endset) -> BTreeSet<&Tumbler> {
-        let mut hits = BTreeSet::new();
-        if let Some(index) = slot
-            .checked_sub(1)
-            .and_then(|position| self.slots.get(position))
-        {
-            for q in query.spans() {
-                index.stab(q, &mut hits);
-            }
+    /// Returns the held home equal to `home`, holding it first if it is new.
+    fn intern(&mut self, home: &Tumbler) -> Home {
+        if let Some((held, ())) = self.homes.get_key_value(home) {
+            return Arc::clone(held);
         }
-        hits
+        let held: Home = Arc::new(home.clone());
+        self.homes.insert(Arc::clone(&held), ());
+        held
+    }
+
+    /// Returns the held home equal to `home`, or `None` where no link homed
+    /// there is filed — and so no range keyed by it holds anything.
+    pub(super) fn home(&self, home: &Tumbler) -> Option<&Home> {
+        self.homes.get_key_value(home).map(|(held, ())| held)
+    }
+
+    /// Returns slot `slot`'s index, or `None` for a slot no filed link has —
+    /// `0`, below the 1-based floor, or one past every arity filed.
+    pub(super) fn slot(&self, slot: usize) -> Option<&SlotIndex> {
+        slot.checked_sub(1)
+            .and_then(|position| self.slots.get(position))
     }
 }
 
@@ -133,49 +244,78 @@ impl Spanfilade {
 ///
 /// Its sibling runs are held twice — by start, for the half of a stab that
 /// starts inside the query span, and on their axis, for the half that
-/// contains the query start — and every other span once, as residue. Each
-/// part is one ordered set keyed by a tuple, never a set per start or per
-/// axis: `im` allocates a whole B-tree node for every set, however few keys it
-/// holds. Starts and links are shared `Arc`s, so the path copies a persistent
-/// insert makes copy pointers rather than tumblers.
+/// contains the query start — and every other span once, as residue, each
+/// part keyed by the link's home first. Beside them the directory's two
+/// parts name the homes with a filing in a block or at a node. Each part is
+/// one ordered set keyed by a tuple, never a set per home, per start or per
+/// axis: `im` allocates a whole B-tree node for every set, however few keys
+/// it holds. Homes, starts and links are shared `Arc`s, so the path copies a
+/// persistent insert makes copy pointers rather than tumblers.
 #[derive(Debug, Clone, Default)]
-struct SlotIndex {
-    /// Every sibling run's start beside its link, in T1 order.
-    starts: OrdSet<(Arc<Tumbler>, Arc<Tumbler>)>,
+pub(super) struct SlotIndex {
+    /// Every sibling run's start beside its link, under its home.
+    starts: OrdSet<(Home, Arc<Tumbler>, Arc<Tumbler>)>,
     /// Every axis a run here sits on, held once.
     axes: OrdMap<Axis, ()>,
     /// Every level an axis files a run at, as `(axis, level)`.
     levels: OrdSet<(Axis, u64)>,
-    /// Every sibling run by its first coordinate `x`.
+    /// Every sibling run by its first coordinate `x`, under its home.
     by_first: OrdSet<Filing>,
-    /// Every sibling run at level 1 or more by its end coordinate `y`.
+    /// Every sibling run at level 1 or more by its end coordinate `y`, under
+    /// its home.
     by_end: OrdSet<Filing>,
-    /// Every span that is no sibling run, beside its link.
-    residue: Vector<(Arc<Tumbler>, Span)>,
+    /// Every span that is no sibling run, under its home and link, keyed by
+    /// its position in the slot.
+    residue: OrdMap<(Home, Arc<Tumbler>, usize), Span>,
+    /// The directory's starting half: `(axis, block, home)` once per home
+    /// with a run starting in the block.
+    starting_homes: OrdSet<(Axis, Nat, Home)>,
+    /// The directory's containing half: `(axis, level, node, home)` once per
+    /// home with a run filed at the node.
+    containing_homes: OrdSet<(Axis, u64, Nat, Home)>,
 }
 
 impl SlotIndex {
-    /// Files one span of `link`'s slot.
-    fn file(&mut self, link: &Arc<Tumbler>, span: &Span) {
+    /// Files the `index`-th span of `link`'s slot, homed at `home`.
+    fn file(&mut self, home: &Home, link: &Arc<Tumbler>, index: usize, span: &Span) {
         let Some(SiblingRun { axis, first, end }) = SiblingRun::of(span) else {
-            self.residue.push_back((Arc::clone(link), span.clone()));
+            self.residue
+                .insert((Arc::clone(home), Arc::clone(link), index), span.clone());
             return;
         };
         let level = (&first ^ &(&end - 1u32)).bits();
         let axis = self.intern(axis);
-        self.starts
-            .insert((Arc::new(span.start().clone()), Arc::clone(link)));
+        self.starts.insert((
+            Arc::clone(home),
+            Arc::new(span.start().clone()),
+            Arc::clone(link),
+        ));
         // Asked first because an insert copies its path even when the key is
-        // there, and nearly every filing meets its axis's level already held.
+        // there, and nearly every filing meets its axis's level, its home's
+        // block and its home's node already held.
         let axis_level = (Arc::clone(&axis), level);
         if !self.levels.contains(&axis_level) {
             self.levels.insert(axis_level);
         }
-        if level > 0 {
-            self.by_end
-                .insert((Arc::clone(&axis), level, end, Arc::clone(link)));
+        let in_block = (Arc::clone(&axis), block_of(&axis, &first), Arc::clone(home));
+        if !self.starting_homes.contains(&in_block) {
+            self.starting_homes.insert(in_block);
         }
-        self.by_first.insert((axis, level, first, Arc::clone(link)));
+        let at_node = (Arc::clone(&axis), level, &first >> level, Arc::clone(home));
+        if !self.containing_homes.contains(&at_node) {
+            self.containing_homes.insert(at_node);
+        }
+        if level > 0 {
+            self.by_end.insert((
+                Arc::clone(home),
+                Arc::clone(&axis),
+                level,
+                end,
+                Arc::clone(link),
+            ));
+        }
+        self.by_first
+            .insert((Arc::clone(home), axis, level, first, Arc::clone(link)));
     }
 
     /// Returns the held axis equal to `comps`, holding it first if it is new.
@@ -188,72 +328,378 @@ impl SlotIndex {
         axis
     }
 
-    /// Adds every link one of whose spans here overlaps `q` to `hits`.
-    fn stab<'a>(&'a self, q: &Span, hits: &mut BTreeSet<&'a Tumbler>) {
-        self.starting_inside(q, hits);
-        self.containing(q.start(), hits);
-        for (link, span) in &self.residue {
+    /// Adds every link homed at `home` one of whose spans here overlaps `q`
+    /// to `hits`.
+    pub(super) fn stab_in<'a>(&'a self, home: &Home, q: &Span, hits: &mut BTreeSet<&'a Tumbler>) {
+        self.starting_inside(home, q, hits);
+        self.containing(home, q.start(), hits);
+        let from = (Arc::clone(home), below_every_link(), 0);
+        for ((at, link, _), span) in self.residue.range((Included(from), Unbounded)) {
+            if at != home {
+                break; // the home's residue is one key range
+            }
             if overlaps(q, span) {
                 hits.insert(link);
             }
         }
     }
 
-    /// Adds the link of every sibling run starting inside `q` to `hits`.
-    fn starting_inside<'a>(&'a self, q: &Span, hits: &mut BTreeSet<&'a Tumbler>) {
-        let from = (Arc::new(q.start().clone()), below_every_link());
-        let to = (Arc::new(q.reach()), below_every_link());
-        for (_, link) in self.starts.range((Included(from), Excluded(to))) {
+    /// Adds the link of every sibling run homed at `home` starting inside `q`
+    /// to `hits`.
+    fn starting_inside<'a>(&'a self, home: &Home, q: &Span, hits: &mut BTreeSet<&'a Tumbler>) {
+        let from = (Arc::clone(home), Arc::new(q.start().clone()), below_every_link());
+        let to = (Arc::clone(home), Arc::new(q.reach()), below_every_link());
+        for (_, _, link) in self.starts.range((Included(from), Excluded(to))) {
             hits.insert(link);
         }
     }
 
-    /// Adds the link of every sibling run that contains `start` to `hits`.
+    /// Adds the link of every sibling run homed at `home` that contains
+    /// `start` to `hits`.
     ///
     /// A run starting at `start` itself is left to
     /// [`SlotIndex::starting_inside`].
-    fn containing<'a>(&'a self, start: &Tumbler, hits: &mut BTreeSet<&'a Tumbler>) {
+    fn containing<'a>(&'a self, home: &Home, start: &Tumbler, hits: &mut BTreeSet<&'a Tumbler>) {
         let comps: Vec<Nat> = start.iter().cloned().collect();
         for (depth, c) in comps.iter().enumerate() {
             let Some((axis, ())) = self.axes.get_key_value(&comps[..depth]) else {
                 continue;
             };
             let own_axis = depth + 1 == comps.len();
-            let levels = (
-                Included((Arc::clone(axis), 0)),
-                Included((Arc::clone(axis), u64::MAX)),
-            );
-            for &(_, level) in self.levels.range(levels) {
+            for level in self.levels_of(axis) {
                 if level == 0 {
                     if !own_axis {
-                        collect(&self.by_first, axis, 0, c.clone(), c + 1u32, hits);
+                        collect(&self.by_first, home, axis, 0, c.clone(), c + 1u32, hits);
                     }
                 } else if c.bit(level - 1) {
                     let block_end = ((c >> level) + 1u32) << level;
-                    collect(&self.by_end, axis, level, c + 1u32, block_end + 1u32, hits);
+                    collect(&self.by_end, home, axis, level, c + 1u32, block_end + 1u32, hits);
                 } else {
                     let block_start = (c >> level) << level;
                     let past = if own_axis { c.clone() } else { c + 1u32 };
-                    collect(&self.by_first, axis, level, block_start, past, hits);
+                    collect(&self.by_first, home, axis, level, block_start, past, hits);
                 }
             }
         }
     }
+
+    /// Returns the levels `axis` files runs at, ascending.
+    fn levels_of(&self, axis: &Axis) -> impl Iterator<Item = u64> + '_ {
+        let levels = (
+            Included((Arc::clone(axis), 0)),
+            Included((Arc::clone(axis), u64::MAX)),
+        );
+        self.levels.range(levels).map(|&(_, level)| level)
+    }
+
+    /// Opens the directory ranges that name the homes with a filing that
+    /// could meet `q`, as streams tagged `(pair, Some(span))`, onto `out`.
+    ///
+    /// For the starting half, one stream per block of each axis that holds
+    /// a start inside `[s, r)` — the axes that are proper prefixes of `s`,
+    /// over the coordinates that keep `a·c` inside the span, and the axes
+    /// between `s` and `r` in T1 order, whole — found by seeking the blocks
+    /// the axis actually holds. For the containing half, one stream per
+    /// `(axis, level, node)` of the probe set [`SlotIndex::containing`]
+    /// walks. Residue is the slot's, not the span's:
+    /// [`SlotIndex::residue_stream`] opens it once per query.
+    pub(super) fn streams<'a>(
+        &'a self,
+        q: &Span,
+        pair: usize,
+        span: usize,
+        out: &mut Vec<Stream<'a>>,
+    ) {
+        let s: Vec<Nat> = q.start().iter().cloned().collect();
+        let r: Vec<Nat> = q.reach().iter().cloned().collect();
+        // The starting half: the axes that are proper prefixes of `s`, each
+        // over the coordinates `c` with `s ≤ a·c < r`.
+        for depth in 0..s.len() {
+            let Some((axis, ())) = self.axes.get_key_value(&s[..depth]) else {
+                continue;
+            };
+            // `a·c` is `s` itself at the last depth and a proper prefix of
+            // `s` — below it — at any other, so the first coordinate at or
+            // past `s` is one more there.
+            let lowest = if depth + 1 == s.len() {
+                s[depth].clone()
+            } else {
+                &s[depth] + 1u32
+            };
+            if let Some(past) = coordinates_below(&s[..depth], &r) {
+                self.block_streams(axis, lowest, past, pair, span, out);
+            }
+        }
+        // …and every axis between `s` and `r`: on each, every coordinate is
+        // past `s`, and the ones short of `r` are kept.
+        let between: (std::ops::Bound<&[Nat]>, std::ops::Bound<&[Nat]>) =
+            (Included(&s[..]), Excluded(&r[..]));
+        for (axis, ()) in self.axes.range::<_, [Nat]>(between) {
+            if let Some(past) = coordinates_below(axis, &r) {
+                self.block_streams(axis, Nat::from(0u32), past, pair, span, out);
+            }
+        }
+        // The containing half: the nodes the probe set visits.
+        for (depth, c) in s.iter().enumerate() {
+            let Some((axis, ())) = self.axes.get_key_value(&s[..depth]) else {
+                continue;
+            };
+            let own_axis = depth + 1 == s.len();
+            for level in self.levels_of(axis) {
+                if level == 0 && own_axis {
+                    continue; // a run starting at `s` is the starting half's
+                }
+                let node = c >> level;
+                let from = (Arc::clone(axis), level, node.clone(), below_every_link());
+                let to = (Arc::clone(axis), level, node + 1u32, below_every_link());
+                let homes = self
+                    .containing_homes
+                    .range((Included(from), Excluded(to)))
+                    .map(|(_, _, _, home)| Arc::clone(home));
+                out.push(Stream::new(pair, Some(span), homes));
+            }
+        }
+    }
+
+    /// Opens one stream per block of `axis` holding a start, from the block
+    /// of `lowest` to the block of the coordinate before `past`, onto `out`.
+    fn block_streams<'a>(
+        &'a self,
+        axis: &Axis,
+        lowest: Nat,
+        past: Past,
+        pair: usize,
+        span: usize,
+        out: &mut Vec<Stream<'a>>,
+    ) {
+        let last_block = match &past {
+            Past::Every => None,
+            Past::At(past) if *past <= lowest => return,
+            Past::At(past) => Some(block_of(axis, &(past - 1u32))),
+        };
+        let mut block = block_of(axis, &lowest);
+        loop {
+            // Seek the first held block at or past `block`: a block no home
+            // starts in opens no stream and costs one seek.
+            let from = (Arc::clone(axis), block.clone(), below_every_link());
+            let Some((at, held, _)) = self
+                .starting_homes
+                .range((Included(from), Unbounded))
+                .next()
+            else {
+                return;
+            };
+            if at != axis || last_block.as_ref().is_some_and(|last| held > last) {
+                return;
+            }
+            let from = (Arc::clone(axis), held.clone(), below_every_link());
+            let to = (Arc::clone(axis), held + 1u32, below_every_link());
+            let homes = self
+                .starting_homes
+                .range((Included(from), Excluded(to)))
+                .map(|(_, _, home)| Arc::clone(home));
+            out.push(Stream::new(pair, Some(span), homes));
+            block = held + 1u32;
+        }
+    }
+
+    /// Returns a stream of every home holding residue here, tagged
+    /// `(pair, None)` — a candidate for every query, the residue being tested
+    /// whole — or `None` where there is no residue.
+    pub(super) fn residue_stream(&self, pair: usize) -> Option<Stream<'_>> {
+        if self.residue.is_empty() {
+            return None;
+        }
+        let homes = self.residue.keys().map(|(home, _, _)| Arc::clone(home));
+        Some(Stream::new(pair, None, homes))
+    }
 }
 
-/// Adds to `hits` every filing's link on `axis` at `level` in `[from, to)`.
+/// Adds to `hits` every filing's link homed at `home` on `axis` at `level`
+/// in `[from, to)`.
 fn collect<'a>(
     filings: &'a OrdSet<Filing>,
+    home: &Home,
     axis: &Axis,
     level: u64,
     from: Nat,
     to: Nat,
     hits: &mut BTreeSet<&'a Tumbler>,
 ) {
-    let from = (Arc::clone(axis), level, from, below_every_link());
-    let to = (Arc::clone(axis), level, to, below_every_link());
-    for (_, _, _, link) in filings.range((Included(from), Excluded(to))) {
+    let from = (Arc::clone(home), Arc::clone(axis), level, from, below_every_link());
+    let to = (Arc::clone(home), Arc::clone(axis), level, to, below_every_link());
+    for (_, _, _, _, link) in filings.range((Included(from), Excluded(to))) {
         hits.insert(link);
+    }
+}
+
+/// The exclusive upper bound on the coordinates `c` of an axis keeping `a·c`
+/// below a reach `r`.
+enum Past {
+    /// Every coordinate keeps `a·c < r`.
+    Every,
+    /// The coordinates below this one do.
+    At(Nat),
+}
+
+/// Returns the coordinates `c` with `a·c < r` in T1 order, or `None` where
+/// no coordinate does.
+///
+/// T1 order is lexicographic and prefix-smaller. Where `a` is a proper
+/// prefix of `r`, `a·c` is below `r` for `c` below `r`'s component there,
+/// and at it too when `a·c` is still a proper prefix of `r`; where `a` is `r`
+/// or past it, no `a·c` is below `r`; and where `a` is below `r` without
+/// being its prefix, every `a·c` is.
+fn coordinates_below(a: &[Nat], r: &[Nat]) -> Option<Past> {
+    if a.len() < r.len() && r.starts_with(a) {
+        let at = &r[a.len()];
+        return Some(Past::At(if r.len() == a.len() + 1 {
+            at.clone()
+        } else {
+            at + 1u32
+        }));
+    }
+    (a < r).then_some(Past::Every)
+}
+
+/// One directory range, or one typed slice's homes: the homes it names,
+/// ascending, and which query it was opened for — `span` the index of the
+/// span within the query's endset, or `None` where it names a home for the
+/// whole query.
+pub(super) struct Stream<'a> {
+    pair: usize,
+    span: Option<usize>,
+    homes: Box<dyn Iterator<Item = Home> + 'a>,
+}
+
+impl<'a> Stream<'a> {
+    /// Wraps `homes`, which yields its homes ascending, under its tag.
+    pub(super) fn new(
+        pair: usize,
+        span: Option<usize>,
+        homes: impl Iterator<Item = Home> + 'a,
+    ) -> Stream<'a> {
+        Stream {
+            pair,
+            span,
+            homes: Box::new(homes),
+        }
+    }
+}
+
+/// One candidate home a stab could meet, with the query spans whose
+/// directory ranges named it.
+///
+/// Yielded by the walk `LinkState::homes_touching` answers (`Touching`): the
+/// home in address order among its siblings, and, per query the walk was
+/// opened for, the spans some filing of the home could overlap — the spans
+/// the per-home stab need probe, every other span being one no filing of
+/// this home meets.
+#[derive(Debug)]
+pub struct Touch<'q> {
+    home: Address,
+    named: Vec<(usize, &'q Span)>,
+}
+
+impl<'q> Touch<'q> {
+    /// Returns the candidate home.
+    pub fn home(&self) -> &Address {
+        &self.home
+    }
+
+    /// Returns the candidate home, consuming the touch.
+    pub fn into_home(self) -> Address {
+        self.home
+    }
+
+    /// Returns the spans of query `query` — its index in the list the walk
+    /// was opened over — whose ranges named this home, in the query's order.
+    pub fn spans(&self, query: usize) -> impl Iterator<Item = &'q Span> + '_ {
+        self.named
+            .iter()
+            .filter(move |(pair, _)| *pair == query)
+            .map(|(_, span)| *span)
+    }
+}
+
+/// The walk of candidate homes over a list of `(slot, query)` pairs.
+///
+/// A heap of the streams every pair opened — the directory ranges, and the
+/// typed slices' homes for a type query — ordered by each stream's next home,
+/// so the least home across them comes first; every stream that names it is
+/// drained together and advanced, and the spans those streams were opened for
+/// are the touch's. Lazy: a stream is stepped only as far as the homes
+/// yielded, so a caller that stops steps no entry past them.
+pub(super) struct Touching<'q> {
+    /// Per pair, the query's spans by index, for the touches to name.
+    spans: Vec<Vec<&'q Span>>,
+    streams: Vec<Stream<'q>>,
+    heap: BinaryHeap<Reverse<(Home, usize)>>,
+}
+
+impl<'q> Touching<'q> {
+    /// Opens the walk over `streams`, each tagged with a pair of `spans`.
+    pub(super) fn open(spans: Vec<Vec<&'q Span>>, mut streams: Vec<Stream<'q>>) -> Touching<'q> {
+        let mut heap = BinaryHeap::with_capacity(streams.len());
+        for (i, stream) in streams.iter_mut().enumerate() {
+            if let Some(home) = stream.homes.next() {
+                heap.push(Reverse((home, i)));
+            }
+        }
+        Touching {
+            spans,
+            streams,
+            heap,
+        }
+    }
+
+    /// Pushes stream `i`'s next home, if it has one.
+    fn advance(&mut self, i: usize) {
+        if let Some(home) = self.streams[i].homes.next() {
+            self.heap.push(Reverse((home, i)));
+        }
+    }
+}
+
+impl<'q> Iterator for Touching<'q> {
+    type Item = Touch<'q>;
+
+    fn next(&mut self) -> Option<Touch<'q>> {
+        let Reverse((home, first)) = self.heap.pop()?;
+        let mut tags = vec![(self.streams[first].pair, self.streams[first].span)];
+        self.advance(first);
+        while let Some(Reverse((next, _))) = self.heap.peek() {
+            if *next != home {
+                break;
+            }
+            let Reverse((_, i)) = self.heap.pop().expect("peeked");
+            tags.push((self.streams[i].pair, self.streams[i].span));
+            self.advance(i);
+        }
+        tags.sort_unstable();
+        tags.dedup();
+        // A whole-query tag names every span of its pair; otherwise the
+        // spans tagged, each once, in the query's order.
+        let mut named = Vec::new();
+        let mut i = 0;
+        while i < tags.len() {
+            let pair = tags[i].0;
+            let end = i + tags[i..].iter().take_while(|(p, _)| *p == pair).count();
+            if tags[i].1.is_none() {
+                named.extend(self.spans[pair].iter().map(|span| (pair, *span)));
+            } else {
+                named.extend(
+                    tags[i..end]
+                        .iter()
+                        .filter_map(|(_, span)| span.map(|s| (pair, self.spans[pair][s]))),
+                );
+            }
+            i = end;
+        }
+        Some(Touch {
+            home: lift_home(&home),
+            named,
+        })
     }
 }
 
@@ -296,16 +742,41 @@ mod tests {
         Tumbler::new(comps).expect("test tumblers are nonempty")
     }
 
-    /// Returns the axis every run below sits on, `[1, 0, 1]`, plus `tail`.
+    /// Returns the axis every run below sits on, `[1, 0, 1]` — a content
+    /// axis, its last two components `0 · s_C`, so its blocks are
+    /// `2^BLOCK_BITS` wide — plus `tail`.
     fn on_axis(tail: &[&Nat]) -> Tumbler {
         let axis = [1u32, 0, 1].map(Nat::from);
         tumbler(axis.into_iter().chain(tail.iter().map(|&c| c.clone())))
     }
 
-    /// Returns whether a stab of `index` with the one span `query` answers.
+    /// The one home every run below is filed under.
+    fn home() -> Home {
+        Arc::new(tumbler([1u32, 0, 1, 0, 1].map(Nat::from)))
+    }
+
+    /// Returns the candidate homes a query of the one span `query` opens,
+    /// through the directory alone: every directory range the span opens,
+    /// merged as a read merges them.
+    fn candidates(index: &SlotIndex, query: &Span) -> Vec<Address> {
+        let mut streams = Vec::new();
+        index.streams(query, 0, 0, &mut streams);
+        streams.extend(index.residue_stream(0));
+        Touching::open(vec![vec![query]], streams)
+            .map(Touch::into_home)
+            .collect()
+    }
+
+    /// Returns whether a stab of `index` with the one span `query` answers,
+    /// asked as a read asks: of the homes the directory names, and then of
+    /// each one's filings — so a directory that misses a home the stab would
+    /// hit answers `false` here.
     fn found(index: &SlotIndex, query: &Span) -> bool {
         let mut hits = BTreeSet::new();
-        index.stab(query, &mut hits);
+        for home in candidates(index, query) {
+            let home: Home = Arc::new(home.into());
+            index.stab_in(&home, query, &mut hits);
+        }
         !hits.is_empty()
     }
 
@@ -314,9 +785,10 @@ mod tests {
         // Every run [x, y) with x < y ≤ 70, filed alone, against every point
         // c < 72: at the point's own subtree, which the run starts in or
         // contains, and beneath it, where only the containing half can see
-        // it. Runs reach level 7 and cross every power of two up to 64. The
-        // second grid straddles 2^64, where the coordinates take two digits
-        // and a run crossing 2^64 files at level 65.
+        // it. Runs reach level 7 and cross every power of two up to 64, and
+        // every block boundary of the directory. The second grid straddles
+        // 2^64, where the coordinates take two digits and a run crossing 2^64
+        // files at level 65.
         let link = Arc::new(tumbler([Nat::from(9u32)]));
         let beneath_tail = Nat::from(5u32);
         for (offset, size) in [
@@ -337,7 +809,7 @@ mod tests {
                     let run = Span::from_endpoints(on_axis(&[&first]), &on_axis(&[&end]))
                         .expect("x < y at one length");
                     let mut index = SlotIndex::default();
-                    index.file(&link, &run);
+                    index.file(&home(), &link, 0, &run);
                     for (point, at, beneath) in &probes {
                         let inside = first <= *point && *point < end;
                         assert_eq!(found(&index, at), inside, "[{first}, {end}) at {point}");
@@ -350,6 +822,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_directory_names_a_home_once_however_many_ranges_reach_it() {
+        // A home with runs in two blocks of one axis and at a deeper axis,
+        // beside a second home with one run: a query spanning both blocks
+        // and the deeper axis names each home once, in address order, with
+        // every span of the query; a query touching neither home's blocks
+        // names nothing without stabbing anything.
+        let (h1, h2) = (
+            home(),
+            Arc::new(tumbler([1u32, 0, 1, 0, 2].map(Nat::from))),
+        );
+        let link = Arc::new(tumbler([Nat::from(9u32)]));
+        let mut index = SlotIndex::default();
+        let unit = |c: u32| subtree_of(&on_axis(&[&Nat::from(c)]));
+        index.file(&h1, &link, 0, &unit(3));
+        index.file(&h1, &link, 1, &unit(200));
+        index.file(&h1, &link, 2, &subtree_of(&on_axis(&[&Nat::from(5u32), &Nat::from(1u32)])));
+        index.file(&h2, &link, 0, &unit(70));
+        let whole = Span::from_endpoints(on_axis(&[&Nat::from(0u32)]), &on_axis(&[&Nat::from(300u32)]))
+            .expect("a run");
+        assert_eq!(
+            candidates(&index, &whole),
+            vec![lift_home(&h1), lift_home(&h2)]
+        );
+        let elsewhere = Span::from_endpoints(
+            on_axis(&[&Nat::from(1000u32)]),
+            &on_axis(&[&Nat::from(2000u32)]),
+        )
+        .expect("a run");
+        assert!(candidates(&index, &elsewhere).is_empty());
+        // The block grain shows in what a short query names: one home has
+        // a run in the block of 70, the other has none there.
+        assert_eq!(candidates(&index, &unit(71)), vec![lift_home(&h2)]);
+        assert!(!found(&index, &unit(71)), "named by the block, missed by the stab");
+        // On a link axis — `[1, 0, 2]`, the link subspace — the grain is one
+        // coordinate: a run at link 70 is no candidate for a query at link
+        // 71, so a probe at a link no claim names costs no home.
+        let on_link_axis = |c: u32| {
+            subtree_of(&tumbler([1u32, 0, 2, c].map(Nat::from)))
+        };
+        let mut links = SlotIndex::default();
+        links.file(&h2, &link, 0, &on_link_axis(70));
+        assert_eq!(candidates(&links, &on_link_axis(70)), vec![lift_home(&h2)]);
+        assert!(candidates(&links, &on_link_axis(71)).is_empty());
     }
 
     #[test]
@@ -371,7 +889,8 @@ mod tests {
     fn a_span_that_is_no_sibling_run_is_tested_whole() {
         // `[1,0,1,5] + [0,0,1,3]` reaches `[1,0,2,3]`: its width is nonzero
         // ahead of its last component, so it is no sibling run, and neither is
-        // a span whose width is longer than its start.
+        // a span whose width is longer than its start. Its home is a candidate
+        // for every query, and the span is tested against each.
         let n = |c: u32| Nat::from(c);
         let span = Span::new(tumbler([1, 0, 1, 5].map(n)), tumbler([0, 0, 1, 3].map(n)))
             .expect("T12 admits it");
@@ -381,9 +900,10 @@ mod tests {
         assert!(SiblingRun::of(&skew).is_none());
         let link = Arc::new(tumbler([n(9)]));
         let mut index = SlotIndex::default();
-        index.file(&link, &span);
+        index.file(&home(), &link, 0, &span);
         let at = |comps: &[u32]| {
             let probe = subtree_of(&tumbler(comps.iter().map(|&c| n(c))));
+            assert_eq!(candidates(&index, &probe), vec![lift_home(&home())]);
             found(&index, &probe)
         };
         assert!(at(&[1, 0, 1, 5]), "at its start");

@@ -10,7 +10,7 @@ use crate::heap::settled_heap_bytes;
 use common::*;
 use skep_address::Address;
 use skep_arrangement::Vstream;
-use skep_discovery::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec};
+use skep_discovery::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec, FROM, TYPE};
 use skep_kernel::Kernel;
 use skep_links::{enc, Endset, HasLinks, LinkWriter};
 
@@ -94,16 +94,16 @@ fn the_descriptor_states_its_own_zero() {
     }
 }
 
-/// §3 — the conjunction is handed to M7 cheapest constraint first — a TYPE
-/// constraint whose class is small moves ahead of the slots written before
-/// it, because M7 answers the first by one probe of its coverage index and
-/// narrows what it finds with the rest. That order is cost, and no answer
-/// shows it. What an answer can show is the one way a reordering could move
-/// it: by parting an endset from its slot. A descriptor whose FROM is a
-/// content address and whose TYPE is a type address answers the link it would
-/// answer unsorted, and its MIRROR — the same two endsets in the other slots —
-/// answers a different link, not the same one. A reordering that lost the
-/// pairing would make the two agree.
+/// §3 — the conjunction drives from the constraint with the fewest candidate
+/// homes — a TYPE constraint whose class is homed in one document drives
+/// ahead of a FROM written before it whose position two homes link from,
+/// because M7 stabs the driver's homes and narrows what it finds with the
+/// rest. That order is cost, and no answer shows it. What an answer can show
+/// is the one way a reordering could move it: by parting an endset from its
+/// slot. A descriptor whose FROM is a content address and whose TYPE is a
+/// type address answers the link it would answer unsorted, and its MIRROR —
+/// the same two endsets in the other slots — answers a different link, not
+/// the same one. A reordering that lost the pairing would make the two agree.
 #[test]
 fn ftt_orders_its_constraints_without_parting_an_endset_from_its_slot() {
     let k = kernel();
@@ -112,18 +112,18 @@ fn ftt_orders_its_constraints_without_parting_an_endset_from_its_slot() {
     let reads = Reads(&k);
     let straight = link(&store, &doc1(), &[ca(1)], &[ca(2)]); // from ca(1), typed rel
     let mirror = typed_link(&store, &doc1(), &[rel()], &[ca(2)], &ca(1)); // from rel, typed ca(1)
+    typed_link(&store, &doc2(), &[ca(1)], &[ca(2)], &rel2()); // from ca(1) too, homed elsewhere
 
-    // Each type names a class of one link, so the TYPE constraint is the one
-    // that moves to the front, ahead of the FROM written before it: the
-    // reordering has something to do.
+    // The TYPE constraint's class is homed in doc1 alone where ca(1) is
+    // linked from two homes, so TYPE drives ahead of the FROM written before
+    // it: the reordering has something to do.
     let snap = k.snapshot();
-    for ty in [rel(), ca(1)] {
-        assert_eq!(
-            snap.world().links().type_hits(&enc([&ty])),
-            Some(1),
-            "{ty}: a class of one, which drives"
-        );
-    }
+    let (from_ca1, by_rel) = (enc([&ca(1)]), rel_ty());
+    assert_eq!(
+        snap.world().links().fewest_homes(&[(FROM, &from_ca1), (TYPE, &by_rel)]),
+        1,
+        "the type's one home drives ahead of the position's two"
+    );
 
     let content_from = FourSet {
         from: SlotSpec::Spans(enc([&ca(1)])),
@@ -258,6 +258,64 @@ fn a_type_constraint_with_a_small_class_drives_ahead_of_a_flooded_from_slot() {
         heap_of(&more, read),
         heap_of(&fewer, read),
         "the two-link class drives: the flood from the same position costs nothing"
+    );
+    let flooded_type = FourSet {
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ty: SlotSpec::Spans(rel_ty()),
+        ..FourSet::any()
+    };
+    let read = |k: &Kernel<World>| findlinks_ftt_on(&k.snapshot(), &flooded_type, &every_home).len();
+    assert!(
+        heap_of(&more, read) > heap_of(&fewer, read),
+        "the control: the flood's own type is the flood"
+    );
+}
+
+/// §3 — THE CONSTRAINT WITH THE FEWEST CANDIDATE HOMES DRIVES, counted (the
+/// home-index record's §3 read, `{from: E, ty: rw}`): a read-with class of
+/// over a thousand links, all homed in ONE document, beside a flood of
+/// another type FROM the same position homed in as many documents as it has
+/// links. The class is larger than any link count a size rule would let
+/// drive, and it has one home where the position has the flood's many, so
+/// the type drives: the read answers the class's links in both worlds, and
+/// its heap beside a thousand flooding homes is its heap beside a hundred.
+/// The same two slots with the flood's own type is the control: that class
+/// IS the flood, so the read pays for it whichever slot drives.
+#[test]
+fn a_two_slot_descriptor_drives_from_the_constraint_with_the_fewest_homes() {
+    const READ_WITHS: u32 = 1_100;
+    let world_of = |flood: u32| {
+        let k = kernel_with_documents(2 + flood);
+        seed_content(&k, &doc1(), 1);
+        let store = LinkWriter::new(&k, &EVERYONE);
+        for i in 0..READ_WITHS {
+            typed_link(&store, &doc2(), &[ca(1)], &[ca2(1 + i)], &rel2()); // the read-withs, one home
+        }
+        for i in 0..flood {
+            link(&store, &doc(3 + i), &[ca(1)], &[ca(1_000 + i)]); // the flood, a home apiece
+        }
+        k
+    };
+    let (fewer, more) = (world_of(100), world_of(1_000));
+    let read_with = FourSet {
+        from: SlotSpec::Spans(enc([&ca(1)])),
+        ty: SlotSpec::Spans(enc([&rel2()])),
+        ..FourSet::any()
+    };
+    for k in [&fewer, &more] {
+        assert_eq!(Reads(k).count_ftt(&read_with), READ_WITHS as usize, "the class, whatever the flood");
+        let (from_ca1, by_rel2) = (enc([&ca(1)]), enc([&rel2()]));
+        assert_eq!(
+            k.snapshot().world().links().fewest_homes(&[(FROM, &from_ca1), (TYPE, &by_rel2)]),
+            1,
+            "the class's one home drives ahead of the position's many"
+        );
+    }
+    let read = |k: &Kernel<World>| findlinks_ftt_on(&k.snapshot(), &read_with, &every_home).len();
+    assert_eq!(
+        heap_of(&more, read),
+        heap_of(&fewer, read),
+        "the one-home class drives: the flood's homes cost nothing"
     );
     let flooded_type = FourSet {
         from: SlotSpec::Spans(enc([&ca(1)])),

@@ -13,15 +13,17 @@
 //! [`DeletePartition::of`], the one element here a change to DELETE's
 //! admission changes.
 
+use im::OrdSet;
 use num_traits::{One, Zero};
 use skep_address::{Address, Nat, Span};
 use skep_arrangement::{M5State, Run, VPos};
 use skep_kernel::Snapshot;
+use skep_links::{LinkState, Touch, View};
 
 use crate::budget::MAX_IMAGE_RUNS;
-use crate::home::home_readable;
+use crate::home::home_admitted;
 use crate::image::content_vspan;
-use crate::sets::stab_runs;
+use crate::region::{extents, V1_SLOTS};
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
 
@@ -157,12 +159,18 @@ impl DeletePartition {
 /// global-ghost determination (LP17 — discoverable from NO document) reaches
 /// provenance R and is M6 territory; M8 stops at the per-document set.
 ///
-/// The result-set filter (PUB round 2, lane 3.3, §3): the orphaned set drops
-/// every link whose HOME `readable` refuses, at link identity — a `d`
-/// argument's own readability is the caller's doc-argument consult
-/// (pre-dispatch), not this preview's. The home rule runs AFTER the set
-/// identity, so it changes which orphans are reported and never which links
-/// are orphaned.
+/// The result-set filter (PUB round 2, lane 3.3, §3; PUB-7.18): the preview
+/// is read home by home — the candidate homes of the deleted runs at every
+/// slot, in address order, the reader asked of each ONCE ahead of its links,
+/// and for each admitted home the identity above over that home's links
+/// alone, its deleted-side and retained-side stabs both within the home — so
+/// a home the reader may not read costs one test and none of its links are
+/// read, and a home none of whose links touch the deleted range is never
+/// asked. A `d` argument's own readability is the caller's doc-argument
+/// consult (pre-dispatch), not this preview's. Membership in the identity is
+/// per link, so the per-home identities concatenated are the filtered
+/// identity: the rule changes which orphans are reported and never which
+/// links are orphaned.
 pub fn delete_orphans_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -213,20 +221,53 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     if a_del.len() + retained.len() + link_run_count > MAX_IMAGE_RUNS {
         return Err(OrphanError::ImageTooLarge);
     }
-    let touching_deleted = stab_runs(w.links(), &a_del);
-    let touching_retained = stab_runs(w.links(), retained.iter().chain(w.m5().link_runs(d)));
-    // The relative complement is walked from the DELETED side — a link
-    // touching what goes is kept unless the retained side also holds it —
-    // NEVER `im`'s `difference`, which is SYMMETRIC and would fold in the
-    // plainly-surviving links, and not `im`'s `relative_complement`, which
-    // walks its argument, the retained side, through `im`'s copying consuming
-    // iterator.
-    Ok(OrphanReport {
-        orphaned: touching_deleted
-            .iter()
-            .filter(|&a| !touching_retained.contains(a)) // the relative complement, from the deleted side
-            .filter(|&a| home_readable(readable, a)) // PUB-6.13 — drop unreadable-home orphans
-            .cloned()
-            .collect(),
-    })
+    let deleted = extents(&a_del);
+    let kept = extents(retained.iter().chain(w.m5().link_runs(d)));
+    // The candidate homes of both sides at every slot, in one walk: pairs
+    // 0..3 are the deleted runs at FROM, TO, TYPE and pairs 3..6 the
+    // retained. A home named by the retained side alone touches nothing the
+    // delete takes, so it is passed unasked; one the deleted side names is
+    // asked of the reader once and, admitted, read on both sides within the
+    // home.
+    let l = w.links();
+    let pairs = V1_SLOTS
+        .map(|slot| (slot, &deleted))
+        .into_iter()
+        .chain(V1_SLOTS.map(|slot| (slot, &kept)));
+    let mut orphaned = Vec::new();
+    for touch in l.homes_touching(pairs) {
+        if (0..V1_SLOTS.len()).all(|i| touch.spans(i).next().is_none()) {
+            continue; // named by the retained side alone: nothing of it is orphaned
+        }
+        if !home_admitted(readable, touch.home()) {
+            continue; // PUB-6.13 — an unreadable home's orphans are never read
+        }
+        let touching_deleted = touching_side(l, &touch, 0);
+        let touching_retained = touching_side(l, &touch, V1_SLOTS.len());
+        // The relative complement is walked from the DELETED side — a link
+        // touching what goes is kept unless the retained side also holds it
+        // — NEVER `im`'s `difference`, which is SYMMETRIC and would fold in
+        // the plainly-surviving links, and not `im`'s `relative_complement`,
+        // which walks its argument, the retained side, through `im`'s copying
+        // consuming iterator.
+        orphaned.extend(
+            touching_deleted
+                .iter()
+                .filter(|&a| !touching_retained.contains(a)) // the relative complement, from the deleted side
+                .cloned(),
+        );
+    }
+    Ok(OrphanReport { orphaned })
+}
+
+/// One home's links touching one side of the preview's identity — the
+/// disjunction over the v1 slots of the per-home stab, each slot over the
+/// spans that named the home at pair `first + slot index`.
+fn touching_side(l: &LinkState, touch: &Touch<'_>, first: usize) -> OrdSet<Address> {
+    V1_SLOTS
+        .iter()
+        .enumerate()
+        .fold(OrdSet::new(), |acc, (i, &slot)| {
+            acc.union(l.stab_in(touch.home(), slot, touch.spans(first + i), View::Active))
+        })
 }

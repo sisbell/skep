@@ -41,11 +41,12 @@ pub const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
 /// what the route commands is at most [`MAX_BLOB_BYTES`] times this,
 /// 128 MiB; a fetch past the pool is refused `503 fetch_busy`, retry-class
 /// as `history_busy` is, and faced as pending by a client. Counted into
-/// `MIN_WORKERS` beside the reconstruction, class-scan, upload and write
-/// pools (`server/listen.rs`), so a caller holding every permit of all five
-/// still leaves a worker free. The reconstruction pool's own number, for its
-/// reason: two keep a page of figures serviceable without letting a
-/// stranger's fetches occupy the worker pool.
+/// `MIN_WORKERS` beside the reconstruction, class-scan, per-document, upload
+/// and write pools and the per-document pool's waiting slots
+/// (`server/listen.rs`), so a caller holding every permit of all six, with a
+/// read in each waiting slot, still leaves a worker free. The reconstruction
+/// pool's own number, for its reason: two keep a page of figures serviceable
+/// without letting a stranger's fetches occupy the worker pool.
 pub const MAX_CONCURRENT_FETCHES: usize = 2;
 
 /// The upload pool, 4: the most `/blob/upload` creations and resumes at once.
@@ -64,9 +65,10 @@ pub const MAX_CONCURRENT_FETCHES: usize = 2;
 /// person's batch; a fifth meets `503 upload_busy`, retry-class as
 /// `fetch_busy` and `history_busy` are, before any body byte — faced as
 /// pending by a client, where without the pool it would meet a daemon that
-/// answers nothing. Counted into `MIN_WORKERS` beside the four other pools
-/// (`server/listen.rs`), so a caller holding every permit of all five still
-/// leaves a worker free; the pool is asked or refused, never told (D9).
+/// answers nothing. Counted into `MIN_WORKERS` beside the five other pools
+/// and the per-document pool's waiting slots (`server/listen.rs`), so a
+/// caller holding every permit of all six, with a read in each waiting slot,
+/// still leaves a worker free; the pool is asked or refused, never told (D9).
 pub const MAX_CONCURRENT_UPLOADS: usize = 4;
 
 /// The byte interval of a fetch: 1 MiB, interim.

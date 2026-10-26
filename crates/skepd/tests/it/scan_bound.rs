@@ -6,8 +6,10 @@
 //! PER-DOCUMENT pool admits at most two region reads of one document at once
 //! — the region family and `delete_orphans`, keyed by the `d` their frame
 //! names — inside a ceiling of six across every document. Every other link
-//! read takes no permit. The surplus is refused at once with `503
-//! scan_busy`, the body naming the op and, in `detail`, the bound that
+//! read takes no permit. The surplus is refused with `503 scan_busy` — a
+//! class scan and a read past the ceiling at once, a region read whose
+//! document holds its width once a bounded wait for one of its permits ends
+//! (D3 (b)) — the body naming the op and, in `detail`, the bound that
 //! refused — one fixed sentence each. A concurrency bound, never a rate
 //! statement; the pools the board's, for every class, session and the guest;
 //! disjoint from the reconstruction pool and from each other; never a change
@@ -93,6 +95,14 @@ const CLASS_BUSY: &str = "all class-scan permits are in use; retry shortly";
 const DOCUMENT_BUSY: &str = "all region-read permits of this document are in use; retry shortly";
 const CEILING_BUSY: &str =
     "all region-read permits across every document are in use; retry shortly";
+
+/// The per-document pool's waiting slots, as §Link discovery reads spells
+/// them (**`MAX_REGION_READ_WAITERS` = 2**): the daemon's crate-private
+/// constant, held to that page by the scan module's own unit test. A
+/// waiting slot is no permit a hook can take — it is a region read's worker
+/// parked for its bounded wait — so the minimum's drain counts it in by
+/// figure.
+const REGION_READ_WAITERS: usize = 2;
 
 /// The unit span at `addr` — `enc([addr])`'s shape: `start` the address,
 /// `width` one at its own depth — as a one-span slot array.
@@ -222,7 +232,7 @@ fn addrs_of(v: &Value) -> Vec<String> {
 /// `detail` the sentence of the bound that refused, and a TRANSPORT body —
 /// no `resp`, no `code` — exactly as `history_busy` is a transport refusal.
 fn assert_scan_busy(st: u16, v: &Value, op: &str, detail: &str) {
-    assert_eq!(st, 503, "a saturated pool answers 503 at once: {v}");
+    assert_eq!(st, 503, "a saturated pool answers 503: {v}");
     assert_eq!(v["error"].as_str(), Some("scan_busy"), "{v}");
     assert_eq!(v["op"].as_str(), Some(op), "the refusal names the op it refused: {v}");
     assert_eq!(v["detail"].as_str(), Some(detail), "the detail names the bound that refused: {v}");
@@ -492,7 +502,8 @@ fn a_documents_region_reads_contend_only_among_themselves() {
     let r2 = daemon.try_hold_region_permit(&doc1).expect("doc 1's region permit 2 of 2");
     assert!(daemon.try_hold_region_permit(&doc1).is_none(), "a document's width is exactly 2");
 
-    // Every region read of doc 1 is refused at once, none queuing.
+    // Every region read of doc 1 is refused once its bounded wait for one of
+    // doc 1's permits ends, none queuing past it: the permits stay held.
     for (name, frame) in [
         ("find_links_v", find_links_v(CLAIMANT_DOC1)),
         ("count_v", count_v(CLAIMANT_DOC1)),
@@ -771,7 +782,9 @@ fn the_guest_and_the_claimant_draw_on_one_pool() {
 /// with every structure inside it healthy (M-I5 (f): the upload pool
 /// counted in the same budget as the three before it; `operations.md` §4
 /// rows 25, 27: the write pool counted in after it; the home-index record's
-/// D4: the per-document pool counted in by its ceiling).
+/// D4: the per-document pool counted in by its ceiling; its D3 (b): and by
+/// its waiting slots, each a region read's worker parked for its bounded
+/// wait).
 ///
 /// Named HERE, from outside the library, because that is the whole of what
 /// the constant buys: the six pools' counts are crate-private, so before it
@@ -780,8 +793,9 @@ fn the_guest_and_the_claimant_draw_on_one_pool() {
 /// is dropped, which is the check the obligation needs.
 ///
 /// The count is then spent as a real `workers` argument and every pool is
-/// drained through the daemon's hooks — the permits held together exactly
-/// one short of the minimum, which pins the derivation from outside; the
+/// drained through the daemon's hooks — the permits held together, with the
+/// waiting slots no hook can take ([`REGION_READ_WAITERS`]), exactly one
+/// short of the minimum, which pins the derivation from outside; the
 /// per-document pool drained to its ceiling, two permits each of three
 /// documents, the fourth document then refused — so the minimum is pinned
 /// as a count `serve` accepts and serves at. What it does not pin is worker
@@ -843,9 +857,10 @@ fn the_minimum_worker_count_is_evaluable_and_serves_with_every_pool_drained() {
         "the ceiling is drained: a fourth document finds no slot"
     );
     assert_eq!(
-        held.len() + region_held.len(),
+        held.len() + region_held.len() + REGION_READ_WAITERS,
         skepd::MIN_WORKERS - 1,
-        "the six pools' permits together are one short of the minimum"
+        "the six pools' permits and the per-document pool's waiting slots together are one \
+         short of the minimum"
     );
 
     let (st, body) = get(port, "/health");

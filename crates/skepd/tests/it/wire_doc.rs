@@ -1279,12 +1279,13 @@ fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
 /// only — no longer "the embedded authoring client". The width is
 /// `history.rs`'s crate-private constant, pinned as its literal and held
 /// by arithmetic the test CAN reach: `MIN_WORKERS` is one more than the
-/// six pools' slots together, so the three widths this document spells —
-/// the two here and the per-document pool's ceiling,
-/// `MAX_CONCURRENT_REGION_READS`, read off §Link discovery reads as the
-/// class-scan pool's is — and the write pool's figure (§The model), with
-/// the two media pools' constants, must sum to it — a pool whose constant
-/// moved without its sentence fails here.
+/// six pools' slots together, so the figures this document spells — the
+/// two widths here, and the per-document pool's ceiling and its waiting
+/// slots, `MAX_CONCURRENT_REGION_READS` and `MAX_REGION_READ_WAITERS`, read
+/// off §Link discovery reads as the class-scan pool's width is — and the
+/// write pool's figure (§The model), with the two media pools' constants,
+/// must sum to it — a pool whose constant moved without its sentence fails
+/// here.
 #[test]
 fn doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_reader() {
     let history = prose("\n## Reading history", &["\n## The commit stream"]);
@@ -1310,17 +1311,19 @@ fn doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_rea
     let reconstructions = figure_after(&history, "**`MAX_CONCURRENT_RECONSTRUCTIONS` = ");
     let class_scans = figure_after(&scans, "**`MAX_CONCURRENT_CLASS_SCANS` = ");
     let region_reads = figure_after(&scans, "**`MAX_CONCURRENT_REGION_READS` = ");
+    let waiters = figure_after(&scans, "**`MAX_REGION_READ_WAITERS` = ");
     let writes = figure_after(&model, "`MAX_CONCURRENT_WRITES` (");
     assert_eq!(
         reconstructions
             + class_scans
             + region_reads
+            + waiters
             + writes
             + skep_media::limits::MAX_CONCURRENT_FETCHES
             + skep_media::limits::MAX_CONCURRENT_UPLOADS
             + 1,
         skepd::MIN_WORKERS,
-        "the six pools' widths as the document spells them — the per-document pool's by its ceiling — plus one, are `MIN_WORKERS`"
+        "the six pools' widths as the document spells them — the per-document pool's by its ceiling and its waiting slots — plus one, are `MIN_WORKERS`"
     );
     let endpoints = prose("\n### Endpoints", &["\n### Transport"]);
     let row = endpoints
@@ -1349,6 +1352,57 @@ fn doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_rea
     ] {
         assert!(other.contains(fact), "§The other endpoints says {fact:?}");
     }
+}
+
+/// Checks that §Link discovery reads states the region read's bounded wait.
+///
+/// The ruling (the home-index record's D3 (b)) keeps the refusal and adds a
+/// bounded wait before it: a region read whose document holds its width
+/// waits **`REGION_READ_WAIT` = 2 ms** at most, in one of
+/// **`MAX_REGION_READ_WAITERS` = 2** waiting slots across the board,
+/// admitted as one of its document's permits returns and refused when the
+/// wait ends; the class pool and the ceiling refuse at once, and the wait is
+/// a bound and never a queue. The paragraph says each, every read is no
+/// longer said to be refused at once, and §HTTP status codes' `scan_busy`
+/// row names the wait at the paragraph's figure. The figures are held to the
+/// daemon's constants by the scan module's own unit test, which also pins
+/// the wait's behaviour.
+#[test]
+fn doc_states_the_region_reads_bounded_wait() {
+    let scans = prose("\n### Link discovery reads", &["\n### Grants"]);
+    for fact in [
+        "A class scan that finds every class-scan permit in use is refused AT ONCE",
+        "and so is a region read whose document has room but whose board holds its six",
+        "A region read whose document holds its two region reads WAITS first, holding its worker",
+        "**`REGION_READ_WAIT` = 2 ms** at most",
+        "in one of **`MAX_REGION_READ_WAITERS` = 2** waiting slots across the board",
+        "admitted the moment one of its document's permits returns",
+        "refused where its document still holds its width when the wait ends, or where it finds \
+         every waiting slot taken",
+        "The wait is a bound and never a queue",
+        "no order is kept among the waiting reads",
+        "refuses its reader after the wait as before it",
+        "A refused read costs the parse and, at its document's width, at most the wait",
+        "The five figures — the three counts, the wait and the waiting slots — are daemon \
+         constants this document names",
+    ] {
+        assert!(scans.contains(fact), "§Link discovery reads says {fact:?}");
+    }
+    assert!(
+        !scans.contains("is refused at once with"),
+        "FINDING (#658): every read is no longer refused at once: {scans}"
+    );
+    let wait = figure_after(&scans, "**`REGION_READ_WAIT` = ");
+    let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
+    let row = statuses
+        .split("| 503 | `scan_busy` |")
+        .nth(1)
+        .and_then(|rest| rest.split(" | | ").next())
+        .expect("the scan_busy row's cell");
+    let named = format!(
+        "whose document still holds its two region reads after a bounded wait ({wait} ms at most)"
+    );
+    assert!(row.contains(&named), "the row names the wait, {named:?}: {row}");
 }
 
 /// The natural the prose spells right after `marker` — a figure read out of

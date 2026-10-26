@@ -9,12 +9,16 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   framework, no async runtime: the kernel's single applier already
   serializes writes, so worker threads are the whole concurrency
   story, and the commit stream needs flush-at-commit semantics
-  pull-based servers cannot give. Five permit pools bound the surfaces
+  pull-based servers cannot give. Six permit pools bound the surfaces
   that hold a worker long — the reconstruction, the class scan, the
-  fetch, the upload and the write — each refusing retry-class past its
-  count, never queueing; the worker count's minimum is one above their
-  sum, refused below it at the parse, and the default one above that, so
-  a daemon whose every pool is saturated still answers.
+  region reads of one page (the per-document pool, under a ceiling
+  across pages), the fetch, the upload and the write — each refusing
+  retry-class past its count, never queueing, the per-document pool
+  after a wait of two milliseconds at most for one of its page's
+  permits; the worker count's minimum is one above their slots together,
+  the ceiling and the two waiting slots among them, refused below it at
+  the parse, and the default one above that, so a daemon whose every
+  pool is saturated still answers.
 - **The wire** — `/op` (execute), `/op-at` (historical reads over
   reconstructed worlds), `/chain` (the commit chain's value at a
   position), `/changes`, `/dump`, `/events` (commit stream),

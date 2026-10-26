@@ -1,13 +1,15 @@
 //! The class-scan bound: the class pool and the per-document pool.
 //!
 //! The items are `MAX_CONCURRENT_CLASS_SCANS`, `MAX_REGION_READS_PER_DOCUMENT`,
-//! `MAX_CONCURRENT_REGION_READS`, `ClassScans`, `ScanPermit`, `RegionPermit`,
+//! `MAX_CONCURRENT_REGION_READS`, `REGION_READ_WAIT`,
+//! `MAX_REGION_READ_WAITERS`, `ClassScans`, `ScanPermit`, `RegionPermit`,
 //! `ScanBusy`, `is_class_scan` and `region_document`.
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use skep_address::{document_of, validate, Address, Tumbler};
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::Op;
@@ -41,10 +43,11 @@ use skep_core::limits::EDGE_HOLD_DOWN;
 /// directory scans, nor the reverse, and a flooded page's readers never
 /// refuse a directory.
 ///
-/// The sum of this pool, the per-document pool's ceiling and the other four
-/// — the reconstruction, fetch, upload and write pools — must leave a worker
-/// free: [`MIN_WORKERS`](super::MIN_WORKERS) holds that relation, and an
-/// assertion beside it holds the shipped default to it.
+/// The sum of this pool, the per-document pool's ceiling and its waiting
+/// slots ([`MAX_REGION_READ_WAITERS`]), and the other four — the
+/// reconstruction, fetch, upload and write pools — must leave a worker free:
+/// [`MIN_WORKERS`](super::MIN_WORKERS) holds that relation, and an assertion
+/// beside it holds the shipped default to it.
 pub(super) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 
 /// The cap on region reads of ONE document admitted at once (the home-index
@@ -60,6 +63,10 @@ pub(super) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 /// of any other page never meets them. Two, as the class pool's width: a
 /// board's reading pane holds one per scroll, and the second is the one a
 /// second reader of the same page takes.
+///
+/// A read that finds its document at this width waits for one of the
+/// document's permits, [`REGION_READ_WAIT`] at most, before it is refused
+/// (the home-index record's D3 (b)).
 pub(super) const MAX_REGION_READS_PER_DOCUMENT: usize = 2;
 
 /// The ceiling on region reads admitted at once across every document (D3,
@@ -69,21 +76,64 @@ pub(super) const MAX_REGION_READS_PER_DOCUMENT: usize = 2;
 /// per document with no ceiling would let a stranger reading many pages
 /// hold every worker inside a bound. So the per-document widths sit inside
 /// ONE ceiling: a region read takes a slot of its document's width AND a
-/// slot of this ceiling, and the ceiling is the term
+/// slot of this ceiling, and the ceiling and the waiting slots
+/// ([`MAX_REGION_READ_WAITERS`]) are the terms
 /// [`MIN_WORKERS`](super::MIN_WORKERS) counts, not the widths. Six: three
 /// pages read two at a time, the shape a board of a few readers makes.
 pub(super) const MAX_CONCURRENT_REGION_READS: usize = 6;
+
+/// How long a region read whose document holds its width waits for one of
+/// that document's permits before it is refused: two milliseconds (the
+/// home-index record's D3 (b)).
+///
+/// A page's permits turn over at the pace of its answers, so a read that
+/// meets the width of a lightly loaded page is one a returning permit admits
+/// almost at once. The spike S43 measured a board's reading pane — four
+/// readers of one page, two of them refused in nearly every trial — and a
+/// permit came free for each refused read within about a quarter of a
+/// millisecond at the 99th percentile, a holder's whole answer taking about
+/// one. Two milliseconds, the top of the ruling's one or two, covers such an
+/// answer twice over. A flooded page's permits come free only as its
+/// answers end — about 28 ms at ten thousand links — so a read of one is
+/// still refused, after the wait, as before it; a wait long enough to admit
+/// it would hold the worker for a flooded page's whole answer, a queue in
+/// all but name.
+///
+/// The wait holds the read's worker and no lock: the read parks on the
+/// pool's condition variable, woken as any region permit returns, and takes
+/// a slot the moment its own document has one. The class pool and the
+/// ceiling refuse at once: the measurements behind the wait are a page's
+/// own readers', and neither pool is a page's — a class-scan permit comes
+/// free only as a world-sized answer ends, and the ceiling binds a reader of
+/// many pages, the case it exists to refuse.
+pub(super) const REGION_READ_WAIT: Duration = Duration::from_millis(2);
+
+/// The most region reads waiting at once, across the board: two (the
+/// home-index record's D3 (b)).
+///
+/// A waiting read holds its worker for the wait, so the waiters are a term
+/// of the worker budget beside the pools' permits, and
+/// [`MIN_WORKERS`](super::MIN_WORKERS) counts them. One count for the board
+/// and never one per page: a cap per page would multiply with the pages read
+/// at once, as the widths would without their ceiling. Two, a page's width
+/// again: the measured four readers of one page are two holding its permits
+/// and two waiting. A read that finds both waiting slots taken — by readers
+/// of any page — is refused at once, as every read past its width was before
+/// the wait. Outside the ceiling: a waiter holds no permit, so the ceiling's
+/// six admitted reads and the two waiters stand together, each on a worker.
+pub(super) const MAX_REGION_READ_WAITERS: usize = 2;
 
 /// The class-scan bound, whole (wire v7.9; PUB-8.36, PUB-8.37; D3).
 ///
 /// It holds what counts as a class scan ([`is_class_scan`]), which reads
 /// draw on the per-document pool ([`region_document`]), how many of each run
 /// at once ([`MAX_CONCURRENT_CLASS_SCANS`], [`MAX_REGION_READS_PER_DOCUMENT`]
-/// inside [`MAX_CONCURRENT_REGION_READS`]), and the permit that spans one
-/// answer. One card, as [`crate::history::History`] is for the
-/// reconstruction budget, so the shape test and the pools it gates cannot
-/// drift apart and a later meter has a whole thing to copy rather than
-/// pieces on [`Daemon`](super::Daemon).
+/// inside [`MAX_CONCURRENT_REGION_READS`]), how long a region read at its
+/// document's width waits and how many wait at once ([`REGION_READ_WAIT`],
+/// [`MAX_REGION_READ_WAITERS`]), and the permit that spans one answer. One
+/// card, as [`crate::history::History`] is for the reconstruction budget, so
+/// the shape test and the pools it gates cannot drift apart and a later meter
+/// has a whole thing to copy rather than pieces on [`Daemon`](super::Daemon).
 ///
 /// Two pools, disjoint by the borrow rather than by convention: the class
 /// pool and the per-document pool's ceiling are each an instance of
@@ -97,19 +147,50 @@ pub(super) const MAX_CONCURRENT_REGION_READS: usize = 6;
 /// daemon drains ([`ClassScans::edge`]) and says through its classed door:
 /// `the scan pool is saturated` at the first refusal of an episode, `has
 /// room again` at the first admission a hold-down after its last refusal.
+///
+/// One wait, the per-document pool's (the home-index record's D3 (b)): a
+/// region read whose document holds its width waits, [`REGION_READ_WAIT`] at
+/// most and in one of [`MAX_REGION_READ_WAITERS`] waiting slots, for one of
+/// that document's permits to return — parked on `freed`, which every
+/// returned region permit notifies — and is admitted the moment one does; a
+/// read still at its document's width when the wait ends, or one finding
+/// every waiting slot taken, is refused as before. A bound and never a
+/// queue: no order is kept among the waiters, and a waiter woken by another
+/// page's permit re-checks its own page and waits on. The class pool and the
+/// ceiling refuse at once.
 pub(super) struct ClassScans {
     /// The class pool: a slot per class scan in flight.
     scans: Permits,
     /// The per-document pool's ceiling: a slot per region read in flight,
     /// whatever its document.
     ceiling: Permits,
-    /// The per-document pool's widths: each document holding a region read,
-    /// with how many it holds. An entry lives exactly while a permit of its
-    /// document does, and every permit holds a slot of the ceiling, so the
-    /// table holds at most [`MAX_CONCURRENT_REGION_READS`] entries, whatever
-    /// a stranger names.
-    by_document: Mutex<BTreeMap<Address, usize>>,
+    /// The per-document pool's widths and its waiters, under one lock that
+    /// every take and every return of a ceiling slot holds too.
+    region: Mutex<RegionTable>,
+    /// Notified as a region permit returns where a read waits: the waiters'
+    /// one wake, each re-checking its own document.
+    freed: Condvar,
     edge: EdgeTracker,
+}
+
+/// The per-document pool's state under its one lock: each document's region
+/// reads in flight, and the reads waiting at their document's width.
+struct RegionTable {
+    /// Each document holding a region read, with how many it holds. An entry
+    /// lives exactly while a permit of its document does, and every permit
+    /// holds a slot of the ceiling, so the table holds at most
+    /// [`MAX_CONCURRENT_REGION_READS`] entries, whatever a stranger names.
+    by_document: BTreeMap<Address, usize>,
+    /// The reads waiting at their document's width, across the board: at
+    /// most [`MAX_REGION_READ_WAITERS`].
+    waiting: usize,
+}
+
+impl RegionTable {
+    /// Returns the region reads of `d` in flight.
+    fn held(&self, d: &Address) -> usize {
+        self.by_document.get(d).copied().unwrap_or(0)
+    }
 }
 
 /// The class-scan bound's refusal: which of its three bounds had no slot
@@ -131,8 +212,10 @@ pub(super) enum ScanBusy {
     /// Every one of the [`MAX_CONCURRENT_CLASS_SCANS`] class-scan permits is
     /// in use.
     Class,
-    /// The read's document holds [`MAX_REGION_READS_PER_DOCUMENT`] region
-    /// reads already: the page's own readers contend.
+    /// The read's document holds its [`MAX_REGION_READS_PER_DOCUMENT`]
+    /// region reads: still when the read's wait ([`REGION_READ_WAIT`]) ended,
+    /// or already when the read arrived to find every waiting slot
+    /// ([`MAX_REGION_READ_WAITERS`]) taken. The page's own readers contend.
     Document,
     /// The board holds [`MAX_CONCURRENT_REGION_READS`] region reads already,
     /// across its documents: the ceiling.
@@ -182,17 +265,27 @@ impl fmt::Debug for RegionPermit<'_> {
 
 impl Drop for RegionPermit<'_> {
     fn drop(&mut self) {
-        let mut table = self.pool.by_document.lock();
-        if let Some(held) = table.get_mut(&self.document) {
+        let mut table = self.pool.region.lock();
+        if let Some(held) = table.by_document.get_mut(&self.document) {
             *held -= 1;
             if *held == 0 {
-                table.remove(&self.document);
+                table.by_document.remove(&self.document);
             }
         }
         // The ceiling's slot returns under the same lock as the width's
         // count, so an admission — which takes the lock, then the ceiling —
         // never sees one returned and not the other.
         drop(self.ceiling.take());
+        // A waiter counts itself under this lock and gives the lock up only
+        // inside its wait, so one counted before this drop took the lock is
+        // parked by now and hears the notice, and one counting itself after
+        // reads the returned slot before it waits. Every waiter is woken,
+        // each re-checking its own document: the slot may be another page's.
+        let wake = table.waiting > 0;
+        drop(table);
+        if wake {
+            self.pool.freed.notify_all();
+        }
     }
 }
 
@@ -201,7 +294,8 @@ impl ClassScans {
         ClassScans {
             scans: Permits::new(MAX_CONCURRENT_CLASS_SCANS),
             ceiling: Permits::new(MAX_CONCURRENT_REGION_READS),
-            by_document: Mutex::new(BTreeMap::new()),
+            region: Mutex::new(RegionTable { by_document: BTreeMap::new(), waiting: 0 }),
+            freed: Condvar::new(),
             edge: EdgeTracker::new(EDGE_HOLD_DOWN),
         }
     }
@@ -212,13 +306,16 @@ impl ClassScans {
     /// [`MAX_CONCURRENT_CLASS_SCANS`] permits for the whole answer; a region
     /// read ([`region_document`]) takes one of its document's
     /// [`MAX_REGION_READS_PER_DOCUMENT`] inside the board's
-    /// [`MAX_CONCURRENT_REGION_READS`]; any other read is admitted with no
-    /// permit (`Ok(None)`).
+    /// [`MAX_CONCURRENT_REGION_READS`], waiting [`REGION_READ_WAIT`] at most
+    /// for one where its document holds its width; any other read is
+    /// admitted with no permit (`Ok(None)`).
     ///
     /// Taken before the read consult and the store call, both of which run
-    /// inside M10's `execute`: a refused request has cost the parse and the
-    /// session read alone, and an admitted one that M10 then withholds or
-    /// rejects — never reaching M7 — still returns its permit by the guard.
+    /// inside M10's `execute`: a refused request has cost the parse, the
+    /// session read and, at its document's width, at most the wait; and an
+    /// admitted one that M10 then withholds or rejects — never reaching M7 —
+    /// still returns its permit by the guard. A waiting read holds its worker
+    /// and, while it is parked, no lock, the pool's own given up for the wait.
     /// Both pools are the board's: the guest and the claimant draw on them
     /// alike, and which class is scanned is not consulted. Which pool the
     /// request draws on, if any, is the one thing decided here; what it
@@ -227,19 +324,27 @@ impl ClassScans {
     ///
     /// **The edge pair's one site** (m12). A bounded read's refusal or
     /// admission, by either pool, is told to the tracker at the edge clock's
-    /// instant and the edge it answers queued for the daemon's door; a read
-    /// that takes no permit crosses none, and neither do the test hooks
-    /// below, which hold a pool and not a request.
+    /// instant — a waiting read's once its wait has ended — and the edge it
+    /// answers queued for the daemon's door; a read that takes no permit
+    /// crosses none, and neither do the test hooks below, which hold a pool
+    /// and not a request.
     ///
     /// # Errors
     ///
-    /// [`ScanBusy`] at once where the pool the read draws on has no slot for
-    /// it — a retry-class refusal, never a queue (D3: no bounded wait).
+    /// [`ScanBusy`] where the pool the read draws on has no slot for it — a
+    /// retry-class refusal, and never a queue:
+    ///
+    /// 1. [`ScanBusy::Class`] at once, for a class scan past its pool;
+    /// 2. [`ScanBusy::Document`] for a region read whose document holds its
+    ///    width: at once where every waiting slot is taken, and otherwise
+    ///    when its wait ends with the width still held;
+    /// 3. [`ScanBusy::Ceiling`] at once, for a region read its document
+    ///    admits on a board that holds its ceiling.
     pub(super) fn admit(&self, op: &Op) -> Result<Option<ScanPermit<'_>>, ScanBusy> {
         let taken = if is_class_scan(op) {
             self.scans.try_acquire().map(ScanPermit::Class).ok_or(ScanBusy::Class)
         } else if let Some(d) = region_document(op) {
-            self.take_region(d).map(ScanPermit::Region)
+            self.take_region(d, REGION_READ_WAIT).map(ScanPermit::Region)
         } else {
             return Ok(None);
         };
@@ -260,14 +365,47 @@ impl ClassScans {
     /// ceiling's refusal, [`ScanBusy::Ceiling`], is met only by a read its
     /// document would admit. An entry is written for `d` only once both
     /// slots are in hand, so a refused read leaves no trace in the table.
-    fn take_region(&self, d: &Address) -> Result<RegionPermit<'_>, ScanBusy> {
-        let mut table = self.by_document.lock();
-        let held = table.get(d).copied().unwrap_or(0);
-        if held >= MAX_REGION_READS_PER_DOCUMENT {
-            return Err(ScanBusy::Document);
+    ///
+    /// Where `d` holds its width, the read waits for one of `d`'s permits —
+    /// `wait` at most, in one of the [`MAX_REGION_READ_WAITERS`] waiting
+    /// slots — parked on `freed` with the table's lock given up, and woken as
+    /// any region permit returns. It re-checks `d` at every wake, so a permit
+    /// of another page wakes it only to wait on, and no order is kept among
+    /// the waiters: whichever takes the lock first takes the slot. A `wait`
+    /// of zero never waits — the test hook's, which holds a pool and not a
+    /// request.
+    ///
+    /// # Errors
+    ///
+    /// In order:
+    ///
+    /// 1. [`ScanBusy::Document`] at once where `d` holds its width and the
+    ///    read may not wait: `wait` is zero, or every waiting slot is taken;
+    /// 2. [`ScanBusy::Document`] where `d` still holds its width when the
+    ///    wait ends;
+    /// 3. [`ScanBusy::Ceiling`] at once where `d` has room and the board
+    ///    holds its ceiling, which is never waited for.
+    fn take_region(&self, d: &Address, wait: Duration) -> Result<RegionPermit<'_>, ScanBusy> {
+        let mut table = self.region.lock();
+        if table.held(d) >= MAX_REGION_READS_PER_DOCUMENT {
+            if wait.is_zero() || table.waiting >= MAX_REGION_READ_WAITERS {
+                return Err(ScanBusy::Document);
+            }
+            table.waiting += 1;
+            let began = Instant::now();
+            while table.held(d) >= MAX_REGION_READS_PER_DOCUMENT {
+                let left = wait.saturating_sub(began.elapsed());
+                if left.is_zero() || self.freed.wait_for(&mut table, left).timed_out() {
+                    break;
+                }
+            }
+            table.waiting -= 1;
+            if table.held(d) >= MAX_REGION_READS_PER_DOCUMENT {
+                return Err(ScanBusy::Document);
+            }
         }
         let ceiling = self.ceiling.try_acquire().ok_or(ScanBusy::Ceiling)?;
-        *table.entry(d.clone()).or_insert(0) += 1;
+        *table.by_document.entry(d.clone()).or_insert(0) += 1;
         Ok(RegionPermit { ceiling: Some(ceiling), pool: self, document: d.clone() })
     }
 
@@ -291,17 +429,27 @@ impl ClassScans {
     /// Holds one region-read permit of `d` exactly as an in-flight region
     /// read of `d` does: a slot of `d`'s width and a slot of the ceiling.
     ///
+    /// It answers `None` at once where a read would wait for its document's
+    /// width: a hook holds a pool and not a request, so it takes no waiting
+    /// slot.
+    ///
     /// **Test hook**, reached through `Daemon::try_hold_region_permit`.
     #[cfg(any(test, feature = "test-hooks"))]
     #[must_use = "a permit dropped at once holds nothing"]
     pub(super) fn try_hold_region(&self, d: &Address) -> Option<RegionPermit<'_>> {
-        self.take_region(d).ok()
+        self.take_region(d, Duration::ZERO).ok()
     }
 
     /// The documents holding a region read: the table's size.
     #[cfg(test)]
     fn documents_held(&self) -> usize {
-        self.by_document.lock().len()
+        self.region.lock().by_document.len()
+    }
+
+    /// The reads waiting at their document's width.
+    #[cfg(test)]
+    fn waiting(&self) -> usize {
+        self.region.lock().waiting
     }
 }
 
@@ -449,240 +597,4 @@ pub(super) fn region_document(op: &Op) -> Option<&Address> {
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_febe::Codec;
-
-    use super::*;
-    use skep_core::codec::JsonCodec;
-
-    fn parse(frame: &str) -> Op {
-        JsonCodec.parse(frame.as_bytes()).unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail)).op
-    }
-
-    /// A four-set frame of `op` over the four slots as given, each already
-    /// JSON: `"any"`, `"empty"`, or a span array.
-    fn ftt(op: &str, home: &str, from: &str, to: &str, ty: &str) -> String {
-        format!(r#"{{"op":"{op}","q":{{"from":{from},"home":{home},"to":{to},"ty":{ty}}}}}"#)
-    }
-
-    const ANY: &str = r#""any""#;
-    const EMPTY: &str = r#""empty""#;
-    /// A type class: a unit span at a type address.
-    const TY: &str = r#"[{"start":"1.1.0.1.0.1.0.3.90","width":"0.0.0.0.0.0.0.0.1"}]"#;
-    /// A content span in document `1.0.1.0.1`, for a link slot.
-    const CONTENT: &str = r#"[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}]"#;
-    /// A `home` span at a document.
-    const DOC: &str = r#"[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]"#;
-    /// A `home` span at a version member of that document.
-    const MEMBER: &str = r#"[{"start":"1.0.1.0.1.1","width":"0.0.0.0.0.1"}]"#;
-    /// A `home` span at an account.
-    const ACCOUNT: &str = r#"[{"start":"1.0.1","width":"0.0.1"}]"#;
-    /// A `home` span at the node.
-    const NODE: &str = r#"[{"start":"1","width":"1"}]"#;
-    const REGION: &str = r#"[{"start":"1.1","width":"0.1"}]"#;
-
-    /// Checks the class-scan test over the query's SHAPE, and the region
-    /// test over the frame's document, with the reads that take no permit
-    /// beside them.
-    ///
-    /// Every row is parsed through the codec rather than built by hand, so
-    /// the test reads the frames a client sends. The three lists are
-    /// disjoint; the class list is held to the three FTT ops and the region
-    /// list to its five, restated, so an op moved between the arms fails its
-    /// row where a list names it and a new op's row added without restating
-    /// the count fails the last assertions.
-    #[test]
-    fn a_class_scan_is_a_shape_and_a_region_read_names_its_document() {
-        /// The ops that have a class-scan shape, and the ops the per-document
-        /// pool bounds, restated.
-        const CLASS_OPS: usize = 3;
-        const REGION_OPS: usize = 5;
-
-        let class = [
-            // `ty` alone: the class, at each of the three ops, `cur` and `n`
-            // notwithstanding; `"empty"` is the same shape annihilated.
-            ftt("find_links_ftt", ANY, ANY, ANY, TY),
-            ftt("count_ftt", ANY, ANY, ANY, TY),
-            format!(
-                r#"{{"cur":null,"n":16,"op":"window_ftt","q":{{"from":"any","home":"any","to":"any","ty":{TY}}}}}"#
-            ),
-            ftt("find_links_ftt", ANY, ANY, ANY, EMPTY),
-            // Nothing at all: the board.
-            ftt("find_links_ftt", ANY, ANY, ANY, ANY),
-            ftt("count_ftt", ANY, ANY, ANY, ANY),
-            // A `home` at an account or the node: every home under it, the
-            // other slots narrowing the survivors and never the walk.
-            ftt("find_links_ftt", ACCOUNT, ANY, ANY, ANY),
-            ftt("find_links_ftt", NODE, ANY, ANY, ANY),
-            ftt("find_links_ftt", ACCOUNT, ANY, ANY, TY),
-            ftt("count_ftt", NODE, CONTENT, ANY, ANY),
-        ];
-        let region = [
-            format!(r#"{{"d":"1.0.1.0.1","op":"find_links_v","region":{REGION}}}"#),
-            format!(r#"{{"d":"1.0.1.0.1","op":"count_v","region":{REGION}}}"#),
-            format!(r#"{{"cur":null,"d":"1.0.1.0.1","n":16,"op":"window_v","region":{REGION}}}"#),
-            format!(r#"{{"d":"1.0.1.0.1","op":"retrieve_endsets","region":{REGION}}}"#),
-            r#"{"d":"1.0.1.0.1","op":"delete_orphans","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#
-                .to_string(),
-        ];
-        let unbounded = [
-            // A `home` at a document or a member: one chain, whatever else
-            // is constrained.
-            ftt("find_links_ftt", DOC, ANY, ANY, ANY),
-            ftt("find_links_ftt", MEMBER, ANY, ANY, ANY),
-            ftt("find_links_ftt", DOC, ANY, ANY, TY),
-            ftt("count_ftt", DOC, CONTENT, ANY, TY),
-            // A link slot beside `ty`, or alone: the directory drives.
-            ftt("find_links_ftt", ANY, CONTENT, ANY, TY),
-            ftt("count_ftt", ANY, ANY, CONTENT, TY),
-            ftt("find_links_ftt", ANY, CONTENT, ANY, ANY),
-            ftt("find_links_ftt", ANY, CONTENT, CONTENT, ANY),
-            // The zero in the home slot: unsatisfiable.
-            ftt("find_links_ftt", EMPTY, ANY, ANY, TY),
-            // The lineage pair and the edition claims: the index, not the
-            // class.
-            r#"{"op":"in_claims","y":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
-            r#"{"op":"out_claims","x":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
-            r#"{"op":"edition_claims","target":"1.0.1.0.1"}"#.to_string(),
-            // M5's resolve and one `readlink`: no store walk.
-            format!(r#"{{"d":"1.0.1.0.1","op":"image","region":{REGION}}}"#),
-            r#"{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.1","op":"project","slot":1}"#.to_string(),
-            r#"{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.1","op":"discoverable_from"}"#.to_string(),
-            r#"{"op":"read_link","a":"1.0.1.0.1.0.2.1"}"#.to_string(),
-            r#"{"op":"follow_link","a":"1.0.1.0.1.0.2.1","slot":1}"#.to_string(),
-            // The M6 and M3 reads touch no link store at all.
-            r#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.1"}}]}"#
-                .to_string(),
-            r#"{"op":"show_deletions","d_a":"1.0.1.0.1","d_b":"1.0.1.0.2"}"#.to_string(),
-            r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#.to_string(),
-            r#"{"op":"next_account_prefix","parent":"1"}"#.to_string(),
-        ];
-        let mut class_names = std::collections::BTreeSet::new();
-        for frame in &class {
-            let op = parse(frame);
-            assert!(is_class_scan(&op), "a class-scan shape, so the class pool bounds it: {frame}");
-            assert!(region_document(&op).is_none(), "and the per-document pool does not: {frame}");
-            class_names.insert(skep_core::codec::op_name(op.kind()));
-        }
-        let mut region_names = std::collections::BTreeSet::new();
-        for frame in &region {
-            let op = parse(frame);
-            assert!(!is_class_scan(&op), "a region read is no class scan: {frame}");
-            let d = region_document(&op).unwrap_or_else(|| panic!("names its document: {frame}"));
-            assert_eq!(d, &address("1.0.1.0.1"), "the key is the frame's `d`: {frame}");
-            region_names.insert(skep_core::codec::op_name(op.kind()));
-        }
-        for frame in &unbounded {
-            let op = parse(frame);
-            assert!(!is_class_scan(&op), "takes no class permit: {frame}");
-            assert!(region_document(&op).is_none(), "takes no region permit: {frame}");
-        }
-        assert_eq!(class_names.len(), CLASS_OPS, "the class shapes' ops: {class_names:?}");
-        assert_eq!(region_names.len(), REGION_OPS, "the region reads' ops: {region_names:?}");
-    }
-
-    fn address(text: &str) -> Address {
-        let comps = text.split('.').map(|c| skep_address::Nat::from(c.parse::<u64>().expect("a digit")));
-        validate(Tumbler::new(comps).expect("nonempty")).expect("a valid address")
-    }
-
-    /// Checks the class pool's admission at both ends (wire v7.9).
-    ///
-    /// A class-scan shape takes one of the [`MAX_CONCURRENT_CLASS_SCANS`]
-    /// permits and a read of no pool takes none, a drained pool refuses
-    /// rather than queueing, and a released permit reopens its slot. The
-    /// pool is per shape, so an unbounded read is admitted while it is
-    /// drained — which is what keeps the bound off the reads that walk no
-    /// whole class.
-    #[test]
-    fn the_class_pool_admission_takes_a_permit_only_for_a_class_scan_shape() {
-        let bounded = parse(&ftt("count_ftt", ANY, ANY, ANY, ANY));
-        let narrowed = parse(&ftt("count_ftt", DOC, ANY, ANY, TY));
-        let unbounded = parse(r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#);
-        let scans = ClassScans::new();
-        for op in [&unbounded, &narrowed] {
-            assert!(
-                scans.admit(op).expect("an unbounded read is admitted").is_none(),
-                "…and spends no permit"
-            );
-        }
-        let held: Vec<_> = (0..MAX_CONCURRENT_CLASS_SCANS)
-            .map(|_| scans.admit(&bounded).expect("a permit").expect("a class scan takes one"))
-            .collect();
-        assert_eq!(
-            scans.admit(&bounded).err(),
-            Some(ScanBusy::Class),
-            "a drained pool refuses, by the class pool; it never queues"
-        );
-        for op in [&unbounded, &narrowed] {
-            assert!(
-                scans.admit(op).expect("an unbounded read is admitted").is_none(),
-                "a drained pool does not reach the reads it does not bound"
-            );
-        }
-        drop(held);
-        assert!(
-            scans.admit(&bounded).expect("a released permit reopens its slot").is_some(),
-            "and the reopened slot is a permit, not an admission with none"
-        );
-    }
-
-    /// Checks the per-document pool (D3, D4): a document admits its width
-    /// and refuses the read past it while another document is admitted; the
-    /// ceiling refuses past [`MAX_CONCURRENT_REGION_READS`] across documents,
-    /// and a read of a document at its width is refused by the width ahead
-    /// of the ceiling; the two pools are disjoint; and the table holds an
-    /// entry per document holding a permit and nothing once they are
-    /// returned, whatever was refused.
-    #[test]
-    fn the_per_document_pool_admits_a_width_per_document_inside_the_ceiling() {
-        let scans = ClassScans::new();
-        let read = |d: &str| parse(&format!(r#"{{"d":"{d}","op":"find_links_v","region":{REGION}}}"#));
-        let (a, b, c, e) = (address("1.0.1.0.1"), address("1.0.1.0.2"), address("1.0.1.0.3"), address("1.0.1.0.4"));
-
-        // A's width, then A refused while B is admitted.
-        let a1 = scans.take_region(&a).expect("A's first");
-        let a2 = scans.take_region(&a).expect("A's second");
-        assert_eq!(scans.take_region(&a).err(), Some(ScanBusy::Document), "A holds its width");
-        assert_eq!(
-            scans.admit(&read("1.0.1.0.1")).err(),
-            Some(ScanBusy::Document),
-            "a wire read of A is refused, by its width"
-        );
-        let b1 = scans.admit(&read("1.0.1.0.2")).expect("B is admitted").expect("with a permit");
-        assert_eq!(scans.documents_held(), 2, "an entry per document holding a permit");
-
-        // The ceiling: six across three documents, the seventh refused by the
-        // ceiling — and a document at its width by its width, first.
-        let b2 = scans.take_region(&b).expect("B's second");
-        let c1 = scans.take_region(&c).expect("C's first");
-        let c2 = scans.take_region(&c).expect("C's second");
-        assert_eq!(
-            scans.take_region(&e).err(),
-            Some(ScanBusy::Ceiling),
-            "the board holds its ceiling"
-        );
-        assert_eq!(
-            scans.take_region(&a).err(),
-            Some(ScanBusy::Document),
-            "the width is judged first"
-        );
-        assert_eq!(scans.documents_held(), 3, "a refused read leaves no entry");
-
-        // Disjoint: every region permit held, the class pool is whole; and
-        // every class permit held, a region read is admitted.
-        let class: Vec<_> = (0..MAX_CONCURRENT_CLASS_SCANS)
-            .map(|_| scans.try_hold().expect("a class permit with every region permit held"))
-            .collect();
-        drop(c2);
-        let c3 = scans.take_region(&c).expect("C's returned slot, with every class permit held");
-        drop(class);
-
-        // Returned permits free the width, the ceiling and the table.
-        drop(a1);
-        let _ = scans.take_region(&a).expect("A's returned slot");
-        drop((a2, b1, b2, c1, c3));
-        assert_eq!(scans.documents_held(), 0, "no permit held, no entry");
-        assert_eq!(scans.ceiling.try_acquire().map(|_| ()), Some(()), "the ceiling is whole again");
-    }
-}
+mod tests;

@@ -168,11 +168,14 @@ impl Daemon {
                 // a permit of the class-scan bound where the frame is
                 // class-scan-shaped or a region read (wire v7.9; the
                 // home-index record's D3), taken here: after the parse and
-                // the session read, before M10 is asked; a refusal names the
-                // bound that refused in its `detail`. The guard lives to the
-                // end of this arm, so the permit spans the whole answer —
-                // M10's own doc-argument consult and the store call inside
-                // `execute`, and the marshal — and returns on every exit.
+                // the session read, before M10 is asked; a region read whose
+                // document is at its width waits for one of its permits
+                // first, `REGION_READ_WAIT` at most, holding its worker and no
+                // lock (D3 (b)); a refusal names the bound that refused in
+                // its `detail`. The guard lives to the end of this arm, so
+                // the permit spans the whole answer — M10's own doc-argument
+                // consult and the store call inside `execute`, and the
+                // marshal — and returns on every exit.
                 None => {
                     let _scan = match self.scans.admit(&frame.op) {
                         Ok(permit) => permit,

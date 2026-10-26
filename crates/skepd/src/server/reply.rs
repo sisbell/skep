@@ -768,17 +768,19 @@ pub(super) fn op_answer(bytes: Vec<u8>) -> Reply {
 /// Returns the `503 scan_busy` refusal (wire v7.9; the home-index record's
 /// D3).
 ///
-/// The pool the read draws on has no slot for it. Retry-class — the query
-/// may be perfectly good and the pool momentarily full — and the body names
-/// the `op` it refused, so a client pipelining reads can pair the refusal
-/// with the request it answers, in the diagnostic-field shape `beyond_head`'s
-/// `head` and `history_reclaimed`'s `floor` take; and its `detail` names the
-/// bound that refused — the class pool, the document's width or the ceiling
-/// — in one fixed sentence each, the three the wire quotes (§Link discovery
-/// reads), so a reader of a flooded page can tell its page's contention from
-/// the board's. A *transport* refusal like `history_busy` and not an
-/// operation response: no `Op` ran, so there is no `resp` and no `code` —
-/// the envelope is `{"error": …}`, never `{"resp": "rejected"}`.
+/// The pool the read draws on has no slot for it — for a region read at its
+/// document's width, none came free within its bounded wait (D3 (b)).
+/// Retry-class — the query may be perfectly good and the pool momentarily
+/// full — and the body names the `op` it refused, so a client pipelining
+/// reads can pair the refusal with the request it answers, in the
+/// diagnostic-field shape `beyond_head`'s `head` and `history_reclaimed`'s
+/// `floor` take; and its `detail` names the bound that refused — the class
+/// pool, the document's width or the ceiling — in one fixed sentence each,
+/// the three the wire quotes (§Link discovery reads), so a reader of a
+/// flooded page can tell its page's contention from the board's. A
+/// *transport* refusal like `history_busy` and not an operation response: no
+/// `Op` ran, so there is no `resp` and no `code` — the envelope is
+/// `{"error": …}`, never `{"resp": "rejected"}`.
 pub(super) fn refuse_scan_busy(kind: OpKind, bound: ScanBusy) -> Reply {
     let detail = match bound {
         ScanBusy::Class => "all class-scan permits are in use; retry shortly",

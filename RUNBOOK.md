@@ -962,9 +962,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      boundary (the hosted image: `README.md`, Running the hosted
      image). Default 8642; `0` picks a free port.
    - `--workers <N>` (`SKEPD_WORKERS`): request threads. Default
-     22, minimum 21. Each worker can hold one request body of up to
-     8 MiB on `/op` and `/op-at`, which the daemon parses whole as
-     JSON before any other check, at about twenty times its size:
+     24, minimum 23. The minimum moves with the daemon's pools: a
+     binary that raises it refuses a start whose count is below it,
+     exit 2, naming the minimum, so a unit or an image that sets
+     `SKEPD_WORKERS` takes the new figure before the upgrade. Each
+     worker can hold one request body of up to 8 MiB on `/op` and
+     `/op-at`, which the daemon parses whole as JSON before any other
+     check, at about twenty times its size:
      about 160 MiB of transient memory per worker reading a body at
      the cap, so a count raised for more concurrent clients raises
      the daemon's peak with it. `failure: the worker pool is

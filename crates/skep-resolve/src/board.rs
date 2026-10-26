@@ -61,8 +61,10 @@ use crate::{hex_byte, parse_address};
 
 /// How often a `history_busy`, `scan_busy` or `feed_rebuilding` answer is
 /// retried before the read is given up — a retry-class refusal, never a
-/// queue (wire.md §Reading history; §The change feed), so the client is the
-/// one that waits.
+/// queue (wire.md §Reading history; §Link discovery reads; §The change
+/// feed), so the client is the one that waits: the daemon refuses at once,
+/// save a region read at its page's width, which it holds for a bounded
+/// wait first.
 const BUSY_RETRIES: u32 = 200;
 
 /// The pause between two busy retries.

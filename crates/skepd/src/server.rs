@@ -118,16 +118,22 @@
 //! `delete_orphans`, keyed by the `d` their frame names — inside a ceiling of
 //! [`MAX_CONCURRENT_REGION_READS`](scan::MAX_CONCURRENT_REGION_READS) across
 //! every document, so one page's readers contend among themselves and the
-//! pools cannot multiply past the workers. Every other link read takes no
-//! permit. The admission takes the permit after the parse and the session
-//! read and before M10 is asked, so a refused request costs the parse and the
-//! session read alone and an admitted one holds its slot for the whole
-//! answer. The pools are instances of [`skep_util::permits::Permits`],
-//! disjoint from the reconstruction pool and from each other — a scan spends
-//! no reconstruction permit and a reconstruction spends no scan permit. The
-//! bound admits or refuses a request (`503 scan_busy`, retry-class, the body
-//! naming the op) and never alters an answer: M7 and M8 are not told a query
-//! is bounded. A concurrency bound, never a rate statement.
+//! pools cannot multiply past the workers. A region read that finds its
+//! document at its width waits for one of the document's permits —
+//! [`REGION_READ_WAIT`](scan::REGION_READ_WAIT) at most, in one of
+//! [`MAX_REGION_READ_WAITERS`](scan::MAX_REGION_READ_WAITERS) waiting slots
+//! across the board — before it is refused (the home-index record's
+//! D3 (b)); the class pool and the ceiling refuse at once. Every other link
+//! read takes no permit. The admission takes the permit after the parse and
+//! the session read and before M10 is asked, so a refused request costs the
+//! parse, the session read and, at its document's width, at most the wait,
+//! and an admitted one holds its slot for the whole answer. The pools are
+//! instances of [`skep_util::permits::Permits`], disjoint from the
+//! reconstruction pool and from each other — a scan spends no reconstruction
+//! permit and a reconstruction spends no scan permit. The bound admits or
+//! refuses a request (`503 scan_busy`, retry-class, the body naming the op)
+//! and never alters an answer: M7 and M8 are not told a query is bounded. A
+//! concurrency bound, never a rate statement.
 //!
 //! **Writes go through one card** (`skep-core`'s `commits`): `POST /op` —
 //! the daemon's only write route — hands each write its sequence admits to
@@ -751,7 +757,8 @@ fn path_is_known(path: &str) -> bool {
 /// It is the most write requests admitted onto the write path at once
 /// (`operations.md` §4 rows 25, 27; the spike S25's measurement), every
 /// other refused `503 write_busy` at once, retry-class — a pool and never a
-/// queue (P29), as the five other pools are.
+/// queue (P29), as the five other pools are, the per-document pool's bounded
+/// wait of two milliseconds before its refusal included.
 ///
 /// **Why a pool on writes at all.** The write path serializes writes under
 /// one guard, and the kernel's backstop runs a checkpoint inline on the
@@ -769,15 +776,17 @@ fn path_is_known(path: &str) -> bool {
 /// writes a second) and parks three writers through one, each answered
 /// inside a client's ten-second patience on a quiet machine; and it keeps
 /// the default's "two free" with every pool saturated —
-/// [`DEFAULT_WORKERS`] 22 less the six pools' twenty slots. A width of
-/// one refuses every overlapping write, backstop or none; two moves the
-/// same pins for less.
+/// [`DEFAULT_WORKERS`] 24 less the twenty-two pooled slots, the six pools'
+/// permits and the per-document pool's two waiting slots. A width of one
+/// refuses every overlapping write, backstop or none; two moves the same
+/// pins for less.
 ///
 /// It is crate-internal — `pub` in a private module the crate root does not
-/// re-export — and [`MIN_WORKERS`] is derived from the six pools' counts by
-/// path, as this crate's own and `skep-media`'s are named there, so the
-/// minimum moves with this figure and no reader does the sum. The daemon's
-/// own pool, held on [`Daemon`] beside the five.
+/// re-export — and [`MIN_WORKERS`] is derived from the six pools' counts and
+/// the per-document pool's waiting slots by path, as this crate's own and
+/// `skep-media`'s are named there, so the minimum moves with this figure and
+/// no reader does the sum. The daemon's own pool, held on [`Daemon`] beside
+/// the five.
 pub const MAX_CONCURRENT_WRITES: usize = 4;
 
 /// The daemon's state.

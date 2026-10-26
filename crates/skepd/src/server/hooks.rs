@@ -997,7 +997,9 @@ impl Daemon {
     /// **Test hook** (the same standing as [`Daemon::try_hold_scan_permit`]:
     /// `#[doc(hidden)]`, not a stable API). It answers `None` when `d` holds
     /// its `MAX_REGION_READS_PER_DOCUMENT` region reads or the board its
-    /// `MAX_CONCURRENT_REGION_READS` across every document. A real region
+    /// `MAX_CONCURRENT_REGION_READS` across every document — at once, where
+    /// a region read at its document's width waits `REGION_READ_WAIT` first:
+    /// a hook holds a pool and not a worker, so it never waits. A real region
     /// read over a test-sized world finishes in microseconds, so the
     /// integration tests pin the two counts through this instead of racing
     /// the store. A permit from here is a slot of `d`'s width and one of the

@@ -1640,7 +1640,7 @@ down through them in this order:
 │                    scan.rs                              │
 │                    replies & refusals · the request and │
 │                    its streaming body · the class-scan  │
-│                    pool                                 │
+│                    bound                                │
 ├─────────────────────────────────────────────────────────┤
 │ 4 LEAVES           history · limits (the daemon's seven)│
 │   SKEP-CORE        the daemon's core, a crate of its    │
@@ -1742,8 +1742,9 @@ through the store's install — nothing above their own layer.
 3. **The daemon's vocabulary** — `server/reply.rs` (the reply and every
    transport refusal), `server/request.rs` (the request, the streaming
    body's source and the slot it rides in, and the rules the request's
-   headers and query obey), `server/scan.rs` (the class-scan pool): what
-   the routes and the transport both speak.
+   headers and query obey), `server/scan.rs` (the class-scan bound: the
+   class pool and the per-document pool): what the routes and the
+   transport both speak.
 4. **The leaves** — `history.rs` (reading the world at an earlier
    position) and `limits.rs` (the daemon's own bounds; the ones the core
    reads are `skep_core::limits`'s, and the media resource's own numbers
@@ -1789,8 +1790,9 @@ crates the daemon composes with:
   deposit read is a route helper of `server/blob_routes.rs` over the
   gate's reads; the floor is sized at the open and re-read by the
   checkpoint thread after any landing; and the upload and fetch pools are
-  counted into the worker minimum beside the three pools of the daemon's
-  own — the reconstruction budget, the class-scan pool and the write pool.
+  counted into the worker minimum beside the daemon's own pools — the
+  reconstruction budget, the class-scan and per-document pools and the
+  write pool.
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary — the

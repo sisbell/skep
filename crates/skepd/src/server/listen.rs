@@ -29,7 +29,9 @@ use super::http::{
 };
 use super::reply::{refuse, Fetch, Routed, TransportError, SESSION_HEADER};
 use super::request::HttpRequest;
-use super::scan::{MAX_CONCURRENT_CLASS_SCANS, MAX_CONCURRENT_REGION_READS};
+use super::scan::{
+    MAX_CONCURRENT_CLASS_SCANS, MAX_CONCURRENT_REGION_READS, MAX_REGION_READ_WAITERS,
+};
 use super::{
     AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine, Daemon,
     StreamThreadLine, WORKER_POOL,
@@ -46,43 +48,50 @@ use skep_core::commits::{CheckpointSignal, StreamStep, Woken};
 ///
 /// The six permit pools bound the five expensive surfaces — the
 /// reconstruction; the class scan, whose bound is two pools, the class pool
-/// and the per-document pool under its ceiling; the blob fetch, which holds
-/// a whole file for its answer; the blob upload, which holds its worker for
-/// a whole file's transfer (M-I5 (f)); and the write, which holds its worker
-/// on the write path's guard for as long as the write ahead of it takes — an
-/// inline backstop's whole checkpoint, seconds on a large board
-/// (`operations.md` §4 rows 25, 27) — and each card argues its own number
-/// against the work that surface commands. None prices the sum, and the sum
-/// is what decides whether the bounds do the thing they exist for: a caller
-/// holding every permit of all six pools is inside every bound, and if that
-/// exhausts the workers the daemon answers nothing — `/health` and
-/// `/session` included — with every structure inside it healthy. The
-/// relation is therefore `workers >= `[`MIN_WORKERS`], and the assertion
-/// below is what keeps it from being arithmetic a reader has to do across
-/// five files.
+/// and the per-document pool under its ceiling, a region read at its page's
+/// width waiting two milliseconds at most, in one of two waiting slots,
+/// before its refusal; the blob fetch, which holds a whole file for its
+/// answer; the blob upload, which holds its worker for a whole file's
+/// transfer (M-I5 (f)); and the write, which holds its worker on the write
+/// path's guard for as long as the write ahead of it takes — an inline
+/// backstop's whole checkpoint, seconds on a large board (`operations.md` §4
+/// rows 25, 27) — and each card argues its own number against the work that
+/// surface commands. None prices the sum, and the sum is what decides
+/// whether the bounds do the thing they exist for: a caller holding every
+/// permit of all six pools, with a read in each waiting slot, is inside
+/// every bound, and if that exhausts the workers the daemon answers nothing
+/// — `/health` and `/session` included — with every structure inside it
+/// healthy. The relation is therefore `workers >= `[`MIN_WORKERS`], and the
+/// assertion below is what keeps it from being arithmetic a reader has to do
+/// across five files.
 ///
-/// Twenty pooled slots plus two free is the smallest split that keeps the
-/// liveness probe, the handshake and every read answerable while every pool is
-/// saturated: one worker of slack over the minimum. Two free suffice because an
-/// ordinary request completes in milliseconds, where a pooled one is a class
-/// scan the world sizes, a region read of a flooded page, a whole-world
-/// replay, a whole file's transfer — the fetch's, which streams the file out,
-/// or the upload's, which streams it in: "a whole file's transfer" reads both
-/// ways, and each holds its worker to the end — or a write parked behind an
-/// inline checkpoint. Twenty-two is the minimum plus one: the per-document
-/// pool counts by its ceiling of six (the home-index record's D4), so the
-/// default is sized to hold that ceiling with a worker of slack.
+/// Twenty-two pooled slots — the six pools' twenty permits and the two
+/// waiting slots — plus two free is the smallest split that keeps the
+/// liveness probe, the handshake and every read answerable while every pool
+/// is saturated: one worker of slack over the minimum. Two free suffice
+/// because an ordinary request completes in milliseconds, where a pooled one
+/// is a class scan the world sizes, a region read of a flooded page or one
+/// waiting its two milliseconds for a busy one, a whole-world replay, a
+/// whole file's transfer — the fetch's, which streams the file out, or the
+/// upload's, which streams it in: "a whole file's transfer" reads both ways,
+/// and each holds its worker to the end — or a write parked behind an inline
+/// checkpoint. Twenty-four is the minimum plus one: the per-document pool
+/// counts by its ceiling of six and its two waiting slots (the home-index
+/// record's D4 and D3 (b)), so the default is sized to hold them with a
+/// worker of slack.
 ///
 /// An embedder calling [`serve`] with its own count owes the same relation,
 /// and [`MIN_WORKERS`] is the form in which they can evaluate it.
-pub const DEFAULT_WORKERS: usize = 22;
+pub const DEFAULT_WORKERS: usize = 24;
 
 /// The smallest worker count [`serve`]'s pooled-permit obligation admits.
 ///
 /// It is one more than the slots the six permit pools hold together — the
 /// per-document pool counted by its ceiling, the term that bounds it across
-/// documents, never by its per-document widths — so a caller holding every
-/// permit of all six still leaves a worker to answer `/health`, `/session`
+/// documents, never by its per-document widths, and by its waiting slots,
+/// each a region read holding its worker for a bounded wait before its
+/// refusal — so a caller holding every permit of all six, with a read in
+/// each waiting slot, still leaves a worker to answer `/health`, `/session`
 /// and every read.
 ///
 /// It is public because it is the caller's half of an obligation [`serve`]
@@ -96,6 +105,7 @@ pub const DEFAULT_WORKERS: usize = 22;
 pub const MIN_WORKERS: usize = crate::history::MAX_CONCURRENT_RECONSTRUCTIONS
     + MAX_CONCURRENT_CLASS_SCANS
     + MAX_CONCURRENT_REGION_READS
+    + MAX_REGION_READ_WAITERS
     + MAX_CONCURRENT_FETCHES
     + MAX_CONCURRENT_UPLOADS
     + crate::server::MAX_CONCURRENT_WRITES

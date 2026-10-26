@@ -83,7 +83,7 @@
 //! its `n` — steps no entry past the homes it passed.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeSet, BinaryHeap};
+use std::collections::BinaryHeap;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::{Arc, LazyLock};
 
@@ -328,38 +328,39 @@ impl SlotIndex {
         axis
     }
 
-    /// Adds every link homed at `home` one of whose spans here overlaps `q`
-    /// to `hits`.
-    pub(super) fn stab_in<'a>(&'a self, home: &Home, q: &Span, hits: &mut BTreeSet<&'a Tumbler>) {
-        self.starting_inside(home, q, hits);
-        self.containing(home, q.start(), hits);
+    /// Hands `hit` every link homed at `home` one of whose spans here
+    /// overlaps `q` — once per span and half that finds it, so a caller
+    /// wanting each link once deduplicates what it is handed.
+    pub(super) fn stab_in<'a>(&'a self, home: &Home, q: &Span, hit: &mut impl FnMut(&'a Tumbler)) {
+        self.starting_inside(home, q, hit);
+        self.containing(home, q.start(), hit);
         let from = (Arc::clone(home), below_every_link(), 0);
         for ((at, link, _), span) in self.residue.range((Included(from), Unbounded)) {
             if at != home {
                 break; // the home's residue is one key range
             }
             if overlaps(q, span) {
-                hits.insert(link);
+                hit(link);
             }
         }
     }
 
-    /// Adds the link of every sibling run homed at `home` starting inside `q`
-    /// to `hits`.
-    fn starting_inside<'a>(&'a self, home: &Home, q: &Span, hits: &mut BTreeSet<&'a Tumbler>) {
+    /// Hands `hit` the link of every sibling run homed at `home` starting
+    /// inside `q`.
+    fn starting_inside<'a>(&'a self, home: &Home, q: &Span, hit: &mut impl FnMut(&'a Tumbler)) {
         let from = (Arc::clone(home), Arc::new(q.start().clone()), below_every_link());
         let to = (Arc::clone(home), Arc::new(q.reach()), below_every_link());
         for (_, _, link) in self.starts.range((Included(from), Excluded(to))) {
-            hits.insert(link);
+            hit(link);
         }
     }
 
-    /// Adds the link of every sibling run homed at `home` that contains
-    /// `start` to `hits`.
+    /// Hands `hit` the link of every sibling run homed at `home` that
+    /// contains `start`.
     ///
     /// A run starting at `start` itself is left to
     /// [`SlotIndex::starting_inside`].
-    fn containing<'a>(&'a self, home: &Home, start: &Tumbler, hits: &mut BTreeSet<&'a Tumbler>) {
+    fn containing<'a>(&'a self, home: &Home, start: &Tumbler, hit: &mut impl FnMut(&'a Tumbler)) {
         let comps: Vec<Nat> = start.iter().cloned().collect();
         for (depth, c) in comps.iter().enumerate() {
             let Some((axis, ())) = self.axes.get_key_value(&comps[..depth]) else {
@@ -369,15 +370,15 @@ impl SlotIndex {
             for level in self.levels_of(axis) {
                 if level == 0 {
                     if !own_axis {
-                        collect(&self.by_first, home, axis, 0, c.clone(), c + 1u32, hits);
+                        collect(&self.by_first, home, axis, 0, c.clone(), c + 1u32, hit);
                     }
                 } else if c.bit(level - 1) {
                     let block_end = ((c >> level) + 1u32) << level;
-                    collect(&self.by_end, home, axis, level, c + 1u32, block_end + 1u32, hits);
+                    collect(&self.by_end, home, axis, level, c + 1u32, block_end + 1u32, hit);
                 } else {
                     let block_start = (c >> level) << level;
                     let past = if own_axis { c.clone() } else { c + 1u32 };
-                    collect(&self.by_first, home, axis, level, block_start, past, hits);
+                    collect(&self.by_first, home, axis, level, block_start, past, hit);
                 }
             }
         }
@@ -515,8 +516,8 @@ impl SlotIndex {
     }
 }
 
-/// Adds to `hits` every filing's link homed at `home` on `axis` at `level`
-/// in `[from, to)`.
+/// Hands `hit` every filing's link homed at `home` on `axis` at `level` in
+/// `[from, to)`.
 fn collect<'a>(
     filings: &'a OrdSet<Filing>,
     home: &Home,
@@ -524,12 +525,12 @@ fn collect<'a>(
     level: u64,
     from: Nat,
     to: Nat,
-    hits: &mut BTreeSet<&'a Tumbler>,
+    hit: &mut impl FnMut(&'a Tumbler),
 ) {
     let from = (Arc::clone(home), Arc::clone(axis), level, from, below_every_link());
     let to = (Arc::clone(home), Arc::clone(axis), level, to, below_every_link());
     for (_, _, _, _, link) in filings.range((Included(from), Excluded(to))) {
-        hits.insert(link);
+        hit(link);
     }
 }
 
@@ -734,6 +735,8 @@ impl SiblingRun {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use skep_address::subtree_of;
 
     use super::*;
@@ -775,7 +778,9 @@ mod tests {
         let mut hits = BTreeSet::new();
         for home in candidates(index, query) {
             let home: Home = Arc::new(home.into());
-            index.stab_in(&home, query, &mut hits);
+            index.stab_in(&home, query, &mut |link| {
+                hits.insert(link);
+            });
         }
         !hits.is_empty()
     }

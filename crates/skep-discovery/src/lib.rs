@@ -5,7 +5,7 @@
 //! descriptor it answers *which links match*; and it counts, paginates,
 //! projects, retrieves endsets, previews delete-orphaning, and traces
 //! supersession lineage — all by composing M7's homes-first spanfilade
-//! reads, home-range and typed reads (`homes_touching`/`stab_in`/
+//! reads, home-range and typed reads (`homes_touching`/`stab_in_slots`/
 //! `match_links_in`, `homes_under`/`homed_in`/`homes`, `stab_typed`), M5's
 //! arrangement, and M3's registry over ONE M2 snapshot per operation. One
 //! thing well: **turn upstream
@@ -208,9 +208,13 @@
 //! coverage index's directory of homes, one step per directory entry a
 //! query's blocks and nodes hold and one lift per candidate home, lazily
 //! and in address order, and off the typed slices for a type query, one
-//! seek per home a related class holds; `stab_in` stabs one home, `O(log n)`
-//! per probe plus that home's hits, over the spans that named it;
-//! `match_links_in` is one home's `stab_in` on the driving constraint and a
+//! seek per home a related class holds; `stab_in` stabs one home at one
+//! slot, `O(log n)` per probe plus that home's hits, over the spans that
+//! named it, and `stab_in_slots` stabs one home at several slots together —
+//! one lookup of the home, the same probes per `(slot, span)`, one sort of
+//! the hits and one lift per link, and no set built per slot, so a home
+//! holding no hit costs its probes alone; `match_links_in` is one home's
+//! `stab_in` on the driving constraint and a
 //! test of every survivor against the rest; `fewest_homes` picks the driver
 //! by stepping the constraints' candidate homes in lockstep until one runs
 //! out; `homes_under` and `homes` seek the store's key order once per home
@@ -248,11 +252,12 @@
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — one `homes_touching` over the image's
 //!   extents at the three v1 slots, then, per candidate home, one test of
-//!   the reader's predicate and, for each home it admits, three `stab_in`s
-//!   over the spans that named it; none when the image is empty. The window
-//!   walks the homes from its cursor's own home to the one that fills its
-//!   `n`, no further. [`retrieve_endsets_on`] adds one `readlink` per link
-//!   of an admitted home.
+//!   the reader's predicate and, for each home it admits, one
+//!   `stab_in_slots` over the spans that named it at each of the three
+//!   slots; none when the image is empty. The window walks the homes from
+//!   its cursor's own home to the one that fills its `n`, no further.
+//!   [`retrieve_endsets_on`] adds one `readlink` per link of an admitted
+//!   home.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — with the home slot constrained: one `homes_under`,
 //!   a seek per home holding links under the slot's spans, then one test of
@@ -272,8 +277,10 @@
 //! * [`delete_orphans_on`] — one `homes_touching` over the deleted and the
 //!   retained runs at the three v1 slots, six pairs in one walk, then, per
 //!   home the deleted side names, one test of the reader's predicate and,
-//!   admitted, six `stab_in`s, three a side, over the spans that named it;
-//!   a home the retained side alone names is passed, and none at all for a
+//!   admitted, two `stab_in_slots`, one a side over the spans that named it
+//!   at each slot, and one binary search per deleted-side link against the
+//!   retained side's; a home the retained side alone names is passed, and
+//!   none at all for a
 //!   request past the run budget. Ahead of every one, each request past the
 //!   width check reads M5's `n_C` for its bounds check — a sum over `d`'s
 //!   content runs, reading each — and a request past the run budget has paid,
@@ -312,8 +319,9 @@
 //! * the spanfilade / coverage index and its directory of homes, the
 //!   per-slot per-home matcher, the AND-of-ORs combiner, the driver's
 //!   choice, the home ranges and the typed stab — M7's
-//!   `homes_touching`/`stab_in`/`match_links_in`/`fewest_homes`/
-//!   `homes_under`/`homed_in`/`homes`/`stab_typed` (Conflicts #1);
+//!   `homes_touching`/`stab_in`/`stab_in_slots`/`match_links_in`/
+//!   `fewest_homes`/`homes_under`/`homed_in`/`homes`/`stab_typed`
+//!   (Conflicts #1);
 //!   `coverage(a, i)` is NOT re-exposed — it is exactly M7's
 //!   `followlink(a, i)`;
 //! * content bytes (M4); provenance R and every R-keyed query —
@@ -369,8 +377,9 @@ mod home;
 // claim, the orphan report — and the two typed rejections.
 mod types;
 // M7's link sets as the reads build and walk them: the v1 slot list, the
-// extents' lift, the per-slot union, the window over homes with the key-cut
-// within one, and the rule every read walks a set by.
+// extents' lift, a home's probes and the disjunction over its slots, the
+// window over homes with the key-cut within one, and the rule every read
+// walks a set by.
 mod sets;
 // A region's shape — its constructor and its gate — and `image_on`, its V→I
 // resolution: the region resolver every region-family read chains into M7's

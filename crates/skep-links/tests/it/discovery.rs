@@ -602,6 +602,138 @@ fn homes_touching_names_every_home_of_every_hit_and_stab_in_concatenates_in_addr
     assert_eq!(named(&enc(&[ca(9)])), vec![doc1()], "the extent-typed class, answered whole");
 }
 
+/// §G — `stab_in_slots` IS THE PER-SLOT STABS OF ONE HOME ANSWERED TOGETHER:
+/// over every candidate home of every query in a pool, in both views, its
+/// `(link, slot)` pairs are exactly the pairs the three `stab_in`s answer —
+/// `(a, slot)` for every `a` in `stab_in(home, slot, …)` — in address order
+/// then slot order, over the spans that named the home as over the whole
+/// query; so the distinct links a caller reads off the pairs, concatenated
+/// over the homes, are the union of the three whole stabs in address order,
+/// and the attribution it reads off the pairs is each slot's own set. A slot
+/// given no probe and a slot no link has contribute nothing, and a home no
+/// link is filed under answers none, asking the heap for nothing. The
+/// fixture homes links of every address shape — two documents of one
+/// account, a sibling account's document and a version member of it — with
+/// one link touching a query at two slots, so the pairs are not the links
+/// restated, one type that is a content address, so the type slot's
+/// candidates come off the typed slices, and one link nullified, so the two
+/// views part.
+#[test]
+fn stab_in_slots_answers_the_per_slot_stabs_of_one_home_as_pairs_in_address_order() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let w = writer(&k);
+    let t = unregistered_ta(1);
+    // doc1: FROM ca(1); FROM ca(2) TO ca(1), two slots on one query; and
+    // one retracted.
+    open_deposit(&w, &[ca(1)], &[ca(5)], std::slice::from_ref(&t));
+    let twice = open_deposit(&w, &[ca(2)], &[ca(1)], std::slice::from_ref(&t));
+    let gone = open_deposit(&w, &[ca(1)], &[ca(6)], std::slice::from_ref(&t));
+    w.nullify(P1, &doc1(), &gone).expect("retract one");
+    // doc2: TO ca(1), and a TYPE that is ca(1) itself.
+    deposit_in(&k, &doc2(), &[ca(7)], &[ca(1)], &t);
+    deposit_in(&k, &doc2(), &[ca(8)], &[], &ca(1));
+    // The sibling's document and its member: FROM ca(1) apiece, the member
+    // with one more a block away.
+    deposit_in(&k, &sib_doc(), &[ca(1), ca(3)], &[], &t);
+    let (member, _) = Vstream::new(&k)
+        .version(PrincipalId(2), &sib_doc(), None)
+        .expect("the owner versions its published document");
+    deposit_in(&k, &member, &[ca(1)], &[ca(2)], &t);
+    deposit_in(&k, &member, &[ca(70)], &[], &t);
+    let snap = k.snapshot();
+    let links = snap.world().links();
+
+    let pool = [
+        enc(&[ca(1)]),
+        enc(&[ca(2)]),
+        enc(&[ca(70)]),
+        enc(&[doc1()]),
+        Endset::from_spans([iext(1, 3)]),
+        Endset::from_spans([iext(2, 100)]),
+        enc(&[ca(1), ca(70)]),
+        Endset::empty(),
+    ];
+    let (mut homes_seen, mut at_two_slots, mut spared, mut views_part) = (OrdSet::new(), 0, 0, false);
+    for q in &pool {
+        let queries = [(FROM, q), (TO, q), (TYPE, q)];
+        for view in [View::Audit, View::Active] {
+            let mut concatenated = Vec::new();
+            for touch in links.homes_touching(queries) {
+                let named = (0..queries.len())
+                    .flat_map(|i| touch.spans(i).map(move |span| (queries[i].0, span)));
+                let pairs = links.stab_in_slots(touch.home(), named, view);
+                let mut expected: Vec<(Address, usize)> = Vec::new();
+                for (i, &(slot, _)) in queries.iter().enumerate() {
+                    let share = links.stab_in(touch.home(), slot, touch.spans(i), view);
+                    expected.extend(share.iter().map(|a| (a.clone(), slot)));
+                }
+                expected.sort();
+                assert_eq!(pairs, expected, "{view:?}, {q:?}, home {:?}", touch.home());
+                let whole = queries
+                    .iter()
+                    .flat_map(|&(slot, q)| q.spans().map(move |span| (slot, span)));
+                assert_eq!(
+                    links.stab_in_slots(touch.home(), whole, view),
+                    pairs,
+                    "the spans named answer the home's whole share: {view:?}, {q:?}"
+                );
+                let mut distinct: Vec<Address> = pairs.iter().map(|(a, _)| a.clone()).collect();
+                distinct.dedup();
+                at_two_slots += pairs.len() - distinct.len();
+                spared += usize::from(pairs.is_empty());
+                views_part |= view == View::Active && pairs.iter().any(|(a, _)| *a == gone);
+                concatenated.extend(distinct);
+                homes_seen.insert(touch.into_home());
+            }
+            let union: OrdSet<Address> = queries
+                .iter()
+                .flat_map(|&(slot, q)| links.stab(slot, q, view))
+                .collect();
+            assert_eq!(
+                concatenated,
+                union.iter().cloned().collect::<Vec<_>>(),
+                "{view:?}, {q:?}: the distinct links, concatenated over the homes, are the union of the whole stabs"
+            );
+        }
+    }
+    assert_eq!(
+        homes_seen,
+        OrdSet::from(vec![doc1(), doc2(), sib_doc(), member]),
+        "every home of every shape is some query's"
+    );
+    assert!(at_two_slots > 0, "some link touches at two slots, so the pairs are not the links restated");
+    assert!(spared > 0, "some candidate holds no hit");
+    assert!(!views_part, "the active view never answers the retracted link");
+    let at_two = links.stab_in_slots(
+        &doc1(),
+        [(FROM, &iext(1, 3)), (TO, &iext(1, 3))],
+        View::Active,
+    );
+    assert_eq!(
+        at_two.iter().filter(|(a, _)| *a == twice).count(),
+        2,
+        "one link, two pairs: {at_two:?}"
+    );
+    // A slot no link has, and a slot given no probe, contribute nothing.
+    let q = enc(&[ca(1)]);
+    assert!(
+        links.stab_in_slots(&doc1(), q.spans().map(|s| (4, s)), View::Audit).is_empty(),
+        "past the arity"
+    );
+    assert!(
+        links.stab_in_slots(&doc1(), std::iter::empty(), View::Audit).is_empty(),
+        "no probe"
+    );
+    // A home no link is filed under answers none, asking the heap for nothing.
+    let unfiled = a(&[1, 0, 1, 0, 3]);
+    let (answer, bytes) = settled_heap_bytes(|| {
+        links.stab_in_slots(&unfiled, q.spans().map(|s| (FROM, s)), View::Active)
+    });
+    assert!(answer.is_empty(), "nothing is homed there");
+    assert_eq!(bytes, 0, "a home no link is filed under costs nothing");
+}
+
 /// §G — THE COMPOSED STAB PAYS NOTHING FOR THE LINKS HOMED WHERE THE READER
 /// MAY NOT READ, counted: twenty links in doc1 beside a flood on the same
 /// position homed in doc2, which the reader may not read. The read a caller

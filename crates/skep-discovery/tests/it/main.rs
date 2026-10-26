@@ -25,6 +25,7 @@ mod home_rule;
 mod lineage;
 mod pointwise;
 mod region;
+mod region_cost;
 mod survival;
 mod tidy;
 mod window;

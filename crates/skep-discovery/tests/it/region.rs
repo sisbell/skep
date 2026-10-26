@@ -9,13 +9,15 @@ use crate::common;
 use crate::heap::settled_heap_bytes;
 
 use common::*;
-use skep_address::{Address, Span};
-use skep_arrangement::{HasM5, Vstream};
+use im::OrdSet;
+use skep_address::{document_of, Address, Span};
+use skep_arrangement::{HasM5, Run, Vstream};
 use skep_discovery::{
-    content_vspan, image_on, OrphanError, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS,
+    content_vspan, count_v_on, findlinks_v_on, image_on, window_v_on, OrphanError, OrphanReport,
+    QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_kernel::Snapshot;
-use skep_links::{enc, LinkWriter, SlotArg, MAX_SLOT_SPANS};
+use skep_links::{enc, Endset, HasLinks, LinkWriter, SlotArg, View, MAX_SLOT_SPANS};
 use skep_namespace::{HasM3, Namespace, PrincipalId};
 
 #[test]
@@ -889,4 +891,120 @@ fn findlinks_v_is_disjunctive_and_addressable_filtered() {
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     assert_eq!(reads.findlinks_v(&doc1(), &[vspan(1, 1, 1)]), Ok(vec![la(2)]));
     assert_eq!(reads.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(1));
+}
+
+/// §1 — THE HOMES-FIRST COMPOSITION ANSWERS THE UNION OF EACH HOME'S
+/// PER-SLOT STABS (PUB-7.18; #656): on a board whose links are homed in
+/// every address shape the mint produces — two documents of one account, a
+/// sub-account's deeper document, the published document and a version
+/// member of it — each candidate home's share of the region read is the
+/// union of its three per-slot stabs, M7's `stab_in` at FROM, TO and TYPE
+/// over the spans that named the home, in address order; and the shares
+/// concatenated in home order are `findlinks_v`'s answer, `count_v`'s
+/// cardinality and what every `window_v` drains, under the reader of every
+/// home and under one refusing two of the homes. A link touching the region
+/// at two slots is answered once; a retracted one never; and a home the
+/// passage's block names that holds no link on the passage is asked and
+/// contributes nothing. A composition that merged two slots' hits wrongly,
+/// dropped a slot, answered a home's links out of order or counted a two-slot
+/// link twice parts from the oracle somewhere here.
+#[test]
+fn the_region_read_answers_the_union_of_each_homes_per_slot_stabs_and_an_empty_home_contributes_nothing() {
+    let k = published_world();
+    seed_content(&k, &doc1(), 100); // positions 1..=100: the passage's block and the next
+    let ns = Namespace::new(&k);
+    let (sub, _) = ns
+        .delegate(PrincipalId(1), t(&[1, 0, 1, 1]), PrincipalId(2))
+        .expect("the account's owner delegates its first sub-account");
+    let (deep, _) = ns
+        .create_new_document(PrincipalId(2), &sub, Some(false))
+        .expect("the sub-account's owner mints a private document");
+    let (extra, _) = ns
+        .create_new_document(PrincipalId(1), &a(&[1, 0, 1]), Some(false))
+        .expect("the owner mints a fourth document");
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let region = [vspan(1, 1, 10)];
+    // doc1: FROM 1; and FROM 2 TO 3, touching the region at two slots.
+    link(&store, &doc1(), &[ca(1)], &[ca(200)]);
+    let twice = link(&store, &doc1(), &[ca(2)], &[ca(3)]);
+    // doc2: TO 4; a TYPE that is position 5 itself; and FROM 6, retracted.
+    link(&store, &doc2(), &[ca(201)], &[ca(4)]);
+    typed_link(&store, &doc2(), &[ca(202)], &[ca(203)], &ca(5));
+    let gone = link(&store, &doc2(), &[ca(6)], &[ca(204)]);
+    store.nullify(SYS, &doc2(), &gone).expect("nullify succeeds");
+    // The deeper document: FROM 7. The published document: TO 8. Its member:
+    // FROM 9 and TO 10.
+    link(&store, &deep, &[ca(7)], &[ca(205)]);
+    link(&store, &pdoc(), &[ca(206)], &[ca(8)]);
+    link(&store, &phead(), &[ca(9)], &[ca(207)]);
+    link(&store, &phead(), &[ca(208)], &[ca(10)]);
+    // The fourth document: one link in the passage's block, off the passage.
+    link(&store, &extra, &[ca(50)], &[ca(209)]);
+
+    let snap = k.snapshot();
+    let l = snap.world().links();
+    let image = image_on(&snap, &doc1(), &region).expect("image");
+    let query = Endset::from_spans(image.iter().map(Run::iextent));
+    // The oracle: the old composition, home by home — three per-slot stabs
+    // over the spans that named the home, their union, the unions
+    // concatenated — and the homes it asked.
+    let old = |readable: &dyn Fn(&Address) -> bool| -> (Vec<Address>, Vec<Address>) {
+        let (mut answer, mut asked) = (Vec::new(), Vec::new());
+        for touch in l.homes_touching([(FROM, &query), (TO, &query), (TYPE, &query)]) {
+            asked.push(touch.home().clone());
+            if !readable(touch.home()) {
+                continue;
+            }
+            let mut union = OrdSet::new();
+            for (i, slot) in [FROM, TO, TYPE].into_iter().enumerate() {
+                union = union.union(l.stab_in(touch.home(), slot, touch.spans(i), View::Active));
+            }
+            answer.extend(union);
+        }
+        (answer, asked)
+    };
+    let refuses_two = |d: &Address| *d != doc2() && *d != phead();
+    let readers: [(&str, &dyn Fn(&Address) -> bool); 2] =
+        [("every home", &every_home), ("refusing doc2 and the member", &refuses_two)];
+    for (who, reader) in readers {
+        let (answer, asked) = old(reader);
+        assert_eq!(
+            findlinks_v_on(&snap, &doc1(), &region, reader),
+            Ok(answer.clone()),
+            "{who}: findlinks_v is the per-home unions concatenated"
+        );
+        assert_eq!(
+            count_v_on(&snap, &doc1(), &region, reader),
+            Ok(answer.len()),
+            "{who}: count_v is their cardinality"
+        );
+        for n in [1, 3, 100] {
+            assert_eq!(
+                drain_window(n, answer.len() + 1, |cur| {
+                    window_v_on(&snap, &doc1(), &region, cur, n, reader).expect("window")
+                }),
+                answer,
+                "{who}: a window of {n} drains them"
+            );
+        }
+        let recorded = Asked::default();
+        let recorder = recorded.recording(reader);
+        findlinks_v_on(&snap, &doc1(), &region, &recorder).expect("findlinks_v");
+        assert_eq!(recorded.take(), asked, "{who}: the homes asked, in order");
+        assert!(asked.contains(&extra), "{who}: the block names the fourth document");
+        assert!(
+            !answer.iter().any(|a| document_of(a) == Some(extra.clone())),
+            "{who}: a home with no hit on the passage contributes nothing"
+        );
+    }
+    // The premises: every shape contributes a link, the two-slot link is
+    // answered once, and the retracted one never.
+    let (answer, _) = old(&every_home);
+    let homes: Vec<Address> = answer.iter().map(|a| document_of(a).expect("a link has a home")).collect();
+    for home in [doc1(), doc2(), deep, pdoc(), phead()] {
+        assert!(homes.contains(&home), "{home:?} contributes to the answer");
+    }
+    assert_eq!(answer.iter().filter(|a| **a == twice).count(), 1, "answered once");
+    assert!(!answer.contains(&gone), "never the retracted link");
+    assert_eq!(answer.len(), 8, "the eight live links on the passage: {answer:?}");
 }

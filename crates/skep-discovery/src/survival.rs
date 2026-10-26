@@ -13,7 +13,6 @@
 //! [`DeletePartition::of`], the one element here a change to DELETE's
 //! admission changes.
 
-use im::OrdSet;
 use num_traits::{One, Zero};
 use skep_address::{Address, Nat, Span};
 use skep_arrangement::{M5State, Run, VPos};
@@ -23,7 +22,7 @@ use skep_links::{LinkState, Touch, View};
 use crate::budget::MAX_IMAGE_RUNS;
 use crate::home::home_admitted;
 use crate::image::content_vspan;
-use crate::sets::{extents, V1_SLOTS};
+use crate::sets::{distinct, extents, probes, V1_SLOTS};
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
 
@@ -245,16 +244,14 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
         let touching_deleted = touching_side(l, &touch, 0);
         let touching_retained = touching_side(l, &touch, V1_SLOTS.len());
         // The relative complement is walked from the DELETED side — a link
-        // touching what goes is kept unless the retained side also holds it
-        // — NEVER `im`'s `difference`, which is SYMMETRIC and would fold in
-        // the plainly-surviving links, and not `im`'s `relative_complement`,
-        // which walks its argument, the retained side, through `im`'s copying
-        // consuming iterator.
+        // touching what goes is kept unless the retained side also holds it,
+        // which one binary search over the retained side's sorted share
+        // answers — never a symmetric difference, which would fold in the
+        // plainly-surviving links.
         orphaned.extend(
             touching_deleted
-                .iter()
-                .filter(|&a| !touching_retained.contains(a)) // the relative complement, from the deleted side
-                .cloned(),
+                .into_iter()
+                .filter(|a| touching_retained.binary_search(a).is_err()), // the relative complement, from the deleted side
         );
     }
     Ok(OrphanReport { orphaned })
@@ -262,12 +259,8 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
 
 /// One home's links touching one side of the preview's identity — the
 /// disjunction over the v1 slots of the per-home stab, each slot over the
-/// spans that named the home at pair `first + slot index`.
-fn touching_side(l: &LinkState, touch: &Touch<'_>, first: usize) -> OrdSet<Address> {
-    V1_SLOTS
-        .iter()
-        .enumerate()
-        .fold(OrdSet::new(), |acc, (i, &slot)| {
-            acc.union(l.stab_in(touch.home(), slot, touch.spans(first + i), View::Active))
-        })
+/// spans that named the home at pair `first + slot index` — each link once,
+/// in address order.
+fn touching_side(l: &LinkState, touch: &Touch<'_>, first: usize) -> Vec<Address> {
+    distinct(l.stab_in_slots(touch.home(), probes(touch, first), View::Active)).collect()
 }

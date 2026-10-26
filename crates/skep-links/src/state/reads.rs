@@ -1113,12 +1113,86 @@ impl LinkState {
         };
         let mut hits = BTreeSet::new();
         for q in query {
-            index.stab_in(home, q, &mut hits);
+            index.stab_in(home, q, &mut |link| {
+                hits.insert(link);
+            });
         }
         hits.into_iter()
             .filter(|t| !(active && self.nullified(t)))
             .map(lift)
             .collect()
+    }
+
+    /// Returns the links homed in `home` whose slot overlaps some probe at
+    /// that slot — one home's stabs at several slots, answered together.
+    ///
+    /// `probes` are `(slot, span)` pairs: at each slot, the spans
+    /// [`Touch::spans`] names for the home at the query a caller walked
+    /// [`homes_touching`](LinkState::homes_touching) over, or any span
+    /// sequence. The answer is `(link, slot)` pairs in M1's address order and
+    /// then slot order, one for every slot at which some probe of that slot
+    /// overlaps the link, under the overlap [`stab_in`](LinkState::stab_in)
+    /// answers by — so a caller after the disjunction over slots (ASN-0127's
+    /// `findlinks`) reads the distinct links, and one after slot attribution
+    /// (RETRIEVEENDSETS) reads the pairs. A slot no filed link has, and a
+    /// slot given no probe, contributes none. `view ∈ {Audit, Active}` only
+    /// (`Default` reads as `Active`).
+    ///
+    /// **What this costs.** One lookup of the home, `stab_in`'s probes once
+    /// per `(slot, span)`, one sort of the hits and one lift per distinct
+    /// link — and no set built per slot, so a home that holds no hit costs
+    /// its probes and allocates nothing for its answer (PUB-7.18: the
+    /// readable homes' links, and not a price per readable home), where one
+    /// `stab_in` per slot costs a lookup and a set apiece, empty or not. A
+    /// home no link is filed under answers none at no cost.
+    ///
+    /// Every returned address is a key of `links`, so [`LinkState::readlink`]
+    /// on it is `Some`. The pairs of two homes never interleave, as
+    /// `stab_in`'s sets do not, so the answers of the homes `homes_touching`
+    /// yields, concatenated in its order, are one address-ordered sequence.
+    /// `tests/it/discovery.rs` holds this to the per-slot `stab_in`s over
+    /// every slot, query and view of a world holding every address shape.
+    pub fn stab_in_slots<'s>(
+        &self,
+        home: &Address,
+        probes: impl IntoIterator<Item = (usize, &'s Span)>,
+        view: View,
+    ) -> Vec<(Address, usize)> {
+        let active = default_to_active(view) == View::Active;
+        let Some(home) = self.hints.spanfilade.home(home.tumbler()) else {
+            return Vec::new();
+        };
+        let mut hits: Vec<(&Tumbler, usize)> = Vec::new();
+        for (slot, q) in probes {
+            if let Some(index) = self.hints.spanfilade.slot(slot) {
+                index.stab_in(home, q, &mut |link| hits.push((link, slot)));
+            }
+        }
+        // A link reached by two spans, or by both halves, of one slot is
+        // handed over twice; sorted, the repeats are adjacent. The home's
+        // links are `home · 0 · s_L · n` ([`LinkState::next_link_address`]),
+        // one length under one prefix, so their address order is their
+        // ordinals' and the sort compares one component, not the prefix they
+        // share.
+        hits.sort_unstable_by(|(t, i), (u, j)| {
+            debug_assert_eq!(t.len(), u.len(), "one home's links have one length");
+            ordinal(t).cmp(ordinal(u)).then(i.cmp(j))
+        });
+        hits.dedup();
+        let mut out: Vec<(Address, usize)> = Vec::with_capacity(hits.len());
+        for (t, slot) in hits {
+            if active && self.nullified(t) {
+                continue;
+            }
+            // Lifted once per distinct link: a link touching at a second slot
+            // follows its first pair directly.
+            let address = match out.last() {
+                Some((a, _)) if a.tumbler() == t => a.clone(),
+                _ => lift(t),
+            };
+            out.push((address, slot));
+        }
+        out
     }
 
     /// Returns the links homed in `home` that satisfy every per-slot overlap

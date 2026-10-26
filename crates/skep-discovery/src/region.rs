@@ -13,23 +13,26 @@
 //! image's extents are lifted to one query, M7's `homes_touching` names the
 //! candidate homes of that query at every v1 slot in address order, the
 //! reader is asked of each once ahead of its links, and an admitted home is
-//! stabbed at each slot over the spans that named it. The per-home answers
+//! stabbed once, at every slot together, over the spans that named it at
+//! each — M7's `stab_in_slots`, which answers the home's `(link, slot)` pairs
+//! in address order and builds no set per slot, so a home holding no hit on
+//! the query costs its probes and nothing else. The per-home answers
 //! concatenated in home order are the selection index in address order, so
 //! nothing is merged and a window resumes in its cursor's home. The pieces
 //! the composition shares with the descriptor family and the delete preview
-//! — the slot list, the extents' lift, the window over homes — are `sets`'.
+//! — the slot list, the extents' lift, the probes, the disjunction over
+//! slots, the window over homes — are `sets`'.
 
 use std::collections::HashSet;
 
-use im::OrdSet;
 use skep_address::{Address, Span};
 use skep_kernel::Snapshot;
-use skep_links::{Endset, LinkState, Touch, View};
+use skep_links::{Endset, Link, LinkState, Touch, View};
 
 use crate::budget::MAX_ANSWER_SPANS;
 use crate::home::home_admitted;
 use crate::image::image_on;
-use crate::sets::{extents, union_slots, window_homes, V1_SLOTS};
+use crate::sets::{distinct, extents, probes, window_homes, V1_SLOTS};
 use crate::types::{Cursor, QueryError, Window};
 use crate::DiscoveryWorld;
 
@@ -41,29 +44,26 @@ fn touching<'l>(l: &'l LinkState, query: &'l Endset) -> impl Iterator<Item = Tou
 }
 
 /// One admitted home's share of the selection index, per slot and KEPT
-/// SEPARATE — slot `i` of `a` touches iff `a` is in slot `i`'s set — as M7's
-/// per-home stab answers it over the spans that named the home at that slot.
-/// `View::Active` discharges addressability — nullified links never match.
-fn touched_by_slot(l: &LinkState, touch: &Touch<'_>) -> [(usize, OrdSet<Address>); 3] {
-    let mut by_slot = V1_SLOTS.map(|slot| (slot, OrdSet::new()));
-    for (i, (slot, hits)) in by_slot.iter_mut().enumerate() {
-        *hits = l.stab_in(touch.home(), *slot, touch.spans(i), View::Active);
-    }
-    by_slot
+/// SEPARATE — slot `i` of `a` touches iff the pair `(a, i)` is among them —
+/// as M7's per-home stab answers it over the spans that named the home at
+/// each slot, in address order and then slot order. `View::Active`
+/// discharges addressability — nullified links never match.
+fn touched_by_slot(l: &LinkState, touch: &Touch<'_>) -> Vec<(Address, usize)> {
+    l.stab_in_slots(touch.home(), probes(touch, 0), View::Active)
 }
 
 /// One admitted home's share of the selection index: the disjunction over
 /// its slots (ASN-0127's `findlinks` OR, M7 having no slot-collapsed
-/// primitive), in address order.
-fn touched(l: &LinkState, touch: &Touch<'_>) -> OrdSet<Address> {
-    union_slots(&touched_by_slot(l, touch))
+/// primitive), each link once, in address order.
+fn touched(l: &LinkState, touch: &Touch<'_>) -> impl Iterator<Item = Address> {
+    distinct(touched_by_slot(l, touch))
 }
 
 /// The region family's selection index under a reader, home by home: for
 /// each candidate home of the image at any slot, in address order, admitted
 /// by `readable` once ahead of its links, that home's touching links. The
 /// disjunctive ASN-0127 `findlinks(image(W,d))` ∩ the active view, as the
-/// concatenation of per-home sets — address order, ASN-0108's permanent
+/// concatenation of per-home answers — address order, ASN-0108's permanent
 /// enumeration key, since a home's links are one key range of the store.
 fn selection<'a>(
     l: &'a LinkState,
@@ -125,7 +125,7 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
 ///
 /// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3;
 /// PUB-6.19): of the links homed where the home rule admits, by
-/// ENUMERATION — the same per-home sets [`findlinks_v_on`] concatenates
+/// ENUMERATION — the same per-home answers [`findlinks_v_on`] concatenates
 /// under the same `readable`, counted rather than collected, so the two
 /// cannot disagree given a predicate that answers each home the same way in
 /// both calls (the crate header states the predicate's contract).
@@ -180,7 +180,7 @@ pub fn window_v_on<W: DiscoveryWorld>(
     Ok(window_homes(
         touching(l, &query),
         |touch| touch.home(),
-        |touch| touched(l, &touch),
+        |touch| touched(l, &touch).collect::<Vec<Address>>(),
         readable,
         cur,
         n,
@@ -192,14 +192,14 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// distinct links collapse to one pair. Endsets are surfaced WHOLE — the full
 /// stored value from `readlink`, never clipped (RE-CLIP/RE-WHOLE, preserving
 /// RE-UDIST) — and content-identity (I-address; V-rendering is a lossy layer
-/// above). Slot attribution is read off M7's per-slot, per-home stab sets —
-/// `(i, eᵢ)` surfaces iff `a ∈ stab_in(home(a), i, query, Active)` — so M7's
-/// overlap verdict (ProperOverlap | Containment | Equal, never Adjacent) is
-/// the ONLY touch test and cross-subspace disjointness (RE-NCD) is
-/// discharged by M7. Output order is pinned — ascending slot, then the
-/// endsets' span sequences compared lexicographically, each span by its
-/// `(start, width)` in tumbler order (`Span` has no order of its own) — and
-/// so deterministic at a snapshot.
+/// above). Slot attribution is read off M7's per-slot, per-home stab —
+/// `(i, eᵢ)` surfaces iff `(a, i)` is among `stab_in_slots`' pairs for
+/// `a`'s home over the query — so M7's overlap verdict (ProperOverlap |
+/// Containment | Equal, never Adjacent) is the ONLY touch test and
+/// cross-subspace disjointness (RE-NCD) is discharged by M7. Output order is
+/// pinned — ascending slot, then the endsets' span sequences compared
+/// lexicographically, each span by its `(start, width)` in tumbler order
+/// (`Span` has no order of its own) — and so deterministic at a snapshot.
 ///
 /// Refuses past [`MAX_ANSWER_SPANS`] with `EndsetsTooLarge`, accumulated over
 /// the spans of the pairs actually KEPT — what the answer carries is what the
@@ -241,21 +241,27 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
         if !home_admitted(readable, touch.home()) {
             continue;
         }
-        let by_slot = touched_by_slot(l, &touch); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
-        for a in union_slots(&by_slot).iter() {
-            let link = l.readlink(a).expect("stab keys are resident links");
-            for (i, hits) in &by_slot {
-                if hits.contains(a) {
-                    let e = link
-                        .slot(*i)
-                        .expect("a link in slot i's stab set has slot i: M7's per-slot overlap is false for an absent slot");
-                    if kept.insert((*i, e)) {
-                        // WHOLE endset, no clip
-                        spans_kept += e.len();
-                        if spans_kept > MAX_ANSWER_SPANS {
-                            return Err(QueryError::EndsetsTooLarge);
-                        }
-                    }
+        // KEPT SEPARATE — slot i of a touches iff (a, i) is a pair; a link's
+        // pairs are adjacent, so it is read once.
+        let by_slot = touched_by_slot(l, &touch);
+        let mut read: Option<(&Address, &Link)> = None;
+        for (a, i) in &by_slot {
+            let link = match read {
+                Some((at, link)) if at == a => link,
+                _ => {
+                    let link = l.readlink(a).expect("stab keys are resident links");
+                    read = Some((a, link));
+                    link
+                }
+            };
+            let e = link
+                .slot(*i)
+                .expect("a link in slot i's stab pairs has slot i: M7's per-slot overlap is false for an absent slot");
+            if kept.insert((*i, e)) {
+                // WHOLE endset, no clip
+                spans_kept += e.len();
+                if spans_kept > MAX_ANSWER_SPANS {
+                    return Err(QueryError::EndsetsTooLarge);
                 }
             }
         }

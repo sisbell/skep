@@ -9,9 +9,11 @@
 //! outcome:
 //!
 //! 1. The doc-1 mint at the account's computable address (AUTH-2.109), the
-//!    flag affirmative — an account's first mint, outside the publish class
-//!    with any flag and taking no `attest` (the daemon's `publish_class`
-//!    doc; PUB-8.21; AUTH RES-182) — resumed by the doc-1 read there.
+//!    flag affirmative — an account's first mint, which from this signed
+//!    session is publish-class whatever its flag (PUB-6.43's exemption is
+//!    the bare session's alone; PUB-8.21) and so carries the `attest` over
+//!    the empty body, signed by the session's own key ([`home_frame`]) —
+//!    resumed by the doc-1 read there.
 //! 2. The setup act, AUTH-5.87's ops (1) and (3) at `inc(account, 1)`, only
 //!    where `key_set(account)` itself enrolls a key (the rule's own binding
 //!    class; a topic or an agent space holds no set and reserves no agent
@@ -24,8 +26,9 @@
 //!    take `principal` where `prefix` equals it, never re-peek the frontier;
 //!    op (3) the mint of `inc(account, 1)`'s doc 1 in a session as that
 //!    account — opened by reference with `key`, which stands in the
-//!    account's set (AUTH-4.30 (i)) — idempotent by reading, the session
-//!    closed when the act ends (AUTH RES-95). Op (3)'s key is pre-checked
+//!    account's set (AUTH-4.30 (i)), the mint attested under `key` as the
+//!    doc-1 mint is — idempotent by reading, the session closed when the
+//!    act ends (AUTH RES-95). Op (3)'s key is pre-checked
 //!    first, among the reads ahead of any frame, and where it is not
 //!    enrolled there — retired, or in neither list — the setup state is sent
 //!    not at all, op (1) included (P13).
@@ -41,9 +44,11 @@
 //! of §4.3's rule, which the handoff's beat (a) runs too (§4c.2 G2: "the
 //! same rule, the same form, not a second one").
 
-use skep_identity::Fingerprint;
+use serde_json::Value;
+use skep_identity::{entry_body_empty, ContentFreeOp, DocTerm, Fingerprint};
 
-use crate::address::{doc_1_of, first_child};
+use super::attest_member;
+use crate::address::{doc_1_of, first_child, parse_address};
 use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
 use crate::ceremony::handshake::{handshake, Session, Site};
 use crate::derive::{principal_of, walk_to_set, KeyDiagnosis};
@@ -216,8 +221,9 @@ pub(crate) fn persisted(board: &Board, store: Option<&FileStore>, account: &str)
 
 /// Runs the composition over `reads` the caller took ahead of `session`.
 ///
-/// `key` is the session's own key, which op (3) opens under; `store` for
-/// the persist-first line (a read-only one degrades to a warning, §3.7).
+/// `key` is the session's own key, which the two home mints are attested
+/// under and op (3) opens under; `store` for the persist-first line (a
+/// read-only one degrades to a warning, §3.7).
 ///
 /// # Errors
 ///
@@ -241,7 +247,7 @@ pub fn first_session(
         warnings: Vec::new(),
     };
     // (1) The doc-1 mint, resumed by the doc-1 read.
-    done.minted_home = mint_home(board, reads, session)?;
+    done.minted_home = mint_home(board, reads, session, key)?;
     // (2) The setup act, where the account holds a set of its own.
     if !reads.set_nonempty {
         return Ok(done);
@@ -268,11 +274,12 @@ pub fn first_session(
     }
     done.agent_space_principal = Some(principal);
     // Op (3): the mint of the agent space's home in a session as the agent
-    // space, the key opening it by reference; idempotent by reading; closed
-    // at the end.
+    // space, the key opening it by reference and attesting the mint;
+    // idempotent by reading; closed at the end.
     if !document_present(board, &doc_1_of(&reads.agent_space))? {
         let as_agent_space = handshake(board, Scope::Content, key, principal, Site::Setup)?;
-        let outcome = as_agent_space.op(&frames::create_home(&reads.agent_space, Some(&format!("first-session.space-mint.{}", reads.agent_space))));
+        let id = format!("first-session.space-mint.{}", reads.agent_space);
+        let outcome = home_frame(board, &as_agent_space, &reads.agent_space, key, &id).and_then(|frame| as_agent_space.op(&frame));
         let _ = as_agent_space.close();
         match outcome? {
             Answer::Closed => return Err(closed()),
@@ -299,18 +306,21 @@ pub fn first_session(
 /// the agent's doc 1 too, while AUTH-5.87 excludes an agent's account by
 /// name ("an agent holds no agent space; its first child is its first
 /// worker") so ops (1) and (3) would delegate the agent's first child from
-/// the owner's anchor session, permanently. It answers whether the home was
-/// minted here.
+/// the owner's anchor session, permanently. The mint is attested under
+/// `signer`, the session's own key ([`home_frame`]). It answers whether the
+/// home was minted here.
 ///
 /// # Errors
 ///
-/// `mint_home_public` is faced as this client's own fault; the session
-/// closed, any other refusal and the reads' errors halt.
-pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session<'_>) -> Result<bool, Halt> {
+/// [`home_frame`]'s halts; `mint_home_public` and an `attestation_*` refusal
+/// are faced as this client's own fault; the session closed, any other
+/// refusal and the reads' errors halt.
+pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session<'_>, signer: &dyn Signer) -> Result<bool, Halt> {
     if document_present(board, &reads.home)? {
         return Ok(false);
     }
-    let v = match session.op(&frames::create_home(&reads.account, Some(&format!("first-session.mint.{}", reads.account))))? {
+    let frame = home_frame(board, session, &reads.account, signer, &format!("first-session.mint.{}", reads.account))?;
+    let v = match session.op(&frame)? {
         Answer::Closed => return Err(closed()),
         Answer::Document(v) => v,
     };
@@ -319,8 +329,43 @@ pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session<'_>
         Some(r) if r.key() == "mint_home_public" => {
             Err(Halt::face("the home mint was refused as a draft", r.token(), "this client passes `published: true`; this is its own fault"))
         }
+        Some(r) if r.key().starts_with("attestation_") => Err(Halt::face(
+            "the board judged the home mint's attest and refused",
+            format!("{}: the frame this client composed did not verify under the set that opens the account as of the base, or the board had no head", r.token()),
+            "this is this client's frame and never your act; `board_unavailable` is a reorder — retry once the head is written",
+        )),
         Some(r) => Err(r.refused(&v)),
     }
+}
+
+/// Returns the home mint's frame for `account` under `session`, attested.
+///
+/// It is `frames::create_home` — the flag affirmative — carrying the `attest`
+/// a first mint from a signed session owes (PUB-6.43; PUB-8.21): the entry
+/// signature over the empty body, the frame's `account` the session's own
+/// and its `doc` the account the home lands in, signed by `signer`, the
+/// session's key — as the daemon composes the frame it verifies. The
+/// bare-session mints (the claim's S2, the hosted arm's H3) take no `attest`
+/// and never come here.
+///
+/// # Errors
+///
+/// A board with no `H.1` yet halts, nothing sent; an address that does not
+/// parse is this client's frame; and the term read's own errors.
+pub(crate) fn home_frame(board: &Board, session: &Session<'_>, account: &str, signer: &dyn Signer, id: &str) -> Result<Value, Halt> {
+    let Some(term) = board.board_term()? else {
+        return Err(Halt::face(
+            format!("this board has no H.1 yet, so the home of {account} cannot be minted from this session"),
+            "a home mint from a signed session carries an `attest` naming `H.1`'s pair as its board term, and the board answers no head",
+            "retry once the board has written its head; nothing was written",
+        ));
+    };
+    let frame_fault = || Halt::face("the home mint's frame could not be composed", "an address of the mint did not parse", "this is this client's frame; nothing was written");
+    let own = parse_address(session.account()).ok_or_else(frame_fault)?;
+    let parent = parse_address(account).ok_or_else(frame_fault)?;
+    let mut frame = frames::create_home(account, Some(id));
+    frame["attest"] = attest_member(term, &own, DocTerm::One(&parent), &entry_body_empty(ContentFreeOp::CreateNewDocument), signer);
+    Ok(frame)
 }
 
 fn closed() -> Halt {

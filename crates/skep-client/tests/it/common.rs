@@ -205,12 +205,13 @@ pub fn files_in(dir: &Path) -> Vec<PathBuf> {
 // (`open_signed_session_as`, `hire`, the retire helpers of skepd's suite) run
 // from the test over the board's raw frames — never a client ceremony.
 
+use skep_client::address::parse_address;
 use skep_client::board::{acked_addr, frames, Answer, KeySetAnswer, Opened, Scope, SessionBody, Token, T_ENROLL, T_RETIRE};
 use skep_client::ceremony::deposit::next_content_ordinal;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::KeyFile;
 use skep_client::sign::{session_payload, sig_hex, signer_from_seed, RecordFrame, Signer};
-use skep_identity::{canonical_record, Enrollment, RecordEntry};
+use skep_identity::{canonical_record, entry_body_empty, entry_frame, ContentFreeOp, DocTerm, Enrollment, RecordEntry};
 use skep_signature::HybridSigner;
 
 /// A FULL signed session under `signer` for `principal`, as skepd's
@@ -257,6 +258,22 @@ pub fn wire_retire(board: &Board, token: &Token, hand: &HybridSigner, home: &str
 /// A `delegate` from `token`'s session.
 pub fn wire_delegate(board: &Board, token: &Token, new_prefix: &str, new_id: u64) -> Result<String, String> {
     let Answer::Document(v) = board.op(Some(token), &frames::delegate(new_prefix, new_id, None)).expect("delegate") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// `account`'s home minted from `token`'s SIGNED session under `signer`, as
+/// the ceremonies mint one: `frames::create_home` carrying the `attest` over
+/// the empty body, `doc` the account — a first mint from a signed session
+/// is publish-class (PUB-6.43). Answers the home's address, or the refusal's
+/// token.
+pub fn wire_home(board: &Board, token: &Token, signer: &HybridSigner, account: &str) -> Result<String, String> {
+    let term = board.board_term().expect("term").expect("H.1");
+    let alg = HybridSigner::public_key(signer).alg();
+    let parent = parse_address(account).expect("an address");
+    let bytes = entry_frame(alg, term, &parent, DocTerm::One(&parent), &entry_body_empty(ContentFreeOp::CreateNewDocument));
+    let mut frame = frames::create_home(account, None);
+    frame["attest"] = serde_json::json!({"alg": alg, "sig": sig_hex(&HybridSigner::sign(signer, &bytes))});
+    let Answer::Document(v) = board.op(Some(token), &frame).expect("mint") else { return Err("closed".into()) };
     acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
 }
 

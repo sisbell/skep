@@ -4,6 +4,7 @@
 //! `nullify` cell.
 
 use super::*;
+use skepd::Seq;
 
 /// Delegate a fresh EMPTY account under principal 0 — no home mint — and
 /// answer `(account, a bare session bound to it)`. The seat every first-mint
@@ -589,6 +590,88 @@ fn the_publish_gate_refuses_an_explicit_true_mint_from_a_bare_session() {
     // A signed session publishes it.
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     expect_resp(&create(&signed, r#","published":true"#), "ack_addr");
+
+    sd.shutdown();
+}
+
+/// The `/changes` row at `at`, read under `token`.
+fn feed_row(port: u16, token: &str, at: u64) -> Value {
+    let page = json(&http(port, "GET", &format!("/changes?since={}", at - 1), Some(token), b"").1);
+    page["changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .find(|e| e["at"].as_u64() == Some(at))
+        .cloned()
+        .unwrap_or_else(|| panic!("no row at {at}: {page}"))
+}
+
+/// THE FIRST-MINT EXEMPTION IS THE BARE SESSION'S ALONE (PUB-6.43; PUB-8.21):
+/// on a claimed board a first `create_new_document` into an empty account
+/// from a SIGNED session is publish-class — refused `attestation_required`
+/// with no `attest`, flagged `true` or flagless alike (the flagless first
+/// mint is the home, born published, so its flag changes nothing here),
+/// nothing minted; admitted with a valid `attest`, flagged or flagless, its
+/// marker carrying the attestation and its feed row the `attest` and no
+/// `key`, so it reads SIGNED under the minter's own key and never as the
+/// operator's — while a BARE session's first mint stays the exempt
+/// content-empty home, admitted unsigned, its slot empty and its row
+/// testifying `bare`. The signed cells are the invited member's, the hire's
+/// and the handoff recipient's homes, which the client's ceremonies mint
+/// from signed sessions.
+#[test]
+fn a_first_mint_from_a_signed_session_is_publish_class_and_a_bare_ones_stays_exempt() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // A hired stranger: a top-level account keyed by its genesis in the
+    // claimant's doc 1, no home yet, and a signed session under its key.
+    let key = distinct_key(61);
+    let (account, _) = bootstrap_delegate(port, 61);
+    let signed = hire(port, &registrar, CLAIMANT_DOC1, &account, 61, &key);
+    // (a) Explicit `true` with no `attest`: the check's first refusal.
+    let v = op_as_written(port, Some(&signed), &create_frame(&account, Some(true)));
+    assert_eq!(rejected_detail(&v), "credential_refused:attestation_required", "{v}");
+    // (d) Flagless with no `attest` — the home born published: the same.
+    let v = op_as_written(port, Some(&signed), &create_frame(&account, None));
+    assert_eq!(rejected_detail(&v), "credential_refused:attestation_required", "{v}");
+    // (b) With a valid `attest` — the fixture signer's, over the EMPTY body
+    // and the account — admitted: the home is doc 1 (so the refusals above
+    // minted nothing), its marker carries the attestation, its row reads
+    // SIGNED.
+    let v = op(port, Some(&signed), &create_frame(&account, Some(true)));
+    assert_eq!(acked_addr(&v), format!("{account}.0.1"), "the home is the account's first document: {v}");
+    let at = acked_at(&v);
+    assert!(sd.daemon().attestation_at(Seq(at)).expect("the journal").is_some(), "the marker carries the attestation");
+    let row = feed_row(port, &signed, at);
+    assert!(row["attest"].is_object() && row.get("key").is_none(), "the attest, and no testimony beside it: {row}");
+
+    // A FLAGLESS first mint with its `attest`: honored, born published
+    // (PUB-8.21 — a bare write into it meets the publish gate), and signed.
+    let key2 = distinct_key(62);
+    let (account2, _) = bootstrap_delegate(port, 62);
+    let signed2 = hire(port, &registrar, CLAIMANT_DOC1, &account2, 62, &key2);
+    let v = op(port, Some(&signed2), &create_frame(&account2, None));
+    let home2 = acked_addr(&v);
+    assert_eq!(home2, format!("{account2}.0.1"), "{v}");
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).expect("the journal").is_some(), "the flagless home's marker carries the attestation");
+    let bare2 = open_session(port, 62);
+    let v = op(port, Some(&bare2), &format!(r#"{{"op":"insert","doc":"{home2}","at":{{"subspace":"1","ordinal":"1"}},"values":["p"]}}"#));
+    assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required", "the flagless first mint is born published: {v}");
+
+    // (c) A BARE session's first mint into another empty account: the exempt
+    // content-empty home, admitted unsigned.
+    let boot = open_session(port, 0);
+    let (bare_account, bare) = delegate_empty_account(port, &boot, 63);
+    let v = op(port, Some(&bare), &create_frame(&bare_account, Some(true)));
+    assert_eq!(acked_addr(&v), format!("{bare_account}.0.1"), "{v}");
+    let at = acked_at(&v);
+    assert_eq!(sd.daemon().attestation_at(Seq(at)).expect("the journal"), None, "the bare mint's slot is empty");
+    let row = feed_row(port, &bare, at);
+    assert_eq!(row["key"].as_str(), Some("bare"), "{row}");
+    assert!(row.get("attest").is_none(), "{row}");
 
     sd.shutdown();
 }

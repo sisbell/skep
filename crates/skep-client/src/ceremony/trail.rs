@@ -6,22 +6,22 @@
 //! L5 and L6) and by `recover`'s device arm never (AUTH RES-62 §6). Above
 //! the claim the trail is publish-class (homed in a published doc 1, sent
 //! from a signed session), so it carries an `attest` over its own entry
-//! frame — composed through `skep_identity::entry_frame` with
-//! `entry_body_assert_sup`'s body, the one composer (P28; no second
-//! `entry_frame`), and signed by the walk's own key (the old key at
-//! `rotate`, the surviving anchor on the loss arm). It is resumed by
-//! reading the trail's presence over the residence-address discovery, so a
-//! re-run never writes a second trail (AUTH-5.59 step 3's machine resume).
+//! frame — composed through the ceremony's one composer (`attest_member`;
+//! P28) with `entry_body_assert_sup`'s body, and signed by the walk's own
+//! key (the old key at `rotate`, the surviving anchor on the loss arm). It
+//! is resumed by reading the trail's presence over the residence-address
+//! discovery, so a re-run never writes a second trail (AUTH-5.59 step 3's
+//! machine resume).
 
-use serde_json::json;
-use skep_identity::{entry_body_assert_sup, entry_frame, unit_span, DocTerm, EntrySlot, LinkSlots};
+use skep_identity::{entry_body_assert_sup, unit_span, DocTerm, EntrySlot, LinkSlots};
 
+use super::attest_member;
 use crate::address::parse_address;
 use crate::board::{acked_addr, answers, frames, Answer, Board, Rejection, T_SUPERSEDES};
 use crate::ceremony::enumerate::link_subject;
 use crate::ceremony::handshake::Session;
 use crate::halt::Halt;
-use crate::sign::{sig_hex, Signer};
+use crate::sign::Signer;
 
 /// One supersession trail, named by its three addresses.
 ///
@@ -89,9 +89,7 @@ impl Trail<'_> {
         let ty_addr = parse_address(T_SUPERSEDES).ok_or_else(frame_fault)?;
         let (from, to, ty) = ([unit_span(&old_addr)], [unit_span(&new_addr)], [unit_span(&ty_addr)]);
         let body = entry_body_assert_sup(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
-        let alg = signer.public_key().alg().to_string();
-        let bytes = entry_frame(&alg, term, &account, DocTerm::One(&home_addr), &body);
-        let attest = json!({"alg": alg, "sig": sig_hex(&signer.sign(&bytes))});
+        let attest = attest_member(term, &account, DocTerm::One(&home_addr), &body, signer);
         let v = match session.op(&frames::assert_sup(home, old, new, Some(attest), Some(id)))? {
             Answer::Closed => {
                 return Err(Halt::face(

@@ -18,7 +18,7 @@ use skep_client::store::{Binding, FileStore, KeyStore};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 
-use crate::common::{anchor_file, board, claim, entry_of, fp_of, key_file, keygen, recording_board, spawn, wire_delegate, wire_enroll, wire_retire, wire_session, Hooked};
+use crate::common::{anchor_file, board, claim, entry_of, fp_of, key_file, keygen, recording_board, spawn, wire_delegate, wire_enroll, wire_home, wire_retire, wire_session, Hooked};
 
 fn opts(label: Option<&str>, payload: Option<&str>) -> RotateOptions {
     RotateOptions { principal: 1, label: label.map(str::to_string), payload: payload.map(|p| format!("{p}\n").into_bytes()) }
@@ -124,7 +124,7 @@ fn the_payload_arm_appends_no_binding_and_the_reach_names_an_admitted_account() 
     wire_enroll(&board, &as_anchor, &anchor, "1.0.1.0.1", "1.0.1.2", &[Enrollment::new(HybridSigner::public_key(&friend).clone(), false, Some("friend".into())).unwrap()]).expect("the handoff");
     board.session_close(&as_anchor).unwrap();
     let as_friend = wire_session(&board, 777, &friend);
-    let Answer::Document(_) = board.op(Some(&as_friend), &frames::create_home("1.0.1.2", None)).unwrap() else { panic!() };
+    wire_home(&board, &as_friend, &friend, "1.0.1.2").expect("the friend's home, attested");
     wire_enroll(&board, &as_friend, &friend, "1.0.1.2.0.1", "1.0.1.2", &[Enrollment::new(HybridSigner::public_key(&old).clone(), false, Some("the giver's old key".into())).unwrap()]).expect("the co-holder");
     board.session_close(&as_friend).unwrap();
     // The payload from the new device.
@@ -208,7 +208,7 @@ fn the_reach_names_every_level_of_the_closure() {
     wire_enroll(&board, &as_anchor, &anchor, "1.0.1.0.1", "1.0.1.2", &[entry(&friend, "friend")]).expect("level one's genesis");
     board.session_close(&as_anchor).unwrap();
     let as_friend = wire_session(&board, 777, &friend);
-    let Answer::Document(_) = board.op(Some(&as_friend), &frames::create_home("1.0.1.2", None)).unwrap() else { panic!() };
+    wire_home(&board, &as_friend, &friend, "1.0.1.2").expect("the friend's home, attested");
     wire_enroll(&board, &as_friend, &friend, "1.0.1.2.0.1", "1.0.1.2", &[old_entry()]).expect("the old key co-holds level one");
     // Level two: `1.0.1.2.1` handed on by the friend, the old key enrolled
     // there too.
@@ -216,7 +216,7 @@ fn the_reach_names_every_level_of_the_closure() {
     wire_enroll(&board, &as_friend, &friend, "1.0.1.2.0.1", "1.0.1.2.1", &[entry(&grandchild, "grandchild")]).expect("level two's genesis");
     board.session_close(&as_friend).unwrap();
     let as_grandchild = wire_session(&board, 888, &grandchild);
-    let Answer::Document(_) = board.op(Some(&as_grandchild), &frames::create_home("1.0.1.2.1", None)).unwrap() else { panic!() };
+    wire_home(&board, &as_grandchild, &grandchild, "1.0.1.2.1").expect("the grandchild's home, attested");
     wire_enroll(&board, &as_grandchild, &grandchild, "1.0.1.2.1.0.1", "1.0.1.2.1", &[old_entry()]).expect("the old key co-holds level two");
     board.session_close(&as_grandchild).unwrap();
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::Confirm(true)]);

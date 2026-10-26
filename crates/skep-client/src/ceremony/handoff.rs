@@ -19,7 +19,9 @@
 //! G1 the strings (i)–(iv), (viii)/(ix) by number and the anchorless line
 //! (AUTH-5.16's second arm; AUTH-5.62 (ii)); a typed confirmation.
 //! G3 = beat (b) the giving account's home mint, idempotent by reading
-//! (AUTH-2.109). G4 = beat (c) the genesis — `DepositKind::EnrollVerbatim`
+//! (AUTH-2.109), attested under the hand — a first mint from a signed
+//! session is publish-class (PUB-6.43), the frame `first_session`'s
+//! `home_frame`. G4 = beat (c) the genesis — `DepositKind::EnrollVerbatim`
 //! homed in the doc 1 of the account the subdivision hangs from (AUTH-2.62;
 //! AUTH-2.127), the session acting as that account (by reference below
 //! depth 1, AUTH-4.30 (i)), the grade as G0 read it. G5 = beat (d) the
@@ -36,10 +38,10 @@ use skep_identity::{Fingerprint, PublicKey};
 
 use super::say;
 use crate::address::{doc_1_of, first_child, parent_account};
-use crate::board::{acked_addr, frames, Answer, Board, KeySetAnswer, Rejection, Scope};
+use crate::board::{acked_addr, Answer, Board, KeySetAnswer, Rejection, Scope};
 use crate::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, DepositOutcome};
 use crate::ceremony::enumerate::by_reference_cone;
-use crate::ceremony::first_session::{delegate_persisted, document_present, persisted, Delegated};
+use crate::ceremony::first_session::{delegate_persisted, document_present, home_frame, persisted, Delegated};
 use crate::ceremony::handshake::{handshake, key_face, Session, Site};
 use crate::ceremony::import::{import_anchor, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text};
@@ -345,9 +347,11 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     };
     let session = handshake(board, Scope::Full, hand, session_principal, Site::Giver)?;
     let result = (|| -> Result<HandoffOutcome, Halt> {
-        // G3 = beat (b): the giving account's home mint, idempotent by reading.
+        // G3 = beat (b): the giving account's home mint, idempotent by
+        // reading, attested under the hand the session opened with.
         if !document_present(board, &giving_home)? {
-            let v = match session.op(&frames::create_home(&g.giving, Some(&format!("handoff.mint.{}", g.giving))))? {
+            let frame = home_frame(board, &session, &g.giving, hand, &format!("handoff.mint.{}", g.giving))?;
+            let v = match session.op(&frame)? {
                 Answer::Closed => return Err(Halt::face("the session ended at the home mint", "closed", "re-run; beat (b) resumes by reading")),
                 Answer::Document(v) => v,
             };

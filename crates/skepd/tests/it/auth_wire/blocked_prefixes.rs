@@ -926,7 +926,8 @@ fn a_key_of_the_holder_opens_its_unseeded_accounts_and_a_retirement_at_the_holde
     let as_x2 = open_signed_session(port, accounts.x2, &device_key());
     let as_x2_7 = open_signed_session(port, accounts.x2_7, &device_key());
     // A token that WRITES, as the account it names: the home mint of X.2,
-    // testified under the holder's key.
+    // signed under the holder's key — a first mint from a signed session is
+    // publish-class (PUB-6.43), so its row carries the attest and no `key`.
     let minted = op(port, Some(&as_x2), &create_frame(&accounts.x2_account, None));
     let at = acked_at(&minted);
     let page = json(&http(port, "GET", &format!("/changes?since={}", at - 1), Some(&as_x2), b"").1);
@@ -937,7 +938,7 @@ fn a_key_of_the_holder_opens_its_unseeded_accounts_and_a_retirement_at_the_holde
         .find(|e| e["at"].as_u64() == Some(at))
         .unwrap_or_else(|| panic!("the mint's own entry: {page}"))
         .clone();
-    assert_eq!(entry["key"].as_str(), Some(device_fp.as_str()), "the opening key testifies");
+    assert!(entry.get("key").is_none() && entry["attest"].is_object(), "the mint is signed under the holder's key: the attest, and no testimony beside it: {entry}");
     // A key NO set above holds opens nothing: the walk chose X's set, and
     // the signature is verified against it.
     let (st, _, _) = signed_handshake(port, accounts.x2, &distinct_key(77));

@@ -48,9 +48,20 @@
 //! crate root's `Send + Sync` check on `handshake::Session` and the unit
 //! tests. `tests/it/tidy.rs` checks it.
 //!
+//! **The attest.** Every `attest` a composition or a walk attaches is
+//! composed by [`attest_member`], the ceremony's one `entry_frame` call
+//! (P28): the trail's `assert_sup`, and the home mints from a signed session
+//! (`first_session`'s two, `handoff`'s beat (b)), publish-class above the
+//! claim (PUB-6.43).
+//!
 //! No journal: every walk resumes by reading the board (§4.4; P4).
 
+use serde_json::{json, Value};
+use skep_address::Address;
+use skep_identity::{entry_frame, BoardTerm, DocTerm, EntryBody};
+
 use crate::person::{Person, Public, Statement};
+use crate::sign::{sig_hex, Signer};
 
 // The compositions.
 pub mod backup;
@@ -79,4 +90,17 @@ pub mod rotate;
 /// and composition speaks to the person.
 fn say(person: &mut dyn Person, rule: &'static str, text: impl Into<String>) {
     person.say(Public(Statement { rule, text: text.into() }));
+}
+
+/// Returns the `attest` member of a publish-class write (signed ops).
+///
+/// It is `{"alg": …, "sig": <hex>}`: the entry signature by `signer` over
+/// the frame `skep_identity::entry_frame` composes — `alg` the signing key's
+/// token, `term` `H.1`'s pair, `account` the session's own, `doc` the
+/// write's address term and `body` its grammar's rows. Reading the term and
+/// parsing the addresses stay the caller's, with their faces.
+fn attest_member(term: BoardTerm, account: &Address, doc: DocTerm<'_>, body: &EntryBody, signer: &dyn Signer) -> Value {
+    let alg = signer.public_key().alg();
+    let bytes = entry_frame(alg, term, account, doc, body);
+    json!({"alg": alg, "sig": sig_hex(&signer.sign(&bytes))})
 }

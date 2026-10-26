@@ -1071,11 +1071,13 @@ fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
                         let key = org_key(*principal);
                         let node_signed = open_signed_session(port, *principal, &key);
                         // The mint through the generator's door: the frame
-                        // `mint_doc_one` sends, the pool's refusal retried.
+                        // `mint_doc_one` sends, attested as a first mint from
+                        // a signed session is (PUB-6.43), the pool's refusal
+                        // retried.
                         let doc1 = acked_addr(&op_as_written_retrying_write_busy(
                             port,
                             &node_signed,
-                            &create_frame(account, Some(true)),
+                            &attach_attest(port, &node_signed, &create_frame(account, Some(true))),
                         ));
                         let own = hybrid_signer(&key);
                         // The key acts first, the endpoint signed by the latest

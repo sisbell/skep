@@ -528,8 +528,8 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             if !take {
                 return Err(Halt::face("the containment act was declined: nothing was written", "the account stands anchored, the act untaken — never the anchorless arm's", "re-run when ready"));
             }
-            // `first_session`'s first state alone.
-            if mint_home(board, &fs_reads, &session)? {
+            // `first_session`'s first state alone, attested under the anchor.
+            if mint_home(board, &fs_reads, &session, &anchor.signer)? {
                 say(person, "AUTH-5.90 (iii)", format!("the home {} was minted (the first state alone; the setup state never runs at an agent's account)", fs_reads.home));
             }
             let mut set = reads.walk.set.clone();

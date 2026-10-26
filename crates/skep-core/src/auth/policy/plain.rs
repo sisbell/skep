@@ -487,7 +487,7 @@ fn board_state_admission(
         // A1: the check runs on a claimed board — every write reaching this
         // arm is above the claim entry, the claim having committed before
         // the snapshot it reads was taken.
-        if !publish_class(world, op, principal) {
+        if !publish_class(world, op, principal, signer.is_some()) {
             return Ok(None);
         }
         if signer.is_none() {
@@ -509,12 +509,16 @@ fn board_state_admission(
 /// published world is accepted only from a signed session — and is where the
 /// write-path check runs (`board_state_admission`). This is the
 /// classification oracle (PUB-6.43, the daemon's own). Domain per input form
-/// (PUB-6.43's input table):
+/// (PUB-6.43's input table), `signed` the session's kind — the one input the
+/// first mint's row takes beside the op (PUB-6.43; RES-311):
 /// * an explicit flag — the argument itself, resolved pre-dispatch: a
 ///   `create`/`fork`/`version` carrying `published: Some(true)` publishes,
 ///   so a bare session is refused; `Some(false)` is a draft (outside). The
-///   first mint stays exempt — the content-empty mechanical home (PUB-6.43),
-///   so a first `create` with any flag is accepted from a bare session;
+///   first mint is exempt from a bare session alone — the content-empty
+///   mechanical home (PUB-6.43), so a first `create` with any flag is
+///   accepted bare; from a signed session a first `create` is publish-class
+///   whatever its flag — the flagless one is the home, born published
+///   (PUB-8.21) — and takes the check like any mint born published;
 /// * a flagless `version` reads `published(d_src)` (inherit);
 /// * a homed write reads `published(home)` — both through [`published`], the
 ///   engine's exception set with the version-member projection (PUB-2.15).
@@ -532,8 +536,9 @@ fn board_state_admission(
 ///   PUB-6.43's own row for the one op whose effect and record home part
 ///   (RES-3's owed input).
 ///
-/// Flagless `create`/`fork` resolve draft (outside), and
-/// `delegate`/`register_node` present no input form here.
+/// A flagless `create` into an account holding documents, and a flagless
+/// `fork`, resolve draft (outside); `delegate`/`register_node` present no
+/// input form here.
 ///
 /// Registration and ω stand ahead (PUB-6.37, PUB-6.36 slot 1) on every arm
 /// that reads a home or a target — the homed writes, `edit_link`'s two
@@ -554,7 +559,7 @@ fn board_state_admission(
 /// gated as published, its own journaled bit notwithstanding. The explicit
 /// flag on the `version` itself is the argument's own input (row 1 of the
 /// table), which is why that mint is admitted from a bare session.
-fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
+fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -> bool {
     // Registration and ω — the pair that stands ahead of this gate (PUB-6.37,
     // PUB-6.36 slot 1) on every home arm, in one spelling, the store's own
     // ownership-gate question (M5's `Caller::passes_ownership_gate`), so an
@@ -567,13 +572,22 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
     let owned = |a: &Address| Caller::Principal(principal).passes_ownership_gate(m3, a);
     let homed = |home: &Address| -> bool { owned(home) && published(world, home) };
     match op {
-        // An explicit `published: true` on a mint *is* the gate input
-        // (PUB-6.43): it lands in the published world. The first mint stays
-        // exempt — a first `create` into an empty account the caller owns is
-        // the content-empty mechanical home (PUB-6.43's enumerated
-        // exemption), so it answers `false` here (accepted).
-        Op::CreateNewDocument { account, published: Some(true) } => {
-            world.m3().is_effective_owner(principal, account) && world.m3().has_documents(account)
+        // A mint's flag *is* the gate input (PUB-6.43): an explicit `true`
+        // lands in the published world, and a flagless first mint resolves
+        // published too — it is the home (PUB-8.21) — where a flagless later
+        // one is a draft. The first mint into an empty account the caller
+        // owns is the content-empty mechanical home, exempt from a BARE
+        // session alone (PUB-6.43's enumerated exemption; RES-311): with no
+        // chooser to check it answers `false` here (accepted). From a SIGNED
+        // session the same mint is publish-class whatever its flag and takes
+        // the check, so the home of an invited member, a hired agent or a
+        // handoff recipient is born signed under its own key, never read as
+        // the operator's. The explicit `false` first mint is the door's,
+        // upstream (`mint_home_public`).
+        Op::CreateNewDocument { account, published } => {
+            let first = !m3.has_documents(account);
+            let born_published = published.unwrap_or(first);
+            m3.is_effective_owner(principal, account) && born_published && (signed || !first)
         }
         // `fork` mints into the caller's own account; an empty account is
         // refused `mint_home_first` ahead of this gate, so only a non-first
@@ -659,8 +673,8 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
                         .as_ref()
                         .is_some_and(|d| m3.is_registered_document(d) && published(world, d)))
         }
-        // create/fork with a non-`true` flag: a draft, or the exempt home
-        // mint (the explicit-`false` first mint is the door's, upstream).
+        // `fork` with a non-`true` flag — a draft — and every op with no
+        // input form here.
         _ => false,
     }
 }

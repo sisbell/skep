@@ -400,9 +400,15 @@ fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
     expect_resp(&v, "ack_addr");
     // The agent opens a session under its tag-3 key — the 730-byte blob…
     let agent_signed = open_signed_session_as(port, 41, &tag3);
-    // …mints its published home, then a grant into it with an attest under
-    // the seed's TAG-1 key, which the set does not hold.
-    let home = acked_addr(&op(port, Some(&agent_signed), &create_frame(&agent, None)));
+    // …mints its published home — a first mint from a signed session is
+    // publish-class (PUB-6.43), its attest composed by hand under the tag-3
+    // key the test signer does not hold — then a grant into it with an
+    // attest under the seed's TAG-1 key, which the set does not hold.
+    let h1 = board_term(port).expect("H.1");
+    let mint_bytes = entry_frame(ALG_FNDSA512_PREVIEW_ED25519, h1, &addr(&agent), DocTerm::One(&addr(&agent)), &entry_body_empty(ContentFreeOp::CreateNewDocument));
+    let mut mint: Value = serde_json::from_str(&create_frame(&agent, None)).unwrap();
+    mint["attest"] = json!({"alg": ALG_FNDSA512_PREVIEW_ED25519, "sig": hex(&tag3.sign(&mint_bytes))});
+    let home = acked_addr(&op_as_written(port, Some(&agent_signed), &mint.to_string()));
     register_signer(&agent_signed, 41, &key);
     let v = op(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &["1.0.2"], T_GRANT));
     assert_eq!(

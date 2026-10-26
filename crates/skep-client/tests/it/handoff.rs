@@ -12,13 +12,14 @@
 
 use std::path::{Path, PathBuf};
 
-use skep_client::board::{Board, KeySetAnswer, Scope};
+use skep_client::board::{Authed, Board, KeySetAnswer, Scope};
 use skep_client::ceremony::accept::{accept, reprint, AcceptOptions, Accepted};
 use skep_client::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind, DepositOutcome};
 use skep_client::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use skep_client::ceremony::handoff::{handoff, Grade, HandoffOptions, HandoffOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::{credential_records, Hand};
+use skep_client::dial::Request;
 use skep_client::derive::{principal_of, KeyDiagnosis};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::KeptOrPlaced;
@@ -35,6 +36,23 @@ fn give(account: &str, payload: Option<String>, anchor: Option<std::path::PathBu
 
 fn take(account: &str, out: &std::path::Path, no_anchors: bool) -> AcceptOptions {
     AcceptOptions { account: account.into(), label: None, anchor_out: vec![out.join("ra"), out.join("rb")], paper: false, no_anchors, hosted: None, host_name: "testhost".into(), date: "2026-10-04".into() }
+}
+
+/// The `/changes` row of the mint of `doc`, read as a guest: a home is
+/// published, so the row is served whole, its `attest` with it.
+fn mint_row(board: &Board, doc: &str) -> serde_json::Value {
+    let mut since = 0;
+    loop {
+        let Authed::Response(resp) = board.authed(None, Request::get(format!("/changes?since={since}&limit=100"))).unwrap() else { panic!("a guest read met the death signal") };
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        let page: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        let rows = page["changes"].as_array().expect("changes");
+        if let Some(row) = rows.iter().find(|r| r["op"] == "create_new_document" && r["docs"].as_array().is_some_and(|d| d.iter().any(|x| x == doc))) {
+            return row.clone();
+        }
+        assert_eq!(page["more"].as_bool(), Some(true), "no mint row of {doc}: {page}");
+        since = page["last"].as_u64().expect("last");
+    }
 }
 
 #[test]
@@ -161,6 +179,12 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     assert!(done.minted_home && done.agent_space_principal.is_some() && done.minted_agent_space_home);
     assert!(document_present(&board, "1.0.1.2.0.1").unwrap());
     assert!(principal_of(&board, "1.0.1.2.1").unwrap().is_some(), "inc(X.2, 1) seated");
+    // Both homes were minted from signed sessions, so each is publish-class
+    // and carries its attest (PUB-6.43): the rows read SIGNED, no `key`.
+    for home in ["1.0.1.2.0.1", "1.0.1.2.1.0.1"] {
+        let row = mint_row(&board, home);
+        assert!(row["attest"].is_object() && row.get("key").is_none(), "{home}'s mint is signed: {row}");
+    }
 }
 
 /// The depth-2 genesis: `--account 1.0.1.3.1` of the giver's own unseeded
@@ -210,6 +234,10 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     assert_eq!((facts.account.as_str(), facts.principal, grade), ("1.0.1.3.1", principal31, Grade::Anchor));
     assert!(p.said("THE ANCHORLESS LINE") && p.said("re-run `skep accept` with an anchor pair"), "{t}");
     assert!(p.said("beat (b) is owed: 1.0.1.3 has no doc 1") && p.said("beat (b): 1.0.1.3.0.1 minted"), "{t}");
+    // Beat (b)'s mint ran from a signed session, so it is publish-class and
+    // carries the hand's attest (PUB-6.43): the row reads SIGNED, no `key`.
+    let row = mint_row(&board, "1.0.1.3.0.1");
+    assert!(row["attest"].is_object() && row.get("key").is_none(), "beat (b)'s mint is signed: {row}");
     assert!(!placed.is_file(), "the placed copy destroyed at the close");
     let records = credential_records(&board, "1.0.1.3.1", &[]).unwrap();
     let genesis = records.genesis().unwrap();

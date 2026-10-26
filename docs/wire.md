@@ -2094,8 +2094,12 @@ resolves AFTER every token below.
    * claimed — `signed_session_required` (the publish class): a
      bare-session op whose write lands in the PUBLISHED world. The
      inputs (PUB-6.43): an **explicit** `published:true` on any mint
-     (`create`/`fork`/`version`) except the exempt content-empty home
-     mint; a flagless `version` of a **published** source (the inherit
+     (`create`/`fork`/`version`) except the content-empty home mint — an
+     account's FIRST `create_new_document`, exempt from a BARE session
+     ALONE (RES-311): from a SIGNED session it is publish-class whatever
+     its flag, the flagless first mint being the home born published
+     (PUB-8.21), and takes the write-path check (§Credential refusals);
+     a flagless `version` of a **published** source (the inherit
      resolving published); an
      `insert`/`delete`/`copy`/`reinstate`/`rearrange`
      whose `doc` is a published document the caller owns — a version
@@ -2113,8 +2117,11 @@ resolves AFTER every token below.
      `*_not_registered`) — for `nullify`, ω on BOTH the home and the
      target stands ahead of the gate, so a caller owning either alone
      answers `not_owner` and is never told what is published. Signed
-     sessions, draft mints (flagless or `published:false`), draft writes,
-     bare reads, `delegate` and the home mint itself are outside the gate.
+     sessions, draft mints (flagless or `published:false`, into an account
+     holding a document), draft writes, bare reads, `delegate` and the
+     home mint from a bare session are outside the gate; the home mint
+     from a signed session is publish-class and takes the check
+     (§Namespace).
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
      `create_new_document` into an account holding no documents, an
@@ -2327,8 +2334,9 @@ public from birth; create it first, then everything else is private by
 default.
 
 On a CLAIMED board a mint BORN PUBLISHED — an explicit `published:true`
-into an account that already holds a document — carries the optional
-top-level `attest` member (signed ops; §Credential refusals, the entry
+into an account that already holds a document, or an account's first
+mint from a SIGNED session, flagless or `published:true` — carries the
+optional top-level `attest` member (signed ops; §Credential refusals, the entry
 frame's rows): the entry signature over the frame whose `doc` is the
 PARENT ACCOUNT the document lands in — `account` itself, so the
 signature attests that this principal performed this kind of act on this
@@ -2337,9 +2345,14 @@ and `body` EMPTY: the member present and empty, `be32(0)`. No minted
 address enters the frame, so a client signs before the commit; two such
 mints by one principal sign identical bytes, which the design accepts. A
 later reader derives the parent account by `effective_owner` over the
-minted document and composes the same frame. The account's first,
-flagless mint — the home — is outside the publish class and takes no
-`attest`.
+minted document and composes the same frame. The account's first mint —
+the home, flagless or `published:true` — is outside the publish class
+and takes no `attest` from a BARE session alone (PUB-6.43's exemption;
+the claim ceremony's own mint): from a SIGNED session it is
+publish-class — refused `attestation_required` without the member,
+admitted with it — so the home of an invited member, a hired agent or a
+handoff recipient reads SIGNED under its own key, never as the
+operator's unsigned word (PUB-8.21; RES-311).
 
 **`delegate`** — carve `new_prefix` off your account (or node) and register
 principal `new_id` as its owner, atomically. Obtain `new_prefix` from

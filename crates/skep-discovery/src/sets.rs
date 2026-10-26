@@ -20,14 +20,15 @@
 //! are M7's `(link, slot)` pairs in a `Vec`, read once through
 //! [`distinct`], which moves each address out, and cut by [`Share`] where a
 //! window pages them; no set is built per slot or per home, so a home that
-//! holds no hit on the query costs its probes and nothing else.
+//! holds no hit on the query costs the parts of the stab that named it and
+//! nothing else.
 
 use std::ops::Bound::{Excluded, Unbounded};
 
 use im::OrdSet;
-use skep_address::{Address, Span};
+use skep_address::Address;
 use skep_arrangement::Run;
-use skep_links::{Endset, Touch, FROM, TO, TYPE};
+use skep_links::{Endset, FROM, TO, TYPE};
 
 use crate::home::{home_admitted, home_behind};
 use crate::types::{Cursor, Window};
@@ -61,19 +62,17 @@ pub(crate) fn extents<'r>(runs: impl IntoIterator<Item = &'r Run>) -> Endset {
     Endset::from_spans(runs.into_iter().map(Run::iextent))
 }
 
-/// One candidate home's probes at every v1 slot: `(slot, span)` pairs, slot
-/// `i` of [`V1_SLOTS`] over the spans whose directory ranges named the home
-/// for the query at pair `first + i` of the walk the touch came from — what
-/// M7's `stab_in_slots` takes. A slot whose query named the home by no span
-/// contributes no probe, and so costs the home's stab nothing.
-pub(crate) fn probes<'t, 'q>(
-    touch: &'t Touch<'q>,
-    first: usize,
-) -> impl Iterator<Item = (usize, &'q Span)> + 't {
+/// One candidate home's probes at every v1 slot: `(slot, query)` pairs, slot
+/// `i` of [`V1_SLOTS`] at pair `first + i` of the walk the home's touch came
+/// from — what M7's `stab_in_slots` takes, which stabs the home at each slot
+/// over the spans whose directory ranges named it there, at the parts of the
+/// stab those ranges stand for. A slot whose query named the home by no span
+/// costs the home's stab nothing.
+pub(crate) fn probes(first: usize) -> impl Iterator<Item = (usize, usize)> {
     V1_SLOTS
-        .iter()
+        .into_iter()
         .enumerate()
-        .flat_map(move |(i, &slot)| touch.spans(first + i).map(move |q| (slot, q)))
+        .map(move |(i, slot)| (slot, first + i))
 }
 
 /// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots

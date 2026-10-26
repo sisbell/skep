@@ -22,7 +22,7 @@ use skep_address::{
     Tumbler,
 };
 
-use super::spanfilade::{overlaps, Home, Stream, Touch, Touching};
+use super::spanfilade::{overlaps, Home, Parts, Stream, Touch, Touching};
 use super::{lift, LinkState, TYPE};
 use crate::class::{coverage_class, CoverageClass};
 use crate::endset::{Endset, Link};
@@ -1038,7 +1038,10 @@ impl LinkState {
     /// whole. A home named for a query may yet hold no hit of it: the
     /// directory answers at block and node grain, and [`Touch::spans`] names
     /// the spans whose ranges reached the home, which the per-home stab
-    /// probes and no other.
+    /// probes and no other. The touch carries, beside each span, the parts of
+    /// the stab its ranges stand for — the starting half, the containing half,
+    /// the residue test — and [`stab_in_slots`](LinkState::stab_in_slots)
+    /// probes the span at those parts alone.
     ///
     /// **What this costs.** The ranges the queries open — per span, one per
     /// block its coordinates cross on each axis holding a start inside it
@@ -1061,7 +1064,7 @@ impl LinkState {
         for (pair, &(slot, query)) in queries.iter().enumerate() {
             if slot == TYPE && query.is_address_denoting() {
                 for slice in self.related_slices(query) {
-                    streams.push(Stream::new(pair, None, ClassHomes::over(slice)));
+                    streams.push(Stream::new(pair, None, Parts::ALL, ClassHomes::over(slice)));
                 }
                 continue;
             }
@@ -1123,49 +1126,66 @@ impl LinkState {
             .collect()
     }
 
-    /// Returns the links homed in `home` whose slot overlaps some probe at
-    /// that slot — one home's stabs at several slots, answered together.
+    /// Returns the links homed in a touch's home whose slot overlaps a span
+    /// the walk named the home for at that slot — one home's stabs at
+    /// several slots, answered together.
     ///
-    /// `probes` are `(slot, span)` pairs: at each slot, the spans
-    /// [`Touch::spans`] names for the home at the query a caller walked
-    /// [`homes_touching`](LinkState::homes_touching) over, or any span
-    /// sequence. The answer is `(link, slot)` pairs in M1's address order and
-    /// then slot order, one for every slot at which some probe of that slot
-    /// overlaps the link, under the overlap [`stab_in`](LinkState::stab_in)
-    /// answers by — so a caller after the disjunction over slots (ASN-0127's
-    /// `findlinks`) reads the distinct links, and one after slot attribution
-    /// (RETRIEVEENDSETS) reads the pairs. A slot no filed link has, and a
-    /// slot given no probe, contributes none. `view ∈ {Audit, Active}` only
-    /// (`Default` reads as `Active`).
+    /// `touch` is one the walk [`homes_touching`](LinkState::homes_touching)
+    /// yielded, and `probes` are `(slot, query)` pairs: at slot `slot`, the
+    /// spans [`Touch::spans`] names for the home at the walk's pair `query`,
+    /// each probed at the parts of the stab — the starting half, the
+    /// containing half, the residue test — whose directory ranges named the
+    /// home for it. A part no range of which named the home finds none of its
+    /// links for the span, so the answer at a slot is the one
+    /// [`stab_in`](LinkState::stab_in) gives over those spans. The answer is
+    /// `(link, slot)` pairs in M1's address order and then slot order, one for
+    /// every slot at which some named span overlaps the link — so a caller
+    /// after the disjunction over slots (ASN-0127's `findlinks`) reads the
+    /// distinct links, and one after slot attribution (RETRIEVEENDSETS) reads
+    /// the pairs. A slot no filed link has, a query that named the home by no
+    /// span, and a slot given no probe contribute none. `view ∈ {Audit,
+    /// Active}` only (`Default` reads as `Active`).
     ///
-    /// **What this costs.** One lookup of the home, `stab_in`'s probes once
-    /// per `(slot, span)`, one sort of the hits and one lift per distinct
-    /// link — and no set built per slot, so a home that holds no hit costs
-    /// its probes and allocates nothing for its answer (PUB-7.18: the
-    /// readable homes' links, and not a price per readable home), where one
-    /// `stab_in` per slot costs a lookup and a set apiece, empty or not. A
-    /// home no link is filed under answers none at no cost.
+    /// **Precondition.** `touch` was yielded by this state's
+    /// `homes_touching`, and each probe's `query` is the index of the walk's
+    /// pair whose query was asked of its `slot`. A probe breaking it does not
+    /// panic: it answers what the named spans find at the named parts of that
+    /// slot, which may miss hits.
+    ///
+    /// **What this costs.** No lookup of the home — the touch holds it as the
+    /// index does — each named `(slot, span)` probed at the parts that named
+    /// it alone, one sort of the hits and one lift per distinct link; no set
+    /// built per slot, so a home that holds no hit costs the parts that named
+    /// it and allocates nothing for its answer (PUB-7.18: the readable homes'
+    /// links, and not a price per readable home).
     ///
     /// Every returned address is a key of `links`, so [`LinkState::readlink`]
     /// on it is `Some`. The pairs of two homes never interleave, as
     /// `stab_in`'s sets do not, so the answers of the homes `homes_touching`
     /// yields, concatenated in its order, are one address-ordered sequence.
     /// `tests/it/discovery.rs` holds this to the per-slot `stab_in`s over
-    /// every slot, query and view of a world holding every address shape.
-    pub fn stab_in_slots<'s>(
+    /// every slot, query and view of a world holding every address shape, and
+    /// `tests/it/spanfilade.rs` holds a reader's walk through it to a scan of
+    /// the store.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build where two links of the home differ in length,
+    /// which no mint produces: a home's links are `home · 0 · s_L · n`.
+    pub fn stab_in_slots(
         &self,
-        home: &Address,
-        probes: impl IntoIterator<Item = (usize, &'s Span)>,
+        touch: &Touch<'_>,
+        probes: impl IntoIterator<Item = (usize, usize)>,
         view: View,
     ) -> Vec<(Address, usize)> {
         let active = default_to_active(view) == View::Active;
-        let Some(home) = self.hints.spanfilade.home(home.tumbler()) else {
-            return Vec::new();
-        };
         let mut hits: Vec<(&Tumbler, usize)> = Vec::new();
-        for (slot, q) in probes {
-            if let Some(index) = self.hints.spanfilade.slot(slot) {
-                index.stab_in(home, q, &mut |link| hits.push((link, slot)));
+        for (slot, query) in probes {
+            let Some(index) = self.hints.spanfilade.slot(slot) else {
+                continue;
+            };
+            for (q, parts) in touch.named_at(query) {
+                index.stab_in_parts(touch.held(), q, parts, &mut |link| hits.push((link, slot)));
             }
         }
         // A link reached by two spans, or by both halves, of one slot is

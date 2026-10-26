@@ -2,9 +2,10 @@
 //! coverage index exactly what a scan of the store under `classify_spans`
 //! would — over every slot, view and query of a world holding every span
 //! shape a deposit path stores, live and after a checkpoint rebuild — and so
-//! does the stab a reader composes over the homes it may read, against the
-//! same scan filtered by each link's home; and a stab pays nothing for the
-//! links it cannot match.
+//! does the stab a reader composes over the homes it may read, each stabbed
+//! at every part or at the parts of the stab that named it, against the same
+//! scan filtered by each link's home; and a stab pays nothing for the links
+//! it cannot match.
 
 use std::collections::HashSet;
 
@@ -58,8 +59,10 @@ fn stab_answers_exactly_what_a_scan_of_the_store_would() {
     // its directory answers differently somewhere in the pool. The reader's
     // stab — the candidate homes, those the reader may read stabbed over the
     // spans that named them, concatenated — is held to the same scan
-    // filtered by each link's home: the reader may read everything but doc2,
-    // which homes a third of the store.
+    // filtered by each link's home, stabbed at every part and at the parts
+    // of the stab that named each home alone, so a part a range stands for
+    // that misses the hits only another part finds answers differently: the
+    // reader may read everything but doc2, which homes a third of the store.
     let k = kernel();
     let nullified = assorted(&k);
     let snap = k.snapshot();
@@ -126,6 +129,12 @@ fn stab_answers_exactly_what_a_scan_of_the_store_would() {
                         under_reader(links, slot, query, view, &cannot_read_doc2),
                         homed_outside_doc2(scan),
                         "the reader's stab: {}",
+                        at(view)
+                    );
+                    assert_eq!(
+                        under_reader_by_parts(links, slot, query, view, &cannot_read_doc2),
+                        homed_outside_doc2(scan),
+                        "the reader's stab at the parts that named each home: {}",
                         at(view)
                     );
                 }
@@ -231,6 +240,27 @@ fn under_reader(
     for touch in links.homes_touching([(slot, query)]) {
         if readable(touch.home()) {
             found.extend(links.stab_in(touch.home(), slot, touch.spans(0), view));
+        }
+    }
+    found
+}
+
+/// The stab a reader composes as the region family does: [`under_reader`]
+/// with each readable home probed by `stab_in_slots`, at the spans that named
+/// it and the parts of the stab whose ranges named it for each, its pairs
+/// read out as links.
+fn under_reader_by_parts(
+    links: &skep_links::LinkState,
+    slot: usize,
+    query: &Endset,
+    view: View,
+    readable: &dyn Fn(&Address) -> bool,
+) -> Vec<Address> {
+    let mut found = Vec::new();
+    for touch in links.homes_touching([(slot, query)]) {
+        if readable(touch.home()) {
+            let pairs = links.stab_in_slots(&touch, [(slot, 0)], view);
+            found.extend(pairs.into_iter().map(|(link, _)| link));
         }
     }
     found

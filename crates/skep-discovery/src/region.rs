@@ -14,11 +14,12 @@
 //! candidate homes of that query at every v1 slot in address order, the
 //! reader is asked of each once ahead of its links, and an admitted home is
 //! stabbed once, at every slot together, over the spans that named it at
-//! each — M7's `stab_in_slots`, which answers the home's `(link, slot)` pairs
-//! in address order and builds no set per slot, so a home holding no hit on
-//! the query costs its probes and nothing else. The per-home answers
-//! concatenated in home order are the selection index in address order, so
-//! nothing is merged and a window resumes in its cursor's home. The pieces
+//! each and at the parts of the stab whose ranges named it — M7's
+//! `stab_in_slots`, which answers the home's `(link, slot)` pairs in address
+//! order and builds no set per slot, so a home holding no hit on the query
+//! costs those parts and nothing else. The per-home answers concatenated in
+//! home order are the selection index in address order, so nothing is
+//! merged and a window resumes in its cursor's home. The pieces
 //! the composition shares with the descriptor family and the delete preview
 //! — the slot list, the extents' lift, the probes, the disjunction over
 //! slots, the window over homes — are `sets`'.
@@ -46,10 +47,11 @@ fn touching<'l>(l: &'l LinkState, query: &'l Endset) -> impl Iterator<Item = Tou
 /// One admitted home's share of the selection index, per slot and KEPT
 /// SEPARATE — slot `i` of `a` touches iff the pair `(a, i)` is among them —
 /// as M7's per-home stab answers it over the spans that named the home at
-/// each slot, in address order and then slot order. `View::Active`
-/// discharges addressability — nullified links never match.
+/// each slot, at the parts that named them, in address order and then slot
+/// order. `View::Active` discharges addressability — nullified links never
+/// match.
 fn touched_by_slot(l: &LinkState, touch: &Touch<'_>) -> Vec<(Address, usize)> {
-    l.stab_in_slots(touch.home(), probes(touch, 0), View::Active)
+    l.stab_in_slots(touch, probes(0), View::Active)
 }
 
 /// One admitted home's share of the selection index: the disjunction over

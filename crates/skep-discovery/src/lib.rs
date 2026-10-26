@@ -211,9 +211,10 @@
 //! seek per home a related class holds; `stab_in` stabs one home at one
 //! slot, `O(log n)` per probe plus that home's hits, over the spans that
 //! named it, and `stab_in_slots` stabs one home at several slots together —
-//! one lookup of the home, the same probes per `(slot, span)`, one sort of
-//! the hits and one lift per link, and no set built per slot, so a home
-//! holding no hit costs its probes alone; `match_links_in` is one home's
+//! no lookup of the home, each named `(slot, span)` probed at the parts of
+//! the stab whose directory ranges named the home, one sort of the hits and
+//! one lift per link, and no set built per slot, so a home holding no hit
+//! costs the parts that named it alone; `match_links_in` is one home's
 //! `stab_in` on the driving constraint and a
 //! test of every survivor against the rest; `fewest_homes` picks the driver
 //! by stepping the constraints' candidate homes in lockstep until one runs
@@ -253,11 +254,11 @@
 //!   [`retrieve_endsets_on`]) — one `homes_touching` over the image's
 //!   extents at the three v1 slots, then, per candidate home, one test of
 //!   the reader's predicate and, for each home it admits, one
-//!   `stab_in_slots` over the spans that named it at each of the three
-//!   slots; none when the image is empty. The window walks the homes from
-//!   its cursor's own home to the one that fills its `n`, no further.
-//!   [`retrieve_endsets_on`] adds one `readlink` per link of an admitted
-//!   home.
+//!   `stab_in_slots` over the spans and the parts that named it at each of
+//!   the three slots; none when the image is empty. The window walks the
+//!   homes from its cursor's own home to the one that fills its `n`, no
+//!   further. [`retrieve_endsets_on`] adds one `readlink` per link of an
+//!   admitted home.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — with the home slot constrained: one `homes_under`,
 //!   a seek per home holding links under the slot's spans, then one test of
@@ -277,15 +278,15 @@
 //! * [`delete_orphans_on`] — one `homes_touching` over the deleted and the
 //!   retained runs at the three v1 slots, six pairs in one walk, then, per
 //!   home the deleted side names, one test of the reader's predicate and,
-//!   admitted, two `stab_in_slots`, one a side over the spans that named it
-//!   at each slot, and one binary search per deleted-side link against the
-//!   retained side's; a home the retained side alone names is passed, and
-//!   none at all for a
-//!   request past the run budget. Ahead of every one, each request past the
-//!   width check reads M5's `n_C` for its bounds check — a sum over `d`'s
-//!   content runs, reading each — and a request past the run budget has paid,
-//!   beside it, two reads of M5's `#runs` when `d` alone is past it and the
-//!   resolution of `d`'s content otherwise.
+//!   admitted, two `stab_in_slots`, one a side over the spans and the parts
+//!   that named it at each slot, and one binary search per deleted-side link
+//!   against the retained side's; a home the retained side alone names is
+//!   passed, and none at all for a request past the run budget. Ahead of
+//!   every one, each request past the width check reads M5's `n_C` for its
+//!   bounds check — a sum over `d`'s content runs, reading each — and a
+//!   request past the run budget has paid, beside it, two reads of M5's
+//!   `#runs` when `d` alone is past it and the resolution of `d`'s content
+//!   otherwise.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `stab_typed` at the key's own span on the claim's slot, cut to the
 //!   supersession class: the directory's candidate homes for that span and a

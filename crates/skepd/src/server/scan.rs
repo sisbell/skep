@@ -502,11 +502,12 @@ impl ClassScans {
 /// ([`region_document`]): `find_links_v`, `count_v`, `window_v`,
 /// `retrieve_endsets` — one `homes_touching` over the image's extents at the
 /// three v1 slots, at up to [`skep_discovery::MAX_IMAGE_RUNS`] query spans,
-/// a predicate test per candidate home and three `stab_in`s per admitted
-/// home, the window no further than the home that fills its `n` — and
-/// `delete_orphans` — the same over the deleted and the retained runs, six
-/// pairs in one walk and six `stab_in`s per admitted home, and no owner
-/// gate, so every asker reaches it on any registered document. Each costs
+/// a predicate test per candidate home and one `stab_in_slots` per admitted
+/// home, over the spans and the parts of the stab that named it, the window
+/// no further than the home that fills its `n` — and `delete_orphans` — the
+/// same over the deleted and the retained runs, six pairs in one walk and
+/// two `stab_in_slots` per admitted home, one a side, and no owner gate, so
+/// every asker reaches it on any registered document. Each costs
 /// the homes touching one document's spans and their readable links: a
 /// flooded PUBLIC page still costs its population, which satisfies the
 /// request, so the read is sized by the page the frame names (`d`), and the

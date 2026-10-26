@@ -259,8 +259,8 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
 
 /// One home's links touching one side of the preview's identity — the
 /// disjunction over the v1 slots of the per-home stab, each slot over the
-/// spans that named the home at pair `first + slot index` — each link once,
-/// in address order.
+/// spans that named the home at pair `first + slot index`, at the parts that
+/// named them — each link once, in address order.
 fn touching_side(l: &LinkState, touch: &Touch<'_>, first: usize) -> Vec<Address> {
-    distinct(l.stab_in_slots(touch.home(), probes(touch, first), View::Active)).collect()
+    distinct(l.stab_in_slots(touch, probes(first), View::Active)).collect()
 }

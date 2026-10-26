@@ -74,16 +74,21 @@
 //! **The candidates, lazily and in address order.** [`Touching`] merges every
 //! directory range a query opens — and, for the type slot, the typed slices'
 //! homes the read surface seeks — into one walk yielding each candidate home
-//! once, ascending, with the query spans whose ranges named it: each range
-//! yields its homes ascending, a heap of the ranges yields the least next home
-//! across them, and the ranges naming one home are drained together. A
-//! caller stabs a home over the spans that named it and no other, so the
-//! probes a read runs are the directory entries it stepped, not the product
-//! of its homes and its spans; and a caller that stops early — a window past
-//! its `n` — steps no entry past the homes it passed.
+//! once, ascending, as the index holds it, with the query spans whose ranges
+//! named it: each range yields its homes ascending, a heap of the ranges
+//! yields the least next home across them, and the ranges naming one home are
+//! drained together. Each range stands for one part of the stab ([`Parts`]) —
+//! a block range for the starting half, a node range for the containing half,
+//! the residue range for the residue test — and a span carries the parts of
+//! the ranges that named it. A caller stabs a home over the spans that named
+//! it, at those parts, and no other, so the probes a read runs are the
+//! directory entries it stepped, not the product of its homes, its spans and
+//! the parts of a stab; and a caller that stops early — a window past its `n`
+//! — steps no entry past the homes it passed.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::iter::Peekable;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::{Arc, LazyLock};
 
@@ -332,15 +337,38 @@ impl SlotIndex {
     /// overlaps `q` — once per span and half that finds it, so a caller
     /// wanting each link once deduplicates what it is handed.
     pub(super) fn stab_in<'a>(&'a self, home: &Home, q: &Span, hit: &mut impl FnMut(&'a Tumbler)) {
-        self.starting_inside(home, q, hit);
-        self.containing(home, q.start(), hit);
-        let from = (Arc::clone(home), below_every_link(), 0);
-        for ((at, link, _), span) in self.residue.range((Included(from), Unbounded)) {
-            if at != home {
-                break; // the home's residue is one key range
-            }
-            if overlaps(q, span) {
-                hit(link);
+        self.stab_in_parts(home, q, Parts::ALL, hit);
+    }
+
+    /// Hands `hit` every link homed at `home` one of whose spans here
+    /// overlaps `q` and that one of `parts` finds.
+    ///
+    /// It is [`SlotIndex::stab_in`] at the parts named, every other part
+    /// skipped. A part no range of which named the home finds no link of it
+    /// ([`Parts`]), so at the parts the walk named a home and span at, this
+    /// answers what `stab_in` answers for that span.
+    pub(super) fn stab_in_parts<'a>(
+        &'a self,
+        home: &Home,
+        q: &Span,
+        parts: Parts,
+        hit: &mut impl FnMut(&'a Tumbler),
+    ) {
+        if parts.has(Parts::STARTING) {
+            self.starting_inside(home, q, hit);
+        }
+        if parts.has(Parts::CONTAINING) {
+            self.containing(home, q.start(), hit);
+        }
+        if parts.has(Parts::RESIDUE) {
+            let from = (Arc::clone(home), below_every_link(), 0);
+            for ((at, link, _), span) in self.residue.range((Included(from), Unbounded)) {
+                if at != home {
+                    break; // the home's residue is one key range
+                }
+                if overlaps(q, span) {
+                    hit(link);
+                }
             }
         }
     }
@@ -400,9 +428,10 @@ impl SlotIndex {
     /// a start inside `[s, r)` — the axes that are proper prefixes of `s`,
     /// over the coordinates that keep `a·c` inside the span, and the axes
     /// between `s` and `r` in T1 order, whole — found by seeking the blocks
-    /// the axis actually holds. For the containing half, one stream per
-    /// `(axis, level, node)` of the probe set [`SlotIndex::containing`]
-    /// walks. Residue is the slot's, not the span's:
+    /// the axis actually holds, each standing for [`Parts::STARTING`]. For
+    /// the containing half, one stream per `(axis, level, node)` of the
+    /// probe set [`SlotIndex::containing`] walks, each standing for
+    /// [`Parts::CONTAINING`]. Residue is the slot's, not the span's:
     /// [`SlotIndex::residue_stream`] opens it once per query.
     pub(super) fn streams<'a>(
         &'a self,
@@ -457,7 +486,7 @@ impl SlotIndex {
                     .containing_homes
                     .range((Included(from), Excluded(to)))
                     .map(|(_, _, _, home)| Arc::clone(home));
-                out.push(Stream::new(pair, Some(span), homes));
+                out.push(Stream::new(pair, Some(span), Parts::CONTAINING, homes));
             }
         }
     }
@@ -499,20 +528,21 @@ impl SlotIndex {
                 .starting_homes
                 .range((Included(from), Excluded(to)))
                 .map(|(_, _, home)| Arc::clone(home));
-            out.push(Stream::new(pair, Some(span), homes));
+            out.push(Stream::new(pair, Some(span), Parts::STARTING, homes));
             block = held + 1u32;
         }
     }
 
     /// Returns a stream of every home holding residue here, tagged
-    /// `(pair, None)` — a candidate for every query, the residue being tested
-    /// whole — or `None` where there is no residue.
+    /// `(pair, None)` and standing for [`Parts::RESIDUE`] — a candidate for
+    /// every query, the residue being tested whole — or `None` where there is
+    /// no residue.
     pub(super) fn residue_stream(&self, pair: usize) -> Option<Stream<'_>> {
         if self.residue.is_empty() {
             return None;
         }
         let homes = self.residue.keys().map(|(home, _, _)| Arc::clone(home));
-        Some(Stream::new(pair, None, homes))
+        Some(Stream::new(pair, None, Parts::RESIDUE, homes))
     }
 }
 
@@ -563,13 +593,56 @@ fn coordinates_below(a: &[Nat], r: &[Nat]) -> Option<Past> {
     (a < r).then_some(Past::Every)
 }
 
+/// Which parts of a home's stab a directory range stands for.
+///
+/// The parts are the starting half ([`SlotIndex::starting_inside`]), the
+/// containing half ([`SlotIndex::containing`]) and the residue test. The
+/// ranges of each part name every home that part could hit for a span
+/// `[s, r)`: a run starting inside the span starts on an axis that is a
+/// proper prefix of `s` or lies between `s` and `r` in T1 order, in a block
+/// [`SlotIndex::streams`] opens; a run containing `s` and not starting at it
+/// is filed, on an axis that is a proper prefix of `s`, at the node of `s`'s
+/// coordinate there at one of the levels the axis files at — the node the
+/// containing probe set visits; and the residue range names every home
+/// holding residue. So a home no range of a part named for a span holds no
+/// link that part finds for it, and a stab of the home at the parts that
+/// named it answers what a stab at every part answers. A typed slice's
+/// homes, named by class and not by a range of the index, stand for every
+/// part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Parts(u8);
+
+impl Parts {
+    /// No part: what a span no range named stands for.
+    const NONE: Parts = Parts(0);
+    /// The starting half: the runs starting inside the span.
+    const STARTING: Parts = Parts(1);
+    /// The containing half: the runs containing the span's start.
+    const CONTAINING: Parts = Parts(1 << 1);
+    /// The residue test: every span that is no sibling run, tested whole.
+    const RESIDUE: Parts = Parts(1 << 2);
+    /// Every part: a whole stab.
+    pub(super) const ALL: Parts = Parts(0b111);
+
+    /// Returns the parts of `self` and of `other` together.
+    fn with(self, other: Parts) -> Parts {
+        Parts(self.0 | other.0)
+    }
+
+    /// Returns whether `self` holds `part`.
+    fn has(self, part: Parts) -> bool {
+        self.0 & part.0 != 0
+    }
+}
+
 /// One directory range, or one typed slice's homes: the homes it names,
-/// ascending, and which query it was opened for — `span` the index of the
-/// span within the query's endset, or `None` where it names a home for the
-/// whole query.
+/// ascending, which query it was opened for — `span` the index of the span
+/// within the query's endset, or `None` where it names a home for the whole
+/// query — and the parts of a stab it stands for.
 pub(super) struct Stream<'a> {
     pair: usize,
     span: Option<usize>,
+    parts: Parts,
     homes: Box<dyn Iterator<Item = Home> + 'a>,
 }
 
@@ -578,11 +651,13 @@ impl<'a> Stream<'a> {
     pub(super) fn new(
         pair: usize,
         span: Option<usize>,
+        parts: Parts,
         homes: impl Iterator<Item = Home> + 'a,
     ) -> Stream<'a> {
         Stream {
             pair,
             span,
+            parts,
             homes: Box::new(homes),
         }
     }
@@ -595,11 +670,20 @@ impl<'a> Stream<'a> {
 /// home in address order among its siblings, and, per query the walk was
 /// opened for, the spans some filing of the home could overlap — the spans
 /// the per-home stab need probe, every other span being one no filing of
-/// this home meets.
+/// this home meets — each with the parts of the stab whose ranges named the
+/// home for it, the parts `LinkState::stab_in_slots` probes the span at. The
+/// touch holds the home as the index holds it, so that stab looks the home
+/// up nowhere.
 #[derive(Debug)]
 pub struct Touch<'q> {
+    /// The candidate home.
     home: Address,
-    named: Vec<(usize, &'q Span)>,
+    /// The candidate home as the index holds it.
+    held: Home,
+    /// Per span named: its query's index in the walk, the parts of the stab
+    /// whose ranges named the home for it, and the span — grouped by query,
+    /// each query's spans in its order.
+    named: Vec<(usize, Parts, &'q Span)>,
 }
 
 impl<'q> Touch<'q> {
@@ -616,10 +700,22 @@ impl<'q> Touch<'q> {
     /// Returns the spans of query `query` — its index in the list the walk
     /// was opened over — whose ranges named this home, in the query's order.
     pub fn spans(&self, query: usize) -> impl Iterator<Item = &'q Span> + '_ {
+        self.named_at(query).map(|(span, _)| span)
+    }
+
+    /// Returns the spans of query `query` whose ranges named this home, each
+    /// with the parts of the stab those ranges stand for, in the query's
+    /// order.
+    pub(super) fn named_at(&self, query: usize) -> impl Iterator<Item = (&'q Span, Parts)> + '_ {
         self.named
             .iter()
-            .filter(move |(pair, _)| *pair == query)
-            .map(|(_, span)| *span)
+            .filter(move |(pair, _, _)| *pair == query)
+            .map(|&(_, parts, span)| (span, parts))
+    }
+
+    /// Returns the candidate home as the index holds it.
+    pub(super) fn held(&self) -> &Home {
+        &self.held
     }
 }
 
@@ -629,13 +725,17 @@ impl<'q> Touch<'q> {
 /// typed slices' homes for a type query — ordered by each stream's next home,
 /// so the least home across them comes first; every stream that names it is
 /// drained together and advanced, and the spans those streams were opened for
-/// are the touch's. Lazy: a stream is stepped only as far as the homes
-/// yielded, so a caller that stops steps no entry past them.
+/// are the touch's, each with the parts of the streams that named it. Lazy: a
+/// stream is stepped only as far as the homes yielded, so a caller that stops
+/// steps no entry past them.
 pub(super) struct Touching<'q> {
     /// Per pair, the query's spans by index, for the touches to name.
     spans: Vec<Vec<&'q Span>>,
     streams: Vec<Stream<'q>>,
     heap: BinaryHeap<Reverse<(Home, usize)>>,
+    /// The streams that named the home last yielded, kept from yield to
+    /// yield so a touch allocates its named spans and nothing more.
+    naming: Vec<usize>,
 }
 
 impl<'q> Touching<'q> {
@@ -651,6 +751,7 @@ impl<'q> Touching<'q> {
             spans,
             streams,
             heap,
+            naming: Vec::new(),
         }
     }
 
@@ -667,41 +768,70 @@ impl<'q> Iterator for Touching<'q> {
 
     fn next(&mut self) -> Option<Touch<'q>> {
         let Reverse((home, first)) = self.heap.pop()?;
-        let mut tags = vec![(self.streams[first].pair, self.streams[first].span)];
+        let mut naming = std::mem::take(&mut self.naming);
+        naming.clear();
+        naming.push(first);
         self.advance(first);
         while let Some(Reverse((next, _))) = self.heap.peek() {
             if *next != home {
                 break;
             }
             let Reverse((_, i)) = self.heap.pop().expect("peeked");
-            tags.push((self.streams[i].pair, self.streams[i].span));
+            naming.push(i);
             self.advance(i);
         }
-        tags.sort_unstable();
-        tags.dedup();
-        // A whole-query tag names every span of its pair; otherwise the
-        // spans tagged, each once, in the query's order.
+        // Grouped by pair, and within a pair by span, the whole-query streams
+        // — `None` — ahead of the per-span ones.
+        let streams = &self.streams;
+        naming.sort_unstable_by_key(|&i| (streams[i].pair, streams[i].span));
         let mut named = Vec::new();
-        let mut i = 0;
-        while i < tags.len() {
-            let pair = tags[i].0;
-            let end = i + tags[i..].iter().take_while(|(p, _)| *p == pair).count();
-            if tags[i].1.is_none() {
-                named.extend(self.spans[pair].iter().map(|span| (pair, *span)));
+        let mut at = naming.iter().map(|&i| &streams[i]).peekable();
+        while let Some(&&Stream { pair, .. }) = at.peek() {
+            let whole = join_parts(&mut at, pair, None, Parts::NONE);
+            if whole == Parts::NONE {
+                // Named by its spans alone: each span a range named, once,
+                // at the parts its ranges stand for.
+                while let Some(&&Stream {
+                    pair: next,
+                    span: Some(span),
+                    ..
+                }) = at.peek()
+                {
+                    if next != pair {
+                        break;
+                    }
+                    let parts = join_parts(&mut at, pair, Some(span), Parts::NONE);
+                    named.push((pair, parts, self.spans[pair][span]));
+                }
             } else {
-                named.extend(
-                    tags[i..end]
-                        .iter()
-                        .filter_map(|(_, span)| span.map(|s| (pair, self.spans[pair][s]))),
-                );
+                // Named for the whole query: every span of it, at the whole
+                // query's parts and its own ranges'.
+                for (span, &q) in self.spans[pair].iter().enumerate() {
+                    named.push((pair, join_parts(&mut at, pair, Some(span), whole), q));
+                }
             }
-            i = end;
         }
+        self.naming = naming;
         Some(Touch {
             home: lift_home(&home),
+            held: home,
             named,
         })
     }
+}
+
+/// Returns `parts` joined with the parts of the streams heading `at` that
+/// were opened for span `span` of pair `pair`, consuming those streams.
+fn join_parts<'s, 'q: 's>(
+    at: &mut Peekable<impl Iterator<Item = &'s Stream<'q>>>,
+    pair: usize,
+    span: Option<usize>,
+    mut parts: Parts,
+) -> Parts {
+    while let Some(stream) = at.next_if(|s| s.pair == pair && s.span == span) {
+        parts = parts.with(stream.parts);
+    }
+    parts
 }
 
 /// A sibling run `[p·x, p·y)`, as its axis `p` and its coordinates.
@@ -734,188 +864,4 @@ impl SiblingRun {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    use skep_address::subtree_of;
-
-    use super::*;
-
-    fn tumbler(comps: impl IntoIterator<Item = Nat>) -> Tumbler {
-        Tumbler::new(comps).expect("test tumblers are nonempty")
-    }
-
-    /// Returns the axis every run below sits on, `[1, 0, 1]` — a content
-    /// axis, its last two components `0 · s_C`, so its blocks are
-    /// `2^BLOCK_BITS` wide — plus `tail`.
-    fn on_axis(tail: &[&Nat]) -> Tumbler {
-        let axis = [1u32, 0, 1].map(Nat::from);
-        tumbler(axis.into_iter().chain(tail.iter().map(|&c| c.clone())))
-    }
-
-    /// The one home every run below is filed under.
-    fn home() -> Home {
-        Arc::new(tumbler([1u32, 0, 1, 0, 1].map(Nat::from)))
-    }
-
-    /// Returns the candidate homes a query of the one span `query` opens,
-    /// through the directory alone: every directory range the span opens,
-    /// merged as a read merges them.
-    fn candidates(index: &SlotIndex, query: &Span) -> Vec<Address> {
-        let mut streams = Vec::new();
-        index.streams(query, 0, 0, &mut streams);
-        streams.extend(index.residue_stream(0));
-        Touching::open(vec![vec![query]], streams)
-            .map(Touch::into_home)
-            .collect()
-    }
-
-    /// Returns whether a stab of `index` with the one span `query` answers,
-    /// asked as a read asks: of the homes the directory names, and then of
-    /// each one's filings — so a directory that misses a home the stab would
-    /// hit answers `false` here.
-    fn found(index: &SlotIndex, query: &Span) -> bool {
-        let mut hits = BTreeSet::new();
-        for home in candidates(index, query) {
-            let home: Home = Arc::new(home.into());
-            index.stab_in(&home, query, &mut |link| {
-                hits.insert(link);
-            });
-        }
-        !hits.is_empty()
-    }
-
-    #[test]
-    fn a_sibling_run_is_found_at_exactly_the_points_it_contains() {
-        // Every run [x, y) with x < y ≤ 70, filed alone, against every point
-        // c < 72: at the point's own subtree, which the run starts in or
-        // contains, and beneath it, where only the containing half can see
-        // it. Runs reach level 7 and cross every power of two up to 64, and
-        // every block boundary of the directory. The second grid straddles
-        // 2^64, where the coordinates take two digits and a run crossing 2^64
-        // files at level 65.
-        let link = Arc::new(tumbler([Nat::from(9u32)]));
-        let beneath_tail = Nat::from(5u32);
-        for (offset, size) in [
-            (Nat::from(0u32), 70u32),
-            ((Nat::from(1u32) << 64u32) - 12u32, 24),
-        ] {
-            let probes: Vec<(Nat, Span, Span)> = (0..size + 2)
-                .map(|c| {
-                    let point = &offset + c;
-                    let at = subtree_of(&on_axis(&[&point]));
-                    let beneath = subtree_of(&on_axis(&[&point, &beneath_tail]));
-                    (point, at, beneath)
-                })
-                .collect();
-            for x in 0..size {
-                for y in x + 1..=size {
-                    let (first, end) = (&offset + x, &offset + y);
-                    let run = Span::from_endpoints(on_axis(&[&first]), &on_axis(&[&end]))
-                        .expect("x < y at one length");
-                    let mut index = SlotIndex::default();
-                    index.file(&home(), &link, 0, &run);
-                    for (point, at, beneath) in &probes {
-                        let inside = first <= *point && *point < end;
-                        assert_eq!(found(&index, at), inside, "[{first}, {end}) at {point}");
-                        assert_eq!(
-                            found(&index, beneath),
-                            inside,
-                            "[{first}, {end}) beneath {point}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_directory_names_a_home_once_however_many_ranges_reach_it() {
-        // A home with runs in two blocks of one axis and at a deeper axis,
-        // beside a second home with one run: a query spanning both blocks
-        // and the deeper axis names each home once, in address order, with
-        // every span of the query; a query touching neither home's blocks
-        // names nothing without stabbing anything.
-        let (h1, h2) = (
-            home(),
-            Arc::new(tumbler([1u32, 0, 1, 0, 2].map(Nat::from))),
-        );
-        let link = Arc::new(tumbler([Nat::from(9u32)]));
-        let mut index = SlotIndex::default();
-        let unit = |c: u32| subtree_of(&on_axis(&[&Nat::from(c)]));
-        index.file(&h1, &link, 0, &unit(3));
-        index.file(&h1, &link, 1, &unit(200));
-        index.file(&h1, &link, 2, &subtree_of(&on_axis(&[&Nat::from(5u32), &Nat::from(1u32)])));
-        index.file(&h2, &link, 0, &unit(70));
-        let whole = Span::from_endpoints(on_axis(&[&Nat::from(0u32)]), &on_axis(&[&Nat::from(300u32)]))
-            .expect("a run");
-        assert_eq!(
-            candidates(&index, &whole),
-            vec![lift_home(&h1), lift_home(&h2)]
-        );
-        let elsewhere = Span::from_endpoints(
-            on_axis(&[&Nat::from(1000u32)]),
-            &on_axis(&[&Nat::from(2000u32)]),
-        )
-        .expect("a run");
-        assert!(candidates(&index, &elsewhere).is_empty());
-        // The block grain shows in what a short query names: one home has
-        // a run in the block of 70, the other has none there.
-        assert_eq!(candidates(&index, &unit(71)), vec![lift_home(&h2)]);
-        assert!(!found(&index, &unit(71)), "named by the block, missed by the stab");
-        // On a link axis — `[1, 0, 2]`, the link subspace — the grain is one
-        // coordinate: a run at link 70 is no candidate for a query at link
-        // 71, so a probe at a link no claim names costs no home.
-        let on_link_axis = |c: u32| {
-            subtree_of(&tumbler([1u32, 0, 2, c].map(Nat::from)))
-        };
-        let mut links = SlotIndex::default();
-        links.file(&h2, &link, 0, &on_link_axis(70));
-        assert_eq!(candidates(&links, &on_link_axis(70)), vec![lift_home(&h2)]);
-        assert!(candidates(&links, &on_link_axis(71)).is_empty());
-    }
-
-    #[test]
-    fn the_spans_the_write_paths_store_are_sibling_runs() {
-        // `enc`'s unit-depth spans at every depth, a one-component one
-        // included, and an extent M5's `Run::iextent` builds.
-        for comps in [&[1u32][..], &[1, 0, 1], &[1, 0, 1, 0, 1, 0, 2, 7]] {
-            let t = tumbler(comps.iter().map(|&c| Nat::from(c)));
-            assert!(SiblingRun::of(&subtree_of(&t)).is_some(), "{t}");
-        }
-        let extent =
-            Span::from_endpoints(on_axis(&[&Nat::from(3u32)]), &on_axis(&[&Nat::from(9u32)]))
-                .expect("an extent");
-        let run = SiblingRun::of(&extent).expect("an extent is a sibling run");
-        assert_eq!((run.first, run.end), (Nat::from(3u32), Nat::from(9u32)));
-    }
-
-    #[test]
-    fn a_span_that_is_no_sibling_run_is_tested_whole() {
-        // `[1,0,1,5] + [0,0,1,3]` reaches `[1,0,2,3]`: its width is nonzero
-        // ahead of its last component, so it is no sibling run, and neither is
-        // a span whose width is longer than its start. Its home is a candidate
-        // for every query, and the span is tested against each.
-        let n = |c: u32| Nat::from(c);
-        let span = Span::new(tumbler([1, 0, 1, 5].map(n)), tumbler([0, 0, 1, 3].map(n)))
-            .expect("T12 admits it");
-        let skew =
-            Span::new(tumbler([5, 3].map(n)), tumbler([0, 2, 7].map(n))).expect("T12 admits it");
-        assert!(SiblingRun::of(&span).is_none());
-        assert!(SiblingRun::of(&skew).is_none());
-        let link = Arc::new(tumbler([n(9)]));
-        let mut index = SlotIndex::default();
-        index.file(&home(), &link, 0, &span);
-        let at = |comps: &[u32]| {
-            let probe = subtree_of(&tumbler(comps.iter().map(|&c| n(c))));
-            assert_eq!(candidates(&index, &probe), vec![lift_home(&home())]);
-            found(&index, &probe)
-        };
-        assert!(at(&[1, 0, 1, 5]), "at its start");
-        assert!(at(&[1, 0, 1, 9]), "past its start, on its start's axis");
-        assert!(at(&[1, 0, 2, 2]), "on the next axis, short of its reach");
-        assert!(!at(&[1, 0, 1, 4]), "abutting its start");
-        assert!(!at(&[1, 0, 2, 3]), "abutting its reach");
-        assert!(!at(&[1, 0, 1, 4, 7]), "beneath a tumbler short of it");
-    }
-}
+mod tests;

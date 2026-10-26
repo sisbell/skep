@@ -7,7 +7,7 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{document_of, Address};
+use skep_address::{document_of, validate, Address};
 use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_engine::types::{
     t_binding, t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_policy_link,
@@ -17,7 +17,7 @@ use skep_engine::types::{
 use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, HasIdentity, TargetClass, WriteTypes};
 use skep_kernel::Attestation;
-use skep_links::{enc, is_replaces_class, HasLinks, SlotArg};
+use skep_links::{enc, is_replaces_class, registry, HasLinks, ShippedType, SlotArg};
 use skep_namespace::{
     first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
@@ -48,7 +48,10 @@ use skep_engine::World;
 /// `3.57` and the policy link `3.58`, each at its kind's address so every
 /// subtype row under the last two is a member by prefix (REG-1.21); the
 /// endpoint `3.56` is not listed, read on the active view with its org's own
-/// `nullify` effective (REG-1.11). Adding a member of PUB-6.64's class is one
+/// `nullify` effective (REG-1.11). One member is no commons pin: the
+/// supersession claim's type is M7's own reserved ghost tumbler
+/// `1.1.0.1.0.1.0.1.4`, read from M7's registry ([`supersedes_type`]) and
+/// spelled nowhere else. Adding a member of PUB-6.64's class is one
 /// `AuditClass` arm and one address in this list; the refusal that reads
 /// them takes no edit. The list order is the recognition order and every
 /// address is pairwise prefix-free.
@@ -75,10 +78,33 @@ fn write_types() -> &'static WriteTypes {
                 (AuditClass::Binding, t_binding().clone()),
                 (AuditClass::TakedownRecord, t_takedown().clone()),
                 (AuditClass::PolicyLink, t_policy_link().clone()),
+                (AuditClass::Supersession, supersedes_type()),
             ],
         )
     });
     &TYPES
+}
+
+/// Returns the supersession class's type address, M7's reserved ghost
+/// tumbler `1.1.0.1.0.1.0.1.4`.
+///
+/// It is the one address every claim's type slot names
+/// (`skep_links::supersession_claim`: `enc([supersedes])`, one unit span),
+/// read off M7's registry — `reserved_type(Supersedes)`'s one denoted
+/// address — rather than spelled again here, so the class the write path
+/// refuses and the type the store deposits cannot part; the engine's ledger
+/// pins no supersedes address (`skep_engine::types` holds the commons `3.x`
+/// pins, and the five reserved tumblers are M7's format constants).
+///
+/// # Panics
+///
+/// Panics where the registry's supersedes endset denotes no one T4-valid
+/// address, which it cannot: `ReservedAddrs::format` builds it from M3's
+/// ghost position, one unit span.
+fn supersedes_type() -> Address {
+    let supersedes = registry().reserved_type(ShippedType::Supersedes);
+    let denoted = supersedes.single_denoted().expect("the supersedes type is one unit span");
+    validate(denoted.clone()).expect("the reserved ghost tumbler is T4-valid")
 }
 
 // ── nullify_refusal — the nullify class, read lock (AUTH-3.7–3.9; PUB-6.10,
@@ -125,7 +151,20 @@ fn write_types() -> &'static WriteTypes {
 ///   home is published (RES-207, keyed on the type *and* on
 ///   `published(document_of(target))` — the same read the publish-class
 ///   gate takes one slot earlier, no read added); draft-homed it is an
-///   ordinary link, admitted.
+///   ordinary link, admitted. The supersession claim (`assert_sup`'s and
+///   `edit_link`'s, typed M7's supersedes ghost) is a member only where the
+///   claim's `new` — its `to`, single-denoted by the Df-DISC(ii) schema
+///   every stored claim keeps — is homed in a PUBLISHED document (the
+///   wire-lane decision 3, RES-207's shape on the other end): a claim that a
+///   public copy supersedes its original is a fact of a past act that no act
+///   legitimately retracts, and the publication's resume reads it on the
+///   ACTIVE view; a claim whose `new` is private — a correction inside the
+///   owner's own notes — stays an ordinary link, its retraction the one
+///   correction path M7 documents for a wrong claim. The read is of the
+///   target link this producer already holds; `document_of(new)` is
+///   arithmetic, and `published()` on it takes PUB-6.37's registered-only
+///   evaluation, since a `new` that a stored claim names was resident when
+///   the claim was deposited and so its home is registered.
 ///
 /// **The grant and audit-view cells' entitlement** is the caller who could
 /// otherwise open the path — M7's own v1 gate mirrored: ω of the record's
@@ -156,12 +195,17 @@ fn nullify_refusal(
     let class = write_types().target_class(link.type_slot())?;
     let m3 = world.m3();
     let claimed = world.identity().claimant().is_some();
-    // The class's own token, chosen before entitlement is consulted — the arm
-    // carrying a second key of its own is a home-conditional class's (RES-207,
-    // `AuditClass::requires_published_home` — the classification link
-    // alone): the link's own home published. A resident link's home is
-    // registered (M7's HomeNotRegistered gate), so `published()`'s
-    // registered-only contract (PUB-6.37) holds on it; draft-homed it is an
+    // The class's own token, chosen before entitlement is consulted — the
+    // arms carrying a second key of their own are the home-conditional
+    // class's (RES-207, `AuditClass::requires_published_home` — the
+    // classification link alone): the link's own home published; and the
+    // new-conditional class's (`AuditClass::requires_published_new` — the
+    // supersession claim alone): the home of the link the claim's `to`
+    // denotes published. A resident link's home is registered (M7's
+    // HomeNotRegistered gate), and so is the home of a link a resident claim
+    // names (the claim's schema held both endpoints resident at its deposit;
+    // nothing unregisters a document), so `published()`'s registered-only
+    // contract (PUB-6.37) holds on both; outside its key the link is an
     // ordinary link and this producer answers nothing.
     let token = match class {
         TargetClass::Credential(_) => CredentialRefusal::NullifyNotRetraction,
@@ -169,6 +213,11 @@ fn nullify_refusal(
         TargetClass::AuditView(audit_class)
             if audit_class.requires_published_home()
                 && !document_of(target).as_ref().is_some_and(|d| published(world, d)) =>
+        {
+            return None
+        }
+        TargetClass::AuditView(audit_class)
+            if audit_class.requires_published_new() && !published_new(world, link) =>
         {
             return None
         }
@@ -186,6 +235,24 @@ fn nullify_refusal(
         return None;
     }
     Some(token)
+}
+
+/// Returns whether the link a claim's `to` denotes is homed in a published
+/// document — the supersession class's second key.
+///
+/// The `to` of a stored claim denotes one address (the Df-DISC(ii) schema
+/// `assert_sup` and `editlink` establish and the `[K_sup]` fences keep), the
+/// successor; its document is address arithmetic (PUB-6.38), and the
+/// publication read is the engine's one definition through [`published`].
+/// A `to` that denotes no one address, or one with no document, is no claim
+/// the fences admitted, and answers `false`: such a link is an ordinary one.
+fn published_new(world: &World, claim: &skep_links::Link) -> bool {
+    claim
+        .to_slot()
+        .single_denoted()
+        .and_then(|new| validate(new.clone()).ok())
+        .and_then(|new| document_of(&new))
+        .is_some_and(|d| published(world, &d))
 }
 
 // ── mint_home_refusal — the mint class (AUTH-3.10–3.14) ──────────────────
@@ -282,7 +349,7 @@ fn first_mint_private_refusal(
 /// pair and name a state for a record whose signed bytes named none. The
 /// class test is M7's own, [`skep_links::is_replaces_class`], asked of the
 /// slot the store would deposit — `enc(addrs)` for the address form, and
-/// nothing for a `Resolve` slot, which resolves to content and never names
+/// nothing for a `Resolve` or an I-span slot, which name content and never
 /// the class — so this refusal and the store's own fence fall on the same
 /// slots, and the wire answers `replaces_not_standalone` where the store
 /// would have answered `dc_violation`. A `replaces`-typed write is never a
@@ -311,9 +378,13 @@ fn replaces_refusal(
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
+    // The two content forms never name the class: a `Resolve` slot resolves
+    // to content, and an I-span slot is held by M7's content clause to
+    // content-subspace starts, under which the `replaces` type — a
+    // subspace-3 address — has no span.
     let in_class = |slot: &SlotArg| match slot {
         SlotArg::Addrs(addrs) => is_replaces_class(&enc(addrs.iter())),
-        SlotArg::Resolve(_) => false,
+        SlotArg::Resolve(_) | SlotArg::Spans(_) => false,
     };
     let (replaces_typed, homes): (bool, Vec<&Address>) = match op {
         Op::MakeLink { home, ty, .. } => (in_class(ty), vec![home]),
@@ -808,6 +879,7 @@ mod tests {
             (AuditClass::Binding, t_binding()),
             (AuditClass::TakedownRecord, t_takedown()),
             (AuditClass::PolicyLink, t_policy_link()),
+            (AuditClass::Supersession, &supersedes_type()),
         ] {
             assert_eq!(
                 types.target_class(&unit(addr)),
@@ -816,6 +888,18 @@ mod tests {
                 addr.tumbler()
             );
         }
+        // The supersession class's address is M7's reserved ghost tumbler,
+        // read from M7 and spelled here only to pin the reading: a stored
+        // claim's type slot is exactly that class.
+        assert_eq!(supersedes_type(), addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 4]));
+        let claim = skep_links::supersession_claim(
+            &addr_of(&[1, 0, 1, 0, 1, 0, 2, 1]),
+            &addr_of(&[1, 0, 1, 0, 1, 0, 2, 2]),
+        );
+        assert_eq!(
+            types.target_class(claim.type_slot()),
+            Some(TargetClass::AuditView(AuditClass::Supersession))
+        );
         // The registry's subtype rows are their kinds' members by prefix
         // (REG-1.21); the endpoint is no class at all (REG-1.11, REG-1.46).
         for (class, addr) in [

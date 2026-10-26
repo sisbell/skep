@@ -1,14 +1,14 @@
-//! MAKELINK (ASN-0120), the open surface, in both forms.
+//! MAKELINK (ASN-0120), the open surface, in its three slot forms.
 //!
 //! [`SlotArg`] is the slot argument; [`slot_endset`] the endset a slot builds
-//! under both per-slot budgets; `stage_record` the record half both forms
-//! stage; and [`LinkWriter::makelink`] and [`LinkWriter::makelink_replacing`]
-//! the two forms — the one op family that seats, so the one block bounded by
-//! `HasM5`.
+//! under both per-slot budgets; `stage_record` the record half both MAKELINK
+//! forms stage; and [`LinkWriter::makelink`] and
+//! [`LinkWriter::makelink_replacing`] the two forms — the one op family that
+//! seats, so the one block bounded by `HasM5`.
 
-use skep_address::{Address, Span};
+use skep_address::{content_subspace, validate, Address, Span};
 use skep_arrangement::{
-    as_ordinal_vspan, stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec,
+    as_ordinal_vspan, stage_seat_link, Caller, HasM5, M5Rec, M5State, Run, SeatError, VSpec,
 };
 use skep_kernel::{Seq, Staging, TxnError};
 use skep_namespace::{M3Rec, M3State};
@@ -19,23 +19,29 @@ use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
 use crate::error::MakeLinkError;
 use crate::registry::{registry, ShippedType};
-use crate::state::LinkRec;
+use crate::state::{LinkRec, FROM, TO, TYPE};
 use crate::LinkWorld;
 
 /// One MAKELINK endset argument (ASN-0043 L4/L8/L9/L13).
 ///
-/// It is content V-specs resolved against the txn base, or address names
+/// It is content V-specs resolved against the txn base; address names
 /// recorded verbatim as [`enc`]`(addrs)`, with no resolution, no occupancy
 /// requirement, and nothing beyond the T4 validity `Address` already carries
 /// (LM 4/44: type matching is by address, contents never examined; ghost
-/// names are valid). Per-slot either/or — no mixing within a slot in v1 (a
-/// mixed need resolves first via the read surface and passes `Addrs`). Also
-/// M10's successor type slot: the one two-form enum serves both surfaces.
+/// names are valid); or content I-spans recorded verbatim (W6 (a)), the
+/// third form, which names its spans as the address form names its
+/// addresses — no source, so nothing is consulted, resolved or required
+/// registered or occupied — and is held to one shape by request arithmetic
+/// alone ([`SlotArg::ill_formed_span`]). Per-slot one form — no mixing
+/// within a slot in v1 (a mixed need resolves first via the read surface
+/// and passes `Addrs` or `Spans`). Also M10's successor slots: the one
+/// three-form enum serves both surfaces, the successor's `from` and `to`
+/// taking the first and the third form.
 ///
 /// Equality is structural over the form and its list — the relation a caller
 /// comparing two requests wants: the same slot, asked for in the same form,
-/// naming the same things in the same order, which is the order both arms
-/// deposit in. It is not a claim about the endset either would become: a
+/// naming the same things in the same order, which is the order every arm
+/// deposits in. It is not a claim about the endset either would become: a
 /// `Resolve` slot's is a function of the txn base as well as the argument, so
 /// two equal `Resolve` slots deposit different endsets against different
 /// bases. Coverage identity is [`coverage_class`], one level down and after
@@ -48,19 +54,93 @@ pub enum SlotArg {
     Resolve(Vec<VSpec>),
     /// Address names, deposited verbatim as the canonical `enc` endset.
     Addrs(Vec<Address>),
+    /// Content I-spans, deposited verbatim (W6 (a); the wire's
+    /// `{"spans": […]}`).
+    ///
+    /// Each span is one the read by identity names and a `Run`'s `iextent`
+    /// is: its start a CONTENT-subspace element position, its width the
+    /// ordinal displacement `0…0.n` with `n ≥ 1` — so level-uniform, and the
+    /// shape a `Resolve` slot stores — checked by [`SlotArg::ill_formed_span`]
+    /// on the request's own bytes. Nothing of the spans' document is read:
+    /// not its registration, not its arrangement, not a byte — a ghost
+    /// position past a frontier, or of a document no one minted, is a valid
+    /// name here exactly as it is in the address form, which is what lets a
+    /// writer name positions it cannot read without being told anything of
+    /// them (the read check, `skepd`'s `ispan_slot` suite).
+    Spans(Vec<Span>),
 }
 
 impl SlotArg {
-    /// Returns the `Resolve` form's specs — the wf-check domain.
+    /// Returns the `Resolve` form's specs — the wf-check domain, and the
+    /// sources a reader of the slot consults.
     ///
     /// `Addrs` names get no check beyond the T4 validity their type already
-    /// carries (ReflexiveAddressing: any T4-valid name, occupied or ghost).
-    fn specs(&self) -> &[VSpec] {
+    /// carries (ReflexiveAddressing: any T4-valid name, occupied or ghost),
+    /// and `Spans` names none beyond their shape; both answer the empty
+    /// slice. Public for M10, whose door consults a slot's sources and whose
+    /// entry-frame composer asks their readability, and which reads them off
+    /// the one form that has any.
+    pub fn specs(&self) -> &[VSpec] {
         match self {
             SlotArg::Resolve(specs) => specs,
-            SlotArg::Addrs(_) => &[],
+            SlotArg::Addrs(_) | SlotArg::Spans(_) => &[],
         }
     }
+
+    /// Returns the index of the first span that is no content I-span, if any.
+    ///
+    /// The I-span form's one shape — THE CONTENT CLAUSE (the wire-lane
+    /// decision 5) — decided on the span's own bytes and no world read: a
+    /// span is admitted iff it is the extent of a content run, M5's
+    /// [`Run::new`] admitting its start (a T4-valid element position
+    /// `doc·0·subspace·ordinal`) with its width's last component as the
+    /// run's width (so `n ≥ 1`) and that run's `iextent` being the span
+    /// itself (so the width is `0…0.n` at the start's own length, and the
+    /// span level-uniform), and the start's subspace is the content
+    /// subspace. The clause is what keeps the form off every address a
+    /// classifier reads: a subspace-3 type address — a credential type's, a
+    /// registry kind's, the `replaces` class — has a unit span of the same
+    /// two-tumbler shape, and a slot spelling one here would reach the plain
+    /// path and the fold as a deposit the credential and registry sequences
+    /// never judged, since both classify the address form alone. The five
+    /// reserved ghost tumblers are content positions and pass the clause;
+    /// the two with a sole writer are caught by the fences below exactly as
+    /// their address form is.
+    ///
+    /// Public for M10's successor build, which admits the form on an
+    /// `edit_link`'s `from` and `to` through this same test — one spelling,
+    /// so the two ops cannot drift. Answers the first offending span's
+    /// index, the `site.index` its refusal names.
+    pub fn ill_formed_span(spans: &[Span]) -> Option<usize> {
+        spans.iter().position(|span| !is_content_ispan(span))
+    }
+}
+
+/// The V-spec form, for a caller that holds specs alone.
+///
+/// The successor's `from` and `to` were V-specs by type before the I-span
+/// form joined them (M10's `SuccessorSpec`); a caller building one from its
+/// specs still writes the list and converts.
+impl From<Vec<VSpec>> for SlotArg {
+    fn from(specs: Vec<VSpec>) -> SlotArg {
+        SlotArg::Resolve(specs)
+    }
+}
+
+/// Returns whether `span` is a content I-span — [`SlotArg::ill_formed_span`]'s
+/// per-span test.
+///
+/// `Run::new`'s admission plus the content clause, then the extent equality
+/// that pins the width's shape; every step is arithmetic on the span.
+fn is_content_ispan(span: &Span) -> bool {
+    let Ok(start) = validate(span.start().clone()) else { return false };
+    if start.subspace() != Some(&content_subspace()) {
+        return false;
+    }
+    // The width's last component, `Tumbler::get` being 1-based.
+    let width = span.width();
+    let Some(count) = width.get(width.len()) else { return false };
+    Run::new(start, count.clone()).is_ok_and(|run| run.iextent() == *span)
 }
 
 impl From<SeatError> for MakeLinkError {
@@ -105,6 +185,11 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// `Addrs`: the canonical name encoding, deposited unresolved, one span per
 /// name, counted before the encoding is built and commanding no walk.
 ///
+/// `Spans`: the spans as given, counted and copied, reading no state at all
+/// — the one path of the three that touches neither `m5` nor any document,
+/// which is the read check's first premise (the content clause is
+/// `stage_record`'s, ahead of this).
+///
 /// Public for one caller beside [`LinkWriter::makelink`]: the daemon's
 /// composer of a MAKELINK's entry frame (signed ops), which composes each
 /// slot's row from *the endset this transaction will deposit* — the same
@@ -142,27 +227,32 @@ pub fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
             Some(Endset::from_spans(spans))
         }
         SlotArg::Addrs(addrs) => (addrs.len() <= MAX_SLOT_SPANS).then(|| enc(addrs)),
+        SlotArg::Spans(spans) => {
+            (spans.len() <= MAX_SLOT_SPANS).then(|| Endset::from_spans(spans.iter().cloned()))
+        }
     }
 }
 
 /// Stages the record half of MAKELINK, in a transaction the caller opened.
 ///
-/// That half is the home gate, the specs' well-formedness, the three slots'
-/// endsets under their budgets, the three sole-writer fences, the deposit
-/// under the Open gate and its seat — everything [`LinkWriter::makelink`]
-/// states — answering the record's address. One body, which both MAKELINK
-/// forms stage: [`LinkWriter::makelink`] alone,
-/// [`LinkWriter::makelink_replacing`] followed by the record's `replaces`
-/// link.
+/// That half is the home gate, the specs' well-formedness, the I-spans'
+/// shape, the three slots' endsets under their budgets, the three
+/// sole-writer fences, the deposit under the Open gate and its seat —
+/// everything [`LinkWriter::makelink`] states — answering the record's
+/// address. One body, which both MAKELINK forms stage:
+/// [`LinkWriter::makelink`] alone, [`LinkWriter::makelink_replacing`]
+/// followed by the record's `replaces` link.
 ///
 /// # Errors
 ///
 /// In the order its steps run: `HomeNotRegistered`, then `NotOwner`, for
 /// `home`, asked of the base; `IllFormedSpec` for a spec of any slot;
-/// `SlotTooLarge` for the first slot over a budget; `RetractionClass`,
-/// `SupersessionClass` or `ReplacesClass` for the resolved type slot's
-/// class; `EmptyTypeResolution` from the Open gate on an empty type slot;
-/// `Mint` where the mint fails; and `Seat` where the seat step refuses.
+/// `NotContentSpan` for the first I-span of any slot that is no content
+/// I-span, slots in declared order; `SlotTooLarge` for the first slot over a
+/// budget; `RetractionClass`, `SupersessionClass` or `ReplacesClass` for the
+/// resolved type slot's class; `EmptyTypeResolution` from the Open gate on
+/// an empty type slot; `Mint` where the mint fails; and `Seat` where the
+/// seat step refuses.
 fn stage_record<W>(
     stg: &mut Staging<W>,
     visibility: &Visibility<'_, W>,
@@ -187,15 +277,31 @@ where
         if !specs.all(|spec| is_wf_content_spec(base.m3(), spec)) {
             return Err(MakeLinkError::IllFormedSpec);
         }
+        // The I-span form's shape — the content clause — by slot and index,
+        // on the request's own bytes: the one check the form takes, and no
+        // read of the spans' document stands beside it (the address form's
+        // rule, which the read check holds this form to).
+        for (slot, arg) in [(FROM, from), (TO, to), (TYPE, ty)] {
+            if let SlotArg::Spans(spans) = arg {
+                if let Some(index) = SlotArg::ill_formed_span(spans) {
+                    return Err(MakeLinkError::NotContentSpan { slot, index });
+                }
+            }
+        }
         let endset_of = |arg| slot_endset(base.m5(), arg).ok_or(MakeLinkError::SlotTooLarge);
         (endset_of(from)?, endset_of(to)?, endset_of(ty)?)
     };
     // The sole-writer fences. Total: a `Resolve` slot is level-uniform by
-    // M5's construction and an `Addrs` slot is address-denoting, which are
-    // the same two grounds under which the fold classifies this very value
-    // one step later. `⟨⟩` classifies as the empty denoted antichain, which
-    // is none of the three classes, so ML6 stays the deposit gate's check
-    // and no input can satisfy both.
+    // M5's construction, a `Spans` slot by the shape check above, and an
+    // `Addrs` slot is address-denoting, which are the same grounds under
+    // which the fold classifies this very value one step later. `⟨⟩`
+    // classifies as the empty denoted antichain, which is none of the three
+    // classes, so ML6 stays the deposit gate's check and no input can
+    // satisfy both. A content extent wider than one position classes as an
+    // extent, never as any of the three; a width-1 content I-span at a
+    // reserved ghost tumbler IS that tumbler's unit span and classes as its
+    // class, so the two fenced ghosts are refused here in this form as in
+    // the address form.
     let e3_class = coverage_class(&e3);
     if e3_class == *r_class {
         return Err(MakeLinkError::RetractionClass); // K ≁ R
@@ -227,7 +333,9 @@ where
     /// off the txn base — the whole op linearizes at its commit, ASN-0134); a
     /// [`SlotArg::Addrs`] slot is `enc(addrs)`, the names verbatim (L8:
     /// matching is by address, contents never examined; ghost names valid,
-    /// L9) — requires the type endset non-empty as given, mints a fresh
+    /// L9); a [`SlotArg::Spans`] slot is its content I-spans verbatim, each
+    /// held to the content clause and nothing read of its document (W6 (a))
+    /// — requires the type endset non-empty as given, mints a fresh
     /// home-scoped link, deposits the standard triple, then seats it in
     /// `home`'s link subspace (K.μ⁺_L, no R — J-LV). One M2 composite under
     /// `link_lock_key(home)` (the held lock and the advanced frontier are
@@ -258,8 +366,10 @@ where
     /// wf-checked — a registered source, and a depth-2 content V-position with
     /// ordinal displacement — before any slot is built (`IllFormedSpec`);
     /// `Addrs` names get no wf step, T4 validity being the whole precondition
-    /// and already carried by the `Address` type. Every slot is then held, as
-    /// [`slot_endset`] builds it, to [`MAX_SLOT_SPANS`] spans in either form
+    /// and already carried by the `Address` type; every `Spans` span is held
+    /// to the content clause, slots in declared order and the first
+    /// offending span named (`NotContentSpan`). Every slot is then held, as
+    /// [`slot_endset`] builds it, to [`MAX_SLOT_SPANS`] spans in any form
     /// and, for a `Resolve` slot, to [`MAX_SLOT_RESOLVE_STEPS`] run-list
     /// steps — both refused `SlotTooLarge`, both charged inside this
     /// transact, under the applier lock the whole engine writes through. The

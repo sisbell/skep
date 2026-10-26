@@ -173,8 +173,8 @@ fn a_retried_editlink_replays_both_addresses_unswapped() {
     let edit = || Op::EditLink {
         original: original.clone(),
         successor: SuccessorSpec {
-            from: vec![vspec(&d, 1, 1)],
-            to: vec![vspec(&d, 2, 1)],
+            from: vec![vspec(&d, 1, 1)].into(),
+            to: vec![vspec(&d, 2, 1)].into(),
             ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
         },
         d_s: d.clone(),

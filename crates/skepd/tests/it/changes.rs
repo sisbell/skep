@@ -640,11 +640,12 @@ const TERMS: [&str; 5] = ["new_prefix", "new_id", "link", "placed", "base_extent
 
 /// The terms an op's row carries (wire.md §The change feed); every other
 /// is ABSENT on its row — `emit` and `edit_link` mint links too and carry
-/// none (r6-2a names `make_link` alone).
+/// none (r6-2a named `make_link` alone; the link-sets ruling W14 added
+/// `assert_sup`'s claim, a one-document row served whole or omitted).
 fn terms_of(op: &str) -> &'static [&'static str] {
     match op {
         "delegate" => &["new_prefix", "new_id"],
-        "make_link" => &["link"],
+        "make_link" | "assert_sup" => &["link"],
         "publish" => &["placed", "base_extent"],
         _ => &[],
     }
@@ -946,10 +947,17 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         let (_, entry) = feed_entry(port, &s1, what, &frame);
         assert_eq!(entry["op"].as_str(), Some(op_of(what)), "{what}: the entry's op kind");
         assert_eq!(entry["docs"], docs, "{what}: the affected-docs convention");
-        // The terms: none on any of these rows — `emit` mints a link and
-        // carries no `link`, `assert_sup` and `nullify` deposit records and
-        // carry none either.
+        // The terms: `emit` mints a link and carries no `link`, `nullify`
+        // deposits a record and carries none; `assert_sup`'s row carries its
+        // claim's address (W14), asserted below by op.
         assert_terms_by_op(&entry, what);
+        if op_of(what) == "assert_sup" {
+            let home = docs[0].as_str().expect("the claim's home");
+            assert!(
+                entry["link"].as_str().is_some_and(|l| l.starts_with(&format!("{home}.0.2."))),
+                "{what}: the claim's address, in its home's link subspace, rides its row: {entry}"
+            );
+        }
         assert_eq!(entry["key"].as_str(), Some("bare"), "{what}: a bare session's write");
         assert_absent(&entry, &["attest"], what);
     }

@@ -19,13 +19,15 @@ use crate::shape::{single_address, sole_span, CredentialKind, TypeAddrs};
 /// view, so a `nullify` of one clears nothing and is refused at the write
 /// path. The list is the members' list and never the boundary: the next
 /// audit-view class is one arm here — with its
-/// [`AuditClass::requires_published_home`] answer, which the compiler
+/// [`AuditClass::requires_published_home`] and
+/// [`AuditClass::requires_published_new`] answers, which the compiler
 /// demands, and its entry in this type's own list of classes, which it does
 /// not — and one address at [`WriteTypes::new`], which refuses a builder that
 /// gives a class none, with no edit to any rule that reads them. Which type
 /// address each class sits at is the caller's to supply (the commons ledger's
-/// numbers, pinned in the engine) — this crate is parametric over them exactly
-/// as it is over the three credential addresses (AUTH-7.1).
+/// numbers, pinned in the engine; M7's own reserved tumbler for the
+/// supersession claim) — this crate is parametric over them exactly as it is
+/// over the three credential addresses (AUTH-7.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditClass {
     /// The succession pair's `successor-of` claim (PUB-7.63).
@@ -91,6 +93,25 @@ pub enum AuditClass {
     /// endpoint, the registry's other kind, is no member: read on the active
     /// view, its org's own `nullify` effective (REG-1.11).
     PolicyLink,
+    /// The supersession claim — `assert_sup`'s and `edit_link`'s `[K_sup]`
+    /// link, typed M7's reserved supersedes ghost tumbler.
+    ///
+    /// It is a member where the claim's `new` — its `to`, one denoted
+    /// address — is homed in a PUBLISHED document (the link-sets wire-lane
+    /// decision 3, narrowing "THE TWO LEFTOVERS RULED" (2)):
+    /// [`AuditClass::requires_published_new`] answers `true` for it, the
+    /// second key in RES-207's shape on the claim's other end, the type half
+    /// this classifier's and the home half the caller's, off the target link
+    /// it already reads. The ground: a claim that a public copy supersedes
+    /// its original is a fact of a past act that no act legitimately
+    /// retracts — the publication's resume reads the claims on the ACTIVE
+    /// view to know what landed, so a retraction would un-land what the
+    /// board already served — where a claim whose `new` is private, a
+    /// correction inside the owner's own notes, stays an ordinary link and
+    /// M7's one correction path for a wrong claim. The address is not a
+    /// commons pin but M7's own constant (`1.1.0.1.0.1.0.1.4`), read from
+    /// M7's registry by the builder.
+    Supersession,
 }
 
 impl AuditClass {
@@ -99,10 +120,11 @@ impl AuditClass {
     /// The language enumerates no enum's arms, so it is kept by hand: the
     /// compiler does not hold it to the enum, and the suite holds it only to
     /// the classes its fixture names. It sits beside
-    /// [`AuditClass::requires_published_home`], whose exhaustive match is
+    /// [`AuditClass::requires_published_home`] and
+    /// [`AuditClass::requires_published_new`], whose exhaustive matches are
     /// where a new class first fails to compile, so the class joins it in
     /// that edit.
-    const ALL: [AuditClass; 10] = [
+    const ALL: [AuditClass; 11] = [
         AuditClass::SuccessorOf,
         AuditClass::DelegatorEndorsement,
         AuditClass::ConsumptionMarker,
@@ -113,6 +135,7 @@ impl AuditClass {
         AuditClass::Binding,
         AuditClass::TakedownRecord,
         AuditClass::PolicyLink,
+        AuditClass::Supersession,
     ];
 
     /// Returns whether membership needs the link's own home published.
@@ -133,6 +156,38 @@ impl AuditClass {
             | AuditClass::ConsumptionMarker
             | AuditClass::JournalDesignation
             | AuditClass::RailRecord
+            | AuditClass::Replaces
+            | AuditClass::Binding
+            | AuditClass::TakedownRecord
+            | AuditClass::PolicyLink
+            | AuditClass::Supersession => false,
+        }
+    }
+
+    /// Returns whether membership needs the home of the link's `to`
+    /// published — the claim's `new`.
+    ///
+    /// [`AuditClass::requires_published_home`]'s neighbour, in RES-207's
+    /// shape on the link's other end: where it answers `true`, a link of this
+    /// class is a member only where the one address its `to` slot denotes is
+    /// homed in a published document; otherwise it is an ordinary link. The
+    /// supersession claim alone answers `true` (the wire-lane decision 3): a
+    /// claim naming a published copy as `new` is permanent, one naming a
+    /// private successor is correctable. The type half is
+    /// [`WriteTypes::target_class`]'s, and the `to`'s denotation and the
+    /// publication read are the caller's, off the target link it reads for
+    /// the type — keyed on this answer, never on a variant it names. Matched
+    /// exhaustively with no wildcard, so a new class does not compile until
+    /// it says whether its membership waits on its `new`.
+    pub fn requires_published_new(self) -> bool {
+        match self {
+            AuditClass::Supersession => true,
+            AuditClass::SuccessorOf
+            | AuditClass::DelegatorEndorsement
+            | AuditClass::ConsumptionMarker
+            | AuditClass::JournalDesignation
+            | AuditClass::RailRecord
+            | AuditClass::StewardClassification
             | AuditClass::Replaces
             | AuditClass::Binding
             | AuditClass::TakedownRecord

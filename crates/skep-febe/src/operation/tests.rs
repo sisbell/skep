@@ -639,8 +639,8 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
     let buildable_edit = Op::EditLink {
         original: doc.clone(),
         successor: SuccessorSpec {
-            from: vec![],
-            to: vec![],
+            from: vec![].into(),
+            to: vec![].into(),
             ty: SlotArg::Addrs(vec![doc.clone()]),
         },
         d_s: doc.clone(),
@@ -878,8 +878,8 @@ fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
     };
     assert_eq!(m5.resolve(&doc, &two_spans().span).len(), 2, "premise: two spans per spec");
     let successor = |specs: usize| SuccessorSpec {
-        from: vec![two_spans(); specs],
-        to: vec![],
+        from: vec![two_spans(); specs].into(),
+        to: vec![].into(),
         ty: SlotArg::Addrs(vec![doc.clone()]),
     };
 
@@ -943,8 +943,8 @@ fn an_unjudged_successor_slot_over_the_work_budget_is_built_for_the_store_to_ref
     let at_budget = MAX_SLOT_RESOLVE_STEPS / run_count;
     assert_eq!(at_budget * run_count, MAX_SLOT_RESOLVE_STEPS, "premise: the budget is whole walks");
     let successor = |specs: usize| SuccessorSpec {
-        from: vec![past_the_end(); specs],
-        to: vec![],
+        from: vec![past_the_end(); specs].into(),
+        to: vec![].into(),
         ty: SlotArg::Addrs(vec![doc.clone()]),
     };
 

@@ -1,10 +1,10 @@
 //! EDITLINK's read-assembled successor (§4).
 //!
 //! It is the one request whose slots M10 builds itself, from content V-specs
-//! resolved through M5 off a snapshot pinned *before* the write transaction.
-//! Recorded I-addresses are permanent, so the source document's arrangement
-//! may move underneath with no hazard, and the operation is still one M2
-//! transaction.
+//! resolved through M5 off a snapshot pinned *before* the write transaction,
+//! or from content I-spans taken verbatim (W6 (a)). Recorded I-addresses are
+//! permanent, so the source document's arrangement may move underneath with
+//! no hazard, and the operation is still one M2 transaction.
 //!
 //! The whole successor is assembled here — all three slots, in the order the
 //! client is promised, each held as it is built to M7's two per-slot budgets
@@ -16,9 +16,9 @@
 //! produced and before each walk is taken. Whether M10 also *answers* a
 //! budget is the write door's to say: where the door judged the write, a
 //! slot is refused as it crosses either; where the door deferred to the
-//! store's own gate, the verdict is M7's, after that gate — save the
-//! address-form type slot's span count, the request's own, which is answered
-//! here either way.
+//! store's own gate, the verdict is M7's, after that gate — save the two name
+//! forms' span counts, an address-form type slot's and an I-span slot's, the
+//! request's own, which are answered here either way.
 
 use skep_address::{subtree_of, Nat, Span, Tumbler};
 use skep_arrangement::{as_ordinal_vspan, M5State, VSpec};
@@ -66,9 +66,15 @@ pub enum Judgment {
 /// is the request's own or the registry's, and answers alike whatever a
 /// source holds.
 ///
-/// `from` and `to` are content-resolved only. An address-denoting successor
-/// endpoint is not constructible through this surface — [`SuccessorSpec`]'s
-/// types say so — so there is no form here for M7 to reject.
+/// `from` and `to` are content-resolved or content I-spans. An
+/// address-denoting successor endpoint is refused here —
+/// `IllFormedSuccessor`, naming the slot — the narrowing [`SuccessorSpec`]
+/// states, and the wire's parse admits no `addrs` object on either, so over
+/// the wire the form never reaches this build. An I-span slot is taken
+/// verbatim (`ispan_slot`): no source, no resolve, nothing read of the
+/// document its spans name, its shape M7's content clause by index — the
+/// same answer whatever `judgment` says and whatever that document holds,
+/// which is the read check's premise for this op.
 ///
 /// Public for one caller beside the dispatch: the daemon's composer of an
 /// `edit_link`'s entry frame (signed ops), which composes the successor's
@@ -81,37 +87,41 @@ pub enum Judgment {
 ///
 /// Refuses with `IllFormedSpec` for a spec whose span is not a content
 /// V-span, `SourceNotRegistered` for a spec whose source the registry does
-/// not know, and `SlotTooLarge` for a slot over a budget — a resolved slot
-/// only where the door judged the write (above), the address-form type slot
-/// whatever it judged (below).
+/// not know, `NotContentSubspace` for an I-span that is no content I-span,
+/// `IllFormedSuccessor` for an address-form `from` or `to`, and
+/// `SlotTooLarge` for a slot over a budget — a resolved slot only where the
+/// door judged the write (above), the two name forms whatever it judged
+/// (below).
 ///
 /// **Precedence.** A successor may be wrong in several slots at once and
 /// exactly one answer goes back, so the order decides it: the slots are built
 /// `from`, then `to`, then `ty`, and the first that refuses is the only
-/// refusal. Within a slot the first offending spec speaks (see
-/// `successor_slot`). Every refusal names its slot in [`FaultSite`]'s `slot`,
-/// in M7's numbering ([`FROM`], [`TO`], [`TYPE`]) — the numbering
-/// `Op::FollowLink`'s and `Op::Project`'s slot index is already in — so the
-/// `index` beside it is read against a slot the client can identify.
+/// refusal. Within a slot the first offending spec or span speaks (see
+/// `successor_slot` and `ispan_slot`). Every refusal names its slot in
+/// [`FaultSite`]'s `slot`, in M7's numbering ([`FROM`], [`TO`], [`TYPE`]) —
+/// the numbering `Op::FollowLink`'s and `Op::Project`'s slot index is
+/// already in — so the `index` beside it is read against a slot the client
+/// can identify.
 ///
-/// `TYPE` is the successor's one two-form slot (§4): address-denoting or
-/// content-resolved, with M7 owning the slot-shape and schema verdict inside
-/// `editlink`. Both forms are held to [`MAX_SLOT_SPANS`] where the slot is
-/// built — the `Resolve` form as `successor_slot` says, and the `Addrs` form
-/// here, whatever `judgment` says, and *before* the encoding is: its count
-/// is the request's own, so refusing it discloses nothing, and [`enc`] turns
-/// each name into a subtree span of two tumblers as deep as the name —
-/// ~26–40× the bytes the name arrived in, ~16–20 KB a span at the 256
-/// components skepd's codec admits a tumbler — memory M7 would then refuse
-/// anyway.
+/// `TYPE` is the successor's one three-form slot (§4): address-denoting,
+/// content-resolved or content I-spans, with M7 owning the slot-shape and
+/// schema verdict inside `editlink`. Every form is held to
+/// [`MAX_SLOT_SPANS`] where the slot is built — the `Resolve` form as
+/// `successor_slot` says, the `Spans` form as `ispan_slot` says, and the
+/// `Addrs` form here, whatever `judgment` says, and *before* the encoding
+/// is: its count is the request's own, so refusing it discloses nothing, and
+/// [`enc`] turns each name into a subtree span of two tumblers as deep as
+/// the name — ~26–40× the bytes the name arrived in, ~16–20 KB a span at the
+/// 256 components skepd's codec admits a tumbler — memory M7 would then
+/// refuse anyway.
 pub fn successor_link(
     m3: &M3State,
     m5: &M5State,
     successor: &SuccessorSpec,
     judgment: Judgment,
 ) -> Result<Link, Rejection> {
-    let from = successor_slot(m3, m5, FROM, &successor.from, judgment)?;
-    let to = successor_slot(m3, m5, TO, &successor.to, judgment)?;
+    let from = successor_end(m3, m5, FROM, &successor.from, judgment)?;
+    let to = successor_end(m3, m5, TO, &successor.to, judgment)?;
     let ty = match &successor.ty {
         SlotArg::Addrs(addrs) => {
             if addrs.len() > MAX_SLOT_SPANS {
@@ -120,8 +130,59 @@ pub fn successor_link(
             enc(addrs)
         }
         SlotArg::Resolve(specs) => successor_slot(m3, m5, TYPE, specs, judgment)?,
+        SlotArg::Spans(spans) => ispan_slot(TYPE, spans)?,
     };
     Ok(Link::triple(from, to, ty))
+}
+
+/// Assembles one successor end, `from` or `to`, in the form it was given.
+///
+/// The `Resolve` form is `successor_slot`'s; the `Spans` form `ispan_slot`'s;
+/// the address form is the narrowing [`SuccessorSpec`] states, refused
+/// `IllFormedSuccessor` naming the slot — the code M7 answers a successor of
+/// the wrong shape, since the shape is the request's own and no source
+/// decides it.
+fn successor_end(
+    m3: &M3State,
+    m5: &M5State,
+    slot: usize,
+    end: &SlotArg,
+    judgment: Judgment,
+) -> Result<Endset, Rejection> {
+    match end {
+        SlotArg::Resolve(specs) => successor_slot(m3, m5, slot, specs, judgment),
+        SlotArg::Spans(spans) => ispan_slot(slot, spans),
+        SlotArg::Addrs(_) => Err(Rejection::classified(
+            OpKind::EditLink,
+            RejectCode::IllFormedSuccessor,
+            Some(FaultSite { slot: Some(slot), ..FaultSite::default() }),
+        )),
+    }
+}
+
+/// Assembles one successor slot from its content I-spans, verbatim.
+///
+/// The I-span form (W6 (a)) names its spans as the address form names its
+/// addresses: no source, so nothing is resolved, consulted or read — not the
+/// registration, the arrangement or a byte of the document the spans name —
+/// and nothing here turns on `judgment`. Two checks, both arithmetic on the
+/// request: each span is a content I-span by M7's one spelling of the shape
+/// ([`SlotArg::ill_formed_span`], the content clause — a content-subspace
+/// element start and an ordinal width of at least one), the first offending
+/// span answering `NotContentSubspace` at its index, the code the read by
+/// identity gives the same fault; and the slot is held to [`MAX_SLOT_SPANS`]
+/// spans, `SlotTooLarge` naming the slot, the count being the request's own.
+/// Then the spans are the slot: `Endset::from_spans` stores what it is given,
+/// which is what M7's `Spans` slot deposits on a `make_link`, so an edit's
+/// re-made end and a fresh link's end are one shape.
+fn ispan_slot(slot: usize, spans: &[Span]) -> Result<Endset, Rejection> {
+    if let Some(index) = SlotArg::ill_formed_span(spans) {
+        return Err(at_spec(slot, index, RejectCode::NotContentSubspace));
+    }
+    if spans.len() > MAX_SLOT_SPANS {
+        return Err(slot_too_large(slot));
+    }
+    Ok(Endset::from_spans(spans.iter().cloned()))
 }
 
 /// Assembles one successor slot from its content V-specs.
@@ -473,8 +534,8 @@ mod tests {
         // `TO` and `TYPE` both offend, with different faults, so the answer
         // says which slot it is about twice over — by code and by slot.
         let both = SuccessorSpec {
-            from: vec![],
-            to: vec![unregistered()],
+            from: vec![].into(),
+            to: vec![unregistered()].into(),
             ty: SlotArg::Resolve(vec![ill_formed()]),
         };
         let rej =
@@ -483,8 +544,11 @@ mod tests {
         assert_eq!(rej.site.expect("localized").slot, Some(TO));
 
         // `TYPE` alone, in its `Resolve` form.
-        let ty_only =
-            SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Resolve(vec![ill_formed()]) };
+        let ty_only = SuccessorSpec {
+            from: vec![].into(),
+            to: vec![].into(),
+            ty: SlotArg::Resolve(vec![ill_formed()]),
+        };
         let rej = successor_link(&m3, &m5, &ty_only, Judgment::Judged)
             .expect_err("the type slot offends");
         assert_eq!(rej.code, RejectCode::IllFormedSpec);
@@ -505,8 +569,8 @@ mod tests {
         let m5 = M5State::genesis();
         let doc = addr(&[1, 0, 1, 0, 1]);
         let with_type = |names: usize| SuccessorSpec {
-            from: vec![],
-            to: vec![],
+            from: vec![].into(),
+            to: vec![].into(),
             ty: SlotArg::Addrs(vec![doc.clone(); names]),
         };
 

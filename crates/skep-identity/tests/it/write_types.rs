@@ -26,6 +26,10 @@ const T_REPLACES: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 12];
 const T_BINDING: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 55];
 const T_TAKEDOWN_RECORD: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 57];
 const T_POLICY_LINK: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 58];
+// The supersession claim's placeholder sits in the commons doc's CONTENT
+// subspace, as the real one does (M7's reserved ghost tumbler, not a
+// commons pin): prefix-free against every `…0.2.x` placeholder above.
+const T_SUPERSESSION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 1, 4];
 
 fn credential() -> TypeAddrs {
     TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM))
@@ -44,6 +48,7 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
         (AuditClass::Binding, addr(T_BINDING)),
         (AuditClass::TakedownRecord, addr(T_TAKEDOWN_RECORD)),
         (AuditClass::PolicyLink, addr(T_POLICY_LINK)),
+        (AuditClass::Supersession, addr(T_SUPERSESSION)),
     ]
 }
 
@@ -202,6 +207,7 @@ fn the_declared_order_of_the_classes_decides_nothing() {
         T_BINDING,
         T_TAKEDOWN_RECORD,
         T_POLICY_LINK,
+        T_SUPERSESSION,
     ] {
         let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
         for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {
@@ -222,6 +228,22 @@ fn only_the_steward_classification_requires_a_published_home() {
         assert_eq!(
             class.requires_published_home(),
             class == AuditClass::StewardClassification,
+            "{class:?}"
+        );
+    }
+}
+
+/// The link-sets wire-lane decision 3 — which audit-view classes are members
+/// only where the home of the link's `to` is published: the supersession
+/// claim, and no other. The whole table, as the home key's test is, so a
+/// flipped answer is discovered here rather than as a permanent refusal of
+/// a correction the ruling leaves open.
+#[test]
+fn only_the_supersession_claim_requires_a_published_new() {
+    for (class, _) in audit_list() {
+        assert_eq!(
+            class.requires_published_new(),
+            class == AuditClass::Supersession,
             "{class:?}"
         );
     }

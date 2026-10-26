@@ -90,8 +90,8 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             Op::EditLink {
                 original: doc(),
                 successor: SuccessorSpec {
-                    from: vec![vspec()],
-                    to: vec![vspec()],
+                    from: vec![vspec()].into(),
+                    to: vec![vspec()].into(),
                     ty: SlotArg::Addrs(vec![doc()]),
                 },
                 d_s: doc(),
@@ -187,8 +187,8 @@ fn kind_is_injective_and_never_unparseable() {
 #[test]
 fn a_successor_spec_is_a_value_the_comparison_macros_accept() {
     let spec = |ordinal: u32| SuccessorSpec {
-        from: vec![vspec()],
-        to: vec![],
+        from: vec![vspec()].into(),
+        to: vec![].into(),
         ty: SlotArg::Addrs(vec![addr(&[1, 0, 1, 0, ordinal])]),
     };
     assert_eq!(spec(1), spec(1), "a rebuilt successor is the same successor");
@@ -363,15 +363,20 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
 /// left out (the shot's rule, the replacement act's record), `version`'s
 /// `d_src`, and the two link writes' RESOLVE-form slots in the wire's
 /// declared order `from`, `to`, `ty` with specs by index inside a slot —
-/// while an ADDRESS-FORM slot is ungated and names nothing. Exactly the
-/// five source-reading writes answer a non-empty list; `fork`, every other
-/// write and every read answer the empty one.
+/// while an ADDRESS-FORM or an I-SPAN slot is ungated and names nothing
+/// (the read check's door channel, W6 (a)). Exactly the five
+/// source-reading writes answer a non-empty list; `fork`, every other write
+/// and every read answer the empty one.
 #[test]
 fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
     let d2 = addr(&[1, 0, 1, 0, 2]);
     let d3 = addr(&[1, 0, 1, 0, 3]);
     let spec = |d: &Address| VSpec { source: d.clone(), span: vspan() };
+    // A content I-span inside d2: positions the writer may or may not read,
+    // and a slot the door consults nothing for either way.
+    let ispan_in_d2 = Span::new(tum(&[1, 0, 1, 0, 2, 0, 1, 1]), tum(&[0, 0, 0, 0, 0, 0, 0, 2]))
+        .expect("a content I-span");
 
     let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)] };
     assert_eq!(op.source_arguments(), vec![&d2, &d3], "copy: each spec's source, by index");
@@ -416,17 +421,44 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         "make_link: from, then ty — the address-form `to` and the `replaces` member name \
          no source"
     );
+    let op = Op::MakeLink {
+        home: d1.clone(),
+        from: SlotArg::Spans(vec![ispan_in_d2.clone()]),
+        to: SlotArg::Resolve(vec![spec(&d3)]),
+        ty: SlotArg::Spans(vec![ispan_in_d2.clone()]),
+        replaces: None,
+    };
+    assert_eq!(
+        op.source_arguments(),
+        vec![&d3],
+        "make_link: an I-span slot names no source, in the `from` and in the `ty` alike"
+    );
     let op = Op::EditLink {
         original: d1.clone(),
         successor: SuccessorSpec {
-            from: vec![spec(&d3)],
-            to: vec![spec(&d2)],
+            from: vec![spec(&d3)].into(),
+            to: vec![spec(&d2)].into(),
             ty: SlotArg::Addrs(vec![d1.clone()]),
         },
         d_s: d1.clone(),
         d_a: d1.clone(),
     };
     assert_eq!(op.source_arguments(), vec![&d3, &d2], "edit_link: the successor's slots in order");
+    let op = Op::EditLink {
+        original: d1.clone(),
+        successor: SuccessorSpec {
+            from: SlotArg::Spans(vec![ispan_in_d2.clone()]),
+            to: vec![spec(&d2)].into(),
+            ty: SlotArg::Spans(vec![ispan_in_d2]),
+        },
+        d_s: d1.clone(),
+        d_a: d1.clone(),
+    };
+    assert_eq!(
+        op.source_arguments(),
+        vec![&d2],
+        "edit_link: an I-span end and an I-span type slot name no source"
+    );
 
     for (op, is_read) in all_ops() {
         let reads_a_source = !op.source_arguments().is_empty();

@@ -1954,10 +1954,15 @@ enum RowTerms {
     ///
     /// The minted account address comes from its `AckAddr`.
     Delegate { new_id: u64 },
-    /// `make_link`'s minted link address, from its `AckAddr`.
+    /// The one link the write deposited, from its `AckAddr`: `make_link`'s
+    /// minted link, and `assert_sup`'s claim (W14).
     ///
     /// For a replacing grant it is the grant record's address; its
-    /// `replaces` link sits at the next.
+    /// `replaces` link sits at the next. An `assert_sup` row names one
+    /// document, its home, so the row is served whole or omitted and never
+    /// reduced — the claim's address rides no row that withholds the home it
+    /// is read against; a dedup hit acks the incumbent and commits nothing,
+    /// so it has no row.
     MakeLink,
     /// `publish`'s placed count and base extent.
     ///
@@ -2124,7 +2129,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             meta(OpKind::MakeLink, one(home), RowTerms::MakeLink, no_cell)
         }
         // `emit` mints a link too, and its row carries no `link`: wire.md
-        // §The change feed names `make_link` alone.
+        // §The change feed names `make_link` and `assert_sup` alone.
         Op::Emit { home, .. } => meta(OpKind::Emit, one(home), absent, no_cell),
         Op::Nullify { home, target } => {
             // The record's home and the target link's home (PUB-6.46): a
@@ -2143,7 +2148,13 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             }
             meta(OpKind::Nullify, AffectedDocs::Named(docs), absent, no_cell)
         }
-        Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home), absent, no_cell),
+        // The claim's address rides the row (W14, the link-sets ceremony's
+        // claim index): one home, so the row is whole or omitted, never
+        // reduced, and the address never crosses to a reader who may not
+        // read the home it is filed in.
+        Op::AssertSup { home, .. } => {
+            meta(OpKind::AssertSup, one(home), RowTerms::MakeLink, no_cell)
+        }
         Op::EditLink { d_s, d_a, .. } => {
             // The successor's home leads (wire.md: "both its homes,
             // successor's first"), and the claim's home is appended only

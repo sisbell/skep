@@ -481,6 +481,90 @@ fn the_registry_classes_refuse_a_nullify_and_the_endpoints_commits() {
     sd.shutdown();
 }
 
+/// THE SUPERSESSION CLAIM (the link-sets wire-lane decision 3, narrowing
+/// "THE TWO LEFTOVERS RULED" (2)): a claim whose `new` is homed in a
+/// PUBLISHED document joins PUB-6.64's class — a fact of a past act that no
+/// act legitimately retracts, the publication's resume reading the claims on
+/// the ACTIVE view — and a claim whose `new` is PRIVATE stays an ordinary
+/// link, its retraction the one correction path for a wrong claim. The
+/// accept's pair (`accept_originals.rs`): `L` in the private notes `N` on P
+/// in the published `E`, its copy `L′` in `E`, the claim `C` in `N`. The
+/// OWNER's `nullify` of `C`, bare and signed alike — `N` is a draft, so no
+/// publish gate stands ahead — is `nullify_audit_view`, permanent; a
+/// STRANGER, signed or bare, answers `not_owner` naming the home,
+/// occupancy-blind; the GUEST `unauthenticated`; nothing commits and `C`
+/// stays active. A claim homed in `E` itself meets the publish gate first
+/// (bare) and the class (signed). And a notes-internal claim — `L2`
+/// superseded by `L3`, both in `N` — is RETRACTED by its owner's `nullify`:
+/// it leaves the active view and stays on the audit view. M7's own
+/// engine-direct claim retractions stand: the refusal is the daemon's.
+#[test]
+fn a_supersession_claims_nullify_is_refused_where_its_new_is_published_and_lands_where_private() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (_, stranger_signed) = signed_stranger(port, &signed, 981, 81);
+    let (_, stranger_bare) = stranger(port, 982);
+    let citation = addrs_slot(&["1.1.0.1.0.1.0.3.13"]);
+    let none = r#"{"addrs":[]}"#;
+
+    // E published with P; N private with Z; L in N citing P; L′ the copy in
+    // E (signed, attested); C the claim in N (bare: N is a draft).
+    let e = edition_with(port, &signed, "the quick brown fox");
+    let n = draft_with(port, &bare, "a note on the fox");
+    let original = acked_addr(&op(port, Some(&bare), &link_frame(&n, &vspec(&e, 1, 9), &vspec(&n, 1, 6), &citation)));
+    let copy = acked_addr(&op(port, Some(&signed), &link_frame(&e, &vspec(&e, 1, 9), &vspec(&n, 1, 6), &citation)));
+    let claim = acked_addr(&op(port, Some(&bare), &assert_sup_frame(&n, &original, &copy)));
+    assert_eq!(claims_in(port, Some(&bare), &original, "active"), vec![claim.clone()], "the claim stands");
+    let before = head(port);
+
+    // THE OWNER, bare and signed: the class cell — the claim's home is a
+    // draft (no publish gate), its `new` is homed in the published E.
+    for token in [&bare, &signed] {
+        let v = nullify(port, Some(token), &n, &claim);
+        assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "{v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+        assert_eq!(v["op"].as_str(), Some("nullify"), "{v}");
+    }
+    // STRANGERS: ω's own answer naming the home, byte-identical to their
+    // answer for an EMPTY address of the same link subspace; the GUEST: slot 0.
+    let empty = format!("{n}.0.2.99");
+    for token in [&stranger_signed, &stranger_bare] {
+        let (_, on_claim) = http(port, "POST", "/op", Some(token), nullify_frame(&n, &claim).as_bytes());
+        let (_, on_empty) = http(port, "POST", "/op", Some(token), nullify_frame(&n, &empty).as_bytes());
+        assert_not_owner(&json(&on_empty), &n);
+        assert_eq!(on_claim, on_empty, "the claim's class is invisible to a stranger");
+    }
+    assert_eq!(verdict(&nullify(port, None, &n, &claim)), "unauthenticated");
+    assert_eq!(head(port), before, "the refusals commit nothing");
+    assert_eq!(claims_in(port, Some(&bare), &original, "active"), vec![claim.clone()], "the claim stays active");
+    assert!(link_resident(port, Some(&bare), &claim), "and resident");
+
+    // A claim homed in the PUBLISHED E, its `new` a second copy in E: the
+    // bare owner meets the publish-class gate first (slot 4 before slot 5),
+    // the signed owner the class.
+    let second = acked_addr(&op(port, Some(&signed), &link_frame(&e, &vspec(&e, 1, 9), none, &citation)));
+    let claim_in_e = acked_addr(&op(port, Some(&signed), &assert_sup_frame(&e, &copy, &second)));
+    assert_eq!(verdict(&nullify(port, Some(&bare), &e, &claim_in_e)), "credential_refused:signed_session_required");
+    assert_eq!(verdict(&nullify(port, Some(&signed), &e, &claim_in_e)), "credential_refused:nullify_audit_view");
+    assert_eq!(claims_in(port, Some(&signed), &copy, "active"), vec![claim_in_e], "the published-homed claim stands too");
+
+    // THE PRIVATE `new`: a notes-internal edit's claim is an ordinary link —
+    // its owner's retraction LANDS, the claim leaves the active view and
+    // stays on the audit view (R3: `readlink` and the audit view keep it).
+    let l2 = acked_addr(&op(port, Some(&bare), &link_frame(&n, &vspec(&n, 1, 3), none, &citation)));
+    let l3 = acked_addr(&op(port, Some(&bare), &link_frame(&n, &vspec(&n, 1, 6), none, &citation)));
+    let private_claim = acked_addr(&op(port, Some(&bare), &assert_sup_frame(&n, &l2, &l3)));
+    assert_eq!(claims_in(port, Some(&bare), &l2, "active"), vec![private_claim.clone()]);
+    let retraction = acked_addr(&nullify(port, Some(&bare), &n, &private_claim));
+    assert_eq!(retraction, format!("{n}.0.2.6"), "the retraction, N's next link");
+    assert!(claims_in(port, Some(&bare), &l2, "active").is_empty(), "retracted: the claim leaves the active view");
+    assert_eq!(claims_in(port, Some(&bare), &l2, "audit"), vec![private_claim], "and stays on the audit view");
+    sd.shutdown();
+}
+
 /// H1 cell 4 — the NEGATIVE cell that keeps the classifier honest (PUB-6.32,
 /// PUB-6.64's exclusion): the R20 edition claim is read under the ACTIVE
 /// view, so its owner's `nullify` clears the state its faces read and is

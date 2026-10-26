@@ -50,11 +50,34 @@ pub enum MakeLinkError {
     /// width₁ = 0`) — the deliberate depth-2 narrowing of ASN-0120's
     /// `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
+    /// A span of an I-span slot is no content I-span.
+    ///
+    /// The I-span form ([`crate::SlotArg::Spans`]) records content I-spans
+    /// verbatim, so each span must be one by its own bytes: its start a
+    /// content-subspace element position and its width that run's ordinal
+    /// displacement, `0…0.n` with `n ≥ 1` — `SlotArg::ill_formed_span`, the
+    /// one spelling of the shape, by request arithmetic and no world read.
+    /// `slot` is the slot in M7's numbering ([`crate::FROM`], [`crate::TO`],
+    /// [`crate::TYPE`]) and `index` the span's position within it. The content
+    /// clause is what keeps a span from spelling a type address's unit span —
+    /// a credential type's, which would route a deposit around the credential
+    /// sequence, the registry's, the `replaces` class — in a form no
+    /// classifier of the daemon's reads. Never a registration or occupancy
+    /// question of the spans' document: a ghost position is a valid name, as
+    /// in the address form.
+    NotContentSpan {
+        /// The slot the span sits in: [`crate::FROM`], [`crate::TO`] or
+        /// [`crate::TYPE`].
+        slot: usize,
+        /// The span's position within the slot.
+        index: usize,
+    },
     /// A slot is over one of the two per-slot budgets.
     ///
     /// It holds more than [`crate::MAX_SLOT_SPANS`] spans in whichever form
-    /// built it — a `Resolve` slot resolved past the budget, or an `Addrs`
-    /// list naming more addresses than it — or, for a `Resolve` slot, its
+    /// built it — a `Resolve` slot resolved past the budget, an `Addrs`
+    /// list naming more addresses than it, or a `Spans` list carrying more
+    /// — or, for a `Resolve` slot, its
     /// specs command more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list
     /// steps. One rejection for both, because both are the same answer to
     /// the caller — this slot asks for more than a slot may have — and one
@@ -290,6 +313,10 @@ impl fmt::Display for MakeLinkError {
             }
             MakeLinkError::IllFormedSpec => f.write_str(
                 "makelink: a V-spec is not a registered-source depth-2 content V-position (wf, Conflicts §12)",
+            ),
+            MakeLinkError::NotContentSpan { slot, index } => write!(
+                f,
+                "makelink: span {index} of slot {slot} is not a content I-span (a content-subspace element start and an ordinal width of at least 1)"
             ),
             MakeLinkError::SlotTooLarge => write!(
                 f,

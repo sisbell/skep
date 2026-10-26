@@ -502,7 +502,7 @@
     },
     {
       "name": "make_link",
-      "description": "Create an open link homed in home. Each of from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty takes one of two forms per slot: a V-spec array, resolved against current arrangements (the recorded endset is the permanent I-spans), or {\"addrs\": [addresses]}, address-denoting — the recorded endset is the names verbatim, one unit subtree span per address, with no resolution and no occupancy requirement. Contents at the addresses are never examined; matching is by address, and names nest by tumbler prefix. Any T4-valid address may be named — a link, a document, or a ghost position nothing will ever occupy. The type slot must be nonempty as given (an empty addrs list, like a V-spec set resolving to nothing, rejects empty_type_resolution); from_ and to may be empty in either form. The optional replaces names the record whose state this link replaces: present, one transaction deposits the link and, at the next address of home's link subspace, a second link typed replaces (1.1.0.1.0.1.0.3.12) from the first to the address named; absent is the empty state. At the grants class it is how a re-share names the revocation it follows — a grant is honored only where the state it names is its key's current one, so a replayed share grants nothing. A make_link whose own ty is the replaces type is refused credential_refused:replaces_not_standalone: the member is that type's one writer. Response: ack_addr with the link's address (the first link's, when replaces is present).",
+      "description": "Create an open link homed in home. Each of from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty takes one of three forms per slot: a V-spec array, resolved against current arrangements (the recorded endset is the permanent I-spans); {\"addrs\": [addresses]}, address-denoting — the recorded endset is the names verbatim, one unit subtree span per address, with no resolution and no occupancy requirement; or {\"spans\": [{\"start\": address, \"width\": n}]}, content I-spans recorded verbatim (retrieve_i's shape; each start a content-subspace element position, each width at least 1), with no source and nothing of the named document read — the address form widened to a run. Contents at the addresses are never examined; matching is by address, and names nest by tumbler prefix. Any T4-valid address may be named — a link, a document, or a ghost position nothing will ever occupy. The type slot must be nonempty as given (an empty addrs or spans list, like a V-spec set resolving to nothing, rejects empty_type_resolution); from_ and to may be empty in any form. The optional replaces names the record whose state this link replaces: present, one transaction deposits the link and, at the next address of home's link subspace, a second link typed replaces (1.1.0.1.0.1.0.3.12) from the first to the address named; absent is the empty state. At the grants class it is how a re-share names the revocation it follows — a grant is honored only where the state it names is its key's current one, so a replayed share grants nothing. A make_link whose own ty is the replaces type is refused credential_refused:replaces_not_standalone: the member is that type's one writer. Response: ack_addr with the link's address (the first link's, when replaces is present).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -512,7 +512,7 @@
             "description": "Home document address."
           },
           "from_": {
-            "description": "FROM endset (the wire argument named from), one of two forms: a V-spec array (content-resolved) or {\"addrs\": [addresses]} (address-denoting). May be empty in either form.",
+            "description": "FROM endset (the wire argument named from), one of three forms: a V-spec array (content-resolved), {\"addrs\": [addresses]} (address-denoting) or {\"spans\": [i-spans]} (content I-spans, verbatim). May be empty in any form.",
             "oneOf": [
               {
                 "type": "array",
@@ -563,12 +563,39 @@
                   }
                 },
                 "required": ["addrs"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "I-span form: content I-spans recorded verbatim — retrieve_i's shape, each width positions from the content element address start — with no source, no resolution and no occupancy requirement: nothing of the document the spans name is read, so a ghost position past a frontier, or of a document no one minted, is a valid name. Every start must be a content-subspace element position (doc.0.1.ordinal) and every width at least 1: another start is not_content_subspace by slot and index; a zero width does not parse.",
+                "properties": {
+                  "spans": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "A content element I-address (doc.0.1.ordinal), the span's first position."
+                        },
+                        "width": {
+                          "type": ["string", "integer"],
+                          "description": "Number of positions, at least 1: decimal string canonically; a non-negative integer is accepted."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["spans"],
                 "additionalProperties": false
               }
             ]
           },
           "to": {
-            "description": "TO endset, one of two forms: a V-spec array (content-resolved) or {\"addrs\": [addresses]} (address-denoting). May be empty in either form.",
+            "description": "TO endset, one of three forms: a V-spec array (content-resolved), {\"addrs\": [addresses]} (address-denoting) or {\"spans\": [i-spans]} (content I-spans, verbatim). May be empty in any form.",
             "oneOf": [
               {
                 "type": "array",
@@ -620,11 +647,38 @@
                 },
                 "required": ["addrs"],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "I-span form: content I-spans recorded verbatim — retrieve_i's shape, each width positions from the content element address start — with no source, no resolution and no occupancy requirement: nothing of the document the spans name is read, so a ghost position past a frontier, or of a document no one minted, is a valid name. Every start must be a content-subspace element position (doc.0.1.ordinal) and every width at least 1: another start is not_content_subspace by slot and index; a zero width does not parse.",
+                "properties": {
+                  "spans": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "A content element I-address (doc.0.1.ordinal), the span's first position."
+                        },
+                        "width": {
+                          "type": ["string", "integer"],
+                          "description": "Number of positions, at least 1: decimal string canonically; a non-negative integer is accepted."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["spans"],
+                "additionalProperties": false
               }
             ]
           },
           "ty": {
-            "description": "TYPE endset, one of two forms: a V-spec array (content-resolved) or {\"addrs\": [addresses]} (address-denoting; matching is by address, and a name prefix's subtree groups subtypes). Must be nonempty as given: an empty addrs list, like a V-spec set resolving to nothing, rejects empty_type_resolution.",
+            "description": "TYPE endset, one of three forms: a V-spec array (content-resolved), {\"addrs\": [addresses]} (address-denoting; matching is by address, and a name prefix's subtree groups subtypes) or {\"spans\": [i-spans]} (content I-spans, verbatim). Must be nonempty as given: an empty addrs or spans list, like a V-spec set resolving to nothing, rejects empty_type_resolution.",
             "oneOf": [
               {
                 "type": "array",
@@ -675,6 +729,33 @@
                   }
                 },
                 "required": ["addrs"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "description": "I-span form: content I-spans recorded verbatim — retrieve_i's shape, each width positions from the content element address start — with no source, no resolution and no occupancy requirement: nothing of the document the spans name is read, so a ghost position past a frontier, or of a document no one minted, is a valid name. Every start must be a content-subspace element position (doc.0.1.ordinal) and every width at least 1: another start is not_content_subspace by slot and index; a zero width does not parse.",
+                "properties": {
+                  "spans": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "A content element I-address (doc.0.1.ordinal), the span's first position."
+                        },
+                        "width": {
+                          "type": ["string", "integer"],
+                          "description": "Number of positions, at least 1: decimal string canonically; a non-negative integer is accepted."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["spans"],
                 "additionalProperties": false
               }
             ]
@@ -790,7 +871,7 @@
     },
     {
       "name": "edit_link",
-      "description": "One composite: create a successor of link original (endsets given as content V-specs; the type slot either {\"addrs\": [...]} or {\"resolve\": [...]}), homed in d_s, plus the supersession claim homed in d_a. Response: ack_edit with the successor link and its supersession claim.",
+      "description": "One composite: create a successor of link original (its from and to each a content V-spec array or the I-span form {\"spans\": [...]} of make_link — the address form is refused on them; the type slot one of {\"addrs\": [...]}, {\"resolve\": [...]} or {\"spans\": [...]}), homed in d_s, plus the supersession claim homed in d_a. An I-span end names its positions verbatim, nothing of their document read; each start must be a content-subspace element position (not_content_subspace by slot and index otherwise). Response: ack_edit with the successor link and its supersession claim.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -804,78 +885,169 @@
             "description": "The successor's endsets. Nested keys are wire shape verbatim (this from is not renamed).",
             "properties": {
               "from": {
-                "type": "array",
-                "description": "FROM endset as V-specs.",
-                "items": {
-                  "type": "object",
-                  "description": "V-spec: a span of some document's arrangement.",
-                  "properties": {
-                    "source": {
-                      "type": "string",
-                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Source document address."
-                    },
-                    "span": {
+                "description": "FROM endset: a V-spec array (content-resolved) or {\"spans\": [i-spans]} (content I-spans, verbatim); never the address form.",
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "description": "V-spec array: resolved against current arrangements; the recorded endset is the permanent I-spans.",
+                    "items": {
                       "type": "object",
-                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "description": "V-spec: a span of some document's arrangement.",
                       "properties": {
-                        "start": {
+                        "source": {
                           "type": "string",
                           "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                          "description": "Start tumbler."
+                          "description": "Source document address."
                         },
-                        "width": {
-                          "type": "string",
-                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                          "description": "Width tumbler."
+                        "span": {
+                          "type": "object",
+                          "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "Start tumbler."
+                            },
+                            "width": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "Width tumbler."
+                            }
+                          },
+                          "required": ["start", "width"],
+                          "additionalProperties": false
                         }
                       },
-                      "required": ["start", "width"],
+                      "required": ["source", "span"],
                       "additionalProperties": false
                     }
                   },
-                  "required": ["source", "span"],
-                  "additionalProperties": false
-                }
+                  {
+                    "type": "object",
+                    "description": "I-span form: content I-spans recorded verbatim, retrieve_i's shape; nothing of the named document is read. Each start a content-subspace element position (doc.0.1.ordinal), each width at least 1.",
+                    "properties": {
+                      "spans": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "A content element I-address (doc.0.1.ordinal), the span's first position."
+                            },
+                            "width": {
+                              "type": ["string", "integer"],
+                              "description": "Number of positions, at least 1: decimal string canonically; a non-negative integer is accepted."
+                            }
+                          },
+                          "required": ["start", "width"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["spans"],
+                    "additionalProperties": false
+                  }
+                ]
               },
               "to": {
-                "type": "array",
-                "description": "TO endset as V-specs.",
-                "items": {
-                  "type": "object",
-                  "description": "V-spec: a span of some document's arrangement.",
-                  "properties": {
-                    "source": {
-                      "type": "string",
-                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Source document address."
-                    },
-                    "span": {
+                "description": "TO endset: a V-spec array (content-resolved) or {\"spans\": [i-spans]} (content I-spans, verbatim); never the address form.",
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "description": "V-spec array: resolved against current arrangements; the recorded endset is the permanent I-spans.",
+                    "items": {
                       "type": "object",
-                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "description": "V-spec: a span of some document's arrangement.",
                       "properties": {
-                        "start": {
+                        "source": {
                           "type": "string",
                           "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                          "description": "Start tumbler."
+                          "description": "Source document address."
                         },
-                        "width": {
-                          "type": "string",
-                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                          "description": "Width tumbler."
+                        "span": {
+                          "type": "object",
+                          "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "Start tumbler."
+                            },
+                            "width": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "Width tumbler."
+                            }
+                          },
+                          "required": ["start", "width"],
+                          "additionalProperties": false
                         }
                       },
-                      "required": ["start", "width"],
+                      "required": ["source", "span"],
                       "additionalProperties": false
                     }
                   },
-                  "required": ["source", "span"],
-                  "additionalProperties": false
-                }
+                  {
+                    "type": "object",
+                    "description": "I-span form: content I-spans recorded verbatim, retrieve_i's shape; nothing of the named document is read. Each start a content-subspace element position (doc.0.1.ordinal), each width at least 1.",
+                    "properties": {
+                      "spans": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "A content element I-address (doc.0.1.ordinal), the span's first position."
+                            },
+                            "width": {
+                              "type": ["string", "integer"],
+                              "description": "Number of positions, at least 1: decimal string canonically; a non-negative integer is accepted."
+                            }
+                          },
+                          "required": ["start", "width"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["spans"],
+                    "additionalProperties": false
+                  }
+                ]
               },
               "ty": {
-                "description": "The type slot: exactly one of {\"addrs\": [addresses]} (address-denoting: the names recorded verbatim, one unit subtree span per address — no resolution, no occupancy requirement; the identical encoding of make_link's addrs form) or {\"resolve\": [V-specs]} (content-resolved).",
+                "description": "The type slot: exactly one of {\"addrs\": [addresses]} (address-denoting: the names recorded verbatim, one unit subtree span per address — no resolution, no occupancy requirement; the identical encoding of make_link's addrs form), {\"resolve\": [V-specs]} (content-resolved) or {\"spans\": [i-spans]} (content I-spans, verbatim).",
                 "oneOf": [
+                  {
+                    "type": "object",
+                    "description": "I-span form: content I-spans recorded verbatim, retrieve_i's shape; each start a content-subspace element position, each width at least 1.",
+                    "properties": {
+                      "spans": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "A content element I-address (doc.0.1.ordinal)."
+                            },
+                            "width": {
+                              "type": ["string", "integer"],
+                              "description": "Number of positions, at least 1."
+                            }
+                          },
+                          "required": ["start", "width"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["spans"],
+                    "additionalProperties": false
+                  },
                   {
                     "type": "object",
                     "properties": {

@@ -258,8 +258,8 @@ fn all_requests() -> Vec<Request> {
             Op::EditLink {
                 original: link1(),
                 successor: SuccessorSpec {
-                    from: vec![vs(d2(), 1, 5)],
-                    to: vec![vs(d2(), 6, 2)],
+                    from: vec![vs(d2(), 1, 5)].into(),
+                    to: vec![vs(d2(), 6, 2)].into(),
                     ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 2, 1])]),
                 },
                 d_s: d2(),
@@ -271,9 +271,39 @@ fn all_requests() -> Vec<Request> {
             Op::EditLink {
                 original: link1(),
                 successor: SuccessorSpec {
-                    from: vec![vs(d2(), 1, 5)],
-                    to: vec![],
+                    from: vec![vs(d2(), 1, 5)].into(),
+                    to: vec![].into(),
                     ty: SlotArg::Resolve(vec![vs(d3(), 1, 1)]),
+                },
+                d_s: d2(),
+                d_a: d1(),
+            },
+        ),
+        // The I-span form (W6 (a)): `{"spans": [{"start", "width"}, …]}` on
+        // make_link's three slots, and on the successor's two ends and its
+        // type slot — `retrieve_i`'s I-span shape, each stored verbatim as
+        // the span of `width` positions from `start`.
+        rq(
+            None,
+            Op::MakeLink {
+                home: d1(),
+                from: SlotArg::Spans(vec![
+                    ispan(),
+                    sp(&[1, 0, 1, 0, 2, 0, 1, 9], &[0, 0, 0, 0, 0, 0, 0, 2]),
+                ]),
+                to: SlotArg::Spans(vec![]),
+                ty: SlotArg::Spans(vec![sp(&[1, 0, 1, 0, 3, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                replaces: None,
+            },
+        ),
+        rq(
+            None,
+            Op::EditLink {
+                original: link1(),
+                successor: SuccessorSpec {
+                    from: SlotArg::Spans(vec![ispan()]),
+                    to: SlotArg::Spans(vec![]),
+                    ty: SlotArg::Spans(vec![sp(&[1, 0, 1, 0, 3, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
                 },
                 d_s: d2(),
                 d_a: d1(),
@@ -1677,13 +1707,17 @@ fn a_zero_width_span_is_refused_at_parse() {
 
 /// Never-silent applied to typos: unknown ops, unknown fields, missing
 /// fields, malformed addresses, and non-object frames all fail parse with a
-/// detail message. The make_link slot grammar is exactly two forms: the
+/// detail message. The make_link slot grammar is exactly three forms: the
 /// tagged `{"resolve"}` object belongs to edit_link's successor `ty` alone,
-/// and addrs names must be T4-valid addresses.
+/// addrs names must be T4-valid addresses, and the I-span form (W6 (a))
+/// refuses at the parse exactly what no stored slot can hold — a zero
+/// width, as a zero-width V-span is refused — plus an object naming two
+/// forms at once and the address form on a successor's end (the narrowing
+/// the successor keeps).
 #[test]
 fn every_malformed_frame_fails_parse_with_a_detail() {
     let codec = JsonCodec;
-    let bad: [&[u8]; 12] = [
+    let bad: [&[u8]; 15] = [
         b"not json at all",
         br#"["op","fork"]"#,
         br#"{"op":"frobnicate"}"#,
@@ -1693,6 +1727,9 @@ fn every_malformed_frame_fails_parse_with_a_detail() {
         br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true]}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"resolve":[]}}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"addrs":["0.1"]}}"#,
+        br#"{"op":"make_link","home":"1.0.1.0.1","from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"0"}]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#,
+        br#"{"op":"make_link","home":"1.0.1.0.1","from":{"addrs":[],"spans":[]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#,
+        br#"{"op":"edit_link","original":"1.0.1.0.1.0.2.1","d_s":"1.0.1.0.1","d_a":"1.0.1.0.1","successor":{"from":{"addrs":["1.0.1.0.1"]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}}"#,
         // Signed and fractional numbers where the wire says "non-negative
         // integer": a slot index, a natural width, and a page size. Each
         // wraps rather than merely differing if the parse is ever widened
@@ -1761,4 +1798,67 @@ fn an_over_cap_request_marshals_to_a_frame_parse_refuses() {
     };
     let detail = err.detail.expect("a parse failure names what failed");
     assert!(detail.contains("wire cap"), "the refusal names the cap: {detail}");
+}
+
+/// The I-span form at the cap (W6 (a)): a `spans` list of `MAX_SLOT_SPANS`
+/// parses and round-trips — on a make_link slot and on a successor end
+/// alike — and one past it is refused at the parse by the wire list cap M7's
+/// budget sets, so no over-cap I-span slot reaches the store's own
+/// `slot_too_large`. The form's one shape fact the parse checks is also
+/// pinned here: a span's `width` rides as the count, and the stored span is
+/// the ordinal displacement of that count at the start's own length — what
+/// `retrieve_i`'s I-span names and `Run::iextent` yields.
+#[test]
+fn an_ispan_slot_round_trips_at_the_cap_and_is_refused_past_it() {
+    let codec = JsonCodec;
+    let spans = |n: usize| (0..n).map(|_| ispan()).collect::<Vec<Span>>();
+    let ty = || SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 1])]);
+    let make = |n: usize| {
+        rq(
+            None,
+            Op::MakeLink {
+                home: d1(),
+                from: SlotArg::Spans(spans(n)),
+                to: SlotArg::Spans(vec![]),
+                ty: ty(),
+                replaces: None,
+            },
+        )
+    };
+    let edit = |n: usize| {
+        rq(
+            None,
+            Op::EditLink {
+                original: link1(),
+                successor: SuccessorSpec {
+                    from: SlotArg::Spans(vec![]),
+                    to: SlotArg::Spans(spans(n)),
+                    ty: ty(),
+                },
+                d_s: d1(),
+                d_a: d1(),
+            },
+        )
+    };
+    for at_cap in [make(MAX_SLOT_SPANS), edit(MAX_SLOT_SPANS)] {
+        let bytes = codec.marshal_request(&at_cap);
+        assert_eq!(parse_ok(&codec, &bytes), at_cap, "an I-span slot at the cap round-trips");
+    }
+    for over in [make(MAX_SLOT_SPANS + 1), edit(MAX_SLOT_SPANS + 1)] {
+        let bytes = codec.marshal_request(&over);
+        let err = match codec.parse(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("an over-cap I-span slot must not parse"),
+        };
+        let detail = err.detail.expect("a parse failure names what failed");
+        assert!(detail.contains("wire cap"), "the refusal names the cap: {detail}");
+    }
+
+    // The wire's I-span and the stored span: `{"start": …, "width": "5"}`
+    // is the span whose width is `0.0.0.0.0.0.0.5` — one spelling on the
+    // wire, `retrieve_i`'s, for the slot form and the read by identity.
+    let frame = br#"{"from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"5"}]},"home":"1.0.1.0.1","op":"make_link","to":{"spans":[]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#;
+    let req = parse_ok(&codec, frame);
+    assert_eq!(req, make(1), "the I-span parses to the span of five positions from its start");
+    assert_eq!(codec.marshal_request(&req), frame, "and renders back as the I-span it was sent as");
 }

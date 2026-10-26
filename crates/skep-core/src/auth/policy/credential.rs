@@ -114,11 +114,15 @@ pub fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
         // (1) — every credential-typed emit, unconditionally: M7's dedup
         // could hand a phantom ack for an act key_set never shows.
         Op::Emit { .. } => Some(CredentialRefusal::EmitNotMakeLink),
-        // (2) — a credential deposit whose from or to entity slot is a
-        // Resolve, either of them, regardless of emptiness; then the
+        // (2) — a credential deposit whose from or to entity slot is not the
+        // address form — a Resolve, or the I-span form, which names content
+        // positions as a Resolve resolves to them and is refused with it
+        // (W6 (a): "refused on the credential and registry paths as V-specs
+        // are") — either of them, regardless of emptiness; then the
         // `replaces` fence on the member's presence alone.
         Op::MakeLink { from, to, replaces, .. } => {
-            if matches!(from, SlotArg::Resolve(_)) || matches!(to, SlotArg::Resolve(_)) {
+            let content_form = |slot: &SlotArg| matches!(slot, SlotArg::Resolve(_) | SlotArg::Spans(_));
+            if content_form(from) || content_form(to) {
                 Some(CredentialRefusal::ResolvedFrom)
             } else if replaces.is_some() {
                 Some(CredentialRefusal::ReplacesNotCredential)
@@ -126,9 +130,10 @@ pub fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
                 None
             }
         }
-        // (2) — every credential edit_link, unconditionally: the successor
-        // endsets are V-spec-only as built (AUTH-3.18's dead rule stands
-        // recorded there; the op never reaches deposit construction).
+        // (2) — every credential edit_link, unconditionally: the successor's
+        // ends are content-shaped as built, V-specs or I-spans, never the
+        // address form (AUTH-3.18's dead rule stands recorded there; the op
+        // never reaches deposit construction).
         Op::EditLink { .. } => Some(CredentialRefusal::ResolvedFrom),
         _ => None,
     }
@@ -247,13 +252,14 @@ impl DepositSpans {
     ///
     /// `Some` only for a `MakeLink` whose three slots are all address-form
     /// — the one op that reaches deposit construction (`Emit` dies at slot
-    /// (1), `EditLink` at slot (2), a `Nullify` is `nullify_refusal`'s).
+    /// (1), `EditLink` at slot (2), a `Nullify` is `nullify_refusal`'s; a
+    /// `Resolve` or I-span `from`/`to` dies at slot (2) too, `resolved_from`).
     pub fn of(op: &Op) -> Option<DepositSpans> {
         let Op::MakeLink { home, from, to, ty, .. } = op else { return None };
         let slot = |s: &SlotArg| -> Option<Vec<Span>> {
             match s {
                 SlotArg::Addrs(a) => Some(addr_spans(a)),
-                SlotArg::Resolve(_) => None,
+                SlotArg::Resolve(_) | SlotArg::Spans(_) => None,
             }
         };
         Some(DepositSpans {

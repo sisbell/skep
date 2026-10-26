@@ -91,12 +91,14 @@ pub(super) fn registry_deposit_kind<'s>(
 
 /// Returns the registry kind a slot names, read in M7's own deposited form.
 ///
-/// The address form is read through [`addr_spans`]; `Resolve` answers
-/// `None`, since it can never name a commons row.
+/// The address form is read through [`addr_spans`]; `Resolve` and `Spans`
+/// answer `None`, since neither can name a commons row — a resolved slot
+/// names content, and an I-span slot is held by M7's content clause to
+/// content-subspace starts, under which no subspace-3 row has a span.
 fn slotarg_kind(s: &SlotArg) -> Option<RegistryKind> {
     match s {
         SlotArg::Addrs(addrs) => registry_deposit_kind(&addr_spans(addrs)),
-        SlotArg::Resolve(_) => None,
+        SlotArg::Resolve(_) | SlotArg::Spans(_) => None,
     }
 }
 

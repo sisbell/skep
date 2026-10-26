@@ -165,7 +165,7 @@ fn each_write_states_the_terms_its_row_carries() {
         Op::Emit { home: doc.clone(), ty: Endset::empty(), from: doc.clone(), to: Vec::new() };
     let edit_link = Op::EditLink {
         original: addr("1.0.1.0.1.0.2.1"),
-        successor: SuccessorSpec { from: Vec::new(), to: Vec::new(), ty: no_slot() },
+        successor: SuccessorSpec { from: Vec::new().into(), to: Vec::new().into(), ty: no_slot() },
         d_s: doc.clone(),
         d_a: doc.clone(),
     };

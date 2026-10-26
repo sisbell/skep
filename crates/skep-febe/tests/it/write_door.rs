@@ -23,10 +23,18 @@ use crate::common;
 use common::*;
 use skep_address::{document_of, elem_addr, Address, ElemPos};
 use skep_febe::{
-    Deposit, Disposition, Op, OpKind, PrincipalId, RejectCode, Rejection, Run, SessionId, Shot,
-    ShotRun, SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
+    Deposit, Disposition, Endset, Op, OpKind, PrincipalId, RejectCode, Rejection, Run, SessionId,
+    Shot, ShotRun, SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
 };
 use skep_links::MAX_SLOT_RESOLVE_STEPS;
+
+/// The content I-span of `width` positions from `doc`'s content I-ordinal
+/// `start`, as the wire's `{"spans"}` form carries one.
+fn ispan(doc: &Address, start: u32, width: u32) -> skep_address::Span {
+    let start = elem_addr(ElemPos { doc: doc.clone(), subspace: nat(1), ordinal: nat(start) })
+        .unwrap_or_else(|_| panic!("a content position"));
+    Run::new(start, nat(width)).expect("a content run").iextent()
+}
 
 /// The stranger's account and session, plus one DRAFT of its own — the
 /// destination every cross-owner write below lands in.
@@ -338,8 +346,8 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
             Op::EditLink {
                 original: l1.clone(),
                 successor: SuccessorSpec {
-                    from: vec![],
-                    to: vec![vspec(&unreadable_doc, 1, 1)],
+                    from: vec![].into(),
+                    to: vec![vspec(&unreadable_doc, 1, 1)].into(),
                     ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 4)]),
                 },
                 d_s: unreadable_doc.clone(),
@@ -395,8 +403,8 @@ fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_
         Op::EditLink {
             original: original.clone(),
             successor: SuccessorSpec {
-                from,
-                to: vec![],
+                from: from.into(),
+                to: vec![].into(),
                 ty: SlotArg::Addrs(vec![ghost_type(&user_draft, 1)]),
             },
             d_s: user_draft.clone(),
@@ -462,8 +470,8 @@ fn an_edit_refused_its_destination_answers_alike_however_long_its_unreadable_sou
         Op::EditLink {
             original: original.clone(),
             successor: SuccessorSpec {
-                from,
-                to: vec![],
+                from: from.into(),
+                to: vec![].into(),
                 ty: SlotArg::Addrs(vec![ghost_type(&user_draft, 1)]),
             },
             d_s: user_draft.clone(),
@@ -523,8 +531,8 @@ fn an_edit_owning_one_of_its_two_homes_is_refused_not_owner_never_withheld() {
             Op::EditLink {
                 original: original.clone(),
                 successor: SuccessorSpec {
-                    from: vec![],
-                    to: vec![vspec(&unreadable_doc, 1, 1)],
+                    from: vec![].into(),
+                    to: vec![vspec(&unreadable_doc, 1, 1)].into(),
                     ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
                 },
                 d_s: d_s.clone(),
@@ -682,8 +690,8 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
     unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, their_draft) = stranger(&fx);
     let successor = |to: Vec<skep_arrangement::VSpec>, ordinal: u32| SuccessorSpec {
-        from: vec![],
-        to,
+        from: vec![].into(),
+        to: to.into(),
         ty: SlotArg::Addrs(vec![ghost_type(&their_draft, ordinal)]),
     };
 
@@ -740,7 +748,7 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
         fx.user,
         Op::EditLink {
             original: unreadable_l1.clone(),
-            successor: SuccessorSpec { from: vec![], to: vec![vspec(&unreadable_doc, 1, 1)], ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 9)]) },
+            successor: SuccessorSpec { from: vec![].into(), to: vec![vspec(&unreadable_doc, 1, 1)].into(), ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 9)]) },
             d_s: unreadable_doc.clone(),
             d_a: unreadable_doc.clone(),
         },
@@ -785,8 +793,8 @@ fn a_link_homed_where_the_writer_cannot_read_is_refused_in_the_stores_own_absenc
     let edit = |original: &Address| Op::EditLink {
         original: original.clone(),
         successor: SuccessorSpec {
-            from: vec![],
-            to: vec![],
+            from: vec![].into(),
+            to: vec![].into(),
             ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
         },
         d_s: their_draft.clone(),
@@ -1042,4 +1050,60 @@ fn a_link_writes_dedup_never_hands_back_a_claim_homed_where_the_writer_cannot_re
     assert_ne!(theirs, unreadable_claim, "never a claim homed where the writer cannot read");
     assert_eq!(document_of(&theirs), Some(their_draft), "the writer's own claim, in its own home");
     assert!(at > before, "minted, not a dedup hit");
+}
+
+/// THE READ CHECK's DOOR CHANNEL (W6 (a); PUB-6.24 carried to a run): an
+/// I-span slot names no source, so the door consults nothing for it — a
+/// stranger's link whose `to` is an I-span INSIDE a document it may not read
+/// is admitted exactly as the address form is, never `withheld`, and the
+/// stored slot is the span as given; the owner's identical slot into a
+/// draft of its own stores the same shape, so the answer is a function of
+/// the request alone. An edit whose successor end is the same I-span is
+/// admitted the same way.
+#[test]
+fn an_ispan_slot_into_an_unreadable_document_is_not_withheld_and_is_stored_as_given() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let (other, their_draft) = stranger(&fx);
+    let inside = ispan(&unreadable_doc, 1, 3);
+    let make = |home: &Address, ordinal: u32| Op::MakeLink {
+        home: home.clone(),
+        from: SlotArg::Addrs(vec![]),
+        to: SlotArg::Spans(vec![inside.clone()]),
+        ty: SlotArg::Addrs(vec![ghost_type(home, ordinal)]),
+        replaces: None,
+    };
+
+    let (link, _) = ack_addr(ex(&fx.febe, other, make(&their_draft, 7)));
+    let value =
+        link_value(ex(&fx.febe, other, Op::ReadLink { a: link.clone() })).expect("the stranger's own link");
+    assert_eq!(value.to_slot(), &Endset::from_spans([inside.clone()]), "the span, verbatim");
+
+    // The owner's identical slot into a draft of its own: one stored shape.
+    let own = create_doc(&fx);
+    let (owner_link, _) = ack_addr(ex(&fx.febe, fx.user, make(&own, 7)));
+    let owner_value =
+        link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: owner_link })).expect("the owner's link");
+    assert_eq!(owner_value.to_slot(), value.to_slot(), "the same bytes whoever can read the document");
+
+    // An edit whose successor end is the same I-span: admitted, as given.
+    let (succ, _, _) = ack_edit(ex(
+        &fx.febe,
+        other,
+        Op::EditLink {
+            original: link,
+            successor: SuccessorSpec {
+                from: SlotArg::Spans(vec![inside.clone()]),
+                to: vec![].into(),
+                ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 8)]),
+            },
+            d_s: their_draft.clone(),
+            d_a: their_draft.clone(),
+        },
+    ));
+    let successor =
+        link_value(ex(&fx.febe, other, Op::ReadLink { a: succ })).expect("the stranger's successor");
+    assert_eq!(successor.from_slot(), &Endset::from_spans([inside]), "the re-made end, verbatim");
 }

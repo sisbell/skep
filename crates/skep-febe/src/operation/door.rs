@@ -839,8 +839,8 @@ mod tests {
         let edit = Op::EditLink {
             original: d1.clone(),
             successor: SuccessorSpec {
-                from: vec![],
-                to: vec![],
+                from: vec![].into(),
+                to: vec![].into(),
                 ty: SlotArg::Addrs(vec![d1.clone()]),
             },
             d_s: d1.clone(),
@@ -961,7 +961,7 @@ mod tests {
         );
         let edit = Op::EditLink {
             original: old.clone(),
-            successor: SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Addrs(vec![]) },
+            successor: SuccessorSpec { from: vec![].into(), to: vec![].into(), ty: SlotArg::Addrs(vec![]) },
             d_s: doc(),
             d_a: doc(),
         };

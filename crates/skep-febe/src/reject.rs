@@ -285,6 +285,12 @@ pub enum RejectCode {
     /// The link is already seated in its document's link subspace.
     AlreadySeated,
     /// A position, span or cut is not in the content subspace.
+    ///
+    /// Also the I-span form's shape fault on a link write (W6 (a)): a span
+    /// of a `make_link` slot or an `edit_link` successor slot that is no
+    /// content I-span — its start no content-subspace element position, or
+    /// its width no ordinal displacement — by slot and index, as the read by
+    /// identity names a span whose start is no element position.
     NotContentSubspace,
     // ── M5 arrangement: the version-chain model's three write-path
     //    refusals (PUB-kickoff D2b). Each is a permanent class (PUB-8.3's

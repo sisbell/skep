@@ -9,11 +9,15 @@
 //!   snake_case op names mirroring `OpKind`; unknown ops and unknown fields
 //!   are parse failures, never ignored (the never-silent contract applied to
 //!   client typos).
-//! * `make_link`'s three endset slots are two-form (wire v5): a V-spec array
-//!   (content-resolved, byte-identical to v4 — a v4 frame means under v5
-//!   exactly what it means under v4) or `{"addrs": [addresses…]}` — the
-//!   names recorded verbatim, no resolution; the addrs-object encoding is
-//!   identical to `edit_link`'s successor `ty` addrs form.
+//! * `make_link`'s three endset slots are three-form (wire v5, widened by the
+//!   I-span form, W6 (a)): a V-spec array (content-resolved, byte-identical
+//!   to v4 — a v4 frame means under v5 exactly what it means under v4),
+//!   `{"addrs": [addresses…]}` — the names recorded verbatim, no resolution;
+//!   the addrs-object encoding is identical to `edit_link`'s successor `ty`
+//!   addrs form — or `{"spans": [{"start": …, "width": …}, …]}`, content
+//!   I-spans in `retrieve_i`'s I-span shape, recorded verbatim; `edit_link`'s
+//!   successor `from` and `to` take the first and the third, its `ty` all
+//!   three (the first as `{"resolve": […]}`).
 //! * Tumblers and addresses are dotted-decimal strings (`"1.1.0.1.0.2"`);
 //!   spans are `{"start": …, "width": …}` objects; unbounded ℕ values ride
 //!   as decimal strings (T0 admits magnitudes no JSON number can carry),
@@ -1334,25 +1338,81 @@ fn p_shot_run(v: &Value) -> PResult<ShotRun> {
     Ok(ShotRun { origin, run })
 }
 
-/// Parses a `make_link` endset slot (wire v5).
+/// Parses a `make_link` endset slot (wire v5; the I-span form, W6 (a)).
 ///
-/// It is a V-spec array (content-resolved, byte-identical to v4) or
+/// It is a V-spec array (content-resolved, byte-identical to v4),
 /// `{"addrs": [addresses…]}` — the names recorded verbatim, the same
-/// addrs-object encoding as `edit_link`'s successor `ty`.
+/// addrs-object encoding as `edit_link`'s successor `ty` — or
+/// `{"spans": [i-spans…]}`, content I-spans recorded verbatim
+/// ([`p_ispan_slot`]).
 ///
 /// # Errors
 ///
-/// A [`PErr`] where `v` is neither an array nor an object, or where the
-/// array, the object or its `addrs` list is refused.
+/// A [`PErr`] where `v` is neither an array nor an object, where the object
+/// holds other than exactly one of `addrs` and `spans`, or where the array,
+/// the `addrs` list or the `spans` list is refused.
 fn p_slotarg(v: &Value) -> PResult<SlotArg> {
     match v {
         Value::Array(_) => Ok(SlotArg::Resolve(p_list(v, p_vspec)?)),
         Value::Object(_) => {
-            let m = p_obj(v, &["addrs"])?;
-            Ok(SlotArg::Addrs(field(m, "addrs", |v| p_list(v, p_addr))?))
+            let m = p_obj(v, &["addrs", "spans"])?;
+            match (m.get("addrs"), m.get("spans")) {
+                (Some(a), None) => {
+                    Ok(SlotArg::Addrs(p_list(a, p_addr).map_err(|e| PErr(format!("addrs: {e}")))?))
+                }
+                (None, Some(s)) => {
+                    Ok(SlotArg::Spans(p_ispan_slot(s).map_err(|e| PErr(format!("spans: {e}")))?))
+                }
+                _ => Err(PErr("expected exactly one of 'addrs' or 'spans'".into())),
+            }
         }
-        _ => Err(PErr("expected a v-spec array or {\"addrs\": [addresses…]}".into())),
+        _ => Err(PErr(
+            "expected a v-spec array, {\"addrs\": [addresses…]} or {\"spans\": [i-spans…]}".into(),
+        )),
     }
+}
+
+/// Parses an I-span slot's list: `retrieve_i`'s I-spans, each as the span
+/// the store holds (wire.md §Links (writes), the I-span form).
+///
+/// The list is one wire list ([`p_list`], the cap M7's slot budget); each
+/// element is [`p_ispan`]'s `{start, width}` turned into its span by
+/// [`ispan_extent`]. The shape the store demands of the span — a
+/// content-subspace element start, the content clause — is M7's refusal
+/// (`not_content_subspace`, by slot and index), not this parse's, as the
+/// read by identity's shape is M10's: a span is well-formed here whatever
+/// document it names.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no array, past the cap, or an element is refused
+/// — its index prefixed.
+fn p_ispan_slot(v: &Value) -> PResult<Vec<Span>> {
+    p_list(v, |v| ispan_extent(&p_ispan(v)?))
+}
+
+/// Returns the span an I-span names: `width` positions from `start`.
+///
+/// It is the extent `Run::iextent` yields for the run of that start and
+/// width — the start's tumbler, and the ordinal displacement at the start's
+/// own length with `width` as its last component — built by arithmetic on
+/// the two fields and no address check: a start that is no content element
+/// position makes a span the store refuses by index, never a parse failure,
+/// so a malformed slot answers the same classified bytes whatever its
+/// document holds.
+///
+/// # Errors
+///
+/// A [`PErr`] where `width` is zero: a span over no position, which no
+/// stored slot holds — M1's span constructor refuses the zero displacement
+/// — so the form refuses it where a zero-width V-span is refused, at the
+/// parse.
+fn ispan_extent(s: &ISpan) -> PResult<Span> {
+    let start = s.start.tumbler().clone();
+    let zeros = (1..start.len()).map(|_| Nat::from(0u32));
+    let width = Tumbler::new(zeros.chain([s.width.clone()]))
+        .expect("a width as long as its start is nonempty");
+    Span::new(start, width).map_err(|_| PErr("width must be at least 1".into()))
 }
 
 fn p_spec(v: &Value) -> PResult<Spec> {
@@ -1604,37 +1664,61 @@ fn p_fourset(v: &Value) -> PResult<FourSet> {
     })
 }
 
-/// Parses EditLink's successor: content V-specs, and the type slot.
+/// Parses EditLink's successor: its two ends, and the type slot.
 ///
-/// The V-specs are for from/to; the type slot is exactly one of
-/// `{"addrs": […]}` (address-denoting — the identical encoding of
-/// `make_link`'s addrs form) or `{"resolve": […]}` (content-resolved),
-/// mirroring M10's `SlotArg`.
+/// `from` and `to` are each a V-spec array (content-resolved) or
+/// `{"spans": […]}` (content I-spans, recorded verbatim — W6 (a)); the type
+/// slot is exactly one of `{"addrs": […]}` (address-denoting — the
+/// identical encoding of `make_link`'s addrs form), `{"resolve": […]}`
+/// (content-resolved) or `{"spans": […]}`, mirroring M10's `SlotArg`. An
+/// `addrs` object on `from` or `to` is refused here: the narrowing M10's
+/// successor keeps — an address-denoting successor end is not sent.
 ///
 /// # Errors
 ///
 /// A [`PErr`] where `v` is no object of `from`, `to` and `ty` alone, where
-/// one of the three is missing or refused, or where `ty` holds other than
-/// exactly one of `addrs` and `resolve`.
+/// one of the three is missing or refused, where `from` or `to` is neither
+/// an array nor a `spans` object, or where `ty` holds other than exactly one
+/// of `addrs`, `resolve` and `spans`.
 fn p_successor(v: &Value) -> PResult<SuccessorSpec> {
     let m = p_obj(v, &["from", "to", "ty"])?;
     Ok(SuccessorSpec {
-        from: field(m, "from", |v| p_list(v, p_vspec))?,
-        to: field(m, "to", |v| p_list(v, p_vspec))?,
+        from: field(m, "from", p_successor_end)?,
+        to: field(m, "to", p_successor_end)?,
         ty: field(m, "ty", p_successor_ty)?,
     })
 }
 
+/// Parses a successor's `from` or `to`: V-specs, or I-spans.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is neither an array nor an object of `spans` alone,
+/// or where the list is refused.
+fn p_successor_end(v: &Value) -> PResult<SlotArg> {
+    match v {
+        Value::Array(_) => Ok(SlotArg::Resolve(p_list(v, p_vspec)?)),
+        Value::Object(_) => {
+            let m = p_obj(v, &["spans"])?;
+            Ok(SlotArg::Spans(field(m, "spans", p_ispan_slot)?))
+        }
+        _ => Err(PErr("expected a v-spec array or {\"spans\": [i-spans…]}".into())),
+    }
+}
+
 fn p_successor_ty(v: &Value) -> PResult<SlotArg> {
-    let m = p_obj(v, &["addrs", "resolve"])?;
-    match (m.get("addrs"), m.get("resolve")) {
-        (Some(a), None) => {
+    let m = p_obj(v, &["addrs", "resolve", "spans"])?;
+    match (m.get("addrs"), m.get("resolve"), m.get("spans")) {
+        (Some(a), None, None) => {
             Ok(SlotArg::Addrs(p_list(a, p_addr).map_err(|e| PErr(format!("addrs: {e}")))?))
         }
-        (None, Some(r)) => {
+        (None, Some(r), None) => {
             Ok(SlotArg::Resolve(p_list(r, p_vspec).map_err(|e| PErr(format!("resolve: {e}")))?))
         }
-        _ => Err(PErr("expected exactly one of 'addrs' or 'resolve'".into())),
+        (None, None, Some(s)) => {
+            Ok(SlotArg::Spans(p_ispan_slot(s).map_err(|e| PErr(format!("spans: {e}")))?))
+        }
+        _ => Err(PErr("expected exactly one of 'addrs', 'resolve' or 'spans'".into())),
     }
 }
 

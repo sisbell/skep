@@ -5,11 +5,12 @@
 use crate::common;
 
 use common::*;
+use skep_address::{subtree_of, Address};
 use skep_arrangement::HasM5;
 use skep_kernel::{Attestation, HistoryError, Seq, TxnError};
 use skep_links::{
-    enc, is_replaces_class, replaces_type, EditLinkError, EmitError, Endset, HasLinks, Link,
-    LinkWriter, MakeLinkError, SlotArg, View,
+    coverage_class, enc, is_replaces_class, replaces_type, EditLinkError, EmitError, Endset,
+    HasLinks, Link, LinkWriter, MakeLinkError, SlotArg, View, TYPE,
 };
 
 // ---- the sole-writer fences, on the open surface ----
@@ -259,4 +260,59 @@ fn makelink_replacing_commits_record_and_link_together() {
         )
         .expect("a later makelink");
     assert_eq!(next, la(3), "a later deposit lands past both");
+}
+
+// ---- the fences over the I-span form (W6 (a)) ----
+
+/// THE THREE FENCES HOLD OVER A `Spans` TYPE SLOT. A content extent never
+/// classes: a type slot of content I-spans wider than one position classes
+/// as an extent, none of the three fenced classes, and deposits — the
+/// fences read the class, never the form. The two reserved ghost tumblers
+/// with a sole writer are content positions, so a width-1 I-span at either
+/// IS its unit span and classes as its class: the same fence refuses it in
+/// this form as in the address form, and the fold never meets a forged
+/// retraction or claim. The `replaces` type is a subspace-3 address no
+/// I-span can spell: the content clause refuses it ahead of the fence, by
+/// slot and index. A reserved class with no sole writer (`retired`) deposits
+/// in this form as in the address form — the control.
+#[test]
+fn the_fences_hold_over_an_ispan_type_slot() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let w = writer(&k);
+    let unit = |addr: &Address| SlotArg::Spans(vec![subtree_of(addr.tumbler())]);
+    let before = k.current_seq();
+    assert!(matches!(
+        w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), unit(&reserved().retraction)),
+        Err(TxnError::Rejected(MakeLinkError::RetractionClass))
+    ));
+    assert!(matches!(
+        w.makelink(P1, &doc1(), SlotArg::Addrs(vec![la(90)]), SlotArg::Addrs(vec![la(91)]), unit(&reserved().supersedes)),
+        Err(TxnError::Rejected(MakeLinkError::SupersessionClass))
+    ));
+    assert!(matches!(
+        w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![]), unit(replaces_type())),
+        Err(TxnError::Rejected(MakeLinkError::NotContentSpan { slot: TYPE, index: 0 }))
+    ));
+    assert_eq!(k.current_seq(), before, "every refusal is pre-deposit");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert!(!links.is_nullified(&ca(2)), "no forged tombstone");
+        assert!(links.succs(&supersedes_ty(), &la(90)).is_empty(), "no forged edge");
+    }
+
+    // A content extent types a link: an extents class, never a denoted one.
+    let (l, _) = w
+        .makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![]), SlotArg::Spans(vec![iext(1, 3)]))
+        .expect("a content extent is none of the fenced classes");
+    let snap = k.snapshot();
+    let ty = snap.world().links().readlink(&l).expect("resident").type_slot().clone();
+    assert_eq!(ty, Endset::from_spans([iext(1, 3)]));
+    assert!(coverage_class(&ty).denoted().is_none(), "an extent classes as an extent, not as a denoted set");
+    assert!(!is_replaces_class(&ty));
+    // The control: a reserved class with no sole writer deposits in this
+    // form as in the address form.
+    w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![]), unit(&reserved().retired))
+        .expect("retired has no sole writer");
 }

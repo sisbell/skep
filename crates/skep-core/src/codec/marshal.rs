@@ -718,12 +718,35 @@ fn j_shot_runs(rs: &[ShotRun]) -> Value {
 /// Renders a slot argument, [`p_slotarg`](super::p_slotarg)'s inverse.
 ///
 /// The Resolve form is the bare v-spec array (byte-identical to v4), the
-/// Addrs form the tagged object.
+/// Addrs form and the Spans form each their tagged object.
 fn j_slotarg(s: &SlotArg) -> Value {
     match s {
         SlotArg::Resolve(v) => j_vspecs(v),
         SlotArg::Addrs(a) => obj(vec![("addrs", j_addrs(a))]),
+        SlotArg::Spans(spans) => obj(vec![("spans", j_ispan_slot(spans))]),
     }
+}
+
+/// Renders an I-span slot's spans as the I-spans they were sent as —
+/// [`p_ispan_slot`](super::p_ispan_slot)'s inverse: each span's start as an
+/// address and its width's last component as the count, `retrieve_i`'s
+/// I-span shape.
+///
+/// Exact for every span the parse admits (a start of any shape, a width
+/// `0…0.n` at the start's length): what a caller rebuilt some other way
+/// renders by the same two fields.
+fn j_ispan_slot(spans: &[Span]) -> Value {
+    Value::Array(
+        spans
+            .iter()
+            .map(|s| {
+                // The width's last component (`Tumbler::get` is 1-based).
+                let width = s.width();
+                let count = width.get(width.len()).expect("a tumbler is nonempty");
+                obj(vec![("start", j_tum(s.start())), ("width", j_nat(count))])
+            })
+            .collect(),
+    )
 }
 
 fn j_spec(s: &Spec) -> Value {
@@ -1076,13 +1099,27 @@ fn j_follow_result(r: &Result<SpanSet, Invalid>) -> Value {
 }
 
 fn j_successor(s: &SuccessorSpec) -> Value {
-    obj(vec![("from", j_vspecs(&s.from)), ("to", j_vspecs(&s.to)), ("ty", j_successor_ty(&s.ty))])
+    obj(vec![
+        ("from", j_successor_end(&s.from)),
+        ("to", j_successor_end(&s.to)),
+        ("ty", j_successor_ty(&s.ty)),
+    ])
+}
+
+/// Renders a successor's `from` or `to`,
+/// [`p_successor_end`](super::p_successor_end)'s inverse: the bare v-spec
+/// array, or the `spans` object. An address-form end renders as its `addrs`
+/// object, which the parse refuses — the narrowing M10 keeps, stated at the
+/// parse and not here.
+fn j_successor_end(e: &SlotArg) -> Value {
+    j_slotarg(e)
 }
 
 fn j_successor_ty(t: &SlotArg) -> Value {
     match t {
         SlotArg::Addrs(a) => obj(vec![("addrs", j_addrs(a))]),
         SlotArg::Resolve(v) => obj(vec![("resolve", j_vspecs(v))]),
+        SlotArg::Spans(spans) => obj(vec![("spans", j_ispan_slot(spans))]),
     }
 }
 

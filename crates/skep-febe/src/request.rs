@@ -290,10 +290,14 @@ pub enum Op {
     /// [`Codec::parse`]: crate::Codec::parse
     Publish { doc: Address, shot: Shot },
     // ── link writes (→ M7) ──
-    /// MAKELINK (ASN-0120): an open link from three two-form slots.
+    /// MAKELINK (ASN-0120): an open link from three three-form slots.
     ///
-    /// Each slot is content V-specs (resolved by M7 inside its transact) or
-    /// address names deposited verbatim (`SlotArg` is M7's).
+    /// Each slot is content V-specs (resolved by M7 inside its transact),
+    /// address names deposited verbatim, or content I-spans deposited
+    /// verbatim (`SlotArg` is M7's). The two name forms name no source: the
+    /// door consults nothing for them and M7 reads nothing of the document
+    /// they name — an I-span's shape is held by request arithmetic alone,
+    /// `not_content_subspace` by slot and index (M7's content clause).
     ///
     /// `replaces` is the op's optional member naming the state the record
     /// replaces (PUB-5.15 (iii), (iv); RES-308): `None` — the member absent —
@@ -567,21 +571,29 @@ pub enum Op {
     UniversalGrants,
 }
 
-/// EditLink's successor, assembled by M10 from content V-specs (§4).
+/// EditLink's successor, assembled by M10 from content V-specs or I-spans
+/// (§4).
 ///
-/// `from`/`to` are content-resolved only — a deliberate narrowing: an
-/// address-denoting successor is not constructible here; supersession of
-/// managed tuples goes via [`Op::Emit`] + [`Op::AssertSup`]. The type slot
-/// is M7's two-form [`SlotArg`], which [`Op::MakeLink`]'s three slots share.
+/// `from`/`to` take two of M7's three slot forms: content V-specs, resolved
+/// here off the snapshot, or content I-spans, deposited verbatim (W6 (a) —
+/// the re-made end of an accepted link is the original's own I-spans, cut
+/// in I-space, and names no source). The address form is refused on them —
+/// a deliberate narrowing, kept: an address-denoting successor endpoint is
+/// `ill_formed_successor` at the build, naming the slot, and the wire's
+/// parse admits no `addrs` object there; supersession of managed tuples goes
+/// via [`Op::Emit`] + [`Op::AssertSup`]. The type slot is M7's three-form
+/// [`SlotArg`], which [`Op::MakeLink`]'s three slots share.
 ///
 /// **Refusal precedence.** A successor may be wrong in several places at once
 /// and exactly one answer comes back, so the order decides it: the slots are
 /// built `from`, then `to`, then `ty`, and the first that refuses speaks.
 /// Within a slot the first offending spec speaks, `IllFormedSpec` ahead of
-/// `SourceNotRegistered` on it. [`crate::FaultSite`] localizes the refusal in
-/// two fields: `slot` names which of the three refused, in M7's numbering
-/// ([`FROM`]/[`TO`]/[`TYPE`], the numbering [`Op::FollowLink`]'s `slot` is
-/// already in), and `index` the offending spec's position within it.
+/// `SourceNotRegistered` on it; within an I-span slot the first span that is
+/// no content I-span, `NotContentSubspace`. [`crate::FaultSite`] localizes
+/// the refusal in two fields: `slot` names which of the three refused, in
+/// M7's numbering ([`FROM`]/[`TO`]/[`TYPE`], the numbering
+/// [`Op::FollowLink`]'s `slot` is already in), and `index` the offending
+/// spec's or span's position within it.
 ///
 /// A slot is also held to M7's two per-slot budgets — the spans it keeps
 /// ([`MAX_SLOT_SPANS`]) and the run-list steps its resolution walks — and
@@ -597,8 +609,9 @@ pub enum Op {
 /// snapshot and the commit — it is M7 that answers `SlotTooLarge`, with no
 /// site, and a successor under both budgets commits as built, its sources
 /// never consulted ([`OperationSurface::execute`] states that window). The
-/// type slot's address form is the exception: its count is the request's own,
-/// so it is held to the span budget whoever asks.
+/// two name forms are the exception: an address-form type slot's count and
+/// an I-span slot's count are the request's own, so each is held to the span
+/// budget whoever asks.
 ///
 /// [`FROM`]: crate::FROM
 /// [`TO`]: crate::TO
@@ -615,11 +628,14 @@ pub enum Op {
 /// [`IllFormedSpec`]: crate::RejectCode::IllFormedSpec
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuccessorSpec {
-    /// The successor's `from` slot, as content V-specs.
-    pub from: Vec<VSpec>,
-    /// The successor's `to` slot, as content V-specs.
-    pub to: Vec<VSpec>,
-    /// The successor's type slot, in either of [`SlotArg`]'s two forms.
+    /// The successor's `from` slot: content V-specs, or content I-spans.
+    ///
+    /// A `Vec<VSpec>` converts into the first form (`SlotArg`'s `From`); the
+    /// address form is refused at the build.
+    pub from: SlotArg,
+    /// The successor's `to` slot: content V-specs, or content I-spans.
+    pub to: SlotArg,
+    /// The successor's type slot, in any of [`SlotArg`]'s three forms.
     pub ty: SlotArg,
 }
 
@@ -1117,9 +1133,10 @@ impl Op {
     /// origin, PUB-2.15); `version` its `d_src`; `make_link` and `edit_link`
     /// the document of every `Resolve`-form slot's V-spec — slots in the
     /// wire's declared order `from`, `to`, `ty`, specs by index within a slot.
-    /// An address-form slot names no source: an address is not secret and
-    /// needs no read to write (PUB-1.13, PUB-6.24), so it is ungated and
-    /// contributes nothing here.
+    /// An address-form or I-span slot names no source: an address is not
+    /// secret and needs no read to write (PUB-1.13, PUB-6.24), and an I-span
+    /// is an address with a width, so both are ungated and contribute nothing
+    /// here — which is the read check's door channel (W6 (a)).
     ///
     /// `fork` reads no source (PUB-6.23) and answers the empty list, as does
     /// every other write — `publish`'s source gate is the composite's own,
@@ -1137,11 +1154,9 @@ impl Op {
         ///
         /// It reads no arrangement: a `Resolve` slot names its sources, and
         /// resolving them is M5's act, on the far side of the consult this
-        /// list feeds.
+        /// list feeds. The two name forms have none (`SlotArg::specs`).
         fn push_resolve_sources<'a>(slot: &'a SlotArg, out: &mut Vec<&'a Address>) {
-            if let SlotArg::Resolve(specs) = slot {
-                out.extend(specs.iter().map(|s| &s.source));
-            }
+            out.extend(slot.specs().iter().map(|s| &s.source));
         }
         match self {
             Op::Copy { specs, .. } => specs.iter().map(|s| &s.source).collect(),
@@ -1168,11 +1183,13 @@ impl Op {
                 push_resolve_sources(ty, &mut out);
                 out
             }
-            // The successor's `from`/`to` are content-resolved by their type
-            // ([`SuccessorSpec`]); only its `ty` has the address form.
+            // The successor's three slots in declared order, each
+            // contributing its `Resolve` sources and nothing in the two name
+            // forms ([`SuccessorSpec`]).
             Op::EditLink { successor, .. } => {
-                let mut out: Vec<&Address> =
-                    successor.from.iter().chain(&successor.to).map(|s| &s.source).collect();
+                let mut out = Vec::new();
+                push_resolve_sources(&successor.from, &mut out);
+                push_resolve_sources(&successor.to, &mut out);
                 push_resolve_sources(&successor.ty, &mut out);
                 out
             }

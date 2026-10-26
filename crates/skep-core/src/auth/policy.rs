@@ -113,14 +113,21 @@ fn addr_of(comps: &[u32]) -> Address {
 
 /// Returns the record-deposit kind a slot names, read as M7 deposits it.
 ///
-/// The address form is read through [`addr_spans`]; `Resolve` answers
-/// `None` — a resolved slot can never name a credential type (the
+/// The address form is read through [`addr_spans`]; `Resolve` and `Spans`
+/// answer `None` — a resolved slot can never name a credential type (the
 /// subspace-3 allocation the engine's pins state, [`skep_engine::types`]),
-/// so classification never resolves.
+/// and an I-span slot is held by M7's content clause to content-subspace
+/// element starts, so a width-1 span of it can be the unit span of a
+/// content address and never of a subspace-3 type's — the clause the
+/// wire-lane decision 5 made REQUIRED exactly so this classifier, reading
+/// the address form alone, stays total: without it an I-span spelling a
+/// credential type's unit span would route its deposit to the plain path,
+/// the false negative [`deposits_credential_link`] names. So classification
+/// never resolves and never reads a span.
 fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
     match s {
         SlotArg::Addrs(addrs) => record_deposit_kind(&addr_spans(addrs)),
-        SlotArg::Resolve(_) => None,
+        SlotArg::Resolve(_) | SlotArg::Spans(_) => None,
     }
 }
 
@@ -639,7 +646,7 @@ mod tests {
                 Op::Emit { home: doc.clone(), ty: enc([&ty]), from: doc.clone(), to: Vec::new() };
             let edit_link = Op::EditLink {
                 original: doc.clone(),
-                successor: SuccessorSpec { from: Vec::new(), to: Vec::new(), ty: typed() },
+                successor: SuccessorSpec { from: Vec::new().into(), to: Vec::new().into(), ty: typed() },
                 d_s: doc.clone(),
                 d_a: doc.clone(),
             };

@@ -817,8 +817,8 @@ pub fn commit_every_write(
         Op::EditLink {
             original: l1.clone(),
             successor: SuccessorSpec {
-                from: vec![vspec(&home, 1, 1)],
-                to: vec![vspec(&home, 2, 1)],
+                from: vec![vspec(&home, 1, 1)].into(),
+                to: vec![vspec(&home, 2, 1)].into(),
                 ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
             },
             d_s: home.clone(),

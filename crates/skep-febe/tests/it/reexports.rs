@@ -102,8 +102,8 @@ fn a_request_is_built_spelling_one_crate() {
         Op::EditLink {
             original: doc.clone(),
             successor: SuccessorSpec {
-                from: vec![vspec],
-                to: vec![],
+                from: vec![vspec].into(),
+                to: vec![].into(),
                 ty: SlotArg::Addrs(vec![doc.clone()]),
             },
             d_s: doc.clone(),

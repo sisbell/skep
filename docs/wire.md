@@ -290,7 +290,11 @@ writes' slots `from`, `to`, `ty`, specs by index within a slot), no
 ORIGIN: a principal MAY copy, fork or link from a PUBLIC document over runs
 whose origin is a draft it cannot read, and the minted document holds
 those I-positions withheld to it exactly as the source does. ADDRESS-FORM
-slots are ungated — an address is not secret and needs no read to write.
+and I-SPAN slots (§Links (writes)) are ungated — an address is not secret
+and needs no read to write, and an I-span is an address with a width:
+nothing of the document an I-span names is read at the write, so naming
+positions you cannot read tells you nothing of them (the read check,
+§Links (writes)).
 `fork` reads no source and takes no gate. The consult stands BEHIND the
 destination's `not_owner`, MINT-FIRST, the publish-class gate
 (§Credential refusals) and the model's in-place refusal
@@ -1626,10 +1630,17 @@ Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class` (make-link and emit: the type resolves into the
 retraction class, which only nullify writes — M7's K ≁ R fence),
 `non_address_denoting_type`, `bad_target`,
-`self_supersession`, `ill_formed_successor`, `dc_violation`,
+`self_supersession`, `ill_formed_successor` (also an edit-link
+successor's FROM or TO end sent in the address form, naming the slot in
+`site.slot`), `dc_violation`, the arrangement's `not_content_subspace`
+once more (an I-SPAN slot of a make-link or of an edit-link successor
+whose span is no content I-span — its start no content-subspace element
+position, or its width no ordinal displacement — `site.slot` the slot in
+declared order and `site.index` the span, by request arithmetic alone;
+§Links (writes)),
 `slot_too_large` (a slot past either of M7's two per-slot budgets: more
-than `MAX_SLOT_SPANS` = 4096 spans, in either form — the three slots of a
-make-link, the to- and type-slots of an emit, and the successor slots of
+than `MAX_SLOT_SPANS` = 4096 spans, in any of the three forms — the three
+slots of a make-link, the to- and type-slots of an emit, and the successor slots of
 an edit-link, the last naming the slot in `site.slot` — or, for a
 make-link slot in the V-spec form, specs commanding more than
 `MAX_SLOT_RESOLVE_STEPS` = 262144 run-list steps, each spec charged its
@@ -2151,7 +2162,21 @@ resolves AFTER every token below.
      and the policy link (`1.1.0.1.0.1.0.3.58`), each with its subtype
      rows by prefix — the endpoint (`1.1.0.1.0.1.0.3.56`) OUTSIDE by the
      same test, read on the active view with its org's own retraction
-     landing. ONE code for the class list; a
+     landing; and the SUPERSESSION CLAIM — `assert_sup`'s and
+     `edit_link`'s, typed the supersedes ghost tumbler
+     `1.1.0.1.0.1.0.1.4` — where the claim's `new` (its `to`, one
+     address) is homed in a PUBLISHED document. Its ground is not the
+     view it is read on but what it records: a claim that a public copy
+     supersedes its original is a fact of a past act that no act
+     legitimately retracts — the publication's resume reads the claims on
+     the ACTIVE view to know which pairs landed, and a landed retraction
+     would un-land what the board already served. The second key is
+     RES-207's shape on the claim's other end — the TYPE and
+     `published(document_of(new))`, read off the target link the refusal
+     already holds: a claim whose `new` is PRIVATE (a correction inside
+     the owner's own notes) is an ordinary link, its owner's retraction
+     landing, the one correction path for a wrong claim. ONE code for the
+     class list; a
      client splits the
      face by the target's type, which the owner can read. The classes are
      the members' list, never the boundary: the next audit-view class
@@ -2167,9 +2192,9 @@ type (§The claim ceremony and credentials) — run a stricter order:
 * Ahead of any lock, the shape slots: `emit_not_make_link` (every
   credential-typed `emit`, unconditionally — the emit path's dedup
   could phantom-ack an act `key_set` never shows), `resolved_from`
-  (a credential `make_link` whose `from` or `to` is the V-spec form —
-  deposit slots are address-form — and every credential-typed
-  `edit_link`), and `replaces_not_credential` (a credential-typed
+  (a credential `make_link` whose `from` or `to` is the V-spec form or
+  the I-span form — deposit slots are address-form — and every
+  credential-typed `edit_link`), and `replaces_not_credential` (a credential-typed
   `make_link` carrying a `replaces` member: a credential deposit's
   `replaces` row is EMPTY by kind — the credential class's fold is a
   set — so the member names a state no credential record replaces, and
@@ -3666,8 +3691,10 @@ and satisfies a home slot naming the member alone or naming the document.
 
 Readability (§The read predicate): a V-SPEC slot of `make_link`, or
 of `edit_link`'s successor, that resolves a document the session
-principal may not read is `withheld` naming it — address-form slots are
-ungated; and a link named by ADDRESS whose home the principal may not
+principal may not read is `withheld` naming it — address-form and I-span
+slots are ungated (an I-span names positions as an address names one,
+and nothing of their document is read at the write: THE READ CHECK,
+under `make_link` below); and a link named by ADDRESS whose home the principal may not
 read — `edit_link`'s `original`, `assert_sup`'s `old` and `new` — answers
 exactly as an address no link occupies: `original_not_resident` and
 `endpoint_not_resident` (reorder), never `withheld`, never `not_owner`.
@@ -3678,7 +3705,8 @@ before the store reads anything. `nullify`'s `target` takes neither: its
 Credential deposits: a `make_link` whose `ty` names a credential
 type address (§The claim ceremony and credentials) is a credential
 DEPOSIT and runs the credential write sequence. Its `from` and `to`
-must be the address form (`resolved_from` otherwise); a
+must be the address form (`resolved_from` otherwise — a V-spec or an
+I-span slot alike); a
 credential-typed `emit` is always `emit_not_make_link`; a
 credential-typed `edit_link` is always `resolved_from`; and a `nullify`
 targeting a credential link is `nullify_not_retraction` — retraction
@@ -3692,7 +3720,10 @@ revoking it, never by retracting its record), and a link of a class the
 publication spec reads under the AUDIT view (the succession pair, the
 consumption marker, the journal designation, the rail record, the
 steward's classification link with a published home, the `replaces` link
-a grant is deposited with) is refused
+a grant is deposited with, and the supersession claim whose `new` is
+homed in a published document — a fact of a past act that no act
+legitimately retracts; a claim whose `new` is private stays retractable)
+is refused
 `nullify_audit_view` — each to the record's owner alone, anyone else
 answering plain `not_owner` (§Credential refusals, item 3). And the
 publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
@@ -3701,7 +3732,7 @@ whose record home OR target home is published is
 `signed_session_required`, ahead of every class cell.
 
 **`make_link`** — create an open link homed in `home`. Each of `from`,
-`to`, `ty` takes **one of two forms** (no mixing within one slot):
+`to`, `ty` takes **one of three forms** (no mixing within one slot):
 
 * a **V-spec array** `[{"source": …, "span": …}, …]` — resolved against
   current arrangements; the recorded endset is the permanent I-spans;
@@ -3710,16 +3741,58 @@ whose record home OR target home is published is
   resolution and no occupancy requirement**: matching is by address and the
   contents at the addresses are never examined, exactly as Literary
   Machines specifies for link types. Any T4-valid address may be named —
-  a link, a document, or a *ghost* position that nothing will ever occupy.
+  a link, a document, or a *ghost* position that nothing will ever occupy;
+* an **I-span form** `{"spans": [{"start": "<address>", "width": "<n>"},
+  …]}` — `retrieve_i`'s I-span shape, each `width` positions from the
+  content element address `start`; the recorded endset is THOSE SPANS
+  verbatim, exactly what a V-spec slot over the same positions would have
+  stored, with **no source, no resolution and no occupancy requirement**:
+  it is the address form widened to a run, and like it is ungated (§The
+  read predicate) and reads nothing of the document the spans name — not
+  its registration, not its arrangement, not a byte — so a ghost position
+  past a frontier, or of a document no one minted, is a valid name here
+  too. The one shape every span must have is THE CONTENT CLAUSE: its
+  `start` a CONTENT-subspace element position (`…·0·1·<ordinal>`) and its
+  `width` at least 1, which keeps the form off every address a classifier
+  reads — a subspace-3 type address, a credential type's or the
+  `replaces` class's, has a unit span of the same two-tumbler shape, and
+  a slot spelling one here would pass the credential and registry
+  classifiers, which read the address form alone. A span whose `start` is
+  any other level or subspace is `not_content_subspace`, `site.slot` the
+  slot in declared order and `site.index` the span (§Rejection codes); a
+  zero `width` does not parse (`malformed`, as a zero-width V-span does
+  not); more than `MAX_SLOT_SPANS` spans is `slot_too_large`. Every verdict
+  is arithmetic on the request's own bytes. The five reserved ghost
+  tumblers are content positions and pass the clause; the two with a sole
+  writer are refused by the fences below in this form as in the address
+  form (`retraction_class`, `dc_violation`). The form is what an
+  accepted link's re-made ends are written in at a publication (the
+  link-sets design): the original's own I-spans, cut in I-space, never
+  re-projected.
+
+  THE READ CHECK (the link-sets ruling W6 (a)): writing a link that names
+  I-spans you cannot read tells you NOTHING of them — no answer, refusal,
+  timing or stored byte differs by what those positions hold or who may
+  read them. The door consults no source for the form; the plain path's
+  admission and the signed frame's slot row are composed from the
+  request's spans alone; the store's one check is the content clause, by
+  the span's bytes; the ack, `read_link` and `follow_link` answer the
+  spans as given; and a read of the document you then make (`project`,
+  `discoverable_from`, `retrieve_i`, `image`) is `withheld` naming it
+  exactly as it would be with no link written. What the form does
+  disclose is the writer's own: a public link naming a draft's I-span
+  tells every reader of the home that the draft exists and where in its
+  I-space the end lies — the disclosure the address form already makes
+  (PUB-6.15). The daemon's `ispan_slot` suite holds every channel.
 
 The declared slot order — here and in `edit_link`'s successor — is
 `from`, `to`, `ty`: the same positional order links read back in
 (slot 1 = FROM, 2 = TO, 3 = TYPE). A pin or diagnostic that speaks of a
 link write's slots "in declared order" means this order.
 
-The type slot must be nonempty **as given** (an empty `addrs` list, like a
-V-spec set resolving to nothing, rejects `empty_type_resolution`);
-`from`/`to` may be empty in either form.
+The type slot must be nonempty **as given** (an empty `addrs` list or
+`spans` list, like a V-spec set resolving to nothing, rejects
+`empty_type_resolution`); `from`/`to` may be empty in any form.
 
 The optional **`replaces`** member (PUB-5.15) names the record whose STATE
 this link replaces — an address. Present, ONE transaction deposits the
@@ -3743,7 +3816,8 @@ entry frame's rows): the entry signature over the frame whose `doc` is
 `home`, `op` `make_link` and `body` the type slot, the `from` slot and
 the `to` slot, each a SLOT ROW — the slot AS THE STORE WILL HOLD IT, its
 spans verbatim under `0x03`: an address-form slot's one unit span per
-name, a V-spec slot's I-extents, which the client resolves through
+name, an I-span slot's spans as given, a V-spec slot's I-extents, which
+the client resolves through
 `image` over each source before signing, against the base the
 transaction will take (a resolution the base has since moved is refused
 `attestation_invalid:signature`: re-compose and re-sign); the EMPTY slot
@@ -3783,6 +3857,16 @@ other address.
 <!-- wire: request make_link -->
 ```json
 {"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":{"addrs":["1.0.1.0.1.0.2.1"]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}
+```
+
+THE I-SPAN FORM: the `from` names five content positions of `1.0.1.0.2`
+by their I-addresses — the span `retrieve_i` would read — and is stored
+as that one span, whatever `1.0.1.0.2` arranges, holds or is readable as;
+the empty `to` is the form's empty slot; the type is a ghost name.
+
+<!-- wire: request make_link -->
+```json
+{"from":{"spans":[{"start":"1.0.1.0.2.0.1.1","width":"5"}]},"home":"1.0.1.0.1","op":"make_link","to":{"spans":[]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}
 ```
 
 A RE-SHARE (§The read predicate): account `1.0.1` shares its draft
@@ -3874,16 +3958,22 @@ the `to` slot row `new`'s; the `replaces` row EMPTY.
 ```
 
 **`edit_link`** — one composite: create a successor of link `original`
-(endsets given as content V-specs; the type slot either
-`{"addrs": [addresses…]}` — the identical encoding of `make_link`'s
-address form — or `{"resolve": [v-specs…]}`), homed in `d_s`, plus the
-supersession claim homed in `d_a`. → `ack_edit`. On a CLAIMED board,
+(its `from` and `to` each a content V-spec array or the I-span form
+`{"spans": [i-spans…]}` of `make_link` — the address form is refused on
+them, `ill_formed_successor` naming the slot, and never parses there;
+the type slot one of `{"addrs": [addresses…]}` — the identical encoding
+of `make_link`'s address form — `{"resolve": [v-specs…]}` or
+`{"spans": [i-spans…]}`), homed in `d_s`, plus the
+supersession claim homed in `d_a`. → `ack_edit`. An I-span end takes the
+content clause and the read check exactly as `make_link`'s does
+(`not_content_subspace` by `site.slot` and `site.index`). On a CLAIMED board,
 where either home is published, it carries the optional top-level
 `attest` member (signed ops): the entry signature over the frame whose
 `doc` is THE PAIR'S ROW — `d_s` then `d_a`, the op's own order, as an
 address-list row of two (§Credential refusals, the entry frame's rows) —
 `op` `edit_link` and `body` FIVE rows: the successor as a `make_link`
-body — its type, `from` and `to` slot rows AS STORED, the I-extents its
+body — its type, `from` and `to` slot rows AS STORED, an I-span slot's
+spans as given and the I-extents its
 V-specs resolve to (resolved by the client through `image` before
 signing) and its type as named or resolved, then the `replaces` row EMPTY
 (a successor typed `replaces` is refused) — and THE FIFTH ROW, the
@@ -4638,13 +4728,20 @@ Each entry:
   alone, never from the node registry; `effective_owner` (§Operations)
   stays the board's own authority for ω. On a bare row, the JOURNAL's
   answer (below); absent on every other op's row.
-* `link` — on a `make_link` row: the minted link's address, the `ack_addr`
-  the op answered. For a replacing grant (§Links (writes), `replaces`) this
+* `link` — on a `make_link` row and on an `assert_sup` row: the one link
+  the op deposited, the `ack_addr` it answered — the minted link, or the
+  supersession claim (the link-sets ruling W14: a device's claim index
+  learns every claim exactly, from the feed, with no count and no read).
+  For a replacing grant (§Links (writes), `replaces`) this
   is the RECORD's address; its `replaces` link sits at the next address in
   the same home, read by adjacency. The claim link's row therefore names
   the claim link's address, which is how a reader maps the link
-  `find_links` answers to its commit position. On a bare row, the journal's
-  answer (below); absent on every other op's row.
+  `find_links` answers to its commit position. An `assert_sup` row names
+  ONE document, the claim's home, so it is served WHOLE or OMITTED and
+  never reduced: the claim's address never rides a row that withholds
+  the home it is filed in. On a bare row, the journal's
+  answer (below); absent on every other op's row — `edit_link`'s claim
+  included.
 * `placed`, `base_extent` — on a `publish` row: the shot's two client terms
   exactly as `doc_metadata` serves them for the minted member (§Operations)
   — `placed` the count of positions the client placed (the sum of the
@@ -4695,9 +4792,10 @@ page is answered from:
   minted with its placing record; a member minted without one is a
   `version`), a replacing `make_link`'s `link` with its `op`, a `nullify`
   by its `op` alone, and `link` for the one link any other link write
-  deposited, its `op` left `null` (a plain `make_link` and an `emit`
-  deposit one link alike, so a bare `emit` row carries a `link` its
-  recorded row did not). A member the journal rules out is ABSENT as on
+  deposited, its `op` left `null` (a plain `make_link`, an `assert_sup`
+  and an `emit` deposit one link alike, so a bare `emit` row carries a
+  `link` its recorded row did not, where a bare `assert_sup` row carries
+  the claim its recorded row carries too). A member the journal rules out is ABSENT as on
   the recorded row; one it cannot decide — the op of an arrangement write
   or a document mint, a `delegate` under a node `register_node` admitted
   that no walk from the board's own nodes reaches, a `publish` under such

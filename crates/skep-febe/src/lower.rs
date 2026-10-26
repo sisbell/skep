@@ -361,6 +361,17 @@ impl Lower for MakeLinkError {
             MakeLinkError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
             MakeLinkError::NotOwner(a) => not_owner(a),
             MakeLinkError::IllFormedSpec => (RejectCode::IllFormedSpec, None),
+            // The I-span form's shape, the content clause (W6 (a)): a span
+            // whose start is no content-subspace element position, or whose
+            // width is no ordinal displacement, under the read by identity's
+            // own code for the same fault, localized as M10's successor guard
+            // localizes a spec — the slot in M7's numbering, the span's index
+            // within it. Permanent by the catch-all: the span's own bytes are
+            // what is wrong.
+            MakeLinkError::NotContentSpan { slot, index } => (
+                RejectCode::NotContentSubspace,
+                Some(FaultSite { slot: Some(slot), index: Some(index), ..FaultSite::default() }),
+            ),
             // Its own leaf rather than a ride on `IllFormedSpec`: the spec is
             // well formed and the slot is too big, and the two ask different
             // things of the client — fix the spec, versus narrow the span.

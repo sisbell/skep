@@ -245,8 +245,12 @@ fn link_slots(link: &Link) -> LinkSlots<&Endset> {
 /// Returns one `make_link` slot as the transaction will store it.
 ///
 /// It is M7's own [`slot_endset`] over this snapshot's M5 — an address-form
-/// slot's unit spans, a V-spec slot's I-extents — under M7's two per-slot
-/// budgets.
+/// slot's unit spans, a V-spec slot's I-extents, an I-span slot's spans
+/// verbatim — under M7's two per-slot budgets. The two name forms consult
+/// nothing: the I-span form's row is the request's own spans, so the
+/// preimage of a write naming positions the principal cannot read is a
+/// function of the request and the home alone (the read check's
+/// composition channel, W6 (a)).
 ///
 /// # Errors
 ///
@@ -377,11 +381,12 @@ pub(super) fn compose(
         // span; the pair of homes as the frame's `doc`.
         Op::EditLink { original, successor, d_s, d_a } => {
             let reader = world.reader_class(Some(principal));
-            let resolve_ty = match &successor.ty {
-                SlotArg::Resolve(specs) => specs.as_slice(),
-                SlotArg::Addrs(_) => &[],
-            };
-            if successor.from.iter().chain(&successor.to).chain(resolve_ty).any(|spec| !reader.readable(&spec.source)) {
+            // The `Resolve` form's sources, slot by slot; the two name forms
+            // have none to consult (`SlotArg::specs`).
+            let mut sources = [&successor.from, &successor.to, &successor.ty]
+                .into_iter()
+                .flat_map(|slot| slot.specs().iter());
+            if sources.any(|spec| !reader.readable(&spec.source)) {
                 return Err(ComposeFault::UnreadableSlotSource);
             }
             let link = successor_link(world.m3(), world.m5(), successor, Judgment::Judged)

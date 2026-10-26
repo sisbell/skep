@@ -487,8 +487,8 @@ fn the_link_family_answers_end_to_end() {
         Op::EditLink {
             original: l1.clone(),
             successor: SuccessorSpec {
-                from: vec![vspec(&d, 1, 1)],
-                to: vec![vspec(&d, 2, 1)],
+                from: vec![vspec(&d, 1, 1)].into(),
+                to: vec![vspec(&d, 2, 1)].into(),
                 ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
             },
             d_s: d.clone(),
@@ -648,8 +648,8 @@ fn refusals_arrive_typed_classified_and_localized() {
         Op::EditLink {
             original: ghost_link(&d, 99),
             successor: SuccessorSpec {
-                from: vec![vspec(&d, 1, 1), ill_formed],
-                to: vec![],
+                from: vec![vspec(&d, 1, 1), ill_formed].into(),
+                to: vec![].into(),
                 ty: SlotArg::Addrs(vec![d.clone()]),
             },
             d_s: d.clone(),
@@ -677,8 +677,8 @@ fn refusals_arrive_typed_classified_and_localized() {
         Op::EditLink {
             original: ghost_link(&d, 99),
             successor: SuccessorSpec {
-                from: vec![vspec(&d, 1, 1), unregistered],
-                to: vec![],
+                from: vec![vspec(&d, 1, 1), unregistered].into(),
+                to: vec![].into(),
                 ty: SlotArg::Addrs(vec![d.clone()]),
             },
             d_s: d.clone(),

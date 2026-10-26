@@ -48,16 +48,17 @@ fn lineage_probes_flipped_slots_and_asks_residence_only_of_a_key_a_claim_names()
     // separates them follows the retraction.
     assert_eq!(reads.in_claims(&e1, View::Default), vec![expected]);
 
-    // The residence clause, asked of a key the stab finds a claim for. A
-    // non-link key under e1 or e2 is COVERED by the claim's F (or G),
-    // `enc([endpoint])`, so the stab at the key's span reaches the claim
-    // through it, and it answers [] twice over: the key is no resident link,
-    // and the read-out's equality would refuse the claim, whose endpoint is
-    // not that key. Where the residence clause ALONE decides is a claim whose
-    // endpoint IS a non-link key, which no writer deposits; a decoded-deposit
-    // test below folds one. doc1 and ca(1), above and beside the endpoints,
-    // reach no claim at all — a key no claim covers answers [] off the stab
-    // alone, before anything asks whether a link resides there.
+    // The residence clause, asked of a key an admitted home's stab finds a
+    // claim for. A non-link key under e1 or e2 is covered by the claim's F
+    // (or G), `enc([endpoint])`, so the stab at the key's span reaches the
+    // claim through it, and it answers [] twice over: the key is no resident
+    // link, and the read-out's equality would refuse the claim, whose
+    // endpoint is not that key. doc1, above both endpoints, reaches the claim
+    // as well — the claim's F lies beneath it — and answers [] twice over
+    // too. Where the residence clause alone decides is a claim whose endpoint
+    // is itself a non-link key, which no writer deposits; a decoded-deposit
+    // test below folds one. ca(1), beside the endpoints, reaches no claim at
+    // all, and answers [] before anything asks whether a link resides there.
     let under_e1 = a(&[1, 0, 1, 0, 1, 0, 2, 1, 1]);
     let under_e2 = a(&[1, 0, 1, 0, 1, 0, 2, 2, 1]);
     assert!(is_prefix(e1.tumbler(), under_e1.tumbler()));
@@ -112,17 +113,19 @@ fn with_a_class_of(claims: u32) -> Kernel<World> {
 }
 
 /// §7 — THE LINEAGE PAIR PAYS FOR THE CLAIMS NAMING THE KEY AND NEVER FOR THE
-/// CLASS, counted (#647): a probe costs the index's one stab and the claims
-/// it finds, so a key no claim names — a resident link with no claims, or an
-/// address holding no link — costs the SAME, and costs it whether the
-/// supersession class holds ten claims or two hundred; a key `c` claims name
-/// costs those `c`, and no more beside a larger class. The two branches that
-/// once cost differently — an empty address answered at once, a resident
-/// link walking the class — are the residence oracle S40 measured: a guest
-/// read which of a private document's link addresses held a link by the
-/// walk's cost, and so the document's link count, through an answer that was
-/// `[]` either way. The clock would show the walk at a hundred claims and
-/// hide it at one; the heap shows the class's absence at every size.
+/// CLASS, counted (#647): a probe costs the directory's candidate homes for
+/// the key's span and the claims an admitted home's stab finds, so a key no
+/// claim names — a resident link with no claims, or an address holding no
+/// link — costs the same, and costs it whether the supersession class holds
+/// ten claims or two hundred; a key `c` claims name costs those `c`, and no
+/// more beside a larger class. A residence gate asked ahead of the walk
+/// would cost its two branches differently — an empty address answered at
+/// once, a resident link walking on — which is the residence oracle S40
+/// measured: a guest read which of a private document's link addresses held
+/// a link by the walk's cost, and so the document's link count, through an
+/// answer that was `[]` either way. The clock would show the walk at a
+/// hundred claims and hide it at one; the heap shows the class's absence at
+/// every size.
 #[test]
 fn the_lineage_pair_pays_for_the_claims_naming_the_key_and_not_for_the_class() {
     let (fewer, more) = (with_a_class_of(10), with_a_class_of(200));
@@ -437,7 +440,8 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
 /// that took every claim's endpoints for defined, or read an endpoint off the
 /// one address its slot denotes whatever else the slot carries, would fail
 /// these probes for as long as the non-conformers are stored. The home rule
-/// is asked past that check, so only of the claim reported.
+/// is asked once, of the one home every claim here shares, ahead of every
+/// read-out.
 #[test]
 fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
     let fixture = OneClaim::new();
@@ -515,7 +519,7 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
     }
 
     // The three non-conformers are skipped: the conforming claim is answered
-    // alone, and the home rule is asked of it alone.
+    // alone, and the home rule is asked once, of the home all four share.
     fixture.assert_answered_alone();
 }
 
@@ -531,7 +535,8 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
 /// minted is the residence clause's alone to refuse: its endpoint IS the key
 /// it is probed by, and that key is no resident link — the one clause the
 /// equality does not imply, kept because this claim exists. The home rule is
-/// asked past both, so only of the claim reported.
+/// asked once, of the one home every claim here shares, ahead of every
+/// read-out.
 #[test]
 fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     let fixture = OneClaim::new();
@@ -598,13 +603,12 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     );
     assert!(links.readlink(&unminted).is_none(), "no deposit minted it");
 
-    // The conforming claim is answered alone. The document-naming claim is
-    // homed in doc1 too, so a home rule asked ahead of the denotation filter
-    // would show as a second ask of doc1.
+    // The conforming claim is answered alone, and doc1, the home every claim
+    // here is filed under, is asked once, ahead of every read-out.
     fixture.assert_answered_alone();
     // And a probe of the unminted address answers no claim, though one names
     // it: the residence clause refuses a key that is no resident link, asked
-    // of it because the stab found the claim.
+    // of it because an admitted home's stab found the claim.
     let reads = Reads(&fixture.k);
     for view in [View::Active, View::Audit] {
         assert_eq!(
@@ -762,8 +766,8 @@ impl OneClaim {
 
     /// The lineage pair answers the conforming claim alone: `in(e1)` and
     /// `out(e2)`, under both views, return it and nothing folded beside it,
-    /// and the reader's predicate is asked once, of its home — never of a
-    /// claim the read did not report.
+    /// and the reader's predicate is asked once, of doc1, the one home every
+    /// claim here is filed under, ahead of every read-out.
     fn assert_answered_alone(&self) {
         let only_the_claim = vec![SupClaim {
             claim: self.claim.clone(),

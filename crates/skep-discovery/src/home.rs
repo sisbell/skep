@@ -1,13 +1,14 @@
-//! §Internal design — the home projection and the home rule: the one place a
-//! link's HOME is computed — `home(a)`, M1's `document_of` (EL8b) — and the
-//! one place the caller's DOCUMENT predicate is asked about it. Every read
-//! that answers for a reader asks through [`home_admitted`], of a candidate
-//! home the link store names ahead of that home's links, or through
-//! [`home_readable`], at a link's identity; asked of a link directly, the
-//! predicate admits every link, which is why the composition has an address
-//! of its own. [`home_behind`] is the one cursor question that reads a home
-//! off an address: which homes a window resuming past a cursor may pass
-//! unasked.
+//! §Internal design — the home projection and the home rule.
+//!
+//! This is the one place a link's home is computed — `home(a)`, M1's
+//! `document_of` (EL8b) — and the one place the caller's document predicate
+//! is asked about it. Every read that answers for a reader asks through
+//! [`home_admitted`], of a candidate home the link store names ahead of that
+//! home's links, or through [`home_readable`], at the pointwise pair's
+//! argument; asked of a link directly, the predicate admits every link,
+//! which is why the composition has an address of its own. [`home_behind`]
+//! is the one cursor question that reads a home off an address: which homes
+//! a window resuming past a cursor may pass unasked.
 
 use skep_address::{document_of, Address};
 
@@ -27,22 +28,23 @@ pub(crate) fn home_of(a: &Address) -> Option<Address> {
     document_of(a)
 }
 
-/// THE HOME RULE (PUB-6.13): may the reader read `a`'s home? The home
-/// projection composed with the caller's predicate, in one place, because
-/// `readable` answers about a DOCUMENT and every question the rule answers
-/// here is asked about a LINK. Asked directly of the link it would answer
-/// TRUE: an element address is absent from the publication index exactly as
-/// a published document is, so the rule would admit every link. That is why
-/// the composition is an element and not an idiom.
+/// Returns whether the reader may read `a`'s home — the home rule (PUB-6.13).
 ///
-/// Total on every address, because the pointwise pair asks it of a
-/// caller's `a` before anything establishes that `a` is a link: an address
-/// with no document field — a node or an account — lives under no home and
-/// has nothing to withhold, so the rule admits it and the store's own answer
-/// about it stands. Every link has a home, so on a result set this is
-/// exactly `readable(home(a))`. The lineage pair and the pointwise pair ask
-/// here, at an identity; every result-set read enumerates homes and asks
-/// [`home_admitted`] instead.
+/// It is the home projection composed with the caller's predicate, in one
+/// place, because `readable` answers about a document and every question the
+/// rule answers here is asked about a link. Asked directly of the link it
+/// would answer true: an element address is absent from the publication
+/// index exactly as a published document is, so the rule would admit every
+/// link. That is why the composition is an element and not an idiom.
+///
+/// Total on every address, because the pointwise pair asks it of a caller's
+/// `a` before anything establishes that `a` is a link: an address with no
+/// document field — a node or an account — lives under no home and has
+/// nothing to withhold, so the rule admits it and the store's own answer
+/// about it stands; on a link it is exactly `readable(home(a))`. The
+/// pointwise pair asks here, at its argument; every result-set read, the
+/// lineage pair among them, enumerates homes and asks [`home_admitted`]
+/// instead.
 pub(crate) fn home_readable(readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
     home_of(a).is_none_or(|home| readable(&home))
 }

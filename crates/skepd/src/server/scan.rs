@@ -526,10 +526,11 @@ impl ClassScans {
 ///   spans size each, never the class or the board. The wire's sentence
 ///   holds of the build: a query constraining a second slot is no class
 ///   scan;
-/// * `in_claims`, `out_claims` — one `stab_typed` at the key's own span on
-///   the claim's slot, cut to the supersession class: the directory's
-///   candidate homes for that span and a step per claim naming the key, no
-///   walk of the class and none of the store;
+/// * `in_claims`, `out_claims` — one `homes_touching` at the key's own span
+///   on the claim's slot, a predicate test per candidate home and one
+///   `stab_typed_in` per admitted home, cut to the supersession class: a step
+///   per claim naming the key in a home the reader may read, no walk of the
+///   class and none of the store;
 /// * `edition_claims` — one `match_links` at a single-span `to` range
 ///   against the edition class, the constraint with the fewest homes
 ///   driving: the claims on the target, which its depositors choose;

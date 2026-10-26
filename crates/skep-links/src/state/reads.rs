@@ -7,10 +7,11 @@
 //! candidate homes a query could meet, and `stab_in`, one home's hits, with
 //! `match_links_in` the AND over one home — the home ranges `homes_under` /
 //! `homed_in` / `homed_under` and the store's `homes`, and the typed stab
-//! `stab_typed`. The stabs answer from the spanfilade beside this file, home
-//! by home; the home ranges and the type slot's candidate homes come off the
-//! map's and the typed slices' own key order. All `&self` over any M2
-//! `Snapshot`; nothing here writes.
+//! `stab_typed` with `stab_typed_in`, one home's share of it. The stabs
+//! answer from the spanfilade beside this file, home by home; the home
+//! ranges and the type slot's candidate homes come off the map's and the
+//! typed slices' own key order. All `&self` over any M2 `Snapshot`; nothing
+//! here writes.
 
 use std::collections::BTreeSet;
 use std::ops::Bound::{Excluded, Included, Unbounded};
@@ -707,9 +708,8 @@ impl LinkState {
 
     /// Returns the format-fixed endset of a shipped class.
     ///
-    /// It is for a caller holding the slice: M8's lineage reads name
-    /// `Supersedes` this way, and the engine's observe dump names all five. A
-    /// caller holding the registry itself asks
+    /// It is for a caller holding the slice: the engine's observe dump names
+    /// all five this way. A caller holding the registry itself asks
     /// [`TypeRegistry::reserved_type`](crate::TypeRegistry::reserved_type),
     /// which is public and is where this delegates; the answer is the same
     /// value either way, the registry being the module's format constant.
@@ -1108,19 +1108,8 @@ impl LinkState {
         view: View,
     ) -> OrdSet<Address> {
         let active = default_to_active(view) == View::Active;
-        let (Some(home), Some(index)) = (
-            self.hints.spanfilade.home(home.tumbler()),
-            self.hints.spanfilade.slot(slot),
-        ) else {
-            return OrdSet::new();
-        };
-        let mut hits = BTreeSet::new();
-        for q in query {
-            index.stab_in(home, q, &mut |link| {
-                hits.insert(link);
-            });
-        }
-        hits.into_iter()
+        self.stab_keys_in(home, slot, query)
+            .into_iter()
             .filter(|t| !(active && self.nullified(t)))
             .map(lift)
             .collect()
@@ -1247,27 +1236,29 @@ impl LinkState {
         acc
     }
 
-    /// Returns the `ty`-typed tuples whose `slot` overlaps `query` — Observe
-    /// answered from the index.
+    /// Returns the `ty`-typed tuples whose `slot` overlaps `query`.
     ///
-    /// It is [`stab`](LinkState::stab)'s hits restricted to the typed slice
-    /// `ty` names, each as the [`Tuple`] [`LinkState::observe`] hands over, in
-    /// ascending tuple-address order. The relation is the index's overlap,
-    /// not `observe`'s coverage of a probe: a probe `p` asked as the unit
-    /// query `enc([p])` reaches every tuple whose slot covers `p` and, beside
-    /// them, the tuples whose slot starts strictly inside `p`'s subtree, which
-    /// a reader after coverage drops by a test of its own. `view ∈ {Audit,
-    /// Active}` only (`Default` reads as `Active`).
+    /// It is Observe answered from the index: [`stab`](LinkState::stab)'s
+    /// hits restricted to the typed slice `ty` names, each as the [`Tuple`]
+    /// [`LinkState::observe`] hands over, in ascending tuple-address order.
+    /// It is [`homes_touching`](LinkState::homes_touching) composed with
+    /// [`stab_typed_in`](LinkState::stab_typed_in), as `stab` is composed
+    /// with [`stab_in`](LinkState::stab_in), the type classified once. The
+    /// relation is the index's overlap, not `observe`'s coverage of a probe:
+    /// a probe `p` asked as the unit query `enc([p])` reaches every tuple
+    /// whose slot covers `p` and, beside them, the tuples whose slot starts
+    /// strictly inside `p`'s subtree, which a reader after coverage drops by a
+    /// test of its own. `view ∈ {Audit, Active}` only (`Default` reads as
+    /// `Active`).
     ///
     /// **What this costs.** The stab's probes and hits — the directory
-    /// ranges the query opens and a step per candidate home, then a step
-    /// per link whose `slot` overlaps the query, whatever its type — then
-    /// one slice-membership test per hit, and a lift and two endset clones
-    /// per member; never a walk of the class, which `observe` pays for every
-    /// probe. M8's lineage pair asks it at a link's unit span, so a claim's
-    /// enumeration costs the links naming that link and not the supersession
-    /// class. `tests/it/discovery.rs` holds it to `observe`'s own answer
-    /// after the reader's coverage test.
+    /// ranges the query opens and a step per candidate home, then a step per
+    /// link whose `slot` overlaps the query, whatever its type — then one
+    /// slice-membership test per hit, and a lift and two endset clones per
+    /// member; never a walk of the class, which `observe` pays for every
+    /// probe. A type no link was ever deposited under answers none without
+    /// the walk. `tests/it/discovery.rs` holds it to the stab cut to the
+    /// slice and to `observe`'s own answer after the reader's coverage test.
     ///
     /// # Panics
     ///
@@ -1276,23 +1267,124 @@ impl LinkState {
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn stab_typed(&self, ty: &Endset, slot: usize, query: &Endset, view: View) -> Vec<Tuple> {
-        let class = coverage_class(ty);
-        let slice = self.hints.type_slices.get(&class);
-        self.stab(slot, query, view)
-            .into_iter()
-            .filter(|a| slice.is_some_and(|s| s.contains(a.tumbler())))
-            .map(|a| {
-                let link = self.link_at(a.tumbler());
-                Tuple {
-                    from: link.from_slot().clone(),
-                    to: link.to_slot().clone(),
-                    addr: a,
-                }
+        let Some(slice) = self.hints.type_slices.get(&coverage_class(ty)) else {
+            return Vec::new(); // no link of the type is filed
+        };
+        self.homes_touching([(slot, query)])
+            .flat_map(|touch| {
+                self.stab_typed_in_slice(slice, touch.home(), slot, touch.spans(0), view)
             })
             .collect()
     }
 
+    /// Returns the typed stab of one home: `class`'s tuples homed in `home`.
+    ///
+    /// They are the tuples whose `slot` overlaps some span of `query` —
+    /// [`stab_typed`](LinkState::stab_typed) within `home`'s keys alone, as
+    /// [`stab_in`](LinkState::stab_in) is [`stab`](LinkState::stab) within
+    /// them: the home's hits at `slot` that the class's typed slice holds,
+    /// each as the [`Tuple`] [`LinkState::observe`] hands over, in ascending
+    /// tuple-address order. `query` is any span sequence — the whole of a
+    /// query's spans, or the ones [`Touch::spans`] names for the home, which
+    /// answer the same hits for less. A home holding no link of the class
+    /// answers none, and so does every home for a class no link was ever
+    /// deposited under. `view ∈ {Audit, Active}` only (`Default` reads as
+    /// `Active`).
+    ///
+    /// Keyed by class rather than by endset, so a caller composing it over
+    /// many homes classifies its type once — by [`coverage_class`], or off
+    /// [`TypeRegistry::shipped_class`](crate::TypeRegistry::shipped_class)
+    /// for a shipped type — and not once a home.
+    ///
+    /// **What this costs.** `stab_in`'s probes of the home, then one
+    /// slice-membership test per hit before anything is lifted, and a lift
+    /// and two endset clones per member; nothing of any other home. A
+    /// reader composes it over [`homes_touching`](LinkState::homes_touching),
+    /// asking its predicate of each candidate home between them, so a home it
+    /// may not read costs the walk's step and nothing of its links
+    /// (PUB-7.18) — M8's lineage pair does, at a link's unit span.
+    /// `tests/it/discovery.rs` holds each home's share to the stab cut to the
+    /// slice and to the home, and the shares concatenated to
+    /// [`stab_typed`](LinkState::stab_typed).
+    pub fn stab_typed_in<'s>(
+        &self,
+        class: &CoverageClass,
+        home: &Address,
+        slot: usize,
+        query: impl IntoIterator<Item = &'s Span>,
+        view: View,
+    ) -> Vec<Tuple> {
+        match self.hints.type_slices.get(class) {
+            Some(slice) => self.stab_typed_in_slice(slice, home, slot, query, view),
+            None => Vec::new(), // no link of the class is filed
+        }
+    }
+
     // ───────────────────────── internal helpers ─────────────────────────
+
+    /// Returns the keys a stab of one home finds, ascending, in every view.
+    ///
+    /// They are the keys of the links homed in `home` whose `slot` overlaps
+    /// some span of `query`: the one walk of a home's share of the index,
+    /// which [`LinkState::stab_in`] lifts under its view and the typed stabs
+    /// test against their slice before they lift one. Each span of `query`
+    /// is stabbed within the home's keys, and a link found by two spans or
+    /// by both halves is held once. A home no link is filed under, and a
+    /// slot no filed link has, answer none at no cost.
+    fn stab_keys_in<'a, 's>(
+        &'a self,
+        home: &Address,
+        slot: usize,
+        query: impl IntoIterator<Item = &'s Span>,
+    ) -> BTreeSet<&'a Tumbler> {
+        let mut keys = BTreeSet::new();
+        if let (Some(home), Some(index)) = (
+            self.hints.spanfilade.home(home.tumbler()),
+            self.hints.spanfilade.slot(slot),
+        ) {
+            for q in query {
+                index.stab_in(home, q, &mut |link| {
+                    keys.insert(link);
+                });
+            }
+        }
+        keys
+    }
+
+    /// Returns the tuples of `slice` homed in `home` that a typed stab finds.
+    ///
+    /// It is the one statement of the typed stab's cut, which
+    /// [`LinkState::stab_typed`] asks of every candidate home and
+    /// [`LinkState::stab_typed_in`] of one: the home's keys whose `slot`
+    /// overlaps some span of `query`, as [`LinkState::stab_in`] finds them,
+    /// each tested against the slice and `view` before it is lifted, so only
+    /// a member is lifted and has its slots cloned, in ascending order. The
+    /// `_slice` suffix keys it as `_class` keys
+    /// [`LinkState::type_slice_class`]: the same question as `stab_typed_in`,
+    /// asked of the slice its class names, which each caller looks up once a
+    /// call.
+    fn stab_typed_in_slice<'s>(
+        &self,
+        slice: &OrdSet<Tumbler>,
+        home: &Address,
+        slot: usize,
+        query: impl IntoIterator<Item = &'s Span>,
+        view: View,
+    ) -> Vec<Tuple> {
+        let active = default_to_active(view) == View::Active;
+        self.stab_keys_in(home, slot, query)
+            .into_iter()
+            .filter(|t| slice.contains(*t) && !(active && self.nullified(t)))
+            .map(|t| {
+                let link = self.link_at(t);
+                Tuple {
+                    addr: lift(t),
+                    from: link.from_slot().clone(),
+                    to: link.to_slot().clone(),
+                }
+            })
+            .collect()
+    }
 
     /// Walks the whole store under a view, lifting every link the view admits.
     ///

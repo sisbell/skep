@@ -9,7 +9,8 @@
 //! (every hit's home named once, ascending; the per-home shares concatenated
 //! in that order the stab's own answer) and what a read composed over
 //! readable homes pays, counted, the typed stab against the stab cut to the
-//! slice, and the verbatim order FOLLOWLINK folds.
+//! slice and its one home's share against the stab cut to the slice and the
+//! home, and the verbatim order FOLLOWLINK folds.
 
 use crate::common;
 use crate::heap::settled_heap_bytes;
@@ -20,7 +21,8 @@ use skep_address::{document_of, Address, Span, SpanSet};
 use skep_arrangement::Vstream;
 use skep_kernel::Kernel;
 use skep_links::{
-    enc, Endset, HasLinks, Link, LinkState, Pattern, SlotArg, Touch, Tuple, View, FROM, TO, TYPE,
+    coverage_class, enc, Endset, HasLinks, Link, LinkState, Pattern, SlotArg, Touch, Tuple, View,
+    FROM, TO, TYPE,
 };
 use skep_namespace::PrincipalId;
 
@@ -876,6 +878,104 @@ fn stab_typed_answers_the_stab_cut_to_the_typed_slice() {
     assert_eq!(addrs(&by_overlap), vec![l1, l3, l4]);
     let covering: Vec<Tuple> = by_overlap.into_iter().filter(|t| t.from.covers(&probe[0])).collect();
     assert_eq!(covering, by_coverage);
+}
+
+/// §G — `stab_typed_in` IS ONE HOME'S SHARE OF THE TYPED STAB: over every
+/// slot, view and query of a pool, and every home the walk names for the
+/// query, its tuples are the links `stab` answers that `type_slice` holds and
+/// that are homed in that home, in address order, each carrying the link's
+/// own F and G, and the spans the walk named answer what the whole query's
+/// do; the shares concatenated in the walk's order are `stab_typed`'s answer;
+/// and a class no link was deposited under answers none in every home. The
+/// fixture homes links of the class in two documents, one of them retracted
+/// so the views part, and links of another type beside them and alone in a
+/// third home, so a candidate's share can be empty: a share that skipped the
+/// slice test, read another home's keys or dropped the view would part from
+/// the oracle somewhere in the pool.
+#[test]
+fn stab_typed_in_answers_one_homes_share_of_the_typed_stab() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let w = writer(&k);
+    let (rel, other) = (unregistered_ty(1), unregistered_ty(2));
+    open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
+    open_deposit(&w, &[ca(1)], &[ca(3)], &[unregistered_ta(2)]); // the other type, beside it
+    let gone = open_deposit(&w, &[ca(2)], &[ca(1)], &[unregistered_ta(1)]);
+    w.nullify(P1, &doc1(), &gone).expect("retract one");
+    deposit_in(&k, &doc2(), &[ca(1)], &[ca(2)], &unregistered_ta(1));
+    // F covers every element of doc1.
+    deposit_in(&k, &doc2(), &[doc1()], &[ca(1)], &unregistered_ta(1));
+    deposit_in(&k, &sib_doc(), &[ca(1)], &[ca(2)], &unregistered_ta(2)); // the other type alone
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    let addrs = |tuples: &[Tuple]| tuples.iter().map(|t| t.addr.clone()).collect::<Vec<_>>();
+
+    let queries = [
+        enc(&[ca(1)]),
+        enc(&[ca(2)]),
+        enc(&[doc1()]),
+        enc(&[ca(1), ca(3)]),
+        enc(&[unregistered_ta(1)]),
+        Endset::from_spans([iext(1, 3)]),
+    ];
+    let (mut empty, mut views_part) = (0, false);
+    for ty in [&rel, &other] {
+        let class = coverage_class(ty);
+        for view in [View::Audit, View::Active, View::Default] {
+            let slice = links.type_slice(ty, view);
+            for slot in [FROM, TO, TYPE] {
+                for q in &queries {
+                    let hits = links.stab(slot, q, view);
+                    let mut concatenated = Vec::new();
+                    for touch in links.homes_touching([(slot, q)]) {
+                        let home = touch.home().clone();
+                        let share = links.stab_typed_in(&class, &home, slot, touch.spans(0), view);
+                        let expected: Vec<Address> = hits
+                            .iter()
+                            .filter(|a| slice.contains(a) && home_of(a) == home)
+                            .cloned()
+                            .collect();
+                        assert_eq!(
+                            addrs(&share),
+                            expected,
+                            "{ty:?} slot {slot} {view:?} {q:?} home {home:?}"
+                        );
+                        assert_eq!(
+                            share,
+                            links.stab_typed_in(&class, &home, slot, q.spans(), view),
+                            "the spans named answer the home's whole share: {q:?}"
+                        );
+                        for tuple in &share {
+                            let link = links.readlink(&tuple.addr).expect("a stab key is resident");
+                            assert_eq!(
+                                (&tuple.from, &tuple.to),
+                                (link.from_slot(), link.to_slot())
+                            );
+                        }
+                        empty += usize::from(share.is_empty());
+                        views_part |= view == View::Audit && share.iter().any(|t| t.addr == gone);
+                        concatenated.extend(share);
+                    }
+                    assert_eq!(
+                        concatenated,
+                        links.stab_typed(ty, slot, q, view),
+                        "{ty:?} slot {slot} {view:?} {q:?}: the shares make the typed stab"
+                    );
+                }
+            }
+        }
+    }
+    assert!(empty > 0, "some candidate holds no link of the class");
+    assert!(views_part, "the retracted link parts the views");
+    let never = coverage_class(&unregistered_ty(9));
+    for home in [doc1(), doc2(), sib_doc()] {
+        assert!(
+            links
+                .stab_typed_in(&never, &home, FROM, enc(&[ca(1)]).spans(), View::Audit)
+                .is_empty(),
+            "a class no link was deposited under answers none in {home:?}"
+        );
+    }
 }
 
 #[test]

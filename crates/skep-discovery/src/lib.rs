@@ -6,7 +6,7 @@
 //! projects, retrieves endsets, previews delete-orphaning, and traces
 //! supersession lineage — all by composing M7's homes-first spanfilade
 //! reads, home-range and typed reads (`homes_touching`/`stab_in_slots`/
-//! `match_links_in`, `homes_under`/`homed_in`/`homes`, `stab_typed`), M5's
+//! `match_links_in`, `homes_under`/`homed_in`/`homes`, `stab_typed_in`), M5's
 //! arrangement, and M3's registry over ONE M2 snapshot per operation. One
 //! thing well: **turn upstream
 //! link/arrangement/registry state into the answers readers ask, owning no
@@ -112,9 +112,8 @@
 //!   `findlinks`, `count` and `window` in both families,
 //!   [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage pair —
 //!   which admit no link the rule refuses, and count and page the survivors:
-//!   the eight that answer sets of links ask it of each candidate HOME ahead
-//!   of the home's links (PUB-7.18), the lineage pair of each claim's home
-//!   at the claim's identity;
+//!   all ten ask it of each candidate home once, ahead of that home's links
+//!   (PUB-7.18);
 //! * the ABSENCE RULE (PUB-6.6), on the POINTWISE pair's `a` ARGUMENT, since
 //!   neither answer names a link: an `a` the rule refuses is ABSENT, which
 //!   both [`project_on`] and [`addressably_discoverable_from_on`] answer
@@ -142,14 +141,13 @@
 //! ONCE per distinct home for the read's life (PUB-7.15's memo, PUB-7.18),
 //! AHEAD of that home's links and of every slot test, so an unreadable
 //! home's links are never read at all and a read's timing counts the homes
-//! the reader may not read and nothing finer; the home of each claim the
-//! lineage pair reads out, past its other filters; and the home of the
-//! pointwise pair's `a`, asked before anything has established that `a` is
-//! a link. A window asks no further than it walks: of the homes from its
-//! cursor's own home to the one that fills its `n`, and of none behind the
-//! cursor. It never asks to judge a named `d`. A candidate home may hold no
-//! link the query meets — the directory answers at block grain — and is
-//! asked all the same. In return, `readable` must answer each document the
+//! the reader may not read and nothing finer; and the home of the pointwise
+//! pair's `a`, asked before anything has established that `a` is a link. A
+//! window asks no further than it walks: of the homes from its cursor's own
+//! home to the one that fills its `n`, and of none behind the cursor. It
+//! never asks to judge a named `d`. A candidate home may hold no link the
+//! query meets — the directory answers at block grain — and is asked all
+//! the same. In return, `readable` must answer each document the
 //! same way for as long as a law here compares its answers: every identity
 //! stated "under the same `readable`" — `count = |findlinks|`, a window
 //! that drains `findlinks` — holds exactly that far. M8 cannot check it,
@@ -220,7 +218,8 @@
 //! by stepping the constraints' candidate homes in lockstep until one runs
 //! out; `homes_under` and `homes` seek the store's key order once per home
 //! they find, and `homed_in` reads one home's links as one key range;
-//! `stab_typed` is a `stab` cut to one typed slice — and M5's arrangement,
+//! `stab_typed_in` is one home's `stab_in` cut to one typed slice, a
+//! membership test per hit before any is lifted — and M5's arrangement,
 //! where a read walks one document's runs or joins against them. Every
 //! result-set read here enumerates candidate homes before it reads a link,
 //! asks the reader's predicate once per distinct home, and reads the
@@ -239,9 +238,9 @@
 //! builds nothing per pair, that `image_on`'s run budget and its square,
 //! both pointwise budgets and the preview's refusal of a `d` whose own runs
 //! are past the budget each refuse before the work they exist to refuse, and
-//! that a region read, a descriptor and a window pay nothing for the links
-//! of an unreadable home, the window nothing past the homes it passes. The
-//! rest, no test can check.
+//! that a region read, a descriptor, a window and the lineage pair pay
+//! nothing for the links of an unreadable home, the window nothing past the
+//! homes it passes. The rest, no test can check.
 //!
 //! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
 //!   surface's content, which reads no run, and then, per region span, one
@@ -288,14 +287,16 @@
 //!   `#runs` when `d` alone is past it and the resolution of `d`'s content
 //!   otherwise.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
-//!   `stab_typed` at the key's own span on the claim's slot, cut to the
-//!   supersession class: the directory's candidate homes for that span and a
-//!   step per link naming or covering the key at that slot, no walk of the
-//!   class and none of the store, so a key no claim names costs the
-//!   directory alone, resident or not; where it finds a claim, one
-//!   `readlink` of the key, then, per claim whose `old` and `new` are
-//!   defined, one `is_active` and one comparison of the probed endpoint with
-//!   the key, ahead of the home rule, asked of each claim's home.
+//!   `homes_touching` at the key's own span on the claim's slot, then, per
+//!   candidate home, one test of the reader's predicate and, for each home it
+//!   admits, one `stab_typed_in` over the spans that named it, cut to the
+//!   supersession class: a step per link of the home naming or covering the
+//!   key at that slot, no walk of the class and none of the store, so a home
+//!   the reader may not read costs its test and a key no admitted claim names
+//!   costs the same, resident or not; where an admitted home's stab first
+//!   finds a claim, one `readlink` of the key, then, per claim whose `old`
+//!   and `new` are defined, one `is_active` and one comparison of the probed
+//!   endpoint with the key.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's `#runs` for the
@@ -321,7 +322,7 @@
 //!   per-slot per-home matcher, the AND-of-ORs combiner, the driver's
 //!   choice, the home ranges and the typed stab — M7's
 //!   `homes_touching`/`stab_in`/`stab_in_slots`/`match_links_in`/
-//!   `fewest_homes`/`homes_under`/`homed_in`/`homes`/`stab_typed`
+//!   `fewest_homes`/`homes_under`/`homed_in`/`homes`/`stab_typed_in`
 //!   (Conflicts #1);
 //!   `coverage(a, i)` is NOT re-exposed — it is exactly M7's
 //!   `followlink(a, i)`;

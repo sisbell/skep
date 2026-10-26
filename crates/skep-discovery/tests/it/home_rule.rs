@@ -178,19 +178,19 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
 /// life (PUB-7.15's memo, PUB-7.16, PUB-7.18), in home order, AHEAD of that
 /// home's links and of every slot test — a window asks no further than it
 /// walks, of its cursor's own home and the homes past it up to the one that
-/// fills its `n`, and of none behind the cursor — the lineage pair of each
-/// claim's home past its other filters, and the pointwise pair of `a`'s home
-/// alone, never of a named `d`. Under the pure predicates every other test
-/// passes, a read that asked a link, asked once per slot, asked once per
-/// link of a home, asked the named document, or asked of the homes behind a
-/// cursor answers exactly as the right one does; a predicate that records
-/// what it is asked is where each shows.
+/// fills its `n`, and of none behind the cursor — and the pointwise pair of
+/// `a`'s home alone, never of a named `d`. Under the pure predicates every
+/// other test passes, a read that asked a link, asked once per slot, asked
+/// once per link of a home, asked the named document, or asked of the homes
+/// behind a cursor answers exactly as the right one does; a predicate that
+/// records what it is asked is where each shows.
 ///
 /// Each link here touches the region through FROM and TO both, which is what
 /// separates one ask per home from one ask per `(home, slot)`; doc1 holds two
 /// of the three links, which is what separates one ask per home from one per
-/// link; and `d` is itself a home, so a preview that consulted its `d` shows
-/// as a repeated ask rather than as a different address.
+/// link, and doc2 homes both claims the lineage pair answers, which does the
+/// same for claims; and `d` is itself a home, so a preview that consulted its
+/// `d` shows as a repeated ask rather than as a different address.
 #[test]
 fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     let k = kernel();
@@ -340,10 +340,20 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     };
     assert_eq!(findlinks_ftt_on(&snap, &from_the_position, &recorder), found);
     assert_eq!(asked.take(), homes);
-    // The lineage pair asks of each claim's home, at the claim's identity.
-    let (claim, _) = store.assert_sup(SYS, &doc2(), &la(1), &la(2)).expect("assert_sup succeeds");
+    // The lineage pair asks of each candidate home once, ahead of its claims:
+    // both claims naming `la(1)` as their `old` are homed in doc2, which is
+    // asked once, not once a claim.
+    let (claim, _) = store
+        .assert_sup(SYS, &doc2(), &la(1), &la(2))
+        .expect("assert_sup succeeds");
+    let (second, _) = store
+        .assert_sup(SYS, &doc2(), &la(1), &la2(1))
+        .expect("assert_sup succeeds");
     let snap = k.snapshot();
-    assert_eq!(claims_of(in_claims_on(&snap, &la(1), View::Active, &recorder)), vec![claim]);
+    assert_eq!(
+        claims_of(in_claims_on(&snap, &la(1), View::Active, &recorder)),
+        vec![claim, second]
+    );
     assert_eq!(asked.take(), vec![doc2()]);
     // The pointwise pair asks `a`'s home once, and of a homeless `a` nothing.
     project_on(&snap, &la2(1), FROM, &doc1(), &recorder).expect("project");
@@ -415,6 +425,9 @@ fn heap_of<T>(k: &Kernel<World>, read: impl Fn(&Kernel<World>) -> T) -> u64 {
 /// compare them.
 type Counted<'a> = dyn Fn(&Kernel<World>) -> usize + 'a;
 
+/// A reader's document predicate, as the answer laws hand one to a read.
+type Reader<'a> = dyn Fn(&Address) -> bool + 'a;
+
 /// THE WORK MOVES, counted (PUB-7.18 at the region family; S36 (a)): a region
 /// read over a passage holding a flood of links homed where the reader may
 /// not read asks of those homes once each and reads none of their links. A
@@ -468,6 +481,135 @@ fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_li
     let everyone = |k: &Kernel<World>| findlinks_v_on(&k.snapshot(), &doc1(), &region, &every_home).expect("findlinks_v").len();
     assert_eq!(everyone(&more), 1_002);
     assert!(heap_of(&more, everyone) > heap_of(&fewer, everyone), "the control pays for the flood");
+}
+
+/// A world of doc1's two links `e1` and `e2`, `la(1)` and `la(2)`, and its
+/// own claim `la(3)` that `e2` supersedes `e1`, beside `claims` claims homed
+/// in doc2 that supersede `e1` and as many that name `e2` as the successor,
+/// the first of the former retracted: the fixture the lineage pair's reader
+/// laws read at two populations of doc2.
+fn claimed_in_doc2(claims: u32) -> Kernel<World> {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    for i in 0..claims {
+        let theirs = link(&store, &doc2(), &[ca(1)], &[ca(1_000 + i)]);
+        let (superseding_e1, _) = store
+            .assert_sup(SYS, &doc2(), &e1, &theirs)
+            .expect("assert_sup succeeds");
+        store
+            .assert_sup(SYS, &doc2(), &theirs, &e2)
+            .expect("assert_sup succeeds");
+        if i == 0 {
+            store
+                .nullify(SYS, &doc2(), &superseding_e1)
+                .expect("nullify succeeds");
+        }
+    }
+    k
+}
+
+/// One of the lineage pair's two probes of [`claimed_in_doc2`]'s world: the
+/// claims whose `old` is `e1` (`in`), or those whose `new` is `e2` (`out`).
+fn lineage_probe(
+    k: &Kernel<World>,
+    out: bool,
+    view: View,
+    readable: &dyn Fn(&Address) -> bool,
+) -> Vec<SupClaim> {
+    if out {
+        out_claims_on(&k.snapshot(), &la(2), view, readable)
+    } else {
+        in_claims_on(&k.snapshot(), &la(1), view, readable)
+    }
+}
+
+/// §7 — the lineage pair passes a refused home on one test, counted.
+///
+/// `in(e1)` and `out(e2)` over a doc2 holding a hundred claims at each, and
+/// over one holding two hundred, ask a reader of doc1 alone of doc1 and doc2,
+/// once each, in home order, answer doc1's own claim in both worlds, and cost
+/// the same heap in both: doc2 is passed on one test, and none of its claims
+/// is stabbed, lifted or read out (PUB-6.13, PUB-7.15, PUB-7.18). The reader
+/// of every home is the control and pays for every claim. Both populations
+/// keep the index's ordered sets at one depth, so a seek's path costs the
+/// same in both: the store's logarithm, the one term it may add, is not what
+/// the counts compare. Beside the cost, the answer law: under readers
+/// admitting every home, doc1 alone, doc2 alone and no home, in both views,
+/// each probe answers exactly the total answer's claims homed where its
+/// reader may read — a refused home's claims never read, and an admitted
+/// home's never lost.
+#[test]
+fn the_lineage_pair_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_claims() {
+    let (fewer, more) = (claimed_in_doc2(100), claimed_in_doc2(200));
+    let only_doc1 = |d: &Address| *d == doc1();
+    for k in [&fewer, &more] {
+        for out in [false, true] {
+            let asked = Asked::default();
+            let recorder = asked.recording(only_doc1);
+            assert_eq!(
+                claims_of(lineage_probe(k, out, View::Active, &recorder)),
+                vec![la(3)],
+                "doc1's own claim, whatever doc2 holds (out: {out})"
+            );
+            assert_eq!(
+                asked.take(),
+                vec![doc1(), doc2()],
+                "once per candidate home (out: {out})"
+            );
+        }
+    }
+    for out in [false, true] {
+        let read = |k: &Kernel<World>| lineage_probe(k, out, View::Active, &only_doc1).len();
+        assert_eq!(
+            heap_of(&more, read),
+            heap_of(&fewer, read),
+            "doc2's claims cost a reader of doc1 nothing (out: {out})"
+        );
+        let everyone = |k: &Kernel<World>| lineage_probe(k, out, View::Audit, &every_home).len();
+        assert_eq!(
+            everyone(&more),
+            201,
+            "the control answers every claim (out: {out})"
+        );
+        assert!(
+            heap_of(&more, everyone) > heap_of(&fewer, everyone),
+            "the control pays for doc2's claims (out: {out})"
+        );
+    }
+    let only_doc2 = |d: &Address| *d == doc2();
+    let no_one = |_: &Address| false;
+    let readers: [(&str, &Reader<'_>); 4] = [
+        ("every home", &every_home),
+        ("doc1 alone", &only_doc1),
+        ("doc2 alone", &only_doc2),
+        ("no home", &no_one),
+    ];
+    for view in [View::Active, View::Audit] {
+        for out in [false, true] {
+            let total = lineage_probe(&fewer, out, view, &every_home);
+            for (who, reader) in readers {
+                let expected: Vec<SupClaim> =
+                    total.iter().filter(|c| reader(&c.home)).cloned().collect();
+                assert_eq!(
+                    lineage_probe(&fewer, out, view, reader),
+                    expected,
+                    "{who}, {view:?} (out: {out}): the total answer cut to the readable homes"
+                );
+            }
+        }
+        // The views part on the retracted claim, so the law is asked of two
+        // answers and not one.
+        assert_eq!(
+            lineage_probe(&fewer, false, view, &every_home).len(),
+            if view == View::Active { 100 } else { 101 }
+        );
+    }
 }
 
 /// §4 — PUB-6.15: filtered at link HOME, UNFILTERED at origin. The home rule
@@ -534,14 +676,15 @@ fn retrieve_endsets_prices_its_span_budget_over_the_readers_own_answer() {
         .all(|(i, e)| *i == FROM && e.len() == SPANS as usize));
 }
 
-/// §7 — the home rule is asked of the CLAIM's own address, and a surviving
-/// claim's endpoints read out as recorded, whatever the reader may read. The
-/// result-set law's claims each share a home with their `new`, so a read that
-/// asked `new`'s home would answer exactly as the right one there; here the
-/// two part. One probe key, `theirs`, is homed where the reader may not read:
-/// the key is a filter value (PUB-6.12), so the claims naming it are listed
-/// under the same result-set filter, while the pointwise pair reads the same
-/// address as absent (PUB-6.6).
+/// §7 — the home rule is asked of the home a claim is filed under, never an
+/// endpoint's, and a surviving claim's endpoints read out as recorded,
+/// whatever the reader may read. The result-set law's claims each share a
+/// home with their `new`, so a read that asked `new`'s home would answer
+/// exactly as the right one there; here the two part. One probe key,
+/// `theirs`, is homed where the reader may not read: the key is a filter
+/// value (PUB-6.12), so the claims naming it are listed under the same
+/// result-set filter, while the pointwise pair reads the same address as
+/// absent (PUB-6.6).
 #[test]
 fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_recorded() {
     let k = kernel();

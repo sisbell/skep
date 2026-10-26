@@ -276,10 +276,11 @@ fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot
 ///
 /// They are the refused rebuild with the account and the region; the absent
 /// store with the floor, the edge above which a signature can have been lost
-/// and the count; the store's size and slots with the positions rebuilt, and
-/// with none; and the line not made durable with the act its cause adds
-/// after it, room for a full volume and the volume, its device and the
-/// quota for any other.
+/// and the count; the store's size and slots with the positions rebuilt, with
+/// none, and with the journal not asked, naming the coverage above which no
+/// line records a filled slot; and the line not made durable with the act
+/// its cause adds after it, room for a full volume and the volume, its device
+/// and the quota for any other.
 #[test]
 fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
     assert_eq!(
@@ -299,9 +300,9 @@ fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
     );
     let mut rebuilt = Rebuilt::default();
     let open =
-        |rebuilt| AttestOpenLine { bytes: 20_700, slots: 3, rebuilt, elapsed_ms: 4 }.to_string();
+        |rebuild| AttestOpenLine { bytes: 20_700, slots: 3, rebuild, elapsed_ms: 4 }.to_string();
     assert_eq!(
-        open(rebuilt),
+        open(Rebuild::Asked(rebuilt)),
         "feed-attest.log: 20700 bytes, never compacted, 3 slots resident; 0 lines rebuilt from \
          the journal's markers, in 4 ms"
     );
@@ -309,9 +310,15 @@ fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
         rebuilt.note(at);
     }
     assert_eq!(
-        open(rebuilt),
+        open(Rebuild::Asked(rebuilt)),
         "feed-attest.log: 20700 bytes, never compacted, 3 slots resident; 3 lines rebuilt from \
          the journal's markers (positions 7–12), in 4 ms"
+    );
+    assert_eq!(
+        open(Rebuild::NotAsked { above: 30 }),
+        "feed-attest.log: 20700 bytes, never compacted, 3 slots resident; the journal not \
+         asked: no line of commits.log above position 30 records a filled slot, in 4 ms",
+        "the open that read no base says so, and the coverage it measured from"
     );
     let durable =
         |kind| NotDurableLine { at: 5, error: &io::Error::new(kind, "no room") }.to_string();

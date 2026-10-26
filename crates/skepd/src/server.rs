@@ -1079,17 +1079,17 @@ impl Daemon {
     /// attest store's open inside it (`skep-core`'s `commits/feed/attest.rs`'s
     /// `AttestStore::open`) is O(its file) — a line for every attested
     /// commit the board has ever made, never compacted, as none of the
-    /// feed's six files is — plus one base loaded and one journal scan for
-    /// its whole uncovered tail. The identity table costs nothing
-    /// here: it rides in the World the engine recovered, checkpointed with
-    /// it and stepped by the replay (AUTH-2.79, AUTH-2.80). What the
-    /// engine's recovery can cost over it is a base written without the
-    /// slice over credential deposits — not a start point, so the open steps
-    /// back to an older one or to genesis and replays, slower, once — and
-    /// that is said on the operator stream (AUTH-2.86; [`Engine::recovery`]).
-    /// A board with no start point left refuses to open (AUTH-2.88):
-    /// `Engine` carries `BadCheckpoint` with the slice's own remedy, and
-    /// nothing is invented.
+    /// feed's six files is — plus, after a loss alone, one base loaded and one
+    /// journal scan for its whole uncovered tail, a reopen after unattested
+    /// commits asking the journal nothing. The identity table costs nothing
+    /// here: it rides in the World the engine recovered, checkpointed with it
+    /// and stepped by the replay (AUTH-2.79, AUTH-2.80). What the engine's
+    /// recovery can cost over it is a base written without the slice over
+    /// credential deposits — not a start point, so the open steps back to an
+    /// older one or to genesis and replays, slower, once — and that is said on
+    /// the operator stream (AUTH-2.86; [`Engine::recovery`]). A board with no
+    /// start point left refuses to open (AUTH-2.88): `Engine` carries
+    /// `BadCheckpoint` with the slice's own remedy, and nothing is invented.
     ///
     /// # Errors
     ///

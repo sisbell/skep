@@ -118,7 +118,9 @@
 //! walk landed, takes no further line. The attest store's file is
 //! untouched, its resident slots trimmed with the twins, its lines appended
 //! all the same and its open having made the window's slots resident from
-//! its own lines and, above its coverage, from the kernel's markers.
+//! its own lines and, above its coverage, from the kernel's markers — read
+//! where `commits.log` leaves a slot there that can be filled, a region
+//! pending among the cases (`CommitsLog::slot_may_be_filled_above`).
 //!
 //! # The supplement (PUB-7.22–7.28)
 //!

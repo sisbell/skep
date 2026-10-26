@@ -659,7 +659,7 @@ fn the_head_writers_row_40_goes_through_the_classed_door() {
 /// and what waits on the walk. A second open over what the first wrote has
 /// nothing uncovered and says none of the three; its report names the attest
 /// store's size and its slots, the figures `Commits::attest_store_figures`
-/// reads.
+/// reads, and that the journal was not asked, the store covering the head.
 #[test]
 fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, SaltSource};
@@ -789,8 +789,8 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     let on_disk = std::fs::metadata(dir.path().join("feed-attest.log")).expect("the store").len();
     assert_eq!((bytes, figures.slots), (on_disk, 0), "the size is the file's; nothing attested");
     let report = format!(
-        "open: feed-attest.log: {bytes} bytes, never compacted, 0 slots resident; 0 lines rebuilt \
-         from the journal's markers, in "
+        "open: feed-attest.log: {bytes} bytes, never compacted, 0 slots resident; the journal not \
+         asked: no line of commits.log above position {head} records a filled slot, in "
     );
     assert!(said.iter().any(|l| l.starts_with(&report)), "the open's report:\n{all}");
     let reach = format!(
@@ -1587,6 +1587,203 @@ fn an_attested_writes_sync_holds_no_lock_a_page_takes() {
     );
     assert_eq!(wp.attest_store_synced_through(), at, "the line synced once the hold released");
     assert_eq!(wp.halted_at(), None, "and the write path admits writes");
+}
+
+/// Returns the positions `feed-attest.log` holds a line for, off the data dir.
+fn attest_store_positions(dir: &std::path::Path) -> Vec<u64> {
+    let text = std::fs::read_to_string(dir.join("feed-attest.log")).unwrap_or_default();
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v.get("at").and_then(serde_json::Value::as_u64))
+        .collect()
+}
+
+/// Checks that a reopen after unattested commits asks the journal nothing.
+///
+/// The attest store's fence moves at an attested commit and at each open's
+/// end, never at an unattested commit, so after four unattested mints the
+/// reopen finds it below the head — and every `commits.log` line above it
+/// names its slot empty, so the store's open loads no base: the reopen loads
+/// what the reopen after it loads, the fence then at the head
+/// (`Kernel::bases_loaded`). Each open says it asked nothing, naming the
+/// fence it measured from, and syncs the store through the head before the
+/// first commit (SO-I5 (d)).
+#[test]
+fn a_reopen_after_unattested_commits_asks_the_journal_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    for _ in 0..4 {
+        mint_a_draft(&wp, &stores);
+    }
+    let head = engine.kernel().current_seq().0;
+    drop(wp);
+    // One reopen: the bases it loaded, and its report of the store.
+    let reopen = || -> (u64, Vec<String>) {
+        let before = engine.kernel().bases_loaded();
+        let wp = open_the_write_path(dir.path(), &engine);
+        let loaded = engine.kernel().bases_loaded() - before;
+        assert_eq!(wp.attest_store_synced_through(), head, "synced through the head");
+        let said = wp.lines_said().lock().clone();
+        let reports = said.into_iter().filter(|l| l.starts_with("open: feed-attest.log: "));
+        (loaded, reports.collect())
+    };
+    let not_asked = |fence: u64| {
+        format!(
+            "; the journal not asked: no line of commits.log above position {fence} records a \
+             filled slot, in "
+        )
+    };
+    let (below_the_head, below) = reopen();
+    let (at_the_head, at) = reopen();
+    assert_eq!(
+        below_the_head, at_the_head,
+        "four unattested positions above the store's fence: no base loaded for the store, as at \
+         the head"
+    );
+    assert!(
+        below.len() == 1 && below[0].contains(&not_asked(0)),
+        "the fence below the head, where the fresh open left it: {below:?}"
+    );
+    assert!(
+        at.len() == 1 && at[0].contains(&not_asked(head)),
+        "the fence at the head, where the reopen left it: {at:?}"
+    );
+}
+
+/// Checks that a slot whose store line was never written is rebuilt.
+///
+/// The record step writes `commits.log`'s line, recording the `marker`
+/// carrier, ahead of the store's: with the store's next write refused, an
+/// attested mint commits and halts the write path, its slot in the journal's
+/// marker and in no store line. The reopen finds that marker line above the
+/// store's fence, asks the journal and writes the line back: the row serves
+/// its `attest` again, and the open says the position it rebuilt.
+#[test]
+fn a_marker_line_whose_store_line_was_never_written_is_rebuilt_at_the_reopen() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let slot = Attestation::new(1, vec![0xab; 8]).expect("tag 1 and a non-empty blob");
+    mint_a_draft(&wp, &stores);
+    wp.fail_the_attest_stores_next_write();
+    let (_, at) = mint_a_draft_attested(&wp, &stores, Some(&slot));
+    assert_eq!(wp.halted_at(), Some(Seq(at)), "the premise: the store's line failed, writes halt");
+    let line = commits_log_entry(dir.path(), at).expect("the attested mint has a line");
+    assert_eq!(line["signed"], "marker", "its commits.log line records the marker: {line}");
+    assert!(!attest_store_positions(dir.path()).contains(&at), "no store line holds its slot");
+    drop(wp);
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert!(attest_store_positions(dir.path()).contains(&at), "the reopen wrote the line back");
+    let snap = engine.kernel().snapshot();
+    let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    assert_eq!(
+        served(page_from(&wp, &class, at - 1))[&at]["attest"],
+        serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
+        "the row serves its attest again"
+    );
+    let said = wp.lines_said().lock().clone();
+    let rebuilt =
+        format!("; 1 lines rebuilt from the journal's markers (positions {at}–{at}), in ");
+    assert!(
+        said.iter().any(|l| l.starts_with("open: feed-attest.log: ") && l.contains(&rebuilt)),
+        "the open says the position it rebuilt:\n{}",
+        said.join("\n")
+    );
+}
+
+/// Checks that a slot lost beside a bare line is rebuilt at the reopen.
+///
+/// A write that panics past its commit is recorded bare at once, its slot
+/// mirrored from the marker the write admitted (`Commits::commit_recorded`'s
+/// catch): with the store's next write refused, that store line is never
+/// written, and `commits.log`'s bare line, its carrier lost with its
+/// testimony, is the one witness. The reopen asks the journal and writes the
+/// line back, so the bare row serves its `attest`.
+#[test]
+fn a_bare_line_whose_store_line_was_never_written_is_rebuilt_at_the_reopen() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let account = system_account();
+    let slot = Attestation::new(1, vec![0xab; 8]).expect("tag 1 and a non-empty blob");
+    wp.fail_the_attest_stores_next_write();
+    let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+    let signed = Some(Signed::Marker(slot.clone()));
+    let meta = write_meta(&op).expect("a write").attributed("cd".repeat(32), signed);
+    let serial = wp.serial_lock();
+    let caught = catch_unwind(AssertUnwindSafe(|| {
+        wp.commit_under(&serial, meta, || {
+            stores
+                .namespace_attested(Some(&slot))
+                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
+                .expect("the mint commits");
+            panic!("after the commit, before the answer");
+        })
+    }));
+    drop(serial);
+    assert!(caught.is_err(), "the panic rode out of the door");
+    let at = engine.kernel().current_seq().0;
+    assert_eq!(wp.halted_at(), Some(Seq(at)), "the premise: the store's line failed, writes halt");
+    let line = commits_log_entry(dir.path(), at).expect("the committed position has a line");
+    assert!(line.get("op").is_none() && line.get("signed").is_none(), "a bare line: {line}");
+    assert!(!attest_store_positions(dir.path()).contains(&at), "no store line holds its slot");
+    drop(wp);
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert!(attest_store_positions(dir.path()).contains(&at), "the reopen wrote the line back");
+    let snap = engine.kernel().snapshot();
+    let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    assert_eq!(
+        served(page_from(&wp, &class, at - 1))[&at]["attest"],
+        serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
+        "the bare row serves its attest"
+    );
+}
+
+/// Checks that a slot lost with `commits.log` too is rebuilt at the reopen.
+///
+/// With the store's next write refused, an attested mint commits and halts
+/// the write path; then `commits.log` is lost, taking the marker line with
+/// it. No line witnesses the slot, but the open finds the region pending —
+/// a position the file does not cover can hold any slot — so the store's
+/// open asks the journal and writes the line back before the walk lands,
+/// and once it has landed the walked row serves its `attest`.
+#[test]
+fn a_slot_lost_with_commits_log_is_rebuilt_while_the_region_pends() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let slot = Attestation::new(1, vec![0xab; 8]).expect("tag 1 and a non-empty blob");
+    mint_a_draft(&wp, &stores);
+    wp.fail_the_attest_stores_next_write();
+    let (_, at) = mint_a_draft_attested(&wp, &stores, Some(&slot));
+    assert_eq!(wp.halted_at(), Some(Seq(at)), "the premise: the store's line failed, writes halt");
+    drop(wp);
+    std::fs::remove_file(dir.path().join("commits.log")).expect("lose commits.log");
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), Some((0, at)), "the region pends, no line left in it");
+    assert!(attest_store_positions(dir.path()).contains(&at), "the open wrote the line back");
+    wait_until("the walk's landing", || !wp.feed_walk_pending());
+    let snap = engine.kernel().snapshot();
+    let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    assert_eq!(
+        served(page_from(&wp, &class, at - 1))[&at]["attest"],
+        serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
+        "the walked row serves its attest"
+    );
 }
 
 /// Checks that a page is marshaled once into the bytes the wire carries.

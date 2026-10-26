@@ -49,6 +49,17 @@
 //! off this file's line, read by position (`feed.rs`'s reader; `window.rs`)
 //! — the lines below the floor are the only copy, and the feed serves them.
 //!
+//! **The journal is asked after a loss alone.** An unattested commit fills
+//! no slot, and `commits.log` records the carrier beside the one value that
+//! fills one (signed-ops D12), so the open asks the journal only where that
+//! file, above this one's fence, holds a line recording the marker or a bare
+//! line, or a region its own open did not cover
+//! (`CommitsLog::slot_may_be_filled_above`, whose card shows that a store
+//! line lost, torn or never written leaves one of the three behind it). This
+//! file's fence moves at an attested commit and at each open's end, never at
+//! an unattested commit, so the reopen after a run of unattested commits
+//! loads no base for the store.
+//!
 //! **Durable before the next commit, and a failed line halts writes**
 //! (SO-I5 (d): no signature the board keeps is lost by a crash, a power loss or
 //! a failed write). The checkpoint that reclaims a position's journal segment
@@ -173,12 +184,14 @@ impl AttestStore {
     /// boundary above the file's coverage whose slot is filled, listed by
     /// `Kernel::boundaries_above` in one scan from one base ([`rebuilt_tail`]:
     /// the floor arm, and what a refusal leaves), kept where the log serves
-    /// the position — the marker-mirroring rebuild, above the floor alone. An
-    /// empty slot contributes nothing; a refusal rebuilds nothing and drops
-    /// nothing, and the fence still closes over it: the journal will not
-    /// answer it on a later open either, and the row's own line says its slot
-    /// is lost — so the refusal is said once, in the kernel's words
-    /// ([`RebuildRefusedLine`]).
+    /// the position — the marker-mirroring rebuild, above the floor alone —
+    /// and asked for only where the log leaves a slot above the coverage that
+    /// can be filled (`CommitsLog::slot_may_be_filled_above`): an unattested
+    /// commit fills none. An empty slot contributes nothing; a refusal
+    /// rebuilds nothing and drops nothing, and the fence still closes over it:
+    /// the journal will not answer it on a later open either, and the row's
+    /// own line says its slot is lost — so the refusal is said once, in the
+    /// kernel's words ([`RebuildRefusedLine`]).
     ///
     /// **The open's other lines.** It says the entry lines past the head the
     /// replay purged, signatures a copy taken before this open still holds
@@ -186,25 +199,26 @@ impl AttestStore {
     /// position can lie at or below the reclaim floor, every signature it kept
     /// there gone ([`BegunAfreshLine`]); and, last, what the store holds — its
     /// size, never compacted, the slots resident — and what the rebuild wrote
-    /// back ([`AttestOpenLine`]).
+    /// back, or that the journal was not asked ([`AttestOpenLine`]).
     ///
     /// **Cost.** O(the file) to read it, a line at a time — holding one line
     /// and the served window, never the file, which keeps a line for every
-    /// attested commit the board ever made — and, for the tail, one
+    /// attested commit the board ever made — and, for the tail, nothing on a
+    /// reopen after unattested commits: the fence moves at an attested commit
+    /// and at each open's end, never at an unattested commit, so the positions
+    /// above it are those writes, whose lines name their slots empty, and the
+    /// journal is not asked. It is asked after a loss alone — a store line
+    /// lost, torn or never written, a bare position, a region of
+    /// `commits.log` its open did not cover — and then pays one
     /// `Kernel::boundaries_above`: the base at or below the fence loaded and
     /// seeded — a whole checkpoint file read and deserialized, dropped unfolded
     /// — then one scan from that base to the journal's end, the retained window
     /// at most, one entry kept per committed transaction above the base and a
     /// signature per attested one; a second such read where the fence's base is
-    /// gone (the floor arm). Where nothing is uncovered — the fence at the
-    /// head, the last commit attested or the board reopened twice — no base is
-    /// loaded and no segment read. What it does not pay is a base and a scan
-    /// per uncovered position: a whole checkpoint decoded per commit made since
-    /// the last open, which — the fence moving at an attested commit and at
-    /// this open's end, never at an unattested commit — every reopen of a board
-    /// that took only unattested writes would pay, a restart measured in
-    /// minutes to hours at a large world. Never a compaction: the store keeps
-    /// what the log drops.
+    /// gone (the floor arm). Where nothing is uncovered, the fence at the head,
+    /// the journal is not asked either. What it never pays is a base and a
+    /// scan per uncovered position. Never a compaction: the store keeps what
+    /// the log drops.
     ///
     /// # Errors
     ///
@@ -272,7 +286,12 @@ impl AttestStore {
             lines.say(Class::Failure, UnreadableSlotsLine { count, first });
         }
         let coverage = file.coverage();
-        let (tail, refused) = rebuilt_tail(engine, coverage);
+        // The journal is asked only where a filled slot can lie above the
+        // coverage; an unattested commit fills none, so the reopen after a
+        // run of them reads no base for the store.
+        let asked = log.slot_may_be_filled_above(coverage);
+        let (tail, refused) =
+            if asked { rebuilt_tail(engine, coverage) } else { (Vec::new(), None) };
         let mut rebuilt = Rebuilt::default();
         for (at, slot) in tail {
             if held(at) {
@@ -311,7 +330,9 @@ impl AttestStore {
         let sync = file.sync_handle().map_err(with_file)?;
         let elapsed_ms = started.elapsed().as_millis();
         let slots = served.len();
-        lines.say(Class::Open, AttestOpenLine { bytes, slots, rebuilt, elapsed_ms });
+        let rebuild =
+            if asked { Rebuild::Asked(rebuilt) } else { Rebuild::NotAsked { above: coverage } };
+        lines.say(Class::Open, AttestOpenLine { bytes, slots, rebuild, elapsed_ms });
         Ok((AttestStore { file, served, lines: lines.clone() }, sync))
     }
 
@@ -715,20 +736,34 @@ impl Rebuilt {
     }
 }
 
+/// What the open's rebuild came to: the journal asked, or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rebuild {
+    /// The journal was asked, and these lines were written back.
+    Asked(Rebuilt),
+    /// The journal was not asked: no slot above `above` can be filled.
+    ///
+    /// `above` is the store's coverage, above which no line of `commits.log`
+    /// records a filled slot (`CommitsLog::slot_may_be_filled_above`).
+    NotAsked { above: u64 },
+}
+
 /// The open's report of the store: what it holds and what the rebuild wrote.
 ///
 /// The words: `feed-attest.log: {bytes} bytes, never compacted, {s} slots
 /// resident; {n} lines rebuilt from the journal's markers (positions
 /// {a}–{b}), in {d} ms` — the slots the served window holds resident, one
-/// per attested position above the reclaim floor, and the positions where
-/// any line was rebuilt, so the restart row 33 asks for says that it wrote
-/// the lost line back. A pure value, pinned by `to_string()` in the unit
-/// suite; emitted under `Class::Open` by [`AttestStore::open`], once per
-/// open.
+/// per attested position inside the window, and the positions where any
+/// line was rebuilt, so the restart row 33 asks for says that it wrote the
+/// lost line back. Where the journal was not asked ([`Rebuild::NotAsked`]),
+/// the clause after the slots reads `the journal not asked: no line of
+/// commits.log above position {c} records a filled slot`, `{c}` the store's
+/// coverage. A pure value, pinned by `to_string()` in the unit suite;
+/// emitted under `Class::Open` by [`AttestStore::open`], once per open.
 struct AttestOpenLine {
     bytes: u64,
     slots: usize,
-    rebuilt: Rebuilt,
+    rebuild: Rebuild,
     elapsed_ms: u128,
 }
 
@@ -736,12 +771,21 @@ impl std::fmt::Display for AttestOpenLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{ATTEST_FILE}: {} bytes, never compacted, {} slots resident; {} lines rebuilt from \
-             the journal's markers",
-            self.bytes, self.slots, self.rebuilt.lines
+            "{ATTEST_FILE}: {} bytes, never compacted, {} slots resident; ",
+            self.bytes, self.slots
         )?;
-        if let Some((first, last)) = self.rebuilt.span {
-            write!(f, " (positions {first}–{last})")?;
+        match self.rebuild {
+            Rebuild::Asked(rebuilt) => {
+                write!(f, "{} lines rebuilt from the journal's markers", rebuilt.lines)?;
+                if let Some((first, last)) = rebuilt.span {
+                    write!(f, " (positions {first}–{last})")?;
+                }
+            }
+            Rebuild::NotAsked { above } => write!(
+                f,
+                "the journal not asked: no line of commits.log above position {above} records a \
+                 filled slot"
+            )?,
         }
         write!(f, ", in {} ms", self.elapsed_ms)
     }
@@ -753,10 +797,12 @@ impl std::fmt::Display for AttestOpenLine {
 /// whose marker slot is filled, in `Seq` order, read in one scan:
 /// `Kernel::boundaries_above` the fence, from one base at or below it to the
 /// journal's end, where a read per position would load a base per position.
-/// Empty slots contribute nothing. A fence at the head asks nothing of the
-/// journal: nothing lies above it to rebuild, so no read is made and no
-/// refusal can be met — a kernel that keeps no journal refuses every history
-/// read, an empty range included.
+/// Empty slots contribute nothing. The open asks for it only where
+/// `commits.log` leaves a slot above `coverage` that can be filled
+/// (`CommitsLog::slot_may_be_filled_above`). A fence at the head asks nothing
+/// of the journal: nothing lies above it to rebuild, so no read is made and
+/// no refusal can be met — a kernel that keeps no journal refuses every
+/// history read, an empty range included.
 ///
 /// **The floor.** Where the fence's base is gone — the read refuses
 /// `Reclaimed` naming a `floor`, the oldest retained checkpoint, above the

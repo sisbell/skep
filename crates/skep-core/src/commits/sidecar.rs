@@ -571,6 +571,23 @@ impl CommitMeta {
     pub(crate) fn bare() -> CommitMeta {
         CommitMeta::Bare { journal: JournalTerms::default() }
     }
+
+    /// Returns whether this entry's marker slot can be filled.
+    ///
+    /// It can where the line records the `marker` carrier, and where the line
+    /// is bare: a bare line's testimony is lost, the carrier with it, and a
+    /// line demoted for a malformed name is bare too ([`demoted`]). A recorded
+    /// line naming no carrier, or the record's own `sig`, says the slot is
+    /// empty: the carrier is recorded beside the one value that fills a slot,
+    /// the attestation the plain sequence admitted and handed the kernel
+    /// (signed-ops D12). A line written before the carrier was recorded reads
+    /// as naming none, dev boards regenerating (the module doc).
+    fn slot_may_be_filled(&self) -> bool {
+        match self {
+            CommitMeta::Bare { .. } => true,
+            CommitMeta::Recorded { signed, .. } => matches!(signed, Some(Carrier::Marker)),
+        }
+    }
 }
 
 /// One line's byte offset in `commits.log`.
@@ -769,6 +786,15 @@ pub(super) struct CommitsLog {
     /// the listener and the checkpoint thread, so the floor cannot move
     /// between the two. It moves no fence of this file's.
     floor_at_open: Option<u64>,
+    /// The last position whose marker slot can be filled, as the open read it.
+    ///
+    /// It is the highest entry above the fence whose line records the
+    /// `marker` carrier, or is bare ([`CommitMeta::slot_may_be_filled`]);
+    /// `None` where no such line stands. Read by
+    /// [`CommitsLog::slot_may_be_filled_above`] alone, at the attest store's
+    /// open, which runs before the walk lands and before the first record:
+    /// neither moves it.
+    possibly_attested_at_open: Option<u64>,
     /// The region pending: the positions the file did not cover at open.
     ///
     /// It is `(low, head]`, which the walk behind the listener re-covers
@@ -846,13 +872,14 @@ impl CommitsLog {
     /// window alone (`limits::FEED_RESIDENT_WINDOW` positions below the
     /// head, or the test seam's figure), and counts the rest: how many
     /// entries the file holds above its fence, how many of them are bare,
-    /// the first position held and the last. It truncates a torn tail and
-    /// drops everything the file says about a journal other than this one
-    /// — entries beyond the head, by one truncation, since they lie at the
-    /// file's end, and a fence above it, by one rewrite of the file without
-    /// it — and any uncovered `(low, head]` region, `low` the last recorded
-    /// position or the fence above it, is recorded as pending, to be
-    /// reconstructed as bare positions by the walk behind the listener
+    /// the first position held, the last, and the last whose marker slot can
+    /// be filled ([`CommitsLog::slot_may_be_filled_above`]). It truncates a
+    /// torn tail and drops everything the file says about a journal other
+    /// than this one — entries beyond the head, by one truncation, since they
+    /// lie at the file's end, and a fence above it, by one rewrite of the
+    /// file without it — and any uncovered `(low, head]` region, `low` the
+    /// last recorded position or the fence above it, is recorded as pending,
+    /// to be reconstructed as bare positions by the walk behind the listener
     /// ([`reconstruct`]) and written by its landing
     /// ([`CommitsLog::write_the_landing`]). Returns the replayed log with
     /// nothing written for the region: no bare line appended, no fence line
@@ -999,6 +1026,7 @@ impl CommitsLog {
             first_held,
             min_since,
             malformed,
+            last_possibly_attested,
             last_time,
             ..
         } = scanned;
@@ -1049,6 +1077,7 @@ impl CommitsLog {
             open_head: head,
             rewritten,
             floor_at_open,
+            possibly_attested_at_open: last_possibly_attested,
             pending,
             last_time,
             len,
@@ -1675,6 +1704,38 @@ impl CommitsLog {
     /// probe other than as reclaimed ([`reclaim_floor`]).
     pub(crate) fn floor_at_open(&self) -> Option<u64> {
         self.floor_at_open
+    }
+
+    /// Returns whether a filled marker slot can lie above `position`.
+    ///
+    /// It is the attest store's question at its open, whose rebuild reads the
+    /// journal's markers above its coverage (SO-I5 (d)), answered off what
+    /// this open read: `true` where `position` lies below the head at open
+    /// and either the region is pending — a position the file does not cover
+    /// can hold any slot — or a line above `position` records the `marker`
+    /// carrier or is bare ([`CommitMeta::slot_may_be_filled`]). Every other
+    /// position's line names its slot empty, since one value alone fills a
+    /// slot — the attestation the plain sequence admitted, recorded as that
+    /// carrier beside it (signed-ops D12) — so a run of unattested commits
+    /// leaves nothing above the store's coverage to rebuild.
+    ///
+    /// **Why a lost store line leaves a witness.** The record step writes
+    /// this file's line ahead of the store's, so a store line lost to a
+    /// crash, a failed write or a failed sync leaves its marker line above
+    /// the store's coverage; a panic past the commit records the position
+    /// bare at once ([`CommitsLog::record_bare`]); and a lost or torn
+    /// `commits.log` leaves the region pending, the file stopping at its
+    /// first failed append so that no line is missing beneath a later one.
+    /// One position goes unwitnessed: a commit whose record step panics
+    /// before this file's line is written, which no row serves.
+    ///
+    /// The reading is the open's, `pending` and the last such line both as
+    /// [`CommitsLog::open`] left them: asked once, before the walk lands and
+    /// before the first record, it answers that moment and no later one.
+    pub(crate) fn slot_may_be_filled_above(&self, position: u64) -> bool {
+        position < self.open_head
+            && (self.pending.is_some()
+                || self.possibly_attested_at_open.is_some_and(|at| at > position))
     }
 }
 
@@ -2825,6 +2886,11 @@ struct Scanned {
     foreign: Option<Foreign>,
     /// The entries with malformed names: how many, and the first.
     malformed: Option<(usize, u64)>,
+    /// The highest entry above the fence whose marker slot can be filled.
+    ///
+    /// It is the last line recording the `marker` carrier, or bare
+    /// ([`CommitMeta::slot_may_be_filled`]).
+    last_possibly_attested: Option<u64>,
     /// The greatest recorded time.
     last_time: u64,
 }
@@ -2853,10 +2919,12 @@ struct Foreign {
 /// journal's, calls for the rewrite that drops the other's lines. A fence
 /// at or below the head makes every entry before it dead to this build — a
 /// fence stands at or above every line before it — so the counts, the
-/// window and the first line held start afresh past it. Each entry with a
-/// malformed name is demoted as it is read ([`demoted`]) and counted. The
-/// window is trimmed as the scan climbs, so it holds the window's span and
-/// no more at any moment. `None` where no file stands.
+/// window, the first line held and the last entry whose marker slot can be
+/// filled ([`CommitMeta::slot_may_be_filled`]) start afresh past it. Each
+/// entry with a malformed name is demoted as it is read ([`demoted`]) and
+/// counted, its slot then one that can be filled. The window is trimmed as
+/// the scan climbs, so it holds the window's span and no more at any
+/// moment. `None` where no file stands.
 ///
 /// # Errors
 ///
@@ -2907,6 +2975,7 @@ fn scan(path: &Path, head: u64, window: u64) -> io::Result<Option<Scanned>> {
                 s.count = 0;
                 s.bare = 0;
                 s.first_held = None;
+                s.last_possibly_attested = None;
             }
             Record::Entry(at, _) if at > head => {
                 let foreign = s.foreign.get_or_insert_with(|| Foreign {
@@ -2934,6 +3003,9 @@ fn scan(path: &Path, head: u64, window: u64) -> io::Result<Option<Scanned>> {
                 s.bare += u64::from(matches!(meta, CommitMeta::Bare { .. }));
                 s.first_held.get_or_insert(at);
                 s.last_entry = Some(at);
+                if meta.slot_may_be_filled() {
+                    s.last_possibly_attested = Some(at);
+                }
                 if let Some(time) = meta.time() {
                     s.last_time = s.last_time.max(time);
                 }
@@ -3511,6 +3583,7 @@ impl CommitsLog {
             open_head,
             rewritten: false,
             floor_at_open: None,
+            possibly_attested_at_open: None,
             pending: None,
             last_time: 0,
             len: 0,
@@ -3554,6 +3627,7 @@ impl CommitsLog {
             open_head: head,
             rewritten: false,
             floor_at_open: None,
+            possibly_attested_at_open: None,
             pending: Some((low, head)),
             last_time: 0,
             len,

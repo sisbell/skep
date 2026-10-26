@@ -896,15 +896,16 @@ fn a_lost_attest_store_is_rebuilt_in_one_scan_loading_one_base_and_none_at_the_h
 /// kept): the store's fence moves only at an attested commit and at an
 /// open's end, so after `k` UNATTESTED commits a plain reopen — the store
 /// intact, its fence below the head — has `k` served positions above the
-/// fence, each with an empty slot. The rebuild lists them in ONE scan from
-/// one base: the reopen loads ONE base more than the reopen after it, the
-/// fence then at the head, where a read per position loaded one per
-/// position — a whole checkpoint decoded per commit since the last open,
-/// the restart measured in minutes to hours at a large world. The lines are
-/// what they were — no slot is filled, so none is written — and the fence
-/// closes over the tail at the head, synced before the first commit.
+/// fence, each with an empty slot, and each `commits.log` line among them
+/// names its slot empty (no `marker` carrier, no bare line). The open asks
+/// the journal nothing for the store — where one scan would load and seed a
+/// whole base only to find every slot empty — so the reopen loads what the
+/// reopen after it loads, the fence then at the head. The open says so,
+/// naming the fence it measured from; the lines are what they were — no
+/// slot is filled, so none is written — and the fence closes over the tail
+/// at the head, synced before the first commit.
 #[test]
-fn a_reopen_after_unattested_commits_loads_one_base_not_one_per_commit() {
+fn a_reopen_after_unattested_commits_loads_no_base_for_the_store() {
     const UNATTESTED: u64 = 30;
     let dir = tempfile::tempdir().expect("tempdir");
     let head_at = {
@@ -924,7 +925,8 @@ fn a_reopen_after_unattested_commits_loads_one_base_not_one_per_commit() {
         lines_before.keys().all(|at| *at + UNATTESTED <= head_at),
         "every attested line lies below the unattested run: {lines_before:?}"
     );
-    let reopen = |ctx: &str| -> u64 {
+    // One reopen, its base-load count and its report of the store read.
+    let reopen = |ctx: &str| -> (u64, Vec<String>) {
         let sd = spawn(dir.path());
         assert_eq!(head(sd.port()), head_at, "{ctx}: the reopen commits nothing");
         assert_eq!(
@@ -933,20 +935,41 @@ fn a_reopen_after_unattested_commits_loads_one_base_not_one_per_commit() {
             "{ctx}: the fence at the head, synced"
         );
         let loaded = sd.daemon().bases_loaded();
+        let reports = sd
+            .daemon()
+            .lines_said()
+            .into_iter()
+            .filter(|l| l.starts_with("open: feed-attest.log: "))
+            .collect();
         sd.shutdown();
-        loaded
+        (loaded, reports)
     };
-    let below_the_head = reopen("the fence below the head");
+    let (below_the_head, reports) = reopen("the fence below the head");
     assert_eq!(
         attest_store_lines(dir.path()),
         lines_before,
         "no slot above the fence is filled: no line written"
     );
-    let at_the_head = reopen("the fence at the head");
+    let not_asked = "; the journal not asked: no line of commits.log above position ";
+    let fence: u64 = match reports.as_slice() {
+        [report] => report
+            .split(not_asked)
+            .nth(1)
+            .and_then(|rest| rest.strip_suffix(" ms"))
+            .and_then(|rest| rest.split_once(" records a filled slot, in "))
+            .and_then(|(fence, _)| fence.parse().ok()),
+        _ => None,
+    }
+    .unwrap_or_else(|| panic!("the open says it asked nothing, once: {reports:?}"));
+    assert!(
+        fence + UNATTESTED <= head_at,
+        "the fence it measured from lies below the unattested run: {fence}, the head {head_at}"
+    );
+    let (at_the_head, _) = reopen("the fence at the head");
     assert_eq!(
-        below_the_head - at_the_head,
-        1,
-        "{UNATTESTED} unattested positions above the fence: ONE base loaded, not one per position"
+        below_the_head, at_the_head,
+        "{UNATTESTED} unattested positions above the fence: NO base loaded for the store, as at \
+         the head"
     );
 }
 

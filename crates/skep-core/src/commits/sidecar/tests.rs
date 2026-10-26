@@ -1187,6 +1187,111 @@ fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
     );
 }
 
+/// A recorded line at `at` naming `carrier` as its entry's signature.
+fn carried(at: u64, carrier: Option<Carrier>) -> Vec<u8> {
+    let meta = CommitMeta::Recorded {
+        op: "insert".into(),
+        docs: vec!["1.0.1.0.1".into()],
+        time: at,
+        key: Some("ab".repeat(32)),
+        signed: carrier,
+        terms: None,
+    };
+    entry_line(at, &meta)
+}
+
+/// Checks the scan's witness: the last line whose marker slot can be filled.
+///
+/// A line recording the `marker` carrier can name a filled slot, and so can a
+/// bare line, its testimony lost, and a line demoted for a malformed name; an
+/// unsigned line and one the record's own `sig` signs name an empty slot. A
+/// fence makes every line before it dead to this build, a witness among
+/// them, and a line past the head is another journal's.
+#[test]
+fn the_scan_finds_the_last_line_whose_slot_can_be_filled() {
+    let witness = |lines: Vec<Vec<u8>>| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(SIDECAR_FILE);
+        std::fs::write(&path, lines.concat()).expect("the file");
+        scan(&path, 20, 20).expect("the scan").expect("the file stands").last_possibly_attested
+    };
+    let demoted = entry_line(10, &recorded("insert", &["1.0"], 10, Some("bare")));
+    assert_eq!(
+        witness(vec![
+            carried(3, Some(Carrier::Marker)),
+            carried(5, None),
+            carried(6, Some(Carrier::RecordSig)),
+            min_since_line(7),
+            entry_line(8, &CommitMeta::bare()),
+            carried(9, None),
+            demoted,
+            carried(11, Some(Carrier::RecordSig)),
+            carried(25, Some(Carrier::Marker)),
+        ]),
+        Some(10),
+        "the demoted line is the last that can name a filled slot: the record's own sig at 11 \
+         names an empty one, and the marker at 25 lies past the head"
+    );
+    assert_eq!(
+        witness(vec![carried(1, None), carried(2, Some(Carrier::Marker)), carried(3, None)]),
+        Some(2),
+        "the marker line"
+    );
+    assert_eq!(
+        witness(vec![carried(1, None), carried(2, Some(Carrier::RecordSig)), carried(3, None)]),
+        None,
+        "no line names a filled slot: the unsigned and the record-signed alike"
+    );
+    assert_eq!(
+        witness(vec![carried(2, Some(Carrier::Marker)), min_since_line(4), carried(5, None)]),
+        None,
+        "a marker below the fence is dead to this build"
+    );
+}
+
+/// Checks when a filled slot can lie above a position, as the open read it.
+///
+/// It can below the head where a line above the position records the
+/// `marker` carrier or is bare, or where the open left a region to walk —
+/// every position the file does not cover can hold any slot. At the head,
+/// or above every such line of a file covering the head, none can, so the
+/// attest store's open asks the journal nothing.
+#[test]
+fn a_filled_slot_can_lie_above_a_position_only_where_the_log_says_so() {
+    let engine = engine_at(6);
+    let head = engine.kernel().current_seq().0;
+    let asked = |lines: Vec<Vec<u8>>, positions: &[u64]| -> Vec<bool> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(SIDECAR_FILE), lines.concat()).expect("the file");
+        let log = CommitsLog::open(dir.path(), &engine, &Lines::new()).expect("the open");
+        positions.iter().map(|&at| log.slot_may_be_filled_above(at)).collect()
+    };
+    let marker_at_1 = (1..=head).map(|at| carried(at, (at == 1).then_some(Carrier::Marker)));
+    assert_eq!(
+        asked(marker_at_1.collect(), &[0, 1, head]),
+        [true, false, false],
+        "the file covers the head: a filled slot only below the marker line"
+    );
+    let torn = (1..=4).map(|at| carried(at, None));
+    assert_eq!(
+        asked(torn.collect(), &[4, 5, head]),
+        [true, true, false],
+        "torn back to 4: the region pends, and every position below the head can hide a slot"
+    );
+    let bare_at_5 = (1..=head).map(|at| {
+        if at == 5 {
+            entry_line(5, &CommitMeta::bare())
+        } else {
+            carried(at, None)
+        }
+    });
+    assert_eq!(
+        asked(bare_at_5.collect(), &[4, 5, head]),
+        [true, false, false],
+        "a bare line, its carrier lost with its testimony"
+    );
+}
+
 /// Checks that a rewrite failed past its rename stops the log, said once.
 ///
 /// The line (`operations.md` §1.1 row 29) names the last entry the

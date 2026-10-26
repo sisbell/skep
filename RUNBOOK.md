@@ -1447,6 +1447,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        open: feed-attest.log: {bytes} bytes, never compacted, {n} slots resident; {n} lines rebuilt from the journal's markers (positions {first}–{last}), in {ms} ms
        ```
 
+       The open asks the journal only after a loss — a store line
+       lost, torn or never written, a bare position, a region of
+       `commits.log` still to walk. Where no line of `commits.log`
+       above the store's coverage records a filled slot, as on the
+       reopen after a run of unattested writes, nothing is read for
+       the store and the line says so in place of the count:
+
+       ```
+       open: feed-attest.log: {bytes} bytes, never compacted, {n} slots resident; the journal not asked: no line of commits.log above position {covered} records a filled slot, in {ms} ms
+       ```
+
        Last of the change feed's, how far back `/changes` answers —
        `{floor}` the oldest position a `410 history_reclaimed` names —
        what `commits.log` holds, the region the walk has yet to

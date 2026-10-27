@@ -559,12 +559,15 @@ fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause(
 /// Checks that §2 step 5 reads an attest cut by the edge its lines lie above.
 ///
 /// The step quotes the rebuilt ending first, as the binary writes it —
-/// `changes/mirror.rs` holds the binary to the words — then says the edge
-/// the open decides the side by: the last trusted position, the one before
-/// the position a torn line at the file's end names, the board term's
-/// position, none attested on an unclaimed board, and, where those leave it
-/// below the floor, what `commits.log` records up to the floor; it quotes the
-/// lost ending from that edge, the clause naming what `commits.log` records
+/// `changes/mirror.rs` holds the binary to the words — then the two
+/// no-signature endings, said in place of any other where the open
+/// witnesses the cut took no signature, as skep-core's attest suite holds
+/// the binary to them; then it says the edge the open decides the side by:
+/// the last trusted position, the one before the position a torn line at
+/// the file's end names, the board term's position, none attested on an
+/// unclaimed board, and, where those leave it below the floor, what
+/// `commits.log` records up to the floor; it quotes the lost ending from
+/// that edge, the clause naming what `commits.log` records
 /// there in each of its forms, the whole lines a damaged line's cut takes
 /// with it, and the begun-afresh line, its lost span opening at the edge the
 /// same read names, and said nowhere that read clears.
@@ -579,6 +582,15 @@ fn runbook_reads_an_attest_cut_by_the_edge_its_lines_lie_above() {
         "failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} \
          bytes after it are cut; every cut line lies above the reclaim floor at position {floor} \
          and is rebuilt from the journal",
+        "said in place of any other, since the open witnesses that the cut took no signature at \
+         all",
+        "failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} \
+         bytes after it are cut; they held an open's fence line alone, and the cut took no \
+         signature",
+        "failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} \
+         bytes after it are cut; the board is unclaimed, and the cut took no signature",
+        "Where the journal refused the rebuild beside it, the refusal's own line, below, says \
+         what that refusal costs",
         "The open decides the ending by an edge every cut line lies above",
         "the one before the position a torn line at the file's end names",
         "the board term's position, `H.1`'s, since no write at or before it is attested (on an \

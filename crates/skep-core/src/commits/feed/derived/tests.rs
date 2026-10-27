@@ -61,8 +61,14 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     assert_eq!(std::fs::read_to_string(&path).expect("read"), contents, "the tail is cut");
     let whole = contents.len() as u64;
     assert_eq!(answered.foreign, None, "a torn line is no foreign one");
-    let cut =
-        Cut { valid_end: whole, len: whole + 12, trusted: 9, first: Some(11), whole_after: None };
+    let cut = Cut {
+        valid_end: whole,
+        len: whole + 12,
+        trusted: 9,
+        first: Some(11),
+        whole_after: None,
+        fence_alone: false,
+    };
     assert_eq!(
         answered.cut,
         Some(cut),
@@ -117,10 +123,13 @@ fn records_and_fences_replay_and_coverage_follows_them() {
 /// A torn line at the file's end names its own position where its `at`
 /// stands whole — a tear inside the digits, zero-fill, or a position the
 /// trusted lines cover or the head does not reach names none — and is cut
-/// and gone; past a damaged whole line, whose digits are no witness, the
-/// whole entry lines the cut takes with it are counted, the ones at or below
-/// the head alone, and every byte from the trusted end on is kept beside the
-/// file first.
+/// and gone; a torn line is a coverage fence alone where its bytes begin as
+/// a fence's do for three bytes or more, inside its digits, whole but for
+/// its newline or zero-filled after, and never at two bytes, at an entry
+/// line's opening or where a damaged line ends trust; past a damaged whole
+/// line, whose digits are no witness, the whole entry lines the cut takes
+/// with it are counted, the ones at or below the head alone, and every byte
+/// from the trusted end on is kept beside the file first.
 #[test]
 fn a_cut_names_the_torn_lines_position_or_the_whole_lines_it_takes() {
     let trusted_len = "{\"at\":3}\n{\"covered\":9}\n".len() as u64;
@@ -152,22 +161,56 @@ fn a_cut_names_the_torn_lines_position_or_the_whole_lines_it_takes() {
             assert_eq!(replayed.kept, None, "{tail:?}: a torn line keeps nothing");
             assert!(kept_names(case.path()).is_empty(), "{tail:?}");
         }
-        (cut.first, cut.whole_after)
+        (cut.first, cut.whole_after, cut.fence_alone)
     };
-    assert_eq!(cut_of("{\"at\":12,\"do"), (Some(12), None), "its digits stand whole");
-    assert_eq!(cut_of("{\"at\":12}"), (Some(12), None), "whole but for its newline");
-    assert_eq!(cut_of("{\"at\":1"), (None, None), "a tear inside the digits names nothing");
-    assert_eq!(cut_of("\0\0\0\0"), (None, None), "zero-fill names nothing");
-    assert_eq!(cut_of("{\"at\":5,"), (None, None), "a position the trusted lines cover");
-    assert_eq!(cut_of("{\"at\":21,"), (None, None), "a position past the head");
+    assert_eq!(cut_of("{\"at\":12,\"do"), (Some(12), None, false), "its digits stand whole");
+    assert_eq!(cut_of("{\"at\":12}"), (Some(12), None, false), "whole but for its newline");
+    assert_eq!(cut_of("{\"at\":1"), (None, None, false), "a tear inside the digits names nothing");
+    assert_eq!(cut_of("\0\0\0\0"), (None, None, false), "zero-fill names nothing");
+    assert_eq!(cut_of("{\"at\":5,"), (None, None, false), "a position the trusted lines cover");
+    assert_eq!(cut_of("{\"at\":21,"), (None, None, false), "a position past the head");
+    assert_eq!(cut_of("{\"covered\":1"), (None, None, true), "a fence torn inside its digits");
+    assert_eq!(cut_of("{\"c"), (None, None, true), "three bytes tell a fence");
+    assert_eq!(cut_of("{\"covered\":12}"), (None, None, true), "a fence whole but its newline");
+    assert_eq!(cut_of("{\"covered\":12\0\0\0"), (None, None, true), "a fence, then zero-fill");
+    assert_eq!(cut_of("{\""), (None, None, false), "two bytes tell nothing");
+    assert_eq!(cut_of("{\"alg"), (None, None, false), "a slot line's opening is no fence");
+    assert_eq!(
+        cut_of("{\"covered\":1x}\n"),
+        (None, None, false),
+        "a damaged fence is damage, kept, and no torn fence"
+    );
     let damaged =
         "{\"at\":1x}\n{\"at\":13}\n{\"covered\":14}\n{\"at\":15}\n{\"at\":40}\n{\"at\":16";
     assert_eq!(
         cut_of(damaged),
-        (None, Some(EntryLines { lines: 2, first: 13, last: 15 })),
+        (None, Some(EntryLines { lines: 2, first: 13, last: 15 }), false),
         "a damaged line's digits are no witness; the whole entry lines after it at or below the \
          head are counted — the fence, the line past the head and the torn tail are none"
     );
+}
+
+/// Checks that a torn fence is told from every entry line at its third byte.
+///
+/// Every prefix of the fence's own line ([`fence_line`]) is a torn fence
+/// from its third byte on, and none before it; no prefix of an entry line
+/// ([`record_object`]) — a derived file's `{"at":…}`, the attest store's
+/// `{"alg":…,"at":…,"sig":…}` — is one, at any length.
+#[test]
+fn a_torn_fence_is_told_from_every_entry_line_at_its_third_byte() {
+    let fence = fence_line(12);
+    let fence = fence.strip_suffix(b"\n").expect("a fence ends its line");
+    for k in 0..=fence.len() {
+        assert_eq!(torn_fence(&fence[..k]), k >= 3, "{:?}", String::from_utf8_lossy(&fence[..k]));
+    }
+    let slot = vec![("alg", Value::from(1u64)), ("sig", Value::String("ab".into()))];
+    for entry in [record_object(5, vec![]), record_object(5, slot)] {
+        let entry = line_bytes(&entry);
+        for k in 0..=entry.len() {
+            let prefix = &entry[..k];
+            assert!(!torn_fence(prefix), "{:?}", String::from_utf8_lossy(prefix));
+        }
+    }
 }
 
 /// Checks that a rewrite's temp file is said at the open and taken after.
@@ -668,7 +711,7 @@ fn a_line_at_the_bound_replays_whole_and_one_past_it_is_damage() {
     let whole_after = Some(EntryLines { lines: 1, first: 5, last: 5 });
     assert_eq!(
         replayed.cut,
-        Some(Cut { valid_end: 9, len, trusted: 1, first: None, whole_after }),
+        Some(Cut { valid_end: 9, len, trusted: 1, first: None, whole_after, fence_alone: false }),
         "damage: cut where the long line begins, the whole line after it counted"
     );
     assert_eq!(replayed.kept, Some(KeptName { byte: 9, k: 0 }));

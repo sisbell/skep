@@ -88,7 +88,14 @@ fn a_position_is_placed_in_order_once() {
 /// kept.
 #[test]
 fn a_derived_cut_says_it_is_re_derived_and_a_failure_names_its_file() {
-    let cut = Cut { valid_end: 120, len: 131, trusted: 32, first: Some(33), whole_after: None };
+    let cut = Cut {
+        valid_end: 120,
+        len: 131,
+        trusted: 32,
+        first: Some(33),
+        whole_after: None,
+        fence_alone: false,
+    };
     assert_eq!(
         DerivedCutLine { name: INDEX_FILE, cut }.to_string(),
         "feed-index.log: trust ends at position 32 (byte 120 of 131); the 11 bytes after it \

@@ -321,22 +321,23 @@ impl LineFile {
     /// answering the cut to the caller ([`Cut`]: the trusted end, the length
     /// before it and the last trusted position, which is the coverage the
     /// scan reached; the position the cut line names where it is a torn line
-    /// at the file's end whose `at` stands whole; and, past a damaged line,
-    /// the whole entry lines the cut takes with it, read before the
-    /// truncation), never saying it here, since the case is the caller's: a
-    /// derived file re-derives the cut part, the attest store says which side
-    /// of the reclaim floor it lies on — drops what describes another journal
-    /// (rewriting the file without it, and answering the entry lines dropped,
-    /// [`EntryLines`]), and hands back the entries at or below `head` that
-    /// `keep` admits, with the file's coverage — which counts every trusted
-    /// line at or below `head`, kept or not. What it drops in class B it
-    /// keeps beside the file first, durably ([`keep_dropped_lines`]): the
-    /// bytes from a damaged line — one ended by its newline that does not
-    /// parse, which no crash leaves — to the file's end, and the entry lines
-    /// above the head; a torn last line is cut and gone. Every answer rides
-    /// [`Replayed`]: `None` for the cut is a file read whole, `None` for the
-    /// foreign lines a file naming no entry past the head, and each kept
-    /// name `None` where nothing was kept.
+    /// at the file's end whose `at` stands whole, and whether that torn line
+    /// is a coverage fence alone; and, past a damaged line, the whole entry
+    /// lines the cut takes with it, read before the truncation), never saying
+    /// it here, since the case is the caller's: a derived file re-derives the
+    /// cut part, the attest store says that the cut took no signature or
+    /// which side of the reclaim floor it lies on — drops what describes
+    /// another journal (rewriting the file without it, and answering the
+    /// entry lines dropped, [`EntryLines`]), and hands back the entries at or
+    /// below `head` that `keep` admits, with the file's coverage — which
+    /// counts every trusted line at or below `head`, kept or not. What it
+    /// drops in class B it keeps beside the file first, durably
+    /// ([`keep_dropped_lines`]): the bytes from a damaged line — one ended by
+    /// its newline that does not parse, which no crash leaves — to the file's
+    /// end, and the entry lines above the head; a torn last line is cut and
+    /// gone. Every answer rides [`Replayed`]: `None` for the cut is a file
+    /// read whole, `None` for the foreign lines a file naming no entry past
+    /// the head, and each kept name `None` where nothing was kept.
     ///
     /// `lines` is the classed door the file keeps for its stop's line while
     /// serving, a failed append's or a rewrite's; the open says through it a
@@ -428,22 +429,23 @@ impl LineFile {
         }
         // The line the scan stopped on, read for the caller's case: a torn
         // line — no newline, the file's end — names its own position where
-        // its `at` stands whole, its bytes lent by the reader; a whole line
-        // that does not parse, or one past the bound, is damage, its digits
-        // no witness, and the whole lines after it are read on — and it is
-        // the cut's class: a damaged line's cut is kept, a torn line's is
-        // gone.
-        let (first, whole_after) = if damaged {
+        // its `at` stands whole, or is a fence cut short, its bytes lent by
+        // the reader; a whole line that does not parse, or one past the
+        // bound, is damage, its digits no witness, and the whole lines after
+        // it are read on — and it is the cut's class: a damaged line's cut is
+        // kept, a torn line's is gone.
+        let (first, whole_after, fence_alone) = if damaged {
             let entry = |line: &[u8]| match parse_line(line) {
                 Some(Record::Entry(at, _)) => Some(at),
                 _ => None,
             };
-            (None, whole_lines_after(&path, valid_end, head, entry).map_err(with_file)?)
+            (None, whole_lines_after(&path, valid_end, head, entry).map_err(with_file)?, false)
         } else if torn {
             let tail = reader.as_ref().map_or(&[][..], LineReader::tail_bytes);
-            (torn_position(tail).filter(|&at| at > coverage && at <= head), None)
+            let first = torn_position(tail).filter(|&at| at > coverage && at <= head);
+            (first, None, torn_fence(tail))
         } else {
-            (None, None)
+            (None, None, false)
         };
         // The append handle: at the trusted end where the file stood, the
         // module trusting the scan's count; made where none did, born 0600.
@@ -474,6 +476,7 @@ impl LineFile {
             trusted: coverage,
             first,
             whole_after,
+            fence_alone,
         });
         let mut this = LineFile {
             file,
@@ -1152,8 +1155,29 @@ pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Valu
     obj(pairs)
 }
 
+/// The coverage fence's one member: `{"covered":N}`.
+///
+/// It is spelled once for the fence's writer ([`fence_line`]), its parser
+/// ([`parse_line`]) and the test of a torn fence ([`torn_fence`]), so the
+/// three cannot part.
+const FENCE_KEY: &str = "covered";
+
 fn fence_line(covered: u64) -> Vec<u8> {
-    line_bytes(&obj(vec![("covered", Value::Number(covered.into()))]))
+    line_bytes(&obj(vec![(FENCE_KEY, Value::Number(covered.into()))]))
+}
+
+/// Returns whether a torn line is a coverage fence cut short.
+///
+/// It is true where the fragment begins as a fence's line does, `{"covered":`
+/// ([`fence_line`]), for three bytes of it or more: every entry line is a
+/// key-sorted object whose first key opens with `a` — `alg` or `at`
+/// ([`record_object`]) — so the third byte is where a fence and an entry
+/// line part. Two bytes, `{"`, are either; a volume's zero-fill is neither;
+/// a fence torn inside its digits is still a fence.
+fn torn_fence(fragment: &[u8]) -> bool {
+    let head = format!("{{\"{FENCE_KEY}\":");
+    let n = fragment.len().min(head.len());
+    n >= 3 && fragment[..n] == head.as_bytes()[..n]
 }
 
 /// Returns the position a torn line names, where its `at` stands whole.
@@ -1225,7 +1249,7 @@ impl Records {
 pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let Value::Object(m) = v else { return None };
-    if let Some(c) = m.get("covered") {
+    if let Some(c) = m.get(FENCE_KEY) {
         return Some(Record::Fence(c.as_u64()?));
     }
     let at = m.get("at")?.as_u64()?;

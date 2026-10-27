@@ -684,11 +684,25 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    nothing of this.
 
 5. **Read the open's report** (Start, step 3), and look for a cut
-   line for `feed-attest.log`. It ends one of three ways. This ending
-   owes nothing, since the open rebuilt what it cut:
+   line for `feed-attest.log`. It ends one of four ways. Two owe
+   nothing. This one, since the open rebuilt what it cut:
 
    ```
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; every cut line lies above the reclaim floor at position {floor} and is rebuilt from the journal
+   ```
+
+   And this one, said in place of any other, since the open
+   witnesses that the cut took no signature at all: the cut is one
+   coverage fence and nothing else — an open writes its fence last
+   and syncs it before any line follows, so a crash or a power loss
+   between the two leaves that fence torn and every line before it
+   whole — or the board is unclaimed, and no write on it is
+   attested. Where the journal refused the rebuild beside it, the
+   refusal's own line, below, says what that refusal costs:
+
+   ```
+   failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; they held an open's fence line alone, and the cut took no signature
+   failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; the board is unclaimed, and the cut took no signature
    ```
 
    The open decides the ending by an edge every cut line lies above:
@@ -704,8 +718,8 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    records attested or cannot tell of — a bare line's, one at or
    below its fence, one its open did not cover — and to the floor
    where there is none, never past a line the cut is known to have
-   taken. An edge at or above the floor is the ending above. These
-   two mean signatures held nowhere else are gone from the file —
+   taken. An edge at or above the floor is the rebuilt ending. The
+   other two mean signatures held nowhere else are gone from the file —
    between the edge and the floor, or above the floor where the
    journal refused the rebuild, which a line of its own names:
 
@@ -1414,7 +1428,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        each back bare, so read the kept file, or put back that copy's
        `commits.log` (Restore), where the testimony matters; for the
        four index files: `the cut part is re-derived`; and for
-       `feed-attest.log`, one of the three endings in Restore,
+       `feed-attest.log`, one of the four endings in Restore,
        step 5. What a file holds that this daemon cannot read is
        said once per open:
 

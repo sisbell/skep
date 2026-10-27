@@ -138,7 +138,14 @@ fn a_failed_sync_is_said_through_the_door_and_stops_the_file() {
 /// rebuilt.
 #[test]
 fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_count() {
-    let cut = Cut { valid_end: 1_400, len: 2_000, trusted: 40, first: None, whole_after: None };
+    let cut = Cut {
+        valid_end: 1_400,
+        len: 2_000,
+        trusted: 40,
+        first: None,
+        whole_after: None,
+        fence_alone: false,
+    };
     let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
                 after it are cut";
     let attested = Attested::Above(0);
@@ -217,16 +224,22 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
 /// `at` stands whole names its own side — above the floor, rebuilt; at the
 /// floor, the floor's own slot lost, the edge the position before it, never
 /// the last trusted one, `commits.log` recording that slot attested — and the
-/// board's attested positions name theirs: on an unclaimed board none lies
-/// anywhere, and on a claimed one none at or below its board term's position,
-/// which stays the edge where `commits.log` cannot tell of the position just
-/// past it. Each lost arm names the whole lines a damaged line took with it.
+/// board term names its own: on a claimed board no write is attested at or
+/// below its position, which stays the edge where `commits.log` cannot tell
+/// of the position just past it. Each lost arm names the whole lines a
+/// damaged line took with it.
 #[test]
 fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot() {
     let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
                 after it are cut";
-    let cut =
-        |first, whole_after| Cut { valid_end: 1_400, len: 2_000, trusted: 40, first, whole_after };
+    let cut = |first, whole_after| Cut {
+        valid_end: 1_400,
+        len: 2_000,
+        trusted: 40,
+        first,
+        whole_after,
+        fence_alone: false,
+    };
     let line = |cut, attested, rebuilt, log| {
         AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None, log }.to_string()
     };
@@ -262,11 +275,6 @@ fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot
         rebuilt,
         "…or at the floor"
     );
-    assert_eq!(
-        line(cut(None, None), Attested::Nowhere, true, none),
-        rebuilt,
-        "an unclaimed board"
-    );
     let damaged = cut(None, Some(EntryLines { lines: 3, first: 44, last: 61 }));
     let past_the_term = LogWitness { attested: None, unnamed: Some((43, 50)) };
     assert_eq!(
@@ -288,17 +296,174 @@ fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot
         ),
         "above the floor, the rebuild refused"
     );
-    let genesis = skep_engine::Engine::open(skep_kernel::KernelConfig {
-        durability: skep_kernel::Durability::InMemory,
-        checkpoint: skep_kernel::CheckpointPolicy::Manual,
-        salt: skep_kernel::SaltSource::Seeded(0),
-    })
-    .expect("in-memory genesis cannot fail");
+}
+
+/// Checks that a cut the open witnesses took no signature says so.
+///
+/// Two witnesses clear a cut of every signature, whichever side its edge
+/// lies on: one torn coverage fence and nothing else — an open's own fence,
+/// cut short before its sync, every line before it standing whole — and an
+/// unclaimed board, which attests no write. The line then owes nothing: no
+/// LOST, no restore and no whole lines, at a rebuild answered or refused —
+/// a refusal is its own line's to say — and at an edge below the floor,
+/// where `commits.log` would otherwise name a loss. A damaged line's cut
+/// still names the file its bytes were kept in, and where both witnesses
+/// hold, the fence's words are said.
+#[test]
+fn a_cut_the_open_witnesses_took_no_signature_says_so_whatever_its_side() {
+    let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
+                after it are cut";
+    let fence = Cut {
+        valid_end: 1_400,
+        len: 2_000,
+        trusted: 40,
+        first: None,
+        whole_after: None,
+        fence_alone: true,
+    };
+    let line = |cut, attested, rebuilt, log| {
+        AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None, log }.to_string()
+    };
+    let none = LogWitness::default();
+    let cannot_tell = LogWitness { attested: None, unnamed: Some((41, 50)) };
+    let fence_words =
+        format!("{head}; they held an open's fence line alone, and the cut took no signature");
+    for (attested, rebuilt, log, why) in [
+        (Attested::Above(55), true, none, "every cut line above the floor, rebuilt"),
+        (Attested::Above(55), false, none, "…the rebuild refused"),
+        (Attested::Above(0), true, cannot_tell, "the edge below the floor, the span unnamed"),
+        (Attested::Nowhere, false, none, "an unclaimed board too: the fence's words"),
+    ] {
+        assert_eq!(line(fence, attested, rebuilt, log), fence_words, "a torn fence alone: {why}");
+    }
+    let unclaimed_words =
+        format!("{head}; the board is unclaimed, and the cut took no signature");
+    let torn = Cut { fence_alone: false, ..fence };
+    for (rebuilt, why) in [(true, "the rebuild answered"), (false, "the rebuild refused")] {
+        assert_eq!(
+            line(torn, Attested::Nowhere, rebuilt, none),
+            unclaimed_words,
+            "an unclaimed board, {why}"
+        );
+    }
+    let damaged = Cut { whole_after: Some(EntryLines { lines: 3, first: 44, last: 61 }), ..torn };
+    let kept = Some(KeptName { byte: 1_400, k: 0 });
+    let attested = Attested::Nowhere;
     assert_eq!(
-        Attested::of(genesis.kernel().snapshot().world()),
-        Attested::Nowhere,
-        "an unclaimed board holds no attested position"
+        AttestCutLine { cut: damaged, floor: 50, attested, rebuilt: false, kept, log: none }
+            .to_string(),
+        format!(
+            "{head}, kept in feed-attest.log.cut-1400; the board is unclaimed, and the cut took \
+             no signature"
+        ),
+        "a damaged line's cut on an unclaimed board: the kept file named, no loss and no lines"
     );
+    assert_eq!(
+        Attested::of(engine_at(0).kernel().snapshot().world()),
+        Attested::Nowhere,
+        "the premise: an unclaimed board holds no attested position"
+    );
+}
+
+/// Checks the fence witness end to end, the rebuild refused beside it.
+///
+/// The store holds one torn coverage fence and nothing else — the bytes an
+/// open's fence leaves where a crash cuts it short before its sync — on a
+/// board claimed through M10 in memory, whose kernel keeps no journal and so
+/// refuses every history read, the rebuild among them; `commits.log` is
+/// absent, so its open leaves the region to walk and the store asks the
+/// journal. The refusal is said by its own line, and the cut line says the
+/// cut took no signature where its side alone would call it LOST: the board
+/// reads no `H.1`, the floor is genesis, and the rebuild was refused.
+#[test]
+fn a_cut_that_took_an_opens_fence_line_alone_says_it_took_no_signature() {
+    let engine = claimed_in_memory();
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(ATTEST_FILE), b"{\"covered\":").expect("the torn fence");
+    let lines = Lines::new();
+    let log = CommitsLog::open(dir.path(), &engine, &lines).expect("the log opens");
+    assert!(log.pending_region().is_some(), "the premise: the store asks the journal");
+    let (_store, _sync) =
+        AttestStore::open(dir.path(), &engine, &log, &lines).expect("the store opens");
+    let said = lines.said().lock().clone();
+    let cuts: Vec<&String> = said.iter().filter(|l| l.contains("trust ends at")).collect();
+    assert_eq!(
+        cuts,
+        [
+            "failure: feed-attest.log: trust ends at position 0 (byte 0 of 11); the 11 bytes \
+             after it are cut; they held an open's fence line alone, and the cut took no \
+             signature"
+        ],
+        "the cut, said once:\n{}",
+        said.join("\n")
+    );
+    let refused = "failure: feed-attest.log: the journal refused the rebuild above position 0 (";
+    assert!(
+        said.iter().any(|l| l.starts_with(refused)),
+        "the refusal, said by its own line:\n{}",
+        said.join("\n")
+    );
+}
+
+/// An in-memory engine whose board is claimed through M10, with no head.
+///
+/// The ceremony — the account, its doc 1, its genesis and the claim — runs
+/// through M10 alone, so no head writer runs and the board holds no `H.1`.
+///
+/// # Panics
+///
+/// Panics where a step of the ceremony is refused, or leaves no claimant.
+fn claimed_in_memory() -> Engine {
+    use serde_json::json;
+    use skep_address::Address;
+    use skep_engine::types::{t_claim, t_enroll};
+    use skep_febe::{Codec, OperationSurface, Response};
+    use skep_identity::{encode_enroll, Enrollment};
+    use skep_namespace::PrincipalId;
+    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+
+    use crate::codec::JsonCodec;
+
+    let engine = engine_at(0);
+    let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
+    let exec = |sid, frame: serde_json::Value| -> String {
+        let req = JsonCodec
+            .parse(frame.to_string().as_bytes())
+            .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
+        match febe.execute(sid, req) {
+            Response::AckAddr { addr, .. } => addr.tumbler().to_string(),
+            other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
+        }
+    };
+    let ty = |t: &Address| t.tumbler().to_string();
+    let key = |n: u8| {
+        let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[n; 32]).expect("tag 1");
+        signer.public_key().clone()
+    };
+    let delegate = json!({"op": "delegate", "new_prefix": "1.0.1", "new_id": 900});
+    exec(febe.bootstrap_session(), delegate);
+    let sid = febe.open_session(PrincipalId(900));
+    let doc1 = exec(sid, json!({"op": "create_new_document", "account": "1.0.1"}));
+    let genesis = encode_enroll(&[
+        Enrollment::new(key(1), true, None).expect("no label"),
+        Enrollment::new(key(2), false, None).expect("no label"),
+    ]);
+    let atom = exec(
+        sid,
+        json!({"op": "insert", "doc": doc1, "at": {"subspace": "1", "ordinal": "1"},
+               "values": [{"atom": genesis}], "deposit": ty(t_enroll())}),
+    );
+    let link = |from: &str, to: &[&str], t: &Address| {
+        json!({"op": "make_link", "home": doc1, "from": {"addrs": [from]},
+               "to": {"addrs": to}, "ty": {"addrs": [ty(t)]}})
+    };
+    exec(sid, link(&atom, &["1.0.1"], t_enroll()));
+    exec(sid, link("1.0.1", &[], t_claim()));
+    assert!(
+        engine.kernel().snapshot().world().identity().claimant().is_some(),
+        "the premise: the ceremony claimed the board"
+    );
+    engine
 }
 
 /// Checks the open's other lines and row 33's two endings, at fixed inputs.
@@ -392,7 +557,14 @@ fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
 fn the_loss_lines_name_what_commits_log_records_and_read_rebuilt_where_it_records_none() {
     let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
                 after it are cut";
-    let plain = Cut { valid_end: 1_400, len: 2_000, trusted: 40, first: None, whole_after: None };
+    let plain = Cut {
+        valid_end: 1_400,
+        len: 2_000,
+        trusted: 40,
+        first: None,
+        whole_after: None,
+        fence_alone: false,
+    };
     let line = |cut, rebuilt, log| {
         let attested = Attested::Above(0);
         AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None, log }.to_string()

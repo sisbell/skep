@@ -37,12 +37,15 @@
 //! reached ([`AttestCutLine`]) — rebuilt where every cut line lies above the
 //! floor and the journal answered the rebuild; otherwise lost, between the
 //! edge they lie above and the floor, or above the floor where the journal
-//! refused the rebuild. The edge is the greatest of what the open can
-//! witness: the last trusted position, the file being position-ordered; the
-//! position before the one a torn line at the file's end names, where its
-//! `at` stands whole; the board term's, at or below which no write is
-//! attested ([`Attested`]); and, where those three leave it below the
-//! floor, what `commits.log` records between it and the floor
+//! refused the rebuild — save where the open witnesses that the cut took no
+//! signature at all, which it then says in place of a side: the cut is one
+//! torn coverage fence alone, the open's own cut short before its sync, or
+//! the board is unclaimed and attests no write. The edge is the greatest of
+//! what the open can witness: the last trusted position, the file being
+//! position-ordered; the position before the one a torn line at the file's
+//! end names, where its `at` stands whole; the board term's, at or below
+//! which no write is attested ([`Attested`]); and, where those three leave
+//! it below the floor, what `commits.log` records between it and the floor
 //! ([`LogWitness`]), whose lines name each commit's slot filled or empty
 //! (signed-ops D12) — the edge rising to the position before the first
 //! commit it records attested or cannot tell of, and never past a line the
@@ -192,9 +195,12 @@ impl AttestStore {
     /// retained checkpoint — the edge of the board's attested positions read
     /// off the head beside it ([`Attested`]), and, where the store's own
     /// witnesses leave the cut's edge below the floor, what `commits.log`
-    /// records between that edge and the floor ([`LogWitness`]). The tail is
-    /// every committed boundary above the file's coverage whose slot is
-    /// filled, listed by `Kernel::boundaries_above` in one scan from one base
+    /// records between that edge and the floor ([`LogWitness`]); a cut the
+    /// open witnesses took no signature — one torn coverage fence alone, or
+    /// any cut on an unclaimed board — says that in place of a side, and
+    /// reads nothing of `commits.log`. The tail is every committed boundary
+    /// above the file's coverage whose slot is filled, listed by
+    /// `Kernel::boundaries_above` in one scan from one base
     /// ([`rebuilt_tail`]: the floor arm, and what a refusal leaves), kept
     /// where the log serves the position — the marker-mirroring rebuild,
     /// above the floor alone — and asked for only where the log leaves a slot
@@ -233,14 +239,14 @@ impl AttestStore {
     /// gone (the floor arm). Where nothing is uncovered, the fence at the head,
     /// the journal is not asked either. What it never pays is a base and a
     /// scan per uncovered position. Never a compaction: the store keeps what
-    /// the log drops. And where a loss would be said — a cut whose own
-    /// witnesses leave its edge below the floor, or a file absent at a
-    /// reclaimed journal, the two never at one open — one read of
-    /// `commits.log` over the span between that edge and the floor
-    /// ([`LogWitness::read`]): one cursor search, order log₂ of the file's
-    /// bytes, then one line at a time through the span, holding one line;
-    /// at most one more pass over the file, and none at an open that says no
-    /// loss.
+    /// the log drops. And where a loss would be said — a cut that can have
+    /// taken a signature, its own witnesses leaving its edge below the floor,
+    /// or a file absent at a reclaimed journal, the two never at one open —
+    /// one read of `commits.log` over the span between that edge and the
+    /// floor ([`LogWitness::read`]): one cursor search, order log₂ of the
+    /// file's bytes, then one line at a time through the span, holding one
+    /// line; at most one more pass over the file, and none at an open that
+    /// says no loss.
     ///
     /// # Errors
     ///
@@ -350,7 +356,10 @@ impl AttestStore {
             let floor = floor.unwrap_or(0);
             let kept = replayed.kept;
             let witnessed = AttestCutLine::witnessed(cut, attested);
-            let recorded = if witnessed < floor {
+            // `commits.log` is read where a loss can be said alone: a cut no
+            // witness clears of every signature, its edge below the floor.
+            let cleared = AttestCutLine::took_no_signature(cut, attested).is_some();
+            let recorded = if !cleared && witnessed < floor {
                 read_the_log(witnessed, floor)?
             } else {
                 LogWitness::default()
@@ -585,6 +594,15 @@ impl Attested {
 /// panicked before that file's line was written is the one it names
 /// nowhere (`CommitsLog::slot_may_be_filled_above`).
 ///
+/// **No signature.** Where the open witnesses that the cut took no
+/// signature at all ([`AttestCutLine::took_no_signature`]), the line says so
+/// in place of a side and owes nothing: `; {witness}, and the cut took no
+/// signature`, `{witness}` being `they held an open's fence line alone` for
+/// one torn coverage fence and nothing else, or `the board is unclaimed`. It
+/// says no LOST, no restore and no whole lines, whichever side the edge
+/// lies on: a refused rebuild beside it is said by its own line
+/// ([`RebuildRefusedLine`]), which names that loss and its restore.
+///
 /// **The side.** An edge at or above the floor reads rebuilt where the
 /// rebuild answered: the rebuild covers `(coverage, head]` above the floor,
 /// the floor's own slot no retained base answers ([`rebuilt_tail`]). A crash
@@ -624,6 +642,25 @@ struct AttestCutLine {
 }
 
 impl AttestCutLine {
+    /// Returns the words of a witness that the cut took no signature.
+    ///
+    /// The open has two: the cut is one torn coverage fence and nothing else
+    /// ([`Cut`]'s `fence_alone`) — the one fence this file writes in place is
+    /// its open's, synced before any line follows, so every line before the
+    /// torn one stands whole and the cut held no slot; or the board is
+    /// unclaimed ([`Attested::Nowhere`]), and no write of this journal is
+    /// attested, so no line the cut took was a signature this board made.
+    /// `None` where neither holds, and the cut's side decides its ending.
+    fn took_no_signature(cut: Cut, attested: Attested) -> Option<&'static str> {
+        if cut.fence_alone {
+            Some("they held an open's fence line alone")
+        } else if attested == Attested::Nowhere {
+            Some("the board is unclaimed")
+        } else {
+            None
+        }
+    }
+
     /// Returns the edge the store's own three witnesses name.
     ///
     /// It is the greatest of the last trusted position, the position before
@@ -689,6 +726,9 @@ impl std::fmt::Display for AttestCutLine {
         write!(f, "{}", CutHead { name: ATTEST_FILE, cut: self.cut })?;
         if let Some(kept) = self.kept {
             write!(f, ", kept in {}", kept.of(ATTEST_FILE))?;
+        }
+        if let Some(witness) = AttestCutLine::took_no_signature(self.cut, self.attested) {
+            return write!(f, "; {witness}, and the cut took no signature");
         }
         let unless = match self.kept {
             Some(kept) => {

@@ -924,7 +924,14 @@ fn the_lines_past_the_head_leave_the_file_and_are_said_once() {
 /// (m8, [`CompactTwinLine`]).
 #[test]
 fn the_cut_and_the_malformed_names_render_the_ruled_words() {
-    let cut = Cut { valid_end: 4_096, len: 4_106, trusted: 32, first: None, whole_after: None };
+    let cut = Cut {
+        valid_end: 4_096,
+        len: 4_106,
+        trusted: 32,
+        first: None,
+        whole_after: None,
+        fence_alone: false,
+    };
     assert_eq!(
         CutHead { name: SIDECAR_FILE, cut }.to_string(),
         "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \

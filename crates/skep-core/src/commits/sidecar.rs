@@ -1053,6 +1053,7 @@ impl CommitsLog {
                 trusted: low,
                 first: None,
                 whole_after: cut_whole_after,
+                fence_alone: false,
             };
             lines.say(Class::Failure, LogCutLine { cut, kept: cut_kept });
         }
@@ -1820,8 +1821,8 @@ pub fn set_feed_resident_window(dir: &Path, positions: u64) {
 /// own open and `LineFile::open` for the four derived files and the attest
 /// store — which words it with the case that is its own: a derived file's
 /// cut part is re-derived, `commits.log`'s as bare entries, and the attest
-/// store's lies on one side of the reclaim floor. [`CutHead`] renders the
-/// head every one of those lines opens with.
+/// store's took no signature or lies on one side of the reclaim floor.
+/// [`CutHead`] renders the head every one of those lines opens with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Cut {
     /// The byte trust ends at, where the file was truncated.
@@ -1854,6 +1855,18 @@ pub(super) struct Cut {
     /// `commits.log`'s cut line name them: what they held, a copy alone
     /// holds now.
     pub whole_after: Option<EntryLines>,
+    /// Whether the cut is one torn coverage fence and nothing else.
+    ///
+    /// It is true where the cut is a torn line at the file's end whose bytes
+    /// begin as a fence `{"covered":N}` does, three bytes of it or more —
+    /// where a fence and every entry line, `{"a…`, part. Every line before a
+    /// torn tail stands whole, so such a cut took no entry line. The attest
+    /// store reads it: the one fence it writes in place is its open's, synced
+    /// before any line follows, so a torn fence there is that open's own, cut
+    /// short. `commits.log`'s open passes `false`: its fence,
+    /// `{"min_since":N}`, is written only through a whole-file rename, and is
+    /// never torn.
+    pub fence_alone: bool,
 }
 
 impl Cut {

@@ -17,7 +17,7 @@ use skep_engine::types::{
 use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, HasIdentity, TargetClass, WriteTypes};
 use skep_kernel::Attestation;
-use skep_links::{enc, is_replaces_class, registry, HasLinks, ShippedType, SlotArg};
+use skep_links::{enc, is_replaces_class, registry, HasLinks, Link, ShippedType, SlotArg};
 use skep_namespace::{
     first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
@@ -155,16 +155,26 @@ fn supersedes_type() -> Address {
 ///   `edit_link`'s, typed M7's supersedes ghost) is a member only where the
 ///   claim's `new` — its `to`, single-denoted by the Df-DISC(ii) schema
 ///   every stored claim keeps — is homed in a PUBLISHED document (the
-///   wire-lane decision 3, RES-207's shape on the other end): a claim that a
-///   public copy supersedes its original is a fact of a past act that no act
-///   legitimately retracts, and the publication's resume reads it on the
-///   ACTIVE view; a claim whose `new` is private — a correction inside the
-///   owner's own notes — stays an ordinary link, its retraction the one
-///   correction path M7 documents for a wrong claim. The read is of the
-///   target link this producer already holds; `document_of(new)` is
-///   arithmetic, and `published()` on it takes PUB-6.37's registered-only
-///   evaluation, since a `new` that a stored claim names was resident when
-///   the claim was deposited and so its home is registered.
+///   wire-lane decision 3, RES-207's shape on the other end) *and* its
+///   `old` — its `from` — is the claim's maker's own (PUB-6.64; the
+///   link-sets design's sweep-4 O6 (b)): a claim that its maker's public
+///   copy supersedes its maker's own original records its maker's own past
+///   act, which no act legitimately retracts, and refusing its retraction
+///   keeps the active view's claim reads (`in_claims`, `out_claims`) exact,
+///   a published copy leaving that view by its own retraction alone.
+///   Failing either key the claim is an ordinary link, its maker's
+///   retraction landing — one whose `new` is private, a correction inside
+///   the owner's own notes, and one its maker asserted over another
+///   account's link (M7 gates ownership of the claim's home alone, so an
+///   agent may name its hirer's public link `old`), retractable by its
+///   maker and by the hirer in a session as the agent — `nullify` the one
+///   correction path M7 documents for a wrong claim. Both reads are of the
+///   target link this producer already holds:
+///   `document_of(new)` is arithmetic, and `published()` on it takes
+///   PUB-6.37's registered-only evaluation, since a `new` that a stored
+///   claim names was resident when the claim was deposited and so its home
+///   is registered; the owners of `old` and of the claim are one seat
+///   lookup each ([`old_is_the_makers_own`]).
 ///
 /// **The grant and audit-view cells' entitlement** is the caller who could
 /// otherwise open the path — M7's own v1 gate mirrored: ω of the record's
@@ -196,17 +206,20 @@ fn nullify_refusal(
     let m3 = world.m3();
     let claimed = world.identity().claimant().is_some();
     // The class's own token, chosen before entitlement is consulted — the
-    // arms carrying a second key of their own are the home-conditional
-    // class's (RES-207, `AuditClass::requires_published_home` — the
-    // classification link alone): the link's own home published; and the
-    // new-conditional class's (`AuditClass::requires_published_new` — the
-    // supersession claim alone): the home of the link the claim's `to`
-    // denotes published. A resident link's home is registered (M7's
+    // arms carrying keys of their own are the home-conditional class's
+    // (RES-207, `AuditClass::requires_published_home` — the classification
+    // link alone): the link's own home published; and the endpoint-
+    // conditional class's (`AuditClass::requires_published_new` — the
+    // supersession claim alone, PUB-6.64): the home of the link the claim's
+    // `to` denotes published, and the link its `from` denotes the claim's
+    // maker's own. A resident link's home is registered (M7's
     // HomeNotRegistered gate), and so is the home of a link a resident claim
     // names (the claim's schema held both endpoints resident at its deposit;
     // nothing unregisters a document), so `published()`'s registered-only
-    // contract (PUB-6.37) holds on both; outside its key the link is an
-    // ordinary link and this producer answers nothing.
+    // contract (PUB-6.37) holds on both, and both owners are read where M3's
+    // seat read answers ω; outside its keys the link is an ordinary link and
+    // this producer answers nothing. The keys are facts of the target, read
+    // the same for every caller.
     let token = match class {
         TargetClass::Credential(_) => CredentialRefusal::NullifyNotRetraction,
         TargetClass::Grant => CredentialRefusal::NullifyNotRevocation,
@@ -217,7 +230,8 @@ fn nullify_refusal(
             return None
         }
         TargetClass::AuditView(audit_class)
-            if audit_class.requires_published_new() && !published_new(world, link) =>
+            if audit_class.requires_published_new()
+                && !(published_new(world, link) && old_is_the_makers_own(world, link, target)) =>
         {
             return None
         }
@@ -238,7 +252,7 @@ fn nullify_refusal(
 }
 
 /// Returns whether the link a claim's `to` denotes is homed in a published
-/// document — the supersession class's second key.
+/// document — the supersession class's key on `new`.
 ///
 /// The `to` of a stored claim denotes one address (the Df-DISC(ii) schema
 /// `assert_sup` and `editlink` establish and the `[K_sup]` fences keep), the
@@ -246,13 +260,41 @@ fn nullify_refusal(
 /// publication read is the engine's one definition through [`published`].
 /// A `to` that denotes no one address, or one with no document, is no claim
 /// the fences admitted, and answers `false`: such a link is an ordinary one.
-fn published_new(world: &World, claim: &skep_links::Link) -> bool {
+/// The class's key on `old` stands beside it ([`old_is_the_makers_own`]).
+fn published_new(world: &World, claim: &Link) -> bool {
     claim
         .to_slot()
         .single_denoted()
         .and_then(|new| validate(new.clone()).ok())
         .and_then(|new| document_of(&new))
         .is_some_and(|d| published(world, &d))
+}
+
+/// Returns whether the link a claim's `from` denotes is its maker's own —
+/// the supersession class's key on `old` (PUB-6.64).
+///
+/// The class holds a claim that records its maker's own past act, and
+/// `assert_sup` and `editlink` gate ownership of the claim's home alone, so
+/// a claim may name another account's link as its `old`; such a claim is an
+/// ordinary link, retractable by its maker (the link-sets design's sweep-4
+/// O6 (b)). The `from` of a stored claim denotes one address, the
+/// superseded link (`skep_links::supersession_claim`), and the maker is the
+/// owner of the claim's own address `at`, whose home the asserter owned.
+/// Both owners are M3's one-lookup seat read, `account_seat`: the claim and
+/// its `old` are links resident in registered documents, each in a
+/// registered account, where that read answers ω. A `from` that denotes no
+/// one address, or an address with no seat, answers `false`, as
+/// [`published_new`] answers for a `to` no claim keeps: such a link is an
+/// ordinary one.
+fn old_is_the_makers_own(world: &World, claim: &Link, at: &Address) -> bool {
+    let m3 = world.m3();
+    let owner = |a: &Address| m3.account_seat(a).map(|(_, id)| id);
+    claim
+        .from_slot()
+        .single_denoted()
+        .and_then(|old| validate(old.clone()).ok())
+        .and_then(|old| owner(&old))
+        .is_some_and(|old_owner| owner(at) == Some(old_owner))
 }
 
 // ── mint_home_refusal — the mint class (AUTH-3.10–3.14) ──────────────────
@@ -935,5 +977,91 @@ mod tests {
             types.target_class(&unit(&trust)),
             Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement))
         );
+    }
+
+    /// Checks the supersession claim's two keys (PUB-6.64).
+    ///
+    /// The board is built through M10 alone and left unclaimed, where
+    /// [`nullify_refusal`] answers a class's token to every caller, so the
+    /// class decision is read bare. A claim in its maker's private notes is a
+    /// member where its `new` is homed in a published document and its `old`
+    /// is the maker's own; the same claim over another account's published
+    /// link is an ordinary link, and so is a claim whose `new` is private.
+    /// The keys are facts of the claim: the maker and another account asking
+    /// get one answer.
+    #[test]
+    fn a_supersession_claim_is_a_member_only_over_its_makers_own_old() {
+        use serde_json::json;
+        use skep_febe::{Codec, OperationSurface, Response};
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+
+        use crate::auth::CredentialLock;
+        use crate::codec::JsonCodec;
+
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
+        let exec = |sid, frame: serde_json::Value| -> Address {
+            let req = JsonCodec
+                .parse(frame.to_string().as_bytes())
+                .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
+            match febe.execute(sid, req) {
+                Response::AckAddr { addr, .. } => addr,
+                other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
+            }
+        };
+        let (maker_id, other_id) = (PrincipalId(900), PrincipalId(901));
+        let boot = febe.bootstrap_session();
+        exec(boot, json!({"op": "delegate", "new_prefix": "1.0.1", "new_id": maker_id.0}));
+        exec(boot, json!({"op": "delegate", "new_prefix": "1.0.2", "new_id": other_id.0}));
+        let (maker, other) = (febe.open_session(maker_id), febe.open_session(other_id));
+        // Each account's home, born published; then the maker's private notes.
+        let mint = |sid, account: &str| {
+            exec(sid, json!({"op": "create_new_document", "account": account})).to_string()
+        };
+        let (home, other_home) = (mint(maker, "1.0.1"), mint(other, "1.0.2"));
+        let notes = mint(maker, "1.0.1");
+        let link = |sid, doc: &str, n: u32| -> String {
+            exec(
+                sid,
+                json!({"op": "make_link", "home": doc, "from": {"addrs": []},
+                       "to": {"addrs": []}, "ty": {"addrs": [format!("{doc}.0.3.6.{n}")]}}),
+            )
+            .to_string()
+        };
+        let own_old = link(maker, &notes, 1);
+        let published_new = link(maker, &home, 2);
+        let private_new = link(maker, &notes, 3);
+        let foreign_old = link(other, &other_home, 4);
+        let claim = |old: &str, new: &str| {
+            exec(maker, json!({"op": "assert_sup", "home": notes, "old": old, "new": new}))
+        };
+        let own = claim(&own_old, &published_new);
+        let over_another = claim(&foreign_old, &published_new);
+        let private = claim(&own_old, &private_new);
+
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(world.identity().claimant().is_none(), "the premise: unclaimed, every caller told");
+        let notes = crate::codec::wire_address(&notes).expect("the notes' address");
+        let lock = CredentialLock::new();
+        for caller in [maker_id, other_id] {
+            let class_of = |target: &Address| {
+                let op = Op::Nullify { home: notes.clone(), target: target.clone() };
+                nullify_refusal(&lock.read(), world, &op, caller)
+            };
+            assert_eq!(
+                class_of(&own),
+                Some(CredentialRefusal::NullifyAuditView),
+                "{caller:?}: the maker's own `old`, a published `new`: a member"
+            );
+            let ordinary = |why: &str| format!("{caller:?}: {why}: an ordinary link");
+            assert_eq!(class_of(&over_another), None, "{}", ordinary("another's `old`"));
+            assert_eq!(class_of(&private), None, "{}", ordinary("a private `new`"));
+        }
     }
 }

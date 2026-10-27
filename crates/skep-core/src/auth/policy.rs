@@ -318,9 +318,11 @@ pub enum CredentialRefusal {
     /// designation, the rail record, the steward's classification link in a
     /// published home, the `replaces` link a grant is deposited with
     /// (PUB-5.15), the registry's binding, takedown record and policy link —
-    /// one code for the class list; the client splits the face by the
-    /// target's type, which the owner can read. Token `nullify_audit_view` —
-    /// the wire's (wire.md §Credential refusals).
+    /// or the supersession claim whose `new` is homed in a published
+    /// document and whose `old` is its maker's own, a fact of its maker's own
+    /// past act. One code for the class list; the client splits the face by
+    /// the target's type, which the owner can read. Token
+    /// `nullify_audit_view` — the wire's (wire.md §Credential refusals).
     NullifyAuditView,
     /// The `replaces` class's sole-writer fence (PUB-5.15).
     ///

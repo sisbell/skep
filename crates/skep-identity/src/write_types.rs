@@ -97,20 +97,21 @@ pub enum AuditClass {
     /// link, typed M7's reserved supersedes ghost tumbler.
     ///
     /// It is a member where the claim's `new` — its `to`, one denoted
-    /// address — is homed in a PUBLISHED document (the link-sets wire-lane
-    /// decision 3, narrowing "THE TWO LEFTOVERS RULED" (2)):
-    /// [`AuditClass::requires_published_new`] answers `true` for it, the
-    /// second key in RES-207's shape on the claim's other end, the type half
-    /// this classifier's and the home half the caller's, off the target link
-    /// it already reads. The ground: a claim that a public copy supersedes
-    /// its original is a fact of a past act that no act legitimately
-    /// retracts — the publication's resume reads the claims on the ACTIVE
-    /// view to know what landed, so a retraction would un-land what the
-    /// board already served — where a claim whose `new` is private, a
-    /// correction inside the owner's own notes, stays an ordinary link and
-    /// M7's one correction path for a wrong claim. The address is not a
-    /// commons pin but M7's own constant (`1.1.0.1.0.1.0.1.4`), read from
-    /// M7's registry by the builder.
+    /// address — is homed in a PUBLISHED document and its `old`, its `from`,
+    /// is the claim's maker's own (PUB-6.64; the link-sets wire-lane
+    /// decision 3 and sweep-4 O6 (b)): [`AuditClass::requires_published_new`]
+    /// answers `true` for it, the endpoint keys in RES-207's shape on the
+    /// claim's ends, the type half this classifier's and both endpoint reads
+    /// the caller's, off the target link it already reads. The ground: a
+    /// claim that its maker's public copy supersedes its maker's own original
+    /// is a fact of its maker's own past act that no act legitimately
+    /// retracts, and refusing its retraction keeps the ACTIVE view's claim
+    /// reads exact — where a claim whose `new` is private, a correction
+    /// inside the owner's own notes, and one its maker asserted over another
+    /// account's link stay ordinary links, retractable by `nullify`, M7's
+    /// one correction path for a wrong claim. The address is not a commons
+    /// pin but M7's own constant (`1.1.0.1.0.1.0.1.4`), read from M7's
+    /// registry by the builder.
     Supersession,
 }
 
@@ -165,20 +166,24 @@ impl AuditClass {
     }
 
     /// Returns whether membership needs the home of the link's `to`
-    /// published — the claim's `new`.
+    /// published — the claim's `new` — and its `from` the maker's own.
     ///
     /// [`AuditClass::requires_published_home`]'s neighbour, in RES-207's
-    /// shape on the link's other end: where it answers `true`, a link of this
+    /// shape on the link's ends: where it answers `true`, a link of this
     /// class is a member only where the one address its `to` slot denotes is
-    /// homed in a published document; otherwise it is an ordinary link. The
-    /// supersession claim alone answers `true` (the wire-lane decision 3): a
-    /// claim naming a published copy as `new` is permanent, one naming a
-    /// private successor is correctable. The type half is
-    /// [`WriteTypes::target_class`]'s, and the `to`'s denotation and the
-    /// publication read are the caller's, off the target link it reads for
-    /// the type — keyed on this answer, never on a variant it names. Matched
-    /// exhaustively with no wildcard, so a new class does not compile until
-    /// it says whether its membership waits on its `new`.
+    /// homed in a published document *and* the one address its `from` slot
+    /// denotes — the claim's `old` — is owned by the account that owns the
+    /// link itself (PUB-6.64); otherwise it is an ordinary link. The
+    /// supersession claim alone answers `true` (the wire-lane decision 3 and
+    /// sweep-4 O6 (b)): a claim naming a published copy as `new` over its
+    /// maker's own `old` is permanent, one naming a private successor, or
+    /// another account's link as `old`, is correctable by its maker. The type
+    /// half is [`WriteTypes::target_class`]'s, and the endpoints'
+    /// denotations, the publication read and the two owner reads are the
+    /// caller's, off the target link it reads for the type — keyed on this
+    /// answer, never on a variant it names. Matched exhaustively with no
+    /// wildcard, so a new class does not compile until it says whether its
+    /// membership waits on its endpoints.
     pub fn requires_published_new(self) -> bool {
         match self {
             AuditClass::Supersession => true,

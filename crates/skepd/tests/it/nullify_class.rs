@@ -481,12 +481,14 @@ fn the_registry_classes_refuse_a_nullify_and_the_endpoints_commits() {
     sd.shutdown();
 }
 
-/// THE SUPERSESSION CLAIM (the link-sets wire-lane decision 3, narrowing
-/// "THE TWO LEFTOVERS RULED" (2)): a claim whose `new` is homed in a
-/// PUBLISHED document joins PUB-6.64's class — a fact of a past act that no
-/// act legitimately retracts, the publication's resume reading the claims on
-/// the ACTIVE view — and a claim whose `new` is PRIVATE stays an ordinary
-/// link, its retraction the one correction path for a wrong claim. The
+/// THE SUPERSESSION CLAIM (PUB-6.64; the link-sets wire-lane decision 3 and
+/// sweep-4 O6 (b)): a claim whose `new` is homed in a PUBLISHED document and
+/// whose `old` is its maker's OWN joins PUB-6.64's class — a fact of its
+/// maker's own past act that no act legitimately retracts, refused so the
+/// ACTIVE view's claim reads stay exact — and a claim whose
+/// `new` is PRIVATE stays an ordinary link, its retraction the one
+/// correction path for a wrong claim. Every claim here names the claimant's
+/// own link as `old`; one over another's link is the next test's. The
 /// accept's pair (`accept_originals.rs`): `L` in the private notes `N` on P
 /// in the published `E`, its copy `L′` in `E`, the claim `C` in `N`. The
 /// OWNER's `nullify` of `C`, bare and signed alike — `N` is a draft, so no
@@ -562,6 +564,51 @@ fn a_supersession_claims_nullify_is_refused_where_its_new_is_published_and_lands
     assert_eq!(retraction, format!("{n}.0.2.6"), "the retraction, N's next link");
     assert!(claims_in(port, Some(&bare), &l2, "active").is_empty(), "retracted: the claim leaves the active view");
     assert_eq!(claims_in(port, Some(&bare), &l2, "audit"), vec![private_claim], "and stays on the audit view");
+    sd.shutdown();
+}
+
+/// THE SUPERSESSION CLAIM OVER ANOTHER's LINK (PUB-6.64's owner key on
+/// `old`; the link-sets design's sweep-4 O6 (b)): `assert_sup` gates the
+/// claim's home alone, so the claimant may name a STRANGER's public link as
+/// `old` beside its own published copy as `new`. That claim records no act
+/// of its maker's own and stays an ordinary link: the stranger, owner of the
+/// `old` endpoint and not of the claim, answers `not_owner` naming the
+/// claim, and the claim's MAKER retracts it — the claim leaves the active
+/// view and stays on the audit view. Its twin over the maker's own link
+/// stays refused (the test above).
+#[test]
+fn a_supersession_claim_over_anothers_link_is_retracted_by_its_maker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (s_account, s_signed) = signed_stranger(port, &signed, 983, 83);
+    let s_home = create_doc(port, &s_signed, &s_account);
+    let s_draft = create_doc(port, &s_signed, &s_account);
+    let citation = addrs_slot(&["1.1.0.1.0.1.0.3.13"]);
+    let none = r#"{"addrs":[]}"#;
+
+    // E published, N private; `copy` the claimant's link in E; `foreign` the
+    // stranger's link in its own published home; the claim in N, from the
+    // bare owner (N is a draft), `foreign` superseded by `copy`.
+    let e = edition_with(port, &signed, "the quick brown fox");
+    let n = draft_with(port, &bare, "a note on the fox");
+    let copy = acked_addr(&op(port, Some(&signed), &link_frame(&e, &vspec(&e, 1, 9), none, &citation)));
+    let foreign = acked_addr(&op(port, Some(&s_signed), &link_frame(&s_home, &vspec(&e, 1, 9), none, &citation)));
+    let claim = acked_addr(&op(port, Some(&bare), &assert_sup_frame(&n, &foreign, &copy)));
+    assert_eq!(claims_in(port, Some(&bare), &foreign, "active"), vec![claim.clone()], "the claim stands");
+
+    // The `old` endpoint's owner, filing from a home of its own: ω on the
+    // claim, `not_owner` naming it — the claim is not its to retract.
+    assert_not_owner(&nullify(port, Some(&s_signed), &s_draft, &claim), &claim);
+    assert_eq!(claims_in(port, Some(&bare), &foreign, "active"), vec![claim.clone()], "the claim stays active");
+
+    // The MAKER's retraction lands: the claim leaves the active view and
+    // stays on the audit view.
+    expect_resp(&nullify(port, Some(&bare), &n, &claim), "ack_addr");
+    assert!(claims_in(port, Some(&bare), &foreign, "active").is_empty(), "retracted: the claim leaves the active view");
+    assert_eq!(claims_in(port, Some(&bare), &foreign, "audit"), vec![claim], "and stays on the audit view");
     sd.shutdown();
 }
 

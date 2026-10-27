@@ -125,12 +125,14 @@ fn a_reinstate_row_names_its_destination_and_never_a_runs_origin() {
     assert!(matches!(meta.minting, Minting::None), "{:?}", meta.minting);
 }
 
-/// Each write's arm of the table states the terms its row carries, beside
-/// its documents, and no default decides it: `delegate` carries the
-/// principal it seats, from the request; `make_link` and `publish` carry
-/// theirs, completed from the ack; every other write carries none —
-/// `emit` and `edit_link` among them, though each mints a link (r6-2a
-/// names `make_link` alone).
+/// Checks that each write's arm of the table states the terms its row carries.
+///
+/// The arm states them beside the row's documents, and no default decides
+/// them: `delegate` carries the principal it seats, from the request;
+/// `make_link` and `publish` carry theirs, completed from the ack; every
+/// other write carries none — `emit`, `assert_sup` and `edit_link` among
+/// them, though each mints a link (r6-2a and link-sets sweep 5 S3 name
+/// `make_link` alone).
 #[test]
 fn each_write_states_the_terms_its_row_carries() {
     use skep_address::Nat;
@@ -163,6 +165,11 @@ fn each_write_states_the_terms_its_row_carries() {
 
     let emit =
         Op::Emit { home: doc.clone(), ty: Endset::empty(), from: doc.clone(), to: Vec::new() };
+    let assert_sup = Op::AssertSup {
+        home: doc.clone(),
+        old: addr("1.0.1.0.1.0.2.1"),
+        new: addr("1.0.1.0.1.0.2.2"),
+    };
     let edit_link = Op::EditLink {
         original: addr("1.0.1.0.1.0.2.1"),
         successor: SuccessorSpec { from: Vec::new().into(), to: Vec::new().into(), ty: no_slot() },
@@ -177,6 +184,7 @@ fn each_write_states_the_terms_its_row_carries() {
     };
     for (op, name) in [
         (emit, "emit"),
+        (assert_sup, "assert_sup"),
         (edit_link, "edit_link"),
         (Op::Fork { published: None }, "fork"),
         (insert, "insert"),
@@ -1505,6 +1513,93 @@ fn the_attest_stores_resident_slots_are_bounded_by_the_window_and_its_file_kept(
         serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
         "the page from genesis serves the new slot"
     );
+}
+
+/// Checks that a supersession claim's row reads alike wherever it is read.
+///
+/// An `assert_sup` row carries no op term — no `link` (link-sets sweep 5
+/// S3) — so the row the record step serves, the row the open's scan
+/// replays after a restart and the row a page reads off `commits.log`
+/// below the resident window are one byte string, which `feed.rs`'s card
+/// on the window promises of every row. Over this suite's own kernel config
+/// ([`fsync_engine`]), the window set to four positions for this board
+/// alone: a draft, two links in it and a claim that the second supersedes
+/// the first, all as the system principal; the claim's row read at once,
+/// again after a reopen over the same engine, and again once four more
+/// drafts carry it below the window.
+#[test]
+fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() {
+    use skep_arrangement::Caller;
+    use skep_febe::SlotArg;
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    set_feed_resident_window(dir.path(), 4);
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let (doc, _) = mint_a_draft(&wp, &stores);
+    let caller = Caller::Principal(SYSTEM_PRINCIPAL);
+    let visibility = World::visible_to(caller);
+    // One link write through the session door, typed `{doc}.0.3.6.{n}`.
+    let make_link = |n: u32| -> Address {
+        let ty = crate::codec::wire_address(&format!("{doc}.0.3.6.{n}")).expect("a type address");
+        let empty = || SlotArg::Addrs(Vec::new());
+        let op = Op::MakeLink {
+            home: doc.clone(),
+            from: empty(),
+            to: empty(),
+            ty: SlotArg::Addrs(vec![ty.clone()]),
+            replaces: None,
+        };
+        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, meta, || {
+            let (addr, at) = stores
+                .linkstore(&visibility)
+                .makelink(caller, &doc, empty(), empty(), SlotArg::Addrs(vec![ty]))
+                .expect("the link commits");
+            Response::AckAddr { addr, at }
+        });
+        let Response::AckAddr { addr, .. } = resp else { panic!("the link is acked") };
+        addr
+    };
+    let (old, new) = (make_link(1), make_link(2));
+    let op = Op::AssertSup { home: doc.clone(), old: old.clone(), new: new.clone() };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let serial = wp.serial_lock();
+    let resp = wp.commit_under(&serial, meta, || {
+        let (addr, at) = stores
+            .linkstore(&visibility)
+            .assert_sup(caller, &doc, &old, &new)
+            .expect("the claim commits");
+        Response::AckAddr { addr, at }
+    });
+    drop(serial);
+    let Response::AckAddr { at, .. } = resp else { panic!("the claim is acked") };
+    let at = at.0;
+    assert_eq!(engine.kernel().current_seq().0, at, "the premise: the claim is the head");
+    let claim_row = |wp: &Commits| {
+        let snap = engine.kernel().snapshot();
+        let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+        served(page_from(wp, &class, 0)).remove(&at).expect("the claim's row is served")
+    };
+    let recorded = claim_row(&wp);
+    assert_eq!(recorded["op"], "assert_sup", "{recorded}");
+
+    drop(wp);
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(claim_row(&wp), recorded, "after the reopen, the row is the recorded one");
+
+    for _ in 0..4 {
+        mint_a_draft(&wp, &stores);
+    }
+    assert!(
+        engine.kernel().current_seq().0 >= at + 4,
+        "the premise: four positions above the claim carry it below the window"
+    );
+    assert_eq!(claim_row(&wp), recorded, "below the window, the row is the recorded one");
+    assert!(recorded.get("link").is_none(), "the claim's row carries no link: {recorded}");
 }
 
 /// Checks that a principal's page merges one stream per owner account.

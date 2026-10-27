@@ -4759,20 +4759,16 @@ Each entry:
   alone, never from the node registry; `effective_owner` (§Operations)
   stays the board's own authority for ω. On a bare row, the JOURNAL's
   answer (below); absent on every other op's row.
-* `link` — on a `make_link` row and on an `assert_sup` row: the one link
-  the op deposited, the `ack_addr` it answered — the minted link, or the
-  supersession claim (the link-sets ruling W14: a device's claim index
-  learns every claim exactly, from the feed, with no count and no read).
-  For a replacing grant (§Links (writes), `replaces`) this
+* `link` — on a `make_link` row: the link the op minted, the `ack_addr` it
+  answered. For a replacing grant (§Links (writes), `replaces`) this
   is the RECORD's address; its `replaces` link sits at the next address in
   the same home, read by adjacency. The claim link's row therefore names
   the claim link's address, which is how a reader maps the link
-  `find_links` answers to its commit position. An `assert_sup` row names
-  ONE document, the claim's home, so it is served WHOLE or OMITTED and
-  never reduced: the claim's address never rides a row that withholds
-  the home it is filed in. On a bare row, the journal's
-  answer (below); absent on every other op's row — `edit_link`'s claim
-  included.
+  `find_links` answers to its commit position. On a bare row, the
+  journal's answer (below); absent on every other op's row — `emit`'s,
+  `assert_sup`'s and `edit_link`'s, each of which mints a link too: a
+  reader finds a supersession claim by `in_claims` or `out_claims`
+  (§Link discovery reads).
 * `placed`, `base_extent` — on a `publish` row: the shot's two client terms
   exactly as `doc_metadata` serves them for the minted member (§Operations)
   — `placed` the count of positions the client placed (the sum of the
@@ -4824,13 +4820,12 @@ page is answered from:
   `version`), a replacing `make_link`'s `link` with its `op`, a `nullify`
   by its `op` alone, and `link` for the one link any other link write
   deposited, its `op` left `null` (a plain `make_link`, an `assert_sup`
-  and an `emit` deposit one link alike, so a bare `emit` row carries a
-  `link` its recorded row did not, where a bare `assert_sup` row carries
-  the claim its recorded row carries too). A member the journal rules out is ABSENT as on
-  the recorded row; one it cannot decide — the op of an arrangement write
-  or a document mint, a `delegate` under a node `register_node` admitted
-  that no walk from the board's own nodes reaches, a `publish` under such
-  a node — stays `null`. So a feed-only mirror's Π is whole across a bare
+  and an `emit` deposit one link alike, so a bare `emit` or `assert_sup`
+  row carries a `link` its recorded row does not). A member the journal
+  rules out is ABSENT as on the recorded row; one it cannot decide — the
+  op of an arrangement write or a document mint, a `delegate` under a
+  node `register_node` admitted that no walk from the board's own nodes
+  reaches, a `publish` under such a node — stays `null`. So a feed-only mirror's Π is whole across a bare
   span; where it is not — a bare span whose rows name no `delegate` where
   one was committed — Π is UNDETERMINABLE for every entry under it, and
   so is every verdict ω composes there: the mirror's rule, stated here and

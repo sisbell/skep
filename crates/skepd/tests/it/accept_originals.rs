@@ -797,12 +797,13 @@ fn two_publications_that_both_read_first_mint_two_copies_and_two_claims() {
     sd.shutdown();
 }
 
-/// R8 — the feed (§The change feed): the `/changes` rows since the position
-/// before the accept of `L` — for the guest ONE row, the `make_link` of `L′`
-/// with its `attest`, naming `E.2`; for S that row and the `assert_sup` row
-/// naming `[N]` and carrying the claim's address in `link` (W14: a one-home
-/// row, whole or omitted, so the address never rides a reduced row); no
-/// `nullify` row — two commits per accepted link.
+/// R8 — the feed shows two commits per accepted link and no retraction.
+///
+/// The `/changes` rows since the position before the accept of `L` (§The
+/// change feed): for the guest one row, the `make_link` of `L′` with its
+/// `attest`, naming `E.2`; for S that row and the `assert_sup` row naming
+/// `[N]` and carrying no `link` (link-sets sweep 5 S3: a reader finds the
+/// claim by `in_claims`); no `nullify` row.
 #[test]
 fn the_feed_shows_two_commits_per_accepted_link_and_no_retraction() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -835,7 +836,7 @@ fn the_feed_shows_two_commits_per_accepted_link_and_no_retraction() {
     assert_eq!(claim["at"].as_u64(), Some(a.claim_at), "{claim}");
     assert_eq!(claim["op"].as_str(), Some("assert_sup"), "{claim}");
     assert_eq!(claim["docs"], json!([n]), "the claim's row names the original's home: {claim}");
-    assert_eq!(claim["link"].as_str(), Some(a.claim.as_str()), "the claim's address rides its row (W14): {claim}");
+    assert!(claim.get("link").is_none(), "the claim's row carries no link: {claim}");
     assert!(claim.get("attest").is_none(), "a draft-homed claim is unsigned: {claim}");
     for rows in [&guest, &owner] {
         assert!(rows.iter().all(|r| r["op"].as_str() != Some("nullify")), "no retraction: {rows:?}");

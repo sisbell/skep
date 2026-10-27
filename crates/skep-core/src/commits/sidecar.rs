@@ -582,7 +582,13 @@ impl CommitMeta {
     /// the attestation the plain sequence admitted and handed the kernel
     /// (signed-ops D12). A line written before the carrier was recorded reads
     /// as naming none, dev boards regenerating (the module doc).
-    fn slot_may_be_filled(&self) -> bool {
+    ///
+    /// The one statement of the rule, read twice: by the open's scan, for
+    /// [`CommitsLog::slot_may_be_filled_above`], and by the attest store's
+    /// open over the span a loss line would name (`feed/attest.rs`), which
+    /// reads a bare line there as one whose slot it cannot tell of and a
+    /// marker line as an attested commit.
+    pub(super) fn slot_may_be_filled(&self) -> bool {
         match self {
             CommitMeta::Bare { .. } => true,
             CommitMeta::Recorded { signed, .. } => matches!(signed, Some(Carrier::Marker)),
@@ -1659,8 +1665,9 @@ impl CommitsLog {
     ///
     /// It is [`CommitsLog::min_since`]'s number, for the attest store's open,
     /// which writes back a rebuilt slot for every position above it the
-    /// journal lists; a caller refusing a query asks
-    /// [`CommitsLog::admits_since`] instead.
+    /// journal lists, and reads no line at or below it for a loss line's
+    /// witness — a position there is one this file cannot tell of; a caller
+    /// refusing a query asks [`CommitsLog::admits_since`] instead.
     pub(crate) fn fence(&self) -> u64 {
         self.min_since
     }
@@ -1727,7 +1734,13 @@ impl CommitsLog {
     /// `commits.log` leaves the region pending, the file stopping at its
     /// first failed append so that no line is missing beneath a later one.
     /// One position goes unwitnessed: a commit whose record step panics
-    /// before this file's line is written, which no row serves.
+    /// before this file's line is written, which no row serves. The attest
+    /// store's two loss lines read the same testimony line by line over the
+    /// span they would name (`feed/attest.rs`), on the same three cases: a
+    /// marker line there is a signature the store alone held, a bare line or
+    /// a position the open did not cover one this file cannot tell of — and
+    /// the one unwitnessed position is why a line the store's own cut is
+    /// known to have taken bounds what this file's silence can clear.
     ///
     /// The reading is the open's, `pending` and the last such line both as
     /// [`CommitsLog::open`] left them: asked once, before the walk lands and

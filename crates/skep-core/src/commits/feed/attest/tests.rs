@@ -127,11 +127,13 @@ fn a_failed_sync_is_said_through_the_door_and_stops_the_file() {
 }
 
 /// Row 9's attest words, all three sides, and row 10's. With the last
-/// trusted position the one witness — no torn position, attested positions
-/// anywhere above 0 — the cut is REBUILT exactly where it stands at or above
+/// trusted position the store's one witness — no torn position, attested
+/// positions anywhere above 0 — and `commits.log` recording the position just
+/// past it attested, the cut is REBUILT exactly where it stands at or above
 /// the floor and the journal answered, and LOST below, a last trusted
 /// position one below the floor included, since no retained base answers
-/// the floor's own slot; LOST above too where the journal refused the
+/// the floor's own slot, the lost ending naming the attested commit
+/// `commits.log` records there; LOST above too where the journal refused the
 /// rebuild. A journal still answering genesis is the floor at 0, every cut
 /// rebuilt.
 #[test]
@@ -140,8 +142,11 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
     let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
                 after it are cut";
     let attested = Attested::Above(0);
-    let line =
-        |floor, rebuilt| AttestCutLine { cut, floor, attested, rebuilt, kept: None }.to_string();
+    let log =
+        LogWitness { attested: Some(EntryLines { lines: 1, first: 41, last: 41 }), unnamed: None };
+    let line = |floor, rebuilt| {
+        AttestCutLine { cut, floor, attested, rebuilt, kept: None, log }.to_string()
+    };
     let rebuilt = |floor| {
         format!(
             "{head}; every cut line lies above the reclaim floor at position {floor} and is \
@@ -151,7 +156,8 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
     let lost = |floor| {
         format!(
             "{head}; the lines between position 40 and the reclaim floor at position {floor} \
-             are LOST unless the board directory's backup is restored"
+             are LOST unless the board directory's backup is restored; commits.log records 1 \
+             attested commits there, positions 41–41"
         )
     };
     assert_eq!(line(40, true), rebuilt(40), "coverage = floor: rebuilt");
@@ -176,7 +182,7 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
     // lost arms name it as what restores the lines beside the backup.
     let kept = Some(KeptName { byte: 1_400, k: 0 });
     let kept_line =
-        |floor, rebuilt| AttestCutLine { cut, floor, attested, rebuilt, kept }.to_string();
+        |floor, rebuilt| AttestCutLine { cut, floor, attested, rebuilt, kept, log }.to_string();
     let kept_head = format!("{head}, kept in feed-attest.log.cut-1400");
     assert_eq!(
         kept_line(40, true),
@@ -190,7 +196,7 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
         format!(
             "{kept_head}; the lines between position 40 and the reclaim floor at position 42 \
              are LOST unless restored from feed-attest.log.cut-1400 or the board directory's \
-             backup"
+             backup; commits.log records 1 attested commits there, positions 41–41"
         )
     );
     assert_eq!(
@@ -203,55 +209,78 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
     );
 }
 
-/// Checks the edge's two other witnesses, in the case a crash leaves.
+/// Checks the edge's two other store witnesses, in the case a crash leaves.
 ///
 /// The store's coverage moves at an open and at an attested commit alone,
 /// so over an uptime of unattested writes the floor passes it, and a crash
 /// then tears the next attested line, above the floor. A torn line whose
 /// `at` stands whole names its own side — above the floor, rebuilt; at the
 /// floor, the floor's own slot lost, the edge the position before it, never
-/// the last trusted one — and the board's attested positions name theirs:
-/// on an unclaimed board none lies anywhere, and on a claimed one none at
-/// or below its board term's position. Each lost arm names the whole lines
-/// a damaged line took with it.
+/// the last trusted one, `commits.log` recording that slot attested — and the
+/// board's attested positions name theirs: on an unclaimed board none lies
+/// anywhere, and on a claimed one none at or below its board term's position,
+/// which stays the edge where `commits.log` cannot tell of the position just
+/// past it. Each lost arm names the whole lines a damaged line took with it.
 #[test]
 fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot() {
     let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
                 after it are cut";
     let cut =
         |first, whole_after| Cut { valid_end: 1_400, len: 2_000, trusted: 40, first, whole_after };
-    let line = |cut, attested, rebuilt| {
-        AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None }.to_string()
+    let line = |cut, attested, rebuilt, log| {
+        AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None, log }.to_string()
     };
     let rebuilt = format!(
         "{head}; every cut line lies above the reclaim floor at position 50 and is rebuilt \
          from the journal"
     );
     let anywhere = Attested::Above(0);
-    assert_eq!(line(cut(Some(60), None), anywhere, true), rebuilt, "a torn line above the floor");
+    let none = LogWitness::default();
+    let at_the_floor =
+        LogWitness { attested: Some(EntryLines { lines: 1, first: 50, last: 50 }), unnamed: None };
     assert_eq!(
-        line(cut(Some(50), None), anywhere, true),
+        line(cut(Some(60), None), anywhere, true, none),
+        rebuilt,
+        "a torn line above the floor"
+    );
+    assert_eq!(
+        line(cut(Some(50), None), anywhere, true, at_the_floor),
         format!(
             "{head}; the lines between position 49 and the reclaim floor at position 50 are \
-             LOST unless the board directory's backup is restored"
+             LOST unless the board directory's backup is restored; commits.log records 1 \
+             attested commits there, positions 50–50"
         ),
         "a torn line at the floor: its own slot lost, and nothing below it"
     );
-    assert_eq!(line(cut(None, None), Attested::Above(55), true), rebuilt, "the board term above");
-    assert_eq!(line(cut(None, None), Attested::Above(50), true), rebuilt, "…or at the floor");
-    assert_eq!(line(cut(None, None), Attested::Nowhere, true), rebuilt, "an unclaimed board");
-    let damaged = cut(None, Some(EntryLines { lines: 3, first: 44, last: 61 }));
     assert_eq!(
-        line(damaged, Attested::Above(42), true),
+        line(cut(None, None), Attested::Above(55), true, none),
+        rebuilt,
+        "the board term above"
+    );
+    assert_eq!(
+        line(cut(None, None), Attested::Above(50), true, none),
+        rebuilt,
+        "…or at the floor"
+    );
+    assert_eq!(
+        line(cut(None, None), Attested::Nowhere, true, none),
+        rebuilt,
+        "an unclaimed board"
+    );
+    let damaged = cut(None, Some(EntryLines { lines: 3, first: 44, last: 61 }));
+    let past_the_term = LogWitness { attested: None, unnamed: Some((43, 50)) };
+    assert_eq!(
+        line(damaged, Attested::Above(42), true, past_the_term),
         format!(
             "{head}; the lines between position 42 and the reclaim floor at position 50 are \
-             LOST unless the board directory's backup is restored; the cut took 3 whole lines \
+             LOST unless the board directory's backup is restored; commits.log cannot tell \
+             which commits there were attested, positions 43–50; the cut took 3 whole lines \
              with it, positions 44–61"
         ),
         "a damaged line: the board term the edge, the whole lines after it named"
     );
     assert_eq!(
-        line(damaged, Attested::Above(55), false),
+        line(damaged, Attested::Above(55), false, none),
         format!(
             "{head}; every cut line lies above the reclaim floor at position 50, but the journal \
              refused their rebuild: they are LOST unless the board directory's backup is \
@@ -275,12 +304,12 @@ fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot
 /// Checks the open's other lines and row 33's two endings, at fixed inputs.
 ///
 /// They are the refused rebuild with the account and the region; the absent
-/// store with the floor, the edge above which a signature can have been lost
-/// and the count; the store's size and slots with the positions rebuilt, with
-/// none, and with the journal not asked, naming the coverage above which no
-/// line records a filled slot; and the line not made durable with the act
-/// its cause adds after it, room for a full volume and the volume, its device
-/// and the quota for any other.
+/// store with the floor, the edge above which a signature can have been lost,
+/// the count and what `commits.log` records there; the store's size and slots
+/// with the positions rebuilt, with none, and with the journal not asked,
+/// naming the coverage above which no line records a filled slot; and the
+/// line not made durable with the act its cause adds after it, room for a
+/// full volume and the volume, its device and the quota for any other.
 #[test]
 fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
     assert_eq!(
@@ -291,12 +320,17 @@ fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
          store and not retried — restore this file and the segment the account names from a \
          copy taken before this open (RUNBOOK §2)"
     );
+    let log = LogWitness {
+        attested: Some(EntryLines { lines: 2, first: 1025, last: 2040 }),
+        unnamed: None,
+    };
     assert_eq!(
-        BegunAfreshLine { above: 1024, floor: 2049, rebuilt: 3 }.to_string(),
+        BegunAfreshLine { above: 1024, floor: 2049, rebuilt: 3, log }.to_string(),
         "feed-attest.log was absent at this open and is begun afresh: the attested commits \
          above the reclaim floor at position 2049 are rebuilt from the journal (3 lines); \
          every signature this board kept between position 1024 and position 2049 is LOST \
-         unless the board directory's backup is restored"
+         unless the board directory's backup is restored; commits.log records 2 attested \
+         commits there, positions 1025–2040"
     );
     let mut rebuilt = Rebuilt::default();
     let open =
@@ -341,4 +375,183 @@ fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
              refuses and reads stop with it"
         )
     );
+}
+
+/// Checks the fourth witness: what `commits.log` records up to the floor.
+///
+/// Each of its clause's three forms rides the lost ending, after the backup
+/// and before the whole lines a damaged cut took: the attested commits it
+/// records, the positions it cannot tell of, and both. The edge rises to the
+/// position before the first it names, so a span it names nothing in reads
+/// REBUILT where the journal answered the rebuild, and above the floor where
+/// the journal refused it; and never past a line the cut is known to have
+/// taken, so a damaged line's first whole line after it, at or below the
+/// floor, keeps the cut LOST though `commits.log` names nothing there. The
+/// absent store's line carries the same clause.
+#[test]
+fn the_loss_lines_name_what_commits_log_records_and_read_rebuilt_where_it_records_none() {
+    let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
+                after it are cut";
+    let plain = Cut { valid_end: 1_400, len: 2_000, trusted: 40, first: None, whole_after: None };
+    let line = |cut, rebuilt, log| {
+        let attested = Attested::Above(0);
+        AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None, log }.to_string()
+    };
+    let lost = |edge, clause: &str| {
+        format!(
+            "{head}; the lines between position {edge} and the reclaim floor at position 50 are \
+             LOST unless the board directory's backup is restored{clause}"
+        )
+    };
+    let attested = Some(EntryLines { lines: 2, first: 44, last: 47 });
+    assert_eq!(
+        line(plain, true, LogWitness { attested, unnamed: None }),
+        lost(43, "; commits.log records 2 attested commits there, positions 44–47"),
+        "the attested commits it records: the edge the position before the first"
+    );
+    assert_eq!(
+        line(plain, true, LogWitness { attested: None, unnamed: Some((45, 50)) }),
+        lost(44, "; commits.log cannot tell which commits there were attested, positions 45–50"),
+        "the positions it cannot tell of: the edge the position before the first"
+    );
+    assert_eq!(
+        line(plain, true, LogWitness { attested, unnamed: Some((42, 49)) }),
+        lost(
+            41,
+            "; commits.log records 2 attested commits there, positions 44–47, and cannot tell \
+             for positions 42–49"
+        ),
+        "both: the edge the position before the first of either"
+    );
+    assert_eq!(
+        line(plain, true, LogWitness::default()),
+        format!(
+            "{head}; every cut line lies above the reclaim floor at position 50 and is rebuilt \
+             from the journal"
+        ),
+        "it names nothing up to the floor: no signature lay there, and the cut reads rebuilt"
+    );
+    assert_eq!(
+        line(plain, false, LogWitness::default()),
+        format!(
+            "{head}; every cut line lies above the reclaim floor at position 50, but the journal \
+             refused their rebuild: they are LOST unless the board directory's backup is \
+             restored"
+        ),
+        "…and above the floor where the journal refused the rebuild"
+    );
+    let damaged = Cut { whole_after: Some(EntryLines { lines: 2, first: 46, last: 58 }), ..plain };
+    assert_eq!(
+        line(damaged, true, LogWitness::default()),
+        format!("{}; the cut took 2 whole lines with it, positions 46–58", lost(45, "")),
+        "a line the cut took at or below the floor bounds the raise: the store held its slot"
+    );
+    let cannot_tell = LogWitness { attested: None, unnamed: Some((1025, 2049)) };
+    assert_eq!(
+        BegunAfreshLine { above: 1024, floor: 2049, rebuilt: 0, log: cannot_tell }.to_string(),
+        "feed-attest.log was absent at this open and is begun afresh: the attested commits \
+         above the reclaim floor at position 2049 are rebuilt from the journal (0 lines); \
+         every signature this board kept between position 1024 and position 2049 is LOST \
+         unless the board directory's backup is restored; commits.log cannot tell which \
+         commits there were attested, positions 1025–2049"
+    );
+}
+
+/// An in-memory engine whose journal holds `commits` committed positions.
+fn engine_at(commits: u64) -> Engine {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    while engine.kernel().current_seq().0 < commits {
+        engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("the mint commits");
+    }
+    engine
+}
+
+/// Checks what the witness reads off `commits.log` between two positions.
+///
+/// The file is hand-written over a journal of twenty positions: an unsigned
+/// line and a marker line under a fence, which makes both dead to this build;
+/// then an unsigned line, a marker line, a record-signed line, a bare line, a
+/// marker line and a marker line whose name does not parse, demoted to bare
+/// as the open's scan demotes it; then an unsigned line, the file ending short
+/// of the head, so its open leaves the rest to walk. A marker line counts
+/// attested; a bare line, a position at or below the fence and one the open
+/// did not cover are ones `commits.log` cannot tell of; the unsigned and the
+/// record-signed lines name their slots empty, and a span of them alone
+/// names nothing, as an empty span does.
+#[test]
+fn the_witness_reads_commits_log_between_two_positions_and_leaves_open_what_it_cannot_name() {
+    let engine = engine_at(20);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let line = |at: u64, signed: &str, doc: &str| {
+        let signed =
+            if signed.is_empty() { String::new() } else { format!(",\"signed\":\"{signed}\"") };
+        format!(
+            "{{\"at\":{at},\"docs\":[\"{doc}\"],\"key\":\"bare\",\"op\":\"insert\"{signed},\
+             \"time\":{at}}}\n"
+        )
+    };
+    let doc = "1.0.1.0.1";
+    let file = [
+        line(2, "", doc),
+        line(3, "marker", doc),
+        "{\"min_since\":4}\n".to_string(),
+        line(5, "", doc),
+        line(6, "marker", doc),
+        line(7, "record", doc),
+        "{\"at\":9}\n".to_string(),
+        line(10, "marker", doc),
+        line(11, "marker", "1.0"),
+        line(12, "", doc),
+    ];
+    std::fs::write(dir.path().join(SIDECAR_FILE), file.concat()).expect("the file");
+    let log = CommitsLog::open(dir.path(), &engine, &Lines::new()).expect("the log opens");
+    assert_eq!(
+        (log.fence(), log.pending_region()),
+        (4, Some((12, 20))),
+        "the premise: the fence at 4, and the region past 12 left to walk"
+    );
+    let read = |after, through| {
+        LogWitness::read(dir.path(), &log, after, through).expect("commits.log reads")
+    };
+    let attested = |lines, first, last| Some(EntryLines { lines, first, last });
+    assert_eq!(
+        read(0, 20),
+        LogWitness { attested: attested(2, 6, 10), unnamed: Some((1, 20)) },
+        "the whole journal: the two marker lines above the fence, and every other kind"
+    );
+    assert_eq!(read(0, 20).first(), Some(1));
+    assert_eq!(
+        read(4, 8),
+        LogWitness { attested: attested(1, 6, 6), unnamed: None },
+        "above the fence, below the bare line: the one marker line"
+    );
+    assert_eq!(read(6, 8), LogWitness::default(), "a record-signed line names its slot empty");
+    assert_eq!(read(6, 8).first(), None, "…so the span held no signature");
+    assert_eq!(
+        read(8, 12),
+        LogWitness { attested: attested(1, 10, 10), unnamed: Some((9, 11)) },
+        "a bare line and a demoted marker line it cannot tell of, beside a marker line"
+    );
+    assert_eq!(
+        read(12, 15),
+        LogWitness { attested: None, unnamed: Some((13, 15)) },
+        "the region its open did not cover"
+    );
+    assert_eq!(
+        read(0, 3),
+        LogWitness { attested: None, unnamed: Some((1, 3)) },
+        "at or below the fence: the marker line there is dead to this build"
+    );
+    assert_eq!(read(8, 8), LogWitness::default(), "an empty span reads nothing");
 }

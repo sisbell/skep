@@ -697,17 +697,33 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    digits stand whole — a crash tears the line its own commit is
    writing, and that line lies above the floor; and the board term's
    position, `H.1`'s, since no write at or before it is attested (on
-   an unclaimed board, none is). An edge at or above the floor is the
-   ending above. These two mean signatures held nowhere else are gone
-   from the file — between the edge and the floor, or above the floor
-   where the journal refused the rebuild, which a line of its own
-   names:
+   an unclaimed board, none is). Where those leave the edge below the
+   floor, the open reads `commits.log` between it and the floor: each
+   commit's line there says whether its entry was attested, so the
+   edge rises to the one before the first commit `commits.log`
+   records attested or cannot tell of — a bare line's, one at or
+   below its fence, one its open did not cover — and to the floor
+   where there is none, never past a line the cut is known to have
+   taken. An edge at or above the floor is the ending above. These
+   two mean signatures held nowhere else are gone from the file —
+   between the edge and the floor, or above the floor where the
+   journal refused the rebuild, which a line of its own names:
 
    ```
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; the lines between position {edge} and the reclaim floor at position {floor} are LOST unless the board directory's backup is restored
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; every cut line lies above the reclaim floor at position {floor}, but the journal refused their rebuild: they are LOST unless the board directory's backup is restored
    failure: feed-attest.log: the journal refused the rebuild above position {last} ({account}): any attested commit in ({last}, {head}] serves attest: null, its line LOST at this store and not retried — restore this file and the segment the account names from a copy taken before this open (RUNBOOK §2)
    ```
+
+   The first goes on with what `commits.log` records between the
+   edge and the floor — what the copy you restore must hold: `;
+   commits.log records {n} attested commits there, positions
+   {first}–{last}`, each a signature held nowhere else; `;
+   commits.log cannot tell which commits there were attested,
+   positions {first}–{last}`, where its lines there are bare, fenced
+   off or lost; or both, `; commits.log records {n} attested commits
+   there, positions {first}–{last}, and cannot tell for positions
+   {first}–{last}`.
 
    Where trust ended at a damaged line and not a torn one — a whole
    line that does not read, which no crash leaves — the open keeps
@@ -729,11 +745,18 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    `feed-attest.log` at all is begun afresh: the lines above the
    reclaim floor are rebuilt, those below it are gone, and where one
    of them can have held a signature — the journal reclaimed past
-   the board term's position — the open says so:
+   the board term's position, and `commits.log`, read from there to
+   the floor, records an attested commit or cannot tell of one — the
+   open says so, from `{edge}`, the position before the first such,
+   with the same clause after it:
 
    ```
-   failure: feed-attest.log was absent at this open and is begun afresh: the attested commits above the reclaim floor at position {floor} are rebuilt from the journal ({n} lines); every signature this board kept between position {term} and position {floor} is LOST unless the board directory's backup is restored
+   failure: feed-attest.log was absent at this open and is begun afresh: the attested commits above the reclaim floor at position {floor} are rebuilt from the journal ({n} lines); every signature this board kept between position {edge} and position {floor} is LOST unless the board directory's backup is restored
    ```
+
+   Where `commits.log` records no attested commit there and nothing
+   it cannot tell of, the store held no signature below the floor,
+   and the open says nothing of it.
 
    A copy with no `commits.log` loses every commit's key and time,
    which only that file holds; the walk behind the listener re-covers

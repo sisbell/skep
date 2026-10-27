@@ -561,10 +561,13 @@ fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause(
 /// The step quotes the rebuilt ending first, as the binary writes it —
 /// `changes/mirror.rs` holds the binary to the words — then says the edge
 /// the open decides the side by: the last trusted position, the one before
-/// the position a torn line at the file's end names, and the board term's
-/// position, none attested on an unclaimed board; it quotes the lost ending
-/// from that edge, the whole lines a damaged line's cut takes with it, and
-/// the begun-afresh line, its lost span opening at the board term's position.
+/// the position a torn line at the file's end names, the board term's
+/// position, none attested on an unclaimed board, and, where those leave it
+/// below the floor, what `commits.log` records up to the floor; it quotes the
+/// lost ending from that edge, the clause naming what `commits.log` records
+/// there in each of its forms, the whole lines a damaged line's cut takes
+/// with it, and the begun-afresh line, its lost span opening at the edge the
+/// same read names, and said nowhere that read clears.
 #[test]
 fn runbook_reads_an_attest_cut_by_the_edge_its_lines_lie_above() {
     let step = collapsed(&passage(
@@ -580,11 +583,21 @@ fn runbook_reads_an_attest_cut_by_the_edge_its_lines_lie_above() {
         "the one before the position a torn line at the file's end names",
         "the board term's position, `H.1`'s, since no write at or before it is attested (on an \
          unclaimed board, none is)",
+        "Where those leave the edge below the floor, the open reads `commits.log` between it and \
+         the floor",
+        "never past a line the cut is known to have taken",
         "the lines between position {edge} and the reclaim floor at position {floor} are LOST \
          unless the board directory's backup is restored",
+        "`; commits.log records {n} attested commits there, positions {first}–{last}`",
+        "`; commits.log cannot tell which commits there were attested, positions \
+         {first}–{last}`",
+        "`; commits.log records {n} attested commits there, positions {first}–{last}, and cannot \
+         tell for positions {first}–{last}`",
         "`; the cut took {n} whole lines with it, positions {first}–{last}`",
-        "every signature this board kept between position {term} and position {floor} is LOST \
+        "every signature this board kept between position {edge} and position {floor} is LOST \
          unless the board directory's backup is restored",
+        "Where `commits.log` records no attested commit there and nothing it cannot tell of, the \
+         store held no signature below the floor, and the open says nothing of it",
     ] {
         assert!(step.contains(fact), "§2 step 5 says {fact:?}: {step}");
     }

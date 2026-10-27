@@ -40,14 +40,23 @@
 //! refused the rebuild. The edge is the greatest of what the open can
 //! witness: the last trusted position, the file being position-ordered; the
 //! position before the one a torn line at the file's end names, where its
-//! `at` stands whole; and the board term's, at or below which no write is
-//! attested ([`Attested`]). So a crash's tear reads as rebuilt wherever a
-//! witness names its side, and the board directory's backup is restored on
-//! a lost cut alone. A below-floor slot is served: `/changes` answers every
-//! position `commits.log` holds, the journal's reclamation moving no fence
-//! of the feed's, and a row below the resident window takes its `attest`
-//! off this file's line, read by position (`feed.rs`'s reader; `window.rs`)
-//! — the lines below the floor are the only copy, and the feed serves them.
+//! `at` stands whole; the board term's, at or below which no write is
+//! attested ([`Attested`]); and, where those three leave it below the
+//! floor, what `commits.log` records between it and the floor
+//! ([`LogWitness`]), whose lines name each commit's slot filled or empty
+//! (signed-ops D12) — the edge rising to the position before the first
+//! commit it records attested or cannot tell of, and never past a line the
+//! cut is known to have taken. So a crash's tear reads as rebuilt wherever
+//! a witness names its side, and the board directory's backup is restored
+//! on a lost cut alone, its line naming what `commits.log` records of the
+//! span; a file absent at a reclaimed journal is said lost on the same
+//! witness, and only where its span can have held a signature
+//! ([`BegunAfreshLine`]). A below-floor slot is served: `/changes` answers
+//! every position `commits.log` holds, the journal's reclamation moving no
+//! fence of the feed's, and a row below the resident window takes its
+//! `attest` off this file's line, read by position (`feed.rs`'s reader;
+//! `window.rs`) — the lines below the floor are the only copy, and the feed
+//! serves them.
 //!
 //! **The journal is asked after a loss alone.** An unattested commit fills
 //! no slot, and `commits.log` records the carrier beside the one value that
@@ -107,11 +116,12 @@ use skep_util::notice::Class;
 
 use super::super::board_term;
 use super::super::sidecar::{
-    CommitsLog, Cut, CutHead, EntryLines, ForeignLinesLine, IoCause, KeptName,
+    CommitMeta, CommitsLog, Cut, CutHead, EntryLines, ForeignLinesLine, IoCause, KeptName,
+    SIDECAR_FILE,
 };
 use super::super::Lines;
 use super::derived::{LineFile, OwedSync, SyncHandle};
-use super::{AttestStoreFailed, AttestStoreFigures};
+use super::{AttestStoreFailed, AttestStoreFigures, LogLines};
 use crate::codec::parse_lower_hex_bytes;
 
 // The file is named beside the fields its records carry, and both beside the
@@ -179,27 +189,32 @@ impl AttestStore {
     /// the log's open probed (`CommitsLog::floor_at_open`, the open's one
     /// probe) — the same refusal the rebuild below meets where its fence's
     /// base is gone, both the kernel's one base selection naming the oldest
-    /// retained checkpoint — and the edge of the board's attested positions
-    /// read off the head beside it ([`Attested`]). The tail is every committed
-    /// boundary above the file's coverage whose slot is filled, listed by
-    /// `Kernel::boundaries_above` in one scan from one base ([`rebuilt_tail`]:
-    /// the floor arm, and what a refusal leaves), kept where the log serves
-    /// the position — the marker-mirroring rebuild, above the floor alone —
-    /// and asked for only where the log leaves a slot above the coverage that
-    /// can be filled (`CommitsLog::slot_may_be_filled_above`): an unattested
-    /// commit fills none. An empty slot contributes nothing; a refusal
-    /// rebuilds nothing and drops nothing, and the fence still closes over it:
-    /// the journal will not answer it on a later open either, and the row's
-    /// own line says its slot is lost — so the refusal is said once, in the
-    /// kernel's words ([`RebuildRefusedLine`]).
+    /// retained checkpoint — the edge of the board's attested positions read
+    /// off the head beside it ([`Attested`]), and, where the store's own
+    /// witnesses leave the cut's edge below the floor, what `commits.log`
+    /// records between that edge and the floor ([`LogWitness`]). The tail is
+    /// every committed boundary above the file's coverage whose slot is
+    /// filled, listed by `Kernel::boundaries_above` in one scan from one base
+    /// ([`rebuilt_tail`]: the floor arm, and what a refusal leaves), kept
+    /// where the log serves the position — the marker-mirroring rebuild,
+    /// above the floor alone — and asked for only where the log leaves a slot
+    /// above the coverage that can be filled
+    /// (`CommitsLog::slot_may_be_filled_above`): an unattested commit fills
+    /// none. An empty slot contributes nothing; a refusal rebuilds nothing and
+    /// drops nothing, and the fence still closes over it: the journal will
+    /// not answer it on a later open either, and the row's own line says its
+    /// slot is lost — so the refusal is said once, in the kernel's words
+    /// ([`RebuildRefusedLine`]).
     ///
     /// **The open's other lines.** It says the entry lines past the head the
     /// replay purged, signatures a copy taken before this open still holds
-    /// ([`ForeignLinesLine`]); a file absent at this open where an attested
-    /// position can lie at or below the reclaim floor, every signature it kept
-    /// there gone ([`BegunAfreshLine`]); and, last, what the store holds — its
-    /// size, never compacted, the slots resident — and what the rebuild wrote
-    /// back, or that the journal was not asked ([`AttestOpenLine`]).
+    /// ([`ForeignLinesLine`]); a file absent at a reclaimed journal where
+    /// `commits.log`, read between the board term's position and the reclaim
+    /// floor, records an attested commit or cannot tell of one, every
+    /// signature it kept there gone ([`BegunAfreshLine`]); and, last, what
+    /// the store holds — its size, never compacted, the slots resident — and
+    /// what the rebuild wrote back, or that the journal was not asked
+    /// ([`AttestOpenLine`]).
     ///
     /// **Cost.** O(the file) to read it, a line at a time — holding one line
     /// and the served window, never the file, which keeps a line for every
@@ -218,14 +233,24 @@ impl AttestStore {
     /// gone (the floor arm). Where nothing is uncovered, the fence at the head,
     /// the journal is not asked either. What it never pays is a base and a
     /// scan per uncovered position. Never a compaction: the store keeps what
-    /// the log drops.
+    /// the log drops. And where a loss would be said — a cut whose own
+    /// witnesses leave its edge below the floor, or a file absent at a
+    /// reclaimed journal, the two never at one open — one read of
+    /// `commits.log` over the span between that edge and the floor
+    /// ([`LogWitness::read`]): one cursor search, order log₂ of the file's
+    /// bytes, then one line at a time through the span, holding one line;
+    /// at most one more pass over the file, and none at an open that says no
+    /// loss.
     ///
     /// # Errors
     ///
-    /// Every failure names this file, the kind kept (`operations.md` §1.1 row
-    /// 2): the replay's through `LineFile::open`; the rebuilt lines' appends,
-    /// the fence, the sync, the size and the handle's duplication through one
-    /// closure here.
+    /// Every failure names its file, the kind kept (`operations.md` §1.1 row
+    /// 2): this file's — the replay's through `LineFile::open`; the rebuilt
+    /// lines' appends, the fence, the sync, the size and the handle's
+    /// duplication through one closure here — and `commits.log`'s, the read
+    /// a loss line's span takes ([`LogWitness::read`]), fatal as every read
+    /// of that file at the open is, never a span read as one holding no
+    /// signature (SP-14).
     pub(super) fn open(
         dir: &Path,
         engine: &Engine,
@@ -311,19 +336,40 @@ impl AttestStore {
         // answers genesis, so every cut line lies above the floor, rebuilt
         // where the journal answered the rebuild, and an absent file lost
         // nothing — the floor is genesis, position 0. Beside it, where an
-        // attested position can lie at all, read off the head.
+        // attested position can lie at all, read off the head; and, for a
+        // span a loss line would name, what `commits.log` records of it —
+        // read only there, its failure fatal and named for that file.
         let floor = log.floor_at_open();
         let attested = Attested::of(engine.kernel().snapshot().world());
+        let read_the_log = |after: u64, through: u64| {
+            LogWitness::read(dir, log, after, through)
+                .map_err(|e| io::Error::new(e.kind(), format!("{SIDECAR_FILE}: {e}")))
+        };
         if let Some(cut) = replayed.cut {
             let rebuilt = refused.is_none();
             let floor = floor.unwrap_or(0);
             let kept = replayed.kept;
-            lines.say(Class::Failure, AttestCutLine { cut, floor, attested, rebuilt, kept });
+            let witnessed = AttestCutLine::witnessed(cut, attested);
+            let recorded = if witnessed < floor {
+                read_the_log(witnessed, floor)?
+            } else {
+                LogWitness::default()
+            };
+            let line = AttestCutLine { cut, floor, attested, rebuilt, kept, log: recorded };
+            lines.say(Class::Failure, line);
         }
         if let (true, Some(floor)) = (absent, floor) {
-            if let Some(above) = attested.edge().filter(|&edge| edge < floor) {
-                let rebuilt = rebuilt.lines;
-                lines.say(Class::Failure, BegunAfreshLine { above, floor, rebuilt });
+            if let Some(term) = attested.edge().filter(|&edge| edge < floor) {
+                // Said where the span can have held a signature alone: the
+                // line names the position before the first commit
+                // `commits.log` records attested or cannot tell of.
+                let recorded = read_the_log(term, floor)?;
+                if let Some(first) = recorded.first() {
+                    let above = first.saturating_sub(1);
+                    let rebuilt = rebuilt.lines;
+                    let line = BegunAfreshLine { above, floor, rebuilt, log: recorded };
+                    lines.say(Class::Failure, line);
+                }
             }
         }
         let bytes = file.len().map_err(with_file)?;
@@ -522,12 +568,22 @@ impl Attested {
 ///
 /// It is `operations.md` §1.1 row 9's line (§3.6 step 3; §4 row 17).
 ///
-/// **The edge.** Every cut line lies above an edge, the greatest of three
-/// witnesses: the last trusted position, the file being position-ordered;
-/// the position before the one a torn line at the file's end names, where
-/// its `at` stands whole ([`Cut`]'s `first`); and the edge of the board's
-/// attested positions ([`Attested`]), no line of this journal lying at or
-/// below it.
+/// **The edge.** Every cut line lies above an edge, the greatest of four
+/// witnesses. Three are the store's own ([`AttestCutLine::witnessed`]): the
+/// last trusted position, the file being position-ordered; the position
+/// before the one a torn line at the file's end names, where its `at` stands
+/// whole ([`Cut`]'s `first`); and the edge of the board's attested positions
+/// ([`Attested`]), no line of this journal lying at or below it. The fourth
+/// is read where those three leave the edge below the floor: what
+/// `commits.log` records between it and the floor ([`LogWitness`]), which
+/// raises the edge to the position before the first commit it records
+/// attested or cannot tell of, to the floor where it records none — and
+/// never past a line the cut is known to have taken, a torn line's own
+/// position or the first whole line past a damaged one
+/// ([`AttestCutLine::taken_below`]). Each of those held a filled slot
+/// whatever `commits.log` records of it: the commit whose record step
+/// panicked before that file's line was written is the one it names
+/// nowhere (`CommitsLog::slot_may_be_filled_above`).
 ///
 /// **The side.** An edge at or above the floor reads rebuilt where the
 /// rebuild answered: the rebuild covers `(coverage, head]` above the floor,
@@ -539,8 +595,10 @@ impl Attested {
 /// kept the cut bytes in, where the cut was a damaged line's
 /// (`, kept in {kept}` after the head, and the lost arm's `unless restored
 /// from {kept} or the board directory's backup`), and otherwise lost unless
-/// the board directory's backup is restored; and where the journal refused
-/// the rebuild, the cut lines above the floor are lost with them
+/// the board directory's backup is restored — and that ending goes on with
+/// what `commits.log` records between the edge and the floor, the
+/// witness's clause ([`LogWitness`]); and where the journal refused the
+/// rebuild, the cut lines above the floor are lost with them
 /// ([`RebuildRefusedLine`] names the account). Each lost arm adds the whole
 /// lines the cut took with it, where it took any: `; the cut took {m} whole
 /// lines with it, positions {a}–{b}`.
@@ -558,14 +616,52 @@ struct AttestCutLine {
     /// The file the cut bytes were kept in: a damaged line's cut, never a
     /// torn line's.
     kept: Option<KeptName>,
+    /// What `commits.log` records between the store's own edge and the floor.
+    ///
+    /// The open reads it where that edge lies below the floor and holds it
+    /// empty otherwise, where the edge already stands at or above it.
+    log: LogWitness,
 }
 
 impl AttestCutLine {
+    /// Returns the edge the store's own three witnesses name.
+    ///
+    /// It is the greatest of the last trusted position, the position before
+    /// the one a torn line names and the edge of the board's attested
+    /// positions: what the open measures against the floor before it reads
+    /// `commits.log`, and the position that read begins above.
+    fn witnessed(cut: Cut, attested: Attested) -> u64 {
+        let torn = cut.first.map_or(0, |at| at.saturating_sub(1));
+        let attested = attested.edge().unwrap_or(u64::MAX);
+        cut.trusted.max(torn).max(attested)
+    }
+
+    /// Returns the position below every line the cut is known to have taken.
+    ///
+    /// It is the one before the lowest of them: a torn line whose `at` stands
+    /// whole and the whole lines past a damaged one, lines this file held,
+    /// each a filled slot whatever `commits.log` records of it. `u64::MAX`
+    /// where the cut names none.
+    fn taken_below(&self) -> u64 {
+        let torn = self.cut.first;
+        let whole = self.cut.whole_after.map(|after| after.first);
+        torn.into_iter().chain(whole).min().map_or(u64::MAX, |at| at.saturating_sub(1))
+    }
+
     /// Returns the position every cut line lies above.
+    ///
+    /// It is the store's own edge where that stands at or above the floor;
+    /// below it, `commits.log`'s witness raises it to the position before the
+    /// first commit it records attested or cannot tell of — to the floor
+    /// where it records none — never past [`AttestCutLine::taken_below`],
+    /// and never below the store's own edge.
     fn edge(&self) -> u64 {
-        let torn = self.cut.first.map_or(0, |at| at.saturating_sub(1));
-        let attested = self.attested.edge().unwrap_or(u64::MAX);
-        self.cut.trusted.max(torn).max(attested)
+        let witnessed = AttestCutLine::witnessed(self.cut, self.attested);
+        if witnessed >= self.floor {
+            return witnessed;
+        }
+        let recorded = self.log.first().map_or(self.floor, |first| first.saturating_sub(1));
+        witnessed.max(recorded.min(self.taken_below()))
     }
 
     /// Returns whether every cut line lies above the reclaim floor.
@@ -623,9 +719,10 @@ impl std::fmt::Display for AttestCutLine {
                 write!(
                     f,
                     "; the lines between position {} and the reclaim floor at position {} are \
-                     LOST {unless}",
+                     LOST {unless}{}",
                     self.edge(),
-                    self.floor
+                    self.floor,
+                    self.log
                 )?;
                 self.whole_after(f)
             }
@@ -692,18 +789,23 @@ impl std::fmt::Display for RebuildRefusedLine<'_> {
 /// the attested commits above the reclaim floor at position {f} are rebuilt
 /// from the journal ({n} lines); every signature this board kept between
 /// position {p} and position {f} is LOST unless the board directory's backup
-/// is restored`. Below the floor the store is the only copy, so an absent
-/// file is a loss the open cannot make good — said where an attested
-/// position can lie at or below the floor, above `{p}`, the edge of the
-/// board's attested positions ([`Attested`]); an unclaimed board, or one
-/// whose board term stands at or above the floor, lost none. A pure value,
-/// pinned by `to_string()` in the unit suite; emitted under
+/// is restored`, then what `commits.log` records of that span, the
+/// witness's clause ([`LogWitness`]). Below the floor the store is the only
+/// copy, so an absent file is a loss the open cannot make good — said where
+/// `commits.log`, read between the edge of the board's attested positions
+/// ([`Attested`]) and the floor, records an attested commit or cannot tell
+/// of one, `{p}` the position before the first such; an unclaimed board,
+/// one whose board term stands at or above the floor, and one whose
+/// `commits.log` names every slot of that span empty, lost none. A pure
+/// value, pinned by `to_string()` in the unit suite; emitted under
 /// `Class::Failure` by [`AttestStore::open`].
 struct BegunAfreshLine {
-    /// The edge every attested position lies above.
+    /// The position before the first one the witness names.
     above: u64,
     floor: u64,
     rebuilt: usize,
+    /// What `commits.log` records between the board term's edge and the floor.
+    log: LogWitness,
 }
 
 impl std::fmt::Display for BegunAfreshLine {
@@ -714,9 +816,134 @@ impl std::fmt::Display for BegunAfreshLine {
             "{ATTEST_FILE} was absent at this open and is begun afresh: the attested commits \
              above the reclaim floor at position {floor} are rebuilt from the journal ({} \
              lines); every signature this board kept between position {} and position {floor} \
-             is LOST unless the board directory's backup is restored",
-            self.rebuilt, self.above
+             is LOST unless the board directory's backup is restored{}",
+            self.rebuilt, self.above, self.log
         )
+    }
+}
+
+/// What `commits.log` records of a span, and what it cannot tell of it.
+///
+/// It is the loss lines' witness off that file (signed-ops D12): each
+/// committed position's line records the carrier beside the one value that
+/// fills a marker slot, so a line recording the `marker` carrier names an
+/// attested commit, its signature held by this store alone below the reclaim
+/// floor, and every other recorded line names its slot empty — an unsigned
+/// commit, or one whose signature is its record's own `sig`
+/// ([`CommitMeta::slot_may_be_filled`] is the rule). It cannot tell of three
+/// kinds of position: a bare line's, its carrier lost with its testimony (a
+/// line demoted for a malformed name among them); one at or below the file's
+/// fence, where it holds no line this build stands behind; and one in the
+/// region its open did not cover, whose lines a loss or a tear took. Every
+/// other position of the span is no committed boundary, and holds no slot:
+/// the file is complete between its fence and that region, its first failed
+/// append stopping it so that no line is missing beneath a later one. So a
+/// span whose witness names nothing held no signature
+/// ([`LogWitness::first`]).
+///
+/// Its `Display` is the clause both loss lines carry after their LOST
+/// ending: `; commits.log records {n} attested commits there, positions
+/// {a}–{b}`; `; commits.log cannot tell which commits there were attested,
+/// positions {c}–{d}`; both at once as `; commits.log records {n} attested
+/// commits there, positions {a}–{b}, and cannot tell for positions
+/// {c}–{d}`; and nothing where it names nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LogWitness {
+    /// The lines recording the `marker` carrier: their count and their span.
+    attested: Option<EntryLines>,
+    /// The first and the last position `commits.log` cannot tell of.
+    unnamed: Option<(u64, u64)>,
+}
+
+impl LogWitness {
+    /// Reads what `commits.log` in `dir` records over `(after, through]`.
+    ///
+    /// `log` is the file's replay at this open: every position of the span
+    /// at or below its fence, and above the lower edge of its region pending,
+    /// is one it cannot tell of. The lines between are read off the file by
+    /// position through the feed's reader of it ([`LogLines`], which demotes
+    /// a malformed name's line to bare as the open's scan does): one cursor
+    /// search, then each line of the span in order — a bare line noted as
+    /// one it cannot tell of, a line recording the `marker` carrier counted
+    /// attested. Read at the attest store's open, after the log's own and
+    /// before the listener, so the file is the one that open left and no
+    /// append lands under the read.
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the read: the open of `commits.log`, the search's
+    /// seeks or reads, or a line's read.
+    fn read(dir: &Path, log: &CommitsLog, after: u64, through: u64) -> io::Result<LogWitness> {
+        let mut witness = LogWitness::default();
+        if after >= through {
+            return Ok(witness);
+        }
+        let fence = log.fence();
+        if fence > after {
+            witness.cannot_tell(after + 1, fence.min(through));
+        }
+        // The file covers the span up to the region's lower edge, which
+        // stands at or above the fence (`CommitsLog::open`).
+        let covered = log.pending_region().map_or(through, |(low, _)| low.min(through));
+        if covered < through {
+            witness.cannot_tell(covered.max(after) + 1, through);
+        }
+        let from = after.max(fence);
+        if from < covered {
+            let mut lines = LogLines::above(dir, from)?;
+            while let Some((_, at, meta)) = lines.next()? {
+                if at > covered {
+                    break;
+                }
+                if matches!(meta, CommitMeta::Bare { .. }) {
+                    witness.cannot_tell(at, at);
+                } else if meta.slot_may_be_filled() {
+                    witness.attested = Some(EntryLines::with(witness.attested, at));
+                }
+            }
+        }
+        Ok(witness)
+    }
+
+    /// Returns the first position the witness names, attested or not told of.
+    ///
+    /// It is `None` where `commits.log` names every slot of the span empty:
+    /// the span held no signature.
+    fn first(&self) -> Option<u64> {
+        let attested = self.attested.map(|lines| lines.first);
+        let unnamed = self.unnamed.map(|(first, _)| first);
+        attested.into_iter().chain(unnamed).min()
+    }
+
+    /// Notes the positions `from` through `to` as ones it cannot tell of.
+    fn cannot_tell(&mut self, from: u64, to: u64) {
+        self.unnamed = Some(match self.unnamed {
+            Some((first, last)) => (first.min(from), last.max(to)),
+            None => (from, to),
+        });
+    }
+}
+
+impl std::fmt::Display for LogWitness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.attested, self.unnamed) {
+            (Some(EntryLines { lines, first, last }), None) => write!(
+                f,
+                "; {SIDECAR_FILE} records {lines} attested commits there, positions \
+                 {first}–{last}"
+            ),
+            (None, Some((first, last))) => write!(
+                f,
+                "; {SIDECAR_FILE} cannot tell which commits there were attested, positions \
+                 {first}–{last}"
+            ),
+            (Some(EntryLines { lines, first, last }), Some((from, to))) => write!(
+                f,
+                "; {SIDECAR_FILE} records {lines} attested commits there, positions \
+                 {first}–{last}, and cannot tell for positions {from}–{to}"
+            ),
+            (None, None) => Ok(()),
+        }
     }
 }
 

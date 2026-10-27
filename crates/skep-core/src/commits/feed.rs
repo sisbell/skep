@@ -1854,8 +1854,10 @@ impl Feed {
 /// file's own parser and demoted as the open's scan demotes
 /// (`sidecar.rs`'s `parse_line` and `demoted`), the fence lines skipped —
 /// the lines at or below the fence are never asked for — ending where the
-/// file ends, at a torn last line, or at a line that does not parse. Every
-/// read of it runs under the feed's lock, so no append lands under it.
+/// file ends, at a torn last line, or at a line that does not parse. The
+/// attest store's open reads through it too, over the span a loss line
+/// would name (`attest.rs`). Every read of it runs under the feed's lock,
+/// or at the feed's open before the listener, so no append lands under it.
 struct LogLines {
     cursor: Cursor,
 }

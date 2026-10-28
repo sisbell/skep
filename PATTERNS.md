@@ -281,6 +281,16 @@ says "from" it at its end.
   **Holds it:** `skep_util::permits` (`Permits`, `Permit`), held by skepd `history` (reconstructions), `server::scan` (class scans; the per-document pool: `ClassScans::take_region`, `RegionPermit`) and `server` (writes), and by `skep_media::pools` (fetches, uploads).
   **Checked by:** `crates/skep-util/src/permits/tests.rs` (`a_pool_hands_out_exactly_its_count_and_a_drop_returns_one_slot`); `crates/skepd/tests/it/write_pool.rs` (`parked_writers_hold_their_permits_and_the_one_past_the_pool_is_refused_before_the_lock`); `crates/skepd/tests/it/scan_bound.rs` (`a_documents_region_reads_contend_only_among_themselves`); `crates/skepd/tests/it/wire_doc.rs` (`doc_states_the_write_permit_pool_and_its_token`, `doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_reader`).
   **Closed:** #87, #293.
+- **SP-30 A write another store's composite may need is a staging
+  function.** A write whose records another store may stage inside its
+  own commit is a function over `&mut Staging<W>` with the op's own
+  bound, pushing its records and opening no transaction; the public op
+  is `transact` around it, with its keys and its attested arm, so a
+  composite opens one transaction over the union of the keys and the
+  kernel's reentrancy panic is never met.
+  **Holds it:** `crates/skep-arrangement/src/ops/publish.rs` (`stage_publish`/`publish`), `ops/reinstate.rs` (`stage_reinstate_at`/`reinstate`), `ops/delete.rs` (`stage_delete_at`/`delete`), `src/seat.rs` (`stage_seat_link`/`seat_link`); `crates/skep-content` (`stage_write`/`write`).
+  **Checked by:** `crates/skep-arrangement/tests/it/rewindow.rs` (the three compose under one `transact`); the per-op-bound cells in `crates/skep-arrangement/src/ops/tests.rs` and `src/ops/reinstate/tests.rs`; no test yet holds a new store op to the form — one would list the staging functions and assert each public op's body is the `transact` wrapper alone.
+  **Closed:** #680.
 
 ## The builds and the checks
 

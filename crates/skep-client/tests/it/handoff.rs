@@ -8,7 +8,9 @@
 //! second genesis's neither arm; the giver's session as the given account
 //! dead; the giver's and the given account's records read apart; the
 //! recipient's `bind`; the setup act sent not at all where the first child is
-//! another party's; the top-level halt; the anchorless line.
+//! another party's; the recipient's first rotation, its trail over the
+//! giver-homed genesis retracted by no session as the recipient; the
+//! top-level halt; the anchorless line.
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +20,8 @@ use skep_client::ceremony::deposit::{deposit, Deposit, DepositHalt, DepositKind,
 use skep_client::ceremony::first_session::{document_present, first_session, FirstSessionReads};
 use skep_client::ceremony::handoff::{handoff, Grade, HandoffOptions, HandoffOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
+use skep_client::ceremony::rotate::{rotate, RotateOptions};
+use skep_client::ceremony::trail::Trail;
 use skep_client::derive::records::{credential_records, Hand};
 use skep_client::dial::Request;
 use skep_client::derive::{principal_of, KeyDiagnosis};
@@ -28,7 +32,7 @@ use skep_client::store::{Binding, FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::{encode_enroll, parse_enroll, Enrollment, Fingerprint};
 
-use crate::common::{anchor_file, board, claim, entry_of, files_in, key_file, keygen, origin_of, recording_board, spawn, token_dead, wire_session, Redirect};
+use crate::common::{anchor_file, board, claim, entry_of, files_in, key_file, keygen, origin_of, recording_board, spawn, token_dead, wire_nullify, wire_session, Redirect};
 
 fn give(account: &str, payload: Option<String>, anchor: Option<std::path::PathBuf>) -> HandoffOptions {
     HandoffOptions { principal: 1, account: account.into(), payload: payload.map(|p| format!("{p}\n").into_bytes()), anchor }
@@ -464,4 +468,44 @@ fn the_setup_act_is_sent_not_at_all_where_the_first_child_is_another_partys() {
     let lines = log.lock().unwrap().clone();
     assert!(!lines.iter().any(|l| l.starts_with("GET /challenge") || l == "POST /op create_new_document" || l == "POST /op delegate"), "{lines:?}");
     session.close().unwrap();
+}
+
+/// A RECIPIENT's FIRST ROTATION (AUTH-5.59 steps 1–4; skep #677): the old
+/// enroll link its trail names is the genesis, homed in the giver's doc 1
+/// (AUTH-2.62, AUTH-2.127), while the trail is homed in the recipient's own
+/// — and the trail is the recipient's own claim all the same, so no session
+/// as the recipient retracts it (PUB-6.64, `nullify_audit_view`, permanent):
+/// not the new key's FULL session, not its CONTENT one, not an anchor's. The
+/// trail stays where `Trail::present`, an active-view discovery, finds it,
+/// so the resume read a re-run makes never writes a second trail.
+#[test]
+fn a_recipients_first_rotation_writes_a_trail_no_session_as_the_recipient_retracts() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = handed_off(dir.path());
+    let records = credential_records(&h.board, "1.0.1.2", &[]).unwrap();
+    let genesis = records.genesis().expect("the genesis");
+    assert_eq!(genesis.home, "1.0.1.0.1", "the genesis is homed in the giver's doc 1");
+    let genesis = genesis.link.clone();
+    let mut p = Scripted::new(vec![Script::LabelDefault, Script::Confirm(true)]);
+    let rotation = RotateOptions { principal: h.principal, label: None, payload: None };
+    let done = rotate(&h.board, &h.recipient, &mut p, &rotation).unwrap_or_else(|e| panic!("{e}\n{}", p.transcript.join("\n")));
+    let records = credential_records(&h.board, "1.0.1.2", &[]).unwrap();
+    let new = records.enrollment_of(&done.new).expect("the new key's enrollment").link.clone();
+    let trail = Trail { home: "1.0.1.2.0.1", old: &genesis, new: &new };
+    assert_eq!(trail.present(&h.board).unwrap().as_deref(), Some(done.trail.as_str()), "T3 over the giver-homed genesis");
+    let new_key = key_file(&h.recipient, &done.new).signer();
+    let anchor = anchor_file(dir.path(), "ra").1.signer();
+    let full = wire_session(&h.board, h.principal, &new_key);
+    let content = handshake(&h.board, Scope::Content, &new_key, h.principal, Site::Session).unwrap();
+    let as_anchor = wire_session(&h.board, h.principal, &anchor);
+    let before = h.board.health().unwrap().log_position();
+    for (name, token, signer) in [("full", &full, &new_key), ("content", content.token(), &new_key), ("anchor", &as_anchor, &anchor)] {
+        let err = wire_nullify(&h.board, token, signer, "1.0.1.2", "1.0.1.2.0.1", &done.trail).expect_err(name);
+        assert!(err.contains(r#""detail":"nullify_audit_view""#) && err.contains(r#""disposition":"permanent""#), "{name}: {err}");
+        assert_eq!(trail.present(&h.board).unwrap().as_deref(), Some(done.trail.as_str()), "{name}: the trail stands active");
+    }
+    assert_eq!(h.board.health().unwrap().log_position(), before, "nothing was written");
+    h.board.session_close(&full).unwrap();
+    h.board.session_close(&as_anchor).unwrap();
+    content.close().unwrap();
 }

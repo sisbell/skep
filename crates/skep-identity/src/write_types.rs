@@ -98,17 +98,23 @@ pub enum AuditClass {
     ///
     /// It is a member where the claim's `new` — its `to`, one denoted
     /// address — is homed in a PUBLISHED document and its `old`, its `from`,
-    /// is the claim's maker's own (PUB-6.64; the link-sets wire-lane
-    /// decision 3 and sweep-4 O6 (b)): [`AuditClass::requires_published_new`]
-    /// answers `true` for it, the endpoint keys in RES-207's shape on the
-    /// claim's ends, the type half this classifier's and both endpoint reads
-    /// the caller's, off the target link it already reads. The ground: a
-    /// claim that its maker's public copy supersedes its maker's own original
-    /// is a fact of its maker's own past act that no act legitimately
-    /// retracts, and refusing its retraction keeps the ACTIVE view's claim
-    /// reads exact — where a claim whose `new` is private, a correction
-    /// inside the owner's own notes, and one its maker asserted over another
-    /// account's link stay ordinary links, retractable by `nullify`, M7's
+    /// is the claim's maker's own: a credential whose subject is the maker's
+    /// account, wherever it is homed, or any other link in an account seated
+    /// by the maker (PUB-6.64; the link-sets wire-lane decision 3 and sweep-4
+    /// O6 (b); skep #677). [`AuditClass::requires_published_new`] answers
+    /// `true` for it, the endpoint keys in RES-207's shape on the claim's
+    /// ends: the type half is this classifier's, and both endpoint reads are
+    /// the caller's — the `new` off the target link it already reads, the
+    /// `old` off `old`'s own link, classified by [`WriteTypes::target_class`].
+    /// The ground: a claim that its maker's public copy supersedes its
+    /// maker's own original is a fact of its maker's own past act that no act
+    /// legitimately retracts — among them a rotation's trail over the genesis
+    /// enrollment that seeded its maker, homed in its registrar's doc 1
+    /// (AUTH-5.59 step 2; AUTH-2.127) — and refusing its retraction keeps the
+    /// ACTIVE view's claim reads exact, where a claim whose `new` is private,
+    /// a correction inside the owner's own notes, and one its maker asserted
+    /// over another account's ordinary link or over a credential naming
+    /// another account stay ordinary links, retractable by `nullify`, M7's
     /// one correction path for a wrong claim. The address is not a commons
     /// pin but M7's own constant (`1.1.0.1.0.1.0.1.4`), read from M7's
     /// registry by the builder.
@@ -172,17 +178,20 @@ impl AuditClass {
     /// shape on the link's ends: where it answers `true`, a link of this
     /// class is a member only where the one address its `to` slot denotes is
     /// homed in a published document *and* the one address its `from` slot
-    /// denotes — the claim's `old` — is owned by the account that owns the
-    /// link itself (PUB-6.64); otherwise it is an ordinary link. The
+    /// denotes — the claim's `old` — is the maker's own: a credential whose
+    /// subject, the one address its own `to` denotes, is the account the link
+    /// lies in, or any other link in an account seated by the link's maker
+    /// (PUB-6.64; skep #677); otherwise it is an ordinary link. The
     /// supersession claim alone answers `true` (the wire-lane decision 3 and
     /// sweep-4 O6 (b)): a claim naming a published copy as `new` over its
     /// maker's own `old` is permanent, one naming a private successor, or
-    /// another account's link as `old`, is correctable by its maker. The type
-    /// half is [`WriteTypes::target_class`]'s, and the endpoints'
-    /// denotations, the publication read and the two owner reads are the
-    /// caller's, off the target link it reads for the type — keyed on this
-    /// answer, never on a variant it names. Matched exhaustively with no
-    /// wildcard, so a new class does not compile until it says whether its
+    /// another account's ordinary link or a credential naming another account
+    /// as `old`, is correctable by its maker. The type half is
+    /// [`WriteTypes::target_class`]'s; the endpoints' denotations, the
+    /// publication read, the read of the `old` link itself — its class, then
+    /// its subject or its seat — and the maker's seat are the caller's, keyed
+    /// on this answer, never on a variant it names. Matched exhaustively with
+    /// no wildcard, so a new class does not compile until it says whether its
     /// membership waits on its endpoints.
     pub fn requires_published_new(self) -> bool {
         match self {

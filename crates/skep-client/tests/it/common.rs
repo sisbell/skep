@@ -211,7 +211,7 @@ use skep_client::ceremony::deposit::next_content_ordinal;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::KeyFile;
 use skep_client::sign::{session_payload, sig_hex, signer_from_seed, RecordFrame, Signer};
-use skep_identity::{canonical_record, entry_body_empty, entry_frame, ContentFreeOp, DocTerm, Enrollment, RecordEntry};
+use skep_identity::{canonical_record, entry_body_empty, entry_body_nullify, entry_frame, unit_span, ContentFreeOp, DocTerm, Enrollment, EntrySlot, LinkSlots, RecordEntry};
 use skep_signature::HybridSigner;
 
 /// A FULL signed session under `signer` for `principal`, as skepd's
@@ -274,6 +274,31 @@ pub fn wire_home(board: &Board, token: &Token, signer: &HybridSigner, account: &
     let mut frame = frames::create_home(account, None);
     frame["attest"] = serde_json::json!({"alg": alg, "sig": sig_hex(&HybridSigner::sign(signer, &bytes))});
     let Answer::Document(v) = board.op(Some(token), &frame).expect("mint") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// The retraction class's reserved ghost tumbler: the type slot of the link
+/// a `nullify` deposits (`skep_links::retraction_tuple`).
+const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
+
+/// A `nullify` of `target` from `home`, sent from `token`'s SIGNED session
+/// as `account` under `signer`, carrying the `attest` skepd's own composer
+/// signs: the entry frame over the retraction link the write would deposit,
+/// `(unit(home), unit(target), retraction)` (`entry_body_nullify`), `doc`
+/// the home. A signed `nullify` into the published world meets the
+/// write-path check ahead of the class (signed ops), so with its `attest`
+/// the board's answer is the class's own. Answers the retraction's address,
+/// or the refusal's document.
+pub fn wire_nullify(board: &Board, token: &Token, signer: &HybridSigner, account: &str, home: &str, target: &str) -> Result<String, String> {
+    let term = board.board_term().expect("term").expect("H.1");
+    let alg = HybridSigner::public_key(signer).alg();
+    let address = |a: &str| parse_address(a).expect("an address");
+    let (from, to, ty) = ([unit_span(&address(home))], [unit_span(&address(target))], [unit_span(&address(T_RETRACTION))]);
+    let body = entry_body_nullify(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
+    let bytes = entry_frame(alg, term, &address(account), DocTerm::One(&address(home)), &body);
+    let attest = serde_json::json!({"alg": alg, "sig": sig_hex(&HybridSigner::sign(signer, &bytes))});
+    let frame = serde_json::json!({"op": "nullify", "home": home, "target": target, "attest": attest});
+    let Answer::Document(v) = board.op(Some(token), &frame).expect("nullify") else { return Err("closed".into()) };
     acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
 }
 

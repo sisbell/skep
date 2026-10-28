@@ -14,10 +14,10 @@
 //! AUTH-5.90 (iii)) then `DepositKind::Enroll` (or `EnrollVerbatim`) under
 //! the old key's hand at the record grade (AUTH-5.59 step 1). T3 the trail
 //! — `assert_sup` from the old enroll link to the new, homed in `X`'s own
-//! doc 1, `old` the address T0's admitted read returned (at the notebook the
-//! genesis link's), `new` T2's ack, signed by the old key, resumed by
-//! reading the trail's presence so a re-run never writes a second trail
-//! (AUTH-5.59 step 2; §4a.5). T4
+//! doc 1, `old` the address T0's admitted read returned (at a first rotation
+//! the genesis link's, wherever the genesis registry homes it), `new` T2's
+//! ack, signed by the old key, resumed by reading the trail's presence so a
+//! re-run never writes a second trail (AUTH-5.59 step 2; §4a.5). T4
 //! `DepositKind::Retire` of the old key — the last write its session can
 //! make, no close sent (AUTH-4.63; AUTH-5.59 step 4), `would_empty` armed.
 //! T5 the `closed` as rotation's expected end (AUTH-5.28), the binding
@@ -165,7 +165,10 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     if reads.walk.set.retired(&old_fp).is_some() {
         return Err(Halt::face(format!("the old key {old_fp} is already retired at {account}"), "I4 (AUTH-2.98): a retired fingerprint never re-enters the set; this rotation already ended, or another hand ended it", "sign in with a key you still hold (`skep session`)"));
     }
-    // The old key's enroll link — at the notebook the genesis link's.
+    // The old key's enroll link — at a first rotation the genesis link's,
+    // homed in the genesis registry (AUTH-2.127): this account's own doc 1
+    // at the notebook's claimant, the delegating account's at a handoff's
+    // recipient or a hired agent.
     let Some(old_link) = reads.records.enrollment_of(&old_fp).map(|r| r.link.clone()) else {
         return Err(Halt::face(
             format!("the enroll link of {old_fp} was not found at {account}"),

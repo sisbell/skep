@@ -8,10 +8,17 @@
 //! from a signed session), so it carries an `attest` over its own entry
 //! frame — composed through the ceremony's one composer (`attest_member`;
 //! P28) with `entry_body_assert_sup`'s body, and signed by the walk's own
-//! key (the old key at `rotate`, the surviving anchor on the loss arm). It
-//! is resumed by reading the trail's presence over the residence-address
-//! discovery, so a re-run never writes a second trail (AUTH-5.59 step 3's
-//! machine resume).
+//! key (the old key at `rotate`, the surviving anchor on the loss arm). At
+//! an account's first rotation the old enroll link is its genesis, homed in
+//! the genesis registry (AUTH-2.62, AUTH-2.127): the subject's own doc 1 at
+//! the notebook's claimant, the delegating account's at a handoff's
+//! recipient or a hired agent. The trail is resumed by reading its presence
+//! over the residence-address discovery, so a re-run never writes a second
+//! trail (AUTH-5.59 step 3's machine resume). That discovery reads the
+//! active view, where a retracted trail reads as absent, so the resume
+//! holds because the board refuses the trail's retraction from every
+//! session as the subject, wherever its `old` is homed (PUB-6.64,
+//! `nullify_audit_view`; skep #677).
 
 use skep_identity::{entry_body_assert_sup, unit_span, DocTerm, EntrySlot, LinkSlots};
 

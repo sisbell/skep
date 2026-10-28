@@ -137,24 +137,28 @@ fn own_draft(port: u16, session: &str, account: &str) -> String {
 /// deposit naming it — through the credential path, from the SIGNED session,
 /// the record signed for the deposit (2a).
 fn credential_link(port: u16, signed: &str, seed: u8) -> String {
-    let ordinal = next_content_ordinal(port, Some(signed), CLAIMANT_DOC1);
-    let atom = signed_atom(
-        port,
-        signed,
-        CLAIMANT_DOC1,
-        T_ENROLL,
-        &[CLAIMANT_ACCOUNT],
-        &enroll_atom(&[&distinct_key(seed)]),
-    );
+    enroll_link(port, signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, seed)
+}
+
+/// One enroll-typed credential link in `doc1` naming `subject`, enrolling
+/// `distinct_key(seed)`: the record atom deposited at the next free position
+/// and the `T_ENROLL` deposit naming it, from the SIGNED session `signed`,
+/// the record signed by that session's key for the deposit (2a). A genesis
+/// where `doc1` is the subject's genesis registry (AUTH-2.62, AUTH-2.127);
+/// an enrollment of the subject's own where `doc1` is the subject's.
+fn enroll_link(port: u16, signed: &str, doc1: &str, subject: &str, seed: u8) -> String {
+    let ordinal = next_content_ordinal(port, Some(signed), doc1);
+    let atom =
+        signed_atom(port, signed, doc1, T_ENROLL, &[subject], &enroll_atom(&[&distinct_key(seed)]));
     let v = op(
         port,
         Some(signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     let atom = acked_addr(&v);
-    typed_link_addr(port, signed, CLAIMANT_DOC1, &[atom.as_str()], &[CLAIMANT_ACCOUNT], T_ENROLL)
+    typed_link_addr(port, signed, doc1, &[atom.as_str()], &[subject], T_ENROLL)
 }
 
 fn head(port: u16) -> u64 {
@@ -567,15 +571,16 @@ fn a_supersession_claims_nullify_is_refused_where_its_new_is_published_and_lands
     sd.shutdown();
 }
 
-/// THE SUPERSESSION CLAIM OVER ANOTHER's LINK (PUB-6.64's owner key on
-/// `old`; the link-sets design's sweep-4 O6 (b)): `assert_sup` gates the
-/// claim's home alone, so the claimant may name a STRANGER's public link as
-/// `old` beside its own published copy as `new`. That claim records no act
-/// of its maker's own and stays an ordinary link: the stranger, owner of the
-/// `old` endpoint and not of the claim, answers `not_owner` naming the
+/// THE SUPERSESSION CLAIM OVER ANOTHER's LINK (PUB-6.64's owner key on an
+/// ordinary `old`; the link-sets design's sweep-4 O6 (b)): `assert_sup`
+/// gates the claim's home alone, so the claimant may name a STRANGER's public
+/// link as `old` beside its own published copy as `new`. That claim records
+/// no act of its maker's own and stays an ordinary link: the stranger, owner
+/// of the `old` endpoint and not of the claim, answers `not_owner` naming the
 /// claim, and the claim's MAKER retracts it — the claim leaves the active
 /// view and stays on the audit view. Its twin over the maker's own link
-/// stays refused (the test above).
+/// stays refused (the test above), and so does a trail over a credential
+/// naming its maker, homed in another account's doc 1 (the test below).
 #[test]
 fn a_supersession_claim_over_anothers_link_is_retracted_by_its_maker() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -609,6 +614,81 @@ fn a_supersession_claim_over_anothers_link_is_retracted_by_its_maker() {
     expect_resp(&nullify(port, Some(&bare), &n, &claim), "ack_addr");
     assert!(claims_in(port, Some(&bare), &foreign, "active").is_empty(), "retracted: the claim leaves the active view");
     assert_eq!(claims_in(port, Some(&bare), &foreign, "audit"), vec![claim], "and stays on the audit view");
+    sd.shutdown();
+}
+
+/// THE FIRST ROTATION's TRAIL (PUB-6.64's key on a credential-typed `old`;
+/// AUTH-5.59 step 2; skep #677): a genesis enrollment is homed in its
+/// subject's genesis registry — the claimant's doc 1 for a bootstrap-delegated
+/// account, the delegator's for a hired agent (AUTH-2.62, AUTH-2.127) — so the
+/// trail of the subject's first rotation, homed in the subject's own doc 1,
+/// names as `old` a link in another account's home. The genesis names the
+/// subject, so the trail records the subject's own act: for a REGISTRAR-KEYED
+/// account (the claimant keys `R`, bootstrap-delegated) and a HIRED AGENT (`R`
+/// keys `A`, a later child of its own), T2 enrolls a fresh key from the old
+/// key's session and T3 writes the trail, and every session as the subject —
+/// the old key's full session, the fresh key's full and content sessions — is
+/// refused `nullify_audit_view`, permanent: nothing commits, and the trail
+/// stays the active claim over the genesis, the read a resumed rotation finds
+/// it by. A claim over another account's ordinary link stays retractable by
+/// its maker (the test above).
+#[test]
+fn a_first_rotations_trail_over_a_genesis_another_account_wrote_is_refused_retraction() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let claimant = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // R, bootstrap-delegated: its genesis written by the claimant into the
+    // claimant's doc 1, its home minted from its own signed session.
+    let (r, _) = stranger(port, 984);
+    let r_genesis = enroll_link(port, &claimant, CLAIMANT_DOC1, &r, 84);
+    let r_signed = open_signed_session(port, 984, &distinct_key(84));
+    let r_doc1 = create_doc(port, &r_signed, &r);
+    // A, a later child of R's — R's first is the agent space, which takes no
+    // genesis (RES-80) — its genesis written by R into R's doc 1.
+    reserve_agent_space(port, &r_signed, &r, 100_985);
+    let (a, _) = delegate_under(port, &r_signed, &r, 985);
+    let a_genesis = enroll_link(port, &r_signed, &r_doc1, &a, 85);
+    let a_signed = open_signed_session(port, 985, &distinct_key(85));
+    let a_doc1 = create_doc(port, &a_signed, &a);
+
+    for (account, principal, doc1, genesis, old, fresh) in [
+        (&r, 984, &r_doc1, &r_genesis, &r_signed, 86),
+        (&a, 985, &a_doc1, &a_genesis, &a_signed, 87),
+    ] {
+        // T2, then T3: the trail from the genesis to the fresh key's
+        // enrollment, homed in the subject's own doc 1.
+        let new = enroll_link(port, old, doc1, account, fresh);
+        let trail = acked_addr(&op(port, Some(old), &assert_sup_frame(doc1, genesis, &new)));
+        assert_eq!(
+            claims_in(port, Some(old), genesis, "active"),
+            vec![trail.clone()],
+            "{account}'s trail stands"
+        );
+        let fresh_full = open_signed_session(port, principal, &distinct_key(fresh));
+        let fresh_content = open_content_session(port, principal, &distinct_key(fresh));
+        let before = head(port);
+        for (session, which) in [
+            (old, "the old key's full session"),
+            (&fresh_full, "the fresh key's full session"),
+            (&fresh_content, "the fresh key's content session"),
+        ] {
+            let v = nullify(port, Some(session), doc1, &trail);
+            assert_eq!(
+                verdict(&v),
+                "credential_refused:nullify_audit_view",
+                "{account}, {which}: {v}"
+            );
+            assert_eq!(v["disposition"].as_str(), Some("permanent"), "{account}, {which}: {v}");
+        }
+        assert_eq!(head(port), before, "{account}: the refusals commit nothing");
+        assert_eq!(
+            claims_in(port, Some(old), genesis, "active"),
+            vec![trail],
+            "{account}: the trail stays active"
+        );
+    }
     sd.shutdown();
 }
 

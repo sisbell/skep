@@ -15,7 +15,9 @@ use skep_engine::types::{
     IDENTITY_TYPES,
 };
 use skep_febe::Op;
-use skep_identity::{AuditClass, Fingerprint, HasIdentity, TargetClass, WriteTypes};
+use skep_identity::{
+    single_address, AuditClass, Fingerprint, HasIdentity, TargetClass, WriteTypes,
+};
 use skep_kernel::Attestation;
 use skep_links::{enc, is_replaces_class, registry, HasLinks, Link, ShippedType, SlotArg};
 use skep_namespace::{
@@ -33,10 +35,11 @@ use skep_engine::World;
 /// same three credential kinds (a clone of the engine's one frozen
 /// instance, so the fold and the write path cannot disagree about a
 /// credential), widened beside them by the grants class and PUB-6.64's
-/// audit-view members. Read by [`nullify_refusal`] alone; the fold and
-/// `deposits_credential_link` read [`IDENTITY_TYPES`] (`kind_of`, the I2
-/// rule, takes none of these classes — a class here is never a credential
-/// there).
+/// audit-view members. Read by [`nullify_refusal`] alone — the target's
+/// class, and through [`old_is_the_makers_own`] the class of a supersession
+/// claim's `old`; the fold and `deposits_credential_link` read
+/// [`IDENTITY_TYPES`] (`kind_of`, the I2 rule, takes none of these classes —
+/// a class here is never a credential there).
 ///
 /// The class addresses are the engine's commons pins (`skep_engine::types`):
 /// the grant `3.90`, `successor-of` `3.59`, `endorse` `3.42`, the consumption
@@ -156,25 +159,29 @@ fn supersedes_type() -> Address {
 ///   claim's `new` — its `to`, single-denoted by the Df-DISC(ii) schema
 ///   every stored claim keeps — is homed in a PUBLISHED document (the
 ///   wire-lane decision 3, RES-207's shape on the other end) *and* its
-///   `old` — its `from` — is the claim's maker's own (PUB-6.64; the
-///   link-sets design's sweep-4 O6 (b)): a claim that its maker's public
-///   copy supersedes its maker's own original records its maker's own past
-///   act, which no act legitimately retracts, and refusing its retraction
-///   keeps the active view's claim reads (`in_claims`, `out_claims`) exact,
-///   a published copy leaving that view by its own retraction alone.
-///   Failing either key the claim is an ordinary link, its maker's
-///   retraction landing — one whose `new` is private, a correction inside
-///   the owner's own notes, and one its maker asserted over another
-///   account's link (M7 gates ownership of the claim's home alone, so an
-///   agent may name its hirer's public link `old`), retractable by its
-///   maker and by the hirer in a session as the agent — `nullify` the one
-///   correction path M7 documents for a wrong claim. Both reads are of the
-///   target link this producer already holds:
-///   `document_of(new)` is arithmetic, and `published()` on it takes
-///   PUB-6.37's registered-only evaluation, since a `new` that a stored
-///   claim names was resident when the claim was deposited and so its home
-///   is registered; the owners of `old` and of the claim are one seat
-///   lookup each ([`old_is_the_makers_own`]).
+///   `old` — its `from` — is the claim's maker's own: a credential-typed
+///   `old` whose subject is the maker's account, any other `old` in an
+///   account seated by the maker (PUB-6.64; the link-sets design's sweep-4
+///   O6 (b); skep #677). A claim that its maker's public copy supersedes its
+///   maker's own original records its maker's own past act — among them a
+///   rotation's trail (AUTH-5.59 step 2) over the genesis enrollment that
+///   seeded its maker, wherever that genesis is homed — which no act
+///   legitimately retracts, and refusing its retraction keeps the active
+///   view's claim reads (`in_claims`, `out_claims`) exact, a published copy
+///   leaving that view by its own retraction alone. Failing either key the
+///   claim is an ordinary link, its maker's retraction landing — one whose
+///   `new` is private, a correction inside the owner's own notes, and one
+///   its maker asserted over another account's ordinary link (M7 gates
+///   ownership of the claim's home alone, so an agent may name its hirer's
+///   public link `old`), retractable by its maker and by the hirer in a
+///   session as the agent — `nullify` the one correction path M7 documents
+///   for a wrong claim. The `new` key reads the target link this producer
+///   already holds: `document_of(new)` is arithmetic, and `published()` on
+///   it takes PUB-6.37's registered-only evaluation, since a `new` that a
+///   stored claim names was resident when the claim was deposited and so its
+///   home is registered. The `old` key reads `old`'s own link — one
+///   `readlink`, its class, then its subject or its seat — beside the
+///   claim's seat ([`old_is_the_makers_own`]).
 ///
 /// **The grant and audit-view cells' entitlement** is the caller who could
 /// otherwise open the path — M7's own v1 gate mirrored: ω of the record's
@@ -212,11 +219,12 @@ fn nullify_refusal(
     // conditional class's (`AuditClass::requires_published_new` — the
     // supersession claim alone, PUB-6.64): the home of the link the claim's
     // `to` denotes published, and the link its `from` denotes the claim's
-    // maker's own. A resident link's home is registered (M7's
+    // maker's own — by its subject where it is a credential, by its seat
+    // otherwise. A resident link's home is registered (M7's
     // HomeNotRegistered gate), and so is the home of a link a resident claim
     // names (the claim's schema held both endpoints resident at its deposit;
     // nothing unregisters a document), so `published()`'s registered-only
-    // contract (PUB-6.37) holds on both, and both owners are read where M3's
+    // contract (PUB-6.37) holds on both, and every seat is read where M3's
     // seat read answers ω; outside its keys the link is an ordinary link and
     // this producer answers nothing. The keys are facts of the target, read
     // the same for every caller.
@@ -275,26 +283,54 @@ fn published_new(world: &World, claim: &Link) -> bool {
 ///
 /// The class holds a claim that records its maker's own past act, and
 /// `assert_sup` and `editlink` gate ownership of the claim's home alone, so
-/// a claim may name another account's link as its `old`; such a claim is an
-/// ordinary link, retractable by its maker (the link-sets design's sweep-4
-/// O6 (b)). The `from` of a stored claim denotes one address, the
-/// superseded link (`skep_links::supersession_claim`), and the maker is the
-/// owner of the claim's own address `at`, whose home the asserter owned.
-/// Both owners are M3's one-lookup seat read, `account_seat`: the claim and
-/// its `old` are links resident in registered documents, each in a
-/// registered account, where that read answers ω. A `from` that denotes no
-/// one address, or an address with no seat, answers `false`, as
-/// [`published_new`] answers for a `to` no claim keeps: such a link is an
-/// ordinary one.
+/// a claim may name a link another account owns as its `old`; over another
+/// account's ordinary link, or a credential naming another account, such a
+/// claim is an ordinary link, retractable by its maker (the link-sets
+/// design's sweep-4 O6 (b)). The `from` of a stored claim denotes one
+/// address, the superseded link (`skep_links::supersession_claim`), and the
+/// maker is the account `at` lies in — the claim's own address, whose home
+/// the asserter owned — read with its principal by M3's one-lookup seat
+/// read, `account_seat`, which answers ω for a link resident in a registered
+/// document.
+///
+/// What makes `old` the maker's own is read off `old`'s link, one
+/// `readlink`, then the write path's classification ([`write_types`]):
+///
+/// * a credential-typed `old` is the maker's own where its subject — the
+///   one address its `to` denotes ([`single_address`], AUTH-2.26) — is the
+///   maker's account (skep #677). A genesis enrollment is homed in its
+///   subject's genesis registry, the delegator's doc 1 or the claimant's
+///   (AUTH-2.62, AUTH-2.127), so the first rotation's trail over it
+///   (AUTH-5.59 step 2), homed in the subject's own doc 1, records the
+///   subject's own act in a home another account owns — a hired agent's, a
+///   handoff's recipient's, a bootstrap-delegated account's. A credential
+///   naming another subject is no act of the maker's, wherever it is homed;
+///   a claim-typed credential's `to` is empty and denotes no subject.
+/// * every other `old` is the maker's own where its own account's seat is
+///   the maker's.
+///
+/// A `from` that denotes no one address, an `at` with no seat, a
+/// credential whose `to` denotes no one address and an ordinary `old` with
+/// no seat answer `false`, as [`published_new`] answers for a `to` no claim
+/// keeps: such a link is an ordinary one.
 fn old_is_the_makers_own(world: &World, claim: &Link, at: &Address) -> bool {
     let m3 = world.m3();
-    let owner = |a: &Address| m3.account_seat(a).map(|(_, id)| id);
-    claim
-        .from_slot()
-        .single_denoted()
-        .and_then(|old| validate(old.clone()).ok())
-        .and_then(|old| owner(&old))
-        .is_some_and(|old_owner| owner(at) == Some(old_owner))
+    let Some(old) = claim.from_slot().single_denoted().and_then(|old| validate(old.clone()).ok())
+    else {
+        return false;
+    };
+    let Some((maker_account, maker)) = m3.account_seat(at) else { return false };
+    match world.links().readlink(&old) {
+        Some(link)
+            if matches!(
+                write_types().target_class(link.type_slot()),
+                Some(TargetClass::Credential(_))
+            ) =>
+        {
+            single_address(link.to_slot()).as_ref() == Some(maker_account)
+        }
+        _ => m3.account_seat(&old).is_some_and(|(_, owner)| owner == maker),
+    }
 }
 
 // ── mint_home_refusal — the mint class (AUTH-3.10–3.14) ──────────────────
@@ -878,190 +914,4 @@ pub fn plain_admission(
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_address::subtree_of;
-    use skep_identity::CredentialKind;
-
-    use skep_engine::types::t_enroll;
-
-    use super::*;
-    use crate::auth::policy::addr_of;
-
-    /// Checks that PUB-2.15's projection is address arithmetic and total.
-    ///
-    /// A version member answers its document, a document answers itself, a
-    /// member of a member peels to the same document — and off the document
-    /// tier the arithmetic changes nothing (an account has no document field;
-    /// an element's field is its document's own). The projection the gate
-    /// reads is M5's, so this pins the one spelling the daemon shares with the
-    /// write path.
-    #[test]
-    fn a_version_member_projects_to_its_document() {
-        let doc = addr_of(&[1, 0, 1, 0, 1]);
-        assert_eq!(trunk_of(&doc), doc, "a document is its own trunk");
-        assert_eq!(trunk_of(&addr_of(&[1, 0, 1, 0, 1, 1])), doc, "a version");
-        assert_eq!(trunk_of(&addr_of(&[1, 0, 1, 0, 1, 1, 2])), doc, "a version of a version");
-        let acct = addr_of(&[1, 0, 1]);
-        assert_eq!(trunk_of(&acct), acct);
-        let element = addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]);
-        assert_eq!(trunk_of(&element), element);
-    }
-
-    /// Checks the write path's input as wired.
-    ///
-    /// Every pinned class address classifies to its own arm, the credential
-    /// kinds answer through the same input as `kind_of` does, the edition
-    /// class is *no* class (PUB-6.32 — its owner's retraction is admitted),
-    /// and a content span is nothing. The wiring itself — the `LazyLock`
-    /// constructing without the prefix-free assertion firing — is what the
-    /// first call proves.
-    #[test]
-    fn the_write_path_input_recognizes_every_pinned_class() {
-        let types = write_types();
-        let unit = |a: &Address| vec![subtree_of(a.tumbler())];
-        assert_eq!(
-            types.target_class(&unit(t_enroll())),
-            Some(TargetClass::Credential(CredentialKind::Enroll))
-        );
-        assert_eq!(types.target_class(&unit(t_grant())), Some(TargetClass::Grant));
-        for (class, addr) in [
-            (AuditClass::SuccessorOf, t_successor_of()),
-            (AuditClass::DelegatorEndorsement, t_endorse()),
-            (AuditClass::ConsumptionMarker, t_consumption_marker()),
-            (AuditClass::JournalDesignation, t_journal_designation()),
-            (AuditClass::RailRecord, t_rail_record()),
-            (AuditClass::StewardClassification, t_steward_classification()),
-            (AuditClass::Replaces, t_replaces()),
-            (AuditClass::Binding, t_binding()),
-            (AuditClass::TakedownRecord, t_takedown()),
-            (AuditClass::PolicyLink, t_policy_link()),
-            (AuditClass::Supersession, &supersedes_type()),
-        ] {
-            assert_eq!(
-                types.target_class(&unit(addr)),
-                Some(TargetClass::AuditView(class)),
-                "{} is {class:?}",
-                addr.tumbler()
-            );
-        }
-        // The supersession class's address is M7's reserved ghost tumbler,
-        // read from M7 and spelled here only to pin the reading: a stored
-        // claim's type slot is exactly that class.
-        assert_eq!(supersedes_type(), addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 4]));
-        let claim = skep_links::supersession_claim(
-            &addr_of(&[1, 0, 1, 0, 1, 0, 2, 1]),
-            &addr_of(&[1, 0, 1, 0, 1, 0, 2, 2]),
-        );
-        assert_eq!(
-            types.target_class(claim.type_slot()),
-            Some(TargetClass::AuditView(AuditClass::Supersession))
-        );
-        // The registry's subtype rows are their kinds' members by prefix
-        // (REG-1.21); the endpoint is no class at all (REG-1.11, REG-1.46).
-        for (class, addr) in [
-            (AuditClass::TakedownRecord, skep_engine::types::t_takedown_lifted()),
-            (AuditClass::PolicyLink, skep_engine::types::t_disavowal()),
-            (AuditClass::PolicyLink, skep_engine::types::t_succession_policy()),
-        ] {
-            assert_eq!(types.target_class(&unit(addr)), Some(TargetClass::AuditView(class)));
-        }
-        assert_eq!(types.target_class(&unit(skep_engine::types::t_endpoint())), None);
-        // The edition class (3.14) is read under the active view: no class.
-        assert_eq!(types.target_class(&unit(skep_engine::types::t_edition())), None);
-        // A content I-span names nothing here either.
-        let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
-        assert_eq!(types.target_class(&[content]), None);
-        // A subtype by prefix is its class's member (L10): `endorse.trust`.
-        let trust = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 42, 2]);
-        assert_eq!(
-            types.target_class(&unit(&trust)),
-            Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement))
-        );
-    }
-
-    /// Checks the supersession claim's two keys (PUB-6.64).
-    ///
-    /// The board is built through M10 alone and left unclaimed, where
-    /// [`nullify_refusal`] answers a class's token to every caller, so the
-    /// class decision is read bare. A claim in its maker's private notes is a
-    /// member where its `new` is homed in a published document and its `old`
-    /// is the maker's own; the same claim over another account's published
-    /// link is an ordinary link, and so is a claim whose `new` is private.
-    /// The keys are facts of the claim: the maker and another account asking
-    /// get one answer.
-    #[test]
-    fn a_supersession_claim_is_a_member_only_over_its_makers_own_old() {
-        use serde_json::json;
-        use skep_febe::{Codec, OperationSurface, Response};
-        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
-
-        use crate::auth::CredentialLock;
-        use crate::codec::JsonCodec;
-
-        let engine = skep_engine::Engine::open(KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-            salt: SaltSource::Seeded(0),
-        })
-        .expect("in-memory genesis cannot fail");
-        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
-        let exec = |sid, frame: serde_json::Value| -> Address {
-            let req = JsonCodec
-                .parse(frame.to_string().as_bytes())
-                .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
-            match febe.execute(sid, req) {
-                Response::AckAddr { addr, .. } => addr,
-                other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
-            }
-        };
-        let (maker_id, other_id) = (PrincipalId(900), PrincipalId(901));
-        let boot = febe.bootstrap_session();
-        exec(boot, json!({"op": "delegate", "new_prefix": "1.0.1", "new_id": maker_id.0}));
-        exec(boot, json!({"op": "delegate", "new_prefix": "1.0.2", "new_id": other_id.0}));
-        let (maker, other) = (febe.open_session(maker_id), febe.open_session(other_id));
-        // Each account's home, born published; then the maker's private notes.
-        let mint = |sid, account: &str| {
-            exec(sid, json!({"op": "create_new_document", "account": account})).to_string()
-        };
-        let (home, other_home) = (mint(maker, "1.0.1"), mint(other, "1.0.2"));
-        let notes = mint(maker, "1.0.1");
-        let link = |sid, doc: &str, n: u32| -> String {
-            exec(
-                sid,
-                json!({"op": "make_link", "home": doc, "from": {"addrs": []},
-                       "to": {"addrs": []}, "ty": {"addrs": [format!("{doc}.0.3.6.{n}")]}}),
-            )
-            .to_string()
-        };
-        let own_old = link(maker, &notes, 1);
-        let published_new = link(maker, &home, 2);
-        let private_new = link(maker, &notes, 3);
-        let foreign_old = link(other, &other_home, 4);
-        let claim = |old: &str, new: &str| {
-            exec(maker, json!({"op": "assert_sup", "home": notes, "old": old, "new": new}))
-        };
-        let own = claim(&own_old, &published_new);
-        let over_another = claim(&foreign_old, &published_new);
-        let private = claim(&own_old, &private_new);
-
-        let snap = engine.kernel().snapshot();
-        let world = snap.world();
-        assert!(world.identity().claimant().is_none(), "the premise: unclaimed, every caller told");
-        let notes = crate::codec::wire_address(&notes).expect("the notes' address");
-        let lock = CredentialLock::new();
-        for caller in [maker_id, other_id] {
-            let class_of = |target: &Address| {
-                let op = Op::Nullify { home: notes.clone(), target: target.clone() };
-                nullify_refusal(&lock.read(), world, &op, caller)
-            };
-            assert_eq!(
-                class_of(&own),
-                Some(CredentialRefusal::NullifyAuditView),
-                "{caller:?}: the maker's own `old`, a published `new`: a member"
-            );
-            let ordinary = |why: &str| format!("{caller:?}: {why}: an ordinary link");
-            assert_eq!(class_of(&over_another), None, "{}", ordinary("another's `old`"));
-            assert_eq!(class_of(&private), None, "{}", ordinary("a private `new`"));
-        }
-    }
-}
+mod tests;

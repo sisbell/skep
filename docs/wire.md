@@ -2173,24 +2173,31 @@ resolves AFTER every token below.
      `edit_link`'s, typed the supersedes ghost tumbler
      `1.1.0.1.0.1.0.1.4` — where the claim's `new` (its `to`, one
      address) is homed in a PUBLISHED document and its `old` (its `from`)
-     is owned by the account that owns the claim itself. Its ground is
-     not the view it is read on but what it records: a claim that its
-     owner's public copy supersedes its owner's own original is a fact of
-     a past act that no act legitimately retracts — refused, the claim
-     keeps the ACTIVE view's claim reads (`in_claims`, `out_claims`)
-     exact, a published copy leaving that view by its own retraction
-     alone. The second key is RES-207's shape on the claim's other end —
-     the TYPE and `published(document_of(new))` — and the third compares
-     the owner of `old` with the owner of the claim, each read off the
-     target link the refusal already holds. Outside them the claim is an
+     is the claim's owner's own: a CREDENTIAL-typed link whose SUBJECT —
+     the one address its `to` denotes — is the account that owns the
+     claim, wherever that credential is homed, or any other link owned by
+     the account that owns the claim itself. Its ground is not the view
+     it is read on but what it records: a claim that its owner's public
+     copy supersedes its owner's own original is a fact of a past act
+     that no act legitimately retracts — among them a rotation's trail
+     (AUTH-5.59 step 2) over the genesis enrollment that seeded its
+     owner, which its registrar homed in the registrar's own doc 1 —
+     refused, the claim keeps the ACTIVE view's claim reads (`in_claims`,
+     `out_claims`) exact, a published copy leaving that view by its own
+     retraction alone. The second key is RES-207's shape on the claim's
+     other end — the TYPE and `published(document_of(new))` — and the
+     third reads `old`'s own link: credential-typed, its subject is
+     compared with the account that owns the claim; otherwise its owner
+     is compared with the claim's owner. Outside them the claim is an
      ordinary link, its owner's retraction landing — the one correction
      path for a wrong claim — both where its `new` is PRIVATE (a
      correction inside the owner's own notes) and where it was asserted
-     over ANOTHER account's link: the claim's write gates ownership of its
-     homes alone, so an agent may name its hirer's public link `old`, and
-     the agent retracts that claim, or the hirer in a session as that
-     agent, while the owner of that `old`, owning no part of the claim,
-     answers `not_owner`. ONE code for the class list; a client splits
+     over ANOTHER account's ordinary link, or over a credential naming
+     another account: the claim's write gates ownership of its homes
+     alone, so an agent may name its hirer's public link `old`, and the
+     agent retracts that claim, or the hirer in a session as that agent,
+     while the owner of that `old`, owning no part of the claim, answers
+     `not_owner`. ONE code for the class list; a client splits
      the face by the target's type, which the owner can read. The classes
      are the members' list, never the boundary: the next audit-view class
      joins the list and inherits the code. The R20 edition claim
@@ -3740,12 +3747,14 @@ publication spec reads under the AUDIT view (the succession pair, the
 consumption marker, the journal designation, the rail record, the
 steward's classification link with a published home, the `replaces` link
 a grant is deposited with, and the supersession claim whose `new` is
-homed in a published document and whose `old` is owned by the claim's
-own owner — a fact of a past act that no act legitimately retracts; a
-claim whose `new` is private, or whose `old` is another account's link,
-stays retractable by its owner) is refused `nullify_audit_view` — each
-to the record's owner alone, anyone else answering plain `not_owner`
-(§Credential refusals, item 3). And the
+homed in a published document and whose `old` is its owner's own — a
+credential naming the claim's owner as its subject, wherever it is
+homed, or any other link the claim's owner owns — a fact of a past act
+that no act legitimately retracts; a claim whose `new` is private, or
+whose `old` is another account's ordinary link or a credential naming
+another account, stays retractable by its owner) is refused
+`nullify_audit_view` — each to the record's owner alone, anyone else
+answering plain `not_owner` (§Credential refusals, item 3). And the
 publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
 lands at its TARGET, so on a claimed board a bare session's `nullify`
 whose record home OR target home is published is

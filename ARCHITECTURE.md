@@ -1560,8 +1560,9 @@ Rules that hold across its files:
   the crate's own. `tests/it/tidy.rs` checks it.
 
 Its unit suites sit beside their code: `auth/blocked/tests.rs`,
-`auth/session/tests.rs` (which opens a real engine), the inline suites of
-`auth/policy/*`, `commits/tests.rs` (which opens one too),
+`auth/session/tests.rs` (which opens a real engine),
+`auth/policy/plain/tests.rs` (which opens one too), the inline suites of
+the rest of `auth/policy/*`, `commits/tests.rs` (which opens one too),
 `commits/sidecar/tests.rs`, `commits/feed/derived/tests.rs`,
 `commits/feed/window/tests.rs` and `codec/tests.rs`. Its integration
 suites — the session layer, the commits and the head over a served daemon

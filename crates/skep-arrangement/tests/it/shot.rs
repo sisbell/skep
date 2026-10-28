@@ -699,12 +699,14 @@ fn a_run_overlapping_an_earlier_one_in_part_is_split_into_a_referenced_piece_and
     // then a b c. The first run is minted whole; of the second, a — the one
     // position no earlier run minted — is minted, and b c placed by
     // reference to the fresh run the first run became. The pairing
-    // `stage_publish` returns is the two minted pieces in minting order,
-    // each beside the fresh run it became — the correspondence a composite
-    // records in the draft, one record per minted piece — and the member
-    // reads every occurrence the client placed. Staged through the public
-    // staging function under a transaction of the test's own, the one way to
-    // read the pairing.
+    // `stage_publish` returns is every piece placed, in placement order,
+    // each under its `runs` entry and beside the fresh run it stands as: the
+    // two minted pieces — the correspondence a composite records in the
+    // draft, one record per minted piece — and the referenced piece, paired
+    // with the same piece of the first run's fresh run, which no second
+    // record names; and the member reads every occurrence the client placed.
+    // Staged through the public staging function under a transaction of the
+    // test's own, the one way to read the pairing.
     let k = mem_kernel();
     deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -728,10 +730,12 @@ fn a_run_overlapping_an_earlier_one_in_part_is_split_into_a_referenced_piece_and
     assert_eq!(
         pairing,
         vec![
-            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2) },
-            MintedRun { from: run(&ca(1), 1), to: run(&pca(6), 1) },
+            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2), index: 1, minted: true },
+            MintedRun { from: run(&ca(1), 1), to: run(&pca(6), 1), index: 2, minted: true },
+            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2), index: 2, minted: false },
         ],
-        "the two minted pieces in minting order, each beside the fresh run it became"
+        "every placed piece in placement order under its entry: the two minted pieces beside \
+         the fresh runs they became, and the referenced piece beside the first's fresh run"
     );
     let s = k.snapshot();
     assert_eq!(

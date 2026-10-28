@@ -1,20 +1,26 @@
 //! THE PUBLICATION (the link-sets design §5.7): the publish shot's one
-//! commit, the member minted and the shot's correspondence records beside
-//! it, in one transaction.
+//! commit, the member minted, the shot's correspondence records beside it,
+//! and the draft re-windowed at its kept places, in one transaction.
 //!
 //! [`stage_publication`] is the composite as a function over a caller-opened
 //! staging — the shot's admission, THE TWIN FENCE, the shot's staging
-//! ([`stage_publish`], M5's) and, per piece of draft identity the shot
-//! minted, one correspondence record homed in the draft
-//! ([`stage_correspondence`]) — and [`LinkWriter::publication`] the public
-//! op: one `transact_attested` over the union of the shot's keys and the
-//! draft's link key. The correspondence class has this one writer; the
-//! fences on the three request-typed doors keep every other act off it.
+//! ([`stage_publish`], M5's), per piece of draft identity the shot minted one
+//! correspondence record homed in the draft ([`stage_correspondence`]), and
+//! THE RE-WINDOW: for each run the request carries a kept place for, the
+//! check that the draft still arranges that run's identity at that place
+//! and its replacement there by the fresh run it became, a placement and a
+//! removal ([`stage_reinstate_at`], [`stage_delete_at`], M5's) — and
+//! [`LinkWriter::publication`] the public op: one `transact_attested` over
+//! the union of the shot's keys, the draft's link key and, where a place is
+//! carried, the draft's content key. The correspondence class has this one
+//! writer; the fences on the three request-typed doors keep every other act
+//! off it.
 
 use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
-    head_lock_key, shot_admission, stage_publish, stage_seat_link, trunk_of, Caller, HasM5,
-    MintedRun, PublishWorld, Run, Shot,
+    head_lock_key, ordinal_vspan, shot_admission, stage_delete_at, stage_publish,
+    stage_reinstate_at, stage_seat_link, trunk_of, Caller, HasM5, M5State, Pairing,
+    PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
 };
 use skep_kernel::{Seq, Staging, TxnError};
 use skep_namespace::{HasM3, M3State};
@@ -55,14 +61,14 @@ impl From<EmitCoreError> for PublicationError {
     }
 }
 
-/// Stages a publication into the caller's transaction: the shot and, for
-/// every piece of draft identity it minted, one correspondence record in
-/// the draft.
+/// Stages a publication into the caller's transaction: the shot, for every
+/// piece of draft identity it minted one correspondence record in the draft,
+/// and the draft's re-window at the kept places the request carries.
 ///
 /// It is the link-sets design's ONE COMMIT (§5.7) as a function over a
 /// caller-opened [`Staging`], the form every store op a composite may need
-/// takes (PATTERNS SP-30), so a wider composite — the kept places, the
-/// deposits — stages it under one transaction with its own. In order:
+/// takes (PATTERNS SP-30), so a wider composite — the deposits — stages it
+/// under one transaction with its own. In order:
 ///
 /// 1. THE SHOT's OWN TABLE: M5's admission through its source gate
 ///    ([`shot_admission`], asked of the working world) — `doc`'s
@@ -86,20 +92,43 @@ impl From<EmitCoreError> for PublicationError {
 ///    card states why), the re-insert's count, the existence walk, the
 ///    placement with each draft identity minted once, the member's mint and
 ///    its placing record — returning the member and the pairing.
-/// 4. THE RECORDS: for each minted piece of the pairing, in minting order,
+/// 4. THE RECORDS: for each MINTED piece of the pairing, in minting order,
 ///    one record homed in the draft through [`stage_correspondence`] —
 ///    `from` the piece's draft-native span, `to` the fresh span it became,
 ///    both the permanent I-spans they are, of one width — its positions
-///    rising in minting order, each seated in the draft's link subspace. A
-///    shot that names no draft, or re-inserts nothing, stages no record and
-///    commits exactly as the shot alone does.
+///    rising in minting order, each seated in the draft's link subspace; a
+///    piece placed by reference to an identity an earlier entry minted is
+///    the first's record's and takes none. A shot that names no draft, or
+///    re-inserts nothing, stages no record and commits exactly as the shot
+///    alone does.
+/// 5. THE RE-WINDOW, last (`stage_rewindow`): for each `runs` entry that
+///    carries a kept place in `places` — the V-position the run held in the
+///    draft when the client composed the request, outside the signed
+///    preimage as `draft` is — in `runs`' order, the check that the draft
+///    still arranges that run's identity at that place, then the entry's
+///    replacement there by the fresh run it became, piece by piece. A
+///    request with no place — `places` empty, or every entry `None` — is
+///    today's shot, writing nothing of the draft.
+///
+/// `places` is parallel to `shot.runs` by index, each entry the run's place
+/// or `None`; a shorter list is read as padded with `None`, and an entry
+/// past the runs is nothing's and is ignored. A place belongs to a
+/// draft-native run alone — the wire's codec refuses one on any other run
+/// (`malformed`, with the entry) — and below that door one on a run that is
+/// not draft-native is checked as any place is and re-windows nothing, the
+/// entry having no draft-native piece; one with no draft named is ignored
+/// with the re-window, which has no draft to window.
 ///
 /// The caller's lock keys are the union of the shot's
-/// ([`stage_publish`]'s card) and the draft's `link_lock_key` where records
-/// will be minted — [`LinkWriter::publication`] supplies exactly that. The
+/// ([`stage_publish`]'s card), the draft's `link_lock_key` where records
+/// will be minted, and the draft's `content_lock_key` where a place is
+/// carried — [`LinkWriter::publication`] supplies exactly that. The
 /// visibility class `readable` is the caller's: the shot's source gate
 /// consults it per origin, and the records' deposit gate is handed it as
 /// every deposit's is, though the Open gate reads no incumbent.
+///
+/// Returns the member and the pairing [`stage_publish`] returned beside it,
+/// for a wider composite that places the pieces itself.
 ///
 /// # Errors
 ///
@@ -108,7 +137,9 @@ impl From<EmitCoreError> for PublicationError {
 /// (`Publish`), the fence (`AlreadyPublished`), the shot's staging
 /// (`Publish`), a record's backstops (`HomeNotRegistered`, `NotOwner` —
 /// unreachable past the admission, which asked both of the same draft) and
-/// its `Mint` and `Seat`. An `Err` commits nothing of the transaction.
+/// its `Mint` and `Seat`, then the re-window's (`KeptPlaceMoved` with the
+/// entry, `Reinstate`, `Delete` — `stage_rewindow` states which are
+/// reachable). An `Err` commits nothing of the transaction.
 ///
 /// # Panics
 ///
@@ -121,8 +152,9 @@ pub fn stage_publication<W>(
     caller: Caller,
     doc: &Address,
     shot: &Shot,
+    places: &[Option<VPos>],
     readable: &Visibility<'_, W>,
-) -> Result<Address, PublicationError>
+) -> Result<(Address, Pairing), PublicationError>
 where
     W: PublishWorld + LinkWorld,
     W::Record: From<LinkRec>,
@@ -149,13 +181,138 @@ where
     }
     // 3. The shot.
     let (member, pairing) = stage_publish(stg, caller, doc, shot, readable)?;
-    // 4. The records, one per minted piece, in minting order.
     if let Some(draft) = shot.draft_document() {
-        for MintedRun { from, to } in &pairing {
-            stage_correspondence(stg, readable, caller, &draft, from, to)?;
+        // 4. The records, one per minted piece, in minting order.
+        for piece in pairing.iter().filter(|piece| piece.minted) {
+            stage_correspondence(stg, readable, caller, &draft, &piece.from, &piece.to)?;
+        }
+        // 5. The re-window, last.
+        stage_rewindow(stg, caller, &draft, &trunk_of(doc), shot, places, &pairing)?;
+    }
+    Ok((member, pairing))
+}
+
+/// Stages the draft's re-window at its kept places: for each `runs` entry
+/// that carries a place, the check that `draft` still arranges that run's
+/// identity there, and the entry's replacement there by the fresh run it
+/// became.
+///
+/// It is the link-sets design's "re-window of `D` at its kept places,
+/// checked by identity" (§5.7), the S-gate's composite, over the pairing
+/// [`stage_publish`] returned: for each entry of `shot.runs` with a place in
+/// `places`, in `runs`' order —
+///
+/// (a) THE CHECK: the V-span of the entry's width that opens at the place
+///     resolves, in the draft as the records staged so far left it
+///     (`stg.working()`), to exactly the entry's run — M5's V→I resolution
+///     ([`M5State::resolve`]) answering the run's addresses in its order and
+///     nothing else over that span ([`arranged_at`]). The question is asked
+///     of the place alone, by MEMBERSHIP (the S-gate's ruling): a draft that
+///     arranges the identity twice is re-windowed at the named place and
+///     left standing at the other, the twin fence meeting the other at its
+///     own publication. The predicate implies the design's projection
+///     membership — `project(D, the run's I-span)` covering the span — and
+///     refuses in addition a run whose addresses the draft arranges at the
+///     place in another order, a rearrangement within the span since the
+///     place was read, which the projection cannot see and the replacement
+///     would silently undo. Failing, `KeptPlaceMoved` with the entry: the
+///     draft moved the run, split it, deleted it or arranges it elsewhere
+///     since the place was read, and nothing is committed — never a guess.
+/// (b) THE REPLACEMENT, piece by piece along the entry's pieces of the
+///     pairing, each at its offset from the place (the pieces tile the run
+///     from its start, in I-order — [`Pairing`]'s contract — so the offset is
+///     the widths before it, summed): the fresh piece placed by identity at
+///     the place plus the offset ([`stage_reinstate_at`], windowing the
+///     edition's trunk, which minted it), which moves the draft-native piece
+///     right by the fresh one's width; then that piece's position RE-DERIVED
+///     off the working world — the fresh piece's width past its place, where
+///     the placement left it, asked of the arrangement again and never
+///     carried over — and the piece removed there ([`stage_delete_at`]), so
+///     the draft reads the same bytes at every position and arranges the
+///     member's identity where it arranged its own. A piece placed by
+///     reference to an identity an earlier entry minted re-windows to the
+///     same piece of the first's fresh run.
+///
+/// Cost: per place, one resolution of the entry's span over the draft's
+/// run-list, and two records per piece.
+///
+/// # Errors
+///
+/// `Reinstate(NotContentSubspace)` for a place outside the content subspace
+/// — the placement's own verdict for the position, asked ahead of the check,
+/// which the wire's codec refuses first; `KeptPlaceMoved { index }` where the
+/// check fails, and where the re-derivation finds the piece elsewhere than
+/// the placement left it, which the check rules out; `Reinstate` with the
+/// placement's own — `PublishedTarget` where the draft is a published
+/// document (a draft named outside the chain need not be private),
+/// `TooManyRuns` where the draft's run-list is at M5's budget; the rest
+/// made unreachable by the check and the admission — and `Delete` with the
+/// removal's, `PublishedTarget` alone reachable, the placement refusing it
+/// first.
+fn stage_rewindow<W>(
+    stg: &mut Staging<W>,
+    caller: Caller,
+    draft: &Address,
+    trunk: &Address,
+    shot: &Shot,
+    places: &[Option<VPos>],
+    pairing: &Pairing,
+) -> Result<(), PublicationError>
+where
+    W: PublishWorld,
+{
+    for (index, (entry, place)) in shot.runs.iter().zip(places).enumerate() {
+        let Some(place) = place else { continue };
+        if !place.is_content() {
+            return Err(ReinstateError::NotContentSubspace.into());
+        }
+        // (a) The check, of the working world: the entry's run, at the
+        //     place, in its order, and nothing else over its span.
+        if !arranged_at(stg.working().m5(), draft, place, &entry.run) {
+            return Err(PublicationError::KeptPlaceMoved { index });
+        }
+        // (b) The replacement, piece by piece at each piece's offset.
+        let mut offset = Nat::from(0u32);
+        for piece in pairing.iter().filter(|piece| piece.index == index) {
+            let at = VPos::content(&place.ordinal + &offset);
+            let fresh = ShotRun { origin: trunk.clone(), run: piece.to.clone() };
+            stage_reinstate_at(stg, caller, draft, at.clone(), &[fresh])?;
+            // The draft-native piece, where the placement left it: the fresh
+            // piece's width past its place, read off the working world.
+            let moved = VPos::content(&at.ordinal + piece.to.width());
+            if !arranged_at(stg.working().m5(), draft, &moved, &piece.from) {
+                return Err(PublicationError::KeptPlaceMoved { index });
+            }
+            stage_delete_at(stg, caller, draft, moved, piece.from.width().clone())?;
+            offset = &offset + piece.from.width();
         }
     }
-    Ok(member)
+    Ok(())
+}
+
+/// Returns whether `doc` arranges exactly `run` over the V-span of `run`'s
+/// width that opens at `at`.
+///
+/// It is the re-window's check by identity, asked of the arrangement `m5`
+/// holds: the span resolves (M5's V→I resolution, clipped to the arranged
+/// range) to runs that tile it, and they are `run`'s addresses in `run`'s
+/// order and nothing else — each resolved run opening where the previous
+/// one reached, the first at `run`'s start and the last reaching `run`'s
+/// reach. A span opening past the arranged end, or reaching past it,
+/// resolves short and answers `false`; so does one holding another address
+/// among the run's, or the run's addresses in another order.
+fn arranged_at(m5: &M5State, doc: &Address, at: &VPos, run: &Run) -> bool {
+    let Some(span) = ordinal_vspan(at.clone(), run.width().clone()) else {
+        return false; // a run's width is ≥ 1, so no span is no arrangement
+    };
+    let mut next = run.i_start().tumbler().clone();
+    for resolved in m5.iter_resolve(doc, &span) {
+        if resolved.i_start().tumbler() != &next {
+            return false;
+        }
+        next = resolved.reach();
+    }
+    next == run.reach()
 }
 
 /// Stages one correspondence record in `draft`: `from` the draft-native
@@ -260,24 +417,31 @@ where
     W: PublishWorld + LinkWorld,
     W::Record: From<LinkRec>,
 {
-    /// THE PUBLICATION (the link-sets design §5.7): the publish shot and its
-    /// correspondence records in ONE commit.
+    /// THE PUBLICATION (the link-sets design §5.7): the publish shot, its
+    /// correspondence records and the draft's re-window at its kept places
+    /// in ONE commit.
     ///
     /// It opens one transaction over the union of the shot's keys —
     /// `doc`'s head key, `content_lock_key` of the document it projects to,
-    /// the base's `version_lock_key` where the base is a member — and the
+    /// the base's `version_lock_key` where the base is a member — the
     /// draft's `link_lock_key` where records will be minted (a draft named
-    /// and a run re-inserted), sorted and deduped as `editlink`'s pair is,
-    /// under this handle's attestation, and stages [`stage_publication`]:
-    /// the shot's admission, the twin fence, the shot, the records. What
+    /// and a run re-inserted), and the draft's `content_lock_key` where
+    /// `places` carries a place (the re-window edits the draft's
+    /// arrangement), sorted and deduped as `editlink`'s pair is, under this
+    /// handle's attestation, and stages [`stage_publication`]: the shot's
+    /// admission, the twin fence, the shot, the records, the re-window. What
     /// the shot does and refuses is M5's `publish` word for word; what this
-    /// adds is the fence and the records, stated on the staging function.
-    /// The visibility class this handle carries is the shot's `readable`,
-    /// the value M10 lends M5's shot on the plain path.
+    /// adds is the fence, the records and the re-window, stated on the
+    /// staging function. The visibility class this handle carries is the
+    /// shot's `readable`, the value M10 lends M5's shot on the plain path.
+    ///
+    /// `places` is the request's kept places, parallel to `shot.runs` by
+    /// index — empty for a request that sends none, which is today's shot.
     ///
     /// Returns `(member, seq)`: the member's address, the ack's, and the one
     /// commit's `Seq`. A caller reads the records back off the draft's link
-    /// subspace, in minting order.
+    /// subspace, in minting order, and the re-windowed draft off its
+    /// arrangement.
     ///
     /// # Errors
     ///
@@ -294,6 +458,7 @@ where
         caller: Caller,
         doc: &Address,
         shot: &Shot,
+        places: &[Option<VPos>],
     ) -> Result<(Address, Seq), TxnError<PublicationError>> {
         let trunk = trunk_of(doc);
         let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
@@ -306,13 +471,16 @@ where
             if shot.reinserted_runs().next().is_some() {
                 keys.push(M3State::link_lock_key(&draft));
             }
+            if places.iter().any(Option::is_some) {
+                keys.push(M3State::content_lock_key(&draft));
+            }
         }
         // M2's own bytewise order, duplicates collapsed, as `editlink` hands
         // its pair: the same set in the same sequence however it was named.
         keys.sort();
         keys.dedup();
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            stage_publication(stg, caller, doc, shot, self.visibility)
+            stage_publication(stg, caller, doc, shot, places, self.visibility).map(|(member, _)| member)
         })
     }
 }

@@ -130,9 +130,10 @@
 //! base's post-render deposits are carried after them (PUB-2.42, PUB-2.45).
 //! The shot's body is a staging function, [`stage_publish`], under the one
 //! bound [`PublishWorld`], returning the member and the pairing of each
-//! minted draft piece with its fresh run ([`Pairing`]) — so a composite in
-//! the link store stages the shot and its correspondence records under one
-//! transaction. The
+//! placed draft piece with the fresh run it stands as, under its `runs`
+//! entry ([`Pairing`]) — so a composite in the link store stages the shot,
+//! its correspondence records and the draft's re-window at its kept places
+//! under one transaction. The
 //! birth version is minted by the same composite in either of two shapes:
 //! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the
 //! memberless document named as its own base, carrying the deposits it took

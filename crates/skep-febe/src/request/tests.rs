@@ -72,7 +72,14 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         ),
         (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
         (Op::Version { d_src: doc(), published: None }, false),
-        (Op::Publish { doc: doc(), shot: Shot { base: None, draft: None, runs: vec![] } }, false),
+        (
+            Op::Publish {
+                doc: doc(),
+                shot: Shot { base: None, draft: None, runs: vec![] },
+                places: vec![],
+            },
+            false,
+        ),
         (
             Op::MakeLink {
                 home: doc(),

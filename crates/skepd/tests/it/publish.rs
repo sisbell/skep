@@ -1091,3 +1091,98 @@ fn the_birth_version_is_one_commit_and_a_refused_shot_leaves_no_residue() {
     );
     sd.shutdown();
 }
+
+/// THE KEPT PLACES ON THE WIRE (the link-sets design §5.7; wire.md §The
+/// publish shot and head-float, the kept places; §Arrangement, `places`): a
+/// shot carrying, beside its `runs`, the place a draft-native run held in
+/// the draft — composed from the draft's image as its owner — has the draft
+/// RE-WINDOWED in the shot's one commit: the draft reads the same text and
+/// images the member's fresh run where its own words were, its own `a`
+/// before them at its own address; the member is minted; the record stands;
+/// and the feed row is as the publication's spine left it, one row, the
+/// member first and the draft beside it to its owner, its `attest` kept.
+/// THE SIGNED FRAME IS UNCHANGED: the entry signature the suite's signer
+/// made over the frame WITHOUT `places` verifies the frame WITH them — the
+/// places lie outside the preimage. A place the draft no longer honours —
+/// the run's words rearranged after the place was read — is refused
+/// `kept_place_moved`, permanent, `site.index` the `runs` entry and nothing
+/// else, no detail, nothing committed and the draft as the rearrangement
+/// left it. And the shape is the codec's, ahead of every store: a place on
+/// a run whose origin is the edition, and a list longer than `runs`, are
+/// `malformed` with `site.index` the entry.
+#[test]
+fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    let d = draft_with(port, &bare, "abc");
+    let b = format!("{d}.0.1.2");
+    // The client's reading: `b c` at ordinal 2 of the draft, one run.
+    assert_eq!(image_as(port, Some(&bare), &d, 2, 2), vec![(b.clone(), "2".to_string())]);
+    let placed = |frame: &str, places: Value| -> Value {
+        let mut v: Value = serde_json::from_str(frame).expect("a frame");
+        v["places"] = places;
+        v
+    };
+    let place = |ordinal: u64| serde_json::json!([{"subspace": "1", "ordinal": ordinal.to_string()}]);
+
+    // The signature over the frame without places, attached to the frame
+    // with them.
+    let unplaced = publish(&e, None, Some(&d), &[run(&d, &b, 2)]);
+    let attested: Value = serde_json::from_str(&attach_attest(port, &signed, &unplaced)).expect("a frame");
+    let attest = attested["attest"].clone();
+    assert!(attest.is_object(), "the suite's signer attested the shot: {attested}");
+    let mut shot = placed(&unplaced, place(2));
+    shot["attest"] = attest;
+    let before = head(port);
+    let member = acked_addr(&op_as_written(port, Some(&signed), &shot.to_string()));
+    assert_eq!(member, format!("{e}.1"));
+    // The draft: the same text, the member's fresh run where `b c` were.
+    assert_eq!(text_as(port, Some(&bare), &d, 1, 3), "abc");
+    assert_eq!(content_extent_as(port, Some(&bare), &d), 3);
+    let fresh = image(port, &member, 1, 2);
+    assert_eq!(fresh, vec![(format!("{e}.0.1.1"), "2".to_string())]);
+    assert_eq!(image_as(port, Some(&bare), &d, 2, 2), fresh, "the draft arranges the member's identity at the place");
+    assert_eq!(image_as(port, Some(&bare), &d, 1, 1), vec![(format!("{d}.0.1.1"), "1".to_string())], "the draft's own `a` at its own address");
+    assert_eq!(text(port, &member, 1, 2), "bc");
+    // The record, and the row as the spine left it.
+    let record = read_link(port, Some(&bare), &format!("{d}.0.2.1"));
+    assert_eq!(record["slots"][0][0]["start"].as_str(), Some(b.as_str()), "the record names the draft's run: {record}");
+    let owners = changes_since_as(port, Some(&signed), before);
+    assert_eq!(owners.len(), 1, "one commit: {owners:?}");
+    assert_eq!(owners[0]["docs"], serde_json::json!([member, d]), "the member first, the draft beside it: {}", owners[0]);
+    assert!(owners[0]["attest"].is_object(), "{}", owners[0]);
+
+    // A moved place: a second draft `x y z`, `y` and `x` swapped after the
+    // place of `y z` was read.
+    let d2 = draft_with(port, &bare, "xyz");
+    let yz = format!("{d2}.0.1.2");
+    assert_eq!(image_as(port, Some(&bare), &d2, 2, 2), vec![(yz.clone(), "2".to_string())]);
+    expect_resp(&op(port, Some(&bare), &rearrange_frame(&d2, [1, 2, 3])), "ack");
+    assert_eq!(text_as(port, Some(&bare), &d2, 1, 3), "yxz");
+    let stale = placed(&publish(&e, Some((&member, 2)), Some(&d2), &[run(&d2, &yz, 2)]), place(2));
+    let before = head(port);
+    let v = op(port, Some(&signed), &stale.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("kept_place_moved"), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "the runs entry, and nothing else: {v}");
+    assert!(rej.get("detail").is_none(), "no detail rides the code: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    assert!(changes_since(port, before).is_empty());
+    assert_eq!(text_as(port, Some(&bare), &d2, 1, 3), "yxz", "the draft as the rearrangement left it");
+
+    // The shape, refused at the codec with the entry, before any store.
+    let both = publish(&e, Some((&member, 2)), Some(&d2), &[run(&e, &format!("{e}.0.1.1"), 2), run(&d2, &yz, 2)]);
+    let v = op_as_written(port, Some(&signed), &placed(&both, serde_json::json!([{"subspace": "1", "ordinal": "1"}, null])).to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "a place on the edition's own run: {v}");
+    let v = op_as_written(port, Some(&signed), &placed(&both, serde_json::json!([null, null, null])).to_string());
+    assert_eq!(expect_resp(&v, "rejected")["site"], serde_json::json!({"index": 2}), "longer than runs: {v}");
+    assert_eq!(head(port), before);
+    sd.shutdown();
+}

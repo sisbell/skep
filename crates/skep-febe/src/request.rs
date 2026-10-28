@@ -284,11 +284,29 @@ pub enum Op {
     /// the five link writes lend M7; M10 hands the shot through verbatim and
     /// names no policy of its own.
     ///
+    /// **The kept places** (the link-sets design §5.7). `places` is parallel
+    /// to `shot.runs` by index: for a draft-native run, the V-position it
+    /// held in the staging draft when the client composed the request, read
+    /// off the draft's image, or `None`; empty where the request carries
+    /// none, which is today's shot, writing nothing of the draft. The
+    /// composite checks, in the shot's one commit, that the draft still
+    /// arranges each such run's identity at its place and replaces it there
+    /// by the fresh run it became, refusing the whole publication
+    /// (`KeptPlaceMoved`, `site.index` the entry) where it does not. They
+    /// ride BESIDE the shot and not in it: the shot is the member's
+    /// arrangement, what the entry signature is composed over, and a place
+    /// is a fact about the draft, outside the signed preimage as `draft` is
+    /// — so the composer reads `shot` and `doc` alone, and every builder of
+    /// a `Shot` stands. The wire's codec holds the list to `runs`' length,
+    /// each place to a draft-native run and the content subspace, padded
+    /// with `None` to `runs`' length where any place is present; M10 hands
+    /// it through verbatim.
+    ///
     /// **Size.** Its work is not bounded by its request's size;
     /// [`Codec::parse`] says why and what a route owes.
     ///
     /// [`Codec::parse`]: crate::Codec::parse
-    Publish { doc: Address, shot: Shot },
+    Publish { doc: Address, shot: Shot, places: Vec<Option<VPos>> },
     // ── link writes (→ M7) ──
     /// MAKELINK (ASN-0120): an open link from three three-form slots.
     ///

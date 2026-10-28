@@ -27,7 +27,7 @@ use std::error::Error;
 use std::fmt;
 
 use skep_address::Address;
-use skep_arrangement::{PublishError, SeatError};
+use skep_arrangement::{DeleteError, PublishError, ReinstateError, SeatError};
 use skep_namespace::MintError;
 
 // Ownership: every op that deposits into a home document's link subspace
@@ -316,7 +316,8 @@ impl From<NullifyError> for RetractStaleError {
 }
 
 /// The publication's rejection (the link-sets design §5.7): the shot's own
-/// verdicts, the twin fence, and the correspondence records' backstops.
+/// verdicts, the twin fence, the correspondence records' backstops, and the
+/// re-window's.
 ///
 /// In the order the composite answers: the shot's admission through its
 /// source gate (`Publish`, M5's verdicts as `publish` states their order,
@@ -327,7 +328,11 @@ impl From<NullifyError> for RetractStaleError {
 /// deposit gate's home check (`HomeNotRegistered`, `NotOwner`) — a backstop
 /// the admission's draft slots make unreachable on the composite's path,
 /// reachable through [`stage_correspondence`](crate::stage_correspondence)
-/// alone — and the record's mint and seat.
+/// alone — and the record's mint and seat; then THE RE-WINDOW, per `runs`
+/// entry that carries a kept place, in `runs`' order: the check by identity
+/// (`KeptPlaceMoved`), then the placement's own verdicts (`Reinstate`) and
+/// the removal's (`Delete`) as the fresh run is put at the place and the
+/// draft-native piece taken out behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicationError {
     /// The shot's own refusal, as `publish` states it.
@@ -348,6 +353,27 @@ pub enum PublicationError {
     Mint(MintError),
     /// A record's seat in the draft's link subspace was refused.
     Seat(SeatError),
+    /// The draft no longer arranges a run's identity at the kept place the
+    /// request carries for it (the link-sets design §5.7): since the client
+    /// read the place the draft moved the run, split it, deleted it, or
+    /// arranges it elsewhere — or arranges its addresses there in another
+    /// order. `index` is the `runs` entry the place belongs to. Permanent:
+    /// the same request can never land; the client re-reads the draft and
+    /// composes the places afresh. Nothing is committed.
+    KeptPlaceMoved {
+        /// The position in the request's `runs` of the entry whose place the
+        /// draft no longer honours.
+        index: usize,
+    },
+    /// The re-window's placement of a fresh run at a kept place was refused —
+    /// `reinstate`'s own verdict, `PublishedTarget` where the draft named is
+    /// a published document, `TooManyRuns` where the draft's run-list is at
+    /// its budget; the rest are made unreachable by the check ahead of it.
+    Reinstate(ReinstateError),
+    /// The re-window's removal of the draft-native piece behind the fresh run
+    /// was refused — `delete`'s own verdict, made unreachable but for a
+    /// published draft by the check and the placement ahead of it.
+    Delete(DeleteError),
 }
 
 impl From<PublishError> for PublicationError {
@@ -359,6 +385,18 @@ impl From<PublishError> for PublicationError {
 impl From<SeatError> for PublicationError {
     fn from(e: SeatError) -> Self {
         PublicationError::Seat(e)
+    }
+}
+
+impl From<ReinstateError> for PublicationError {
+    fn from(e: ReinstateError) -> Self {
+        PublicationError::Reinstate(e)
+    }
+}
+
+impl From<DeleteError> for PublicationError {
+    fn from(e: DeleteError) -> Self {
+        PublicationError::Delete(e)
     }
 }
 
@@ -579,6 +617,12 @@ impl fmt::Display for PublicationError {
             }
             PublicationError::Mint(e) => write!(f, "publication: a record's mint failed: {e}"),
             PublicationError::Seat(e) => write!(f, "publication: a record's seat refused: {e}"),
+            PublicationError::KeptPlaceMoved { index } => write!(
+                f,
+                "publication: the draft no longer arranges run {index}'s identity at the kept place the request carries for it"
+            ),
+            PublicationError::Reinstate(e) => write!(f, "publication: the re-window's placement refused: {e}"),
+            PublicationError::Delete(e) => write!(f, "publication: the re-window's removal refused: {e}"),
         }
     }
 }
@@ -588,6 +632,8 @@ impl Error for PublicationError {
             PublicationError::Publish(e) => Some(e),
             PublicationError::Mint(e) => Some(e),
             PublicationError::Seat(e) => Some(e),
+            PublicationError::Reinstate(e) => Some(e),
+            PublicationError::Delete(e) => Some(e),
             _ => None,
         }
     }

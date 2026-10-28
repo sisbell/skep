@@ -167,8 +167,10 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::Version { d_src: d1(), published: None }),
         rq(None, Op::Version { d_src: d1(), published: Some(false) }),
         // The publish shot (wire v7.3): the ordinary shot off a member with
-        // a draft-native run and a window, and the birth version — base and
-        // draft both absent — so both optional forms ride the round trip.
+        // a draft-native run and a window, carrying the draft-native run's
+        // kept place beside the runs (the link-sets design §5.7) — `null` at
+        // the other two — and the birth version — base, draft and places all
+        // absent — so every optional form rides the round trip.
         rq(
             None,
             Op::Publish {
@@ -182,6 +184,7 @@ fn all_requests() -> Vec<Request> {
                         shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 4]), 1),
                     ],
                 },
+                places: vec![None, Some(vp(1, 4)), None],
             },
         ),
         rq(
@@ -193,6 +196,7 @@ fn all_requests() -> Vec<Request> {
                     draft: None,
                     runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 5)],
                 },
+                places: vec![],
             },
         ),
         rq(
@@ -557,6 +561,82 @@ fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
     assert!(zero.contains(&RunError::ZeroWidth.to_string()), "{zero}");
     let document = refusal(r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1","width":"1"}"#);
     assert!(document.contains(&RunError::NotAnElementPosition.to_string()), "{document}");
+}
+
+/// The publish shot's kept places (the link-sets design §5.7; lane S2):
+/// `places` is a list parallel to `runs` by index, each entry a V-position
+/// as `reinstate`'s `at` is spelled or `null`. Absent, empty, or `null` at
+/// every entry — a short list included — is today's shot and parses to no
+/// place, and marshals to no member; a list with a place parses to `runs`'
+/// length, a short one padded with `null`, and marshals as that list, which
+/// parses back to the same request. The shape refusals name their entry in
+/// the `malformed` rejection's `site.index`: a list longer than `runs` (the
+/// first entry past them), a place on a run whose `origin` is not the
+/// request's `draft` — a request naming no draft included — a place
+/// outside the content subspace, one that is no V-position, one with a
+/// member of its own; a `places` that is no array is refused with no site.
+/// The member is read against the envelope as every other is: `extra`
+/// beside it stays refused.
+#[test]
+fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
+    let codec = JsonCodec;
+    // Two runs: the edition's own, then the draft's.
+    let frame = |draft: &str, places: &str| {
+        format!(
+            r#"{{"op":"publish","doc":"1.0.1.0.1"{draft},"runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}},{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}}]{places}}}"#
+        )
+        .into_bytes()
+    };
+    let drafted = |places: &str| frame(r#","draft":"1.0.1.0.7""#, places);
+    let places_of = |req: &Request| match &req.op {
+        Op::Publish { places, .. } => places.clone(),
+        other => panic!("a publish, not {other:?}"),
+    };
+    let canonical = |req: &Request| String::from_utf8(codec.marshal_request(req)).expect("utf-8");
+    // Today's shot: no place, and no member in the canonical form.
+    for none in ["", r#","places":[]"#, r#","places":[null]"#, r#","places":[null,null]"#] {
+        let req = parse_ok(&codec, &drafted(none));
+        assert!(places_of(&req).is_empty(), "{none}: today's shot");
+        assert!(!canonical(&req).contains("places"), "{none}: no member in the canonical form");
+    }
+    // A place on the draft's run: the list as given, and the canonical form
+    // carries it, keys sorted, parsing back to the same request.
+    let req = parse_ok(&codec, &drafted(r#","places":[null,{"subspace":"1","ordinal":"4"}]"#));
+    assert_eq!(places_of(&req), vec![None, Some(vp(1, 4))]);
+    let text = canonical(&req);
+    assert!(text.contains(r#""places":[null,{"ordinal":"4","subspace":"1"}]"#), "{text}");
+    assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form parses to the same request");
+    // Padding: the draft's run first and a one-entry list, read as `runs`'
+    // length and written back so.
+    let first = |places: &str| {
+        format!(
+            r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","runs":[{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}},{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}]{places}}}"#
+        )
+        .into_bytes()
+    };
+    let req = parse_ok(&codec, &first(r#","places":[{"subspace":"1","ordinal":"4"}]"#));
+    assert_eq!(places_of(&req), vec![Some(vp(1, 4)), None], "padded with null to runs' length");
+    assert!(canonical(&req).contains(r#""places":[{"ordinal":"4","subspace":"1"},null]"#));
+    // The shape refusals, each naming its entry — `malformed`, with the
+    // entry as `site.index` through `Rejection::unparseable`.
+    let index_of = |frame: &[u8]| {
+        let e = codec.parse(frame).expect_err("refused");
+        assert!(e.detail.as_deref().is_some_and(|d| d.contains("places")), "{e}");
+        let site = e.site.clone();
+        let rej = Rejection::unparseable(e);
+        assert_eq!((rej.op, rej.code), (OpKind::Unparseable, RejectCode::Malformed));
+        assert_eq!(rej.site, site);
+        site.and_then(|s| s.index)
+    };
+    assert_eq!(index_of(&drafted(r#","places":[null,null,null]"#)), Some(2), "longer than runs: the first entry past them");
+    assert_eq!(index_of(&drafted(r#","places":[{"subspace":"1","ordinal":"1"},null]"#)), Some(0), "a place on the edition's own run");
+    assert_eq!(index_of(&frame("", r#","places":[null,{"subspace":"1","ordinal":"4"}]"#)), Some(1), "no draft named: no run is draft-native");
+    assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"2","ordinal":"1"}]"#)), Some(1), "the link subspace");
+    assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"1"}]"#)), Some(1), "no V-position");
+    assert_eq!(index_of(&drafted(r#","places":[null,7]"#)), Some(1), "no object");
+    assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"1","ordinal":"4","extra":1}]"#)), Some(1), "a member of its own");
+    assert_eq!(index_of(&drafted(r#","places":{}"#)), None, "no array: refused with no site");
+    assert!(codec.parse(&drafted(r#","places":[null,{"subspace":"1","ordinal":"4"}],"extra":1"#)).is_err());
 }
 
 /// The idempotency id rides the frame and survives the round trip.
@@ -1103,7 +1183,10 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         ),
         (
             "rejected_unparseable",
-            JsonCodec.unparseable(ParseError { detail: Some("unknown op 'frobnicate'".into()) }),
+            JsonCodec.unparseable(ParseError {
+                detail: Some("unknown op 'frobnicate'".into()),
+                site: None,
+            }),
         ),
     ]
 }
@@ -1196,14 +1279,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 80 codes, pinned.
+/// The full `RejectCode` wire-name table — all 81 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 80] = [
+    let table: [(RejectCode, &str); 81] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1261,6 +1344,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::BaseSuperseded, "base_superseded"),
         (RejectCode::BaseExtentTooLarge, "base_extent_too_large"),
         (RejectCode::AlreadyPublished, "already_published"),
+        (RejectCode::KeptPlaceMoved, "kept_place_moved"),
         (RejectCode::IllFormedSpec, "ill_formed_spec"),
         (RejectCode::SlotTooLarge, "slot_too_large"),
         (RejectCode::EmptyTypeResolution, "empty_type_resolution"),

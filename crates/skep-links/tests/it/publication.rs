@@ -11,18 +11,35 @@
 //! staging function under one transaction with a staging of the test's own
 //! (PATTERNS SP-30); and the attested arm. The kernel's `Seq` counts
 //! records, so "one commit" is read off a journaled kernel's boundaries.
+//!
+//! And THE RE-WINDOW OF THE DRAFT AT ITS KEPT PLACES, CHECKED BY IDENTITY
+//! (§5.7; the S-gate's composite, now the publication's own): the request
+//! carries, per draft-native run, the V-place it held in the draft when the
+//! client composed it, and the one commit checks the draft still arranges
+//! that run's identity there and replaces it there by the fresh run it
+//! became — "a `reinstate` of the fresh I-run at the run's place and a
+//! `delete` of the draft-native run, staged in the same commit and applied
+//! in turn so positions stay true, a piece of a run by the same piece of the
+//! fresh run at its offset" — refusing the whole publication, with the
+//! entry, where it does not: "`D` moved the run, split it, deleted it or
+//! arranged it elsewhere since P4 … never a guess". The check is by
+//! MEMBERSHIP (the S-gate's ruling): the named place alone, a draft
+//! arranging the identity twice re-windowed at the named place and left
+//! standing at the other. A request with no place is today's shot: the S1
+//! cells above pass unchanged, carrying none.
 
-use skep_address::{Address, Span};
+use skep_address::{Address, Span, SpanSet};
 use skep_arrangement::{
-    head_lock_key, Caller, Deposit, HasM5, PublishError, Run, Shot, ShotRun, Vstream,
+    head_lock_key, trunk_head, Caller, Deposit, HasM5, PublishError, ReinstateError, Run, Shot,
+    ShotRun, VPos, Vstream,
 };
 use skep_content::{HasContent, Val};
-use skep_kernel::{Attestation, Kernel, TxnError};
+use skep_kernel::{Attestation, Kernel, Seq, TxnError};
 use skep_links::{
     correspondence_type, enc, is_correspondence_class, stage_correspondence, stage_publication,
     Endset, HasLinks, Link, LinkWriter, PublicationError, SlotArg, FROM, TO,
 };
-use skep_namespace::{HasM3, M3State};
+use skep_namespace::{HasM3, M3Rec, M3State};
 
 use crate::common::*;
 
@@ -98,7 +115,7 @@ fn a_publication_mints_one_correspondence_record_per_minted_piece_in_one_commit(
     draft_holding(&k, "abc");
     let before = k.snapshot();
     let (member, seq) = writer(&k)
-        .publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(2), 2), shot_run(&doc1(), &ca(1), 3)]))
+        .publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(2), 2), shot_run(&doc1(), &ca(1), 3)]), &[])
         .expect("the publication commits");
     assert_eq!(member, pmember(1), "the edition's first member");
     assert_eq!(
@@ -149,12 +166,12 @@ fn the_twin_fence_refuses_a_run_a_record_already_names_and_stages_nothing() {
     let k = kernel_over(edition_world());
     draft_holding(&k, "abc");
     let w = writer(&k);
-    let (m1, _) = w.publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(1), 3)])).expect("the first shot");
+    let (m1, _) = w.publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(1), 3)]), &[]).expect("the first shot");
     // A second member, placing the published words by reference and a
     // fresh `d` from the draft: a record for `d` alone.
     Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared).expect("d at ca(4)");
     let (m2, _) = w
-        .publication(P1, &pdoc(), &shot(Some((&m1, 3)), vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(4), 1)]))
+        .publication(P1, &pdoc(), &shot(Some((&m1, 3)), vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(4), 1)]), &[])
         .expect("a fresh run lands");
     assert_eq!((m1, m2.clone()), (pmember(1), pmember(2)));
     assert_eq!(records_in_doc1(&k).len(), 2, "one record per shot that re-inserted: a b c, then d");
@@ -162,7 +179,7 @@ fn the_twin_fence_refuses_a_run_a_record_already_names_and_stages_nothing() {
 
     let before = k.snapshot();
     // `b` alone: a sub-run of the first record's `from`, split from its run.
-    let refusal = refused(w.publication(P1, &pdoc(), &shot(Some((&m2, 4)), vec![shot_run(&doc1(), &ca(2), 1)])));
+    let refusal = refused(w.publication(P1, &pdoc(), &shot(Some((&m2, 4)), vec![shot_run(&doc1(), &ca(2), 1)]), &[]));
     assert_eq!(
         refusal,
         PublicationError::AlreadyPublished { site: pmember(1) },
@@ -171,7 +188,7 @@ fn the_twin_fence_refuses_a_run_a_record_already_names_and_stages_nothing() {
     // The whole run again, and a run straddling the record's reach.
     for run in [shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(3), 2)] {
         assert_eq!(
-            refused(w.publication(P1, &pdoc(), &shot(Some((&m2, 4)), vec![run]))),
+            refused(w.publication(P1, &pdoc(), &shot(Some((&m2, 4)), vec![run]), &[])),
             PublicationError::AlreadyPublished { site: pmember(1) }
         );
     }
@@ -193,7 +210,7 @@ fn the_twin_fence_refuses_a_run_a_record_already_names_and_stages_nothing() {
     )
     .expect("a counterpart-typed link is an ordinary link");
     let (m3, _) = w
-        .publication(P1, &pdoc(), &shot(Some((&m2, 4)), vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(5), 1)]))
+        .publication(P1, &pdoc(), &shot(Some((&m2, 4)), vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(5), 1)]), &[])
         .expect("the parent-typed link is no record: the run lands");
     assert_eq!(bytes_of(&k, &m3), "abcde");
     assert_eq!(records_in_doc1(&k).len(), 3, "three records, the counterpart link beside them at la(3)");
@@ -214,16 +231,16 @@ fn a_draft_the_caller_does_not_own_is_refused_ahead_of_the_fence() {
     let k = kernel_over(edition_world());
     draft_holding(&k, "abc");
     let w = writer(&k);
-    w.publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(1), 3)])).expect("P1 publishes a b c");
+    w.publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(1), 3)]), &[]).expect("P1 publishes a b c");
     let before = k.snapshot();
     let theirs = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 1)] };
     assert_eq!(
-        refused(w.publication(P2, &sib_doc(), &theirs)),
+        refused(w.publication(P2, &sib_doc(), &theirs, &[])),
         PublicationError::Publish(PublishError::NotOwner(doc1())),
         "the draft is P1's: ω, not the fence"
     );
     assert_eq!(
-        refused(w.publication(Caller::System, &sib_doc(), &theirs)),
+        refused(w.publication(Caller::System, &sib_doc(), &theirs, &[])),
         PublicationError::AlreadyPublished { site: pmember(1) },
         "System passes the edge, and the fence reads the record"
     );
@@ -247,9 +264,9 @@ fn a_shot_that_re_inserts_nothing_stages_no_record_and_commits_as_the_shot_alone
     let seq0 = k.current_seq();
     let (m1, s1) = Vstream::new(&k).publish(P1, &pdoc(), &own(None, None), &ALL_VISIBLE).expect("the shot alone");
     let shot_alone = s1.0 - seq0.0;
-    let (m2, s2) = writer(&k).publication(P1, &pdoc(), &own(Some((&m1, 0)), None)).expect("no draft");
+    let (m2, s2) = writer(&k).publication(P1, &pdoc(), &own(Some((&m1, 0)), None), &[]).expect("no draft");
     assert_eq!(s2.0 - s1.0, shot_alone, "the same records as the shot alone");
-    let (_, s3) = writer(&k).publication(P1, &pdoc(), &own(Some((&m2, 0)), Some(doc1()))).expect("a draft, nothing re-inserted");
+    let (_, s3) = writer(&k).publication(P1, &pdoc(), &own(Some((&m2, 0)), Some(doc1())), &[]).expect("a draft, nothing re-inserted");
     assert_eq!(s3.0 - s2.0, shot_alone, "a draft named and nothing re-inserted: no record either");
     assert!(records_in_doc1(&k).is_empty(), "no record in the draft");
     assert_eq!(k.snapshot().world().m5().link_count(&doc1()), n(0));
@@ -271,7 +288,7 @@ fn the_composite_stages_under_a_callers_transaction_and_a_refusal_discards_it_wh
     let before = k.current_seq();
     // A refusal after the publication staged: nothing of it stands.
     let r: Result<((), skep_kernel::Seq), TxnError<PublicationError>> = k.transact(&keys, |stg| {
-        stage_publication(stg, P1, &pdoc(), &the_shot, &ALL_VISIBLE)?;
+        stage_publication(stg, P1, &pdoc(), &the_shot, &[], &ALL_VISIBLE)?;
         Err(PublicationError::HomeNotRegistered)
     });
     assert!(matches!(r, Err(TxnError::Rejected(PublicationError::HomeNotRegistered))));
@@ -281,7 +298,7 @@ fn the_composite_stages_under_a_callers_transaction_and_a_refusal_discards_it_wh
     // The composite beside a staging of the caller's own, in one commit.
     let (member, _) = k
         .transact(&keys, |stg| {
-            let member = stage_publication(stg, P1, &pdoc(), &the_shot, &ALL_VISIBLE)?;
+            let (member, _) = stage_publication(stg, P1, &pdoc(), &the_shot, &[], &ALL_VISIBLE)?;
             let from = Run::new(ca(1), n(1)).expect("a run");
             let to = Run::new(pca(9), n(1)).expect("a run");
             stage_correspondence(stg, &ALL_VISIBLE, P1, &doc1(), &from, &to)?;
@@ -314,11 +331,288 @@ fn an_attested_publication_fills_its_one_commits_slot() {
     draft_holding(&k, "abc");
     let tag1 = Attestation::new(1, vec![0x11; 3_373]).expect("tag 1");
     let attested = LinkWriter::attested(&k, &ALL_VISIBLE, Some(&tag1));
-    let (m1, s1) = attested.publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(1), 2)])).expect("attested");
+    let (m1, s1) = attested.publication(P1, &pdoc(), &shot(None, vec![shot_run(&doc1(), &ca(1), 2)]), &[]).expect("attested");
     let (_, s2) = writer(&k)
-        .publication(P1, &pdoc(), &shot(Some((&m1, 2)), vec![shot_run(&pdoc(), &pca(1), 2), shot_run(&doc1(), &ca(3), 1)]))
+        .publication(P1, &pdoc(), &shot(Some((&m1, 2)), vec![shot_run(&pdoc(), &pca(1), 2), shot_run(&doc1(), &ca(3), 1)]), &[])
         .expect("plain");
     assert_eq!(k.attestation_at(s1).unwrap(), Some(tag1), "the attested publication's one slot");
     assert_eq!(k.attestation_at(s2).unwrap(), None, "the plain one's");
     assert_eq!(records_in_doc1(&k).len(), 2);
+}
+
+// ───────────────────────── the re-window at the kept places ─────────────────────────
+
+/// The kept places of a shot: `None` at every entry but the named ones.
+fn places(n: usize, named: &[(usize, u32)]) -> Vec<Option<VPos>> {
+    let mut out = vec![None; n];
+    for &(index, ordinal) in named {
+        out[index] = Some(vp(1, ordinal));
+    }
+    out
+}
+
+/// `doc`'s content runs, V-ordered, off one snapshot.
+fn runs_of(k: &Kernel<World>, doc: &Address) -> Vec<Run> {
+    k.snapshot().world().m5().content_runs(doc).cloned().collect()
+}
+
+/// Where `doc` arranges `run`'s identity — M5's I→V projection.
+fn footprint(k: &Kernel<World>, doc: &Address, run: &Run) -> SpanSet {
+    k.snapshot().world().m5().project(doc, &SpanSet::singleton(run.iextent()))
+}
+
+/// A run of `width` positions from `start`.
+fn run(start: &Address, width: u32) -> Run {
+    Run::new(start.clone(), n(width)).expect("a run")
+}
+
+/// A test run's width, as the small number it is.
+fn width_of(run: &Run) -> u32 {
+    u32::try_from(run.width()).expect("a test run's width fits")
+}
+
+/// Every V-span of `doc` the draft's kept state is read against, as the
+/// client reads it before composing: `(ordinal, width)` pairs.
+fn spans(pairs: &[(u32, u32)]) -> SpanSet {
+    pairs.iter().map(|&(ordinal, width)| vspan(1, ordinal, width)).collect()
+}
+
+/// SAME COMMIT, WHOLE RUN AND PIECE. The invariant, §5.7's: the member
+/// minted and the draft re-windowed at its kept place are ONE transaction —
+/// exactly one boundary above the position before it, on a journaled kernel
+/// — and the fresh run is placed THERE, whether the named span is a whole
+/// run of the draft or a strict piece of one, "a piece of a run by the same
+/// piece of the fresh run at its offset". Two cells: doc1 built by three
+/// inserts so `b` is a run of its own (a at `ca(1)`, c at `ca(2)`, b at
+/// `ca(3)`), and the one-run draft of `abc`, `b c` a piece at offset 1. In
+/// each the client's P4 reading is the run's place, and after the one
+/// commit, on one snapshot: doc1 reads the same bytes at every position; its
+/// run at the place IS the member's fresh run, the draft-native one arranged
+/// nowhere in doc1 and the rest of the draft at its own addresses; the
+/// member reads the shot's bytes; and the record names the piece.
+#[test]
+fn a_shots_fresh_run_replaces_the_drafts_run_at_its_kept_place_in_the_one_commit() {
+    let whole = |k: &Kernel<World>| {
+        let vs = Vstream::new(k);
+        vs.insert(P1, &doc1(), vp(1, 1), vec![Val::new([b'a'])], Deposit::Undeclared).expect("a at ca(1)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![Val::new([b'c'])], Deposit::Undeclared).expect("c at ca(2)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![Val::new([b'b'])], Deposit::Undeclared).expect("b at ca(3), between");
+    };
+    let piece = |k: &Kernel<World>| draft_holding(k, "abc");
+    let cells: [(&str, &dyn Fn(&Kernel<World>), Run, u32, Vec<Run>, Vec<Run>); 2] = [
+        ("whole", &whole, run(&ca(3), 1), 2, vec![run(&ca(1), 1), run(&ca(3), 1), run(&ca(2), 1)], vec![run(&ca(1), 1), run(&pca(1), 1), run(&ca(2), 1)]),
+        ("piece", &piece, run(&ca(2), 2), 2, vec![run(&ca(1), 3)], vec![run(&ca(1), 1), run(&pca(1), 2)]),
+    ];
+    for (what, build, named, place, before_runs, after_runs) in cells {
+        let k = journaled_over(edition_world());
+        build(&k);
+        let before = k.snapshot();
+        assert_eq!(runs_of(&k, &doc1()), before_runs, "{what}: the draft's shape");
+        assert_eq!(bytes_of(&k, &doc1()), "abc");
+        // The client's P4 reading: where doc1 arranges the named run.
+        assert_eq!(footprint(&k, &doc1(), &named), spans(&[(place, width_of(&named))]), "{what}");
+
+        let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![ShotRun { origin: doc1(), run: named.clone() }] };
+        let (member, seq) = writer(&k)
+            .publication(P1, &pdoc(), &the_shot, &places(1, &[(0, place)]))
+            .expect("the one commit stands whole");
+        assert_eq!(member, pmember(1), "{what}");
+        assert_eq!(
+            k.boundaries_above(before.seq()).expect("a journaled kernel answers its boundaries"),
+            vec![(seq, None)],
+            "{what}: ONE commit — the member, its records and the re-window under one boundary"
+        );
+        let fresh = run(&pca(1), width_of(&named));
+        assert_eq!(bytes_of(&k, &doc1()), "abc", "{what}: the draft reads the same bytes at every position");
+        assert_eq!(runs_of(&k, &doc1()), after_runs, "{what}: the fresh run at the place, the rest at its own addresses");
+        assert!(footprint(&k, &doc1(), &named).is_empty(), "{what}: the draft-native run is arranged nowhere in the draft");
+        assert_eq!(footprint(&k, &doc1(), &fresh), spans(&[(place, width_of(&named))]), "{what}: the fresh run holds the place");
+        assert_eq!(bytes_of(&k, &member), if what == "whole" { "b" } else { "bc" }, "{what}: the member reads the shot's bytes");
+        assert_eq!(records_in_doc1(&k), vec![record(&named, &fresh)], "{what}: one record, naming the piece");
+        assert_eq!(trunk_head(k.snapshot().world().m3(), &pdoc()), Some(member));
+    }
+}
+
+/// What the draft did to a named run between the kept place's reading and
+/// the commit, and what the check must find.
+struct Since {
+    what: &'static str,
+    /// The edit doc1 takes after the places are read.
+    disturb: fn(&Vstream<'_, World>),
+    /// The bytes doc1 reads afterwards, which the refusal leaves standing.
+    after: &'static str,
+}
+
+/// REFUSED WITH THE ENTRY, NOTHING WRITTEN. The invariant, §5.7's: "where
+/// the check fails — `D` moved the run, split it, deleted it or arranged it
+/// elsewhere since P4 — the request is REFUSED … never a guess", with
+/// `site.index` the entry, and the one transaction "either stands whole or
+/// not at all": the shot's mints, its records and every earlier entry's
+/// re-window are staged before the check, and the refusal discards them
+/// with it. The draft holds `a b c d` as one run; the shot names `a` with
+/// its place and then `b c` with its own, so the refusal must name the
+/// SECOND entry while the first's place still holds. Four cells, each an
+/// edit of doc1 after the places were read: `b c` MOVED by a rearrangement
+/// that swaps `b` and `c` inside the span — the draft arranges the run's
+/// addresses at the place still, in another order, which M5's projection
+/// cannot tell from the kept state and the check must (a replacement there
+/// would silently undo the edit); MOVED elsewhere, `b c` after `d`; SPLIT by
+/// an insert inside it; DELETED. Afterwards nothing is committed: no member,
+/// no record, no fresh identity, doc1 what the disturbance left at every
+/// position and in every run.
+#[test]
+fn a_run_moved_split_or_deleted_since_its_place_was_read_refuses_with_its_entry_and_writes_nothing() {
+    let cells = [
+        Since {
+            what: "swapped within the span",
+            disturb: |vs| {
+                vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 3), vp(1, 4)]).expect("a c b d");
+            },
+            after: "acbd",
+        },
+        Since {
+            what: "moved after d",
+            disturb: |vs| {
+                vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 5)]).expect("a d b c");
+            },
+            after: "adbc",
+        },
+        Since {
+            what: "split",
+            disturb: |vs| {
+                vs.insert(P1, &doc1(), vp(1, 3), vec![Val::new([b'x'])], Deposit::Undeclared).expect("a b x c d");
+            },
+            after: "abxcd",
+        },
+        Since {
+            what: "deleted",
+            disturb: |vs| {
+                vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("a c d");
+            },
+            after: "acd",
+        },
+    ];
+    for cell in cells {
+        let k = kernel_over(edition_world());
+        draft_holding(&k, "abcd");
+        let (a, bc) = (run(&ca(1), 1), run(&ca(2), 2));
+        // The client's P4 reading: `a` at 1, `b c` at 2.
+        assert_eq!(footprint(&k, &doc1(), &a), spans(&[(1, 1)]), "{}", cell.what);
+        assert_eq!(footprint(&k, &doc1(), &bc), spans(&[(2, 2)]), "{}", cell.what);
+        (cell.disturb)(&Vstream::new(&k));
+        let disturbed = k.snapshot();
+        assert_eq!(bytes_of(&k, &doc1()), cell.after, "{}", cell.what);
+        let runs_before = runs_of(&k, &doc1());
+        let stored_before = disturbed.world().content().len();
+
+        let the_shot = Shot {
+            base: None,
+            draft: Some(doc1()),
+            runs: vec![ShotRun { origin: doc1(), run: a.clone() }, ShotRun { origin: doc1(), run: bc.clone() }],
+        };
+        let refusal = refused(writer(&k).publication(P1, &pdoc(), &the_shot, &places(2, &[(0, 1), (1, 2)])));
+        assert_eq!(
+            refusal,
+            PublicationError::KeptPlaceMoved { index: 1 },
+            "{}: the second entry's place no longer holds; the first's does",
+            cell.what
+        );
+
+        let s = k.snapshot();
+        assert_eq!(s.seq(), disturbed.seq(), "{}: nothing committed", cell.what);
+        assert_eq!(trunk_head(s.world().m3(), &pdoc()), None, "{}: no member minted", cell.what);
+        assert!(!s.world().m3().is_registered_document(&pmember(1)), "{}", cell.what);
+        assert!(records_in_doc1(&k).is_empty(), "{}: no record", cell.what);
+        assert_eq!(s.world().content().len(), stored_before, "{}: no fresh identity written", cell.what);
+        assert_eq!(runs_of(&k, &doc1()), runs_before, "{}: the draft's runs unchanged", cell.what);
+        assert_eq!(bytes_of(&k, &doc1()), cell.after, "{}: the draft unchanged at every position", cell.what);
+    }
+}
+
+/// MEMBERSHIP (the S-gate's ruling): a draft that arranges a run's identity
+/// twice — `a b c b`, the second `b` a self-copy of the first — answers two
+/// V-spans to the projection, and a place on ONE of them re-windows that
+/// occurrence and leaves the other standing as the draft's own words, "an
+/// occurrence of a run's identity the request did not name stays as it
+/// stands, the twin fence meeting it at its own publication". Two cells: the
+/// place on the second occurrence, then on the first. In each, the named
+/// occurrence holds the fresh run afterwards, the other still the
+/// draft-native run, and the bytes read the same.
+#[test]
+fn a_run_the_draft_arranges_twice_is_re_windowed_at_the_named_place_and_left_standing_at_the_other() {
+    for (named, other) in [(4u32, 2u32), (2, 4)] {
+        let k = kernel_over(edition_world());
+        draft_holding(&k, "abc");
+        Vstream::new(&k).copy(P1, &doc1(), vp(1, 4), &[spec(&doc1(), 1, 2, 1)]).expect("a b c b: b twice");
+        let b = run(&ca(2), 1);
+        assert_eq!(bytes_of(&k, &doc1()), "abcb");
+        assert_eq!(footprint(&k, &doc1(), &b), spans(&[(2, 1), (4, 1)]), "the premise: the identity at two places");
+
+        let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![ShotRun { origin: doc1(), run: b.clone() }] };
+        let (member, _) = writer(&k).publication(P1, &pdoc(), &the_shot, &places(1, &[(0, named)])).expect("the named place holds");
+        let fresh = run(&pca(1), 1);
+        assert_eq!(bytes_of(&k, &doc1()), "abcb", "at {named}: the draft reads the same");
+        assert_eq!(footprint(&k, &doc1(), &fresh), spans(&[(named, 1)]), "at {named}: the fresh run holds the named place");
+        assert_eq!(footprint(&k, &doc1(), &b), spans(&[(other, 1)]), "at {named}: the other occurrence stands as the draft's own");
+        assert_eq!(bytes_of(&k, &member), "b");
+        assert_eq!(records_in_doc1(&k), vec![record(&b, &fresh)], "one record, the identity minted once");
+    }
+}
+
+/// THE REFERENCED PIECE: a run named twice in `runs` — the draft arranging
+/// its identity twice, `a b c b` — with a place on each: the first entry
+/// mints the fresh run and the second places the identity by reference to
+/// it, "a later occurrence of a minted identity with the first's fresh run",
+/// and the re-window puts the first's fresh run at BOTH places, so the
+/// draft-native run is arranged nowhere in the draft afterwards and the
+/// member reads the identity twice; one record, the identity minted once.
+#[test]
+fn a_run_named_twice_with_a_place_on_each_re_windows_the_second_to_the_firsts_fresh_run() {
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abc");
+    Vstream::new(&k).copy(P1, &doc1(), vp(1, 4), &[spec(&doc1(), 1, 2, 1)]).expect("a b c b");
+    let b = run(&ca(2), 1);
+    let the_shot = Shot {
+        base: None,
+        draft: Some(doc1()),
+        runs: vec![ShotRun { origin: doc1(), run: b.clone() }, ShotRun { origin: doc1(), run: b.clone() }],
+    };
+    let (member, _) = writer(&k).publication(P1, &pdoc(), &the_shot, &places(2, &[(0, 2), (1, 4)])).expect("both places hold");
+    let fresh = run(&pca(1), 1);
+    assert_eq!(bytes_of(&k, &doc1()), "abcb", "the draft reads the same");
+    assert!(footprint(&k, &doc1(), &b).is_empty(), "the draft-native run is arranged nowhere in the draft");
+    assert_eq!(footprint(&k, &doc1(), &fresh), spans(&[(2, 1), (4, 1)]), "the one fresh run at both places");
+    assert_eq!(runs_of(&k, &member), vec![fresh.clone(), fresh.clone()], "the member places the identity twice, the second time by reference");
+    assert_eq!(bytes_of(&k, &member), "bb");
+    assert_eq!(records_in_doc1(&k), vec![record(&b, &fresh)], "one record: the identity was minted once");
+    assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(2)), "one fresh position minted");
+}
+
+/// A draft the re-window cannot edit: a PUBLISHED document named as the
+/// draft (the shot admits any registered document of the caller's outside
+/// the chain) takes the shot and its record, and then the placement refuses
+/// `published_target` — `reinstate`'s own verdict, lowered as `Reinstate` —
+/// and the whole publication falls with it: no member, no record. With no
+/// place the same shot lands, the published draft's words re-inserted and
+/// the draft left as it stands.
+#[test]
+fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands_with_no_place() {
+    let published_draft = a(&[1, 0, 1, 0, 4]);
+    let world = edition_world();
+    let k = kernel_over(World { m3: world.m3.apply_m3(Seq(0), &M3Rec::allocate(published_draft.clone(), true)), ..world });
+    Vstream::new(&k)
+        .insert(P1, &published_draft, vp(1, 1), vec![Val::new([b'q'])], Deposit::Declared(skep_arrangement::deposit_class_types()[0].clone()))
+        .expect("a declared deposit at the published document's fresh position");
+    let q = Run::new(a(&[1, 0, 1, 0, 4, 0, 1, 1]), n(1)).expect("a run");
+    let the_shot = Shot { base: None, draft: Some(published_draft.clone()), runs: vec![ShotRun { origin: published_draft.clone(), run: q }] };
+    let before = k.current_seq();
+    assert_eq!(
+        refused(writer(&k).publication(P1, &pdoc(), &the_shot, &places(1, &[(0, 1)]))),
+        PublicationError::Reinstate(ReinstateError::PublishedTarget)
+    );
+    assert_eq!(k.current_seq(), before, "nothing committed");
+    assert!(!k.snapshot().world().m3().is_registered_document(&pmember(1)), "no member");
+    let (member, _) = writer(&k).publication(P1, &pdoc(), &the_shot, &[]).expect("with no place, today's shot");
+    assert_eq!(bytes_of(&k, &member), "q");
+    assert_eq!(bytes_of(&k, &published_draft), "q", "the published draft stands");
 }

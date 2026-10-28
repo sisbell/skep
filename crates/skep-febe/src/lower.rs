@@ -373,6 +373,17 @@ impl Lower for PublicationError {
             PublicationError::NotOwner(a) => not_owner(a),
             PublicationError::Mint(m) => m.lower(),
             PublicationError::Seat(s) => s.lower(),
+            // The re-window's check: `site.index` the `runs` entry whose
+            // kept place the draft no longer honours, and nothing else rides
+            // the code.
+            PublicationError::KeptPlaceMoved { index } => (
+                RejectCode::KeptPlaceMoved,
+                Some(FaultSite { index: Some(index), ..FaultSite::default() }),
+            ),
+            // The re-window's placement and removal lower through M5's
+            // tables, so they read as `reinstate`'s and `delete`'s.
+            PublicationError::Reinstate(e) => e.lower(),
+            PublicationError::Delete(e) => e.lower(),
         }
     }
 }

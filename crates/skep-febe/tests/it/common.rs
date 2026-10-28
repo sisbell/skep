@@ -794,7 +794,7 @@ pub fn commit_every_write(
             run: Run::new(edition_start, nat(3)).expect("a content run"),
         }],
     };
-    ack_addr(write(fx.user, Op::Publish { doc: edition, shot }));
+    ack_addr(write(fx.user, Op::Publish { doc: edition, shot, places: Vec::new() }));
 
     ack(write(fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)] }));
     ack(write(fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) }));

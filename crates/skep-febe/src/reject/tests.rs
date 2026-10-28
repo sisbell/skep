@@ -248,13 +248,15 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::PublishedTarget
         | RejectCode::PrivateVersionOfPublished
         | RejectCode::PrivateSourceVersionless
-        // The publish shot's four request-shape refusals (lane 3.2), and the
-        // publication's twin fence (the link-sets design §5.7).
+        // The publish shot's four request-shape refusals (lane 3.2), the
+        // publication's twin fence and its re-window's check (the link-sets
+        // design §5.7).
         | RejectCode::BadRun
         | RejectCode::BaseNotInChain
         | RejectCode::BaseSuperseded
         | RejectCode::BaseExtentTooLarge
         | RejectCode::AlreadyPublished
+        | RejectCode::KeptPlaceMoved
         | RejectCode::IllFormedSpec
         | RejectCode::SlotTooLarge
         | RejectCode::EmptyTypeResolution
@@ -283,7 +285,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 80] = [
+const ALL_CODES: [RejectCode; 81] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -341,6 +343,7 @@ const ALL_CODES: [RejectCode; 80] = [
     RejectCode::BaseSuperseded,
     RejectCode::BaseExtentTooLarge,
     RejectCode::AlreadyPublished,
+    RejectCode::KeptPlaceMoved,
     RejectCode::IllFormedSpec,
     RejectCode::SlotTooLarge,
     RejectCode::EmptyTypeResolution,

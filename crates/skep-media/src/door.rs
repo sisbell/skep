@@ -305,7 +305,7 @@ pub fn media_door<W: FebeWorld>(
 ) -> Option<MediaRefusal> {
     match op {
         Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal, media_gate),
-        Op::Publish { doc, shot } => publish_arm(world, doc, shot, principal, media_gate),
+        Op::Publish { doc, shot, .. } => publish_arm(world, doc, shot, principal, media_gate),
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }

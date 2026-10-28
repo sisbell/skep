@@ -84,7 +84,11 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     for op in [copy, reinstate, version] {
         assert!(matches!(write_meta(&op).expect("a write").minting, Minting::None));
     }
-    let publish = Op::Publish { doc, shot: Shot { base: None, draft: None, runs: Vec::new() } };
+    let publish = Op::Publish {
+        doc,
+        shot: Shot { base: None, draft: None, runs: Vec::new() },
+        places: Vec::new(),
+    };
     assert!(matches!(
         write_meta(&publish).expect("a write").minting,
         Minting::Publish { reinserted: 0 }
@@ -160,6 +164,7 @@ fn each_write_states_the_terms_its_row_carries() {
     let publish = Op::Publish {
         doc: doc.clone(),
         shot: Shot { base: None, draft: None, runs: Vec::new() },
+        places: Vec::new(),
     };
     assert!(matches!(terms(publish), RowTerms::Publish));
 

@@ -59,12 +59,12 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{trunk_of, Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
-    Codec, Deposit, ISpan, Op, OpKind, ParseError, Rejection, ReqId, Request, Response, SlotArg,
-    SuccessorSpec, MAX_REQ_ID_BYTES,
+    Codec, Deposit, FaultSite, ISpan, Op, OpKind, ParseError, Rejection, ReqId, Request, Response,
+    SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
 };
 use skep_identity::SigAlgRow;
 use skep_kernel::Attestation;
@@ -268,7 +268,7 @@ impl Codec for JsonCodec {
     /// A [`ParseError`] whose detail names the fault: a frame that is not
     /// JSON, or one the frame grammar refuses.
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError> {
-        parse_request(frame).map_err(|e| ParseError { detail: Some(e.0) })
+        parse_request(frame).map_err(ParseError::from)
     }
 
     fn marshal(&self, resp: &Response) -> Vec<u8> {
@@ -290,7 +290,10 @@ impl JsonCodec {
     /// idempotency id, `MAX_MINTED_PRINCIPAL_ID` for a `delegate`'s `new_id`
     /// — carries no zero-byte `Val`, which `marshal::j_atom` renders as
     /// `{"atom": ""}` and `p_val_form` refuses by design (coarse granularity
-    /// must be said, and a zero-byte atom says nothing), carries an `id`, if
+    /// must be said, and a zero-byte atom says nothing), carries a
+    /// `publish`'s `places` either empty or `runs`' length with a place in
+    /// it, each place a content position beside a draft-native run (the
+    /// form [`Fields::places`] hands on), carries an `id`, if
     /// any, that is UTF-8, which a `ReqId` this codec parsed always is, and
     /// carries an `attest`, if any, only on an op of the checked set (the ten
     /// publish-class kinds `in_checked_set` states and the parse side admits
@@ -359,7 +362,9 @@ impl JsonCodec {
     pub fn parse_daemon(&self, frame: &[u8]) -> Result<DaemonOp, ParseError> {
         let v: Value = match serde_json::from_slice(frame) {
             Ok(v) => v,
-            Err(e) => return Err(ParseError { detail: Some(format!("invalid JSON: {e}")) }),
+            Err(e) => {
+                return Err(ParseError { detail: Some(format!("invalid JSON: {e}")), site: None })
+            }
         };
         self.parse_daemon_value(v)
     }
@@ -374,14 +379,14 @@ impl JsonCodec {
     /// `key_set` frame or of the ordinary frame.
     pub fn parse_daemon_value(&self, v: Value) -> Result<DaemonOp, ParseError> {
         if v.as_object().and_then(|m| m.get("op")).and_then(Value::as_str) == Some("key_set") {
-            return parse_key_set(v).map_err(|e| ParseError { detail: Some(e.0) });
+            return parse_key_set(v).map_err(|e| ParseError::from(Refusal::from(e)));
         }
         parse_value(v)
             .map(|mut request| {
                 let presented = request.attest.take();
                 DaemonOp::Febe { request: Box::new(request), presented }
             })
-            .map_err(|e| ParseError { detail: Some(e.0) })
+            .map_err(ParseError::from)
     }
 
     /// Returns the rejection that answers a frame which failed to parse.
@@ -492,7 +497,41 @@ impl std::fmt::Display for PErr {
 
 type PResult<T> = Result<T, PErr>;
 
-fn parse_request(frame: &[u8]) -> PResult<Request> {
+/// A parse fault as the door answers it: the detail, and the entry of the
+/// request's own list it is localized to, where it is one — the site the
+/// `Unparseable` rejection carries (`site.index`).
+///
+/// Every leaf parser answers a bare [`PErr`], which lifts into this naming
+/// no entry; the one parser that localizes its refusal — the publish shot's
+/// `places`, refused entry by entry ([`Fields::places`]) — answers this
+/// directly. The request's own faults ride it to [`ParseError`]. A tuple as
+/// [`PErr`] is, its detail first, so a reader of either names the text the
+/// same way.
+#[derive(Debug)]
+struct Refusal(String, Option<usize>);
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<PErr> for Refusal {
+    fn from(e: PErr) -> Refusal {
+        Refusal(e.0, None)
+    }
+}
+
+impl From<Refusal> for ParseError {
+    fn from(r: Refusal) -> ParseError {
+        ParseError {
+            detail: Some(r.0),
+            site: r.1.map(|index| FaultSite { index: Some(index), ..FaultSite::default() }),
+        }
+    }
+}
+
+fn parse_request(frame: &[u8]) -> Result<Request, Refusal> {
     let v: Value = serde_json::from_slice(frame).map_err(|e| PErr(format!("invalid JSON: {e}")))?;
     parse_value(v)
 }
@@ -503,13 +542,13 @@ fn parse_request(frame: &[u8]) -> PResult<Request> {
 ///
 /// # Errors
 ///
-/// A [`PErr`], in this order: the value is not an object; its `op` is
+/// A [`Refusal`], in this order: the value is not an object; its `op` is
 /// missing or no string; its `id` is refused ([`Fields::req_id`]); the op is
 /// unknown or its own fields are refused ([`parse_op`]); its `attest` member
 /// is refused ([`Fields::attest`]); a field is left unknown.
-fn parse_value(v: Value) -> PResult<Request> {
+fn parse_value(v: Value) -> Result<Request, Refusal> {
     let Value::Object(m) = v else {
-        return Err(PErr("request frame must be a JSON object".into()));
+        return Err(PErr("request frame must be a JSON object".into()).into());
     };
     let mut fields = Fields(m);
     let name = fields.string("op")?;
@@ -563,13 +602,14 @@ fn p_attest(v: &Value) -> PResult<Attestation> {
 /// because the envelope key `"id"` is the idempotency slot, and `publish`,
 /// whose `shot` rides flattened into the envelope — its base's member as
 /// `"base"` and its extent as `"base_extent"`, beside `"draft"` and
-/// `"runs"`.
+/// `"runs"` — with its kept places beside them as `"places"`.
 ///
 /// # Errors
 ///
-/// A [`PErr`] naming an unknown op, or a field of the op's own that is
-/// missing or refused.
-fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
+/// A [`Refusal`] naming an unknown op, or a field of the op's own that is
+/// missing or refused — the entry named where the field is a `publish`'s
+/// `places` ([`Fields::places`]).
+fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
     Ok(match name {
         "create_new_document" => Op::CreateNewDocument {
             account: fields.addr("account")?,
@@ -612,7 +652,15 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         },
         "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
-        "publish" => Op::Publish { doc: fields.addr("doc")?, shot: fields.shot()? },
+        // The shot, then its kept places beside it (the link-sets design
+        // §5.7): parallel to the runs the shot just took, so the places are
+        // read against them.
+        "publish" => {
+            let doc = fields.addr("doc")?;
+            let shot = fields.shot()?;
+            let places = fields.places(&shot)?;
+            Op::Publish { doc, shot, places }
+        }
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
             from: fields.slotarg("from")?,
@@ -689,7 +737,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         // No argument (PUB-8.47): `finish` refuses any field beside `op` and
         // the idempotency `id`, as everywhere.
         "universal_grants" => Op::UniversalGrants,
-        other => return Err(PErr(format!("unknown op '{}'", bounded(other)))),
+        other => return Err(PErr(format!("unknown op '{}'", bounded(other))).into()),
     })
 }
 
@@ -1040,6 +1088,66 @@ impl Fields {
         let draft = self.opt_addr("draft")?;
         let runs = self.field("runs", |v| p_list(v, p_shot_run))?;
         Ok(Shot { base, draft, runs })
+    }
+
+    /// Takes the publish shot's kept places (the link-sets design §5.7).
+    ///
+    /// `places` is a list parallel to `runs` by index — each entry a
+    /// V-position as `reinstate`'s `at` is spelled, the place the run held
+    /// in the staging draft when the client composed the request, or `null`
+    /// for a run with none. Absent, or every entry `null`, is today's shot
+    /// and reads as the empty list; a shorter list is padded with `null` to
+    /// `runs`' length — so the value handed on is either empty or exactly as
+    /// long as `runs`, with a place in it, the form the marshal writes back.
+    /// Outside the signed preimage, as `draft` is: the composer reads the
+    /// shot alone, and this is read after it, against the runs it took.
+    ///
+    /// # Errors
+    ///
+    /// A [`Refusal`] where the member is no array; and, naming the entry in
+    /// its `index` — the `malformed` rejection's `site.index` — where the
+    /// list is longer than `runs` (the first entry past them), where a
+    /// non-null entry is no V-position, lies outside the content subspace
+    /// (a kept place is a content position), or sits beside a run whose
+    /// stated `origin` is not the request's `draft`: a place belongs to a
+    /// draft-native run alone, and a request naming no draft has none.
+    fn places(&mut self, shot: &Shot) -> Result<Vec<Option<VPos>>, Refusal> {
+        let Some(v) = self.take_opt("places") else { return Ok(Vec::new()) };
+        let arr =
+            v.as_array().ok_or_else(|| PErr("field 'places': expected a JSON array".into()))?;
+        if arr.len() > shot.runs.len() {
+            return Err(Refusal(
+                format!("field 'places': {} entries beside {} runs", arr.len(), shot.runs.len()),
+                Some(shot.runs.len()),
+            ));
+        }
+        let draft = shot.draft_document();
+        let at = |index: usize, fault: &str| {
+            Refusal(format!("field 'places': [{index}]: {fault}"), Some(index))
+        };
+        let mut out: Vec<Option<VPos>> = Vec::with_capacity(shot.runs.len());
+        for (index, (entry, run)) in arr.iter().zip(&shot.runs).enumerate() {
+            if entry.is_null() {
+                out.push(None);
+                continue;
+            }
+            let place = p_vpos(entry).map_err(|e| at(index, &e.0))?;
+            if !place.is_content() {
+                return Err(at(index, "a kept place is a content position"));
+            }
+            if draft.as_ref() != Some(&trunk_of(&run.origin)) {
+                return Err(at(
+                    index,
+                    "a kept place belongs to a draft-native run, whose origin is the request's draft",
+                ));
+            }
+            out.push(Some(place));
+        }
+        if out.iter().all(Option::is_none) {
+            return Ok(Vec::new());
+        }
+        out.resize(shot.runs.len(), None);
+        Ok(out)
     }
 
     fn successor(&mut self, k: &'static str) -> PResult<SuccessorSpec> {

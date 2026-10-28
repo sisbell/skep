@@ -385,7 +385,10 @@ fn fixture(name: &str) -> Response {
             io_kind: None,
         }),
         "rejected_unparseable" => {
-            JsonCodec.unparseable(ParseError { detail: Some("unknown op 'frobnicate'".into()) })
+            JsonCodec.unparseable(ParseError {
+                detail: Some("unknown op 'frobnicate'".into()),
+                site: None,
+            })
         }
         other => panic!("doc marker 'response {other}' has no fixture in wire_doc.rs"),
     }
@@ -620,6 +623,44 @@ fn doc_states_the_correspondence_fence_and_the_slots_ordinal_and_role_reading() 
     ] {
         assert!(links.contains(fact), "§Links (writes) says {fact:?}");
     }
+}
+
+/// THE KEPT PLACES (the link-sets design §5.7; lane S2): §Arrangement's
+/// `publish` names the `places` member — parallel to `runs`, a V-position
+/// or `null` per entry, outside the signed frame, absent the shot as before
+/// — §The publish shot and head-float states the re-window, its check by
+/// membership and its refusal with the entry, and §Rejection codes carries
+/// the token. The daemon's answers are pinned in `publish.rs` and skep-core's
+/// suite; this pins that the contract says so.
+#[test]
+fn doc_states_the_kept_places_and_their_refusal() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "`places`, optional, is the draft's KEPT PLACES",
+        "a list parallel to `runs` by index",
+        "absent or all-`null` is the shot as before",
+        "The places lie OUTSIDE the signed frame, as `draft` does",
+        "`malformed`, `site.index` the entry",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "**The kept places**",
+        "RE-WINDOWS the draft at each, after the records",
+        "The check is by MEMBERSHIP of the named place",
+        "| `kept_place_moved` | permanent | `index` = the `runs` entry |",
+        "A request that sends no places, or `null` at every entry, is the shot as before",
+        "The board's own producers send none",
+        "* `kept_place_moved` —",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(
+        codes.contains("and `kept_place_moved` (the publication's re-window"),
+        "§Rejection codes carries the token"
+    );
 }
 
 /// THE TEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):

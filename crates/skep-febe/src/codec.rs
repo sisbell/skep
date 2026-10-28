@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use crate::reject::{RejectCode, Rejection};
+use crate::reject::{FaultSite, RejectCode, Rejection};
 use crate::request::{OpKind, Request};
 use crate::response::Response;
 
@@ -169,7 +169,11 @@ pub trait Codec {
 ///
 /// The failure is an unknown op, a bad argument encoding, or a frame past a
 /// cap the codec enforces. Constructed by the transport's `Codec` impl;
-/// `detail` becomes the `Unparseable` rejection's own `detail`.
+/// `detail` becomes the `Unparseable` rejection's own `detail`, and `site`
+/// its site, where the codec localizes the failure to one entry of a list
+/// the request carries — a `publish`'s `places`, whose shape is the codec's
+/// to refuse entry by entry (`site.index` the entry); `None` for every
+/// other failure, as every unparseable frame carried before the member.
 ///
 /// A std error, as a [`Rejection`] is, so the transport author writing the
 /// one required [`Codec`] impl can `unwrap`, `expect`, `?` it into a boxed
@@ -185,6 +189,8 @@ pub trait Codec {
 pub struct ParseError {
     /// Optional human-readable cause for the `Unparseable` rejection.
     pub detail: Option<String>,
+    /// Where in the request the failure landed, where the codec says.
+    pub site: Option<FaultSite>,
 }
 
 impl fmt::Display for ParseError {
@@ -215,14 +221,16 @@ impl Rejection {
     /// Classification stays M10's: the code is `Malformed` and the
     /// disposition is whatever the table says `Malformed` disposes to, so an
     /// unparseable frame is advised exactly as every other `Malformed` is.
-    /// `e.detail` rides through as the message.
+    /// `e.detail` rides through as the message, and `e.site` as the site —
+    /// the one entry of a request's list the codec localized the failure to,
+    /// where it did.
     ///
     /// [`Op`]: crate::Op
     /// [`Codec`]: crate::Codec
     /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     /// [`Request`]: crate::Request
     pub fn unparseable(e: ParseError) -> Rejection {
-        let r = Rejection::classified(OpKind::Unparseable, RejectCode::Malformed, None);
+        let r = Rejection::classified(OpKind::Unparseable, RejectCode::Malformed, e.site);
         match e.detail {
             Some(d) => r.with_detail(d),
             None => r,
@@ -237,16 +245,25 @@ mod tests {
     /// The parse-failure rejection is classified as any other `Malformed` is.
     ///
     /// It goes through the same table, and carries the codec's cause when it
-    /// has one.
+    /// has one, and the codec's site — the entry of a request's list the
+    /// failure is localized to — when it names one.
     #[test]
     fn an_unparseable_frame_is_classified_by_the_same_table() {
-        let rej = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
+        let rej =
+            Rejection::unparseable(ParseError { detail: Some("unknown op".into()), site: None });
         assert_eq!(rej.op, OpKind::Unparseable);
         assert_eq!(rej.code, RejectCode::Malformed);
         assert_eq!(rej.disposition, RejectCode::Malformed.disposition());
         assert_eq!(rej.detail.as_deref(), Some("unknown op"));
-        let bare = Rejection::unparseable(ParseError { detail: None });
+        assert!(rej.site.is_none());
+        let bare = Rejection::unparseable(ParseError { detail: None, site: None });
         assert!(bare.detail.is_none());
+        let sited = Rejection::unparseable(ParseError {
+            detail: Some("field 'places': [2]: a place belongs to a draft-native run".into()),
+            site: Some(FaultSite { index: Some(2), ..FaultSite::default() }),
+        });
+        assert_eq!(sited.code, RejectCode::Malformed);
+        assert_eq!(sited.site.expect("the entry rides the site").index, Some(2));
     }
 
     /// A parse failure is a std error, as a rejection is.
@@ -261,9 +278,9 @@ mod tests {
             Box::new(e)
         }
 
-        let e = ParseError { detail: Some("unknown op".into()) };
+        let e = ParseError { detail: Some("unknown op".into()), site: None };
         assert!(e.to_string().contains("unknown op"));
         assert_eq!(boxed(e).to_string(), "unparseable frame: unknown op");
-        assert_eq!(ParseError { detail: None }.to_string(), "unparseable frame");
+        assert_eq!(ParseError { detail: None, site: None }.to_string(), "unparseable frame");
     }
 }

@@ -147,6 +147,7 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
     let into_h = |base: Option<Base>| Op::Publish {
         doc: h.clone(),
         shot: Shot { base, draft: None, runs: Vec::new() },
+        places: Vec::new(),
     };
     assert!(
         !refused_at_or_before_the_source_gate(world, &into_h(None), SYSTEM_PRINCIPAL),

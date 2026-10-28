@@ -1608,12 +1608,17 @@ reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run` (a shot's or a reinstate's run: its start is no content
 element, or its stated origin is not the document that minted it),
 `base_not_in_chain`, `base_superseded`,
-`base_extent_too_large`, and `already_published` (the publication's
+`base_extent_too_large`, `already_published` (the publication's
 twin fence: a draft-native run of the shot whose I-span overlaps a span
 a correspondence record homed in the draft already names as its
 from-span — the words were re-inserted by an earlier shot, and
 `site.addr` is the member they were published into; permanent, the
-record standing for good); and three more of M5's — `not_link_address`
+record standing for good), and `kept_place_moved` (the publication's
+re-window: the draft no longer arranges a draft-native run's identity
+at the kept place the request carries for it in its places member —
+moved, split, deleted or rearranged since the client read it —
+`site.index` the runs entry; permanent, the client re-reads the draft
+and composes its places afresh); and three more of M5's — `not_link_address`
 (make-link's seat step, M5 §8: the address it is to seat is not a full
 element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
@@ -1851,6 +1856,40 @@ the registry seed — shoot from the system account's staging draft and
 mint their records there (§The other endpoints; §Registry; §The change
 feed's positions), each run fresh, so the fence never meets them.
 
+**The kept places** (the link-sets design §5.7). The request may carry,
+per run of the `draft`, the V-place the run held in the draft when the
+client composed the request — `places`, beside `runs` (§Arrangement),
+read off the draft's image at the confirmation — and the shot's ONE
+commit then RE-WINDOWS the draft at each, after the records: it checks
+that the draft still arranges that run's identity at that place, by
+identity — the V-span of the run's width at the place resolves to
+exactly the run's addresses, in its order — and replaces it THERE by
+the fresh run the member holds, a `reinstate` of the fresh run at the
+place and a `delete` of the draft's own run behind it, piece by piece
+at each piece's offset, applied in turn inside the transaction so
+positions stay true: the draft reads the same bytes at every position
+afterwards and arranges the member's identity where it arranged its
+own, at every principal, with no client step between the version and
+the re-window and no crash that leaves the draft showing published
+words as its own. The check is by MEMBERSHIP of the named place: a
+draft arranging a run's identity twice is re-windowed at the place the
+request names and left standing at the other, which the twin fence
+meets at its own publication; a run named twice in `runs` with a place
+on each re-windows both onto the one fresh run the first entry minted.
+Where the check fails — the draft moved the run, split it, deleted it,
+or arranges it elsewhere or in another order since the place was read
+— the whole publication is refused `kept_place_moved`, permanent,
+`site.index` the `runs` entry and nothing else, nothing committed: the
+client re-reads the draft and composes the places afresh (the editor
+orders its own bursts around the act, and the race face that names
+whose write moved the run is the client's). A request that sends no
+places, or `null` at every entry, is the shot as before: the draft is
+left as it stands. The shape is the codec's, refused ahead of every
+store: a list longer than `runs`, a place beside a run whose `origin`
+is not the `draft`, one outside the content subspace, or one that is
+no V-position is `malformed` with `site.index` the entry. The board's
+own producers send none.
+
 **Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
 of a bare DOCUMENT address answers the document's trunk HEAD — the
 latest trunk member — and never the pre-chain arrangement a shot
@@ -1919,7 +1958,8 @@ commits nothing:
 | `already_published` | permanent | `addr` = the member the words were published into | a draft-native run overlaps the `from` of a correspondence record homed in the draft (the twin fence, above) — read inside the transaction, after the shot's own table through the source gate and ahead of the count and the existence walk |
 | `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values; a position two runs name counts once) — arithmetic on the request, asked ahead of existence |
 | `dangling_source` | permanent | — | an address a run names holds no value |
-| `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget |
+| `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget — or, with a kept place, the draft's run-list at its re-window |
+| `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's run at the kept place the request carries for it (the kept places, above) — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
 
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
@@ -1939,6 +1979,10 @@ the origin withheld:
   ⟨k⟩ — reload this draft, and publish again only what you have changed
   since" (the link-sets design's DRAFT face; the member `site.addr`
   names is ⟨k⟩).
+* `kept_place_moved` — "⟨D⟩ changed under this publication — the words
+  you selected moved since you read them; look again and publish" (the
+  DRAFT face; the race face that names whose write moved them is the
+  client's, read off the change feed).
 * `not_owner` naming the draft — "⟨D⟩ is not yours — a publication
   keeps its records in the draft it was staged in; publish from a draft
   of your own" (DRAFT).
@@ -2840,8 +2884,21 @@ the draft the caller's own, and for each piece re-inserted one
 correspondence record homed in the draft, in the shot's one commit; a
 run a record already names is refused `already_published` (§The publish
 shot and head-float, the correspondence records); each run is `origin`,
-`i_start`, `width`. Owner-gated, and the publish class's input from any
-session.
+`i_start`, `width`. `places`, optional, is the draft's KEPT PLACES (§The
+publish shot and head-float, the kept places): a list parallel to `runs`
+by index, each entry a V-position as `reinstate`'s `at` is spelled —
+for a run of the `draft`, the place it held in the draft when the
+client composed the request, read off the draft's image (`image`) at
+the confirmation — or `null`; a shorter list is padded with `null`, and
+absent or all-`null` is the shot as before, writing nothing of the
+draft. With a place the commit re-windows the draft there, the fresh
+run replacing the draft's own, and refuses the publication
+`kept_place_moved` where the draft no longer arranges the run at it. A
+place beside a run whose `origin` is not the `draft`, outside the
+content subspace, or past the runs is `malformed`, `site.index` the
+entry. The places lie OUTSIDE the signed frame, as `draft` does: a shot
+with places signs as the same shot without them. Owner-gated, and the
+publish class's input from any session.
 On a CLAIMED board the shot carries the optional top-level `attest`
 member (signed ops; the object `insert` describes): the entry signature
 over the frame whose `doc` is the trunk document, `op` `publish` and
@@ -2887,11 +2944,13 @@ publish shot and head-float, the correspondence records).
 → `ack_addr` (the member's address). `content` and `gate` are defences,
 as at `insert` (§Rejection codes). This example publishes a draft
 staged off the second member: the edition's own three positions by
-reference and the draft's two as fresh identity:
+reference and the draft's two as fresh identity, with the draft's run's
+kept place beside the runs — `null` for the edition's own — so the
+commit re-windows the draft at its ordinal 4:
 
 <!-- wire: request publish -->
 ```json
-{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","op":"publish","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
+{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
 ```
 
 ### Media — the reference cell and its door (lane A; the fence) and the upload (lane B)

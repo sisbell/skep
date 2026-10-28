@@ -76,9 +76,10 @@
 //! the correspondence type ([`correspondence_type`]; the link-sets design
 //! §5.7), the publish shot's record whose one writer is
 //! [`LinkWriter::publication`] — the shot staged with one record per piece
-//! of draft identity it minted, in one transaction, the composite a
-//! staging function ([`stage_publication`], [`stage_correspondence`]) over
-//! M5's exported shot bound. Each a type no registration holds, which every
+//! of draft identity it minted and the draft re-windowed at the kept places
+//! the request carries, in one transaction, the composite a staging
+//! function ([`stage_publication`], [`stage_correspondence`]) over M5's
+//! exported shot bound and its two placement stagings. Each a type no registration holds, which every
 //! write that takes a caller's type slot refuses: exactly the slots
 //! [`is_replaces_class`] and [`is_correspondence_class`] answer `true` for.
 

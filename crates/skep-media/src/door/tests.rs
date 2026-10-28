@@ -154,6 +154,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
                 run: Run::new(cell_at.clone(), Nat::from(1u32)).expect("one position"),
             }],
         },
+        places: Vec::new(),
     };
     assert_eq!(
         door(shot(Some(draft.clone())), SYSTEM_PRINCIPAL),
@@ -210,6 +211,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
                 run: Run::new(real_at.clone(), Nat::from(1u32)).expect("one position"),
             }],
         },
+        places: Vec::new(),
     };
     let deposit = |p: PrincipalId, interval: Duration| {
         let key = MediaGate::key(p);

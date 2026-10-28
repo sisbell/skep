@@ -53,7 +53,11 @@
 //!   and width, read from nowhere — within [`MAX_SHOT_BODY_BYTES`]; the base
 //!   the shot's own, `Shot::base`'s member and extent as the request named
 //!   them, empty in the birth shape — the member's address read off the
-//!   request and never minted here, so the frame stays position-free.
+//!   request and never minted here, so the frame stays position-free; the
+//!   kept places a `publish` carries beside its shot (`Op::Publish`'s
+//!   `places`, the link-sets design §5.7) are no part of it, outside the
+//!   preimage as `draft` is, so a shot with places verifies as the same
+//!   shot without them.
 //!
 //! Eight bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
@@ -396,7 +400,11 @@ pub(super) fn compose(
                 entry_body_edit_link(link_slots(&link), &unit_span(original)),
             )
         }
-        Op::Publish { doc, shot } => {
+        // The kept places the request carries beside the shot (the
+        // link-sets design §5.7) are outside the preimage, as `draft` is:
+        // the shot alone is read here, and a shot with places signs as the
+        // same shot without them.
+        Op::Publish { doc, shot, .. } => {
             let trunk = trunk_of(doc);
             // The runs as the commit will place them — M5's classing, the
             // one place a run's family is decided, asked with the address

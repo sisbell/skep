@@ -273,8 +273,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         }
         // Canonical: `base`/`base_extent` and `draft` ride only when present,
         // so an absent one marshals to no field and `parse ∘ marshal` is a
-        // fixpoint.
-        Op::Publish { doc, shot } => {
+        // fixpoint — and so do the kept places: `places` rides only where
+        // one is present, the list `runs`' length with `null` at a run with
+        // none, the form the parse pads a shorter list to.
+        Op::Publish { doc, shot, places } => {
             let mut pairs = vec![("doc", j_addr(doc)), ("runs", j_shot_runs(&shot.runs))];
             if let Some(base) = &shot.base {
                 pairs.push(("base", j_addr(&base.member)));
@@ -282,6 +284,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             }
             if let Some(draft) = &shot.draft {
                 pairs.push(("draft", j_addr(draft)));
+            }
+            if places.iter().any(Option::is_some) {
+                let places = places.iter().map(|p| p.as_ref().map_or(Value::Null, j_vpos));
+                pairs.push(("places", Value::Array(places.collect())));
             }
             (op_name(OpKind::Publish), pairs)
         }
@@ -1280,9 +1286,11 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::BaseNotInChain => "base_not_in_chain",
         RejectCode::BaseSuperseded => "base_superseded",
         RejectCode::BaseExtentTooLarge => "base_extent_too_large",
-        // The publication's twin fence (the link-sets design §5.7), tabled
-        // with the shot's codes in §The publish shot and head-float.
+        // The publication's twin fence and its re-window's check (the
+        // link-sets design §5.7), tabled with the shot's codes in §The publish
+        // shot and head-float.
         RejectCode::AlreadyPublished => "already_published",
+        RejectCode::KeptPlaceMoved => "kept_place_moved",
         RejectCode::IllFormedSpec => "ill_formed_spec",
         RejectCode::SlotTooLarge => "slot_too_large",
         RejectCode::EmptyTypeResolution => "empty_type_resolution",

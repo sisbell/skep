@@ -486,6 +486,26 @@
               "additionalProperties": false
             }
           },
+          "places": {
+            "type": "array",
+            "description": "The kept places, parallel to runs by index: for a run of the draft, the V-position it held in the draft when you composed the request — where image(draft, region) answered that run — or null; a shorter list is padded with null; absent or all null leaves the draft as it stands. Outside the signed frame. The commit checks the draft still arranges the run there and replaces it there by the fresh run the member holds; where the draft changed since, the whole publish is refused kept_place_moved with site.index the runs entry, nothing written — read the draft again and compose the places afresh.",
+            "items": {
+              "type": ["object", "null"],
+              "description": "A content V-position, or null for a run with no place.",
+              "properties": {
+                "subspace": {
+                  "type": ["string", "integer"],
+                  "description": "Subspace natural, 1 = content; decimal string canonically."
+                },
+                "ordinal": {
+                  "type": ["string", "integer"],
+                  "description": "1-based ordinal natural, decimal string canonically."
+                }
+              },
+              "required": ["subspace", "ordinal"],
+              "additionalProperties": false
+            }
+          },
           "base": {
             "type": "string",
             "pattern": "^[0-9]+(\\.[0-9]+)*$",

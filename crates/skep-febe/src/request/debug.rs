@@ -74,9 +74,12 @@ impl fmt::Debug for Op {
                 .field("d_src", d_src)
                 .field("published", published)
                 .finish(),
-            Op::Publish { doc, shot } => {
-                f.debug_struct("Publish").field("doc", doc).field("shot", shot).finish()
-            }
+            Op::Publish { doc, shot, places } => f
+                .debug_struct("Publish")
+                .field("doc", doc)
+                .field("shot", shot)
+                .field("places", places)
+                .finish(),
             Op::MakeLink { home, from, to, ty, replaces } => f
                 .debug_struct("MakeLink")
                 .field("home", home)

@@ -26,6 +26,35 @@ fn wrappers_recurse() {
     ))
     .lower();
     assert_eq!(code, RejectCode::Content);
+    // The publication's re-window: its placement and its removal recurse
+    // into M5's own tables, so a published draft reads as `reinstate`'s and
+    // `delete`'s `published_target`.
+    let (code, site) = PublicationError::Reinstate(ReinstateError::PublishedTarget).lower();
+    assert_eq!((code, site), (RejectCode::PublishedTarget, None));
+    let (code, site) = PublicationError::Delete(DeleteError::PublishedTarget).lower();
+    assert_eq!((code, site), (RejectCode::PublishedTarget, None));
+    let (code, _) = PublicationError::Reinstate(ReinstateError::TooManyRuns).lower();
+    assert_eq!(code, RejectCode::TooManyRuns);
+}
+
+/// The re-window's refusal (the link-sets design §5.7), at the lowering:
+/// `kept_place_moved` carries the `runs` entry in `site.index` and NOTHING
+/// else — permanent, no detail, no other site field. The shape is what
+/// `wire.md` pins and `tests/publish.rs` reads back over the wire; this is
+/// where it is decided.
+#[test]
+fn kept_place_moved_names_its_runs_entry_and_nothing_else() {
+    let rej = lower_txn(
+        OpKind::Publish,
+        TxnError::Rejected(PublicationError::KeptPlaceMoved { index: 3 }),
+    );
+    assert_eq!(rej.code, RejectCode::KeptPlaceMoved);
+    assert_eq!(rej.disposition, Disposition::Permanent, "the same request can never land");
+    let site = rej.site.expect("the entry rides the site");
+    assert_eq!(site.index, Some(3));
+    assert!(site.addr.is_none() && site.slot.is_none() && site.fault.is_none());
+    assert!(site.operand.is_none() && site.region.is_none());
+    assert!(rej.detail.is_none(), "no detail rides the code");
 }
 
 /// §5's nested-error rule as a LAW over every wrapper: each wrapper variant
@@ -390,6 +419,12 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(EditLinkError::SlotTooLarge);
     same_name(EditLinkError::IllFormedSuccessor);
     same_name(EditLinkError::DcViolation);
+    // The publication's own (the link-sets design §5.7): the twin fence and
+    // the re-window's check, each threading its site.
+    same_name(PublicationError::HomeNotRegistered);
+    same_name(PublicationError::NotOwner(doc()));
+    same_name(PublicationError::AlreadyPublished { site: doc() });
+    same_name(PublicationError::KeptPlaceMoved { index: 0 });
 
     // ── M6 (retrieval) ──
     same_name(RetrieveError::DocNotRegistered(doc()));

@@ -402,7 +402,7 @@ fn system_owned(world: &World, op: &Op) -> bool {
 /// shot through unattested on `true` alone, which is safe because the real
 /// shot is then refused with the same answer.
 fn refused_at_or_before_the_source_gate(world: &World, op: &Op, principal: PrincipalId) -> bool {
-    let Op::Publish { doc, shot } = op else {
+    let Op::Publish { doc, shot, .. } = op else {
         return false;
     };
     let caller = Caller::Principal(principal);

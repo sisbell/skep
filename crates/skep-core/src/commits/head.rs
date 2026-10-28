@@ -1026,9 +1026,10 @@ impl HeadWriter {
         shot: Shot,
         refused: Refused<'_>,
     ) -> Option<Address> {
-        let op = Op::Publish { doc, shot };
+        // No kept place: the producer's shot leaves its draft as it stands.
+        let op = Op::Publish { doc, shot, places: Vec::new() };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
-        let Op::Publish { doc, shot } = op else {
+        let Op::Publish { doc, shot, .. } = op else {
             return None;
         };
         // The source consult at the system principal's class, never System's
@@ -1040,7 +1041,7 @@ impl HeadWriter {
         self.run_commit(wp, serial, meta, refused, move || {
             self.stores
                 .linkstore(&visibility)
-                .publication(Caller::Principal(SYSTEM_PRINCIPAL), &doc, &shot)
+                .publication(Caller::Principal(SYSTEM_PRINCIPAL), &doc, &shot, &[])
                 .map_err(|e| lower_txn(OpKind::Publish, e))
         })
     }

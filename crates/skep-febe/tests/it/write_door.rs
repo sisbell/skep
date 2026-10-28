@@ -999,13 +999,17 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     };
     let before = fx.febe.log_position();
     assert_withheld(
-        ex(&fx.febe, other, Op::Publish { doc: their_edition, shot: shot() }),
+        ex(&fx.febe, other, Op::Publish { doc: their_edition, shot: shot(), places: vec![] }),
         OpKind::Publish,
         &unreadable_edition,
     );
     assert_eq!(fx.febe.log_position(), before, "a withheld shot commits nothing");
 
-    ack_addr(ex(&fx.febe, fx.user, Op::Publish { doc: unreadable_edition.clone(), shot: shot() }));
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Publish { doc: unreadable_edition.clone(), shot: shot(), places: vec![] },
+    ));
 }
 
 /// PUB-6.25 / PUB-6.26 on the LINK writes: a `[K_sup]` claim dedups on its

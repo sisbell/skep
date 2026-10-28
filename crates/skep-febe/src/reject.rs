@@ -144,9 +144,13 @@ pub struct FaultSite {
     /// list — RETRIEVEV's `specs` or RETRIEVEI's `spans`. So the fields are
     /// read together, and an `index` alone always has exactly one container.
     /// Filled by M6's per-spec and per-span refusals, by M10's successor guard
-    /// for a per-spec refusal, and by the doc-argument consult's refusal of a
-    /// RETRIEVEI span's shape; the guard's `SlotTooLarge` names its slot and
-    /// no index, the slot rather than one spec being at fault.
+    /// for a per-spec refusal, by the doc-argument consult's refusal of a
+    /// RETRIEVEI span's shape, by the publication's kept-place refusal
+    /// (`KeptPlaceMoved`: the `runs` entry whose place the draft no longer
+    /// honours), and by a transport's codec refusing the shape of one entry
+    /// of a request's own list (`Malformed`, through `Rejection::unparseable`:
+    /// a `publish`'s `places` entry); the guard's `SlotTooLarge` names its
+    /// slot and no index, the slot rather than one spec being at fault.
     pub index: Option<usize>,
     /// The span well-formedness fault.
     ///
@@ -350,6 +354,18 @@ pub enum RejectCode {
     /// land; the act that exists is a shot re-composing the run by reference
     /// to the published words. Nothing is committed.
     AlreadyPublished,
+    /// The draft no longer arranges a run's identity at the kept place the
+    /// shot carries for it (the link-sets design §5.7's re-window).
+    ///
+    /// Since the client read the place — the V-position the draft-native run
+    /// held in the draft when the request was composed, carried in `places`
+    /// beside `runs` — the draft moved the run, split it, deleted it, or
+    /// arranges it elsewhere or in another order, so the fresh run cannot be
+    /// put where the draft's own words were; `site.index` is the `runs`
+    /// entry. Permanent by the catch-all: the same request can never land —
+    /// the act that exists is a re-read of the draft and a request with the
+    /// places composed afresh. Nothing is committed.
+    KeptPlaceMoved,
     // ── M7 link ──
     /// A `Resolve` V-spec fails its well-formedness check.
     IllFormedSpec,

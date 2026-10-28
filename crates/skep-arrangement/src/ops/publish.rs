@@ -6,8 +6,10 @@
 //! the one value its source gate, existence check and placement each walk;
 //! [`PublishWorld`], the bound the shot's staging needs, exported so a
 //! composite in another crate names it and nothing beneath it; and
-//! [`MintedRun`], the pairing of a draft-native run with the fresh run the
-//! shot minted for it, which [`stage_publish`] returns beside the member.
+//! [`MintedRun`], the pairing of a piece of a draft-native run with the fresh
+//! run it was placed as — minted for it, or minted for an earlier run of the
+//! shot and placed by reference — which [`stage_publish`] returns beside the
+//! member.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -78,34 +80,52 @@ impl<W> PublishWorld for W where
 {
 }
 
-/// One piece of draft identity the shot minted, beside the fresh run it became.
+/// One piece of a draft-native run the shot placed, beside the fresh run it
+/// was placed as, and the `runs` entry it came from.
 ///
-/// `from` is the piece of a draft-native run the shot met for the first
-/// time — a whole run, or the part of one no earlier run of the shot had
-/// minted — and `to` the run of fresh identity it was re-inserted as, under
-/// the content chain of the document the shot names: the two of one width,
-/// so a position of either maps onto the other by its offset (the link-sets
-/// design §5.5's "`from` and `to` of one width"). What the correspondence
-/// record homed in the draft names as its two spans, and what a re-window of
-/// the draft at the run's kept place places there.
+/// `from` is a piece of a draft-native run — a whole run, or the part of one
+/// — at the draft's own addresses, and `to` the run of fresh identity it
+/// stands as in the member, under the content chain of the document the shot
+/// names: the two of one width, so a position of either maps onto the other
+/// by its offset (the link-sets design §5.5's "`from` and `to` of one
+/// width"). `minted` says how the piece was placed: `true` where this entry
+/// re-inserted it, minting `to` for it — the piece the shot met for the first
+/// time, which the correspondence record homed in the draft names as its two
+/// spans — and `false` where an earlier run of the shot had minted the
+/// identity and this entry placed the piece by reference to it, `to` then the
+/// same piece of that earlier fresh run (the design's "a later occurrence of a
+/// minted identity with the first's fresh run"), which no record names again.
+/// `index` is the `runs` entry the piece is a part of, so a re-window of the
+/// draft at that entry's kept place finds every piece it places there, the
+/// referenced ones with the minted.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MintedRun {
     /// The draft-native piece, at the draft's own addresses.
     pub from: Run,
-    /// The fresh run it became, at the edition's.
+    /// The fresh run it stands as in the member, at the edition's addresses.
     pub to: Run,
+    /// The position in the shot's `runs` of the entry the piece is a part of.
+    pub index: usize,
+    /// Whether this entry minted `to` for the piece, or placed the piece by
+    /// reference to an identity an earlier entry minted.
+    pub minted: bool,
 }
 
-/// The pairing [`stage_publish`] returns: every piece of draft identity the
-/// shot minted, in minting order — `runs`' order, each run's pieces in
-/// I-order — each beside the fresh run it became.
+/// The pairing [`stage_publish`] returns: every piece of every draft-native
+/// run the shot placed, in placement order — `runs`' order, each run's pieces
+/// in I-order, tiling the run from its start — each beside the fresh run it
+/// was placed as, with its `runs` entry and whether the entry minted it.
 ///
 /// A list and not an index into the member's runs, because the placement
 /// coalesces: the member holds I-adjacent fresh runs as one run, and a
 /// by-reference run beside a fresh one merges with it where they are
 /// adjacent, so the member's `k`-th run is not the `k`-th run of the request
 /// once any two coalesce, and a caller pairing by index would pair a draft
-/// run with a run that holds other identity too (the S-gate's ruling). Empty
+/// run with a run that holds other identity too (the S-gate's ruling). The
+/// entries of one `runs` index are consecutive, in I-order, and their `from`
+/// pieces tile that run from its start: the first's `from` opens at the run's
+/// start and each next one at the previous one's reach, so a piece's offset
+/// into its run is the widths of the entry's pieces before it, summed. Empty
 /// for a shot that names no draft or re-inserts nothing.
 pub type Pairing = Vec<MintedRun>;
 
@@ -117,8 +137,9 @@ pub type Pairing = Vec<MintedRun>;
 /// it became; the rest is minted. A run that overlaps an earlier one in part
 /// splits into the two kinds, in I-order.
 enum Portion {
-    /// A piece an earlier run minted: the fresh run to place by reference.
-    Referenced(Run),
+    /// A piece an earlier run minted: the draft-native piece, and the fresh
+    /// run to place by reference for it.
+    Referenced { from: Run, to: Run },
     /// A piece no earlier run minted: the draft-native run to re-insert.
     Unminted(Run),
 }
@@ -180,9 +201,10 @@ impl MintedIdentity {
             if cursor < lo {
                 portions.push(Portion::Unminted(piece(&cursor, &lo)));
             }
-            portions.push(Portion::Referenced(
-                Run::new(fresh_at_lo, &hi - &lo).expect("a piece of a fresh run is a run"),
-            ));
+            portions.push(Portion::Referenced {
+                from: piece(&lo, &hi),
+                to: Run::new(fresh_at_lo, &hi - &lo).expect("a piece of a fresh run is a run"),
+            });
             cursor = hi;
         }
         if cursor < reach {
@@ -193,8 +215,9 @@ impl MintedIdentity {
 
     /// Notes that `piece`, a draft-native run no earlier run had minted, was
     /// re-inserted as `fresh` — the runs its re-insert allocated, in order,
-    /// of the piece's width together — and appends the pairing of each.
-    fn note(&mut self, piece: &Run, fresh: &[Run], pairing: &mut Pairing) {
+    /// of the piece's width together — for the `runs` entry at `index`, and
+    /// appends the pairing of each.
+    fn note(&mut self, piece: &Run, fresh: &[Run], index: usize, pairing: &mut Pairing) {
         let (chain, first) = chain_and_ordinal(piece.i_start());
         let pieces = self.chains.entry(chain).or_default();
         let mut offset = Nat::zero();
@@ -203,7 +226,7 @@ impl MintedIdentity {
                 .expect("a piece of a draft-native run is a run");
             pieces.insert(&first + &offset, (to.width().clone(), to.i_start().clone()));
             offset = &offset + to.width();
-            pairing.push(MintedRun { from, to: to.clone() });
+            pairing.push(MintedRun { from, to: to.clone(), index, minted: true });
         }
         debug_assert_eq!(&offset, piece.width(), "the fresh runs are the piece's width together");
     }
@@ -311,8 +334,9 @@ where
     /// one fresh identity in the member, and words the draft holds as one
     /// text stay one text in the edition; the signed body is unchanged, a
     /// value stretch being spelled by its values however its positions were
-    /// placed. Which draft piece became which fresh run is
-    /// [`stage_publish`]'s to return ([`Pairing`]).
+    /// placed. Which draft piece became which fresh run — minted for it, or
+    /// placed by reference to the first's — is [`stage_publish`]'s to return
+    /// ([`Pairing`]).
     /// `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
     /// pins the order, the content chain, the once-per-identity rule and the
     /// "nothing else", and
@@ -475,14 +499,18 @@ where
 /// each draft identity once, the base's tail carried — the member's mint and
 /// its one [`M5Rec::ShotPlace`], every check in the order `publish` states,
 /// every refusal and every record pushed `publish`'s own. Returns the
-/// member's address and THE PAIRING ([`Pairing`]): every piece of draft
-/// identity the shot minted, in minting order, beside the fresh run it
-/// became — the correspondence a composite records in the draft, one record
-/// per minted piece (the link-sets design §5.5, §5.7), and what a re-window
-/// of the draft at a run's kept place places there. A list, because the
-/// member's runs coalesce and an index into them pairs nothing once two
-/// have; empty where the shot names no draft or re-inserts nothing. The
-/// commit's `Seq` is the transaction's to report. Offered so a caller can
+/// member's address and THE PAIRING ([`Pairing`]): every piece of every
+/// draft-native run the shot placed, in placement order, beside the fresh
+/// run it stands as in the member, with its `runs` entry and whether that
+/// entry minted it — the minted pieces, each the correspondence a composite
+/// records in the draft, one record per minted piece (the link-sets design
+/// §5.5, §5.7), and the pieces placed by reference to an identity an earlier
+/// entry minted, paired with the same piece of that fresh run and recorded
+/// by no second record; both what a re-window of the draft at a run's kept
+/// place places there, piece by piece at each piece's offset. A list,
+/// because the member's runs coalesce and an index into them pairs nothing
+/// once two have; empty where the shot names no draft or re-inserts nothing.
+/// The commit's `Seq` is the transaction's to report. Offered so a caller can
 /// compose the shot with other stagings under ONE transaction, which the
 /// public ops cannot, each opening a transaction of its own and the kernel
 /// refusing a nested one: the link-sets design's one commit, the member
@@ -594,20 +622,24 @@ pub fn stage_publish<W: PublishWorld>(
     let mut placement: Vec<Run> = Vec::new();
     let mut minted = MintedIdentity::default();
     let mut pairing: Pairing = Vec::new();
-    for SettledRun { run, origin_doc } in supplied {
+    for (index, SettledRun { run, origin_doc }) in supplied.into_iter().enumerate() {
         if draft_native(&origin_doc) {
             // EACH DRAFT IDENTITY ONCE PER SHOT: the run split by the
             // identities this shot already minted, each referenced piece
-            // placed as the fresh run it became and each unminted piece
-            // re-inserted, then noted with the fresh runs it became —
-            // one pairing entry per fresh run, which is one per piece on
-            // the frontier allocator M3 has.
+            // placed as the fresh run it became — and paired with it, under
+            // this entry's index, as a piece the entry did not mint — and
+            // each unminted piece re-inserted, then noted with the fresh
+            // runs it became — one pairing entry per fresh run, which is one
+            // per piece on the frontier allocator M3 has.
             for portion in minted.portions_of(run) {
                 match portion {
-                    Portion::Referenced(fresh) => extend_or_push_run(&mut placement, fresh),
+                    Portion::Referenced { from, to } => {
+                        extend_or_push_run(&mut placement, to.clone());
+                        pairing.push(MintedRun { from, to, index, minted: false });
+                    }
                     Portion::Unminted(piece) => {
                         let fresh = reinsert(stg, &trunk, &piece)?;
-                        minted.note(&piece, &fresh, &mut pairing);
+                        minted.note(&piece, &fresh, index, &mut pairing);
                         for run in fresh {
                             extend_or_push_run(&mut placement, run);
                         }

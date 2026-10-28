@@ -3,13 +3,13 @@
 use serde_json::Value;
 use skep_address::Address;
 use skep_engine::HistoryError;
-use skep_febe::{Codec, OpKind, RejectCode, Rejection, Response};
+use skep_febe::{Codec, FaultSite, OpKind, RejectCode, Rejection, Response};
 use skep_media::door::MediaRefusal;
 use skep_media::serve::{Admitted, FetchRefusal, NamedBlob};
 use skep_util::json::obj;
 
 use super::scan::ScanBusy;
-use skep_core::auth::policy::{CredentialRefusal, RegistryRefusal};
+use skep_core::auth::policy::{CredentialRefusal, RegistryRefusal, RetractClassRefusal};
 use skep_core::auth::session::HandshakeRefusal;
 use skep_core::codec::{
     credential_refused_reply, op_name, registry_refused_reply, to_bytes, JsonCodec,
@@ -829,6 +829,23 @@ pub(super) fn refuse_write_busy(kind: OpKind) -> Reply {
 /// every answer on that channel, whatever the answer says.
 pub(super) fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
+}
+
+/// Returns a publication's `retract` entry refused by its target's class as
+/// its 200-enveloped rejection (the link-sets design §5.7; lane S3).
+///
+/// It is M10's own `retract_refused` — permanent, `site.index` the entry —
+/// built as M10 builds it ([`Rejection::classified`]) with the class token
+/// the daemon's producer answered (`retract_class_refusal`:
+/// `not_retraction`, `not_revocation`, `audit_view`) as its `detail`, the
+/// shape the store's own refusals of the code take with their causes
+/// (`absent`, `not_owner`, `not_published`); the daemon's one cell of that
+/// code, marshaled by the one codec.
+pub(super) fn retract_refused(kind: OpKind, r: RetractClassRefusal) -> Reply {
+    let site = FaultSite { index: Some(r.index), ..FaultSite::default() };
+    let mut rejection = Rejection::classified(kind, RejectCode::RetractRefused, Some(site));
+    rejection.detail = Some(r.cause.to_string());
+    op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }
 
 /// Returns the registry sequence's refusal as its 200-enveloped rejection.

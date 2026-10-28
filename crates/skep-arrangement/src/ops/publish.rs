@@ -839,48 +839,9 @@ fn admit<'s, W: HasM3 + HasM5>(
     )?;
     let (m3, m5) = (world.m3(), world.m5());
     // Slot 3: registration — the base, the document the draft projects to,
-    // every origin document (PUB-6.37: an unregistered argument answers
-    // registration and nothing later).
-    if let Some(base) = &shot.base {
-        if !m3.is_registered_document(&base.member) {
-            return Err(PublishError::SourceNotRegistered);
-        }
-    }
-    if let Some(draft_doc) = shot.draft_document() {
-        if !m3.is_registered_document(&draft_doc) {
-            return Err(PublishError::SourceNotRegistered);
-        }
-        // THE UNOWNED-DRAFT EDGE (the link-sets design §5.7): whenever a
-        // draft is named the caller owns it — ω exact, the predicate slot 1
-        // asks of `doc` — asked right after the draft's registration and
-        // ahead of every readability question, so ω speaks and readability
-        // never does; a draft-native run present or not, the shot's records
-        // being homed in the draft. `System` passes, as it passes slot 1.
-        if !caller.is_owner(m3, &draft_doc) {
-            return Err(PublishError::NotOwner(draft_doc));
-        }
-    }
-    // Each run settled beside its origin document (`SettledRun`): derived
-    // from the run's own start, required to be the document the client's
-    // stated `origin` projects to, then registered — the first defective run
-    // in order deciding.
-    let supplied: Vec<SettledRun<'s>> = shot
-        .runs
-        .iter()
-        .map(|stated| -> Result<SettledRun<'s>, PublishError> {
-            let origin_doc = run_origin_document(&stated.run).ok_or(PublishError::BadRun)?;
-            if origin_doc != trunk_of(&stated.origin) {
-                return Err(PublishError::BadRun);
-            }
-            if !m3.is_registered_document(&origin_doc) {
-                return Err(PublishError::SourceNotRegistered);
-            }
-            Ok(SettledRun {
-                run: &stated.run,
-                origin_doc,
-            })
-        })
-        .collect::<Result<_, _>>()?;
+    // every origin document — and the unowned-draft edge, then each run
+    // settled beside its origin document.
+    let supplied = settle_runs(m3, caller, shot)?;
     // Slot 5: the model's refusal — a private document has no chain to
     // append to (PUB-2.9).
     if !published_target(m3, doc) {
@@ -918,20 +879,144 @@ fn admit<'s, W: HasM3 + HasM5>(
             }
         }
     };
-    // Slot 6: the source gate, per distinct origin document, in run order —
-    // the document's own I-space needs no consult, a run the base already
-    // arranges takes none (PUB-6.24), and the first unreadable origin
-    // document speaks before any existence answer. An origin document joins
-    // `admitted` only once the consult admits it: a carried run adds nothing
-    // to it, so a later run from the same origin that the base does not
-    // arrange is still asked about. The base's runs are merged into their
-    // union once, at the first run the gate must ask about, and every run is
-    // then one search of it: a carried run admits no origin, so a request of
-    // carried runs asks this of every one.
+    // Slot 6: the source gate.
+    source_gate(world, Some(&trunk), shot, &supplied, readable)?;
+    Ok(Admission { anchor, supplied })
+}
+
+/// Returns the MINT form's admission (the link-sets design §5.7's (iv),
+/// sweep 6 W16): `publish`'s checks through its source gate for a request
+/// that names the parent ACCOUNT in place of `doc`, the edition minted
+/// under it in the commit.
+///
+/// It is [`shot_admission`] with (1)'s `doc` rows re-keyed onto the account
+/// — "`doc_not_registered` → `not_owner` asked of `account` for a minting
+/// request" — and no document to read: `DocNotRegistered` where `account`
+/// is no registered account, `NotOwner` carrying it where the caller does
+/// not own it; `BaseNotInChain` where the shot names a base, the minted
+/// edition having no chain for one to lie in (the birth shape alone mints
+/// an edition); then slot 3 and the unowned-draft edge as `publish` asks
+/// them (`settle_runs`) — the draft's registration and ω, every run's
+/// shape and origin — and slot 6, the source gate over every origin: the
+/// edition minted in the commit has no I-space of its own a run could be,
+/// so no run is exempt. Slot 5 has nothing to ask: the edition is born
+/// published. Asked of `world` and nothing else, with [`shot_admission`]'s
+/// one-answer premise: inside the commit the composite mints the edition
+/// first and asks `publish`'s own admission of the working world, where the
+/// edition is a registered, published, memberless document of the account's
+/// owner, and that admission answers every row this one answered, in the
+/// same order, with the mint's rows ahead.
+///
+/// # Errors
+///
+/// `DocNotRegistered`, `NotOwner` (the account), `BaseNotInChain`, then
+/// `settle_runs`'s and the source gate's: `SourceNotRegistered`,
+/// `NotOwner` (the draft), `BadRun`, `Withheld` — the first in that order.
+pub fn mint_admission<W: HasM3 + HasM5>(
+    world: &W,
+    caller: Caller,
+    account: &Address,
+    shot: &Shot,
+    readable: &dyn Fn(&W, &Address) -> bool,
+) -> Result<(), PublishError> {
+    let m3 = world.m3();
+    if !m3.is_registered_account(account) {
+        return Err(PublishError::DocNotRegistered);
+    }
+    if !caller.is_owner(m3, account) {
+        return Err(PublishError::NotOwner(account.clone()));
+    }
+    if shot.base.is_some() {
+        return Err(PublishError::BaseNotInChain);
+    }
+    let supplied = settle_runs(m3, caller, shot)?;
+    source_gate(world, None, shot, &supplied, readable)
+}
+
+/// Runs slot 3 and the unowned-draft edge, and settles each run beside its
+/// origin document.
+///
+/// Registration — the base, the document the draft projects to, every
+/// origin document (PUB-6.37: an unregistered argument answers registration
+/// and nothing later) — with THE UNOWNED-DRAFT EDGE (the link-sets design
+/// §5.7) right after the draft's registration: whenever a draft is named
+/// the caller owns it — ω exact, the predicate slot 1 asks of `doc` — ahead
+/// of every readability question, so ω speaks and readability never does; a
+/// draft-native run present or not, the shot's records being homed in the
+/// draft (`System` passes, as it passes slot 1). Then each run settled
+/// ([`SettledRun`]): its origin document derived from the run's own start,
+/// required to be the document the client's stated `origin` projects to,
+/// then registered — the first defective run in order deciding.
+///
+/// # Errors
+///
+/// `SourceNotRegistered` for the base, then the draft's document; `NotOwner`
+/// carrying the draft; then per run in order `BadRun` and
+/// `SourceNotRegistered`.
+fn settle_runs<'s>(
+    m3: &M3State,
+    caller: Caller,
+    shot: &'s Shot,
+) -> Result<Vec<SettledRun<'s>>, PublishError> {
+    if let Some(base) = &shot.base {
+        if !m3.is_registered_document(&base.member) {
+            return Err(PublishError::SourceNotRegistered);
+        }
+    }
+    if let Some(draft_doc) = shot.draft_document() {
+        if !m3.is_registered_document(&draft_doc) {
+            return Err(PublishError::SourceNotRegistered);
+        }
+        if !caller.is_owner(m3, &draft_doc) {
+            return Err(PublishError::NotOwner(draft_doc));
+        }
+    }
+    shot.runs
+        .iter()
+        .map(|stated| -> Result<SettledRun<'s>, PublishError> {
+            let origin_doc = run_origin_document(&stated.run).ok_or(PublishError::BadRun)?;
+            if origin_doc != trunk_of(&stated.origin) {
+                return Err(PublishError::BadRun);
+            }
+            if !m3.is_registered_document(&origin_doc) {
+                return Err(PublishError::SourceNotRegistered);
+            }
+            Ok(SettledRun {
+                run: &stated.run,
+                origin_doc,
+            })
+        })
+        .collect()
+}
+
+/// Runs slot 6, the source gate, over the settled runs.
+///
+/// Per distinct origin document, in run order — the document's own I-space
+/// (`trunk`, where the shot has one) needs no consult, a run the base already
+/// arranges takes none (PUB-6.24), and the first unreadable origin document
+/// speaks before any existence answer. An origin document joins `admitted`
+/// only once the consult admits it: a carried run adds nothing to it, so a
+/// later run from the same origin that the base does not arrange is still
+/// asked about. The base's runs are merged into their union once, at the
+/// first run the gate must ask about, and every run is then one search of
+/// it: a carried run admits no origin, so a request of carried runs asks
+/// this of every one.
+///
+/// # Errors
+///
+/// `Withheld` carrying the first unreadable origin document.
+fn source_gate<W: HasM3 + HasM5>(
+    world: &W,
+    trunk: Option<&Address>,
+    shot: &Shot,
+    supplied: &[SettledRun<'_>],
+    readable: &dyn Fn(&W, &Address) -> bool,
+) -> Result<(), PublishError> {
+    let m5 = world.m5();
     let mut base_union: Option<RunUnion<'_>> = None;
     let mut admitted: BTreeSet<&Address> = BTreeSet::new();
-    for SettledRun { run, origin_doc } in &supplied {
-        if *origin_doc == trunk || admitted.contains(origin_doc) {
+    for SettledRun { run, origin_doc } in supplied {
+        if Some(origin_doc) == trunk || admitted.contains(origin_doc) {
             continue;
         }
         let carried = shot.base.as_ref().is_some_and(|base| {
@@ -947,7 +1032,7 @@ fn admit<'s, W: HasM3 + HasM5>(
         }
         admitted.insert(origin_doc);
     }
-    Ok(Admission { anchor, supplied })
+    Ok(())
 }
 
 /// What the shot's admission ([`admit`]) hands the rest of the composite.

@@ -19,7 +19,12 @@ use std::sync::{LazyLock, PoisonError};
 // The frame's own unit span, named ahead of the glob so it shadows the
 // suite's JSON helper of the same name.
 use skep_identity::unit_span;
+use skep_identity::{
+    entry_body_publication, DepositHome, DepositKind, DepositRow, DepositSlot, MemberPositions,
+    SlotElement,
+};
 use skep_registry::BodyKind;
+use std::collections::BTreeMap;
 
 use super::*;
 
@@ -354,7 +359,10 @@ pub fn publish_segments(
     frame: &Value,
     supplied: Option<&[&[u8]]>,
 ) -> Option<Vec<SignerSegment>> {
-    let trunk = trunk_of_str(frame["doc"].as_str()?);
+    // The frame's term: the trunk at the document form; the parent account
+    // at the mint form, which no run's origin is, so every run of another
+    // document is a window there, as the commit keeps it.
+    let trunk = publish_term(frame)?;
     let draft = frame.get("draft").and_then(Value::as_str).map(trunk_of_str);
     let mut per_origin: HashMap<String, HashMap<String, Vec<u8>>> = HashMap::new();
     let mut supplied = supplied.map(|values| values.iter());
@@ -411,6 +419,289 @@ pub fn publish_segments(
         }
     }
     Some(out)
+}
+
+/// The frame's `doc` term of a `publish` (the link-sets design §5.7): the
+/// trunk of `doc` at the document form; the `account` at the mint form
+/// (`mint: true` with `account`, `doc` absent). `None` for a frame of
+/// neither form.
+pub fn publish_term(frame: &Value) -> Option<String> {
+    let mint = frame.get("mint").and_then(Value::as_bool).unwrap_or(false);
+    match (frame.get("doc").and_then(Value::as_str), frame.get("account").and_then(Value::as_str), mint) {
+        (Some(doc), None, false) => Some(trunk_of_str(doc)),
+        (None, Some(account), true) => Some(account.to_string()),
+        _ => None,
+    }
+}
+
+/// THE DEPOSIT ROWS' home, as the signed entry orders homes: the member by
+/// tag first, then the edition, then every address in address order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SignerHome {
+    Member,
+    Edition,
+    Addr(Address),
+}
+
+/// One element of a deposit's slot row, owned: a span as stored, or a tag.
+#[derive(Debug, Clone)]
+pub enum SignerElement {
+    Span(Span),
+    Member,
+    Edition,
+}
+
+/// One slot of a deposit's rows, owned: as stored, or the member positions.
+#[derive(Debug, Clone)]
+pub enum SignerSlot {
+    Stored(Vec<SignerElement>),
+    Member(Vec<MemberPositions>),
+}
+
+/// One deposit's rows, owned — [`DepositRow`]'s owning twin, borrowed by
+/// [`SignerRow::borrow`] for the builder.
+#[derive(Debug, Clone)]
+pub struct SignerRow {
+    pub home: SignerHome,
+    pub kind: DepositKind,
+    pub ty: SignerSlot,
+    pub from: SignerSlot,
+    pub to: SignerSlot,
+}
+
+impl SignerSlot {
+    fn unit(a: &Address) -> SignerSlot {
+        SignerSlot::Stored(vec![SignerElement::Span(unit_span(a))])
+    }
+
+    fn borrow(&self) -> DepositSlot<'_> {
+        match self {
+            SignerSlot::Stored(elements) => DepositSlot::Stored(
+                elements
+                    .iter()
+                    .map(|e| match e {
+                        SignerElement::Span(s) => SlotElement::Span(s),
+                        SignerElement::Member => SlotElement::Member,
+                        SignerElement::Edition => SlotElement::Edition,
+                    })
+                    .collect(),
+            ),
+            SignerSlot::Member(spans) => DepositSlot::MemberPositions(spans.clone()),
+        }
+    }
+}
+
+impl SignerRow {
+    pub fn borrow(&self) -> DepositRow<'_> {
+        let home = match &self.home {
+            SignerHome::Member => DepositHome::Member,
+            SignerHome::Edition => DepositHome::Edition,
+            SignerHome::Addr(a) => DepositHome::Address(a),
+        };
+        DepositRow { home, kind: self.kind, ty: self.ty.borrow(), from: self.from.borrow(), to: self.to.borrow() }
+    }
+}
+
+/// An end of a `links` entry as the body spells it: the address form's
+/// elements — a tag as the tag, an address as its unit span — the I-span
+/// form's spans verbatim, the member-position form's row as spelled.
+fn signer_end(v: &Value) -> Option<SignerSlot> {
+    let m = v.as_object()?;
+    if let Some(addrs) = m.get("addrs").and_then(Value::as_array) {
+        return addrs
+            .iter()
+            .map(|a| match a.as_str()? {
+                "member" => Some(SignerElement::Member),
+                "edition" => Some(SignerElement::Edition),
+                text => Some(SignerElement::Span(unit_span(&parse_addr(text)?))),
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(SignerSlot::Stored);
+    }
+    if let Some(spans) = m.get("spans").and_then(Value::as_array) {
+        return spans
+            .iter()
+            .map(|s| {
+                let width: u64 = s["width"].as_str()?.parse().ok()?;
+                Some(SignerElement::Span(extent_span(s["start"].as_str()?, width)?))
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(SignerSlot::Stored);
+    }
+    let positions = m.get("member")?.as_array()?;
+    positions
+        .iter()
+        .map(|p| {
+            let ordinal: u64 = p["ordinal"].as_str()?.parse().ok()?;
+            let width: u64 = p["width"].as_str()?.parse().ok()?;
+            Some(MemberPositions { ordinal, width })
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(SignerSlot::Member)
+}
+
+/// The document a link address is homed in: the prefix before its `.0.2.`.
+fn home_of_link(link: &str) -> Option<String> {
+    let idx = link.rfind(".0.2.")?;
+    Some(link[..idx].to_string())
+}
+
+/// Whether a retraction of `target` stands on the board — the skip the plan
+/// decides for a `retract` entry — read as `token`: a tuple of the
+/// retraction class whose `to` names the target.
+fn retraction_stands(port: u16, token: &str, target: &str) -> bool {
+    let frame = format!(
+        r#"{{"op":"find_links_ftt","q":{{"from":"any","home":"any","to":{},"ty":{}}}}}"#,
+        unit_span_slot(target),
+        unit_span_slot(T_RETRACTION)
+    );
+    let v = op_as_written(port, Some(token), &frame);
+    v["addrs"].as_array().is_some_and(|hits| !hits.is_empty())
+}
+
+/// Whether a read-with from `edition` to `set` stands in a PUBLISHED home
+/// the account owns — the skip the plan decides for a `read_with` entry at
+/// the document form — read as `token`: the rows the three slots match,
+/// each kept where its stored `from` and `to` are exactly the two unit spans,
+/// its home's ω the account's and its home published.
+fn read_with_stands(port: u16, token: &str, account: &str, edition: &str, set: &str) -> bool {
+    let frame = format!(
+        r#"{{"op":"find_links_ftt","q":{{"from":{},"home":"any","to":{},"ty":{}}}}}"#,
+        unit_span_slot(edition),
+        unit_span_slot(set),
+        unit_span_slot(T_READ_WITH)
+    );
+    let v = op_as_written(port, Some(token), &frame);
+    let Some(hits) = v["addrs"].as_array() else { return false };
+    hits.iter().filter_map(Value::as_str).any(|hit| {
+        let Some(home) = home_of_link(hit) else { return false };
+        let link = read_link(port, Some(token), hit);
+        let one = |slot: usize| link["slots"][slot].as_array().map(|s| s.len()) == Some(1);
+        let exact = one(0)
+            && one(1)
+            && link["slots"][0][0]["start"].as_str() == Some(edition)
+            && link["slots"][1][0]["start"].as_str() == Some(set);
+        exact
+            && effective_owner(port, Some(token), &home).is_some_and(|(prefix, _)| prefix == account)
+            && doc_metadata(port, Some(token), &home)["published"].as_bool() == Some(true)
+    })
+}
+
+/// The unit subtree span at `addr` as a four-set slot, the spelling M7's
+/// `enc` stores for an address-form slot.
+fn unit_span_slot(addr: &str) -> String {
+    let depth = addr.split('.').count();
+    format!(r#"[{{"start":"{addr}","width":"{}1"}}]"#, "0.".repeat(depth - 1))
+}
+
+/// THE DEPOSIT ROWS of a `publish` frame (the link-sets design §5.7's signed
+/// entry; lane S3), as the daemon's composer spells them from M7's plan:
+/// per home in the signed order — the member by tag, then a minted edition,
+/// then every other home in address order — the edition claim (`claim:
+/// true`, `from` the edition by tag, `to` the `draft`), the copies (`links`,
+/// in order: the type slot as stored, each end as spelled), the retractions
+/// (`retract`, in order, each homed in its target's document: the
+/// retraction class, `from` the home, `to` the target) and the read-withs
+/// (`read_with`, in order, each homed in its set: the read-with class,
+/// `from` the edition — the trunk, or the tag at the mint form — `to` the
+/// set). With `skipping`, the two skips the plan decides are read off the
+/// board and the skipped entries' rows left out ([`retraction_stands`],
+/// [`read_with_stands`]); without it every entry's rows are spelled — the
+/// body the daemon refuses `signature` where the plan skipped one, which
+/// the refusal cells send on purpose. `None` where a member does not parse.
+pub fn deposit_rows(port: u16, token: &str, frame: &Value, account: &str, skipping: bool) -> Option<Vec<SignerRow>> {
+    let mints = frame.get("mint").and_then(Value::as_bool).unwrap_or(false);
+    let claims = frame.get("claim").and_then(Value::as_bool).unwrap_or(false);
+    let trunk = frame.get("doc").and_then(Value::as_str).map(trunk_of_str);
+    let empty = Vec::new();
+    let list = |name: &str| frame.get(name).and_then(Value::as_array).unwrap_or(&empty);
+    let mut homes: BTreeMap<SignerHome, Vec<SignerRow>> = BTreeMap::new();
+    let mut push = |home: SignerHome, kind, ty, from, to| {
+        homes.entry(home.clone()).or_default().push(SignerRow { home, kind, ty, from, to });
+    };
+    if claims && mints {
+        let draft = parse_addr(frame["draft"].as_str()?)?;
+        push(
+            SignerHome::Edition,
+            DepositKind::EditionClaim,
+            SignerSlot::unit(&parse_addr(T_EDITION)?),
+            SignerSlot::Stored(vec![SignerElement::Edition]),
+            SignerSlot::unit(&draft),
+        );
+    }
+    for entry in list("links") {
+        let home = match entry["home"].as_str()? {
+            "member" => SignerHome::Member,
+            "edition" => SignerHome::Edition,
+            text => SignerHome::Addr(parse_addr(text)?),
+        };
+        push(home, DepositKind::Copy, signer_end(&entry["ty"])?, signer_end(&entry["from"])?, signer_end(&entry["to"])?);
+    }
+    for target in list("retract") {
+        let target = target.as_str()?;
+        if skipping && retraction_stands(port, token, target) {
+            continue;
+        }
+        let home = parse_addr(&home_of_link(target)?)?;
+        push(
+            SignerHome::Addr(home.clone()),
+            DepositKind::Retraction,
+            SignerSlot::unit(&parse_addr(T_RETRACTION)?),
+            SignerSlot::unit(&home),
+            SignerSlot::unit(&parse_addr(target)?),
+        );
+    }
+    for set in list("read_with") {
+        let set = set.as_str()?;
+        if skipping {
+            if let Some(trunk) = &trunk {
+                if read_with_stands(port, token, account, trunk, set) {
+                    continue;
+                }
+            }
+        }
+        let from = match &trunk {
+            Some(trunk) => SignerSlot::unit(&parse_addr(trunk)?),
+            None => SignerSlot::Stored(vec![SignerElement::Edition]),
+        };
+        push(
+            SignerHome::Addr(parse_addr(set)?),
+            DepositKind::ReadWith,
+            SignerSlot::unit(&parse_addr(T_READ_WITH)?),
+            from,
+            SignerSlot::unit(&parse_addr(set)?),
+        );
+    }
+    Some(homes.into_values().flatten().collect())
+}
+
+/// [`op`] for a `publish` signed over EVERY entry's rows, the plan's skips
+/// unread — the body the daemon refuses `attestation_invalid:signature`
+/// where it skipped a deposit the request named: a `retract` of a link
+/// already retracted, a `read_with` already standing. The refusal cells'
+/// door; an honest frame signs through [`op`].
+pub fn op_unskipped(port: u16, token: &str, frame: &str) -> Value {
+    let Some((principal, seed)) = signer_of(token) else {
+        return op_as_written(port, Some(token), frame);
+    };
+    let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
+    let (Some(board), Some(account)) = (board_term(port), account_of(port, token, principal)) else {
+        return op_as_written(port, Some(token), frame);
+    };
+    let account_addr = parse_addr(&account).expect("the daemon's own account prefix is an address");
+    let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token;
+    let doc = parse_addr(&publish_term(&v).expect("doc, or account with mint")).expect("a document address");
+    let segments = publish_segments(port, token, &v, None).expect("the frame's runs read back");
+    let base = base_of(&v).expect("a member and a count, or no base");
+    let base = base.as_ref().map(|(member, extent)| ShotBase { member, extent: *extent });
+    let shot = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
+    let rows = deposit_rows(port, token, &v, &account, false).expect("the frame's deposits compose");
+    let rows: Vec<DepositRow<'_>> = rows.iter().map(SignerRow::borrow).collect();
+    let body = entry_body_publication(shot, &rows);
+    let bytes = entry_frame(alg, board, &account_addr, DocTerm::One(&doc), &body);
+    let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
+    v["attest"] = attest_member(&signer.sign(&bytes));
+    op_as_written(port, Some(token), &v.to_string())
 }
 
 /// A `publish` frame's BASE as the body spells it (V; bu7-E2): the member
@@ -522,10 +813,12 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
             let segments = publish_segments(port, token, frame, None)?;
             let base = base_of(frame)?;
             let base = base.as_ref().map(|(member, extent)| ShotBase { member, extent: *extent });
-            (
-                parse_addr(&trunk_of_str(frame["doc"].as_str()?))?,
-                entry_body_publish(segments.iter().map(SignerSegment::as_shot), base),
-            )
+            let shot = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
+            // The deposit rows behind the shot's (lane S3), each skip the
+            // plan decides read off the board.
+            let rows = deposit_rows(port, token, frame, &account.to_string(), true)?;
+            let rows: Vec<DepositRow<'_>> = rows.iter().map(SignerRow::borrow).collect();
+            (parse_addr(&publish_term(frame)?)?, entry_body_publication(shot, &rows))
         }
         _ => return None,
     };
@@ -719,12 +1012,15 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
     };
     let account = parse_addr(&account).expect("the daemon's own account prefix is an address");
     let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token;
-    let doc = parse_addr(&trunk_of_str(v["doc"].as_str().expect("doc"))).expect("a document address");
+    let doc = parse_addr(&publish_term(&v).expect("doc, or account with mint")).expect("a document address");
     let segments = publish_segments(port, token, &v, Some(values))
         .expect("the frame's runs are content runs and the values supplied cover the copied ones");
     let base = base_of(&v).expect("a member and a count, or no base");
     let base = base.as_ref().map(|(member, extent)| ShotBase { member, extent: *extent });
-    let body = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
+    let shot = entry_body_publish(segments.iter().map(SignerSegment::as_shot), base);
+    let rows = deposit_rows(port, token, &v, &account.to_string(), true).expect("the frame's deposits compose");
+    let rows: Vec<DepositRow<'_>> = rows.iter().map(SignerRow::borrow).collect();
+    let body = entry_body_publication(shot, &rows);
     let bytes = entry_frame(alg, board, &account, DocTerm::One(&doc), &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));

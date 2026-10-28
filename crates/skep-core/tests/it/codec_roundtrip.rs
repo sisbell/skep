@@ -17,7 +17,10 @@ use skep_febe::{
     SuccessorSpec, TimeSource, UniversalGrant,
 };
 use skep_kernel::Seq;
-use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
+use skep_links::{
+    EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress, PublishDeposits,
+    PublishTarget, View, MAX_SLOT_SPANS,
+};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{
     CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec, SpanFault,
@@ -174,7 +177,7 @@ fn all_requests() -> Vec<Request> {
         rq(
             None,
             Op::Publish {
-                doc: d1(),
+                target: PublishTarget::Document(d1()),
                 shot: Shot {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: Some(d3()),
@@ -185,18 +188,94 @@ fn all_requests() -> Vec<Request> {
                     ],
                 },
                 places: vec![None, Some(vp(1, 4)), None],
+                deposits: PublishDeposits::default(),
             },
         ),
         rq(
             None,
             Op::Publish {
-                doc: d2(),
+                target: PublishTarget::Document(d2()),
                 shot: Shot {
                     base: None,
                     draft: None,
                     runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 5)],
                 },
                 places: vec![],
+                deposits: PublishDeposits::default(),
+            },
+        ),
+        // The publication's deposits (the link-sets design §5.7; lane S3):
+        // every member and every end form on one shot — a `links` entry
+        // homed in the member by tag with an address-form `from` naming the
+        // member, a member-position `to` and an `old`; one homed by address
+        // with I-span ends and no `old`; a `retract` and a `read_with`.
+        rq(
+            None,
+            Op::Publish {
+                target: PublishTarget::Document(d1()),
+                shot: Shot {
+                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
+                    draft: Some(d3()),
+                    runs: vec![
+                        shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
+                        shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
+                    ],
+                },
+                places: vec![],
+                deposits: PublishDeposits {
+                    links: vec![
+                        LinkEntry {
+                            home: NamedAddress::Member,
+                            from: EndArg::Addrs(vec![NamedAddress::Member, NamedAddress::Address(d2())]),
+                            to: EndArg::Member(vec![MemberSpan { ordinal: 4, width: 2 }]),
+                            ty: EndArg::Addrs(vec![NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]),
+                            old: Some(a(&[1, 0, 1, 0, 3, 0, 2, 1])),
+                        },
+                        LinkEntry {
+                            home: NamedAddress::Address(d2()),
+                            from: EndArg::Spans(vec![sp(&[1, 0, 1, 0, 2, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 2])]),
+                            to: EndArg::Spans(vec![]),
+                            ty: EndArg::Spans(vec![sp(&[1, 0, 1, 0, 2, 0, 1, 7], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                            old: None,
+                        },
+                    ],
+                    retract: vec![link1(), link2()],
+                    read_with: vec![d2()],
+                },
+            },
+        ),
+        // The mint form: `account` with `mint` and `claim`, the edition and
+        // the member both named by tag.
+        rq(
+            None,
+            Op::Publish {
+                target: PublishTarget::Mint { account: a(&[1, 0, 1]), claim: true },
+                shot: Shot {
+                    base: None,
+                    draft: Some(d3()),
+                    runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 4)],
+                },
+                places: vec![],
+                deposits: PublishDeposits {
+                    links: vec![LinkEntry {
+                        home: NamedAddress::Member,
+                        from: EndArg::Addrs(vec![NamedAddress::Edition]),
+                        to: EndArg::Member(vec![MemberSpan { ordinal: 1, width: 4 }]),
+                        ty: EndArg::Addrs(vec![NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]),
+                        old: None,
+                    }],
+                    retract: vec![],
+                    read_with: vec![d2()],
+                },
+            },
+        ),
+        rq(
+            None,
+            Op::Publish {
+                target: PublishTarget::Mint { account: a(&[1, 0, 1]), claim: false },
+                shot: Shot { base: None, draft: None, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
+                places: vec![],
+                deposits: PublishDeposits::default(),
             },
         ),
         rq(
@@ -637,6 +716,125 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"1","ordinal":"4","extra":1}]"#)), Some(1), "a member of its own");
     assert_eq!(index_of(&drafted(r#","places":{}"#)), None, "no array: refused with no site");
     assert!(codec.parse(&drafted(r#","places":[null,{"subspace":"1","ordinal":"4"}],"extra":1"#)).is_err());
+}
+
+/// The publication's members (the link-sets design §5.7; lane S3), at the
+/// parse: the target is ONE of two forms — `doc`, or `account` with
+/// `mint: true` — and every other spelling is `malformed`, `claim` without
+/// `mint` among them (not admitted in this build), as is `claim` without
+/// `draft`; a `links` entry's ends take the address form (the tags `member`
+/// and, with `mint`, `edition` admitted among the addresses), the I-span
+/// form or the member-position form, and a V-spec array is refused in
+/// every entry; the member-position form is held to its canonical spelling
+/// over the shot's runs; `ty` takes no tag and no member position; a
+/// refused entry of `links`, `retract` or `read_with` names its index in
+/// `site.index`, a list that is no array none; an unset flag marshals to
+/// no member, and the canonical form parses back to the same request.
+#[test]
+fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
+    let codec = JsonCodec;
+    // Three runs: the edition's own three positions, the draft's two, a
+    // window of one — placed = 6.
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.3","i_start":"1.0.1.0.3.0.1.1","width":"2"},{"origin":"1.0.1.0.2","i_start":"1.0.1.0.2.0.1.4","width":"1"}]"#;
+    let frame = |head: &str, tail: &str| format!(r#"{{"op":"publish"{head},"draft":"1.0.1.0.3","runs":{RUNS}{tail}}}"#).into_bytes();
+    let doc = |tail: &str| frame(r#","doc":"1.0.1.0.1""#, tail);
+    let mint = |tail: &str| frame(r#","account":"1.0.1","mint":true"#, tail);
+    let index_of = |frame: &[u8]| {
+        let e = codec.parse(frame).expect_err("refused");
+        let site = e.site.clone();
+        let rej = Rejection::unparseable(e);
+        assert_eq!((rej.op, rej.code), (OpKind::Unparseable, RejectCode::Malformed));
+        site.and_then(|s| s.index)
+    };
+    let detail_of = |frame: &[u8]| codec.parse(frame).expect_err("refused").detail.unwrap_or_default();
+    // The target's two forms, and the shapes that are neither.
+    let plain = parse_ok(&codec, &doc(""));
+    assert!(matches!(&plain.op, Op::Publish { target: PublishTarget::Document(d), deposits, .. } if *d == d1() && deposits.is_empty()));
+    let minted = parse_ok(&codec, &mint(r#","claim":true"#));
+    assert!(matches!(&minted.op, Op::Publish { target: PublishTarget::Mint { account, claim: true }, .. } if *account == a(&[1, 0, 1])));
+    let unclaimed = parse_ok(&codec, &mint(r#","claim":false"#));
+    assert!(matches!(&unclaimed.op, Op::Publish { target: PublishTarget::Mint { claim: false, .. }, .. }));
+    let canonical = String::from_utf8(codec.marshal_request(&unclaimed)).expect("utf-8");
+    assert!(!canonical.contains("claim"), "an unset flag is no member: {canonical}");
+    assert_eq!(parse_ok(&codec, canonical.as_bytes()), unclaimed);
+    for (bad, why) in [
+        (frame(r#","doc":"1.0.1.0.1","claim":true"#, ""), "not admitted in this build"),
+        (frame(r#","doc":"1.0.1.0.1","account":"1.0.1""#, ""), "'account'"),
+        (frame(r#","doc":"1.0.1.0.1","mint":true"#, ""), "'doc'"),
+        (frame(r#","account":"1.0.1""#, ""), "'account'"),
+        (frame(r#","mint":true"#, ""), "'account'"),
+        (frame("", ""), "'doc'"),
+        (frame(r#","doc":"1.0.1.0.1","mint":"yes""#, ""), "'mint'"),
+    ] {
+        let detail = detail_of(&bad);
+        assert!(detail.contains(why), "{}: {detail}", String::from_utf8_lossy(&bad));
+        assert_eq!(index_of(&bad), None, "the target names no entry");
+    }
+    // `claim` without `draft`.
+    let claim_no_draft = format!(r#"{{"op":"publish","account":"1.0.1","mint":true,"claim":true,"runs":{RUNS}}}"#);
+    assert!(detail_of(claim_no_draft.as_bytes()).contains("'draft'"));
+    // The ends' three forms on one entry, the tags among the addresses, and
+    // the canonical form parsing back.
+    let entry = |home: &str, from: &str, to: &str, ty: &str, old: &str| {
+        format!(r#"{{"home":{home},"from":{from},"to":{to},"ty":{ty}{old}}}"#)
+    };
+    let ty = r#"{"addrs":["1.1.0.1.0.1.0.3.13"]}"#;
+    let links = doc(&format!(
+        r#","links":[{}],"retract":["1.0.1.0.1.0.2.1"],"read_with":["1.0.1.0.2"]"#,
+        entry(r#""member""#, r#"{"addrs":["member","1.0.1.0.2"]}"#, r#"{"member":[{"ordinal":"4","width":"2"}]}"#, ty, r#","old":"1.0.1.0.3.0.2.1""#)
+    ));
+    let req = parse_ok(&codec, &links);
+    let Op::Publish { deposits, .. } = &req.op else { panic!("a publish") };
+    assert_eq!(deposits.links.len(), 1);
+    assert_eq!(deposits.links[0].home, NamedAddress::Member);
+    assert_eq!(deposits.links[0].from, EndArg::Addrs(vec![NamedAddress::Member, NamedAddress::Address(d2())]));
+    assert_eq!(deposits.links[0].to, EndArg::Member(vec![MemberSpan { ordinal: 4, width: 2 }]));
+    assert_eq!(deposits.links[0].old, Some(a(&[1, 0, 1, 0, 3, 0, 2, 1])));
+    assert_eq!(deposits.retract, vec![link1()]);
+    assert_eq!(deposits.read_with, vec![d2()]);
+    let canonical = codec.marshal_request(&req);
+    assert_eq!(parse_ok(&codec, &canonical), req, "the canonical form parses to the same request");
+    let text = String::from_utf8(canonical).expect("utf-8");
+    assert!(text.contains(r#""to":{"member":[{"ordinal":"4","width":"2"}]}"#), "{text}");
+    // The I-span form, and the empty `to`.
+    let spans = doc(&format!(r#","links":[{}]"#, entry(r#""1.0.1.0.2""#, r#"{"spans":[{"start":"1.0.1.0.2.0.1.1","width":"2"}]}"#, r#"{"spans":[]}"#, ty, "")));
+    let req = parse_ok(&codec, &spans);
+    let Op::Publish { deposits, .. } = &req.op else { panic!("a publish") };
+    assert!(matches!(&deposits.links[0].from, EndArg::Spans(s) if s.len() == 1));
+    assert_eq!(deposits.links[0].to, EndArg::Spans(vec![]));
+    assert_eq!(parse_ok(&codec, &codec.marshal_request(&req)), req);
+    // `edition` is a tag at the mint form alone.
+    let edition_end = |head: &dyn Fn(&str) -> Vec<u8>| head(&format!(r#","links":[{}]"#, entry(r#""member""#, r#"{"addrs":["edition"]}"#, r#"{"addrs":[]}"#, ty, "")));
+    assert!(codec.parse(&edition_end(&mint)).is_ok(), "the edition by tag, minting");
+    assert_eq!(index_of(&edition_end(&doc)), Some(0), "the edition by tag, minting none: the entry");
+    // The refusals, each naming its entry: a V-spec end, a tag in `ty`, the
+    // member-position form in `ty`, a non-canonical member row (the
+    // edition's own three positions spelled as two spans), a row past the
+    // placed positions, a zero width, a null `old`, a `home` that is no
+    // address, a missing slot, a stray member; the second entry refused
+    // names index 1; a `retract` or `read_with` entry that is no address
+    // names its own index; a list that is no array names none.
+    let vspec = r#"[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.2"}}]"#;
+    let good = entry(r#""member""#, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, ty, "");
+    for (bad, want, why) in [
+        (entry(r#""member""#, vspec, r#"{"addrs":[]}"#, ty, ""), Some(0), "a V-spec end"),
+        (entry(r#""member""#, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, r#"{"addrs":["member"]}"#, ""), Some(0), "a tag in ty"),
+        (entry(r#""member""#, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, r#"{"member":[{"ordinal":"1","width":"1"}]}"#, ""), Some(0), "the member form in ty"),
+        (entry(r#""member""#, r#"{"member":[{"ordinal":"1","width":"1"},{"ordinal":"2","width":"2"}]}"#, r#"{"addrs":[]}"#, ty, ""), Some(0), "not canonical"),
+        (entry(r#""member""#, r#"{"member":[{"ordinal":"6","width":"2"}]}"#, r#"{"addrs":[]}"#, ty, ""), Some(0), "past the placed positions"),
+        (entry(r#""member""#, r#"{"member":[{"ordinal":"1","width":"0"}]}"#, r#"{"addrs":[]}"#, ty, ""), Some(0), "a zero width"),
+        (entry(r#""member""#, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, ty, r#","old":null"#), Some(0), "a null old"),
+        (entry("7", r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, ty, ""), Some(0), "a home that is no address"),
+        (format!(r#"{{"home":"member","from":{{"addrs":[]}},"ty":{ty}}}"#), Some(0), "a missing slot"),
+        (format!(r#"{{"home":"member","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{ty},"extra":1}}"#), Some(0), "a stray member"),
+        (format!("{good},{}", entry(r#""member""#, r#"{"addrs":[]}"#, r#"{"addrs":[],"spans":[]}"#, ty, "")), Some(1), "two forms in one end, the second entry"),
+    ] {
+        assert_eq!(index_of(&doc(&format!(r#","links":[{bad}]"#))), want, "{why}");
+    }
+    assert_eq!(index_of(&doc(r#","retract":["1.0.1.0.1.0.2.1","x"]"#)), Some(1), "a retract entry that is no address");
+    assert_eq!(index_of(&doc(r#","read_with":[7]"#)), Some(0), "a read_with entry that is no address");
+    assert_eq!(index_of(&doc(r#","links":{}"#)), None, "no array: refused with no site");
+    assert!(detail_of(&doc(&format!(r#","links":[{}]"#, entry(r#""member""#, r#"{"member":[{"ordinal":"1","width":"1"},{"ordinal":"2","width":"2"}]}"#, r#"{"addrs":[]}"#, ty, "")))).contains(r#"[{"ordinal":"1","width":"3"}]"#), "the canonical spelling owed is named");
 }
 
 /// The idempotency id rides the frame and survives the round trip.
@@ -1279,14 +1477,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 81 codes, pinned.
+/// The full `RejectCode` wire-name table — all 87 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 81] = [
+    let table: [(RejectCode, &str); 87] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1355,6 +1553,12 @@ fn reject_code_names_are_pinned() {
         (RejectCode::SelfSupersession, "self_supersession"),
         (RejectCode::IllFormedSuccessor, "ill_formed_successor"),
         (RejectCode::DcViolation, "dc_violation"),
+        (RejectCode::LinkHomeRefused, "link_home_refused"),
+        (RejectCode::OldRefused, "old_refused"),
+        (RejectCode::DuplicateOriginal, "duplicate_original"),
+        (RejectCode::ReadWithInLinks, "read_with_in_links"),
+        (RejectCode::RetractRefused, "retract_refused"),
+        (RejectCode::ReadWithRefused, "read_with_refused"),
         (RejectCode::NoSuchSubspace, "no_such_subspace"),
         (RejectCode::EmptySubspace, "empty_subspace"),
         (RejectCode::DepthIncompatible, "depth_incompatible"),

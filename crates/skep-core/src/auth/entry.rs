@@ -57,9 +57,21 @@
 //!   kept places a `publish` carries beside its shot (`Op::Publish`'s
 //!   `places`, the link-sets design §5.7) are no part of it, outside the
 //!   preimage as `draft` is, so a shot with places verifies as the same
-//!   shot without them.
+//!   shot without them; and, behind the shot's rows, THE DEPOSIT ROWS of a
+//!   publication that carries `links`, `retract` or `read_with` entries
+//!   (the link-sets design §5.7's signed entry; the signed-ops record's D25
+//!   delta): M7's own [`plan_deposits`] over this snapshot — the one
+//!   function the composite stages from, under the serialization lock the
+//!   transaction's base — answers the public deposits per home in the
+//!   signed order, and each is spelled by skep-identity's one builder
+//!   ([`entry_body_publication`]) as the rows its own act would sign: the
+//!   home by tag or address, the kind, the three slots as the store will
+//!   hold them — a tag where a slot names the member or the edition the
+//!   commit mints, the member-position row where the request spelled an
+//!   end as the member's positions — and the `replaces` row empty. A
+//!   request carrying no deposit spells today's body byte for byte.
 //!
-//! Eight bodies the daemon does not compose. Each is answered as the
+//! Nine bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
 //! then owed — passed through to the store's or the door's own refusal, or
 //! refused as its own cause — is the check's to decide, and is stated there
@@ -107,21 +119,31 @@
 //!   spec, an unregistered source, a slot past a budget
 //!   ([`ComposeFault::SuccessorRefused`]): the dispatch refuses the same
 //!   request by the same function.
+//! * a `publish` whose deposits M7's plan refuses
+//!   ([`ComposeFault::DepositRefused`]): a `links`, `retract` or `read_with`
+//!   entry the design's validation (3)–(5) refuses over this snapshot — the
+//!   store refuses the same request by the same function, with the same
+//!   fault, and answers it as the typed rejection naming the entry.
 
 use std::num::NonZeroU64;
 
-use skep_address::{document_of, Address, Nat};
-use skep_arrangement::{trunk_of, Deposit, HasM5, SegmentRun, Shot, MAX_REINSERTED_VALUES};
+use skep_address::{document_of, Address, Nat, Span};
+use skep_arrangement::{
+    trunk_of, Caller, Deposit, HasM5, SegmentRun, Shot, MAX_REINSERTED_VALUES,
+};
 use skep_content::{HasContent, Piece};
 use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
-    entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody, LinkSlots, PublishBody,
-    PublishRefusal, RecordFrame, RecordRows, ShotBase,
+    entry_body_publication, entry_frame, unit_span, BoardTerm, ContentFreeOp, DepositHome,
+    DepositKind, DepositRow, DepositSlot, DocTerm, EntryBody, LinkSlots, MemberPositions,
+    PublishBody, PublishRefusal, RecordFrame, RecordRows, ShotBase, SlotElement,
 };
 use skep_links::{
-    emit_tuple, retraction_tuple, slot_endset, supersession_claim, Endset, Link, SlotArg,
+    edition_type, emit_tuple, plan_deposits, read_with_type, retraction_tuple, slot_endset,
+    supersession_claim, DepositPlan, Endset, Link, NamedAddress, PlanFault, PlannedDeposit,
+    PlannedEnd, PlannedHome, PublishDeposits, PublishTarget, SlotArg,
 };
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -160,7 +182,7 @@ const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 /// These are [`compose`]'s reasons alone, the record frame's one refusal
 /// being [`compose_record`]'s `None`; what the write is owed is the check's
 /// to answer (`policy/attestation.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ComposeFault {
     /// The principal has no account prefix — no `account` term.
     NoAccount,
@@ -217,6 +239,17 @@ pub(super) enum ComposeFault {
     /// past a budget — so no frame is composed: the dispatch refuses the same
     /// request by the same function, before any driver.
     SuccessorRefused,
+    /// A `publish` whose deposits M7's plan refuses (the link-sets design
+    /// §5.7's validation (3)–(5)).
+    ///
+    /// The plan is a pure function of the world and the request, run here
+    /// over the snapshot that is, under the serialization lock, the base the
+    /// transaction opens on — so the store's own plan, inside the
+    /// transaction, refuses the same request with this same fault, lowered
+    /// to the typed rejection naming the entry (`link_home_refused`,
+    /// `old_refused`, … with `site.index`), which is the answer owed; no
+    /// frame is composed.
+    DepositRefused(PlanFault),
 }
 
 /// The entry frame's `doc` term, owned, as the composer holds it.
@@ -294,8 +327,10 @@ fn stored_slot(
 /// faults ([`stored_slot`]), an `emit`'s [`ComposeFault::SlotTooLarge`], an
 /// `edit_link`'s [`ComposeFault::UnreadableSlotSource`] or
 /// [`ComposeFault::SuccessorRefused`], and a `publish`'s
-/// [`ComposeFault::UnreadableCopiedRunOrigin`] or its body's faults
-/// ([`publish_body`]).
+/// [`ComposeFault::UnreadableCopiedRunOrigin`], its body's faults
+/// ([`publish_body`]) or its deposits' ([`publication_body`]:
+/// [`ComposeFault::DepositRefused`], and [`ComposeFault::PastBodyBudget`]
+/// for the rows past the budget).
 ///
 /// # Panics
 ///
@@ -403,20 +438,27 @@ pub(super) fn compose(
         // The kept places the request carries beside the shot (the
         // link-sets design §5.7) are outside the preimage, as `draft` is:
         // the shot alone is read here, and a shot with places signs as the
-        // same shot without them.
-        Op::Publish { doc, shot, .. } => {
-            let trunk = trunk_of(doc);
+        // same shot without them. The deposits beside it are IN the
+        // preimage, behind the shot's rows (`publication_body`).
+        Op::Publish { target, shot, deposits, .. } => {
+            // The frame's `doc`: the trunk at the document form, the parent
+            // account at the mint form — the term M5's classing takes too
+            // (`PublishTarget::term`), so at a mint every run of another
+            // document is a window, as the commit will keep it.
+            let term = target.term();
             // The runs as the commit will place them — M5's classing, the
             // one place a run's family is decided, asked with the address
             // the shot names, as `publish` is.
-            let segments = shot.address_form(doc);
+            let segments = shot.address_form(&term);
             // No value the principal may not read is ever read here: a
             // copied run's origin must be readable to it; a window is spelled
             // by address and read from nowhere.
-            if !every_copied_run_origin_readable(world, &trunk, &segments, principal) {
+            if !every_copied_run_origin_readable(world, &term, &segments, principal) {
                 return Err(ComposeFault::UnreadableCopiedRunOrigin);
             }
-            (FrameDocTerm::One(trunk), publish_body(world, shot, &segments)?)
+            let shot_body = publish_body(world, shot, &segments)?;
+            let body = publication_body(world, principal, target, shot, deposits, shot_body)?;
+            (FrameDocTerm::One(term), body)
         }
         _ => unreachable!(
             "compose's precondition: {:?} is outside the checked set, or the set was \
@@ -573,6 +615,198 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
     }
 }
 
+/// Builds a publication's body: `shot_body`, the shot's own rows, then the
+/// deposit rows of its public deposits (the link-sets design §5.7's signed
+/// entry; the signed-ops record's D25 delta).
+///
+/// The deposits are M7's own plan over this snapshot ([`plan_deposits`]) —
+/// the function the composite stages from inside the transaction, over the
+/// base this snapshot is under the serialization lock, so the rows signed
+/// here and the links stored agree by construction — spelled per home in
+/// the plan's order by skep-identity's one builder
+/// ([`entry_body_publication`]), each deposit the rows its own act would
+/// sign ([`deposit_rows`]). A request carrying no deposit is `shot_body`
+/// byte for byte; the plan is not asked for it, so a shot alone costs what
+/// it cost before.
+///
+/// # Errors
+///
+/// [`ComposeFault::DepositRefused`] with the plan's fault — the store
+/// refuses the same request by the same function — and
+/// [`ComposeFault::PastBodyBudget`] where the rows carry the body past
+/// [`MAX_SHOT_BODY_BYTES`].
+fn publication_body(
+    world: &World,
+    principal: PrincipalId,
+    target: &PublishTarget,
+    shot: &Shot,
+    deposits: &PublishDeposits,
+    shot_body: EntryBody,
+) -> Result<EntryBody, ComposeFault> {
+    if deposits.is_empty() && !target.claims() {
+        return Ok(shot_body);
+    }
+    let plan = plan_deposits(world, Caller::Principal(principal), target, shot, deposits)
+        .map_err(ComposeFault::DepositRefused)?;
+    // The edition the read-withs are `from`: the document's trunk at the
+    // document form, read off the request; at the mint form the edition the
+    // commit mints, which no signer holds, spelled by tag.
+    let owned = deposit_rows(&plan, target.document().map(trunk_of).as_ref());
+    let rows: Vec<DepositRow<'_>> = owned.iter().map(OwnedRow::borrow).collect();
+    let body = entry_body_publication(shot_body, &rows);
+    if body.as_bytes().len() > MAX_SHOT_BODY_BYTES {
+        return Err(ComposeFault::PastBodyBudget);
+    }
+    Ok(body)
+}
+
+/// One element of a deposit's slot row, owned ahead of the borrow the
+/// builder takes ([`SlotElement`]'s owning twin).
+enum OwnedElement {
+    Span(Span),
+    Member,
+    Edition,
+}
+
+/// One slot of a deposit's rows, owned ([`DepositSlot`]'s owning twin).
+enum OwnedSlot {
+    Stored(Vec<OwnedElement>),
+    Member(Vec<MemberPositions>),
+}
+
+/// One deposit's rows, owned ([`DepositRow`]'s owning twin): the builder
+/// borrows every span and address, and the plan holds them in its own
+/// shapes, so the rows are built once here and borrowed from.
+struct OwnedRow {
+    home: NamedAddress,
+    kind: DepositKind,
+    ty: OwnedSlot,
+    from: OwnedSlot,
+    to: OwnedSlot,
+}
+
+impl OwnedSlot {
+    /// Returns a stored slot over `spans`, each its own element.
+    fn spans<'a>(spans: impl IntoIterator<Item = &'a Span>) -> OwnedSlot {
+        OwnedSlot::Stored(spans.into_iter().cloned().map(OwnedElement::Span).collect())
+    }
+
+    /// Returns a stored slot of one unit span, `a`'s.
+    fn unit(a: &Address) -> OwnedSlot {
+        OwnedSlot::Stored(vec![OwnedElement::Span(unit_span(a))])
+    }
+
+    /// Returns a planned end as its slot: a stored end's spans; a named end's
+    /// elements, each tag as the tag and each address as its unit span, the
+    /// span M7's `enc` stores for it; a member-position end's row.
+    fn of(end: &PlannedEnd) -> OwnedSlot {
+        match end {
+            PlannedEnd::Stored(endset) => OwnedSlot::spans(endset.spans()),
+            PlannedEnd::Named(named) => OwnedSlot::Stored(
+                named
+                    .iter()
+                    .map(|n| match n {
+                        NamedAddress::Member => OwnedElement::Member,
+                        NamedAddress::Edition => OwnedElement::Edition,
+                        NamedAddress::Address(a) => OwnedElement::Span(unit_span(a)),
+                    })
+                    .collect(),
+            ),
+            PlannedEnd::Member(spans) => OwnedSlot::Member(
+                spans.iter().map(|s| MemberPositions { ordinal: s.ordinal, width: s.width }).collect(),
+            ),
+        }
+    }
+
+    fn borrow(&self) -> DepositSlot<'_> {
+        match self {
+            OwnedSlot::Stored(elements) => DepositSlot::Stored(
+                elements
+                    .iter()
+                    .map(|e| match e {
+                        OwnedElement::Span(s) => SlotElement::Span(s),
+                        OwnedElement::Member => SlotElement::Member,
+                        OwnedElement::Edition => SlotElement::Edition,
+                    })
+                    .collect(),
+            ),
+            OwnedSlot::Member(spans) => DepositSlot::MemberPositions(spans.clone()),
+        }
+    }
+}
+
+impl OwnedRow {
+    fn borrow(&self) -> DepositRow<'_> {
+        let home = match &self.home {
+            NamedAddress::Member => DepositHome::Member,
+            NamedAddress::Edition => DepositHome::Edition,
+            NamedAddress::Address(a) => DepositHome::Address(a),
+        };
+        DepositRow { home, kind: self.kind, ty: self.ty.borrow(), from: self.from.borrow(), to: self.to.borrow() }
+    }
+}
+
+/// Returns the deposit rows of `plan`, per home in the plan's order — the
+/// signed entry's — each deposit as the rows its own act would sign over
+/// the link the composite stages (`skep_links`'s `stage_deposits`, the one
+/// other reader of the plan):
+///
+/// * the edition claim: the edition type's unit span, `from` the edition
+///   by tag, `to` the staging draft's unit span;
+/// * a copy: the plan's type slot as stored, its ends as planned —
+///   stored, named (a tag, or an address's unit span) or by the member's
+///   positions; its private claim is in no row, outside the signed set;
+/// * a retraction: M7's own [`retraction_tuple`] over the home and the
+///   target, as a `nullify` signs it;
+/// * a read-with: the read-with type's unit span, `from` the edition —
+///   `edition`'s unit span at the document form, the tag at the mint form —
+///   `to` the set's unit span.
+fn deposit_rows(plan: &DepositPlan, edition: Option<&Address>) -> Vec<OwnedRow> {
+    let mut rows = Vec::new();
+    for PlannedHome { home, deposits } in &plan.homes {
+        for deposit in deposits {
+            let row = |kind, ty, from, to| OwnedRow { home: home.clone(), kind, ty, from, to };
+            rows.push(match deposit {
+                PlannedDeposit::EditionClaim { origin } => row(
+                    DepositKind::EditionClaim,
+                    OwnedSlot::unit(edition_type()),
+                    OwnedSlot::Stored(vec![OwnedElement::Edition]),
+                    OwnedSlot::unit(origin),
+                ),
+                PlannedDeposit::Copy { ty, from, to, .. } => {
+                    row(DepositKind::Copy, OwnedSlot::spans(ty.spans()), OwnedSlot::of(from), OwnedSlot::of(to))
+                }
+                PlannedDeposit::Retraction { target, .. } => {
+                    // The plan homes a retraction at its target's home, by
+                    // address; a tag here is a broken premise, spelled as
+                    // the tuple over the target alone would never be.
+                    let NamedAddress::Address(at) = home else {
+                        unreachable!("the plan homes a retraction in its target's home, by address")
+                    };
+                    let tuple = retraction_tuple(at, target);
+                    let slots = link_slots(&tuple);
+                    row(
+                        DepositKind::Retraction,
+                        OwnedSlot::spans(slots.ty.spans()),
+                        OwnedSlot::spans(slots.from.spans()),
+                        OwnedSlot::spans(slots.to.spans()),
+                    )
+                }
+                PlannedDeposit::ReadWith { set, .. } => row(
+                    DepositKind::ReadWith,
+                    OwnedSlot::unit(read_with_type()),
+                    match edition {
+                        Some(edition) => OwnedSlot::unit(edition),
+                        None => OwnedSlot::Stored(vec![OwnedElement::Edition]),
+                    },
+                    OwnedSlot::unit(set),
+                ),
+            });
+        }
+    }
+    rows
+}
+
 /// Composes the record frame for a credential or registry record's `make_link`.
 ///
 /// It is skep-identity's [`RecordFrame`] (signed ops, the record grade, 2a;
@@ -649,251 +883,4 @@ impl EntryFrame {
 }
 
 #[cfg(test)]
-mod tests {
-    use skep_address::Span;
-    use skep_febe::{Codec, OpKind};
-    use skep_identity::{entry_body_publish, entry_body_record, EntrySlot};
-    use skep_links::{enc, registry, ShippedType};
-
-    use super::*;
-    use crate::codec::op_name;
-    use crate::codec::JsonCodec;
-
-    /// Returns an endset's spans, owned, in stored order.
-    ///
-    /// They are what the unit-span pins below compare against.
-    fn spans_of(endset: &Endset) -> Vec<Span> {
-        endset.spans().cloned().collect()
-    }
-
-    /// Checks that each body's `op` member is its op's wire name.
-    ///
-    /// The frame's `op` member (the design record §2.5) is the op-kind token
-    /// as the wire spells it: each entry-grade body `skep_identity` builds —
-    /// one per kind of the checked set — carries the codec's own name for its
-    /// op, so a wire rename meets this test before it can move a signed
-    /// preimage. One exception, the frame merge's: `record` names the record
-    /// grade's body and no wire op — the codec parses no such op, and the
-    /// body's token says which grammar a `sig` was made over.
-    #[test]
-    fn each_body_carries_the_wire_name_of_its_op() {
-        let empty = EntrySlot(&[]);
-        let slots = LinkSlots { from: empty, to: empty, ty: empty };
-        let original = skep_address::validate(
-            skep_address::Tumbler::new([1u32, 0, 1, 0, 1, 0, 2, 1].map(skep_address::Nat::from))
-                .expect("a tumbler"),
-        )
-        .expect("an address");
-        for (body, kind) in [
-            (entry_body_empty(ContentFreeOp::CreateNewDocument), OpKind::CreateNewDocument),
-            (entry_body_empty(ContentFreeOp::Fork), OpKind::Fork),
-            (entry_body_empty(ContentFreeOp::Version), OpKind::Version),
-            (entry_body_insert(None, std::iter::empty()), OpKind::Insert),
-            (entry_body_make_link(slots), OpKind::MakeLink),
-            (entry_body_emit(slots), OpKind::Emit),
-            (entry_body_nullify(slots), OpKind::Nullify),
-            (entry_body_assert_sup(slots), OpKind::AssertSup),
-            (entry_body_edit_link(slots, &unit_span(&original)), OpKind::EditLink),
-            (entry_body_publish(std::iter::empty(), None), OpKind::Publish),
-        ] {
-            assert_eq!(body.op(), op_name(kind), "{kind:?}");
-            assert!(crate::codec::in_checked_set(kind), "{kind:?}: every body's kind is of the checked set");
-        }
-        let ty = skep_address::validate(
-            skep_address::Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, 1].map(skep_address::Nat::from))
-                .expect("a tumbler"),
-        )
-        .expect("an address");
-        let record = entry_body_record(RecordRows {
-            ty: &ty,
-            to: &[],
-            replaces: None,
-            lineage_fork_point: None,
-            sigless_canonical_record: b"",
-        });
-        assert_eq!(record.op(), "record", "the record grade's grammar token");
-        assert!(
-            JsonCodec.parse(br#"{"op":"record"}"#).is_err(),
-            "`record` is a grammar token with no wire op: the codec parses none by that name"
-        );
-    }
-
-    /// Checks that the unit span is M7's own spelling.
-    ///
-    /// The span the frame's `unit_span` gives an address — the start the
-    /// address, the width the unit at its length — is the span M7's `enc`
-    /// stores for a slot that names it, at every depth an address takes, and
-    /// over a list the two agree span for span and in order. So a slot row
-    /// composed from addresses alone — a `nullify`'s, an `assert_sup`'s, an
-    /// `emit`'s, the `edit_link` claim's `from` — is the row a verifier
-    /// composes from `read_link`.
-    #[test]
-    fn the_unit_span_is_the_span_enc_stores() {
-        let addr = |comps: &[u32]| {
-            skep_address::validate(
-                skep_address::Tumbler::new(comps.iter().map(|&c| skep_address::Nat::from(c)))
-                    .expect("a tumbler"),
-            )
-            .expect("an address")
-        };
-        let addrs = [
-            addr(&[1, 0, 1]),
-            addr(&[1, 0, 1, 0, 1]),
-            addr(&[1, 0, 1, 0, 1, 0, 2, 1]),
-            addr(&[1, 1, 0, 1, 0, 1, 0, 1, 5]),
-            addr(&[1, 0, 1, 0, 1, 2, 0, 1, 7]),
-        ];
-        for a in &addrs {
-            assert_eq!(enc([a]).spans().cloned().collect::<Vec<_>>(), vec![unit_span(a)], "{a}");
-        }
-        assert_eq!(
-            spans_of(&enc(addrs.iter())),
-            addrs.iter().map(unit_span).collect::<Vec<_>>(),
-            "over a list, span for span and in order"
-        );
-        assert_eq!(
-            spans_of(registry().reserved_type(ShippedType::Retraction)),
-            vec![unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 5]))],
-            "the retraction class's type slot is its ghost address's one unit span"
-        );
-        assert_eq!(
-            spans_of(registry().reserved_type(ShippedType::Supersedes)),
-            vec![unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 4]))],
-            "the supersedes class's type slot is its ghost address's one unit span"
-        );
-    }
-
-    /// Checks that compose's precondition is never answered as a fault.
-    ///
-    /// For a principal with a prefix — the account term read ahead of the op
-    /// — an op outside the checked set stops loudly. A fault here would be
-    /// one the check passes through, committing the write with its marker
-    /// slot empty — the silent drop the checked set's card rules out — and no
-    /// refusal the check could give is true of a build whose two tables
-    /// disagree.
-    #[test]
-    #[should_panic(expected = "compose's precondition")]
-    fn an_op_outside_the_checked_set_stops_compose_loudly() {
-        use skep_arrangement::VPos;
-        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
-        use skep_namespace::{head_document, BOOTSTRAP_PRINCIPAL};
-
-        let engine = skep_engine::Engine::open(KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-            salt: SaltSource::Seeded(0),
-        })
-        .expect("in-memory genesis cannot fail");
-        let snap = engine.kernel().snapshot();
-        let world = snap.world();
-        assert!(
-            world.m3().principal_prefix(BOOTSTRAP_PRINCIPAL).is_some(),
-            "the premise: genesis seats principal 0, so its account term is read"
-        );
-        let board = BoardTerm { log_position: 1, chain: [0; 32] };
-        let delete = Op::Delete {
-            doc: head_document(),
-            p: VPos::content(Nat::from(1u32)),
-            width: Nat::from(1u32),
-        };
-        let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL, board);
-    }
-
-    /// Checks that the publish body's grain is per value, whatever M4 holds.
-    ///
-    /// **The preimage pin.** The body composed over a run M4 holds as *one*
-    /// stretch is byte-equal to the body composed over the same bytes M4
-    /// holds as one-byte values — one row per byte either way — and both
-    /// equal the body the client composes from the values it inserted, one
-    /// row apiece. A row per piece would spell one N-byte value where the
-    /// client spelled N one-byte values, and every attested per-byte publish
-    /// would be refused for its signature. The two worlds are built through
-    /// the stores' own public doors: M3's mints and M4's two stage doors,
-    /// under the content key, into the head document genesis registers.
-    #[test]
-    fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
-        use std::sync::Arc;
-
-        use skep_arrangement::{InsertError, Run, SegmentRun, Shot};
-        use skep_content::{stage_stretch, stage_write, Val};
-        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
-        use skep_namespace::{head_document, M3State};
-
-        let open = || {
-            skep_engine::Engine::open(KernelConfig {
-                durability: Durability::InMemory,
-                checkpoint: CheckpointPolicy::Manual,
-                salt: SaltSource::Seeded(0),
-            })
-            .expect("in-memory genesis cannot fail")
-        };
-        let doc = head_document();
-        let keys = [M3State::content_lock_key(&doc)];
-        // The per-value world: three one-byte values, three mints, three
-        // writes — the form a board written without stretches holds.
-        let values = open();
-        let (first_of_values, _) = values
-            .kernel()
-            .transact::<_, InsertError>(&keys, |stg| {
-                let mut first = None;
-                for byte in b"abc" {
-                    let (addr, mint) = stg.working().m3().mint_content(&doc)?;
-                    stg.push(mint.into());
-                    let write = stage_write(stg.working().content(), addr.clone(), Val::new([*byte]))?;
-                    stg.push(write.into());
-                    first.get_or_insert(addr);
-                }
-                Ok(first.expect("three values"))
-            })
-            .expect("three values commit");
-        // The stretch world: one range mint, one stretch.
-        let stretch = open();
-        let (first_of_stretch, _) = stretch
-            .kernel()
-            .transact::<_, InsertError>(&keys, |stg| {
-                let (first, range) = stg.working().m3().mint_content_range(&doc, &Nat::from(3u32))?;
-                stg.push(range.into());
-                let rec = stage_stretch(stg.working().content(), first.clone(), Arc::from(&b"abc"[..]))?;
-                stg.push(rec.into());
-                Ok(first)
-            })
-            .expect("a range and its stretch commit");
-        assert_eq!(first_of_values, first_of_stretch, "B2: one chain, one first address");
-        let run = Run::new(first_of_stretch, Nat::from(3u32)).expect("a three-position run");
-        let shot = Shot { base: None, draft: None, runs: Vec::new() };
-        let body_of = |engine: &skep_engine::Engine| {
-            let snap = engine.kernel().snapshot();
-            publish_body(snap.world(), &shot, &[SegmentRun::Value(run.clone())])
-                .expect("the body composes")
-                .as_bytes()
-                .to_vec()
-        };
-        let over_values = body_of(&values);
-        let over_stretch = body_of(&stretch);
-        assert_eq!(over_stretch, over_values, "the body's grain parted from per value");
-        // …and both are the client's own composition: one row per value.
-        let mut by_hand = PublishBody::within(MAX_SHOT_BODY_BYTES, None).expect("an empty base");
-        for byte in b"abc" {
-            by_hand = by_hand.push(std::slice::from_ref(byte)).expect("three one-byte rows");
-        }
-        assert_eq!(over_stretch, by_hand.finish().as_bytes().to_vec());
-        // The control that the grain is what is pinned: a one-row body over
-        // the three bytes is another preimage.
-        let one_row = PublishBody::within(MAX_SHOT_BODY_BYTES, None)
-            .expect("an empty base")
-            .push(b"abc")
-            .expect("one row")
-            .finish();
-        assert_ne!(over_stretch, one_row.as_bytes().to_vec(), "a row per piece is another body");
-        // A run short of its stored bytes is still composed per value, and
-        // one past them is the missing value.
-        let snap = stretch.kernel().snapshot();
-        let short = Run::new(run.i_start().clone(), Nat::from(2u32)).expect("a two-position run");
-        assert!(publish_body(snap.world(), &shot, &[SegmentRun::Value(short)]).is_ok());
-        let long = Run::new(run.i_start().clone(), Nat::from(4u32)).expect("a four-position run");
-        assert!(matches!(
-            publish_body(snap.world(), &shot, &[SegmentRun::Value(long)]),
-            Err(ComposeFault::MissingValue)
-        ));
-    }
-}
+mod tests;

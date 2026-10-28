@@ -1,4 +1,4 @@
-//! THE FIXED FRAMES the suites sign and pin: the thirteen entry frames at
+//! THE FIXED FRAMES the suites sign and pin: the fourteen entry frames at
 //! fixed instances (`fixed_frames`), each under its name, and the two
 //! helpers that spell their addresses and extents.
 //!
@@ -10,9 +10,10 @@
 
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
-    entry_body_insert, entry_body_make_link, entry_body_nullify, entry_body_publish,
-    entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntrySlot,
-    LinkSlots, RecordRows, ShotBase, ShotSegmentPiece,
+    entry_body_insert, entry_body_make_link, entry_body_nullify, entry_body_publication,
+    entry_body_publish, entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp,
+    DepositHome, DepositKind, DepositRow, DepositSlot, DocTerm, EntrySlot, LinkSlots,
+    MemberPositions, RecordRows, ShotBase, ShotSegmentPiece, SlotElement,
 };
 
 pub fn addr(s: &str) -> skep_address::Address {
@@ -32,7 +33,7 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
         .unwrap()
 }
 
-/// The thirteen fixed instances every golden signs, on a board whose `H.1`
+/// The fourteen fixed instances every golden signs, on a board whose `H.1`
 /// pair is `(12, 0xAB…)`, by account `1.0.1`: the frames of an `insert`
 /// (undeclared, two values), a `make_link` (three slots as stored: a unit
 /// type span, a unit `from`, the `to` EMPTY), a `publish` (three values
@@ -53,8 +54,14 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
 /// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`. Each
 /// comes under its NAME — its op and, after a comma, what marks the instance
 /// out (`insert, undeclared`; `record, enroll`) — the one label both goldens
-/// report it by.
-pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
+/// report it by. The fourteenth (lane S3, the link-sets design §5.7's
+/// signed entry): the same `publish` body with THREE DEPOSIT ROWS behind
+/// it — a copy homed in the member by tag, typed `3.13`, `from` the
+/// member's positions 1–3 by the member-position row, `to` the member by
+/// tag beside `1.0.1.0.2`'s unit span; a retraction of `1.0.1.0.2.0.2.1`
+/// homed in `1.0.1.0.2`; and a read-with from `1.0.1.0.1` to `1.0.1.0.2`
+/// homed there — in the signed order, the member's home first.
+pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
     let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
@@ -141,6 +148,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         entry_body_empty(ContentFreeOp::Fork),
         entry_body_empty(ContentFreeOp::Version),
     );
+    let deposits = publish_deposits(publish.clone(), &other, &doc);
     let frame = |name: &'static str, body: &skep_identity::EntryBody, term: DocTerm<'_>| {
         (name, entry_frame(alg, board, &account, term, body))
     };
@@ -148,6 +156,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         frame("insert, undeclared", &insert, DocTerm::One(&doc)),
         frame("make_link, no replaces", &link, DocTerm::One(&doc)),
         frame("publish, the base filled", &publish, DocTerm::One(&doc)),
+        frame("publish, with deposits", &deposits, DocTerm::One(&doc)),
         frame("record, enroll", &enroll, DocTerm::One(&doc)),
         frame("record, retire", &retire, DocTerm::One(&doc)),
         frame("record, claim", &claim, DocTerm::One(&doc)),
@@ -159,4 +168,43 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         frame("emit, the to empty", &emit, DocTerm::One(&doc)),
         frame("edit_link, the pair row", &edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
     ]
+}
+
+/// The `publish` body `shot` with the three deposit rows behind it (lane
+/// S3): the copy in the member, the retraction and the read-with in
+/// `other`, `doc` the edition the read-with is `from`.
+pub fn publish_deposits(
+    shot: skep_identity::EntryBody,
+    other: &skep_address::Address,
+    doc: &skep_address::Address,
+) -> skep_identity::EntryBody {
+    let copy_ty = unit_span(&addr("1.1.0.1.0.1.0.3.13"));
+    let (other_unit, doc_unit) = (unit_span(other), unit_span(doc));
+    let retraction_ty = unit_span(&addr("1.1.0.1.0.1.0.1.5"));
+    let target = unit_span(&addr("1.0.1.0.2.0.2.1"));
+    let read_with_ty = unit_span(&addr("1.1.0.1.0.1.0.3.71"));
+    let rows = [
+        DepositRow {
+            home: DepositHome::Member,
+            kind: DepositKind::Copy,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&copy_ty)]),
+            from: DepositSlot::MemberPositions(vec![MemberPositions { ordinal: 1, width: 3 }]),
+            to: DepositSlot::Stored(vec![SlotElement::Member, SlotElement::Span(&other_unit)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(other),
+            kind: DepositKind::Retraction,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&retraction_ty)]),
+            from: DepositSlot::Stored(vec![SlotElement::Span(&other_unit)]),
+            to: DepositSlot::Stored(vec![SlotElement::Span(&target)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(other),
+            kind: DepositKind::ReadWith,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&read_with_ty)]),
+            from: DepositSlot::Stored(vec![SlotElement::Span(&doc_unit)]),
+            to: DepositSlot::Stored(vec![SlotElement::Span(&other_unit)]),
+        },
+    ];
+    entry_body_publication(shot, &rows)
 }

@@ -28,7 +28,8 @@ use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
 use skep_kernel::TxnError;
 use skep_links::{
-    AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, PublicationError,
+    AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, PlanFault,
+    PublicationError,
 };
 use skep_namespace::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
@@ -51,6 +52,22 @@ use crate::request::OpKind;
 pub trait Lower {
     /// Returns the code this error lowers to, and the site that localizes it.
     fn lower(self) -> (RejectCode, Option<FaultSite>);
+
+    /// Returns the code, the site, and the `detail` token the refusal
+    /// carries, where its code names a cause beside its site.
+    ///
+    /// The three deposit codes that do (`old_refused`, `retract_refused`,
+    /// `read_with_refused`; the link-sets design §5.7) override this; every
+    /// other error carries none, and this is [`Lower::lower`] with `None`
+    /// beside it. [`lower_txn`] lowers through it, so a cause reaches the
+    /// rejection's `detail` by the one table.
+    fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>)
+    where
+        Self: Sized,
+    {
+        let (code, site) = self.lower();
+        (code, site, None)
+    }
 }
 
 /// Returns the `NotOwner(Address)` lowering, shared by every enum with one.
@@ -107,8 +124,12 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 pub fn lower_txn<E: Lower>(kind: OpKind, e: TxnError<E>) -> Rejection {
     match e {
         TxnError::Rejected(inner) => {
-            let (code, site) = inner.lower();
-            Rejection::classified(kind, code, site)
+            let (code, site, detail) = inner.lower_with_detail();
+            let rejection = Rejection::classified(kind, code, site);
+            match detail {
+                Some(detail) => rejection.with_detail(detail),
+                None => rejection,
+            }
         }
         TxnError::Durability(io) => Rejection::classified(kind, RejectCode::Durability, None)
             .with_detail(io.to_string())
@@ -357,12 +378,66 @@ impl Lower for PublishError {
 
 // ─────────────────────────────── M7 (links) ────────────────────────────────
 
+/// Lowers the deposit plan's refusal (the link-sets design §5.7's validation
+/// (3)–(5); lane S3): each the lane's own token or the slot-form and
+/// class-fence code `make_link` answers, with the entry's index as
+/// `site.index` — and, for `old_refused`, `retract_refused` and
+/// `read_with_refused`, the cause as `detail`.
+///
+/// `NotOwner`, a `links` entry's home that is not the caller's, rides
+/// `not_owner` with the home as `site.addr`, ω's own site; the slot-form
+/// codes name the entry and, for the content clause, the slot — never a
+/// span's index within the slot, the entry being the site the lane names.
+/// The three fenced classes lower as `make_link`'s do, to `dc_violation`,
+/// the daemon's own token speaking ahead over the wire for the two commons
+/// classes.
+impl Lower for PlanFault {
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        let at = |index: usize| Some(FaultSite { index: Some(index), ..FaultSite::default() });
+        match self {
+            PlanFault::NotOwner(a) => not_owner(a),
+            PlanFault::LinkHome { index } => (RejectCode::LinkHomeRefused, at(index)),
+            PlanFault::DuplicateOriginal { index } => (RejectCode::DuplicateOriginal, at(index)),
+            PlanFault::ReadWithInLinks { index } => (RejectCode::ReadWithInLinks, at(index)),
+            PlanFault::Old { index, .. } => (RejectCode::OldRefused, at(index)),
+            PlanFault::NotContentSpan { index, slot } => (
+                RejectCode::NotContentSubspace,
+                Some(FaultSite { slot: Some(slot), index: Some(index), ..FaultSite::default() }),
+            ),
+            PlanFault::SlotTooLarge { index } => (RejectCode::SlotTooLarge, at(index)),
+            PlanFault::EmptyType { index } => (RejectCode::EmptyTypeResolution, at(index)),
+            PlanFault::RetractionClass { index } => (RejectCode::RetractionClass, at(index)),
+            PlanFault::SupersessionClass { index }
+            | PlanFault::ReplacesClass { index }
+            | PlanFault::CorrespondenceClass { index } => (RejectCode::DcViolation, at(index)),
+            PlanFault::MemberSpan { index } => (RejectCode::Malformed, at(index)),
+            PlanFault::ClaimWithoutDraft => (RejectCode::Malformed, None),
+            PlanFault::Retract { index, .. } => (RejectCode::RetractRefused, at(index)),
+            PlanFault::ReadWith { index, .. } => (RejectCode::ReadWithRefused, at(index)),
+        }
+    }
+
+    /// The three detailed codes carry their cause's token as `detail`.
+    fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>) {
+        let detail = match &self {
+            PlanFault::Old { cause, .. } => Some(cause.token().to_string()),
+            PlanFault::Retract { cause, .. } => Some(cause.token().to_string()),
+            PlanFault::ReadWith { cause, .. } => Some(cause.token().to_string()),
+            _ => None,
+        };
+        let (code, site) = self.lower();
+        (code, site, detail)
+    }
+}
+
 impl Lower for PublicationError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             // The shot's own verdicts lower through M5's table, so the
             // publication's refusals read as `publish`'s, slot for slot.
             PublicationError::Publish(e) => e.lower(),
+            // The deposit plan's: the lane's tokens with their entries.
+            PublicationError::Plan(f) => f.lower(),
             // The twin fence: `site.addr` the member the record's `to` was
             // minted into, and nothing else rides the code.
             PublicationError::AlreadyPublished { site } => (
@@ -384,6 +459,17 @@ impl Lower for PublicationError {
             // tables, so they read as `reinstate`'s and `delete`'s.
             PublicationError::Reinstate(e) => e.lower(),
             PublicationError::Delete(e) => e.lower(),
+        }
+    }
+
+    /// The deposit plan's detailed refusals carry their cause through.
+    fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>) {
+        match self {
+            PublicationError::Plan(f) => f.lower_with_detail(),
+            other => {
+                let (code, site) = other.lower();
+                (code, site, None)
+            }
         }
     }
 }

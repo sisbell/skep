@@ -46,7 +46,7 @@
 //! budget here is one the board does not keep, so no frame the board takes
 //! is refused for one.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -60,8 +60,9 @@ use skep_client::halt::Halt;
 use skep_client::sign::{sig_hex, Signer};
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty, entry_body_insert, entry_body_make_link,
-    entry_body_make_link_replacing, entry_body_nullify, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody,
-    EntrySlot, LinkSlots, PublishBody, PublishRefusal, ShotBase, SIG_ALGS,
+    entry_body_make_link_replacing, entry_body_nullify, entry_body_publication, entry_frame, unit_span, BoardTerm, ContentFreeOp,
+    DepositHome, DepositKind, DepositRow, DepositSlot, DocTerm, EntryBody, EntrySlot, LinkSlots, MemberPositions, PublishBody,
+    PublishRefusal, ShotBase, SlotElement, SIG_ALGS,
 };
 
 use crate::refusal::{Name, Refusal};
@@ -923,14 +924,133 @@ impl Composer<'_> {
         Ok(body.finish())
     }
 
+    /// Returns whether a retraction of `target` stands on the board — the
+    /// skip the board's plan decides for a `retract` entry: a tuple of the
+    /// retraction class whose `to` names the target, read by `find_links_ftt`.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever the read refuses ([`Composer::read`]).
+    fn retraction_stands(&self, target: &str) -> Result<bool, Unattested> {
+        let v = self.read(&frames::find_links_ftt(T_RETRACTION, target))?;
+        Ok(v["addrs"].as_array().is_some_and(|hits| !hits.is_empty()))
+    }
+
+    /// Returns whether a read-with from `edition` to `set` stands in a
+    /// PUBLISHED home the session's account owns — the skip the board's plan
+    /// decides for a `read_with` entry at the document form: the rows the
+    /// three slots match, each kept where its stored `from` and `to` are
+    /// exactly the two unit spans, its home's ω the account's and its home
+    /// published.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever a read refuses ([`Composer::read`]).
+    fn read_with_stands(&self, edition: &str, set: &str) -> Result<bool, Unattested> {
+        let q = json!({"op": "find_links_ftt", "q": {"home": "any", "from": frames::unit_span(edition), "to": frames::unit_span(set), "ty": frames::unit_span(T_READ_WITH)}});
+        let v = self.read(&q)?;
+        let hits: Vec<String> = v["addrs"].as_array().map(|hits| hits.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        for hit in hits {
+            let Some(home) = home_of_link(&hit) else { continue };
+            let link = self.read(&frames::read_link(&hit))?;
+            let exact = |slot: usize, start: &str| {
+                let spans = link["link"]["slots"][slot].as_array();
+                spans.is_some_and(|s| s.len() == 1) && link["link"]["slots"][slot][0]["start"].as_str() == Some(start)
+            };
+            if !(exact(0, edition) && exact(1, set)) {
+                continue;
+            }
+            let owner = self.read(&frames::effective_owner(home))?;
+            if owner["prefix"].as_str() != Some(self.account) {
+                continue;
+            }
+            let meta = self.read(&frames::doc_metadata(home))?;
+            if meta["published"].as_bool() == Some(true) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Returns the deposit rows of a `publish` frame (the link-sets design
+    /// §5.7's signed entry), as the board's composer spells them from its
+    /// plan: per home in the signed order — the member by tag, then a minted
+    /// edition, then every other home in address order — the edition claim
+    /// (`claim: true` with `mint`: `from` the edition by tag, `to` the
+    /// `draft`), the copies (`links`, in order: the type slot as stored, each
+    /// end as spelled), the retractions (`retract`, in order, each homed in
+    /// its target's document) and the read-withs (`read_with`, in order,
+    /// each homed in its set, `from` the edition — the trunk, or the tag at
+    /// the mint form). The two skips the plan decides are read off the board
+    /// ([`Composer::retraction_stands`], [`Composer::read_with_stands`]) and
+    /// the skipped entries' rows left out, so the body signed is the body
+    /// the board composes. A frame carrying no deposit composes no row and
+    /// makes no read.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where a list passes [`MAX_WIRE_LIST`], an entry lacks
+    /// a member or names what does not parse, or `claim` names no `draft`;
+    /// and whatever a read refuses ([`Composer::read`]).
+    fn deposit_rows(&self, frame: &Value) -> Result<Vec<OwnedRow>, Unattested> {
+        let mints = frame["mint"].as_bool().unwrap_or(false);
+        let claims = frame["claim"].as_bool().unwrap_or(false);
+        let trunk = frame["doc"].as_str().and_then(trunk_text);
+        let empty = Vec::new();
+        let list = |name: &str| -> Result<&Vec<Value>, Halt> {
+            let list = frame[name].as_array().unwrap_or(&empty);
+            check_wire_list(list, name)?;
+            Ok(list)
+        };
+        let mut homes: BTreeMap<OwnedHome, Vec<OwnedRow>> = BTreeMap::new();
+        let mut push = |home: OwnedHome, kind, ty, from, to| {
+            homes.entry(home.clone()).or_default().push(OwnedRow { home, kind, ty, from, to });
+        };
+        if claims && mints {
+            let draft = addr(member(frame, "draft")?, "draft")?;
+            push(OwnedHome::Edition, DepositKind::EditionClaim, OwnedSlot::unit(&addr(T_EDITION, "edition type")?), OwnedSlot::Stored(vec![OwnedElement::Edition]), OwnedSlot::unit(&draft));
+        }
+        for entry in list("links")? {
+            let home = match member(entry, "home")? {
+                "member" => OwnedHome::Member,
+                "edition" => OwnedHome::Edition,
+                text => OwnedHome::Addr(addr(text, "links[].home")?),
+            };
+            push(home, DepositKind::Copy, deposit_end(&entry["ty"], "links[].ty")?, deposit_end(&entry["from"], "links[].from")?, deposit_end(&entry["to"], "links[].to")?);
+        }
+        for target in list("retract")? {
+            let target = target.as_str().ok_or_else(|| fault("the frame's `retract` names an entry that is no address", target.to_string()))?;
+            if self.retraction_stands(target)? {
+                continue;
+            }
+            let home = home_of_link(target).ok_or_else(|| fault(format!("the frame's `retract` entry is no link address: `{target}`"), "a link address lies in its home's link subspace, `<home>.0.2.<n>`"))?;
+            let home = addr(home, "retract[]")?;
+            push(OwnedHome::Addr(home.clone()), DepositKind::Retraction, OwnedSlot::unit(&addr(T_RETRACTION, "retraction type")?), OwnedSlot::unit(&home), OwnedSlot::unit(&addr(target, "retract[]")?));
+        }
+        for set in list("read_with")? {
+            let set = set.as_str().ok_or_else(|| fault("the frame's `read_with` names an entry that is no address", set.to_string()))?;
+            if let Some(trunk) = &trunk {
+                if self.read_with_stands(trunk, set)? {
+                    continue;
+                }
+            }
+            let from = match &trunk {
+                Some(trunk) => OwnedSlot::unit(&addr(trunk, "doc")?),
+                None => OwnedSlot::Stored(vec![OwnedElement::Edition]),
+            };
+            push(OwnedHome::Addr(addr(set, "read_with[]")?), DepositKind::ReadWith, OwnedSlot::unit(&addr(T_READ_WITH, "read-with type")?), from, OwnedSlot::unit(&addr(set, "read_with[]")?));
+        }
+        Ok(homes.into_values().flatten().collect())
+    }
+
     /// Returns the frame's `doc` term and body, as its `kind` spells them.
     ///
     /// # Errors
     ///
     /// Returns a halt where the frame lacks a member its kind's grammar names
     /// or names an address the composer cannot spell, and whatever
-    /// [`insert_terms`], [`Composer::slot`] and [`Composer::publish_body`]
-    /// refuse.
+    /// [`insert_terms`], [`Composer::slot`], [`Composer::publish_body`] and
+    /// [`Composer::deposit_rows`] refuse.
     fn doc_term_and_body(&self, kind: CheckedKind, frame: &Value) -> Result<(OwnedDocTerm, EntryBody), Unattested> {
         let one = |text: &str, what: &str| -> Result<OwnedDocTerm, Halt> { Ok(OwnedDocTerm::One(addr(text, what)?)) };
         Ok(match kind {
@@ -982,10 +1102,11 @@ impl Composer<'_> {
                 (OwnedDocTerm::Pair { d_s: addr(member(frame, "d_s")?, "d_s")?, d_a: addr(member(frame, "d_a")?, "d_a")? }, body)
             }
             CheckedKind::Publish => {
-                let doc = member(frame, "doc")?;
-                let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "a publish's doc term is the document's trunk"))?;
-                let body = self.publish_body(frame, &trunk)?;
-                (one(&trunk, "doc")?, body)
+                let term = publish_term(frame)?;
+                let shot = self.publish_body(frame, &term)?;
+                let rows = self.deposit_rows(frame)?;
+                let rows: Vec<DepositRow<'_>> = rows.iter().map(OwnedRow::borrow).collect();
+                (one(&term, "doc")?, entry_body_publication(shot, &rows))
             }
         })
     }
@@ -1018,6 +1139,154 @@ impl Composer<'_> {
         Ok(())
     }
 }
+
+/// Returns a `publish` frame's `doc` term (the link-sets design §5.7): the
+/// trunk of `doc` at the document form, the `account` at the mint form —
+/// `mint: true` with `account` and no `doc`.
+///
+/// # Errors
+///
+/// Returns a halt where the frame is of neither form — `doc` beside `mint`,
+/// `account` without it, neither member, `claim` without `mint` — or where
+/// its `doc` has no trunk.
+fn publish_term(frame: &Value) -> Result<String, Halt> {
+    let mint = frame["mint"].as_bool().unwrap_or(false);
+    let claim = frame["claim"].as_bool().unwrap_or(false);
+    match (frame["doc"].as_str(), frame["account"].as_str(), mint) {
+        (Some(doc), None, false) => {
+            if claim {
+                return Err(fault("the frame carries `claim` without `mint`", "a claim into an edition the request does not mint is not admitted in this build"));
+            }
+            trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "a publish's doc term is the document's trunk"))
+        }
+        (None, Some(account), true) => Ok(account.to_string()),
+        _ => Err(fault("the frame names neither `doc` alone nor `account` with `mint`", "a publish is the document form or the mint form (wire.md §Arrangement)")),
+    }
+}
+
+/// The home of a deposit's rows, as the signed entry orders homes: the
+/// member by tag, then the edition, then every address in address order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum OwnedHome {
+    Member,
+    Edition,
+    Addr(Address),
+}
+
+/// One element of a deposit's slot row, owned ahead of the builder's borrow.
+#[derive(Debug, Clone)]
+enum OwnedElement {
+    Span(Span),
+    Member,
+    Edition,
+}
+
+/// One slot of a deposit's rows, owned: as stored, or the member positions.
+#[derive(Debug, Clone)]
+enum OwnedSlot {
+    Stored(Vec<OwnedElement>),
+    Member(Vec<MemberPositions>),
+}
+
+/// One deposit's rows, owned — [`DepositRow`]'s owning twin.
+#[derive(Debug, Clone)]
+struct OwnedRow {
+    home: OwnedHome,
+    kind: DepositKind,
+    ty: OwnedSlot,
+    from: OwnedSlot,
+    to: OwnedSlot,
+}
+
+impl OwnedSlot {
+    fn unit(a: &Address) -> OwnedSlot {
+        OwnedSlot::Stored(vec![OwnedElement::Span(unit_span(a))])
+    }
+
+    fn borrow(&self) -> DepositSlot<'_> {
+        match self {
+            OwnedSlot::Stored(elements) => DepositSlot::Stored(
+                elements
+                    .iter()
+                    .map(|e| match e {
+                        OwnedElement::Span(s) => SlotElement::Span(s),
+                        OwnedElement::Member => SlotElement::Member,
+                        OwnedElement::Edition => SlotElement::Edition,
+                    })
+                    .collect(),
+            ),
+            OwnedSlot::Member(spans) => DepositSlot::MemberPositions(spans.clone()),
+        }
+    }
+}
+
+impl OwnedRow {
+    fn borrow(&self) -> DepositRow<'_> {
+        let home = match &self.home {
+            OwnedHome::Member => DepositHome::Member,
+            OwnedHome::Edition => DepositHome::Edition,
+            OwnedHome::Addr(a) => DepositHome::Address(a),
+        };
+        DepositRow { home, kind: self.kind, ty: self.ty.borrow(), from: self.from.borrow(), to: self.to.borrow() }
+    }
+}
+
+/// Returns one end of a `links` entry as the body spells it: the address
+/// form's elements — a tag as the tag, an address as its unit span — the
+/// I-span form's spans verbatim, the member-position form's row as spelled.
+///
+/// # Errors
+///
+/// Returns a halt where the end is of no form, or an element does not read.
+fn deposit_end(end: &Value, what: &str) -> Result<OwnedSlot, Halt> {
+    if let Some(addrs) = end["addrs"].as_array() {
+        check_wire_list(addrs, what)?;
+        let elements = addrs
+            .iter()
+            .map(|a| match a.as_str() {
+                Some("member") => Ok(OwnedElement::Member),
+                Some("edition") => Ok(OwnedElement::Edition),
+                Some(text) => Ok(OwnedElement::Span(unit_span(&addr(text, what)?))),
+                None => Err(fault(format!("the frame's `{what}` names an element that is no address"), a.to_string())),
+            })
+            .collect::<Result<Vec<_>, Halt>>()?;
+        return Ok(OwnedSlot::Stored(elements));
+    }
+    if let Some(spans) = end["spans"].as_array() {
+        check_wire_list(spans, what)?;
+        let elements = spans
+            .iter()
+            .map(|s| {
+                let width: u64 = s["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(|| fault(format!("the frame's `{what}` span has no width"), s.to_string()))?;
+                let span = s["start"].as_str().and_then(|start| extent_span(start, width)).ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), s.to_string()))?;
+                Ok(OwnedElement::Span(span))
+            })
+            .collect::<Result<Vec<_>, Halt>>()?;
+        return Ok(OwnedSlot::Stored(elements));
+    }
+    if let Some(positions) = end["member"].as_array() {
+        check_wire_list(positions, what)?;
+        let rows = positions
+            .iter()
+            .map(|p| {
+                let number = |k: &str| p[k].as_str().and_then(|n| n.parse::<u64>().ok()).ok_or_else(|| fault(format!("the frame's `{what}` member span has no `{k}`"), p.to_string()));
+                Ok(MemberPositions { ordinal: number("ordinal")?, width: number("width")? })
+            })
+            .collect::<Result<Vec<_>, Halt>>()?;
+        return Ok(OwnedSlot::Member(rows));
+    }
+    Err(fault(format!("the frame's `{what}` end is of no form"), "an end is `{\"addrs\": […]}`, `{\"spans\": […]}` or `{\"member\": […]}` (wire.md §Arrangement, `publish`)"))
+}
+
+/// Returns the document a link address is homed in: the text before its
+/// `.0.2.`.
+fn home_of_link(link: &str) -> Option<&str> {
+    link.rfind(".0.2.").map(|idx| &link[..idx])
+}
+
+/// The read-with type and the edition-claim type, as the board spells them.
+const T_READ_WITH: &str = "1.1.0.1.0.1.0.3.71";
+const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
 
 /// Returns the halt where map and delivery disagree with an origin's extent.
 fn disagree(origin: &str, how: &str) -> Halt {

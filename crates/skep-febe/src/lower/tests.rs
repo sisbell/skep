@@ -1,6 +1,7 @@
 use super::*;
 use crate::reject::Disposition;
 use skep_address::{validate, Nat, Tumbler};
+use skep_links::{OldCause, ReadWithCause, RetractCause, FROM, TO};
 use skep_retrieval::{Operand, SpanFault};
 
 /// The standard test document address.
@@ -35,6 +36,60 @@ fn wrappers_recurse() {
     assert_eq!((code, site), (RejectCode::PublishedTarget, None));
     let (code, _) = PublicationError::Reinstate(ReinstateError::TooManyRuns).lower();
     assert_eq!(code, RejectCode::TooManyRuns);
+    // The deposit plan's refusal recurses into `PlanFault`'s own table.
+    let (code, site) =
+        PublicationError::Plan(PlanFault::Retract { index: 2, cause: RetractCause::NotOwner }).lower();
+    assert_eq!(code, RejectCode::RetractRefused);
+    assert_eq!(site.and_then(|s| s.index), Some(2));
+}
+
+/// The deposit plan's lowering (the link-sets design §5.7; lane S3): every
+/// refusal of a `links`, `retract` or `read_with` entry carries the entry's
+/// index in `site.index` — the content clause its slot beside it, and
+/// nothing else — save ω's, which rides `not_owner` with the home as
+/// `site.addr`, and the claim-without-draft shape, which names no entry.
+/// The three detailed codes carry their cause's token as `detail` through
+/// `lower_txn` (`Lower::lower_with_detail`); every other carries none.
+#[test]
+fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
+    let faults: Vec<(PlanFault, RejectCode, Option<&str>)> = vec![
+        (PlanFault::LinkHome { index: 4 }, RejectCode::LinkHomeRefused, None),
+        (PlanFault::DuplicateOriginal { index: 4 }, RejectCode::DuplicateOriginal, None),
+        (PlanFault::ReadWithInLinks { index: 4 }, RejectCode::ReadWithInLinks, None),
+        (PlanFault::Old { index: 4, cause: OldCause::Superseded }, RejectCode::OldRefused, Some("superseded")),
+        (PlanFault::SlotTooLarge { index: 4 }, RejectCode::SlotTooLarge, None),
+        (PlanFault::EmptyType { index: 4 }, RejectCode::EmptyTypeResolution, None),
+        (PlanFault::RetractionClass { index: 4 }, RejectCode::RetractionClass, None),
+        (PlanFault::SupersessionClass { index: 4 }, RejectCode::DcViolation, None),
+        (PlanFault::ReplacesClass { index: 4 }, RejectCode::DcViolation, None),
+        (PlanFault::CorrespondenceClass { index: 4 }, RejectCode::DcViolation, None),
+        (PlanFault::MemberSpan { index: 4 }, RejectCode::Malformed, None),
+        (PlanFault::Retract { index: 4, cause: RetractCause::NotPublished }, RejectCode::RetractRefused, Some("not_published")),
+        (PlanFault::ReadWith { index: 4, cause: ReadWithCause::NotDocument }, RejectCode::ReadWithRefused, Some("not_document")),
+    ];
+    for (fault, expected, detail) in faults {
+        let name = format!("{fault:?}");
+        let rej = lower_txn(OpKind::Publish, TxnError::Rejected(PublicationError::Plan(fault)));
+        assert_eq!(rej.code, expected, "{name}");
+        assert_eq!(rej.disposition, Disposition::Permanent, "{name}: the same request never lands");
+        let site = rej.site.expect("the entry rides the site");
+        assert_eq!(site.index, Some(4), "{name}: the entry's index");
+        assert!(site.addr.is_none() && site.slot.is_none() && site.fault.is_none(), "{name}");
+        assert!(site.operand.is_none() && site.region.is_none(), "{name}");
+        assert_eq!(rej.detail.as_deref(), detail, "{name}: the cause's token, or none");
+    }
+    // The content clause names the slot beside the entry.
+    let (code, site) = PlanFault::NotContentSpan { index: 1, slot: TO }.lower();
+    assert_eq!(code, RejectCode::NotContentSubspace);
+    let site = site.expect("site");
+    assert_eq!((site.index, site.slot), (Some(1), Some(TO)));
+    // ω: the home, not an entry.
+    let (code, site) = PlanFault::NotOwner(doc()).lower();
+    assert_eq!(code, RejectCode::NotOwner);
+    let site = site.expect("site");
+    assert_eq!((site.addr, site.index), (Some(doc()), None));
+    // The claim-without-draft shape names nothing.
+    assert_eq!(PlanFault::ClaimWithoutDraft.lower(), (RejectCode::Malformed, None));
 }
 
 /// The re-window's refusal (the link-sets design §5.7), at the lowering:
@@ -278,8 +333,9 @@ fn deviates<E: Lower>(name: &str, e: E, expected: RejectCode) {
 
 /// §5's mechanical claim over the whole table rather than a sample of it:
 /// EVERY flat variant of EVERY upstream error enum lowers to the leaf
-/// with its own name, and the nine documented deviations are the only
-/// ones. Wrapper variants belong to `wrappers_recurse`.
+/// with its own name, and the documented deviations — nine, and the deposit
+/// plan's twelve — are the only ones. Wrapper variants belong to
+/// `wrappers_recurse`.
 #[test]
 fn flat_variants_lower_to_the_same_named_code() {
     // ── M3 (namespace) ──
@@ -425,6 +481,50 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(PublicationError::NotOwner(doc()));
     same_name(PublicationError::AlreadyPublished { site: doc() });
     same_name(PublicationError::KeptPlaceMoved { index: 0 });
+    // The deposit plan's (lane S3): the six of the lane's own, the
+    // slot-form and class-fence verdicts `make_link` answers — the three
+    // fenced classes deviating as `make_link`'s do — and the two shape
+    // verdicts the codec would have refused, lowered `malformed`.
+    same_name(PlanFault::NotOwner(doc()));
+    same_name(PlanFault::DuplicateOriginal { index: 0 });
+    same_name(PlanFault::ReadWithInLinks { index: 0 });
+    same_name(PlanFault::SlotTooLarge { index: 0 });
+    same_name(PlanFault::RetractionClass { index: 0 });
+    deviates("LinkHome", PlanFault::LinkHome { index: 0 }, RejectCode::LinkHomeRefused);
+    deviates(
+        "Old",
+        PlanFault::Old { index: 0, cause: OldCause::Absent },
+        RejectCode::OldRefused,
+    );
+    deviates(
+        "NotContentSpan",
+        PlanFault::NotContentSpan { index: 0, slot: FROM },
+        RejectCode::NotContentSubspace,
+    );
+    deviates("EmptyType", PlanFault::EmptyType { index: 0 }, RejectCode::EmptyTypeResolution);
+    deviates(
+        "SupersessionClass",
+        PlanFault::SupersessionClass { index: 0 },
+        RejectCode::DcViolation,
+    );
+    deviates("ReplacesClass", PlanFault::ReplacesClass { index: 0 }, RejectCode::DcViolation);
+    deviates(
+        "CorrespondenceClass",
+        PlanFault::CorrespondenceClass { index: 0 },
+        RejectCode::DcViolation,
+    );
+    deviates("MemberSpan", PlanFault::MemberSpan { index: 0 }, RejectCode::Malformed);
+    deviates("ClaimWithoutDraft", PlanFault::ClaimWithoutDraft, RejectCode::Malformed);
+    deviates(
+        "Retract",
+        PlanFault::Retract { index: 0, cause: RetractCause::Absent },
+        RejectCode::RetractRefused,
+    );
+    deviates(
+        "ReadWith",
+        PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotRegistered },
+        RejectCode::ReadWithRefused,
+    );
 
     // ── M6 (retrieval) ──
     same_name(RetrieveError::DocNotRegistered(doc()));

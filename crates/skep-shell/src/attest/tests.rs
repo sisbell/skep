@@ -22,6 +22,7 @@ use skep_client::dial::{DialError, Dialer, Headers, Request, RequestHead, Respon
 use skep_client::sign::{signer_from_seed, signer_from_seed_under};
 use skep_client::Origin;
 use skep_identity::{entry_body_publish, ShotSegmentPiece};
+use skep_identity::{DepositHome, DepositKind, DepositRow, DepositSlot, MemberPositions, SlotElement};
 
 use super::*;
 
@@ -141,6 +142,9 @@ struct Fake {
     origins: HashMap<&'static str, Stored>,
     extents: HashMap<&'static str, u64>,
     images: HashMap<&'static str, Value>,
+    /// The links a retraction tuple stands for: `find_links_ftt` over the
+    /// retraction class and one of these as `to` answers one hit.
+    retracted: Vec<&'static str>,
     closed: AtomicBool,
     dialed: Mutex<Vec<String>>,
 }
@@ -205,6 +209,12 @@ impl Dialer for Fake {
                     Some(stored) => ok(json!({"resp": "delivery", "items": stored.items.iter().skip(from - 1).take(width).collect::<Vec<_>>()})),
                     None => unknown(),
                 }
+            }
+            "find_links_ftt" => {
+                let to = frame["q"]["to"][0]["start"].as_str().unwrap_or("");
+                let ty = frame["q"]["ty"][0]["start"].as_str().unwrap_or("");
+                let hits: Vec<String> = if ty == T_RETRACTION && self.retracted.contains(&to) { vec![format!("{}.0.2.9", to.rsplit_once(".0.2.").map_or(to, |(home, _)| home))] } else { Vec::new() };
+                ok(json!({"resp": "addrs", "addrs": hits, "as_of": 1}))
             }
             _ => ok(json!({"resp": "ack"})),
         })
@@ -371,6 +381,108 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
     assert_eq!(body.as_bytes(), spelled.as_bytes());
     let reads = g.fake.dialed();
     assert_eq!(reads.iter().filter(|op| *op == "retrieve_v").count(), 2, "one read per origin: {reads:?}");
+}
+
+/// THE DEPOSIT ROWS (the link-sets design §5.7; lane S3): a `publish` frame
+/// carrying `links`, `retract` and `read_with` signs the shot's body with
+/// one group per public deposit behind it, per home in the signed order —
+/// the member by tag first, then every other home in address order; inside
+/// a home the copies, the retractions, the read-withs — each end as spelled
+/// (an address as its unit span, a tag as the tag, an I-span verbatim, a
+/// member-position row as given), a retraction `from` its home `to` its
+/// target under the retraction class, a read-with `from` the trunk `to` the
+/// set under the read-with class; a `retract` of a link whose retraction
+/// stands on the board is read as skipped and spells no row, exactly as the
+/// signer's own builder spells the same rows. The mint form's term is the
+/// account, its claim row homed in the edition by tag, `from` the edition,
+/// `to` the draft; `claim` without `mint` is the composer's halt.
+#[test]
+fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction_is_skipped() {
+    let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
+    fake.retracted.push("1.0.1.0.5.0.2.1");
+    let g = Ground::over(fake);
+    let c = g.composer();
+    let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
+    let frame = json!({
+        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2",
+        "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)],
+        "links": [
+            {"home": "1.0.1.0.4", "from": {"spans": [{"start": "1.0.1.0.4.0.1.1", "width": "2"}]}, "to": {"addrs": []}, "ty": ty},
+            {"home": "member", "from": {"member": [{"ordinal": "1", "width": "3"}]}, "to": {"addrs": ["member", "1.0.1.0.3"]}, "ty": ty, "old": "1.0.1.0.6.0.2.1"},
+        ],
+        "retract": ["1.0.1.0.5.0.2.1", "1.0.1.0.3.0.2.1"],
+        "read_with": ["1.0.1.0.3"],
+    });
+    let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &frame).unwrap();
+    assert_eq!(term.as_doc_term(), DocTerm::One(&parse_address("1.0.1.0.1").unwrap()));
+    let a = |text: &str| parse_address(text).unwrap();
+    let (ty_unit, three, four, five_target, three_target) =
+        (unit_span(&a("1.1.0.1.0.1.0.3.13")), unit_span(&a("1.0.1.0.3")), unit_span(&a("1.0.1.0.4")), unit_span(&a("1.0.1.0.5.0.2.1")), unit_span(&a("1.0.1.0.3.0.2.1")));
+    let (retraction_ty, read_with_ty, trunk) = (unit_span(&a(T_RETRACTION)), unit_span(&a(T_READ_WITH)), unit_span(&a("1.0.1.0.1")));
+    let four_span = extent_span("1.0.1.0.4.0.1.1", 2).unwrap();
+    fn stored<'a>(elements: Vec<SlotElement<'a>>) -> DepositSlot<'a> {
+        DepositSlot::Stored(elements)
+    }
+    let rows = [
+        DepositRow {
+            home: DepositHome::Member,
+            kind: DepositKind::Copy,
+            ty: stored(vec![SlotElement::Span(&ty_unit)]),
+            from: DepositSlot::MemberPositions(vec![MemberPositions { ordinal: 1, width: 3 }]),
+            to: stored(vec![SlotElement::Member, SlotElement::Span(&three)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(&a("1.0.1.0.3")),
+            kind: DepositKind::Retraction,
+            ty: stored(vec![SlotElement::Span(&retraction_ty)]),
+            from: stored(vec![SlotElement::Span(&three)]),
+            to: stored(vec![SlotElement::Span(&three_target)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(&a("1.0.1.0.3")),
+            kind: DepositKind::ReadWith,
+            ty: stored(vec![SlotElement::Span(&read_with_ty)]),
+            from: stored(vec![SlotElement::Span(&trunk)]),
+            to: stored(vec![SlotElement::Span(&three)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(&a("1.0.1.0.4")),
+            kind: DepositKind::Copy,
+            ty: stored(vec![SlotElement::Span(&ty_unit)]),
+            from: stored(vec![SlotElement::Span(&four_span)]),
+            to: stored(vec![]),
+        },
+    ];
+    let _ = (&four, &five_target);
+    let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
+    assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the rows in the signed order, the standing retraction skipped");
+    let reads = g.fake.dialed();
+    assert_eq!(reads.iter().filter(|op| *op == "find_links_ftt").count(), 3, "two retract skips and one read-with skip read: {reads:?}");
+    // The mint form: the account as the term, the claim's row in the edition.
+    let mint = json!({"op": "publish", "account": "1.0.1", "mint": true, "claim": true, "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)], "read_with": ["1.0.1.0.3"]});
+    let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &mint).unwrap();
+    assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1")));
+    let (edition_ty, draft) = (unit_span(&a(T_EDITION)), unit_span(&a("1.0.1.0.2")));
+    let rows = [
+        DepositRow {
+            home: DepositHome::Edition,
+            kind: DepositKind::EditionClaim,
+            ty: stored(vec![SlotElement::Span(&edition_ty)]),
+            from: stored(vec![SlotElement::Edition]),
+            to: stored(vec![SlotElement::Span(&draft)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(&a("1.0.1.0.3")),
+            kind: DepositKind::ReadWith,
+            ty: stored(vec![SlotElement::Span(&read_with_ty)]),
+            from: stored(vec![SlotElement::Edition]),
+            to: stored(vec![SlotElement::Span(&three)]),
+        },
+    ];
+    let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
+    assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the claim first in the edition, the read-with from the edition by tag");
+    let bare_claim = json!({"op": "publish", "doc": "1.0.1.0.1", "claim": true, "draft": "1.0.1.0.2", "runs": []});
+    assert!(c.doc_term_and_body(CheckedKind::Publish, &bare_claim).unwrap_err().to_string().contains("not admitted in this build"));
 }
 
 /// THE DEATH SIGNAL at a read the composer makes is the session's end and

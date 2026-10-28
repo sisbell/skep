@@ -1,8 +1,8 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
 //! fingerprint; a signature over each fixed entry frame (`frames.rs`), under
-//! its name — the ten publish-class kinds and the `record` grammar at three
-//! kinds; tag 1's signatures byte-stable (FIPS 204's deterministic variant),
+//! its name — the ten publish-class kinds, the `publish` with its deposit
+//! rows, and the `record` grammar at three kinds; tag 1's signatures byte-stable (FIPS 204's deterministic variant),
 //! tag 3's under the fixtures' seeded stream; the preimage of every fixed
 //! frame and of the shapes of a cell they leave out; the hybrid cross-check;
 //! the widths each pinned crate fixes, pinned by hand beside the sizes and
@@ -40,7 +40,7 @@ pub const GOLDEN_SEED: [u8; 32] = [
 
 /// The seed of the fixtures' stream the tag-3 golden signatures draw their
 /// per-signature seeds from — `GOLDEN_SEED`'s bytes reused, so those
-/// thirteen pins depend on the key seed twice: through the key and through
+/// fourteen pins depend on the key seed twice: through the key and through
 /// the stream.
 const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 
@@ -80,7 +80,7 @@ struct TagGolden {
     ed_pk: &'static str,
     raw_key: &'static str,
     fingerprint: &'static str,
-    sigs: [&'static str; 13],
+    sigs: [&'static str; 14],
 }
 
 /// One fixed frame, signed: the name `fixed_frames` gives it, the frame's
@@ -151,7 +151,7 @@ fn check_golden(g: &TagGolden) {
 }
 
 /// TAG 1's GOLDEN: the KEY-DERIVATION golden (seed → KDF → both public
-/// keys → fingerprint) and the thirteen fixed frames' signatures,
+/// keys → fingerprint) and the fourteen fixed frames' signatures,
 /// byte-stable under FIPS 204's deterministic variant and Ed25519's own
 /// determinism.
 #[test]
@@ -166,6 +166,7 @@ fn golden_tag_1_mldsa65_ed25519() {
             "2892943416a13f80eeb95f4c8bd55f115d7248324c433bffbeaf7f0501828148",
             "66f4f573eaf53426b5a3d4d360a06d98df61ca6d0578fa5fe5aadc92c9c32bb0",
             "b433f7cd372e1bd8073f1b3222eba5b06976ee47734b66e761a3493d2c0deac0",
+            "d3a2c0e47b239894219f616eab3f66eb2d45712e8abd47ade53005299f70f00c",
             "28c70f669d44919062bf99a79cec75a973c7f6acaf315991a53daea054b7f508",
             "abb554df48572fb1fbfa72445b1ef8024dd6fd2c8889ed33cc1a756d5a9a07c3",
             "4c367931a56e731f01c0f5dc19d4d79d7be5b459c3cc113cbf946fe54cf90472",
@@ -182,7 +183,7 @@ fn golden_tag_1_mldsa65_ed25519() {
 
 /// TAG 3's GOLDEN (the PREVIEW): the KEY-DERIVATION golden — `fn-dsa`
 /// 0.4.0's keygen from the KDF's PQ half seed IS the tag's frozen keygen
-/// rule — and the thirteen signatures under the fixtures' seeded stream
+/// rule — and the fourteen signatures under the fixtures' seeded stream
 /// (FN-DSA signing is randomized by the draft's own rule; what the tag
 /// freezes is the key, the frame and the verify, and that stream makes the
 /// bytes reproducible here).
@@ -198,6 +199,7 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
             "da92e3fc0247d5f39ed149f574a6c18cc1bf959a4f167ba33d381a955ed95779",
             "be84ffa9151b386e184f89530add29898fb70808537dc8b2bd044c290a1173cb",
             "5df7ecb18a4809f0f6dad4a3db1cecfe946724d66024e66ff78d4fb92c5046a6",
+            "dd3d196a0451587afd6536f243389d8554f440c42c803a8800b7b81acbb24694",
             "38b456b9f4413a0f6164aad2e0cc3e9e8b35b8534c915f465992391cf71b03ad",
             "7399b23baaae2e1a1bdc85eb74bfc6b88f76029bf3e17857635c86b9e106eab1",
             "7807cbba98e2e04fa7647c50baeacdaefb44fbf477fd9ee3f71095f47d1fe37d",
@@ -218,16 +220,17 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 /// not signatures, since tag 3's signing is randomized), byte-asserted, so a
 /// member silently absent from a body — the base member of a `publish`, for
 /// one — fails the build here, whatever the signatures over it do. The
-/// thirteen fixed frames (`frames.rs`) cover `insert` (undeclared),
+/// fourteen fixed frames (`frames.rs`) cover `insert` (undeclared),
 /// `make_link` WITHOUT its `replaces` row over unit spans and the EMPTY `to`,
-/// `publish` with a value stretch, a window and the base group FILLED, the
+/// `publish` with a value stretch, a window and the base group FILLED, that
+/// `publish` with three DEPOSIT ROWS behind it (lane S3), the
 /// three `record`s (rows 3 and 4 EMPTY), the three EMPTY bodies over the
 /// parent account, the three other link writes over the stored link and the
 /// `edit_link` with its pair's row and resolved extents; this table adds the
 /// shapes they leave out — an `insert` DECLARED under a type, a `make_link`
 /// WITH its `replaces` row, a `make_link` whose `to` is a RESOLVED content
 /// extent (the slot a V-spec stores as, §7.6's vector (vii)), the `publish`
-/// BIRTH SHAPE with the EMPTY group — and pins the thirteen beside them under
+/// BIRTH SHAPE with the EMPTY group — and pins the fourteen beside them under
 /// their own names, so one table names every cell, at each shape it is pinned
 /// at, with its preimage's length, and no two shapes share a name: a name
 /// picks out one row. The frames are the twins skepd pins byte for byte
@@ -267,15 +270,15 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ],
         None,
     );
-    let [insert, link, publish, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
+    let [insert, link, publish, deposits, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
         fixed_frames(alg);
-    // The thirteen come under `fixed_frames`' own names, the names the
+    // The fourteen come under `fixed_frames`' own names, the names the
     // signature goldens report them by; the shapes they leave out are named
     // here.
     let named = |(name, bytes): (&'static str, Vec<u8>), len: usize, hash: &'static str| {
         (name, bytes, len, hash)
     };
-    let shapes: [(&str, Vec<u8>, usize, &str); 17] = [
+    let shapes: [(&str, Vec<u8>, usize, &str); 18] = [
         named(insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
         named(link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
@@ -283,6 +286,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ("make_link, a resolved to", frame(&resolved), 245, "daea951d32f82858d99ea5e0500feceec7ae5d926d2ee5375f7392b48a95cd7b"),
         named(publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
         ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
+        named(deposits, 641, "437f26fdc5da3747eee6cc240d91d9c36f21ba56131c509064fdfb0ed6e99e1a"),
         named(enroll, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
         named(retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
         named(claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),

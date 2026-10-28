@@ -514,9 +514,48 @@
           "base_extent": {
             "type": ["string", "integer"],
             "description": "The number of content positions the staged copy took, an unbounded natural (decimal string canonically). With base, or neither."
+          },
+          "account": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "THE MINT FORM: the parent account (yours) the commit mints a new published edition under, the shot its birth version — with mint true and no doc."
+          },
+          "mint": {
+            "type": "boolean",
+            "description": "true with account and no doc: mint the edition in this commit. Absent or false is the doc form."
+          },
+          "claim": {
+            "type": "boolean",
+            "description": "true with mint: the commit also writes the edition claim homed in the new edition, to the draft (which is then required). Not admitted without mint in this build."
+          },
+          "links": {
+            "type": "array",
+            "description": "The links this publication accepts, each landing as a public copy in its home in the same commit (the signed body carries their rows). An end is {\"addrs\": [addresses — the tag \"member\" for the member being minted, \"edition\" with mint]}, {\"spans\": [{start, width}]} content I-spans, or {\"member\": [{ordinal, width}]} — spans of the member's own positions inside [1, placed] for an end on the draft's new words, spelled canonically: the lowest positions holding each value, consecutive positions merged. ty takes addrs or spans over addresses alone. A refused entry answers link_home_refused, old_refused, duplicate_original, read_with_in_links or a make_link code with site.index the entry.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "home": {"type": "string", "description": "\"member\", or a published document of yours (its address)."},
+                "ty": {"type": "object", "description": "The type slot: {\"addrs\": [...]} or {\"spans\": [...]}."},
+                "from": {"type": "object", "description": "The from end, in any of the three forms."},
+                "to": {"type": "object", "description": "The to end, in any of the three forms."},
+                "old": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$", "description": "The private original this copy stands for; its supersession claim is written in the original's home. Omit where there is none."}
+              },
+              "required": ["home", "ty", "from", "to"],
+              "additionalProperties": false
+            }
+          },
+          "retract": {
+            "type": "array",
+            "description": "Link addresses of yours, homed in published documents of yours, to retract in the same commit; one already retracted is skipped. A refused entry answers retract_refused with site.index and a detail.",
+            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+          },
+          "read_with": {
+            "type": "array",
+            "description": "Published documents of yours the edition is newly read with; a read-with already standing in a published home of yours is skipped. A refused entry answers read_with_refused with site.index and a detail.",
+            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
           }
         },
-        "required": ["doc", "draft", "runs"],
+        "required": ["draft", "runs"],
         "additionalProperties": false
       }
     },

@@ -1,20 +1,30 @@
 //! THE PUBLICATION (the link-sets design §5.7): the publish shot's one
-//! commit, the member minted, the shot's correspondence records beside it,
-//! and the draft re-windowed at its kept places, in one transaction.
+//! commit — the member minted, the edition where the request mints one, the
+//! shot's correspondence records beside it, every public deposit the request
+//! carries (the accepted links as copies with their claims, the held
+//! removals' retractions, the read-withs, the edition claim) and the draft
+//! re-windowed at its kept places, in one transaction.
 //!
 //! [`stage_publication`] is the composite as a function over a caller-opened
-//! staging — the shot's admission, THE TWIN FENCE, the shot's staging
-//! ([`stage_publish`], M5's), per piece of draft identity the shot minted one
-//! correspondence record homed in the draft ([`stage_correspondence`]), and
-//! THE RE-WINDOW: for each run the request carries a kept place for, the
+//! staging — at the mint form the edition's mint first; the shot's admission;
+//! THE TWIN FENCE; THE DEPOSIT PLAN ([`plan_deposits`], the child module
+//! `plan`, read on the transaction's base); the shot's staging
+//! ([`stage_publish`], M5's); per piece of draft identity the shot minted
+//! one correspondence record homed in the draft ([`stage_correspondence`]);
+//! THE DEPOSITS, exactly as planned, per home in the signed entry's order;
+//! and THE RE-WINDOW: for each run the request carries a kept place for, the
 //! check that the draft still arranges that run's identity at that place
 //! and its replacement there by the fresh run it became, a placement and a
 //! removal ([`stage_reinstate_at`], [`stage_delete_at`], M5's) — and
 //! [`LinkWriter::publication`] the public op: one `transact_attested` over
-//! the union of the shot's keys, the draft's link key and, where a place is
-//! carried, the draft's content key. The correspondence class has this one
-//! writer; the fences on the three request-typed doors keep every other act
-//! off it.
+//! the union of the shot's keys, the draft's link key, the draft's content
+//! key where a place is carried, every home's link key where a deposit
+//! lands, and the account's document key where an edition is minted. The
+//! correspondence class has this one writer; the fences on the three
+//! request-typed doors keep every other act off it. Within one commit a
+//! home's link addresses rise in the order the daemon mints them — THE
+//! PIN, stated at `mint_link`'s frontier read and held by
+//! `tests/it/publication.rs`.
 
 use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
@@ -25,14 +35,29 @@ use skep_arrangement::{
 use skep_kernel::{Seq, Staging, TxnError};
 use skep_namespace::{HasM3, M3State};
 
+use super::nullify::retraction_tuple;
+use super::supersession::supersession_claim;
 use super::{
     correspondence_type, emit_core, is_correspondence_class, EmitCoreError, Gate, HomeFault,
     LinkWriter, Visibility,
 };
+use crate::budget::MAX_SLOT_SPANS;
 use crate::endset::{enc, Endset, Link};
-use crate::error::PublicationError;
+use crate::error::{PlanFault, PublicationError};
 use crate::state::{LinkRec, View, FROM, TYPE};
 use crate::LinkWorld;
+
+// The deposit plan: the request members a publication carries beside its
+// shot, the one function that validates them and plans the deposits, and
+// the member-position end's one function.
+mod plan;
+
+pub use plan::{
+    canonical_member_spans, edition_type, member_end, member_image, names_read_with,
+    plan_deposits, read_with_in, read_with_type, request_image, resolve_end, DepositPlan, EndArg,
+    LinkEntry, MemberEnd, MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit, PlannedEnd,
+    PlannedHome, PublishDeposits, PublishTarget,
+};
 
 impl From<HomeFault> for PublicationError {
     fn from(e: HomeFault) -> Self {
@@ -44,8 +69,12 @@ impl From<HomeFault> for PublicationError {
 }
 
 impl From<EmitCoreError> for PublicationError {
-    // Open: only EmptyType/Home/Mint reachable, and EmptyType is dead too —
-    // the record's type slot is the one commons value, spelled here.
+    // The record, the edition claim, a copy and a read-with take the Open
+    // gate over a type slot the plan found non-empty; the claim takes the
+    // Managed gate over the registry-fixed `[K_sup]` class and the
+    // retraction the Retraction gate over the shipped `[R]` class, each
+    // Binary over a tuple built one address a side — so of the gate's
+    // verdicts only Home and Mint are reachable.
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::Home(f) => f.into(),
@@ -54,29 +83,39 @@ impl From<EmitCoreError> for PublicationError {
             | EmitCoreError::NotRegistered
             | EmitCoreError::ShapeViolation
             | EmitCoreError::RetractionClass => unreachable!(
-                "the correspondence record takes the Open gate with the class's own type slot: \
-                 no Managed/Retraction rejection, and no empty type"
+                "the publication's deposits take the Open gate over a type the plan found \
+                 non-empty, the Managed gate over the registry-fixed claim and the Retraction \
+                 gate over the shipped retraction tuple: no gate verdict but Home and Mint"
             ),
         }
     }
 }
 
-/// Stages a publication into the caller's transaction: the shot, for every
-/// piece of draft identity it minted one correspondence record in the draft,
-/// and the draft's re-window at the kept places the request carries.
+/// Stages a publication into the caller's transaction: the edition where
+/// the request mints one, the shot, for every piece of draft identity it
+/// minted one correspondence record in the draft, every public deposit the
+/// request carries as the plan holds it, and the draft's re-window at the
+/// kept places the request carries.
 ///
 /// It is the link-sets design's ONE COMMIT (§5.7) as a function over a
 /// caller-opened [`Staging`], the form every store op a composite may need
-/// takes (PATTERNS SP-30), so a wider composite — the deposits — stages it
-/// under one transaction with its own. In order:
+/// takes (PATTERNS SP-30), so a wider composite stages it under one
+/// transaction with its own. In order:
 ///
-/// 1. THE SHOT's OWN TABLE: M5's admission through its source gate
+/// 1. THE MINT, at the mint form ([`PublishTarget::Mint`]): ω of `account`
+///    — registered, the caller's — then the edition minted under it, born
+///    published, through M3's staging mint; the shot's `doc` is then the
+///    edition, which the admission below finds registered, published and
+///    memberless in the working world (M5's `mint_admission` states that
+///    agreement). Refused `Publish(DocNotRegistered)`, `Publish(NotOwner)`
+///    carrying the account, or `Mint`.
+/// 2. THE SHOT's OWN TABLE: M5's admission through its source gate
 ///    ([`shot_admission`], asked of the working world) — `doc`'s
 ///    registration and ω, the draft's registration and ω (the unowned-draft
 ///    edge: a draft the caller does not own is refused `NotOwner` here,
 ///    ahead of every readability question), the runs, the source gate.
 ///    Refused as `Publish`.
-/// 2. THE TWIN FENCE, reading nothing but `stg.working()` and staging
+/// 3. THE TWIN FENCE, reading nothing but `stg.working()` and staging
 ///    nothing: for each draft-native run of the request, the correspondence
 ///    records homed in the draft whose `from` overlaps the run's I-span —
 ///    one home's stab of the FROM slot ([`match_links_in`], `O(log n)` per
@@ -88,20 +127,47 @@ impl From<EmitCoreError> for PublicationError {
 ///    published words, split from its run by an edit on a stale device, is
 ///    no way past, at every principal. It costs the request's overlaps, never
 ///    the draft's history.
-/// 3. THE SHOT: [`stage_publish`] — the admission again, one answer (its
+/// 4. THE DEPOSIT PLAN ([`plan_deposits`]) over `stg.base()` — THE
+///    VALIDATION's (3), (4) and (5), the first fault in list order refusing
+///    the whole as `Plan` — the same world the daemon's composer read for
+///    the body it checked the signature against (the survey's C8: under
+///    the serialization lock the admission's snapshot is the base), so the
+///    deposits staged below are the deposits the signature covers, by one
+///    function over one world.
+/// 5. THE SHOT: [`stage_publish`] — the admission again, one answer (its
 ///    card states why), the re-insert's count, the existence walk, the
 ///    placement with each draft identity minted once, the member's mint and
-///    its placing record — returning the member and the pairing.
-/// 4. THE RECORDS: for each MINTED piece of the pairing, in minting order,
+///    its placing record — returning the member and the pairing. The
+///    member's `ShotPlace` is staged here, ahead of every link homed in the
+///    member below (the survey's C14).
+/// 6. THE RECORDS: for each MINTED piece of the pairing, in minting order,
 ///    one record homed in the draft through [`stage_correspondence`] —
 ///    `from` the piece's draft-native span, `to` the fresh span it became,
 ///    both the permanent I-spans they are, of one width — its positions
 ///    rising in minting order, each seated in the draft's link subspace; a
 ///    piece placed by reference to an identity an earlier entry minted is
 ///    the first's record's and takes none. A shot that names no draft, or
-///    re-inserts nothing, stages no record and commits exactly as the shot
-///    alone does.
-/// 5. THE RE-WINDOW, last (`stage_rewindow`): for each `runs` entry that
+///    re-inserts nothing, stages no record.
+/// 7. THE DEPOSITS (`stage_deposits`), home by home in the plan's order
+///    and inside each home in its order, each through the one deposit gate
+///    under the gate its class takes: the edition claim (`Gate::Open`,
+///    typed the edition class, `from` the edition's own unit span, `to` the
+///    origin draft — the R20 shape `edition_claims` reads — seated); each
+///    copy (`Gate::Open`, its tags resolved to the minted member and
+///    edition and its member-position ends to the fresh I-spans through the
+///    member's image, [`resolve_end`]; seated) and then its claim
+///    (`supersession_claim(old, copy)` under `Gate::Managed` in `old`'s
+///    home, as `editlink` deposits its — the residence of `old` read off
+///    the base by the plan, the claim after the copy, the public schema
+///    check skipped, its dedup a guaranteed miss, the survey's C15); each
+///    retraction (`retraction_tuple(home, target)` under `Gate::Retraction`
+///    at the target's home, as `nullify` deposits it, unseated as `nullify`
+///    leaves it); each read-with (`Gate::Open`, `{home: S, ty: rw, from:
+///    unit(E), to: unit(S)}`, seated). Every deposit's home passes the
+///    gate's registration and ω check, so a home the plan did not read is
+///    refused `NotOwner` with its address. A request carrying no deposit
+///    stages none here and commits as S2 left it.
+/// 8. THE RE-WINDOW, last (`stage_rewindow`): for each `runs` entry that
 ///    carries a kept place in `places` — the V-position the run held in the
 ///    draft when the client composed the request, outside the signed
 ///    preimage as `draft` is — in `runs`' order, the check that the draft
@@ -121,11 +187,13 @@ impl From<EmitCoreError> for PublicationError {
 ///
 /// The caller's lock keys are the union of the shot's
 /// ([`stage_publish`]'s card), the draft's `link_lock_key` where records
-/// will be minted, and the draft's `content_lock_key` where a place is
-/// carried — [`LinkWriter::publication`] supplies exactly that. The
-/// visibility class `readable` is the caller's: the shot's source gate
-/// consults it per origin, and the records' deposit gate is handed it as
-/// every deposit's is, though the Open gate reads no incumbent.
+/// will be minted, the draft's `content_lock_key` where a place is carried,
+/// `link_lock_key` of every home a deposit names by address and the
+/// account's `document_lock_key` at the mint form —
+/// [`LinkWriter::publication`] supplies exactly that. The visibility class
+/// `readable` is the caller's: the shot's source gate consults it per
+/// origin, and every deposit's gate is handed it as every deposit's is —
+/// the claim's dedup runs at it, a guaranteed miss.
 ///
 /// Returns the member and the pairing [`stage_publish`] returned beside it,
 /// for a wider composite that places the pieces itself.
@@ -133,13 +201,16 @@ impl From<EmitCoreError> for PublicationError {
 /// # Errors
 ///
 /// In the order above, as the bare [`PublicationError`] the caller's
-/// transaction answers as `TxnError::Rejected`: the shot's admission
-/// (`Publish`), the fence (`AlreadyPublished`), the shot's staging
-/// (`Publish`), a record's backstops (`HomeNotRegistered`, `NotOwner` —
-/// unreachable past the admission, which asked both of the same draft) and
-/// its `Mint` and `Seat`, then the re-window's (`KeptPlaceMoved` with the
-/// entry, `Reinstate`, `Delete` — `stage_rewindow` states which are
-/// reachable). An `Err` commits nothing of the transaction.
+/// transaction answers as `TxnError::Rejected`: the mint's (`Publish`,
+/// `Mint`), the shot's admission (`Publish`), the fence
+/// (`AlreadyPublished`), the plan's (`Plan`), the shot's staging
+/// (`Publish`), a record's or a deposit's backstops (`HomeNotRegistered`,
+/// `NotOwner`) and its `Mint` and `Seat` — and `Plan(SlotTooLarge)` where a
+/// member-position end resolves to more spans than a slot holds, which the
+/// request's own run count cannot tell ahead of the mint — then the
+/// re-window's (`KeptPlaceMoved` with the entry, `Reinstate`, `Delete` —
+/// `stage_rewindow` states which are reachable). An `Err` commits nothing
+/// of the transaction.
 ///
 /// # Panics
 ///
@@ -150,19 +221,43 @@ impl From<EmitCoreError> for PublicationError {
 pub fn stage_publication<W>(
     stg: &mut Staging<W>,
     caller: Caller,
-    doc: &Address,
+    target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
+    deposits: &PublishDeposits,
     readable: &Visibility<'_, W>,
 ) -> Result<(Address, Pairing), PublicationError>
 where
     W: PublishWorld + LinkWorld,
     W::Record: From<LinkRec>,
 {
-    // 1. The shot's own table, ahead of the fence: ω speaks first, and a
+    // 1. The mint, first of all: the edition under the account.
+    let (doc, edition): (Address, Option<Address>) = match target {
+        PublishTarget::Document(doc) => (doc.clone(), None),
+        PublishTarget::Mint { account, .. } => {
+            let m3 = stg.working().m3();
+            if !m3.is_registered_account(account) {
+                return Err(skep_arrangement::PublishError::DocNotRegistered.into());
+            }
+            if !caller.is_owner(m3, account) {
+                return Err(skep_arrangement::PublishError::NotOwner(account.clone()).into());
+            }
+            // The edition minted here has no chain for a base to lie in:
+            // the mint form is the birth shape alone, as M5's
+            // `mint_admission` refuses it ahead of the mint.
+            if shot.base.is_some() {
+                return Err(skep_arrangement::PublishError::BaseNotInChain.into());
+            }
+            let (edition, rec) = m3.mint_document(account, true).map_err(PublicationError::Mint)?;
+            stg.push(rec.into());
+            (edition.clone(), Some(edition))
+        }
+    };
+    let doc = &doc;
+    // 2. The shot's own table, ahead of the fence: ω speaks first, and a
     //    draft the caller does not own discloses none of its records.
     shot_admission(stg.working(), caller, doc, shot, readable)?;
-    // 2. The twin fence.
+    // 3. The twin fence.
     if let Some(draft) = shot.draft_document() {
         let ty = enc([correspondence_type()]);
         let world = stg.working();
@@ -179,17 +274,117 @@ where
             }
         }
     }
-    // 3. The shot.
+    // 4. The deposit plan, on the base the daemon's composer read.
+    let plan = plan_deposits(stg.base(), caller, target, shot, deposits)?;
+    // 5. The shot.
     let (member, pairing) = stage_publish(stg, caller, doc, shot, readable)?;
+    // 6. The records, one per minted piece, in minting order.
     if let Some(draft) = shot.draft_document() {
-        // 4. The records, one per minted piece, in minting order.
         for piece in pairing.iter().filter(|piece| piece.minted) {
             stage_correspondence(stg, readable, caller, &draft, &piece.from, &piece.to)?;
         }
-        // 5. The re-window, last.
+    }
+    // 7. The deposits, exactly as planned.
+    stage_deposits(stg, readable, caller, &plan, &member, edition.as_ref(), &trunk_of(doc), shot, &pairing)?;
+    // 8. The re-window, last.
+    if let Some(draft) = shot.draft_document() {
         stage_rewindow(stg, caller, &draft, &trunk_of(doc), shot, places, &pairing)?;
     }
     Ok((member, pairing))
+}
+
+/// Stages the plan's deposits: home by home in the plan's order, inside each
+/// home in its order, every tag resolved to the address the commit minted.
+///
+/// The body of [`stage_publication`]'s step 7, which states each deposit's
+/// gate, value and seat. `edition` is the one the commit minted, at the
+/// mint form; `trunk` the document the shot appends — the edition's own
+/// address at the mint form, which the read-with's `from` names.
+///
+/// # Errors
+///
+/// A deposit's gate (`HomeNotRegistered`, `NotOwner`), its `Mint` and its
+/// `Seat`; `Plan(SlotTooLarge)` for a member-position end resolving past the
+/// slot budget; `Plan(MemberSpan)` where one fails to resolve, which the plan
+/// rules out.
+#[allow(clippy::too_many_arguments)]
+fn stage_deposits<W>(
+    stg: &mut Staging<W>,
+    readable: &Visibility<'_, W>,
+    caller: Caller,
+    plan: &DepositPlan,
+    member: &Address,
+    edition: Option<&Address>,
+    trunk: &Address,
+    shot: &Shot,
+    pairing: &Pairing,
+) -> Result<(), PublicationError>
+where
+    W: PublishWorld + LinkWorld,
+    W::Record: From<LinkRec>,
+{
+    let image = member_image(shot, pairing);
+    for PlannedHome { home, deposits } in &plan.homes {
+        let home: Address = match home {
+            NamedAddress::Member => member.clone(),
+            // The plan admits the edition's tag at the mint form alone.
+            NamedAddress::Edition => edition.cloned().unwrap_or_else(|| trunk.clone()),
+            NamedAddress::Address(a) => a.clone(),
+        };
+        for deposit in deposits {
+            match deposit {
+                PlannedDeposit::EditionClaim { origin } => {
+                    let value = Link::triple(enc([&home]), enc([origin]), enc([edition_type()]));
+                    let claim = emit_core(stg, readable, caller, &home, value, Gate::Open)?.minted();
+                    seat(stg, &home, &claim)?;
+                }
+                PlannedDeposit::Copy { index, ty, from, to, claim } => {
+                    let resolve = |end: &PlannedEnd| -> Result<Endset, PublicationError> {
+                        let endset = resolve_end(end, member, edition, &image)
+                            .ok_or(PlanFault::MemberSpan { index: *index })?;
+                        if endset.len() > MAX_SLOT_SPANS {
+                            return Err(PlanFault::SlotTooLarge { index: *index }.into());
+                        }
+                        Ok(endset)
+                    };
+                    let value = Link::triple(resolve(from)?, resolve(to)?, ty.clone());
+                    let copy = emit_core(stg, readable, caller, &home, value, Gate::Open)?.minted();
+                    seat(stg, &home, &copy)?;
+                    if let Some(PlannedClaim { old, home: old_home }) = claim {
+                        let value = supersession_claim(old, &copy);
+                        // `minted`: the claim's I0 carries the copy, minted a
+                        // line above, so no incumbent can answer.
+                        emit_core(stg, readable, caller, old_home, value, Gate::Managed)?.minted();
+                    }
+                }
+                PlannedDeposit::Retraction { target, .. } => {
+                    let value = retraction_tuple(&home, target);
+                    // As `nullify` deposits it: the Retraction gate, unseated.
+                    // The plan found the target active, so no incumbent
+                    // retraction stands; the address is taken either way.
+                    emit_core(stg, readable, caller, &home, value, Gate::Retraction)?.address();
+                }
+                PlannedDeposit::ReadWith { set, .. } => {
+                    let from = enc([edition.unwrap_or(trunk)]);
+                    let value = Link::triple(from, enc([set]), enc([read_with_type()]));
+                    let link = emit_core(stg, readable, caller, &home, value, Gate::Open)?.minted();
+                    seat(stg, &home, &link)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Seats `link` in `home`'s link subspace, as MAKELINK seats what it
+/// deposits.
+fn seat<W>(stg: &mut Staging<W>, home: &Address, link: &Address) -> Result<(), PublicationError>
+where
+    W: PublishWorld + LinkWorld,
+{
+    let seat = stage_seat_link(stg.working().m5(), home, link)?;
+    stg.push(seat.into());
+    Ok(())
 }
 
 /// Stages the draft's re-window at its kept places: for each `runs` entry
@@ -417,31 +612,40 @@ where
     W: PublishWorld + LinkWorld,
     W::Record: From<LinkRec>,
 {
-    /// THE PUBLICATION (the link-sets design §5.7): the publish shot, its
-    /// correspondence records and the draft's re-window at its kept places
-    /// in ONE commit.
+    /// THE PUBLICATION (the link-sets design §5.7): the publish shot, the
+    /// edition where the request mints one, its correspondence records,
+    /// every public deposit the request carries and the draft's re-window
+    /// at its kept places in ONE commit.
     ///
     /// It opens one transaction over the union of the shot's keys —
     /// `doc`'s head key, `content_lock_key` of the document it projects to,
     /// the base's `version_lock_key` where the base is a member — the
     /// draft's `link_lock_key` where records will be minted (a draft named
-    /// and a run re-inserted), and the draft's `content_lock_key` where
-    /// `places` carries a place (the re-window edits the draft's
-    /// arrangement), sorted and deduped as `editlink`'s pair is, under this
-    /// handle's attestation, and stages [`stage_publication`]: the shot's
-    /// admission, the twin fence, the shot, the records, the re-window. What
-    /// the shot does and refuses is M5's `publish` word for word; what this
-    /// adds is the fence, the records and the re-window, stated on the
-    /// staging function. The visibility class this handle carries is the
-    /// shot's `readable`, the value M10 lends M5's shot on the plain path.
+    /// and a run re-inserted), the draft's `content_lock_key` where `places`
+    /// carries a place (the re-window edits the draft's arrangement), the
+    /// `link_lock_key` of every home a deposit names by address (a `links`
+    /// entry's bare home, its `old`'s home, a `retract` target's home, a
+    /// `read_with` set) and, at the mint form, the account's
+    /// `document_lock_key` as `create_new_document` takes it — a home the
+    /// commit mints has no key to name before it —
+    /// sorted and deduped as `editlink`'s pair is, under this handle's
+    /// attestation, and stages [`stage_publication`]: the mint, the shot's
+    /// admission, the twin fence, the plan, the shot, the records, the
+    /// deposits, the re-window. What the shot does and refuses is M5's
+    /// `publish` word for word; what this adds is stated on the staging
+    /// function. The visibility class this handle carries is the shot's
+    /// `readable`, the value M10 lends M5's shot on the plain path.
     ///
     /// `places` is the request's kept places, parallel to `shot.runs` by
-    /// index — empty for a request that sends none, which is today's shot.
+    /// index — empty for a request that sends none; `deposits` the request's
+    /// three lists — empty for one that sends none. Both empty, at the
+    /// document form, is today's shot.
     ///
-    /// Returns `(member, seq)`: the member's address, the ack's, and the one
-    /// commit's `Seq`. A caller reads the records back off the draft's link
-    /// subspace, in minting order, and the re-windowed draft off its
-    /// arrangement.
+    /// Returns `(member, seq)`: the member's address, the ack's — at the
+    /// mint form, the first member of the edition minted, its trunk — and
+    /// the one commit's `Seq`. A caller reads the records back off the
+    /// draft's link subspace, the deposits off each home's, in minting
+    /// order, and the re-windowed draft off its arrangement.
     ///
     /// # Errors
     ///
@@ -456,17 +660,27 @@ where
     pub fn publication(
         &self,
         caller: Caller,
-        doc: &Address,
+        target: &PublishTarget,
         shot: &Shot,
         places: &[Option<VPos>],
+        deposits: &PublishDeposits,
     ) -> Result<(Address, Seq), TxnError<PublicationError>> {
-        let trunk = trunk_of(doc);
-        let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
-        if let Some(base) = &shot.base {
-            if base.member != trunk {
-                keys.push(M3State::version_lock_key(&base.member));
+        let mut keys = match target {
+            PublishTarget::Document(doc) => {
+                let trunk = trunk_of(doc);
+                let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
+                if let Some(base) = &shot.base {
+                    if base.member != trunk {
+                        keys.push(M3State::version_lock_key(&base.member));
+                    }
+                }
+                keys
             }
-        }
+            // The account's document chain, as `create_new_document` takes
+            // it; the principals key it holds beside is M3's own and
+            // defensive there, its ω read stale-safe on the base.
+            PublishTarget::Mint { account, .. } => vec![M3State::document_lock_key(account)],
+        };
         if let Some(draft) = shot.draft_document() {
             if shot.reinserted_runs().next().is_some() {
                 keys.push(M3State::link_lock_key(&draft));
@@ -475,12 +689,29 @@ where
                 keys.push(M3State::content_lock_key(&draft));
             }
         }
+        for entry in &deposits.links {
+            if let NamedAddress::Address(home) = &entry.home {
+                keys.push(M3State::link_lock_key(home));
+            }
+            if let Some(home) = entry.old.as_ref().and_then(document_of) {
+                keys.push(M3State::link_lock_key(&home));
+            }
+        }
+        for target_link in &deposits.retract {
+            if let Some(home) = document_of(target_link) {
+                keys.push(M3State::link_lock_key(&home));
+            }
+        }
+        for set in &deposits.read_with {
+            keys.push(M3State::link_lock_key(set));
+        }
         // M2's own bytewise order, duplicates collapsed, as `editlink` hands
         // its pair: the same set in the same sequence however it was named.
         keys.sort();
         keys.dedup();
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            stage_publication(stg, caller, doc, shot, places, self.visibility).map(|(member, _)| member)
+            stage_publication(stg, caller, target, shot, places, deposits, self.visibility)
+                .map(|(member, _)| member)
         })
     }
 }

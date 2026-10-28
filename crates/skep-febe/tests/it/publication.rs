@@ -20,8 +20,8 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    Base, DeliveryItem, Op, RejectCode, Run, SessionId, Shot, ShotRun, Spec, UniversalGrant,
-    UniversalIndexRow, FROM, TO, TYPE,
+    Base, DeliveryItem, Op, PublishDeposits, PublishTarget, RejectCode, Run, SessionId, Shot,
+    ShotRun, Spec, UniversalGrant, UniversalIndexRow, FROM, TO, TYPE,
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -52,7 +52,7 @@ fn a_drafted_shot_mints_its_records_in_one_commit_and_the_fence_refuses_a_second
         }],
     };
     let before = fx.febe.log_position();
-    let (member, at) = ack_addr(ex_id(&fx.febe, fx.user, b"shot", Op::Publish { doc: edition.clone(), shot: shot(3), places: vec![] }));
+    let (member, at) = ack_addr(ex_id(&fx.febe, fx.user, b"shot", Op::Publish { target: PublishTarget::Document(edition.clone()), shot: shot(3), places: vec![], deposits: PublishDeposits::default() }));
     assert_eq!(at, fx.febe.log_position(), "the ack names the one commit's position");
     assert!(at > before);
     // The record, in the draft's link subspace: the draft's first link.
@@ -72,18 +72,18 @@ fn a_drafted_shot_mints_its_records_in_one_commit_and_the_fence_refuses_a_second
 
     // The twin fence through the lowering: the code, the site, the class.
     let before = fx.febe.log_position();
-    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { doc: edition.clone(), shot: Shot { base: Some(Base { member: member.clone(), extent: nat(3) }), ..shot(1) }, places: vec![] }));
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { target: PublishTarget::Document(edition.clone()), shot: Shot { base: Some(Base { member: member.clone(), extent: nat(3) }), ..shot(1) }, places: vec![], deposits: PublishDeposits::default() }));
     assert_eq!(rej.code, RejectCode::AlreadyPublished, "{rej}");
     assert_eq!(rej.disposition, skep_febe::Disposition::Permanent);
     assert_eq!(rej.site.expect("the member rides the site").addr.as_ref(), Some(&member));
     assert_eq!(fx.febe.log_position(), before, "the fence commits nothing");
 
     // The memo ahead of the fence: the same id replays the ack.
-    let (replayed, at2) = ack_addr(ex_id(&fx.febe, fx.user, b"shot", Op::Publish { doc: edition.clone(), shot: shot(3), places: vec![] }));
+    let (replayed, at2) = ack_addr(ex_id(&fx.febe, fx.user, b"shot", Op::Publish { target: PublishTarget::Document(edition.clone()), shot: shot(3), places: vec![], deposits: PublishDeposits::default() }));
     assert_eq!((replayed, at2), (member.clone(), at), "the committed shot's ack, replayed; no fence read");
     assert_eq!(fx.febe.log_position(), before, "a replayed ack commits nothing");
     // A fresh id meets the fence.
-    let rej = rejected(ex_id(&fx.febe, fx.user, b"shot-again", Op::Publish { doc: edition, shot: Shot { base: Some(Base { member: member.clone(), extent: 3u32.into() }), ..shot(3) }, places: vec![] }));
+    let rej = rejected(ex_id(&fx.febe, fx.user, b"shot-again", Op::Publish { target: PublishTarget::Document(edition), shot: Shot { base: Some(Base { member: member.clone(), extent: 3u32.into() }), ..shot(3) }, places: vec![], deposits: PublishDeposits::default() }));
     assert_eq!(rej.code, RejectCode::AlreadyPublished, "{rej}");
 }
 
@@ -571,7 +571,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_and_a_moved_place_is_refused_wit
     let bc = Run::new(under(&draft, &[0, 1, 2]), nat(2)).expect("b c");
     let shot = Shot { base: None, draft: Some(draft.clone()), runs: vec![ShotRun { origin: draft.clone(), run: bc }] };
     let before = fx.febe.log_position();
-    let (member, at) = ack_addr(ex(&fx.febe, fx.user, Op::Publish { doc: edition.clone(), shot, places: vec![Some(vp(1, 2))] }));
+    let (member, at) = ack_addr(ex(&fx.febe, fx.user, Op::Publish { target: PublishTarget::Document(edition.clone()), shot, places: vec![Some(vp(1, 2))], deposits: PublishDeposits::default() }));
     assert_eq!(at, fx.febe.log_position(), "the ack names the one commit's position");
     assert!(at > before);
     let fresh = Run::new(under(&edition, &[0, 1, 1]), nat(2)).expect("the member's fresh run");
@@ -595,7 +595,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_and_a_moved_place_is_refused_wit
         runs: vec![ShotRun { origin: draft2.clone(), run: b }],
     };
     let before = fx.febe.log_position();
-    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { doc: edition, shot: stale, places: vec![Some(vp(1, 2))] }));
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { target: PublishTarget::Document(edition), shot: stale, places: vec![Some(vp(1, 2))], deposits: PublishDeposits::default() }));
     assert_eq!(rej.code, RejectCode::KeptPlaceMoved, "{rej}");
     assert_eq!(rej.disposition, skep_febe::Disposition::Permanent, "the same request can never land");
     let site = rej.site.expect("the entry rides the site");

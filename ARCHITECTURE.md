@@ -1190,8 +1190,11 @@ coverage index `stab` answers from. `writes.rs` is the handle and what
 its ops share; beneath it, `writes/makelink.rs`, `writes/emit.rs`,
 `writes/nullify.rs`, `writes/supersession.rs` and `writes/publication.rs`
 each hold one op family's `impl` block — the last the publication, the
-publish shot staged with its correspondence records in one transaction,
-over `skep-arrangement`'s exported shot bound.
+publish shot staged with its correspondence records and its deposits in
+one transaction, over `skep-arrangement`'s exported shot bound; beneath
+it, `writes/publication/plan.rs` holds the request members and the
+deposit plan, the one function the composite stages from and the
+daemon's composer signs from.
 
 Rules that hold across its files:
 
@@ -1563,7 +1566,8 @@ Rules that hold across its files:
   the crate's own. `tests/it/tidy.rs` checks it.
 
 Its unit suites sit beside their code: `auth/blocked/tests.rs`,
-`auth/session/tests.rs` (which opens a real engine),
+`auth/entry/tests.rs` (which opens a real engine),
+`auth/session/tests.rs` (which opens one too),
 `auth/policy/plain/tests.rs` (which opens one too), the inline suites of
 the rest of `auth/policy/*`, `commits/tests.rs` (which opens one too),
 `commits/sidecar/tests.rs`, `commits/feed/derived/tests.rs`,

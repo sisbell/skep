@@ -25,6 +25,9 @@ pub const T_JOURNAL_DESIGNATION: &str = "1.1.0.1.0.1.0.3.22";
 pub const T_RAIL_RECORD: &str = "1.1.0.1.0.1.0.3.60";
 pub const T_STEWARD_CLASSIFICATION: &str = "1.1.0.1.0.1.0.3.61";
 pub const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
+/// The read-with type (the link-sets design §5.7's `3.71`): the class a
+/// publication's `read_with` entries deposit, through that one door.
+pub const T_READ_WITH: &str = "1.1.0.1.0.1.0.3.71";
 /// The `replaces` type (PUB-5.15; RES-310's `3.12`): the audit-view class of
 /// the link a re-share is deposited with, and one of the two types a bare
 /// link write may not carry (`replaces_not_standalone`).

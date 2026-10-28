@@ -46,7 +46,7 @@ fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
 #[test]
 fn each_write_states_which_addresses_may_hold_a_cell() {
     use skep_address::Nat;
-    use skep_febe::{Deposit, Shot, VPos};
+    use skep_febe::{Deposit, PublishDeposits, PublishTarget, Shot, VPos};
 
     let doc = crate::codec::wire_address("1.0.1.0.1").expect("a test address");
     let cell = format!(
@@ -85,9 +85,10 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
         assert!(matches!(write_meta(&op).expect("a write").minting, Minting::None));
     }
     let publish = Op::Publish {
-        doc,
+        target: PublishTarget::Document(doc),
         shot: Shot { base: None, draft: None, runs: Vec::new() },
         places: Vec::new(),
+        deposits: PublishDeposits::default(),
     };
     assert!(matches!(
         write_meta(&publish).expect("a write").minting,
@@ -140,7 +141,7 @@ fn a_reinstate_row_names_its_destination_and_never_a_runs_origin() {
 #[test]
 fn each_write_states_the_terms_its_row_carries() {
     use skep_address::Nat;
-    use skep_febe::{Deposit, Endset, Shot, SlotArg, SuccessorSpec, VPos};
+    use skep_febe::{Deposit, Endset, PublishDeposits, PublishTarget, Shot, SlotArg, SuccessorSpec, VPos};
 
     let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
     let doc = addr("1.0.1.0.1");
@@ -162,9 +163,10 @@ fn each_write_states_the_terms_its_row_carries() {
     };
     assert!(matches!(terms(make_link), RowTerms::MakeLink));
     let publish = Op::Publish {
-        doc: doc.clone(),
+        target: PublishTarget::Document(doc.clone()),
         shot: Shot { base: None, draft: None, runs: Vec::new() },
         places: Vec::new(),
+        deposits: PublishDeposits::default(),
     };
     assert!(matches!(terms(publish), RowTerms::Publish));
 

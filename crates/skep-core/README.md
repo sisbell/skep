@@ -40,7 +40,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `parse_session_body` (`SessionBody`), `handshake` (`HandshakeRefusal`,
   `SessionRejected`) and `CHALLENGE_TTL_MS`.
 - **The policy**, `auth::policy` — the three write sequences' admission:
-  `plain_admission`; `precheck` with `RecordSig`, `DepositSpans` (`of`,
+  `plain_admission` and, behind it, `retract_class_refusal`
+  (`RetractClassRefusal`); `precheck` with `RecordSig`, `DepositSpans` (`of`,
   `deposit`) and `op_shape_refusal`; `registry_admission` and
   `genesis_seeding_check`; `upload_admission` (`UploadRefusal`, `token`);
   the two classifiers `deposits_credential_link` and

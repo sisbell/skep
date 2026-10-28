@@ -315,28 +315,217 @@ impl From<NullifyError> for RetractStaleError {
     }
 }
 
-/// The publication's rejection (the link-sets design §5.7): the shot's own
-/// verdicts, the twin fence, the correspondence records' backstops, and the
-/// re-window's.
+/// Why a `links` entry's `old` is refused: the `old_refused` token's
+/// `detail` (the link-sets design §5.7, THE VALIDATION's (3)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OldCause {
+    /// No resident link stands at `old`.
+    Absent,
+    /// `old` is homed in a published document.
+    Public,
+    /// `old` is retracted.
+    Retracted,
+    /// `old` is not the caller's own.
+    NotOwner,
+    /// `old` — or, where `old` is a successor, its own original — is
+    /// superseded by an active claim of the caller's naming a public copy.
+    Superseded,
+}
+
+impl OldCause {
+    /// Returns the cause's `detail` token.
+    pub fn token(self) -> &'static str {
+        match self {
+            OldCause::Absent => "absent",
+            OldCause::Public => "public",
+            OldCause::Retracted => "retracted",
+            OldCause::NotOwner => "not_owner",
+            OldCause::Superseded => "superseded",
+        }
+    }
+}
+
+/// Why a `retract` entry is refused: the `retract_refused` token's `detail`
+/// (THE VALIDATION's (4)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetractCause {
+    /// No resident link stands at the target.
+    Absent,
+    /// The target is not the caller's own.
+    NotOwner,
+    /// The target is not homed in a published document of the caller's.
+    NotPublished,
+}
+
+impl RetractCause {
+    /// Returns the cause's `detail` token.
+    pub fn token(self) -> &'static str {
+        match self {
+            RetractCause::Absent => "absent",
+            RetractCause::NotOwner => "not_owner",
+            RetractCause::NotPublished => "not_published",
+        }
+    }
+}
+
+/// Why a `read_with` entry is refused: the `read_with_refused` token's
+/// `detail` (THE VALIDATION's (5)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadWithCause {
+    /// `S` is no registered document.
+    NotRegistered,
+    /// `S` is a member, not a document.
+    NotDocument,
+    /// `S` is not the caller's.
+    NotOwner,
+    /// `S` is not published.
+    NotPublished,
+}
+
+impl ReadWithCause {
+    /// Returns the cause's `detail` token.
+    pub fn token(self) -> &'static str {
+        match self {
+            ReadWithCause::NotRegistered => "not_registered",
+            ReadWithCause::NotDocument => "not_document",
+            ReadWithCause::NotOwner => "not_owner",
+            ReadWithCause::NotPublished => "not_published",
+        }
+    }
+}
+
+/// The deposit plan's refusal (the link-sets design §5.7, THE VALIDATION's
+/// (3)–(5)): the first fault in list order, naming its entry.
 ///
-/// In the order the composite answers: the shot's admission through its
-/// source gate (`Publish`, M5's verdicts as `publish` states their order,
-/// the draft's registration and ownership among them); then THE TWIN FENCE
-/// (`AlreadyPublished`), before anything is staged; then the shot's staging
-/// (`Publish` again: the re-insert's count, the existence walk, the
-/// placement, the member's mint); then, per correspondence record, the
-/// deposit gate's home check (`HomeNotRegistered`, `NotOwner`) — a backstop
-/// the admission's draft slots make unreachable on the composite's path,
-/// reachable through [`stage_correspondence`](crate::stage_correspondence)
-/// alone — and the record's mint and seat; then THE RE-WINDOW, per `runs`
-/// entry that carries a kept place, in `runs`' order: the check by identity
-/// (`KeptPlaceMoved`), then the placement's own verdicts (`Reinstate`) and
-/// the removal's (`Delete`) as the fresh run is put at the place and the
-/// draft-native piece taken out behind it.
+/// The lane's tokens (the survey's ruling 8), each a `RejectCode` with a
+/// site — the entry's index, or, for a `links` entry's home that is not the
+/// caller's, the home's address, `not_owner`'s own site. The slot forms and
+/// the class fences answer as `make_link`'s do, with the entry. Built by
+/// `plan_deposits` (`writes/publication/plan.rs`), and carried by
+/// [`PublicationError::Plan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanFault {
+    /// A `links` entry's bare home is not the caller's: ω, with the home.
+    NotOwner(Address),
+    /// A `links` entry's home is neither the tag `member` nor a published
+    /// document of the caller's: a private document, a member, an
+    /// unregistered address, the edition's tag with no mint.
+    LinkHome {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A second `links` entry names one original.
+    DuplicateOriginal {
+        /// The second entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's stored type slot names the read-with type.
+    ReadWithInLinks {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's `old` is refused, the cause named.
+    Old {
+        /// The entry's position in `links`.
+        index: usize,
+        /// Which clause refused it.
+        cause: OldCause,
+    },
+    /// A `links` entry's I-span slot holds a span that is no content I-span.
+    NotContentSpan {
+        /// The entry's position in `links`.
+        index: usize,
+        /// The slot, in M7's numbering.
+        slot: usize,
+    },
+    /// A `links` entry's slot is past M7's per-slot budget.
+    SlotTooLarge {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's type slot is empty.
+    EmptyType {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's type slot lands in the retraction class.
+    RetractionClass {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's type slot lands in the supersession class.
+    SupersessionClass {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's type slot lands in the `replaces` class.
+    ReplacesClass {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's type slot lands in the correspondence class.
+    CorrespondenceClass {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// A `links` entry's member-position end lies outside `[1, placed]`, has
+    /// a zero width, or is not canonical; or a tag or the member-position
+    /// form stands in its type slot — the codec's refusals, backstops here.
+    MemberSpan {
+        /// The entry's position in `links`.
+        index: usize,
+    },
+    /// The edition claim names no origin: the mint form claims with no
+    /// draft — the codec's refusal, a backstop here.
+    ClaimWithoutDraft,
+    /// A `retract` entry is refused, the cause named.
+    Retract {
+        /// The entry's position in `retract`.
+        index: usize,
+        /// Which clause refused it.
+        cause: RetractCause,
+    },
+    /// A `read_with` entry is refused, the cause named.
+    ReadWith {
+        /// The entry's position in `read_with`.
+        index: usize,
+        /// Which clause refused it.
+        cause: ReadWithCause,
+    },
+}
+
+/// The publication's rejection (the link-sets design §5.7): the shot's own
+/// verdicts, the twin fence, the deposit plan's, the correspondence records'
+/// and the deposits' backstops, and the re-window's.
+///
+/// In the order the composite answers: at the mint form, the account's
+/// registration and ownership (`Publish` carrying `DocNotRegistered` or
+/// `NotOwner` with the account) and the edition's mint (`Mint`); the shot's
+/// admission through its source gate (`Publish`, M5's verdicts as `publish`
+/// states their order, the draft's registration and ownership among them);
+/// then THE TWIN FENCE (`AlreadyPublished`), before anything is staged;
+/// then THE DEPOSIT PLAN (`Plan`: THE VALIDATION's (3), (4) and (5), the
+/// first fault in list order); then the shot's staging (`Publish` again:
+/// the re-insert's count, the existence walk, the placement, the member's
+/// mint); then, per correspondence record, the deposit gate's home check
+/// (`HomeNotRegistered`, `NotOwner`) — a backstop the admission's draft
+/// slots make unreachable on the composite's path, reachable through
+/// [`stage_correspondence`](crate::stage_correspondence) alone — and the
+/// record's mint and seat; then the deposits as planned — each deposit's
+/// gate (`NotOwner` on a home the plan did not read, a backstop), its mint
+/// and its seat; then THE RE-WINDOW, per `runs` entry that carries a kept
+/// place, in `runs`' order: the check by identity (`KeptPlaceMoved`), then
+/// the placement's own verdicts (`Reinstate`) and the removal's (`Delete`)
+/// as the fresh run is put at the place and the draft-native piece taken
+/// out behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicationError {
-    /// The shot's own refusal, as `publish` states it.
+    /// The shot's own refusal, as `publish` states it — and, at the mint
+    /// form, the account's registration and ownership under its codes.
     Publish(PublishError),
+    /// The deposit plan's refusal: a `links`, `retract` or `read_with`
+    /// entry, the first fault in list order.
+    Plan(PlanFault),
     /// A draft-native run of the request overlaps a span a correspondence
     /// record homed in the draft already names as its `from`: those words
     /// are published already, in the member `site` names — the record's
@@ -345,13 +534,17 @@ pub enum PublicationError {
         /// The member the record's `to` span was minted into.
         site: Address,
     },
-    /// The draft a record is homed in is not a registered document.
+    /// The draft a record is homed in, or a deposit's home, is not a
+    /// registered document.
     HomeNotRegistered,
-    /// The caller is not the draft's effective owner (ω, exact account match).
+    /// The caller is not the effective owner (ω, exact account match) of
+    /// the draft, or of a home a deposit lands in.
     NotOwner(Address),
-    /// A record's link mint was refused.
+    /// A mint was refused: a record's or a deposit's link mint, or the
+    /// edition's own at the mint form.
     Mint(MintError),
-    /// A record's seat in the draft's link subspace was refused.
+    /// A record's or a deposit's seat in its home's link subspace was
+    /// refused.
     Seat(SeatError),
     /// The draft no longer arranges a run's identity at the kept place the
     /// request carries for it (the link-sets design §5.7): since the client
@@ -379,6 +572,12 @@ pub enum PublicationError {
 impl From<PublishError> for PublicationError {
     fn from(e: PublishError) -> Self {
         PublicationError::Publish(e)
+    }
+}
+
+impl From<PlanFault> for PublicationError {
+    fn from(e: PlanFault) -> Self {
+        PublicationError::Plan(e)
     }
 }
 
@@ -601,11 +800,72 @@ impl Error for EditLinkError {
     }
 }
 
+impl fmt::Display for PlanFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlanFault::NotOwner(_) => f.write_str("a links entry's home is not the caller's (ω)"),
+            PlanFault::LinkHome { index } => write!(
+                f,
+                "links[{index}]: the home is neither the member nor a published document of the caller's"
+            ),
+            PlanFault::DuplicateOriginal { index } => {
+                write!(f, "links[{index}]: a second copy of one original")
+            }
+            PlanFault::ReadWithInLinks { index } => write!(
+                f,
+                "links[{index}]: the type names the read-with, which a publication writes through read_with alone"
+            ),
+            PlanFault::Old { index, cause } => {
+                write!(f, "links[{index}]: old is refused: {}", cause.token())
+            }
+            PlanFault::NotContentSpan { index, slot } => {
+                write!(f, "links[{index}]: a span of slot {slot} is not a content I-span")
+            }
+            PlanFault::SlotTooLarge { index } => write!(
+                f,
+                "links[{index}]: a slot carries more than {} spans",
+                crate::budget::MAX_SLOT_SPANS
+            ),
+            PlanFault::EmptyType { index } => write!(f, "links[{index}]: the type slot is empty"),
+            PlanFault::RetractionClass { index } => {
+                write!(f, "links[{index}]: ty ~ [R] — retraction writes only through nullify")
+            }
+            PlanFault::SupersessionClass { index } => write!(
+                f,
+                "links[{index}]: ty ~ [K_sup] — supersession writes only through assert_sup/editlink"
+            ),
+            PlanFault::ReplacesClass { index } => write!(
+                f,
+                "links[{index}]: ty ~ replaces — the authority successor has one writer"
+            ),
+            PlanFault::CorrespondenceClass { index } => write!(
+                f,
+                "links[{index}]: ty ~ correspondence — the shot's record class has one writer"
+            ),
+            PlanFault::MemberSpan { index } => write!(
+                f,
+                "links[{index}]: a member-position end lies outside [1, placed] or is not canonical, or a type slot takes no tag and no member positions"
+            ),
+            PlanFault::ClaimWithoutDraft => {
+                f.write_str("claim: the edition claim names the staging draft, and the request names none")
+            }
+            PlanFault::Retract { index, cause } => {
+                write!(f, "retract[{index}]: refused: {}", cause.token())
+            }
+            PlanFault::ReadWith { index, cause } => {
+                write!(f, "read_with[{index}]: refused: {}", cause.token())
+            }
+        }
+    }
+}
+impl Error for PlanFault {}
+
 impl fmt::Display for PublicationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // This layer only — the shot's own words are the `source`.
             PublicationError::Publish(_) => f.write_str("publication: the shot refused"),
+            PublicationError::Plan(_) => f.write_str("publication: a deposit the request names is refused"),
             PublicationError::AlreadyPublished { .. } => f.write_str(
                 "publication: a draft-native run of the request is already published — a correspondence record homed in the draft names its words",
             ),
@@ -630,6 +890,7 @@ impl Error for PublicationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             PublicationError::Publish(e) => Some(e),
+            PublicationError::Plan(e) => Some(e),
             PublicationError::Mint(e) => Some(e),
             PublicationError::Seat(e) => Some(e),
             PublicationError::Reinstate(e) => Some(e),

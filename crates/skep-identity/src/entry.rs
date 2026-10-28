@@ -117,6 +117,17 @@
 //!   mints) holds by address: the run's I-start as the address row,
 //!   length-delimited, then `be64(width)` — [`push_window`]. Which runs those
 //!   are is the `publish` body's rule, stated in the child module `publish`.
+//! * **The deposit rows** — a publication's public deposits behind its shot
+//!   body (the link-sets design §5.7's signed entry): per deposit its home
+//!   as one length-delimited element (the tag `member` or `edition` where
+//!   the commit mints the home, else the address row), one kind byte, then
+//!   the four rows the deposit's own op signs — three slot rows and the
+//!   `replaces` row empty — where a slot row is the `0x03` row above, its
+//!   elements spans or the tags `member`/`edition` standing for an address
+//!   the commit mints (the tag's token, then the empty element), or the
+//!   member-position row `0x04`, `be64(n)` then each span of the member's
+//!   positions as `be64(ordinal) ‖ be64(width)`. Stated in full in the
+//!   child module `publication`, beside its builder.
 //!
 //! **The bodies, per grammar.** Each is an [`EntryBody`], the token paired
 //! with its body, so a body is never framed under another token. The ten
@@ -138,7 +149,9 @@
 //! * `edit_link` — [`entry_body_edit_link`];
 //! * `publish` — [`entry_body_publish`], or piece by piece under a byte
 //!   budget by [`PublishBody`], in the child module `publish`, the one module
-//!   the builder's fields are visible to;
+//!   the builder's fields are visible to — and, for a publication carrying
+//!   deposits, that body extended by [`entry_body_publication`] in the child
+//!   module `publication`, the deposit rows behind it;
 //! * `record` — [`entry_body_record`] over a [`RecordRows`], framed by
 //!   [`RecordFrame`]: the record grade's body.
 //!
@@ -162,7 +175,12 @@ use skep_address::{subtree_of, Address, Span};
 use crate::framing::{framed, push_delimited, ENTRY_TAG};
 
 mod publish;
+mod publication;
 
+pub use publication::{
+    entry_body_publication, DepositHome, DepositKind, DepositRow, DepositSlot, MemberPositions,
+    SlotElement,
+};
 pub use publish::{entry_body_publish, PublishBody, PublishRefusal, ShotBase, ShotSegmentPiece};
 
 /// Composes the entry frame from the values the caller holds.
@@ -338,8 +356,9 @@ impl fmt::Debug for BoardTerm {
 /// ([`entry_body_make_link`], [`entry_body_make_link_replacing`]), the three
 /// other link writes' ([`entry_body_emit`], [`entry_body_nullify`],
 /// [`entry_body_assert_sup`]), [`entry_body_edit_link`], [`PublishBody`] —
-/// [`entry_body_publish`] among its builds — and [`entry_body_record`], so a
-/// body cannot be framed under another grammar's token, and a `publish` body
+/// [`entry_body_publish`] among its builds, and [`entry_body_publication`]
+/// over a finished `publish` body — and [`entry_body_record`], so a body
+/// cannot be framed under another grammar's token, and a `publish` body
 /// cannot be finished over fewer pieces than its builder was offered. The
 /// tokens are the op-kind names as the wire spells them —
 /// `create_new_document`, `fork`, `version`, `insert`, `make_link`, `emit`,

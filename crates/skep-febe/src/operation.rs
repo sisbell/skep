@@ -36,7 +36,7 @@ use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use crate::memo::RetryMemo;
 use crate::reject::{rejection, RejectCode};
-use crate::request::{OpKind, Request};
+use crate::request::{OpKind, ReqId, Request};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::world::{FebeWorld, Stores};
@@ -442,6 +442,30 @@ where
             }
         }
         resp
+    }
+
+    /// Returns the acknowledgment this session committed under `id` for a
+    /// write of `kind`, ahead of [`execute`] — step (a) on its own.
+    ///
+    /// It is the memo's recall and nothing else: the same lookup `execute`
+    /// makes first, answering the memoized committed-write ack as the
+    /// [`Response`] the retry would be answered with, and executing nothing.
+    /// A transport that judges a write ahead of `execute` — the daemon's plain
+    /// sequence, whose admission checks a `publish`'s signature against the
+    /// body its links compose — asks here before judging, so a retry of a
+    /// write that already committed is answered from the memo whatever the
+    /// judgment would now say (the link-sets design §5.7's ruling 4: the
+    /// originals a committed publication claimed are public, and a re-judged
+    /// retry of it would be refused for its own commit's effect). `None` where
+    /// the memo holds no entry for the triple — a foreign session, a reused id
+    /// under another kind, an evicted or oversized key — and the write is the
+    /// transport's to judge and `execute`'s to run, which then meets the same
+    /// memo again and misses the same way. Takes the memo's lock, as `execute`
+    /// does, and bumps the entry's recency.
+    ///
+    /// [`execute`]: OperationSurface::execute
+    pub fn recall(&self, session: SessionId, id: &ReqId, kind: OpKind) -> Option<Response> {
+        self.memo.get(session, id, kind).map(Response::from)
     }
 
     /// Returns the coordinate of the committed head — the last committed write.

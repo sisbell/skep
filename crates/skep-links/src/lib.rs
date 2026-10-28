@@ -134,7 +134,7 @@ pub use endset::{enc, Endset, IntoSpans, Link, Spans};
 pub use skep_arrangement::Caller;
 pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
-    PublicationError, RetractStaleError,
+    OldCause, PlanFault, PublicationError, ReadWithCause, RetractCause, RetractStaleError,
 };
 pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
@@ -143,9 +143,12 @@ pub use state::{
     CurrentMember, LinkRec, LinkState, Pattern, Tip, Touch, Tuple, View, FROM, TO, TYPE,
 };
 pub use writes::{
-    correspondence_type, emit_tuple, is_correspondence_class, is_replaces_class, replaces_type,
-    retraction_tuple, slot_endset, stage_correspondence, stage_publication, supersession_claim,
-    Edit, LinkWriter, SlotArg, Visibility,
+    canonical_member_spans, correspondence_type, edition_type, emit_tuple, is_correspondence_class,
+    is_replaces_class, member_end, member_image, names_read_with, plan_deposits, read_with_in,
+    read_with_type, replaces_type, request_image, resolve_end, retraction_tuple, slot_endset,
+    stage_correspondence, stage_publication, supersession_claim, DepositPlan, Edit, EndArg,
+    LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit,
+    PlannedEnd, PlannedHome, PublishDeposits, PublishTarget, SlotArg, Visibility,
 };
 
 /// The auto traits M7's slice promises without saying.

@@ -139,7 +139,10 @@
 //!   its terms [`BoardTerm`] and [`DocTerm`], and the [`EntryBody`] each
 //!   grammar's builders return; the `publish` body's budgeted builder
 //!   [`PublishBody`], with its refusal [`PublishRefusal`], in the child module
-//!   `entry::publish`, the one module its fields are visible to; and
+//!   `entry::publish`, the one module its fields are visible to; a
+//!   publication's deposit rows behind that body —
+//!   [`entry_body_publication`] over [`DepositRow`]s — in the child module
+//!   `entry::publication` (the link-sets design §5.7's signed entry); and
 //!   [`RecordFrame`], the record grade's frame (signed ops; the design record
 //!   §2.5; the frame merge);
 //! * `payload`: the credential records — [`ENROLL_TYPE`], [`RETIRE_TYPE`],
@@ -238,9 +241,10 @@ mod write_types;
 pub use entry::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
-    entry_body_publish, entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp,
-    DocTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordFrame, RecordRows,
-    ShotBase, ShotSegmentPiece,
+    entry_body_publication, entry_body_publish, entry_body_record, entry_frame, unit_span,
+    BoardTerm, ContentFreeOp, DepositHome, DepositKind, DepositRow, DepositSlot, DocTerm,
+    EntryBody, EntrySlot, LinkSlots, MemberPositions, PublishBody, PublishRefusal, RecordFrame,
+    RecordRows, ShotBase, ShotSegmentPiece, SlotElement,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

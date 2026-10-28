@@ -1067,3 +1067,57 @@ fn a_carriages_liveness_reads_at_the_member_and_not_at_the_bare_set() {
     assert!(!discoverable_from(port, Some(&signed), &k, &s));
     sd.shutdown();
 }
+
+/// R12 — THE ACCEPT THROUGH THE PUBLICATION (the link-sets design §5.7; lane
+/// S3): the pair the two-step ceremony writes in two commits — the copy
+/// homed in the member, the claim homed where the original is — lands in
+/// the shot's ONE commit as a `links` entry: `home` the tag `member`, `from`
+/// P by the member-position form (the member's first `P_LEN` positions,
+/// which resolve to P's one identity under `E`), `to` Z's I-span, the
+/// citation type, `old` the original. The copy is `E.3`'s first link with
+/// the slots the two-step accept stores, the claim `N`'s next link naming
+/// it; the original stands, superseded and unretracted; the filter drops it
+/// at the new member on all three keys; and the feed shows ONE commit, its
+/// row naming the member first and `N` beside it for the owner.
+#[test]
+fn the_publication_s_links_entry_lands_the_copy_and_the_claim_in_one_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let c = chain(port, &signed);
+    let (n, l) = notes_and_original(port, &bare, &c);
+    let Chain { e, e2, .. } = &c;
+    let before_link = read_link(port, Some(&signed), &l);
+    assert_eq!(offered(port, Some(&signed), e2, 1, P_LEN), vec![l.clone()], "before: offered");
+
+    let head = json(&get(port, "/health").1)["log_position"].as_u64().expect("log_position");
+    let mut frame: Value = serde_json::from_str(&publish_frame(e, Some((e2, P_LEN)), None, &shot_runs(port, None, e2, 1, P_LEN))).expect("a frame");
+    frame["links"] = json!([{
+        "home": "member",
+        "from": {"member": [{"ordinal": "1", "width": P_LEN.to_string()}]},
+        "to": {"spans": [{"start": format!("{n}.0.1.1"), "width": Z_LEN.to_string()}]},
+        "ty": {"addrs": [T_CITATION]},
+        "old": l,
+    }]);
+    let v = op(port, Some(&signed), &frame.to_string());
+    let e3 = acked_addr(&v);
+    assert_eq!(e3, format!("{e}.3"), "the next trunk member");
+    let copy = format!("{e3}.0.2.1");
+    let claim = format!("{n}.0.2.2");
+    assert_eq!(
+        read_link(port, Some(&signed), &copy)["slots"],
+        json!([i_slot(&p_run(e).0, P_LEN), i_slot(&format!("{n}.0.1.1"), Z_LEN), i_slot(T_CITATION, 1)]),
+        "the copy's slots: P's identity resolved from the member's positions, Z's I-span, the type"
+    );
+    assert_eq!(claim_rows(port, Some(&signed), &l, "active"), vec![claim_row(&claim, &n, &l, &copy)], "the original's one active claim");
+    assert_eq!(read_link(port, Some(&signed), &l), before_link, "the original reads back verbatim");
+    assert!(discoverable_from(port, Some(&signed), &l, e), "the original is active and reachable");
+    assert_eq!(offered(port, Some(&signed), &e3, 1, P_LEN), Vec::<String>::new(), "the accepted original: offered no more");
+    let rows = changes_since(port, Some(&signed), head);
+    assert_eq!(rows.len(), 1, "one commit for the member, the copy and the claim: {rows:?}");
+    assert_eq!(rows[0]["docs"], json!([e3, n]), "the member first, the claim's home beside it: {}", rows[0]);
+    assert_eq!(changes_since(port, None, head)[0]["docs"], json!([e3]), "the guest: the member alone");
+    sd.shutdown();
+}

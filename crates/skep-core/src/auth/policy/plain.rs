@@ -22,8 +22,8 @@ use skep_identity::{
 };
 use skep_kernel::Attestation;
 use skep_links::{
-    enc, is_correspondence_class, is_replaces_class, registry, Endset, HasLinks, Link,
-    ShippedType, SlotArg,
+    enc, is_correspondence_class, is_replaces_class, registry, EndArg, Endset, HasLinks, Link,
+    NamedAddress, PublishTarget, ShippedType, SlotArg,
 };
 use skep_namespace::{
     first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
@@ -218,6 +218,73 @@ fn nullify_refusal(
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
     let Op::Nullify { home, target } = op else { return None };
+    retraction_class_refusal(world, home, target, principal)
+}
+
+/// A `retract` entry of a publication refused by its target's class (the
+/// link-sets design §5.7; lane S3): the entry's index, and the cause as the
+/// `retract_refused` rejection's `detail` token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetractClassRefusal {
+    /// The entry's position in `retract`.
+    pub index: usize,
+    /// The cause's token: `not_retraction` (a credential-typed target),
+    /// `not_revocation` (a grant), `audit_view` (the audit-view class).
+    pub cause: &'static str,
+}
+
+/// Returns the first `retract` entry of a publication whose target the
+/// `nullify` class refuses to retract — the producer behind
+/// `retract_refused` with its class detail, the daemon's own cell.
+///
+/// It is [`nullify_refusal`]'s read over each entry of a `publish`'s
+/// `retract` list in order — the one producer, [`retraction_class_refusal`],
+/// asked with the target's own home as the record's home, which is where
+/// the publication deposits the retraction — so a `retract` entry is judged
+/// exactly as the `nullify` of the same target would be: the credential,
+/// grant and audit-view cells, each to the record's owner alone, a
+/// stranger's or a plain target's entry answering nothing here and the
+/// store's own plan judging it. A target no link occupies answers nothing
+/// here too (`retract_refused` with `absent` is the plan's). `None` for an
+/// op that is no `publish`, or one carrying no refused entry.
+///
+/// **Its place in the write order:** after `plain_admission` — the
+/// `nullify` class's own place, behind the board-state pair and the
+/// write-path check — so a session that may not write here is never told
+/// what a target link is, and ahead of the media door and the store.
+///
+/// **Precondition.** `world` must be the snapshot taken under the read guard
+/// for this request; the guard argument is that contract's cheap half.
+pub fn retract_class_refusal(
+    _lock: &LockRead<'_>,
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<RetractClassRefusal> {
+    let Op::Publish { deposits, .. } = op else { return None };
+    deposits.retract.iter().enumerate().find_map(|(index, target)| {
+        let home = document_of(target)?;
+        let cause = match retraction_class_refusal(world, &home, target, principal)? {
+            CredentialRefusal::NullifyNotRetraction => "not_retraction",
+            CredentialRefusal::NullifyNotRevocation => "not_revocation",
+            CredentialRefusal::NullifyAuditView => "audit_view",
+            // The producer answers the three class tokens and nothing else.
+            other => unreachable!("the retraction class producer answers a class token, not {other:?}"),
+        };
+        Some(RetractClassRefusal { index, cause })
+    })
+}
+
+/// Returns the `nullify` class's refusal of retracting `target` from `home`
+/// — the one producer behind [`nullify_refusal`] and
+/// [`retract_class_refusal`]: the target's link and its class, read the same
+/// for every caller, then the token chosen last.
+fn retraction_class_refusal(
+    world: &World,
+    home: &Address,
+    target: &Address,
+    principal: PrincipalId,
+) -> Option<CredentialRefusal> {
     // The same reads for every caller: the target's link, then its class.
     let link = world.links().readlink(target)?;
     let class = write_types().target_class(link.type_slot())?;
@@ -501,18 +568,62 @@ fn sole_writer_refusal(
         SlotArg::Addrs(addrs) => fenced(&enc(addrs.iter())),
         SlotArg::Resolve(_) | SlotArg::Spans(_) => None,
     };
-    let (refusal, homes): (Option<CredentialRefusal>, Vec<&Address>) = match op {
-        Op::MakeLink { home, ty, .. } => (in_class(ty), vec![home]),
-        Op::Emit { home, ty, .. } => (fenced(ty), vec![home]),
-        Op::EditLink { successor, d_s, d_a, .. } => (in_class(&successor.ty), vec![d_s, d_a]),
+    let (refusal, homes): (Option<CredentialRefusal>, Vec<Address>) = match op {
+        Op::MakeLink { home, ty, .. } => (in_class(ty), vec![home.clone()]),
+        Op::Emit { home, ty, .. } => (fenced(ty), vec![home.clone()]),
+        Op::EditLink { successor, d_s, d_a, .. } => {
+            (in_class(&successor.ty), vec![d_s.clone(), d_a.clone()])
+        }
+        // A publication's `links` entries (the link-sets design §5.7): each
+        // entry's type slot in the address form over addresses alone is the
+        // slot the store would deposit, read as a `make_link`'s; the first
+        // fenced entry answers, over its own home — the entry's address, or
+        // the frame's term where the entry is homed in the member the commit
+        // mints (the trunk at the document form, the account at the mint
+        // form, which ω answers for as the shot's own gate does). An entry
+        // in the I-span form names content and never a class; a tag among
+        // the addresses is a form the plan refuses on its own.
+        Op::Publish { target, deposits, .. } => {
+            let fenced_entry = deposits.links.iter().find_map(|entry| {
+                let EndArg::Addrs(named) = &entry.ty else { return None };
+                let addrs: Vec<&Address> = named
+                    .iter()
+                    .filter_map(|n| match n {
+                        NamedAddress::Address(a) => Some(a),
+                        NamedAddress::Member | NamedAddress::Edition => None,
+                    })
+                    .collect();
+                if addrs.len() != named.len() {
+                    return None;
+                }
+                let refusal = fenced(&enc(addrs))?;
+                let home = match &entry.home {
+                    NamedAddress::Address(home) => home.clone(),
+                    NamedAddress::Member | NamedAddress::Edition => target.term(),
+                };
+                Some((refusal, home))
+            });
+            match fenced_entry {
+                Some((refusal, home)) => (Some(refusal), vec![home]),
+                None => return None,
+            }
+        }
         _ => return None,
     };
     let refusal = refusal?;
     let m3 = world.m3();
-    homes
-        .into_iter()
-        .all(|home| Caller::Principal(principal).passes_ownership_gate(m3, home))
-        .then_some(refusal)
+    let caller = Caller::Principal(principal);
+    // ω over each home: the ownership gate's pair for a document, and for
+    // the mint form's parent account — no document — registration as an
+    // account beside ω.
+    let owns = |home: &Address| {
+        if m3.is_registered_account(home) {
+            m3.is_effective_owner(principal, home)
+        } else {
+            caller.passes_ownership_gate(m3, home)
+        }
+    };
+    homes.iter().all(owns).then_some(refusal)
 }
 
 // ── board_state_admission — the two claim-complementary gates (AUTH-3.78) ─
@@ -735,8 +846,17 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
         // the signed session then meets the store's
         // `private_source_versionless` (slot 5), exactly as a bare
         // `version(d, published:true)` does. Registration and ω stand ahead
-        // (PUB-6.37, PUB-6.36 slot 1), as everywhere.
-        Op::Publish { doc, .. } => owned(doc),
+        // (PUB-6.37, PUB-6.36 slot 1), as everywhere. The mint form (the
+        // link-sets design §5.7) mints a published edition under the parent
+        // account it names, so it takes the gate where the caller owns that
+        // registered account — the `create` arm's pair, with no first-mint
+        // exemption: an edition born by a shot is never the mechanical home.
+        Op::Publish { target, .. } => match target {
+            PublishTarget::Document(doc) => owned(doc),
+            PublishTarget::Mint { account, .. } => {
+                m3.is_registered_account(account) && m3.is_effective_owner(principal, account)
+            }
+        },
         // The five in-place edits (PUB-2.11): the write by identity among
         // them — a re-placement into an owned published document lands in
         // the published world exactly as a `copy` into it would.

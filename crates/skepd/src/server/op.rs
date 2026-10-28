@@ -18,14 +18,14 @@ use skep_util::permits::{edge_clock_now, Permit, PoolEdgeLine};
 use super::actor::Resolved;
 use super::reply::{
     credential_refused, media_door_refused, op_answer, refuse_scan_busy, refuse_write_busy,
-    registry_refused, with_signal, Reply,
+    registry_refused, retract_refused, with_signal, Reply,
 };
 use super::request::HttpRequest;
 use super::{ClaimLine, Daemon, WRITE_POOL};
 use skep_core::auth::key_set_of;
 use skep_core::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
-    registry_admission, CredentialRefusal, DepositSpans, RecordSig,
+    registry_admission, retract_class_refusal, CredentialRefusal, DepositSpans, RecordSig,
 };
 use skep_core::auth::session::Actor;
 use skep_core::auth::LockWrite;
@@ -371,8 +371,12 @@ impl Daemon {
     ///
     /// Its steps are the write pool's permit → the read lock → the
     /// serialization lock → [`Daemon::locked_state`] (the head snapshot, the
-    /// key table it carries, and this site's own resolve) →
-    /// `plain_admission`'s ordered producers → the media door → execute. The
+    /// key table it carries, and this site's own resolve) → the retry memo's
+    /// recall (`OperationSurface::recall`: a committed write's ack under the
+    /// same session, id and kind, answered before any producer judges the
+    /// retry — the link-sets design §5.7's ruling 4) → `plain_admission`'s
+    /// ordered producers → the `retract` class (`retract_class_refusal`, the
+    /// `nullify` class's own place) → the media door → execute. The
     /// permit is the first act (`operations.md` §4 rows 25, 27): taken before
     /// either lock, held in this frame through `commit_under`'s return, so a
     /// write parked on the guard behind an inline backstop holds it the whole
@@ -411,6 +415,22 @@ impl Daemon {
             Actor::Principal(b) => b,
             Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
         };
+        // The memo ahead of the admission (the link-sets design §5.7's
+        // ruling 4; lane S3): a retry of a write this session already
+        // committed under `id` is answered from M10's retry memo BEFORE the
+        // producers judge it — `OperationSurface::recall`, the lookup
+        // `execute` makes first — so a publication whose own commit made
+        // the originals it claimed public is never re-judged for its own
+        // effect and refused `old_refused` where its ack was lost. Keyed as
+        // the memo is, by session, id and op-kind; a miss falls through to
+        // the producers and to `execute`, which misses the same way. Under
+        // the locks, as the credential sequence's recall is: the memo is
+        // read on the same committed state the admission would read.
+        if let Some(id) = &frame.id {
+            if let Some(ack) = self.febe.recall(binding.sid, id, frame.op.kind()) {
+                return with_signal(self.op_reply(&ack), closed);
+            }
+        }
         // The attestation's one door (signed ops; the design record §4.5
         // (1)–(2), §5.5): the producers judge the presented member beside the
         // op, and what reaches the store is what they admitted — the value
@@ -437,6 +457,19 @@ impl Daemon {
                 return with_signal(credential_refused(meta.kind, &r), closed);
             }
         };
+        // A publication's `retract` entries' class (the link-sets design
+        // §5.7; lane S3): the `nullify` class's own producer over each
+        // target, in the `nullify` class's own place — after the admission,
+        // behind the board-state pair and the write-path check, so a session
+        // that may not write here is never told what a target link is — and
+        // ahead of the media door and the store. Answered as the typed
+        // `retract_refused` with the entry and the class token as its detail,
+        // the daemon's own cell of that code; the admitted attestation is
+        // dropped with the write, as at every refusal ahead of the store.
+        if let Some(r) = retract_class_refusal(&credential_lock, snap.world(), &frame.op, binding.principal) {
+            self.commits.take_turn_after_refusal(&serial);
+            return with_signal(retract_refused(meta.kind, r), closed);
+        }
         // The media door (`skep_media::door`): one step of its own, after
         // every producer above and ahead of the store, on the same locked
         // snapshot the commit will read — so the check that passed and the

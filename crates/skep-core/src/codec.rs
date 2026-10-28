@@ -68,7 +68,10 @@ use skep_febe::{
 };
 use skep_identity::SigAlgRow;
 use skep_kernel::Attestation;
-use skep_links::{Endset, View, MAX_SLOT_SPANS};
+use skep_links::{
+    member_end, request_image, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
+    PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
+};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 use skep_util::json::{hex_nibble, obj};
@@ -652,14 +655,19 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         },
         "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
-        // The shot, then its kept places beside it (the link-sets design
-        // §5.7): parallel to the runs the shot just took, so the places are
-        // read against them.
+        // The target, the shot, then its kept places and its deposits beside
+        // it (the link-sets design §5.7): the places parallel to the runs the
+        // shot just took, so they are read against them; the deposits' member
+        // positions read against the same runs.
         "publish" => {
-            let doc = fields.addr("doc")?;
+            let target = fields.publish_target()?;
             let shot = fields.shot()?;
+            if target.claims() && shot.draft.is_none() {
+                return Err(PErr("field 'claim': the edition claim names the staging draft, so 'draft' is required beside it".into()).into());
+            }
             let places = fields.places(&shot)?;
-            Op::Publish { doc, shot, places }
+            let deposits = fields.deposits(&shot, &target)?;
+            Op::Publish { target, shot, places, deposits }
         }
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
@@ -1153,6 +1161,252 @@ impl Fields {
     fn successor(&mut self, k: &'static str) -> PResult<SuccessorSpec> {
         self.field(k, p_successor)
     }
+
+    /// Takes a `publish`'s target (the link-sets design §5.7, THE REQUEST):
+    /// the document form or the mint form.
+    ///
+    /// The document form is `doc`, the published document the shot appends;
+    /// the mint form is `mint: true` with `account`, the parent account the
+    /// commit mints the edition under, `doc` ABSENT — and `claim: true`
+    /// beside it where the commit writes the edition claim. `mint` and
+    /// `claim` are flags: absent, `null` and `false` alike are the flag
+    /// unset, which is the one spelling the marshal writes back for it.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where a flag is no boolean, where `doc` or `account` is no
+    /// address, and for the shapes that name no one form: `doc` beside
+    /// `mint`, `account` without `mint`, `mint` without `account`, neither
+    /// `doc` nor `account`, and `claim` without `mint` — a claim written
+    /// into an edition the request does not mint is not admitted in this
+    /// build.
+    fn publish_target(&mut self) -> PResult<PublishTarget> {
+        let mint = self.flag("mint")?;
+        let claim = self.flag("claim")?;
+        let doc = self.opt_addr("doc")?;
+        let account = self.opt_addr("account")?;
+        match (mint, doc, account) {
+            (false, Some(doc), None) => {
+                if claim {
+                    return Err(PErr(
+                        "field 'claim': a claim into an edition the request does not mint is not admitted in this build (send 'mint': true with 'account')".into(),
+                    ));
+                }
+                Ok(PublishTarget::Document(doc))
+            }
+            (true, None, Some(account)) => Ok(PublishTarget::Mint { account, claim }),
+            (false, None, Some(_)) => Err(PErr("field 'account': carried without 'mint': true".into())),
+            (false, None, None) => Err(PErr("missing field 'doc'".into())),
+            (false, Some(_), Some(_)) => {
+                Err(PErr("field 'account': carried beside 'doc'; the mint form names 'account' alone".into()))
+            }
+            (true, Some(_), _) => {
+                Err(PErr("field 'doc': carried beside 'mint': true; the mint form names 'account' alone".into()))
+            }
+            (true, None, None) => Err(PErr("field 'account': required beside 'mint': true".into())),
+        }
+    }
+
+    /// Takes a boolean flag: absent, `null` and `false` alike are unset.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] for any other non-boolean value.
+    fn flag(&mut self, k: &'static str) -> PResult<bool> {
+        match self.take_opt(k) {
+            None => Ok(false),
+            Some(v) => v.as_bool().ok_or_else(|| PErr(format!("field '{k}': expected true or false"))),
+        }
+    }
+
+    /// Takes a `publish`'s three deposit lists (the link-sets design §5.7):
+    /// `links`, `retract` and `read_with`, each optional and read as the
+    /// empty list where absent.
+    ///
+    /// Each list is one wire list under [`MAX_WIRE_LIST`]. A `links` entry
+    /// is `{home, ty, from, to, old?}` ([`p_link_entry`]); a `retract` entry
+    /// a link address; a `read_with` entry a document address. The tags
+    /// `member` and `edition` are admitted where an address is expected
+    /// inside an entry — a home, an element of an address-form end —
+    /// `edition` at the mint form alone; the member-position end form is
+    /// read against the shot's runs ([`p_end`]).
+    ///
+    /// # Errors
+    ///
+    /// A [`Refusal`] where a list is no array or is past the cap (no
+    /// index), and naming the entry in its `index` — the `malformed`
+    /// rejection's `site.index` — where an entry is refused.
+    fn deposits(&mut self, shot: &Shot, target: &PublishTarget) -> Result<PublishDeposits, Refusal> {
+        let image = request_image(shot);
+        let mints = target.mints();
+        let links = match self.take_opt("links") {
+            None => Vec::new(),
+            Some(v) => indexed_list(&v, "links", |entry| p_link_entry(entry, mints, &image))?,
+        };
+        let retract = match self.take_opt("retract") {
+            None => Vec::new(),
+            Some(v) => indexed_list(&v, "retract", p_addr)?,
+        };
+        let read_with = match self.take_opt("read_with") {
+            None => Vec::new(),
+            Some(v) => indexed_list(&v, "read_with", p_addr)?,
+        };
+        Ok(PublishDeposits { links, retract, read_with })
+    }
+}
+
+/// Parses one wire list whose entries' refusals name their index.
+///
+/// It is [`p_list`] — the one cap, counted before any element is parsed —
+/// for the lists of a request that answer a refused entry by its position:
+/// the fault carries the entry's index as the [`Refusal`]'s site, which
+/// reaches the `malformed` rejection's `site.index`.
+///
+/// # Errors
+///
+/// A [`Refusal`] with no index where `v` is no array or is past
+/// [`MAX_WIRE_LIST`], and with the entry's index where `f` refuses an
+/// element.
+fn indexed_list<T>(v: &Value, k: &str, f: impl Fn(&Value) -> PResult<T>) -> Result<Vec<T>, Refusal> {
+    let arr = v.as_array().ok_or_else(|| PErr(format!("field '{k}': expected a JSON array")))?;
+    if arr.len() > MAX_WIRE_LIST {
+        return Err(PErr(format!(
+            "field '{k}': array has {} elements, past the {MAX_WIRE_LIST}-element wire cap",
+            arr.len()
+        ))
+        .into());
+    }
+    arr.iter()
+        .enumerate()
+        .map(|(i, x)| f(x).map_err(|e| Refusal(format!("field '{k}': [{i}]: {e}"), Some(i))))
+        .collect()
+}
+
+/// Parses one `links` entry of a `publish` (the link-sets design §5.7):
+/// `{"home": …, "ty": …, "from": …, "to": …, "old"?: …}`.
+///
+/// `home` is the tag `member` or an address; `ty` an end in the address form
+/// over addresses alone or the I-span form — a type names no address the
+/// commit mints and no member position; `from` and `to` ends in any of the
+/// three forms ([`p_end`]); `old` the original's address, absent for an
+/// entry with none (an explicit `null` is refused, as `make_link`'s
+/// `replaces` refuses one).
+///
+/// # Errors
+///
+/// A [`PErr`] where the entry is no object of those keys, a member is
+/// missing or refused, `home` is the tag `edition` at the document form,
+/// or `ty` carries a tag or the member-position form.
+fn p_link_entry(v: &Value, mints: bool, image: &[Run]) -> PResult<LinkEntry> {
+    let m = p_obj(v, &["home", "ty", "from", "to", "old"])?;
+    let home = field(m, "home", |v| p_named(v, mints))?;
+    let ty = field(m, "ty", |v| p_end(v, mints, image))?;
+    match &ty {
+        EndArg::Addrs(named) if named.iter().any(|n| !matches!(n, NamedAddress::Address(_))) => {
+            return Err(PErr("ty: a type slot names no address the commit mints (no tag)".into()));
+        }
+        EndArg::Member(_) => {
+            return Err(PErr("ty: a type slot takes no member-position form".into()));
+        }
+        EndArg::Addrs(_) | EndArg::Spans(_) => {}
+    }
+    let from = field(m, "from", |v| p_end(v, mints, image))?;
+    let to = field(m, "to", |v| p_end(v, mints, image))?;
+    let old = match m.get("old") {
+        None => None,
+        Some(v) => Some(p_addr(v).map_err(|e| PErr(format!("old: {e}")))?),
+    };
+    Ok(LinkEntry { home, from, to, ty, old })
+}
+
+/// Parses an address or a tag standing for one the commit mints: the string
+/// `member`, the string `edition` (at the mint form alone), else a wire
+/// address.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is the tag `edition` and the request mints no
+/// edition, or is neither tag nor a wire address.
+fn p_named(v: &Value, mints: bool) -> PResult<NamedAddress> {
+    match v.as_str() {
+        Some("member") => Ok(NamedAddress::Member),
+        Some("edition") if mints => Ok(NamedAddress::Edition),
+        Some("edition") => {
+            Err(PErr("the tag 'edition' names the edition the request mints; this request mints none".into()))
+        }
+        _ => p_addr(v).map(NamedAddress::Address),
+    }
+}
+
+/// Parses one end of a `links` entry (the link-sets design §5.7): the
+/// address form `{"addrs": [addresses or tags…]}`, the I-span form
+/// `{"spans": [i-spans…]}` ([`p_ispan_slot`]), or THE MEMBER-POSITION FORM
+/// `{"member": [{"ordinal": n, "width": w}, …]}` — spans of the member's
+/// positions inside `[1, placed]`, 1-based, each a natural as `reinstate`'s
+/// `at` spells one — which must be CANONICAL: the lowest member positions
+/// holding each value, consecutive positions merged, as M7's own
+/// [`member_end`] spells them over the request's runs, so one signed row
+/// stands against one request.
+///
+/// A V-spec array is admitted in no entry (the survey's ruling 7): the
+/// ceremony sends I-spans or addresses, and the form is refused here.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is a V-spec array or no object of exactly one of
+/// the three keys, where the list under it is refused, where a member span
+/// has a zero ordinal or width, lies outside the runs' positions, or
+/// passes `u64`, and where the member-position row is not its canonical
+/// spelling — the refusal naming the spelling the request owes.
+fn p_end(v: &Value, mints: bool, image: &[Run]) -> PResult<EndArg> {
+    if v.is_array() {
+        return Err(PErr(
+            "a V-spec array is admitted in no publication entry: send {\"addrs\": […]}, {\"spans\": […]} or {\"member\": […]}".into(),
+        ));
+    }
+    let m = p_obj(v, &["addrs", "spans", "member"])?;
+    match (m.get("addrs"), m.get("spans"), m.get("member")) {
+        (Some(a), None, None) => {
+            Ok(EndArg::Addrs(p_list(a, |v| p_named(v, mints)).map_err(|e| PErr(format!("addrs: {e}")))?))
+        }
+        (None, Some(s), None) => {
+            Ok(EndArg::Spans(p_ispan_slot(s).map_err(|e| PErr(format!("spans: {e}")))?))
+        }
+        (None, None, Some(p)) => {
+            let spans = p_list(p, p_member_span).map_err(|e| PErr(format!("member: {e}")))?;
+            let end = member_end(image, &spans).ok_or_else(|| {
+                PErr("member: a span of the member's positions has a zero ordinal or width, or reaches past the positions the runs place".into())
+            })?;
+            if end.canonical != spans {
+                let owed = end
+                    .canonical
+                    .iter()
+                    .map(|s| format!("{{\"ordinal\":\"{}\",\"width\":\"{}\"}}", s.ordinal, s.width))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                return Err(PErr(format!(
+                    "member: not the canonical spelling — the lowest member positions holding each value, consecutive positions merged: [{owed}]"
+                )));
+            }
+            Ok(EndArg::Member(spans))
+        }
+        _ => Err(PErr("expected exactly one of 'addrs', 'spans' or 'member'".into())),
+    }
+}
+
+/// Parses one span of the member-position form: `{"ordinal": n, "width": w}`,
+/// each a natural spelled as `reinstate`'s `at` spells one, within `u64`.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of the two keys, a key is missing or
+/// refused, or a value passes `u64`.
+fn p_member_span(v: &Value) -> PResult<MemberSpan> {
+    let m = p_obj(v, &["ordinal", "width"])?;
+    let bounded = |n: Nat| u64::try_from(&n).map_err(|_| PErr("past 2^64 − 1".into()));
+    let ordinal = field(m, "ordinal", |v| p_nat(v).and_then(bounded))?;
+    let width = field(m, "width", |v| p_nat(v).and_then(bounded))?;
+    Ok(MemberSpan { ordinal, width })
 }
 
 // ── leaf parsers, M1's values each through its validating constructors ──

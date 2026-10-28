@@ -18,7 +18,7 @@ use skep_febe::{
 };
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
-use skep_links::{Endset, Invalid, Link, View};
+use skep_links::{EndArg, Endset, Invalid, Link, LinkEntry, NamedAddress, PublishTarget, View};
 use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, SpanFault, Spec};
 use skep_util::json::{hex_string, obj};
 
@@ -275,9 +275,23 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // so an absent one marshals to no field and `parse ∘ marshal` is a
         // fixpoint — and so do the kept places: `places` rides only where
         // one is present, the list `runs`' length with `null` at a run with
-        // none, the form the parse pads a shorter list to.
-        Op::Publish { doc, shot, places } => {
-            let mut pairs = vec![("doc", j_addr(doc)), ("runs", j_shot_runs(&shot.runs))];
+        // none, the form the parse pads a shorter list to — and so do the
+        // deposits (the link-sets design §5.7): the target in its one form
+        // (`doc`, or `account` with `mint: true` and, where set, `claim:
+        // true`; an unset flag is no field), and each of `links`, `retract`
+        // and `read_with` only where it holds an entry.
+        Op::Publish { target, shot, places, deposits } => {
+            let mut pairs = match target {
+                PublishTarget::Document(doc) => vec![("doc", j_addr(doc))],
+                PublishTarget::Mint { account, claim } => {
+                    let mut pairs = vec![("account", j_addr(account)), ("mint", Value::Bool(true))];
+                    if *claim {
+                        pairs.push(("claim", Value::Bool(true)));
+                    }
+                    pairs
+                }
+            };
+            pairs.push(("runs", j_shot_runs(&shot.runs)));
             if let Some(base) = &shot.base {
                 pairs.push(("base", j_addr(&base.member)));
                 pairs.push(("base_extent", j_nat(&base.extent)));
@@ -288,6 +302,15 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if places.iter().any(Option::is_some) {
                 let places = places.iter().map(|p| p.as_ref().map_or(Value::Null, j_vpos));
                 pairs.push(("places", Value::Array(places.collect())));
+            }
+            if !deposits.links.is_empty() {
+                pairs.push(("links", Value::Array(deposits.links.iter().map(j_link_entry).collect())));
+            }
+            if !deposits.retract.is_empty() {
+                pairs.push(("retract", j_addrs(&deposits.retract)));
+            }
+            if !deposits.read_with.is_empty() {
+                pairs.push(("read_with", j_addrs(&deposits.read_with)));
             }
             (op_name(OpKind::Publish), pairs)
         }
@@ -730,6 +753,58 @@ fn j_slotarg(s: &SlotArg) -> Value {
         SlotArg::Resolve(v) => j_vspecs(v),
         SlotArg::Addrs(a) => obj(vec![("addrs", j_addrs(a))]),
         SlotArg::Spans(spans) => obj(vec![("spans", j_ispan_slot(spans))]),
+    }
+}
+
+/// Renders one `links` entry of a `publish` (the link-sets design §5.7) —
+/// [`p_link_entry`](super::p_link_entry)'s inverse: `home`, `ty`, `from`,
+/// `to`, and `old` only where the entry names one.
+fn j_link_entry(entry: &LinkEntry) -> Value {
+    let mut pairs = vec![
+        ("home", j_named(&entry.home)),
+        ("ty", j_end(&entry.ty)),
+        ("from", j_end(&entry.from)),
+        ("to", j_end(&entry.to)),
+    ];
+    if let Some(old) = &entry.old {
+        pairs.push(("old", j_addr(old)));
+    }
+    obj(pairs)
+}
+
+/// Renders an address or a tag standing for one the commit mints —
+/// [`p_named`](super::p_named)'s inverse: the string `member`, the string
+/// `edition`, or the address.
+fn j_named(named: &NamedAddress) -> Value {
+    match named {
+        NamedAddress::Member => Value::String("member".into()),
+        NamedAddress::Edition => Value::String("edition".into()),
+        NamedAddress::Address(a) => j_addr(a),
+    }
+}
+
+/// Renders one end of a `links` entry — [`p_end`](super::p_end)'s inverse:
+/// the address form, the I-span form, or the member-position form, each its
+/// tagged object; a member span's `ordinal` and `width` as decimal strings,
+/// as `reinstate`'s `at` spells its naturals.
+fn j_end(end: &EndArg) -> Value {
+    match end {
+        EndArg::Addrs(named) => obj(vec![("addrs", Value::Array(named.iter().map(j_named).collect()))]),
+        EndArg::Spans(spans) => obj(vec![("spans", j_ispan_slot(spans))]),
+        EndArg::Member(spans) => obj(vec![(
+            "member",
+            Value::Array(
+                spans
+                    .iter()
+                    .map(|s| {
+                        obj(vec![
+                            ("ordinal", Value::String(s.ordinal.to_string())),
+                            ("width", Value::String(s.width.to_string())),
+                        ])
+                    })
+                    .collect(),
+            ),
+        )]),
     }
 }
 
@@ -1301,6 +1376,14 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::SelfSupersession => "self_supersession",
         RejectCode::IllFormedSuccessor => "ill_formed_successor",
         RejectCode::DcViolation => "dc_violation",
+        // The publication's deposits (the link-sets design §5.7; lane S3):
+        // six tokens, tabled in §Rejection codes.
+        RejectCode::LinkHomeRefused => "link_home_refused",
+        RejectCode::OldRefused => "old_refused",
+        RejectCode::DuplicateOriginal => "duplicate_original",
+        RejectCode::ReadWithInLinks => "read_with_in_links",
+        RejectCode::RetractRefused => "retract_refused",
+        RejectCode::ReadWithRefused => "read_with_refused",
         RejectCode::NoSuchSubspace => "no_such_subspace",
         RejectCode::EmptySubspace => "empty_subspace",
         RejectCode::DepthIncompatible => "depth_incompatible",

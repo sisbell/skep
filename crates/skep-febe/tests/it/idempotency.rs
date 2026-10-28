@@ -17,6 +17,43 @@ use common::*;
 use skep_address::SpanSet;
 use skep_febe::{Deposit, Disposition, Op, RejectCode, SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES};
 
+/// THE RECALL AHEAD OF `execute` (the link-sets design §5.7's ruling 4;
+/// lane S3): `recall` answers the memoized committed-write ack as the
+/// `Response` a retry would be answered with — the same address and
+/// position — for the session, id and kind that committed it, executing
+/// nothing and moving the log by nothing; it answers `None` for a foreign
+/// session, an id this session never committed under, the same id under
+/// another kind, and an id the memo declined (past `MAX_REQ_ID_BYTES`) —
+/// each the miss `execute` itself would meet.
+#[test]
+fn recall_answers_the_memoized_ack_ahead_of_execute_and_misses_as_execute_would() {
+    use skep_febe::{OpKind, ReqId, Response};
+
+    let fx = setup();
+    let d = create_doc(&fx);
+    let insert = Op::Insert {
+        doc: d.clone(),
+        at: vp(1, 1),
+        values: vec![skep_content::Val::new(vec![b'x'])],
+        deposit: Deposit::Undeclared,
+    };
+    let id = ReqId(b"ins-recall".to_vec());
+    assert_eq!(fx.febe.recall(fx.user, &id, OpKind::Insert), None, "nothing committed under the id yet");
+    let (addr, at) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-recall", insert));
+    let before = fx.febe.log_position();
+    assert_eq!(
+        fx.febe.recall(fx.user, &id, OpKind::Insert),
+        Some(Response::AckAddr { addr, at }),
+        "the committed write's ack, as the retry would be answered"
+    );
+    assert_eq!(fx.febe.log_position(), before, "a recall executes nothing");
+    assert_eq!(fx.febe.recall(fx.user, &id, OpKind::Delete), None, "another kind under the id misses");
+    let s2 = fx.febe.open_session(USER);
+    assert_eq!(fx.febe.recall(s2, &id, OpKind::Insert), None, "a foreign session misses");
+    let long = ReqId(vec![b'k'; MAX_REQ_ID_BYTES + 1]);
+    assert_eq!(fx.febe.recall(fx.user, &long, OpKind::Insert), None, "an id the memo never admits misses");
+}
+
 /// §7: sequential lost-ack retries replay the committed ack without
 /// re-executing; the key is per-session and op-kind-matched; reads are never
 /// memoized; a fresh session re-executes (best-effort, by design).

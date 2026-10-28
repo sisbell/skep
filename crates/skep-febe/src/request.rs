@@ -9,7 +9,7 @@ use skep_arrangement::{trunk_of, Deposit, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_kernel::Attestation;
-use skep_links::{Endset, SlotArg, View};
+use skep_links::{Endset, PublishDeposits, PublishTarget, SlotArg, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 
@@ -302,11 +302,28 @@ pub enum Op {
     /// with `None` to `runs`' length where any place is present; M10 hands
     /// it through verbatim.
     ///
+    /// **The target and the deposits** (the link-sets design §5.7; lane
+    /// S3). `target` is where the publication lands: a published document
+    /// of the caller's — today's `doc` — or, at the mint form, the parent
+    /// account the commit mints an edition under (`mint: true` with
+    /// `account`, `doc` absent, `claim: true` beside it where the commit
+    /// writes the edition claim) — M7's [`PublishTarget`], an enum over the
+    /// two forms so a request names exactly one. `deposits` is the request's
+    /// three optional lists beside the shot — `links`, `retract`,
+    /// `read_with` (M7's [`PublishDeposits`]) — every public deposit the
+    /// one commit stages after the records and before the re-window; empty
+    /// where the request sends none, which with the document form is
+    /// today's shot. The deposits lie INSIDE the signed preimage: the body
+    /// is the shot's rows then each public deposit's, in the one order M7's
+    /// plan gives them. M10 hands both through verbatim; the shape of each
+    /// member is the codec's, and what each deposit is refused is M7's plan's,
+    /// lowered here with its entry's index.
+    ///
     /// **Size.** Its work is not bounded by its request's size;
     /// [`Codec::parse`] says why and what a route owes.
     ///
     /// [`Codec::parse`]: crate::Codec::parse
-    Publish { doc: Address, shot: Shot, places: Vec<Option<VPos>> },
+    Publish { target: PublishTarget, shot: Shot, places: Vec<Option<VPos>>, deposits: PublishDeposits },
     // ── link writes (→ M7) ──
     /// MAKELINK (ASN-0120): an open link from three three-form slots.
     ///

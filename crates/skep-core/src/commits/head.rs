@@ -183,6 +183,7 @@ use skep_febe::{lower_txn, Codec, Op, OpKind, Rejection, Response, Stores};
 use skep_febe::RejectCode;
 use skep_identity::BoardTerm;
 use skep_kernel::Seq;
+use skep_links::{PublishDeposits, PublishTarget};
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
 use skep_util::json::{hex_string, parse_lower_hex};
 use skep_util::notice::Class;
@@ -1026,10 +1027,16 @@ impl HeadWriter {
         shot: Shot,
         refused: Refused<'_>,
     ) -> Option<Address> {
-        // No kept place: the producer's shot leaves its draft as it stands.
-        let op = Op::Publish { doc, shot, places: Vec::new() };
+        // No kept place, and no deposit: the producer's shot leaves its
+        // draft as it stands and writes no link.
+        let op = Op::Publish {
+            target: PublishTarget::Document(doc),
+            shot,
+            places: Vec::new(),
+            deposits: PublishDeposits::default(),
+        };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
-        let Op::Publish { doc, shot, .. } = op else {
+        let Op::Publish { target, shot, .. } = op else {
             return None;
         };
         // The source consult at the system principal's class, never System's
@@ -1041,7 +1048,13 @@ impl HeadWriter {
         self.run_commit(wp, serial, meta, refused, move || {
             self.stores
                 .linkstore(&visibility)
-                .publication(Caller::Principal(SYSTEM_PRINCIPAL), &doc, &shot, &[])
+                .publication(
+                    Caller::Principal(SYSTEM_PRINCIPAL),
+                    &target,
+                    &shot,
+                    &[],
+                    &PublishDeposits::default(),
+                )
                 .map_err(|e| lower_txn(OpKind::Publish, e))
         })
     }

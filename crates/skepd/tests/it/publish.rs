@@ -1186,3 +1186,329 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
     assert_eq!(head(port), before);
     sd.shutdown();
 }
+
+// ── THE PUBLICATION's DEPOSITS AND ITS SIGNED BODY (the link-sets design §5.7; lane S3) ──
+
+/// `frame` with the members of `extra` set beside the shot's own.
+fn with_members(frame: &str, extra: Value) -> String {
+    let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
+    for (k, val) in extra.as_object().expect("an object of members") {
+        v[k] = val.clone();
+    }
+    v.to_string()
+}
+
+/// The board every deposit cell stands on: the claimant's signed session S
+/// and bare session B; `E`, an empty published edition; `D`, a private
+/// draft holding `abc`; `N`, a private notes document holding the original
+/// `L` (homed in `N`, `from` the draft's text, a ghost type); `SET`, a
+/// second published edition holding the link `R` (homed in it, signed).
+struct DepositBoard {
+    signed: String,
+    bare: String,
+    e: String,
+    d: String,
+    d_text: String,
+    n: String,
+    l: String,
+    set: String,
+    r: String,
+}
+
+fn deposit_board(port: u16) -> DepositBoard {
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    let d = draft_with(port, &bare, "abc");
+    let d_text = format!("{d}.0.1.1");
+    let n = draft(port, &bare);
+    let l = acked_addr(&op(port, Some(&bare), &link_frame(&n, &addrs_slot(&[&d_text]), &addrs_slot(&[]), &ghost_ty(&n, 1))));
+    assert_eq!(l, format!("{n}.0.2.1"));
+    let set = edition(port, &signed);
+    let r = acked_addr(&op(port, Some(&signed), &link_frame(&set, &addrs_slot(&[&set]), &addrs_slot(&[]), &ghost_ty(&set, 1))));
+    assert_eq!(r, format!("{set}.0.2.1"));
+    DepositBoard { signed, bare, e, d, d_text, n, l, set, r }
+}
+
+impl DepositBoard {
+    /// The drafted shot of `D`'s three bytes into `E`, as a birth version.
+    fn shot(&self) -> String {
+        publish(&self.e, None, Some(&self.d), &[run(&self.d, &self.d_text, 3)])
+    }
+
+    /// One accepted link: homed in the member, `from` the member's own three
+    /// positions (the draft's new words, by the member-position form), `to`
+    /// `SET`, typed a ghost type of `E`'s, the original `L` named.
+    fn copy_entry(&self) -> Value {
+        serde_json::json!({
+            "home": "member",
+            "from": {"member": [{"ordinal": "1", "width": "3"}]},
+            "to": {"addrs": [self.set]},
+            "ty": {"addrs": [format!("{}.0.3.6.1", self.e)]},
+            "old": self.l,
+        })
+    }
+
+    /// The shot carrying the copy, `R`'s retraction and the read-with.
+    fn full(&self) -> String {
+        with_members(&self.shot(), serde_json::json!({"links": [self.copy_entry()], "retract": [self.r], "read_with": [self.set]}))
+    }
+}
+
+/// The first span of slot `k` of a link value: `(start, width's last component)`.
+fn slot_span(link: &Value, k: usize) -> (String, String) {
+    let span = &link["slots"][k][0];
+    let width = span["width"].as_str().expect("a width").rsplit('.').next().expect("a component").to_string();
+    (span["start"].as_str().expect("a start").to_string(), width)
+}
+
+/// Assert a deposit refusal: the code, permanent, `site.index` the entry and
+/// nothing else in the site, the detail as given.
+fn assert_deposit_refused(v: &Value, code: &str, index: u64, detail: Option<&str>) {
+    let rej = expect_resp(v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some(code), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"index": index}), "the entry, and nothing else: {v}");
+    assert_eq!(rej["detail"].as_str(), detail, "{v}");
+}
+
+/// THE ONE COMMIT (the link-sets design §5.7, THE COMPOSITE's DEPOSITS): a
+/// signed publication carrying a `links` entry with its original, a
+/// `retract` and a `read_with` lands the member, the correspondence record,
+/// the public copy in the member's own link subspace — its `from` the fresh
+/// run the member-position end resolved to, its `to` and type as given —
+/// the original's supersession claim in `N`, the retraction tuple in
+/// `SET` and the read-with in `SET`, in ONE commit (one feed entry); the
+/// original stands, superseded, not retracted; `R` is gone from the active
+/// view; and the row's `docs` name the member FIRST, then `D`, then every
+/// other home the commit touched in address order — `N` (the claim's home)
+/// and `SET` — for the owner, reduced to the member and `SET` for a guest,
+/// the `attest` kept on both pages. Then THE PIN at the wire: `SET`'s links
+/// rise in the plan's order — the retraction, then the read-with.
+#[test]
+fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit_and_names_every_home() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let before = head(port);
+    let member = acked_addr(&op(port, Some(&b.signed), &b.full()));
+    assert_eq!(member, format!("{}.1", b.e));
+    assert_eq!(text(port, &member, 1, 3), "abc");
+    let entries = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(entries.len(), 1, "one commit: {entries:?}");
+    // The copy, in the member's own subspace: `from` the fresh run the
+    // member's positions resolved to, `to` SET's unit span, the type as given.
+    let fresh = image(port, &member, 1, 3);
+    assert_eq!(fresh.len(), 1, "one fresh run: {fresh:?}");
+    let copy = read_link(port, None, &format!("{member}.0.2.1"));
+    assert!(!copy.is_null(), "the copy is the member's first link");
+    assert_eq!(slot_span(&copy, 0), (fresh[0].0.clone(), "3".to_string()), "`from` the member's fresh run: {copy}");
+    assert_eq!(slot_span(&copy, 1).0, b.set, "`to` the set: {copy}");
+    assert_eq!(slot_span(&copy, 2).0, format!("{}.0.3.6.1", b.e), "typed as given: {copy}");
+    // The claim in N: `from` L, `to` the copy, the supersedes class; L stands.
+    let claim = read_link(port, Some(&b.bare), &format!("{}.0.2.2", b.n));
+    assert_eq!(slot_span(&claim, 0).0, b.l, "{claim}");
+    assert_eq!(slot_span(&claim, 1).0, format!("{member}.0.2.1"), "{claim}");
+    assert_eq!(slot_span(&claim, 2).0, T_SUPERSEDES, "{claim}");
+    assert!(!read_link(port, Some(&b.bare), &b.l).is_null(), "the original stands, superseded");
+    // The retraction tuple in SET, then the read-with: the addresses rising
+    // in the plan's order (THE PIN).
+    let retraction = read_link(port, None, &format!("{}.0.2.2", b.set));
+    assert_eq!(slot_span(&retraction, 2).0, T_RETRACTION, "{retraction}");
+    assert_eq!(slot_span(&retraction, 1).0, b.r, "`to` R: {retraction}");
+    let read_with = read_link(port, None, &format!("{}.0.2.3", b.set));
+    assert_eq!(slot_span(&read_with, 2).0, T_READ_WITH, "{read_with}");
+    assert_eq!(slot_span(&read_with, 0).0, b.e, "`from` the edition: {read_with}");
+    assert_eq!(slot_span(&read_with, 1).0, b.set, "`to` the set: {read_with}");
+    let active = find_links_ftt_home(port, None, &b.set);
+    assert!(!active.contains(&b.r), "R is retracted: {active:?}");
+    assert!(active.contains(&format!("{}.0.2.3", b.set)), "the read-with is active: {active:?}");
+    // The row: the member first, D, then N and SET in address order; the
+    // guest's reduced to what it may read, its attest kept.
+    let mut others = vec![b.n.clone(), b.set.clone()];
+    others.sort_by_key(|a| a.split('.').map(|c| c.parse::<u64>().unwrap()).collect::<Vec<_>>());
+    let mut want = vec![member.clone(), b.d.clone()];
+    want.extend(others);
+    assert_eq!(entries[0]["docs"], serde_json::json!(want), "{}", entries[0]);
+    assert!(entries[0]["attest"].is_object(), "{}", entries[0]);
+    let guests = changes_since(port, before);
+    assert_eq!(guests[0]["docs"], serde_json::json!([member, b.set]), "reduced for the guest: {}", guests[0]);
+    assert_eq!(guests[0]["attest"], entries[0]["attest"], "the exemption keeps the attest");
+    sd.shutdown();
+}
+
+/// THE SIGNED BODY (the signed-ops record's D25 delta): the deposit rows are
+/// IN the preimage — a signature made over the shot's body alone, the rows
+/// left out, is refused `attestation_invalid:signature`, nothing committed;
+/// and a body naming a deposit the plan SKIPS — a `retract` of a link
+/// already retracted — is refused the same way, where the signer that reads
+/// the skip as the board does lands the publication with no row for it, the
+/// feed row then naming no home for the skipped entry.
+#[test]
+fn a_body_missing_the_deposit_rows_or_naming_a_skipped_one_is_refused_for_its_signature() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let before = head(port);
+    // The rows left out: the shot alone's attest, moved onto the frame with
+    // its links.
+    let signed_shot: Value = serde_json::from_str(&attach_attest(port, &b.signed, &b.shot())).expect("a frame");
+    let mut frame: Value = serde_json::from_str(&with_members(&b.shot(), serde_json::json!({"links": [b.copy_entry()]}))).expect("a frame");
+    frame["attest"] = signed_shot["attest"].clone();
+    let v = op_as_written(port, Some(&b.signed), &frame.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["detail"].as_str()), (Some("credential_refused"), Some("attestation_invalid:signature")), "{v}");
+    assert_eq!(head(port), before, "nothing committed");
+    // A skipped deposit: R retracted first, then a publication retracting it
+    // again — signed over the row, refused; signed as the board reads the
+    // skip, landed with no row and no home for it.
+    expect_resp(&op(port, Some(&b.signed), &nullify_frame(&b.set, &b.r)), "ack_addr");
+    let before = head(port);
+    let skipped = with_members(&b.shot(), serde_json::json!({"retract": [b.r]}));
+    let v = op_unskipped(port, &b.signed, &skipped);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["detail"].as_str()), (Some("credential_refused"), Some("attestation_invalid:signature")), "{v}");
+    assert_eq!(head(port), before, "nothing committed");
+    let member = acked_addr(&op(port, Some(&b.signed), &skipped));
+    let owners = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0]["docs"], serde_json::json!([member, b.d]), "the skipped entry names no home: {}", owners[0]);
+    assert!(read_link(port, None, &format!("{}.0.2.3", b.set)).is_null(), "no second retraction in SET");
+    sd.shutdown();
+}
+
+/// THE MINT FORM on the wire: `account` with `mint` and `claim`, no `doc` —
+/// the commit mints a published edition `E′` under the account, its first
+/// member `E′.1` holding the draft's words (the ack's address), the edition
+/// claim homed in `E′` `to` the draft (`edition_claims` lists it, active),
+/// and the read-with from `E′` in `SET`; the row names the member, then the
+/// edition, then the draft, then `SET`. A stranger's mint under the
+/// claimant's account is `not_owner` naming the account; `claim` without
+/// `mint` is `malformed`, unparsed.
+#[test]
+fn the_mint_form_mints_the_edition_its_member_the_claim_and_the_read_with_in_one_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let mint = format!(
+        r#"{{"op":"publish","account":"{CLAIMANT_ACCOUNT}","mint":true,"claim":true,"draft":"{}","runs":[{}],"read_with":["{}"]}}"#,
+        b.d,
+        run(&b.d, &b.d_text, 3),
+        b.set
+    );
+    let before = head(port);
+    let member = acked_addr(&op(port, Some(&b.signed), &mint));
+    let edition = member.strip_suffix(".1").expect("the edition's first member").to_string();
+    assert!(edition.starts_with(&format!("{CLAIMANT_ACCOUNT}.0.")), "minted under the account: {member}");
+    assert_ne!(edition, b.e, "a fresh edition");
+    assert_eq!(doc_metadata(port, None, &edition)["published"], serde_json::json!(true), "born published");
+    assert_eq!(text(port, &member, 1, 3), "abc");
+    let claims = op(port, Some(&b.bare), &format!(r#"{{"op":"edition_claims","target":"{}"}}"#, b.d));
+    let rows = expect_resp(&claims, "edition_claims")["claims"].as_array().expect("claims").clone();
+    assert_eq!(rows.len(), 1, "the one claim: {claims}");
+    assert_eq!((rows[0]["home"].as_str(), rows[0]["active"].as_bool()), (Some(edition.as_str()), Some(true)), "{claims}");
+    let read_with = read_link(port, None, &format!("{}.0.2.2", b.set));
+    assert_eq!(slot_span(&read_with, 0).0, edition, "`from` the minted edition: {read_with}");
+    let owners = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(owners.len(), 1, "one commit: {owners:?}");
+    assert_eq!(owners[0]["docs"], serde_json::json!([member, edition, b.d, b.set]), "{}", owners[0]);
+    // A stranger's mint under the claimant's account.
+    let boot = open_session(port, 0);
+    let before = head(port);
+    assert_not_owner(&op(port, Some(&boot), &mint), CLAIMANT_ACCOUNT);
+    assert_eq!(head(port), before);
+    // `claim` without `mint`: not admitted in this build, at the codec.
+    let v = op_as_written(port, Some(&b.signed), &with_members(&b.shot(), serde_json::json!({"claim": true})));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");
+    assert!(rej["detail"].as_str().is_some_and(|d| d.contains("not admitted in this build")), "{v}");
+    sd.shutdown();
+}
+
+/// THE TOKENS over the wire, each with `site.index` the entry in its own
+/// list, permanent, nothing committed, in the plan's order: a `links` entry
+/// homed in a private draft is `link_home_refused`; one naming an absent
+/// original `old_refused` with `absent`; a second entry naming one original
+/// `duplicate_original` at the second; one typed the read-with
+/// `read_with_in_links`; a `retract` of an absent link `retract_refused`
+/// with `absent`, of the claimant's own credential link `not_retraction`
+/// (the `nullify` class's cell, the daemon's own); a `read_with` naming a
+/// private draft `read_with_refused` with `not_published`, an unregistered
+/// document `not_registered`. The plan runs behind the shot's own table:
+/// the same entries on a shot whose base is outside the chain answer
+/// `base_not_in_chain`.
+#[test]
+fn each_refused_deposit_names_its_entry_and_commits_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let d2 = draft(port, &b.bare);
+    let before = head(port);
+    let entry = |home: &str, old: Option<&str>, ty: &str| {
+        let mut e = b.copy_entry();
+        e["home"] = serde_json::json!(home);
+        e["ty"] = serde_json::json!({"addrs": [ty]});
+        match old {
+            Some(old) => e["old"] = serde_json::json!(old),
+            None => {
+                e.as_object_mut().unwrap().remove("old");
+            }
+        }
+        e
+    };
+    let ghost = format!("{}.0.3.6.1", b.e);
+    let cells: Vec<(Value, &str, u64, Option<&str>)> = vec![
+        (serde_json::json!({"links": [entry(&d2, None, &ghost)]}), "link_home_refused", 0, None),
+        (serde_json::json!({"links": [entry("member", Some(&format!("{}.0.2.9", b.n)), &ghost)]}), "old_refused", 0, Some("absent")),
+        (serde_json::json!({"links": [entry("member", Some(&b.l), &ghost), entry("member", Some(&b.l), &ghost)]}), "duplicate_original", 1, None),
+        (serde_json::json!({"links": [entry("member", None, T_READ_WITH)]}), "read_with_in_links", 0, None),
+        (serde_json::json!({"retract": [format!("{}.0.2.9", b.set)]}), "retract_refused", 0, Some("absent")),
+        (serde_json::json!({"retract": [b.r, format!("{CLAIMANT_DOC1}.0.2.1")]}), "retract_refused", 1, Some("not_retraction")),
+        (serde_json::json!({"read_with": [d2]}), "read_with_refused", 0, Some("not_published")),
+        (serde_json::json!({"read_with": [b.set, "1.0.1.0.99"]}), "read_with_refused", 1, Some("not_registered")),
+    ];
+    for (members, code, index, detail) in cells {
+        let v = op(port, Some(&b.signed), &with_members(&b.shot(), members.clone()));
+        assert_deposit_refused(&v, code, index, detail);
+        assert_eq!(head(port), before, "{code}: nothing committed");
+    }
+    // Behind the shot's own table.
+    let stale = with_members(&publish(&b.e, Some((&b.set, 0)), Some(&b.d), &[run(&b.d, &b.d_text, 3)]), serde_json::json!({"read_with": [d2]}));
+    assert_refused(&op(port, Some(&b.signed), &stale), "base_not_in_chain");
+    assert_eq!(head(port), before);
+    sd.shutdown();
+}
+
+/// THE MEMO AHEAD OF THE ADMISSION (ruling 4): a publication that accepted
+/// an original, retried under the same `id` on the same session after its
+/// ack, is answered its acknowledgment — the same member, the same position
+/// — and never re-judged: its own commit superseded the original it names,
+/// which the admission's plan refuses `old_refused` with `superseded` for
+/// the same entry sent under a fresh `id` on a shot staged off the member
+/// it minted (the shot's own table standing ahead of the plan, a birth
+/// shape would answer `base_superseded` first).
+#[test]
+fn a_retry_of_a_committed_publication_replays_its_ack_ahead_of_the_admission() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let frame = with_members(&b.full(), serde_json::json!({"id": "pub-1"}));
+    let first = op(port, Some(&b.signed), &frame);
+    let member = acked_addr(&first);
+    let before = head(port);
+    let again = op(port, Some(&b.signed), &frame);
+    assert_eq!(again, first, "the committed publication's ack, replayed");
+    assert_eq!(head(port), before, "a replayed ack commits nothing");
+    let fresh_start = image(port, &member, 1, 3)[0].0.clone();
+    let staged_off_member = publish(&b.e, Some((&member, 3)), None, &[run(&b.e, &fresh_start, 3)]);
+    let fresh = op(port, Some(&b.signed), &with_members(&staged_off_member, serde_json::json!({"links": [b.copy_entry()], "id": "pub-2"})));
+    assert_deposit_refused(&fresh, "old_refused", 0, Some("superseded"));
+    assert_eq!(head(port), before);
+    assert_eq!(text(port, &member, 1, 3), "abc");
+    sd.shutdown();
+}

@@ -105,7 +105,9 @@ mod reinstate;
 mod version;
 
 pub use delete::stage_delete_at;
-pub use publish::{shot_admission, stage_publish, MintedRun, Pairing, PublishWorld};
+pub use publish::{
+    mint_admission, shot_admission, stage_publish, MintedRun, Pairing, PublishWorld,
+};
 pub use reinstate::stage_reinstate_at;
 
 /// The most runs one COPY, one REINSTATE, or one publish shot may place.

@@ -625,6 +625,53 @@ fn doc_states_the_correspondence_fence_and_the_slots_ordinal_and_role_reading() 
     }
 }
 
+/// THE DEPOSITS AND THE SIGNED BODY (the link-sets design §5.7; lane S3):
+/// §Arrangement's `publish` names the target's two forms and the three
+/// lists with their end forms; §The publish shot and head-float states the
+/// one commit's order, the plan's validation with its skips, the deposit
+/// rows of the signed body and the memo ahead of the admission; §Rejection
+/// codes carries the six tokens with their details; §Links (writes) the
+/// `retract` entry's class cell; §Correlation and idempotency the memo's
+/// place; §The change feed the row's homes. The daemon's answers are
+/// pinned in `publish.rs` and `signed_ops.rs`; this pins that the contract
+/// says so.
+#[test]
+fn doc_states_the_deposits_their_body_and_their_tokens() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "THE TARGET takes one of two forms",
+        "`claim` without `mint` is not admitted in this build",
+        "THE DEPOSITS, three",
+        "THE MEMBER-POSITION",
+        "A V-spec is admitted in no entry",
+        "DEPOSIT ROWS (§The publish shot and head-float, the deposits)",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "**The deposits**",
+        "THE PLAN, read on",
+        "RETRACTED is SKIPPED",
+        "standing in a published home of yours is SKIPPED",
+        "A skipped entry has no",
+        "answered from the retry memo BEFORE the admission judges it",
+        "| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list |",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for token in ["`link_home_refused`", "`old_refused`", "`duplicate_original`", "`read_with_in_links`", "`retract_refused`", "`read_with_refused`"] {
+        assert!(codes.contains(token), "§Rejection codes carries {token}");
+    }
+    let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
+    assert!(links.contains("refused `retract_refused` with the class as its"), "§Links (writes) states the retract entry's class cell");
+    let memo = prose("\n### Correlation and idempotency", &["\n### HTTP status codes"]);
+    assert!(memo.contains("the memo is read BEFORE the write is judged"), "§Correlation states the memo's place");
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(feed.contains("then every other home the commit's"), "§The change feed states the row's homes");
+}
+
 /// THE KEPT PLACES (the link-sets design §5.7; lane S2): §Arrangement's
 /// `publish` names the `places` member — parallel to `runs`, a V-position
 /// or `null` per entry, outside the signed frame, absent the shot as before

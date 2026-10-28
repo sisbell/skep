@@ -230,11 +230,11 @@ where
             // M7 lends the records' deposit gate; the places pass through
             // verbatim. The ack is the member's address (PUB-2.37); the
             // records and the re-windowed draft are the draft's to read back.
-            Op::Publish { doc, shot, places } => {
+            Op::Publish { target, shot, places, deposits } => {
                 let (addr, at) = self
                     .stores
                     .linkstore_attested(&visibility, attest)
-                    .publication(wc.caller(), &doc, &shot, &places)
+                    .publication(wc.caller(), &target, &shot, &places, &deposits)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }

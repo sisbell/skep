@@ -23,8 +23,9 @@ use crate::common;
 use common::*;
 use skep_address::{document_of, elem_addr, Address, ElemPos};
 use skep_febe::{
-    Deposit, Disposition, Endset, Op, OpKind, PrincipalId, RejectCode, Rejection, Run, SessionId,
-    Shot, ShotRun, SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
+    Deposit, Disposition, Endset, Op, OpKind, PrincipalId, PublishDeposits, PublishTarget,
+    RejectCode, Rejection, Run, SessionId, Shot, ShotRun, SlotArg, SuccessorSpec, VSpec,
+    MAX_SLOT_SPANS,
 };
 use skep_links::MAX_SLOT_RESOLVE_STEPS;
 
@@ -999,7 +1000,7 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     };
     let before = fx.febe.log_position();
     assert_withheld(
-        ex(&fx.febe, other, Op::Publish { doc: their_edition, shot: shot(), places: vec![] }),
+        ex(&fx.febe, other, Op::Publish { target: PublishTarget::Document(their_edition), shot: shot(), places: vec![], deposits: PublishDeposits::default() }),
         OpKind::Publish,
         &unreadable_edition,
     );
@@ -1008,7 +1009,7 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     ack_addr(ex(
         &fx.febe,
         fx.user,
-        Op::Publish { doc: unreadable_edition.clone(), shot: shot(), places: vec![] },
+        Op::Publish { target: PublishTarget::Document(unreadable_edition.clone()), shot: shot(), places: vec![], deposits: PublishDeposits::default() },
     ));
 }
 

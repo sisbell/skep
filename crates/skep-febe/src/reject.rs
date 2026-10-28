@@ -147,10 +147,15 @@ pub struct FaultSite {
     /// for a per-spec refusal, by the doc-argument consult's refusal of a
     /// RETRIEVEI span's shape, by the publication's kept-place refusal
     /// (`KeptPlaceMoved`: the `runs` entry whose place the draft no longer
-    /// honours), and by a transport's codec refusing the shape of one entry
-    /// of a request's own list (`Malformed`, through `Rejection::unparseable`:
-    /// a `publish`'s `places` entry); the guard's `SlotTooLarge` names its
-    /// slot and no index, the slot rather than one spec being at fault.
+    /// honours), by the publication's deposit plan (the six deposit codes,
+    /// and every slot-form and class-fence code a `links` entry answers:
+    /// the entry's position in its own list — `links`, `retract` or
+    /// `read_with` — never a span's within a slot), and by a transport's
+    /// codec refusing the shape of one entry of a request's own list
+    /// (`Malformed`, through `Rejection::unparseable`: a `publish`'s
+    /// `places`, `links`, `retract` or `read_with` entry); the guard's
+    /// `SlotTooLarge` names its slot and no index, the slot rather than one
+    /// spec being at fault.
     pub index: Option<usize>,
     /// The span well-formedness fault.
     ///
@@ -387,6 +392,45 @@ pub enum RejectCode {
     IllFormedSuccessor,
     /// A type slot breaks a sole-writer fence or the DC guard's claim schema.
     DcViolation,
+    // ── M7 link: the publication's deposits (the link-sets design §5.7's
+    //    validation (3)–(5); lane S3). Each is permanent, carries its
+    //    entry's index in `site.index`, and the three that name a cause
+    //    carry it as `detail`. ──
+    /// A `links` entry's home is neither the tag `member` nor a published
+    /// document of the caller's.
+    ///
+    /// A private document, a member `E.j`, an unregistered address, or the
+    /// tag `edition` with no mint. A home of another's answers `not_owner`
+    /// naming it instead.
+    LinkHomeRefused,
+    /// A `links` entry's `old` is refused.
+    ///
+    /// `detail` names which: `absent`, `public` (not homed in a private
+    /// document), `retracted`, `not_owner`, or `superseded` — by an active
+    /// claim of the caller's naming a public successor that covers the
+    /// entry's published spans, or, where `old` is itself a successor, its
+    /// own original so superseded.
+    OldRefused,
+    /// A second `links` entry of one request names one original.
+    ///
+    /// `site.index` is the second entry.
+    DuplicateOriginal,
+    /// A `links` entry's stored type slot names the read-with type.
+    ///
+    /// A publication writes a read-with through its `read_with` member
+    /// alone, the one door with the presence check.
+    ReadWithInLinks,
+    /// A `retract` entry is refused.
+    ///
+    /// `detail` names which: `absent`, `not_owner`, `not_published` (the
+    /// target is not homed in a published document of the caller's), or
+    /// `audit_view` (a class retraction never ends, the daemon's own cell).
+    RetractRefused,
+    /// A `read_with` entry is refused.
+    ///
+    /// `detail` names which: `not_registered`, `not_document` (a member),
+    /// `not_owner`, or `not_published`.
+    ReadWithRefused,
     // ── M6 content/provenance read (MalformedSpan also covers
     //    RetrieveError::MalformedSpec; the last four are M6's own budget
     //    refusals — two for COMPARE, whose join squares in the request, one

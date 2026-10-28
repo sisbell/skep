@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use skep_arrangement::{Deposit, Run, ShotRun, VPos};
+use skep_febe::{PublishDeposits, PublishTarget};
 use skep_blobs::HashFunction;
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_namespace::{head_document, system_account, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
@@ -145,7 +146,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     );
 
     let shot = |draft: Option<Address>| Op::Publish {
-        doc: h.clone(),
+        target: PublishTarget::Document(h.clone()),
         shot: Shot {
             base: None,
             draft: draft.clone(),
@@ -155,6 +156,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
             }],
         },
         places: Vec::new(),
+        deposits: PublishDeposits::default(),
     };
     assert_eq!(
         door(shot(Some(draft.clone())), SYSTEM_PRINCIPAL),
@@ -202,7 +204,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     let world = snap.world();
     let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
     let shot2 = || Op::Publish {
-        doc: h.clone(),
+        target: PublishTarget::Document(h.clone()),
         shot: Shot {
             base: None,
             draft: Some(draft2.clone()),
@@ -212,6 +214,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
             }],
         },
         places: Vec::new(),
+        deposits: PublishDeposits::default(),
     };
     let deposit = |p: PrincipalId, interval: Duration| {
         let key = MediaGate::key(p);

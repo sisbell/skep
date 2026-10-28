@@ -43,10 +43,12 @@ use skep_febe::Codec;
 use skep_identity::{
     canonical_record, encode_enroll, encode_retire, entry_body_assert_sup, entry_body_edit_link,
     entry_body_emit, entry_body_empty, entry_body_insert, entry_body_make_link,
-    entry_body_make_link_replacing, entry_body_nullify, entry_body_publish, entry_body_record,
-    entry_frame, parse_record_value, unit_span as unit, BoardTerm, ContentFreeOp, DocTerm,
-    Enrollment, EntryBody, EntrySlot, Fingerprint, LinkSlots, PublicKey, RecordRows, RecordValue,
-    ShotBase, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
+    entry_body_make_link_replacing, entry_body_nullify, entry_body_publication,
+    entry_body_publish, entry_body_record, entry_frame, parse_record_value, unit_span as unit,
+    BoardTerm, ContentFreeOp, DepositHome, DepositKind, DepositRow, DepositSlot, DocTerm,
+    Enrollment, EntryBody, EntrySlot, Fingerprint, LinkSlots, MemberPositions, PublicKey,
+    RecordRows, RecordValue, ShotBase, ShotSegmentPiece, SigAlgRow, SlotElement,
+    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skep_signature::{HybridSigner, Seed as SigningKey};
 use skepd::{JsonCodec, Seq};
@@ -2514,7 +2516,7 @@ fn extent(start: &str, width: u64) -> Span {
 /// comes under its NAME — its op and, after a comma, what marks the instance
 /// out (`insert, undeclared`; `record, enroll`) — the one label both goldens
 /// report it by.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
     let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
@@ -2595,6 +2597,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         entry_body_empty(ContentFreeOp::Fork),
         entry_body_empty(ContentFreeOp::Version),
     );
+    let deposits = publish_deposits(publish.clone(), &other, &doc);
     let frame = |name: &'static str, body: &EntryBody, term: DocTerm<'_>| {
         (name, entry_frame(alg, board, &account, term, body))
     };
@@ -2602,6 +2605,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         frame("insert, undeclared", &insert, DocTerm::One(&doc)),
         frame("make_link, no replaces", &link, DocTerm::One(&doc)),
         frame("publish, the base filled", &publish, DocTerm::One(&doc)),
+        frame("publish, with deposits", &deposits, DocTerm::One(&doc)),
         frame("record, enroll", &enroll, DocTerm::One(&doc)),
         frame("record, retire", &retire, DocTerm::One(&doc)),
         frame("record, claim", &claim, DocTerm::One(&doc)),
@@ -2613,6 +2617,44 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         frame("emit, the to empty", &emit, DocTerm::One(&doc)),
         frame("edit_link, the pair row", &edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
     ]
+}
+
+/// The `publish` body `shot` with the three deposit rows behind it (lane S3;
+/// skep-signature's `frames.rs` twin): a copy homed in the member by tag,
+/// typed `3.13`, `from` the member's positions 1–3 by the member-position
+/// row, `to` the member by tag beside `1.0.1.0.2`'s unit span; a retraction
+/// of `1.0.1.0.2.0.2.1` homed in `1.0.1.0.2`; a read-with from `1.0.1.0.1`
+/// to `1.0.1.0.2` homed there — the member's home first.
+fn publish_deposits(shot: EntryBody, other: &skep_address::Address, doc: &skep_address::Address) -> EntryBody {
+    let copy_ty = unit(&addr("1.1.0.1.0.1.0.3.13"));
+    let (other_unit, doc_unit) = (unit(other), unit(doc));
+    let retraction_ty = unit(&addr("1.1.0.1.0.1.0.1.5"));
+    let target = unit(&addr("1.0.1.0.2.0.2.1"));
+    let read_with_ty = unit(&addr("1.1.0.1.0.1.0.3.71"));
+    let rows = [
+        DepositRow {
+            home: DepositHome::Member,
+            kind: DepositKind::Copy,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&copy_ty)]),
+            from: DepositSlot::MemberPositions(vec![MemberPositions { ordinal: 1, width: 3 }]),
+            to: DepositSlot::Stored(vec![SlotElement::Member, SlotElement::Span(&other_unit)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(other),
+            kind: DepositKind::Retraction,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&retraction_ty)]),
+            from: DepositSlot::Stored(vec![SlotElement::Span(&other_unit)]),
+            to: DepositSlot::Stored(vec![SlotElement::Span(&target)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(other),
+            kind: DepositKind::ReadWith,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&read_with_ty)]),
+            from: DepositSlot::Stored(vec![SlotElement::Span(&doc_unit)]),
+            to: DepositSlot::Stored(vec![SlotElement::Span(&other_unit)]),
+        },
+    ];
+    entry_body_publication(shot, &rows)
 }
 
 /// THE FRAME REGRESSION per op cell: the bytes, spelled out by hand once —
@@ -2635,7 +2677,7 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
 /// `edit_link`.
 #[test]
 fn the_entry_frames_bytes_per_op_are_pinned() {
-    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
+    let [(_, insert), (_, link), (_, publish), (_, deposits), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
         fixed_frames(ALG_MLDSA65_ED25519);
     // The members every frame shares: the framing tag, then `alg`, `board`
     // and `account`; then `doc` — the document, the parent account at the
@@ -2729,6 +2771,45 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
         .concat(),
     ));
     assert_eq!(publish, want, "publish");
+    // publish, with deposits (lane S3; the link-sets design §5.7's signed
+    // entry): the same body, then one group per deposit in the signed order
+    // — the home delimited (`member` by tag, else the address), the kind
+    // byte, the three slot rows, the `replaces` row EMPTY. The copy in the
+    // member: 0x02; its type's unit span; its `from` the MEMBER-POSITION ROW
+    // `0x04 ‖ be64(1) ‖ be64(1) ‖ be64(3)`; its `to` a stored row of two —
+    // the tag `member` spelled as its token where a start goes and the EMPTY
+    // element where a width goes, then `1.0.1.0.2`'s unit span. The
+    // retraction in `1.0.1.0.2`: 0x03, the retraction class's unit span, the
+    // home's, the target's. The read-with there: 0x04, `3.71`'s unit span,
+    // `from` `1.0.1.0.1`, `to` `1.0.1.0.2`.
+    // The shot's body as just pinned: past the shared members, the op and
+    // the body's own length prefix.
+    let shot_body = want[prefix.len() + member(b"publish").len() + 4..].to_vec();
+    let other_unit: (&[u8], &[u8]) = (b"1.0.1.0.2", b"0.0.0.0.1");
+    let doc_unit: (&[u8], &[u8]) = (b"1.0.1.0.1", b"0.0.0.0.1");
+    let mut groups = Vec::new();
+    groups.extend(member(b"member"));
+    groups.push(0x02);
+    groups.extend(stored(&[(b"1.1.0.1.0.1.0.3.13", b"0.0.0.0.0.0.0.0.1")]));
+    groups.extend([&[0x04u8][..], &[0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 0, 0, 0, 0, 3][..]].concat());
+    groups.extend(stored(&[(b"member", b""), other_unit]));
+    groups.extend([0, 0, 0, 0]);
+    groups.extend(member(b"1.0.1.0.2"));
+    groups.push(0x03);
+    groups.extend(stored(&[(b"1.1.0.1.0.1.0.1.5", b"0.0.0.0.0.0.0.0.1")]));
+    groups.extend(stored(&[other_unit]));
+    groups.extend(stored(&[(b"1.0.1.0.2.0.2.1", b"0.0.0.0.0.0.0.1")]));
+    groups.extend([0, 0, 0, 0]);
+    groups.extend(member(b"1.0.1.0.2"));
+    groups.push(0x04);
+    groups.extend(stored(&[(b"1.1.0.1.0.1.0.3.71", b"0.0.0.0.0.0.0.0.1")]));
+    groups.extend(stored(&[doc_unit]));
+    groups.extend(stored(&[other_unit]));
+    groups.extend([0, 0, 0, 0]);
+    let mut want = prefix.clone();
+    want.extend(member(b"publish"));
+    want.extend(member(&[shot_body, groups].concat()));
+    assert_eq!(deposits, want, "publish, with deposits");
     // record: op `record` — no wire op spells it — then body = the type
     // slot row ‖ the `to` slot row — list rows both — ‖ the `replaces` row
     // EMPTY ‖ the lineage row EMPTY ‖ the canonical bytes, delimited. The

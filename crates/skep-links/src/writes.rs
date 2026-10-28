@@ -81,7 +81,13 @@ mod publication;
 pub use emit::emit_tuple;
 pub use makelink::{slot_endset, SlotArg};
 pub use nullify::retraction_tuple;
-pub use publication::{stage_correspondence, stage_publication};
+pub use publication::{
+    canonical_member_spans, edition_type, member_end, member_image, names_read_with,
+    plan_deposits, read_with_in, read_with_type, request_image, resolve_end,
+    stage_correspondence, stage_publication, DepositPlan, EndArg, LinkEntry, MemberEnd,
+    MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome,
+    PublishDeposits, PublishTarget,
+};
 pub use supersession::{supersession_claim, Edit};
 
 /// The caller's visibility class (PUB-6.25): its read predicate on documents.
@@ -692,6 +698,17 @@ where
     }
     // K.λ via M3 (home already known-registered, so mint's own
     // HomeNotRegistered branch is unreachable; other MintError → Mint).
+    //
+    // THE PIN (the link-sets design §5.7; lane S3): within one transaction a
+    // home's link addresses RISE in minting order. The mint is M3's frontier
+    // read over the working world — `next_link_address`'s ordinal is one
+    // past the home's frontier, which every deposit staged ahead of this
+    // one has already moved — so the composite that deposits several links
+    // in one home (a publication's copies, retractions and read-withs, in
+    // the plan's order) mints them at ascending addresses, and a reader
+    // that sorts a home's links by address reads them in the order the
+    // signed entry lists them; `tests/it/publication.rs` pins it
+    // (`a_homes_link_addresses_rise_in_the_plans_order_within_one_commit`).
     let (addr, m3rec) = stg.working().m3().mint_link(home)?;
     stg.push(m3rec.into());
     stg.push(

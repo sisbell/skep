@@ -18,8 +18,8 @@ use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
     Base, BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface,
-    RejectCode, Rejection, ReqId, Request, Response, SessionId, Shot, ShotRun, SlotArg, Stores,
-    SuccessorSpec, UniversalGrant, UniversalIndexRow,
+    PublishDeposits, PublishTarget, RejectCode, Rejection, ReqId, Request, Response, SessionId,
+    Shot, ShotRun, SlotArg, Stores, SuccessorSpec, UniversalGrant, UniversalIndexRow,
 };
 use skep_kernel::{
     Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim,
@@ -794,7 +794,7 @@ pub fn commit_every_write(
             run: Run::new(edition_start, nat(3)).expect("a content run"),
         }],
     };
-    ack_addr(write(fx.user, Op::Publish { doc: edition, shot, places: Vec::new() }));
+    ack_addr(write(fx.user, Op::Publish { target: PublishTarget::Document(edition), shot, places: Vec::new(), deposits: PublishDeposits::default() }));
 
     ack(write(fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)] }));
     ack(write(fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) }));

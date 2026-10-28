@@ -501,3 +501,46 @@ fn the_feed_row_of_a_member_homed_link_names_the_member() {
     assert!(expect_resp(&earlier, "link_value")["link"].is_null(), "{earlier}");
     sd.shutdown();
 }
+
+/// M10 — the member homes the publication's own `links` (the link-sets
+/// design §5.7; lane S3): a third shot off `E.2` re-supplying P and Q by
+/// reference, carrying one `links` entry homed in the tag `member` with
+/// `from` P by the member-position form, mints `E.3` and the copy as
+/// `E.3`'s first link in ONE commit — its slots P's I-span under `E`, the
+/// empty TO and the citation type, as the two-step `make_link` stores them —
+/// found by identity at `E.1`, `E.2`, `E.3`, the bare `E` and the
+/// transclusion `F`, absent over Q's region, in `E.3`'s subspace and no
+/// other member's; the row names `E.3` first.
+#[test]
+fn the_publication_s_links_entry_lands_in_the_members_own_subspace_and_is_found_by_identity() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let Chain { e, e1, e2, f } = chain(port, &signed, &bare);
+    let head = json(&get(port, "/health").1)["log_position"].as_u64().expect("log_position");
+    let mut frame: Value = serde_json::from_str(&publish_frame(&e, Some((&e2, P_LEN + Q_LEN)), None, &shot_runs(port, None, &e2, 1, P_LEN + Q_LEN))).expect("a frame");
+    frame["links"] = json!([{"home": "member", "from": {"member": [{"ordinal": "1", "width": P_LEN.to_string()}]}, "to": {"addrs": []}, "ty": {"addrs": [T_CITATION]}}]);
+    let e3 = acked_addr(&op(port, Some(&signed), &frame.to_string()));
+    assert_eq!(e3, format!("{e}.3"));
+    let copy = format!("{e3}.0.2.1");
+    let link = read_link(port, None, &copy);
+    assert_eq!(
+        link["slots"],
+        json!([p_slot(&e), [], [{"start": T_CITATION, "width": "0.0.0.0.0.0.0.0.1"}]]),
+        "the slots as stored: P's identity, the TO empty, the type: {link}"
+    );
+    for d in [e1.as_str(), e2.as_str(), e3.as_str(), e.as_str()] {
+        assert_eq!(find_links_v(port, None, d, 1, P_LEN), floor_and(&[&copy]), "P's region at {d}");
+        assert_eq!(count_v(port, None, d, 1, P_LEN), 3, "the census at {d}");
+    }
+    assert_eq!(find_links_v(port, Some(&bare), &f, 1, P_LEN), floor_and(&[&copy]), "the transclusion");
+    assert_eq!(find_links_v(port, None, &e3, P_LEN + 1, Q_LEN), floor_and(&[]), "Q's region");
+    assert_eq!(find_links_ftt_home(port, None, &e3), vec![copy.clone()], "E.3's own subspace");
+    assert_eq!(find_links_ftt_home(port, None, &e2), Vec::<String>::new(), "E.2's holds none");
+    let rows = changes_since(port, None, head);
+    assert_eq!(rows.len(), 1, "one commit: {rows:?}");
+    assert_eq!(rows[0]["docs"], json!([e3]), "the member first — and alone, the copy homed in it: {}", rows[0]);
+    sd.shutdown();
+}

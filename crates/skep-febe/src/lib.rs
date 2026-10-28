@@ -277,5 +277,11 @@ pub use skep_retrieval::{
 // or `SlotSpec::Spans` needs the second. `MAX_SLOT_SPANS` is here for the
 // reason [`MAX_REQ_ID_BYTES`] is public: they are two of the budgets that
 // govern what a request may carry, and a caller that checks both before
-// sending should not have to spell two crates to do it.
-pub use skep_links::{enc, Endset, Invalid, Link, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE};
+// sending should not have to spell two crates to do it. The publication's
+// members — `PublishTarget`, `PublishDeposits` with its `LinkEntry`, `EndArg`,
+// `NamedAddress` and `MemberSpan` — are M7's, as `SlotArg` is: `Op::Publish`
+// is unbuildable without them (the link-sets design §5.7).
+pub use skep_links::{
+    enc, EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress, PublishDeposits,
+    PublishTarget, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE,
+};

@@ -136,9 +136,11 @@
 //! turn, as an admission refusal does.
 
 use skep_address::{Address, Nat};
-use skep_arrangement::{published_target, shot_admission, Caller, Shot, MAX_REINSERTED_VALUES};
+use skep_arrangement::{
+    mint_admission, published_target, shot_admission, Caller, Shot, MAX_REINSERTED_VALUES,
+};
 use skep_content::Val;
-use skep_febe::{Disposition, FebeWorld, Op, ReadableWorld, RejectCode};
+use skep_febe::{Disposition, FebeWorld, Op, PublishTarget, ReadableWorld, RejectCode};
 use skep_namespace::PrincipalId;
 
 use crate::cell;
@@ -305,7 +307,7 @@ pub fn media_door<W: FebeWorld>(
 ) -> Option<MediaRefusal> {
     match op {
         Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal, media_gate),
-        Op::Publish { doc, shot, .. } => publish_arm(world, doc, shot, principal, media_gate),
+        Op::Publish { target, shot, .. } => publish_arm(world, target, shot, principal, media_gate),
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
@@ -407,7 +409,7 @@ fn insert_arm<W: FebeWorld>(
 /// by the re-insert's cap.
 fn publish_arm<W: FebeWorld>(
     world: &W,
-    doc: &Address,
+    target: &PublishTarget,
     shot: &Shot,
     principal: PrincipalId,
     media_gate: &MediaGate,
@@ -419,7 +421,14 @@ fn publish_arm<W: FebeWorld>(
     // The predicate handed the source gate is the one M10 lends the real shot:
     // `World::readable` at the principal (the write-path check's premise,
     // `policy/attestation.rs`), built here over the trait ([`visible_to`]).
-    if shot_admission(world, caller, doc, shot, &visible_to::<W>(caller)).is_err() {
+    // At the mint form (the link-sets design §5.7) the same table is M5's
+    // mirror of it onto the parent account the edition is minted under.
+    let readable = visible_to::<W>(caller);
+    let admitted = match target {
+        PublishTarget::Document(doc) => shot_admission(world, caller, doc, shot, &readable),
+        PublishTarget::Mint { account, .. } => mint_admission(world, caller, account, shot, &readable),
+    };
+    if admitted.is_err() {
         return None;
     }
     // The staging draft, judged as the document it projects to (PUB-2.15) —

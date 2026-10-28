@@ -7,8 +7,9 @@
 //! owed ([`refused_at_or_before_the_source_gate`]).
 
 use skep_address::Address;
-use skep_arrangement::{shot_admission, Caller, Deposit};
+use skep_arrangement::{mint_admission, shot_admission, Caller, Deposit};
 use skep_febe::Op;
+use skep_links::PublishTarget;
 use skep_identity::{
     parse_record_value, CredentialKind, Enrollment, Fingerprint, HasIdentity, PublicKey, SigAlgRow,
 };
@@ -211,16 +212,21 @@ pub(super) fn attestation_check(
         // A write the store or the door refuses whatever it carries: the walk
         // finds no value, a term names what no store holds, the staging
         // draft's runs pass the store's re-insert budget, a link slot passes
-        // M7's budgets, a V-spec names a source the door withholds, or M10's
-        // successor build refuses the request. The store's or the door's own
-        // answer is owed, so the write passes through unattested to it.
+        // M7's budgets, a V-spec names a source the door withholds, M10's
+        // successor build refuses the request, or M7's deposit plan refuses
+        // a publication's entry (the link-sets design §5.7) — the plan the
+        // store runs again inside the transaction over the same base,
+        // answering the typed rejection naming the entry. The store's or
+        // the door's own answer is owed, so the write passes through
+        // unattested to it.
         Err(
             ComposeFault::MissingValue
             | ComposeFault::Unspellable
             | ComposeFault::PastReinsertBudget
             | ComposeFault::SlotTooLarge
             | ComposeFault::UnreadableSlotSource
-            | ComposeFault::SuccessorRefused,
+            | ComposeFault::SuccessorRefused
+            | ComposeFault::DepositRefused(_),
         ) => return Ok(None),
     };
     // 7 — (2): the member's marker tag names its row, whose token is the
@@ -362,7 +368,10 @@ fn system_owned(world: &World, op: &Op) -> bool {
     let system = system_account();
     let owned = |a: &Address| m3.effective_owner_prefix(a) == Some(&system);
     match op {
-        Op::Insert { doc, .. } | Op::Publish { doc, .. } => owned(doc),
+        Op::Insert { doc, .. } => owned(doc),
+        // The frame's `doc`: the document at the document form, the parent
+        // account at the mint form (`PublishTarget::term`).
+        Op::Publish { target, .. } => owned(&target.term()),
         Op::MakeLink { home, .. }
         | Op::Emit { home, .. }
         | Op::Nullify { home, .. }
@@ -402,11 +411,20 @@ fn system_owned(world: &World, op: &Op) -> bool {
 /// shot through unattested on `true` alone, which is safe because the real
 /// shot is then refused with the same answer.
 fn refused_at_or_before_the_source_gate(world: &World, op: &Op, principal: PrincipalId) -> bool {
-    let Op::Publish { doc, shot, .. } = op else {
+    let Op::Publish { target, shot, .. } = op else {
         return false;
     };
     let caller = Caller::Principal(principal);
-    shot_admission(world, caller, doc, shot, &World::visible_to(caller)).is_err()
+    let readable = World::visible_to(caller);
+    match target {
+        PublishTarget::Document(doc) => shot_admission(world, caller, doc, shot, &readable).is_err(),
+        // The mint form's admission (the link-sets design §5.7): M5's own
+        // mirror of the shot's table onto the parent account, the source
+        // gate among its slots.
+        PublishTarget::Mint { account, .. } => {
+            mint_admission(world, caller, account, shot, &readable).is_err()
+        }
+    }
 }
 
 #[cfg(test)]

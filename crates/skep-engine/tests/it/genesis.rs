@@ -19,7 +19,9 @@ use skep_engine::types::{
     t_takedown, t_takedown_base, t_takedown_lifted,
 };
 use skep_engine::World;
-use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
+use skep_links::{
+    coverage_class, edition_type, read_with_type, HasLinks, ReservedAddrs, ShippedType, View,
+};
 use skep_namespace::{
     ghost_home_document, ghost_position, head_document, system_account, system_node, HasM3,
     BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, SYSTEM_PRINCIPAL,
@@ -205,6 +207,19 @@ fn the_seeding_check_passes_over_what_the_engine_sees() {
         .collect();
     assert_eq!(domain.len(), 11 + 2, "eleven pins and the two credential members of M5's set");
     assert_eq!(skep_registry::seeding_check(skep_registry::rows(), domain), Ok(()));
+}
+
+/// M7's two spellings of the commons values a publication's deposits are
+/// typed by (the link-sets design §5.7; lane S3) — the read-with type its
+/// `read_with` entries deposit and the edition-claim type its `claim`
+/// writes — are the ledger's own pins, as its correspondence type is held
+/// to `t_correspondence` beside them: the link store sits below the engine
+/// and spells the two addresses itself, and this holds the two spellings
+/// equal where both are in view, so neither can drift from the ledger.
+#[test]
+fn the_link_stores_read_with_and_edition_types_are_the_ledgers_pins() {
+    assert_eq!(read_with_type(), skep_engine::types::t_read_with(), "the read-with type, `3.71`");
+    assert_eq!(edition_type(), skep_engine::types::t_edition(), "the edition-claim type, `3.14`");
 }
 
 /// Non-reissue end to end, through the assembled engine — the load-bearing

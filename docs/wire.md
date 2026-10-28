@@ -832,7 +832,12 @@ status codes). One credential-path difference: a credential deposit (§The
 claim ceremony and credentials) rides its own per-session memo with the
 same contract — the original acknowledgment, byte-identical, no
 re-execution — except the hit is KIND-BLIND (`id` already ran on this
-session) and the memo dies with its session, close included.
+session) and the memo dies with its session, close included. On the
+plain path the memo is read BEFORE the write is judged, under the same
+locks the judgment takes: a retry of a committed `publish` that carried
+deposits is answered its acknowledgment and is never refused for what
+its own commit changed (§The publish shot and head-float, the
+deposits).
 
 ### HTTP status codes
 
@@ -1618,7 +1623,26 @@ re-window: the draft no longer arranges a draft-native run's identity
 at the kept place the request carries for it in its places member —
 moved, split, deleted or rearranged since the client read it —
 `site.index` the runs entry; permanent, the client re-reads the draft
-and composes its places afresh); and three more of M5's — `not_link_address`
+and composes its places afresh); the publication's deposits (§The
+publish shot and head-float, the deposits), each permanent, each
+carrying `site.index` — the entry's position in its own list, the links
+list, the retract list or the read-with list: `link_home_refused` (a
+links entry's home is neither the tag member nor a published document of
+yours — a private document, a member address, an unregistered address,
+or the tag edition with no mint; a home of another's answers
+`not_owner` naming it instead), `old_refused` (a links entry's original,
+with `detail` naming which: absent, public, retracted, not_owner, or
+superseded by an active claim of yours naming a public successor that
+covers the entry's published spans), `duplicate_original` (a second
+links entry naming one original; the second's index), `read_with_in_links`
+(a links entry whose stored type names the read-with type, which the
+read-with list alone deposits), `retract_refused` (a retract entry, with
+`detail` naming which: absent, not_owner, not_published — the target not
+homed in a published document of yours — or the target's class, which
+the nullify class refuses to retract: audit_view, not_retraction for a
+credential, not_revocation for a grant), and `read_with_refused` (a
+read-with entry, with `detail` naming which: not_registered,
+not_document, not_owner, not_published); and three more of M5's — `not_link_address`
 (make-link's seat step, M5 §8: the address it is to seat is not a full
 element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
@@ -1890,6 +1914,81 @@ is not the `draft`, one outside the content subspace, or one that is
 no V-position is `malformed` with `site.index` the entry. The board's
 own producers send none.
 
+**The deposits** (the link-sets design §5.7). A publication may carry,
+beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes and
+THE READ-WITHS it declares — `links`, `retract`, `read_with`
+(§Arrangement) — and its target may be THE MINT FORM, an edition minted
+under `account` in the same commit with its first member, the edition
+claim (`claim: true`, typed `3.14`, `from` the edition, `to` the
+`draft`) homed in it. All of it lands in the shot's ONE commit, in one
+order: the mint, the shot's own table through the source gate, the
+twin fence, THE PLAN — the validation below, the first refused entry
+refusing the whole, nothing committed — the shot, the records, then
+the deposits per home (the member first, then a minted edition, then
+every other home in address order; inside a home the edition claim,
+the copies, the retractions, the read-withs, each list in its
+declared order), then the re-window. Within one commit a home's link
+addresses RISE in that order, so a reader sorting a home's links by
+address reads them as the signed entry lists them. THE PLAN, read on
+the committed state the transaction opens on: (3) each `links` entry's
+home is the tag `member` or a registered, published trunk document of
+yours (`link_home_refused`; another's home `not_owner` naming it); its
+slots take the make-link checks — the content clause by slot, the
+budget, an empty type, the retraction class and the three fenced
+classes (`not_content_subspace`, `slot_too_large`,
+`empty_type_resolution`, `retraction_class`, `dc_violation` — the two
+commons fences answering `credential_refused` with their own tokens
+ahead of the store, as a `make_link`'s do), each with `site.index` the
+entry; a type naming the read-with is `read_with_in_links`; its `old`,
+where named, must be resident, private, active and yours, not
+superseded by an active claim of yours naming a public successor homed
+in a published document of yours whose ends cover every published
+content span of the entry (an end on the shot's own new words is
+covered by nothing), nor, where `old` is itself a successor, its own
+original so superseded (`old_refused`, `detail` the cause); a second
+entry naming one `old` is `duplicate_original` at the second. (4) each
+`retract` entry names a resident link of yours homed in a published
+document of yours (`retract_refused`: absent, not_owner,
+not_published), and one of a class the nullify class refuses to
+retract (§Links (writes)) is `retract_refused` with that class's token
+— audit_view, not_retraction, not_revocation; a target ALREADY
+RETRACTED is SKIPPED, the entry committing nothing. (5) each
+`read_with` entry names a registered trunk document of yours,
+published (`read_with_refused`: not_registered, not_document,
+not_owner, not_published); a read-with from the edition to it already
+standing in a published home of yours is SKIPPED; at the mint form
+none can stand, and every entry is written. A copy is homed where the
+entry says, typed as given, its ends as stored — the tags resolved to
+the addresses the commit mints, a member-position end to the I-spans
+the member holds at those positions — and its original's supersession
+claim beside it in the original's home; a retraction is `nullify`'s
+tuple at the target's home; a read-with is typed `3.71`, `from` the
+edition, `to` the set, homed in the set. The deposits are IN THE
+SIGNED FRAME (§Arrangement, `publish`'s body): behind the shot's rows,
+one group per PUBLIC deposit in the order above — the home, one
+length-delimited element, the tag `member` or `edition` where the
+commit mints the home, else its address; the kind, one byte, `0x01`
+the edition claim, `0x02` a copy, `0x03` a retraction, `0x04` a
+read-with; then the four rows the deposit's own act signs — the type,
+`from` and `to` slots as the store will hold them in the `0x03` slot
+row, a tag spelled as its token where a span's start goes and the EMPTY
+element where its width goes, or, for a member-position end, the
+`0x04` row `be64(n) ‖ (be64(ordinal) ‖ be64(width))*` as the request
+spells it; then the `replaces` row EMPTY. A skipped entry has no
+group — the signer reads the skip as the board does — and the private
+claims are in no group. A request carrying no deposit signs today's
+body byte for byte. A signature over a body missing a deposit's rows,
+or naming a skipped one, is `attestation_invalid:signature`. A retry
+of a committed publication under the same `id` on the same session is
+answered from the retry memo BEFORE the admission judges it — the
+originals its own commit made public would refuse it `old_refused`
+otherwise (§Correlation and idempotency). The feed row of the commit
+names the member first, then the edition at the mint form, then the
+draft where a record landed in it, then every other home the deposits
+touched in address order (§The change feed). THE EDITION CLAIM's
+reader is `edition_claims` (§Namespace), and a minting publication's
+member is `E.1` of the edition `E` the ack's address lies under.
+
 **Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
 of a bare DOCUMENT address answers the document's trunk HEAD — the
 latest trunk member — and never the pre-chain arrangement a shot
@@ -1960,6 +2059,8 @@ commits nothing:
 | `dangling_source` | permanent | — | an address a run names holds no value |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget — or, with a kept place, the draft's run-list at its re-window |
 | `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's run at the kept place the request carries for it (the kept places, above) — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
+| `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
+| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
 
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
@@ -1989,6 +2090,10 @@ the origin withheld:
 * `private_source_versionless` on `publish` — the flag-`true` face of
   §The version-chain refusals: "⟨D⟩ is private — publishing means
   minting a separate edition."
+* `old_refused` with `superseded` — "this link was already accepted
+  into an earlier version — reload and offer only what is new" (the
+  deposits, above; the DRAFT face); the other deposit codes are the
+  client's own arithmetic, with no user-facing act to offer.
 
 ### Credential refusals
 
@@ -2899,6 +3004,33 @@ content subspace, or past the runs is `malformed`, `site.index` the
 entry. The places lie OUTSIDE the signed frame, as `draft` does: a shot
 with places signs as the same shot without them. Owner-gated, and the
 publish class's input from any session.
+THE TARGET takes one of two forms: `doc`, the published document whose
+chain the shot appends — the form above — or THE MINT FORM, `account`
+with `mint: true` and no `doc` (§The publish shot and head-float, the
+deposits): the commit mints a published EDITION under that parent
+account, the shot its birth version, and `claim: true` beside it writes
+the edition claim homed in the edition, `to` the `draft`, which is then
+required; `claim` without `mint` is not admitted in this build, and a
+frame naming both forms or neither is `malformed`. THE DEPOSITS, three
+optional lists beside the shot, land in the shot's one commit (§The
+publish shot and head-float, the deposits; the six codes in §Rejection
+codes): `links`, one entry per accepted link — `{home, ty, from, to,
+old?}`, `home` the tag `member` (the member the commit mints) or a
+published document of yours, `old` the private original the copy stands
+for, whose supersession claim the commit writes in the original's home;
+`retract`, link addresses of yours to retract from their homes; and
+`read_with`, published documents of yours the edition is newly read
+with. Each end of a `links` entry is the address form `{"addrs": […]}` —
+the tags `member` and, at the mint form, `edition` admitted among the
+addresses — the I-span form `{"spans": […]}`, or THE MEMBER-POSITION
+FORM `{"member": [{"ordinal": "4", "width": "2"}, …]}`, spans of the
+member's own positions inside `[1, placed]`, 1-based, for an end on the
+shot's own new words, which must be CANONICAL: the lowest member
+positions holding each value, consecutive positions merged, else
+`malformed` naming the spelling owed; `ty` takes the first two forms
+over addresses alone. A V-spec is admitted in no entry. A refused entry
+of any of the three lists is `malformed` with `site.index` the entry.
+Absent, each list is empty, and the shot is the shot as before.
 On a CLAIMED board the shot carries the optional top-level `attest`
 member (signed ops; the object `insert` describes): the entry signature
 over the frame whose `doc` is the trunk document, `op` `publish` and
@@ -2919,7 +3051,11 @@ them; then THE BASE GROUP, one length-delimited group — EMPTY (`be32(0)`)
 where the shot has no base, else the base MEMBER's address as an
 address-form slot row of one element (`0x01 ‖ be64(1) ‖ be32(len) ‖ the
 dotted decimal`, the form the `record` body's optional rows take) followed
-by `be64(base_extent)`. So the signature binds the base, member and
+by `be64(base_extent)`; then, for a publication carrying deposits, THE
+DEPOSIT ROWS (§The publish shot and head-float, the deposits), one
+group per public deposit in the signed order — nothing for a request
+carrying none, so a shot alone signs as before. So the signature binds
+the base, member and
 extent both: `base` is no member of the frame, but a verifier DERIVES it
 from the minted member's address — a trunk member `D.k+1` was minted
 against `D.k`, a daughter `X.m` against `X`, a birth version `D.1` against
@@ -2941,16 +3077,20 @@ not move — where it re-inserts nothing from a draft; a replayed shot
 that does meets the twin fence instead, refused `already_published`
 with the member its words were published into, nothing minted (§The
 publish shot and head-float, the correspondence records).
-→ `ack_addr` (the member's address). `content` and `gate` are defences,
-as at `insert` (§Rejection codes). This example publishes a draft
-staged off the second member: the edition's own three positions by
-reference and the draft's two as fresh identity, with the draft's run's
-kept place beside the runs — `null` for the edition's own — so the
-commit re-windows the draft at its ordinal 4:
+→ `ack_addr` (the member's address, at both forms). `content` and `gate`
+are defences, as at `insert` (§Rejection codes). This example publishes
+a draft staged off the second member: the edition's own three positions
+by reference and the draft's two as fresh identity, with the draft's
+run's kept place beside the runs — `null` for the edition's own — so the
+commit re-windows the draft at its ordinal 4; and beside the shot one
+accepted link homed in the member, `from` the member's own fourth and
+fifth positions (the draft's new words, by the member-position form)
+and `to` another document, its private original named, one link
+retracted and one read-with:
 
 <!-- wire: request publish -->
 ```json
-{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
+{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
 ```
 
 ### Media — the reference cell and its door (lane A; the fence) and the upload (lane B)
@@ -3896,7 +4036,11 @@ that no act legitimately retracts; a claim whose `new` is private, or
 whose `old` is another account's ordinary link or a credential naming
 another account, stays retractable by its owner) is refused
 `nullify_audit_view` — each to the record's owner alone, anyone else
-answering plain `not_owner` (§Credential refusals, item 5). And the
+answering plain `not_owner` (§Credential refusals, item 5). A `retract`
+entry of a `publish` naming a link of any of the three classes is judged
+by the same producer and refused `retract_refused` with the class as its
+`detail` — audit_view, not_retraction, not_revocation — `site.index` the
+entry (§The publish shot and head-float, the deposits). And the
 publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
 lands at its TARGET, so on a claimed board a bare session's `nullify`
 whose record home OR target home is published is
@@ -4864,11 +5008,17 @@ Each entry:
   one name); the **minted** document for
   `create_new_document`/`fork`/`version`,
   and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
-  trunk is the document it advances) FIRST, then the staging draft where
+  trunk is the document it advances) FIRST, then, at the mint form, the
+  EDITION it was minted under, then the staging draft where
   the shot minted a correspondence record in it — `[member, D]`, the
   member first by rule, the order a mirror reads the member by (§The
-  publish shot and head-float) — reduced to the member alone for a reader
-  who cannot read the draft; `delegate` and `register_node`
+  publish shot and head-float) — then every other home the commit's
+  deposits touched, in address order, each once: a links entry's home
+  named by address, the private home of an original whose claim landed,
+  a retracted link's home, a set the read-with landed in — never a home
+  whose entry the plan skipped (§The publish shot and head-float, the
+  deposits); reduced to the documents the reader may read, the member
+  alone for a reader who can read none of the rest; `delegate` and `register_node`
   touch no document and carry `[]`. A declared deposit into a
   published chain names the address the `insert` was written to,
   though the arrangement it lands in is the chain's head member (§The

@@ -133,6 +133,7 @@ fn a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_as
 #[test]
 fn the_check_answers_the_store_s_own_admission_of_the_shot() {
     use skep_arrangement::{Base, VPos};
+    use skep_febe::{PublishDeposits, PublishTarget};
     use skep_namespace::{ghost_home_document, head_document, SYSTEM_PRINCIPAL};
 
     let engine = skep_engine::Engine::open(KernelConfig {
@@ -145,9 +146,10 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
     let world = snap.world();
     let h = head_document();
     let into_h = |base: Option<Base>| Op::Publish {
-        doc: h.clone(),
+        target: PublishTarget::Document(h.clone()),
         shot: Shot { base, draft: None, runs: Vec::new() },
         places: Vec::new(),
+        deposits: PublishDeposits::default(),
     };
     assert!(
         !refused_at_or_before_the_source_gate(world, &into_h(None), SYSTEM_PRINCIPAL),

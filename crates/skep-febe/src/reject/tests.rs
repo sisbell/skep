@@ -266,6 +266,15 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::SelfSupersession
         | RejectCode::IllFormedSuccessor
         | RejectCode::DcViolation
+        // The publication's deposits (the link-sets design §5.7, lane S3):
+        // each a fact of the request against the committed world that no
+        // reissue of the same request changes.
+        | RejectCode::LinkHomeRefused
+        | RejectCode::OldRefused
+        | RejectCode::DuplicateOriginal
+        | RejectCode::ReadWithInLinks
+        | RejectCode::RetractRefused
+        | RejectCode::ReadWithRefused
         | RejectCode::NoSuchSubspace
         | RejectCode::EmptySubspace
         | RejectCode::DepthIncompatible
@@ -285,7 +294,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 81] = [
+const ALL_CODES: [RejectCode; 87] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -354,6 +363,12 @@ const ALL_CODES: [RejectCode; 81] = [
     RejectCode::SelfSupersession,
     RejectCode::IllFormedSuccessor,
     RejectCode::DcViolation,
+    RejectCode::LinkHomeRefused,
+    RejectCode::OldRefused,
+    RejectCode::DuplicateOriginal,
+    RejectCode::ReadWithInLinks,
+    RejectCode::RetractRefused,
+    RejectCode::ReadWithRefused,
     RejectCode::NoSuchSubspace,
     RejectCode::EmptySubspace,
     RejectCode::DepthIncompatible,

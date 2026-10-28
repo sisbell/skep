@@ -15,7 +15,10 @@
 //! and THE RE-WINDOW: for each run the request carries a kept place for, the
 //! check that the draft still arranges that run's identity at that place
 //! and its replacement there by the fresh run it became, a placement and a
-//! removal ([`stage_reinstate_at`], [`stage_delete_at`], M5's) — and
+//! removal ([`stage_reinstate_at`], [`stage_delete_at`], M5's) — a
+//! draft-native run's pieces read off the pairing, a stray run's — one of
+//! the document's own identity, re-composed by reference to a record's
+//! `to` — off the draft's records (the child module `stray`) — and
 //! [`LinkWriter::publication`] the public op: one `transact_attested` over
 //! the union of the shot's keys, the draft's link key, the draft's content
 //! key where a place is carried, every home's link key where a deposit
@@ -26,21 +29,22 @@
 //! PIN, stated at `mint_link`'s frontier read and held by
 //! `tests/it/publication.rs`.
 //!
-//! Beside the composite sit its two bounds: [`price_publication_reads`],
-//! the price of the four reads the composite makes under the lock, which a
+//! Beside the composite sits its price, [`price_publication_reads`]: the
+//! four reads the composite makes under the lock and, its fifth term, the
+//! bytes it would stage, priced from the child module `sizes` — the
+//! worst-case bytes per entry kind as the kernel prices them, the table a
+//! panel prices a request's records from before the act — which a
 //! transport asks of a snapshot ahead of its lock and refuses past
-//! [`MAX_PUBLICATION_READS`] — the
-//! composite reads as it did, the price merely bounds it — and the child
-//! module `sizes`, the worst-case bytes per entry kind as the kernel prices
-//! them, the table a panel prices a request's records from before the act.
+//! [`MAX_PUBLICATION_READS`] or past the kernel's transaction budget. The
+//! composite reads and stages as it did; the price merely bounds it.
 
-use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
+use skep_address::{document_of, shift, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
     head_lock_key, ordinal_vspan, shot_admission, stage_delete_at, stage_publish,
     stage_reinstate_at, stage_seat_link, trunk_of, Caller, HasM5, M5State, Pairing,
     PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
 };
-use skep_kernel::{Seq, Staging, TxnError};
+use skep_kernel::{Seq, Staging, TxnError, MAX_TXN_BYTES};
 use skep_namespace::{HasM3, M3State};
 
 use super::nullify::retraction_tuple;
@@ -60,9 +64,13 @@ use crate::LinkWorld;
 // the member-position end's one function.
 mod plan;
 // The worst-case table: the staged bytes per entry kind as the kernel
-// prices them, and the maximal request's sum against the transaction
-// budget.
+// prices them, the price of a request's staged bytes from it, and the
+// maximal and the reachable request's sums against the transaction budget.
 mod sizes;
+// The stray places: the record read that turns a run of the document's own
+// identity, re-composed by reference to a record's `to`, back into the
+// draft words the re-window checks and replaces.
+mod stray;
 
 pub use plan::{
     canonical_member_spans, edition_type, member_end, member_image, names_read_with,
@@ -71,19 +79,23 @@ pub use plan::{
     PlannedHome, PublishDeposits, PublishTarget,
 };
 pub use sizes::{
-    CLAIM_BYTES, COPY_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
-    EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAXIMAL_PUBLICATION_BYTES, PLACED_RUN_BYTES,
-    READ_WITH_BYTES, REINSERTED_VALUE_BYTES, RETRACTION_BYTES, SHOT_BYTES,
+    price_staged_bytes, stored_span_bytes, stored_tumbler_bytes, CLAIM_BYTES, COPY_BYTES,
+    COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES,
+    KEPT_PLACE_BYTES, MAXIMAL_PUBLICATION_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES,
+    REACHABLE_PUBLICATION_BYTES, REINSERTED_VALUE_BYTES, REQUEST_BODY_BYTES, RETRACTION_BYTES,
+    SHOT_BYTES,
 };
 
-/// The price of a publication's in-lock reads: the four terms the design
-/// names, read off one snapshot (the link-sets design §5.7, EVERY IN-LOCK
-/// READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK).
+/// The price of a publication: the four in-lock reads the design names,
+/// read off one snapshot (the link-sets design §5.7, EVERY IN-LOCK READ IS
+/// BOUNDED BY A REFUSAL AHEAD OF THE LOCK), and its fifth term, the bytes
+/// the commit would stage, priced from the worst-case table (§5.6, M6).
 ///
 /// It is what [`price_publication_reads`] answers and a transport refuses
 /// on ([`ReadPrice::over_budget`]), carried whole so the refusal can name
 /// each term: the caller's link-holding home count, the entries that read
-/// per home, the draft's content run count and the request's runs.
+/// per home, the draft's content run count, the request's runs, and the
+/// staged bytes against the transaction budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadPrice {
     /// The caller's link-holding homes: `homes_under` of the caller's
@@ -102,32 +114,55 @@ pub struct ReadPrice {
     /// the draft's run count per placed run, and the twin fence one stab per
     /// re-inserted run, so the runs bound both.
     pub runs: usize,
+    /// The bytes the commit would stage, as [`price_staged_bytes`] prices
+    /// them from the worst-case table: an upper bound on what the kernel
+    /// charges the transaction, held to [`ReadPrice::BYTE_BUDGET`].
+    pub staged_bytes: u64,
 }
 
 impl ReadPrice {
-    /// The budget the price is held to:
+    /// The budget the reads are held to:
     /// [`MAX_PUBLICATION_READS`].
     pub const BUDGET: usize = MAX_PUBLICATION_READS;
 
-    /// Returns the price: `homes × entries + draft_runs × runs`, saturating.
+    /// The budget the staged bytes are held to: the kernel's own
+    /// [`MAX_TXN_BYTES`], so a request priced past it never reaches the
+    /// kernel's `txn_over_budget` (M6: "met only by a bug or a race").
+    pub const BYTE_BUDGET: u64 = MAX_TXN_BYTES;
+
+    /// Returns the reads' price: `homes × entries + draft_runs × runs`,
+    /// saturating.
     pub fn total(&self) -> usize {
         self.homes
             .saturating_mul(self.entries)
             .saturating_add(self.draft_runs.saturating_mul(self.runs))
     }
 
-    /// Returns whether the price is past [`ReadPrice::BUDGET`].
-    ///
-    /// The one comparison against the budget (PATTERNS SP-23): a transport
-    /// refuses where this answers `true` and reads the terms off the price
-    /// for its refusal's detail.
-    pub fn over_budget(&self) -> bool {
+    /// Returns whether the reads are priced past [`ReadPrice::BUDGET`].
+    pub fn reads_over_budget(&self) -> bool {
         self.total() > Self::BUDGET
+    }
+
+    /// Returns whether the staged bytes are priced past
+    /// [`ReadPrice::BYTE_BUDGET`].
+    pub fn bytes_over_budget(&self) -> bool {
+        self.staged_bytes > Self::BYTE_BUDGET
+    }
+
+    /// Returns whether the price is past either budget.
+    ///
+    /// The one comparison against the budgets (PATTERNS SP-23): a transport
+    /// refuses where this answers `true` and reads the terms off the price
+    /// — and which bound was passed, [`ReadPrice::reads_over_budget`] and
+    /// [`ReadPrice::bytes_over_budget`] — for its refusal's detail.
+    pub fn over_budget(&self) -> bool {
+        self.reads_over_budget() || self.bytes_over_budget()
     }
 }
 
-/// Prices a publication's in-lock reads over `world`: [`ReadPrice`]'s four
-/// terms, read off the snapshot a transport admits on, ahead of its lock.
+/// Prices a publication over `world`: [`ReadPrice`]'s four read terms and
+/// its staged bytes, read off the snapshot a transport admits on, ahead of
+/// its lock.
 ///
 /// It reads two counts of the world and two of the request, and walks
 /// nothing: the caller's link-holding homes by [`homes_under`] of the
@@ -135,17 +170,21 @@ impl ReadPrice {
 /// off M3's principal table), the draft's content run count by M5's one map
 /// lookup, the entries and the runs off the request's lists. A caller that
 /// is no principal — `Caller::System`, which no request path carries — has
-/// no account and so no homes, and prices the draft term alone. The counts
-/// may move between this read and the composite's own, where the transport
-/// takes its lock after it (the survey's C8): the budget is conservative
-/// by design, and the composite reads under the lock exactly as it did
+/// no account and so no homes, and prices the draft term alone. The staged
+/// bytes are [`price_staged_bytes`]'s — request arithmetic over the table,
+/// and one stab of the draft's records per stray place. The counts may move
+/// between this read and the composite's own, where the transport takes
+/// its lock after it (the survey's C8): the budget is conservative by
+/// design, and the composite reads under the lock exactly as it did
 /// before it was priced.
 ///
 /// [`homes_under`]: crate::LinkState::homes_under
 pub fn price_publication_reads<W: LinkWorld + HasM5>(
     world: &W,
     caller: Caller,
+    target: &PublishTarget,
     shot: &Shot,
+    places: &[Option<VPos>],
     deposits: &PublishDeposits,
 ) -> ReadPrice {
     let homes = match caller {
@@ -163,6 +202,7 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
         entries: deposits.links.len().saturating_add(deposits.read_with.len()),
         draft_runs,
         runs: shot.runs.len(),
+        staged_bytes: price_staged_bytes(world, target, shot, places, deposits),
     }
 }
 
@@ -278,19 +318,26 @@ impl From<EmitCoreError> for PublicationError {
 ///    carries a kept place in `places` — the V-position the run held in the
 ///    draft when the client composed the request, outside the signed
 ///    preimage as `draft` is — in `runs`' order, the check that the draft
-///    still arranges that run's identity at that place, then the entry's
-///    replacement there by the fresh run it became, piece by piece. A
-///    request with no place — `places` empty, or every entry `None` — is
-///    today's shot, writing nothing of the draft.
+///    still arranges that run's draft words at that place, then their
+///    replacement there by the published identity, piece by piece: a
+///    draft-native entry's pieces are the pairing's, the fresh runs it
+///    became; a STRAY entry's — a run of the document's own identity,
+///    re-composed by reference to a correspondence record's `to` — are the
+///    records' (the child module `stray`), the draft words each record
+///    names as its `from`, and a stray run no record of the draft covers
+///    whole refuses `StrayPlaceUnrecorded` with the entry. A request with
+///    no place — `places` empty, or every entry `None` — is today's shot,
+///    writing nothing of the draft.
 ///
 /// `places` is parallel to `shot.runs` by index, each entry the run's place
 /// or `None`; a shorter list is read as padded with `None`, and an entry
 /// past the runs is nothing's and is ignored. A place belongs to a
-/// draft-native run alone — the wire's codec refuses one on any other run
-/// (`malformed`, with the entry) — and below that door one on a run that is
-/// not draft-native is checked as any place is and re-windows nothing, the
-/// entry having no draft-native piece; one with no draft named is ignored
-/// with the re-window, which has no draft to window.
+/// draft-native run or to a run of the document's own trunk — the wire's
+/// codec refuses one on a window onto any other document (`malformed`,
+/// with the entry) — and below that door one on such a window is checked
+/// as any place is and re-windows nothing, the entry having no piece; one
+/// with no draft named is ignored with the re-window, which has no draft to
+/// window.
 ///
 /// The caller's lock keys are the union of the shot's
 /// ([`stage_publish`]'s card), the draft's `link_lock_key` where records
@@ -315,9 +362,9 @@ impl From<EmitCoreError> for PublicationError {
 /// `NotOwner`) and its `Mint` and `Seat` — and `Plan(SlotTooLarge)` where a
 /// member-position end resolves to more spans than a slot holds, which the
 /// request's own run count cannot tell ahead of the mint — then the
-/// re-window's (`KeptPlaceMoved` with the entry, `Reinstate`, `Delete` —
-/// `stage_rewindow` states which are reachable). An `Err` commits nothing
-/// of the transaction.
+/// re-window's (`StrayPlaceUnrecorded` and `KeptPlaceMoved` with the entry,
+/// `Reinstate`, `Delete` — `stage_rewindow` states which are reachable). An
+/// `Err` commits nothing of the transaction.
 ///
 /// # Panics
 ///
@@ -496,61 +543,86 @@ where
 
 /// Stages the draft's re-window at its kept places: for each `runs` entry
 /// that carries a place, the check that `draft` still arranges that run's
-/// identity there, and the entry's replacement there by the fresh run it
-/// became.
+/// draft words there, and their replacement there by the published
+/// identity.
 ///
 /// It is the link-sets design's "re-window of `D` at its kept places,
-/// checked by identity" (§5.7), the S-gate's composite, over the pairing
-/// [`stage_publish`] returned: for each entry of `shot.runs` with a place in
+/// checked by identity" (§5.7), the S-gate's composite, with THE STRAY
+/// PLACES beside it: for each entry of `shot.runs` with a place in
 /// `places`, in `runs`' order —
 ///
+/// THE PIECES: each entry is re-windowed as pieces, a draft-native `from`
+///     beside the published `to` it stands for, of one width. A
+///     DRAFT-NATIVE entry's are its pieces of the pairing [`stage_publish`]
+///     returned — the fresh runs it became, or an earlier entry's where it
+///     placed the identity by reference — tiling the run from its start in
+///     I-order ([`Pairing`]'s contract). A STRAY entry's — a run of the
+///     document's own trunk, which no pairing holds, re-composed by the
+///     client by reference to a correspondence record's `to` where the
+///     draft still arranges that record's `from` (the design's "AND THE
+///     STRAY PLACES WITH THEM") — are read off the draft's records
+///     ([`stray::record_pieces`]): the records homed in the draft whose `to`
+///     covers the entry's span, each cut to the piece it covers and mapped
+///     onto the same piece of its `from`; a span no record covers whole
+///     refuses `StrayPlaceUnrecorded` with the entry, nothing committed. A
+///     window onto another document, which the wire's codec refuses a place
+///     on, has no piece: below that door it is checked as (a) checks any
+///     place and re-windows nothing.
 /// (a) THE CHECK: the V-span of the entry's width that opens at the place
 ///     resolves, in the draft as the records staged so far left it
-///     (`stg.working()`), to exactly the entry's run — M5's V→I resolution
-///     ([`M5State::resolve`]) answering the run's addresses in its order and
-///     nothing else over that span ([`arranged_at`]). The question is asked
-///     of the place alone, by MEMBERSHIP (the S-gate's ruling): a draft that
-///     arranges the identity twice is re-windowed at the named place and
-///     left standing at the other, the twin fence meeting the other at its
-///     own publication. The predicate implies the design's projection
+///     (`stg.working()`), to exactly the pieces' `from` runs in sequence —
+///     M5's V→I resolution ([`M5State::resolve`]) answering their addresses
+///     in their order and nothing else over that span ([`arranged_at`]);
+///     for a draft-native entry that is the entry's own run, for a stray
+///     entry the records' draft words. The question is asked of the place
+///     alone, by MEMBERSHIP (the S-gate's ruling): a draft that arranges
+///     the identity twice is re-windowed at the named place and left
+///     standing at the other, the twin fence meeting the other at its own
+///     publication. The predicate implies the design's projection
 ///     membership — `project(D, the run's I-span)` covering the span — and
 ///     refuses in addition a run whose addresses the draft arranges at the
 ///     place in another order, a rearrangement within the span since the
 ///     place was read, which the projection cannot see and the replacement
 ///     would silently undo. Failing, `KeptPlaceMoved` with the entry: the
 ///     draft moved the run, split it, deleted it or arranges it elsewhere
-///     since the place was read, and nothing is committed — never a guess.
-/// (b) THE REPLACEMENT, piece by piece along the entry's pieces of the
-///     pairing, each at its offset from the place (the pieces tile the run
-///     from its start, in I-order — [`Pairing`]'s contract — so the offset is
-///     the widths before it, summed): the fresh piece placed by identity at
+///     since the place was read — or, for a stray entry, already arranges
+///     the published identity there — and nothing is committed, never a
+///     guess.
+/// (b) THE REPLACEMENT, piece by piece, each at its offset from the place
+///     (the widths before it, summed): the `to` piece placed by identity at
 ///     the place plus the offset ([`stage_reinstate_at`], windowing the
-///     edition's trunk, which minted it), which moves the draft-native piece
-///     right by the fresh one's width; then that piece's position RE-DERIVED
-///     off the working world — the fresh piece's width past its place, where
-///     the placement left it, asked of the arrangement again and never
-///     carried over — and the piece removed there ([`stage_delete_at`]), so
-///     the draft reads the same bytes at every position and arranges the
+///     edition's trunk, which minted it — an identity `reinstate` admits
+///     into a private draft as any), which moves the `from` piece right by
+///     the `to` piece's width; then that piece's position RE-DERIVED off
+///     the working world — the `to` piece's width past its place, where the
+///     placement left it, asked of the arrangement again and never carried
+///     over — and the piece removed there ([`stage_delete_at`]), so the
+///     draft reads the same bytes at every position and arranges the
 ///     member's identity where it arranged its own. A piece placed by
 ///     reference to an identity an earlier entry minted re-windows to the
-///     same piece of the first's fresh run.
+///     same piece of the first's fresh run; a stray piece to the record's
+///     published words, the member placing the entry by reference as any
+///     trunk run — no mint, no record, the draft's link run-list untouched
+///     (links move with identity, `reinstate`'s rule).
 ///
 /// Cost: per place, one resolution of the entry's span over the draft's
-/// run-list, and two records per piece.
+/// run-list, and two records per piece; per stray place one stab of the
+/// draft's TO slot beside it.
 ///
 /// # Errors
 ///
 /// `Reinstate(NotContentSubspace)` for a place outside the content subspace
 /// — the placement's own verdict for the position, asked ahead of the check,
-/// which the wire's codec refuses first; `KeptPlaceMoved { index }` where the
-/// check fails, and where the re-derivation finds the piece elsewhere than
-/// the placement left it, which the check rules out; `Reinstate` with the
-/// placement's own — `PublishedTarget` where the draft is a published
-/// document (a draft named outside the chain need not be private),
-/// `TooManyRuns` where the draft's run-list is at M5's budget; the rest
-/// made unreachable by the check and the admission — and `Delete` with the
-/// removal's, `PublishedTarget` alone reachable, the placement refusing it
-/// first.
+/// which the wire's codec refuses first; `StrayPlaceUnrecorded { index }`
+/// where a stray entry's span is not covered whole by the draft's records;
+/// `KeptPlaceMoved { index }` where the check fails, and where the
+/// re-derivation finds the piece elsewhere than the placement left it,
+/// which the check rules out; `Reinstate` with the placement's own —
+/// `PublishedTarget` where the draft is a published document (a draft named
+/// outside the chain need not be private), `TooManyRuns` where the draft's
+/// run-list is at M5's budget; the rest made unreachable by the check and
+/// the admission — and `Delete` with the removal's, `PublishedTarget` alone
+/// reachable, the placement refusing it first.
 fn stage_rewindow<W>(
     stg: &mut Staging<W>,
     caller: Caller,
@@ -561,28 +633,50 @@ fn stage_rewindow<W>(
     pairing: &Pairing,
 ) -> Result<(), PublicationError>
 where
-    W: PublishWorld,
+    W: PublishWorld + LinkWorld,
 {
     for (index, (entry, place)) in shot.runs.iter().zip(places).enumerate() {
         let Some(place) = place else { continue };
         if !place.is_content() {
             return Err(ReinstateError::NotContentSubspace.into());
         }
-        // (a) The check, of the working world: the entry's run, at the
-        //     place, in its order, and nothing else over its span.
-        if !arranged_at(stg.working().m5(), draft, place, &entry.run) {
+        // The pieces: the pairing's for a draft-native entry, the records'
+        // for a stray entry of the trunk's own identity.
+        let mut pieces: Vec<stray::Piece> = pairing
+            .iter()
+            .filter(|piece| piece.index == index)
+            .map(|piece| stray::Piece { from: piece.from.clone(), to: piece.to.clone() })
+            .collect();
+        if pieces.is_empty() {
+            let origin = document_of(entry.run.i_start()).map(|d| trunk_of(&d));
+            if origin.as_ref() == Some(trunk) {
+                pieces = stray::record_pieces(stg.working(), draft, &entry.run)
+                    .ok_or(PublicationError::StrayPlaceUnrecorded { index })?;
+            } else {
+                // A window onto another document, below the codec's door:
+                // checked as any place is, and re-windowing nothing.
+                if !arranged_at(stg.working().m5(), draft, place, [&entry.run]) {
+                    return Err(PublicationError::KeptPlaceMoved { index });
+                }
+                continue;
+            }
+        }
+        // (a) The check, of the working world: the pieces' draft words, at
+        //     the place, in their order, and nothing else over the span.
+        if !arranged_at(stg.working().m5(), draft, place, pieces.iter().map(|piece| &piece.from)) {
             return Err(PublicationError::KeptPlaceMoved { index });
         }
         // (b) The replacement, piece by piece at each piece's offset.
         let mut offset = Nat::from(0u32);
-        for piece in pairing.iter().filter(|piece| piece.index == index) {
+        for piece in &pieces {
             let at = VPos::content(&place.ordinal + &offset);
             let fresh = ShotRun { origin: trunk.clone(), run: piece.to.clone() };
             stage_reinstate_at(stg, caller, draft, at.clone(), &[fresh])?;
-            // The draft-native piece, where the placement left it: the fresh
-            // piece's width past its place, read off the working world.
+            // The draft-native piece, where the placement left it: the
+            // published piece's width past its place, read off the working
+            // world.
             let moved = VPos::content(&at.ordinal + piece.to.width());
-            if !arranged_at(stg.working().m5(), draft, &moved, &piece.from) {
+            if !arranged_at(stg.working().m5(), draft, &moved, [&piece.from]) {
                 return Err(PublicationError::KeptPlaceMoved { index });
             }
             stage_delete_at(stg, caller, draft, moved, piece.from.width().clone())?;
@@ -592,29 +686,49 @@ where
     Ok(())
 }
 
-/// Returns whether `doc` arranges exactly `run` over the V-span of `run`'s
-/// width that opens at `at`.
+/// Returns whether `doc` arranges exactly `pieces`, in sequence, over the
+/// V-span of their summed width that opens at `at`.
 ///
 /// It is the re-window's check by identity, asked of the arrangement `m5`
 /// holds: the span resolves (M5's V→I resolution, clipped to the arranged
-/// range) to runs that tile it, and they are `run`'s addresses in `run`'s
-/// order and nothing else — each resolved run opening where the previous
-/// one reached, the first at `run`'s start and the last reaching `run`'s
-/// reach. A span opening past the arranged end, or reaching past it,
-/// resolves short and answers `false`; so does one holding another address
-/// among the run's, or the run's addresses in another order.
-fn arranged_at(m5: &M5State, doc: &Address, at: &VPos, run: &Run) -> bool {
-    let Some(span) = ordinal_vspan(at.clone(), run.width().clone()) else {
-        return false; // a run's width is ≥ 1, so no span is no arrangement
+/// range) to runs that tile it, and their addresses are the pieces'
+/// addresses in the pieces' order and nothing else — walked position by
+/// position in chunks, a resolved run's addresses against the piece under
+/// the cursor, so a draft holding two I-adjacent pieces as one run and a
+/// run cut by an edit into two resolved runs answer alike. A span opening
+/// past the arranged end, or reaching past it, resolves short and answers
+/// `false`; so does one holding another address among the pieces', or the
+/// pieces' addresses in another order. One piece is the S2 check of one
+/// run; no piece is no arrangement.
+fn arranged_at<'r>(m5: &M5State, doc: &Address, at: &VPos, pieces: impl IntoIterator<Item = &'r Run>) -> bool {
+    let pieces: Vec<&Run> = pieces.into_iter().collect();
+    let width: Nat = pieces.iter().map(|piece| piece.width().clone()).sum();
+    let Some(span) = ordinal_vspan(at.clone(), width) else {
+        return false; // a piece's width is ≥ 1, so no span is no arrangement
     };
-    let mut next = run.i_start().tumbler().clone();
+    let zero = Nat::from(0u32);
+    // The cursor into the pieces: which piece, and the offset into it.
+    let (mut k, mut offset) = (0usize, zero.clone());
     for resolved in m5.iter_resolve(doc, &span) {
-        if resolved.i_start().tumbler() != &next {
-            return false;
+        let mut cursor = resolved.i_start().tumbler().clone();
+        let mut left = resolved.width().clone();
+        while left > zero {
+            let Some(piece) = pieces.get(k) else { return false };
+            if shift(piece.i_start().tumbler(), &offset) != cursor {
+                return false;
+            }
+            let room = piece.width() - &offset;
+            let step = if left < room { left.clone() } else { room };
+            cursor = shift(&cursor, &step);
+            offset += &step;
+            left -= &step;
+            if offset == *piece.width() {
+                k += 1;
+                offset = zero.clone();
+            }
         }
-        next = resolved.reach();
     }
-    next == run.reach()
+    k == pieces.len()
 }
 
 /// Stages one correspondence record in `draft`: `from` the draft-native

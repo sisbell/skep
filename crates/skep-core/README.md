@@ -43,10 +43,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `plain_admission` and, behind it, `retract_class_refusal`
   (`RetractClassRefusal`); `precheck` with `RecordSig`, `DepositSpans` (`of`,
   `deposit`) and `op_shape_refusal`; `publication_read_refusal`
-  (`PublicationReadRefusal`: the price's four terms, its total and the
-  budget) — a publication's in-lock reads priced past M7's
-  `MAX_PUBLICATION_READS`, asked of a lock-free snapshot ahead of the plain
-  sequence's permit and locks; `registry_admission` and
+  (`PublicationReadRefusal`: the price's four read terms, their total and
+  budget, and the staged bytes with the transaction budget; `reads_over`
+  and `bytes_over`, which bound was passed) — a publication's in-lock
+  reads priced past M7's `MAX_PUBLICATION_READS`, or its staged bytes past
+  the kernel's `MAX_TXN_BYTES`, asked of a lock-free snapshot ahead of the
+  plain sequence's permit and locks; `registry_admission` and
   `genesis_seeding_check`; `upload_admission` (`UploadRefusal`, `token`);
   the two classifiers `deposits_credential_link` and
   `deposits_registry_link`; the refusals `CredentialRefusal` and

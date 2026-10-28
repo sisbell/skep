@@ -618,6 +618,208 @@ fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands
     assert_eq!(bytes_of(&k, &published_draft), "q", "the published draft stands");
 }
 
+// ───────────────────────── the stray places (F4) ─────────────────────────
+
+/// doc2's content element `k`: `[1,0,1,0,2,0,1,k]`.
+fn ca2(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 2, 0, 1, k])
+}
+
+/// The board every stray cell opens over: doc1 `a b c`, published once with
+/// `b c` at its place — doc1 arranging its own `a` and then E.1's fresh
+/// `b c` (`pca(1..=2)`), one record `(ca(2..=3) → pca(1..=2))` — and then
+/// THE STRAY ACT: a raw `reinstate` of the draft's own `b c` after them, so
+/// doc1 reads `a b c b c` and arranges the record's `from`, private text
+/// again, at 4. Answers `E.1`.
+fn stray_board(k: &Kernel<World>) -> Address {
+    draft_holding(k, "abc");
+    let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 2)] };
+    let (member, _) = writer(k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, 2)]), &PublishDeposits::default()).expect("E.1");
+    Vstream::new(k).reinstate(P1, &doc1(), vp(1, 4), &[ShotRun { origin: doc1(), run: run(&ca(2), 2) }]).expect("the stray act");
+    assert_eq!(bytes_of(k, &doc1()), "abcbc");
+    assert_eq!(runs_of(k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(2), 2)], "the premise: the record's from, back in the draft at 4");
+    assert_eq!(records_in_doc1(k), vec![record(&run(&ca(2), 2), &run(&pca(1), 2))]);
+    member
+}
+
+/// THE STRAY (the link-sets design §5.7, "AND THE STRAY PLACES WITH THEM"):
+/// a second publication whose `runs` names the stray words BY REFERENCE to
+/// the record's `to` — E's own identity, a run the pairing never holds —
+/// with their kept place beside it: ONE commit (one boundary on a journaled
+/// kernel) after which doc1 reads the same bytes and arranges E's identity
+/// at the place, the draft-native words arranged nowhere in it; the member
+/// holds the run by reference, twice, as any run of the document's own;
+/// NO new record, the S1 record standing alone; no identity minted.
+#[test]
+fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_at_its_kept_place_in_one_commit() {
+    let k = journaled_over(edition_world());
+    stray_board(&k);
+    let before = k.snapshot();
+    // The head's `b c` by reference, then the stray run re-composed by
+    // reference to the record's `to`, its place beside it.
+    let the_shot = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(1), 2)]);
+    assert_eq!(the_shot.runs.len(), 2);
+    let (member, seq) = writer(&k)
+        .publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(2, &[(1, 4)]), &PublishDeposits::default())
+        .expect("the stray re-window commits");
+    assert_eq!(member, pmember(2));
+    assert_eq!(k.boundaries_above(before.seq()).expect("a journaled kernel answers its boundaries"), vec![(seq, None)], "ONE commit");
+    assert_eq!(bytes_of(&k, &doc1()), "abcbc", "the draft reads the same bytes at every position");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 2), run(&pca(1), 2)], "E's identity at the place");
+    assert!(footprint(&k, &doc1(), &run(&ca(2), 2)).is_empty(), "the draft-native words arranged nowhere in the draft");
+    assert_eq!(footprint(&k, &doc1(), &run(&pca(1), 2)), spans(&[(2, 4)]), "E's identity at 2 and at 4, one V-span to the projection");
+    assert_eq!(runs_of(&k, &member), vec![run(&pca(1), 2), run(&pca(1), 2)], "the member holds the run by reference, twice");
+    assert_eq!(bytes_of(&k, &member), "bcbc");
+    assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(2), 2), &run(&pca(1), 2))], "NO new record: the S1 record stands alone");
+    assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(3)), "no identity minted");
+    assert_eq!(trunk_head(k.snapshot().world().m3(), &pdoc()), Some(member));
+}
+
+/// A DRAFT LEFT AS IT STANDS (§5.1's residue; "shot again, it meets the
+/// twin fence at every run already published from it, and those runs are
+/// re-composed by reference to the records' `to` … re-windowed onto them at
+/// their kept places"): today's shot of `b c` with no place leaves doc1
+/// arranging the record's `from`; the next shot re-supplies the whole draft
+/// — `a` draft-native with its place, `b c` by reference to the record's
+/// `to` with its — and the one commit re-windows both kinds: doc1 reads
+/// `a b c`, arranges `a`'s fresh identity at 1 and E's `b c` at 2, its own
+/// words nowhere; two records, `a`'s new beside `b c`'s standing.
+#[test]
+fn a_draft_left_arranging_published_words_is_re_windowed_by_the_next_shot_that_sends_their_place() {
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abc");
+    let first = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 2)] };
+    writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &first, &[], &PublishDeposits::default()).expect("today's shot");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 3)], "the draft left as it stands");
+    let the_shot = Shot {
+        base: Some(skep_arrangement::Base { member: pmember(1), extent: n(2) }),
+        draft: Some(doc1()),
+        runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&pdoc(), &pca(1), 2)],
+    };
+    let (member, _) = writer(&k)
+        .publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(2, &[(0, 1), (1, 2)]), &PublishDeposits::default())
+        .expect("both kinds of place hold");
+    assert_eq!(member, pmember(2));
+    assert_eq!(bytes_of(&k, &doc1()), "abc");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(3), 1), run(&pca(1), 2)], "a's fresh identity, then E's b c");
+    assert!(footprint(&k, &doc1(), &run(&ca(1), 3)).is_empty(), "the draft's own words arranged nowhere");
+    assert_eq!(bytes_of(&k, &member), "abc");
+    assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(2), 2), &run(&pca(1), 2)), record(&run(&ca(1), 1), &run(&pca(3), 1))], "b c's standing, a's new");
+}
+
+/// A PIECE, AND ACROSS TWO RECORDS: doc1 `a b c d e` published twice with
+/// places — `b c` into E.1, `d e` into E.2, two records whose `to` spans
+/// adjoin (`pca(1..=2)`, `pca(3..=4)`) — then two stray acts, `c` alone
+/// (a piece of the first record's `from`, at offset 1) and `b c d e` (across
+/// both records); the shot re-composes the first as `pca(2)` and the second
+/// as `pca(1..=4)`, each with its place, and the one commit re-windows the
+/// piece at its offset and the span piece by piece — the draft holding the
+/// two records' words as one run, which the check walks as one — leaving
+/// doc1 reading the same bytes with E's identity at both places, the
+/// records as they were, no identity minted.
+#[test]
+fn a_stray_run_that_is_a_piece_of_a_record_or_spans_two_records_is_re_windowed_piece_by_piece() {
+    let k = journaled_over(edition_world());
+    draft_holding(&k, "abcde");
+    let none = PublishDeposits::default();
+    let into_e = PublishTarget::Document(pdoc());
+    let first = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 2)] };
+    writer(&k).publication(P1, &into_e, &first, &places(1, &[(0, 2)]), &none).expect("E.1");
+    let second = shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 2)]);
+    writer(&k).publication(P1, &into_e, &second, &places(2, &[(1, 4)]), &none).expect("E.2");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 4)], "the premise: the fresh identity adjoining, one run");
+    assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(2), 2), &run(&pca(1), 2)), record(&run(&ca(4), 2), &run(&pca(3), 2))]);
+    let vs = Vstream::new(&k);
+    vs.reinstate(P1, &doc1(), vp(1, 6), &[ShotRun { origin: doc1(), run: run(&ca(3), 1) }]).expect("c, the piece");
+    vs.reinstate(P1, &doc1(), vp(1, 7), &[ShotRun { origin: doc1(), run: run(&ca(2), 4) }]).expect("b c d e, across both");
+    assert_eq!(bytes_of(&k, &doc1()), "abcdecbcde");
+    let before = k.snapshot();
+    let the_shot = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(2), 1), shot_run(&pdoc(), &pca(1), 4)]);
+    assert_eq!(the_shot.runs.len(), 3, "the head's run, the piece, the span");
+    let (member, seq) = writer(&k).publication(P1, &into_e, &the_shot, &places(3, &[(1, 6), (2, 7)]), &none).expect("piece by piece");
+    assert_eq!(member, pmember(3));
+    assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "ONE commit");
+    assert_eq!(bytes_of(&k, &doc1()), "abcdecbcde", "the same bytes");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 4), run(&pca(2), 1), run(&pca(1), 4)], "E's identity at both places");
+    assert!(footprint(&k, &doc1(), &run(&ca(2), 4)).is_empty(), "the draft-native words arranged nowhere");
+    assert_eq!(bytes_of(&k, &member), "bcdecbcde");
+    assert_eq!(records_in_doc1(&k).len(), 2, "no new record");
+    assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(5)), "no identity minted");
+}
+
+/// MOVED, OR ALREADY PUBLISHED THERE: the stray words edited after their
+/// place was read — `b` of the stray `b c` deleted, doc1 `a b c c` — refuse
+/// the publication `KeptPlaceMoved` with the entry, nothing committed; and
+/// a place where doc1 already arranges E's identity (the re-windowed `b c`
+/// at 2) names no draft words to re-window and is refused the same — the
+/// check asks for the record's `from` at the place, never a guess.
+#[test]
+fn a_stray_run_whose_draft_words_moved_since_is_refused_with_its_entry_and_writes_nothing() {
+    let k = kernel_over(edition_world());
+    stray_board(&k);
+    Vstream::new(&k).delete(P1, &doc1(), vp(1, 4), n(1)).expect("a b c c");
+    assert_eq!(bytes_of(&k, &doc1()), "abcc");
+    let disturbed = k.snapshot();
+    let runs_before = runs_of(&k, &doc1());
+    let the_shot = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(1), 2)]);
+    for (place, what) in [(4u32, "the stray words moved"), (2, "E's identity already there")] {
+        let refusal = refused(writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(2, &[(1, place)]), &PublishDeposits::default()));
+        assert_eq!(refusal, PublicationError::KeptPlaceMoved { index: 1 }, "{what}");
+        let s = k.snapshot();
+        assert_eq!(s.seq(), disturbed.seq(), "{what}: nothing committed");
+        assert!(!s.world().m3().is_registered_document(&pmember(2)), "{what}: no member");
+        assert_eq!(runs_of(&k, &doc1()), runs_before, "{what}: the draft unchanged");
+        assert_eq!(records_in_doc1(&k).len(), 1, "{what}: the one record");
+    }
+}
+
+/// UNRECORDED: a run of E's identity no record of the draft names whole —
+/// E's `x y` minted from doc2's words, so recorded in doc2 and not in doc1;
+/// and `b c x`, which doc1's record covers in part — with a place is
+/// refused `StrayPlaceUnrecorded` with the entry, nothing committed: the
+/// shot's mints and the re-window of an earlier entry are discarded with
+/// it. And below the codec's door a place beside a window onto another
+/// document (doc2's own words) is checked as any place is and re-windows
+/// nothing — refused `KeptPlaceMoved` where the draft does not arrange it
+/// there.
+#[test]
+fn a_stray_run_no_record_of_the_draft_covers_whole_is_refused_with_its_entry_and_writes_nothing() {
+    let k = kernel_over(edition_world());
+    stray_board(&k);
+    let into_e = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    Vstream::new(&k)
+        .insert(P1, &doc2(), vp(1, 1), "xy".bytes().map(|b| Val::new([b])).collect(), Deposit::Undeclared)
+        .expect("doc2 holding x y");
+    let from_doc2 = Shot {
+        base: Some(skep_arrangement::Base { member: pmember(1), extent: n(2) }),
+        draft: Some(doc2()),
+        runs: vec![shot_run(&pdoc(), &pca(1), 2), shot_run(&doc2(), &ca2(1), 2)],
+    };
+    writer(&k).publication(P1, &into_e, &from_doc2, &[], &none).expect("E.2, x y minted from doc2");
+    assert_eq!(bytes_of(&k, &pmember(2)), "bcxy");
+    let before = k.snapshot();
+    let cells: [(&str, ShotRun, PublicationError); 3] = [
+        ("x y, recorded in doc2 alone", shot_run(&pdoc(), &pca(3), 2), PublicationError::StrayPlaceUnrecorded { index: 2 }),
+        ("b c x, covered in part", shot_run(&pdoc(), &pca(1), 3), PublicationError::StrayPlaceUnrecorded { index: 2 }),
+        ("a window onto doc2, below the door", shot_run(&doc2(), &ca2(1), 2), PublicationError::KeptPlaceMoved { index: 2 }),
+    ];
+    for (what, stray, expected) in cells {
+        // The head's run by reference, the stray `b c` with its place (which
+        // holds), then the entry under test with a place of its own.
+        let mut the_shot = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(1), 2), stray]);
+        the_shot.draft = Some(doc1());
+        assert_eq!(the_shot.runs.len(), 3, "{what}");
+        let refusal = refused(writer(&k).publication(P1, &into_e, &the_shot, &places(3, &[(1, 4), (2, 1)]), &none));
+        assert_eq!(refusal, expected, "{what}");
+        let s = k.snapshot();
+        assert_eq!(s.seq(), before.seq(), "{what}: nothing committed, the first entry's re-window with it");
+        assert_eq!(bytes_of(&k, &doc1()), "abcbc", "{what}");
+        assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(2), 2)], "{what}: the draft unchanged");
+        assert!(!s.world().m3().is_registered_document(&pmember(3)), "{what}: no member");
+    }
+}
+
 // ───────────────────────── the deposits in the one commit (S3) ─────────────────────────
 
 use skep_links::{
@@ -1055,39 +1257,141 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
 /// runs and the request's runs — and the one comparison against
 /// `MAX_PUBLICATION_READS`: a request at the budget is inside it, one past
 /// it is over, the system caller prices no homes, and a shot naming no draft
-/// no runs of one.
+/// no runs of one. AND THE FIFTH TERM (lane F4): the staged bytes, priced
+/// from the table off the request — the shot, a by-reference run's
+/// placement, a draft-native run's placement and record, its values, the
+/// copy at its own slots' spans (a member-position span at the fewer of its
+/// width and the runs, an address as its unit span) with its claim, the
+/// retraction and the two read-withs — against `MAX_TXN_BYTES`, the same
+/// `over_budget`; one past the transaction budget is over with the reads
+/// inside theirs.
 #[test]
 fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() {
-    use skep_links::{price_publication_reads, ReadPrice, MAX_PUBLICATION_READS};
+    use skep_links::{
+        price_publication_reads, stored_span_bytes, ReadPrice, CLAIM_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
+        MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES, RETRACTION_BYTES, SHOT_BYTES,
+    };
 
     let k = kernel_over(deposits_world());
     let (l, m) = board(&k);
     let s = k.snapshot();
     let world = s.world();
+    let target = PublishTarget::Document(pdoc());
     let the_shot = shot_off_head(&k, vec![shot_run(&doc1(), &ca(1), 3)]);
     let deposits = PublishDeposits {
         links: vec![entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l))],
         retract: vec![m],
         read_with: vec![set_s(), set_s()],
     };
-    let price = price_publication_reads(world, P1, &the_shot, &deposits);
+    let price = price_publication_reads(world, P1, &target, &the_shot, &[], &deposits);
+    // The fifth term, from the table: the member-position `from` of width 3
+    // over a shot of two runs is at most two content spans of the edition's
+    // chain; `to` and `ty` one unit span each.
+    let content_span = stored_span_bytes(&run(&pca(1), 1).iextent());
+    let unit = |a: &Address| stored_span_bytes(&skep_address::subtree_of(a.tumbler()));
+    let staged = SHOT_BYTES
+        + PLACED_RUN_BYTES
+        + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES)
+        + 3 * REINSERTED_VALUE_BYTES
+        + COPY_FIXED_BYTES
+        + 2 * content_span
+        + unit(&doc2())
+        + unit(&citation())
+        + CLAIM_BYTES
+        + RETRACTION_BYTES
+        + 2 * READ_WITH_BYTES;
     assert_eq!(
         price,
-        ReadPrice { homes: 3, entries: 3, draft_runs: 1, runs: 2 },
-        "three link-holding homes under the account; one links entry and two read-withs; one run in doc1; two runs in the shot"
+        ReadPrice { homes: 3, entries: 3, draft_runs: 1, runs: 2, staged_bytes: staged },
+        "three link-holding homes under the account; one links entry and two read-withs; one run in doc1; two runs in the shot; the staged bytes from the table"
     );
+    assert_eq!(staged, 7_145, "the figure, at the shallow depth");
     assert_eq!(price.total(), 3 * 3 + 2, "homes × entries + draft runs × runs");
     assert!(!price.over_budget());
     assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
-    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 0, runs: 0 };
-    assert!(!at_budget.over_budget(), "at the budget is inside it");
-    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 1, runs: 1 };
-    assert!(past.over_budget(), "one past the budget is over");
-    let huge = ReadPrice { homes: usize::MAX, entries: 2, draft_runs: usize::MAX, runs: 2 };
+    assert_eq!(ReadPrice::BYTE_BUDGET, skep_kernel::MAX_TXN_BYTES);
+    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 0, runs: 0, staged_bytes: ReadPrice::BYTE_BUDGET };
+    assert!(!at_budget.over_budget(), "at both budgets is inside them");
+    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 1, runs: 1, staged_bytes: 0 };
+    assert!(past.over_budget() && past.reads_over_budget() && !past.bytes_over_budget(), "one read past the budget is over");
+    let heavy = ReadPrice { homes: 0, entries: 0, draft_runs: 0, runs: 0, staged_bytes: ReadPrice::BYTE_BUDGET + 1 };
+    assert!(heavy.over_budget() && heavy.bytes_over_budget() && !heavy.reads_over_budget(), "one byte past the transaction budget is over");
+    let huge = ReadPrice { homes: usize::MAX, entries: 2, draft_runs: usize::MAX, runs: 2, staged_bytes: 0 };
     assert_eq!(huge.total(), usize::MAX, "the price saturates");
-    assert_eq!(price_publication_reads(world, Caller::System, &the_shot, &deposits).homes, 0, "no account, no homes");
+    assert_eq!(price_publication_reads(world, Caller::System, &target, &the_shot, &[], &deposits).homes, 0, "no account, no homes");
     let draftless = Shot { draft: None, ..the_shot.clone() };
-    assert_eq!(price_publication_reads(world, P1, &draftless, &deposits).draft_runs, 0, "no draft, no draft runs");
+    assert_eq!(price_publication_reads(world, P1, &target, &draftless, &[], &deposits).draft_runs, 0, "no draft, no draft runs");
+}
+
+/// THE STAGED BYTES' SHAPES (lane F4): what the fifth term prices off the
+/// request alone, each against the formula — a kept place on a
+/// draft-native run (`KEPT_PLACE_BYTES` per piece, a run cut by another
+/// run's endpoints inside it priced per piece); a kept place on a stray
+/// run (per record of the draft overlapping it, one here; one where none
+/// does, the arm refusing it); the mint form's two; a copy's `spans` form at
+/// its own spans; and the member-position form's amplification, which the
+/// product of caps hid: a hundred `links` entries whose `from` names the
+/// member's 4096 positions, over a shot of 4096 runs, price past
+/// `MAX_TXN_BYTES` from a request of a few hundred kilobytes, where one
+/// such entry is well inside it.
+#[test]
+fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spells() {
+    use skep_links::{
+        price_staged_bytes, stored_span_bytes, ReadPrice, CLAIM_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
+        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, SHOT_BYTES,
+    };
+
+    let k = kernel_over(deposits_world());
+    board(&k);
+    let s = k.snapshot();
+    let world = s.world();
+    let target = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let birth = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(doc1()), runs };
+    // Draft-native: `a b c` whole and `b` inside it — the first cut at `b`'s
+    // two endpoints into three pieces, the second one piece; both placed.
+    let nested = birth(vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
+    let per_piece = PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES;
+    assert_eq!(
+        price_staged_bytes(world, &target, &nested, &[], &none),
+        SHOT_BYTES + (3 + 1) * per_piece + 3 * REINSERTED_VALUE_BYTES,
+        "three pieces and one, the values the distinct positions"
+    );
+    assert_eq!(
+        price_staged_bytes(world, &target, &nested, &places(2, &[(0, 1), (1, 2)]), &none),
+        SHOT_BYTES + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + 3 * REINSERTED_VALUE_BYTES,
+        "a kept place per piece"
+    );
+    // Stray: the head's identity, which the board's one record names, with
+    // a place — one record; identity no record names — priced as one piece,
+    // the arm refusing it.
+    let stray = birth(vec![shot_run(&pdoc(), &pca(1), 3)]);
+    assert_eq!(price_staged_bytes(world, &target, &stray, &places(1, &[(0, 1)]), &none), SHOT_BYTES + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    let unrecorded = birth(vec![shot_run(&pdoc(), &pca(9), 1)]);
+    assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &none), SHOT_BYTES + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    // The mint form's two, and a copy in the I-span form at its own spans.
+    let mint = PublishTarget::Mint { account: a(&[1, 0, 1]), claim: true };
+    let spans = EndArg::Spans(vec![run(&pca(1), 2).iextent(), run(&pca(5), 1).iextent()]);
+    let copy = PublishDeposits { links: vec![entry(NamedAddress::Edition, spans.clone(), spans, addrs(&[&citation()]), None)], ..PublishDeposits::default() };
+    let span_bytes: u64 = [run(&pca(1), 2), run(&pca(5), 1)].iter().map(|r| stored_span_bytes(&r.iextent())).sum();
+    assert_eq!(
+        price_staged_bytes(world, &mint, &birth(vec![]), &[], &copy),
+        SHOT_BYTES + EDITION_MINT_BYTES + EDITION_CLAIM_BYTES + COPY_FIXED_BYTES + 2 * span_bytes + stored_span_bytes(&skep_address::subtree_of(citation().tumbler())),
+        "the mint and the claim, the copy at its four spans and its type, no claim without an original"
+    );
+    assert!(CLAIM_BYTES > 0);
+    // The member-position form's amplification.
+    let wide = |count: usize| PublishDeposits {
+        links: (0..count).map(|_| entry(NamedAddress::Member, member_spans(1, 4096), addrs(&[]), addrs(&[&citation()]), None)).collect(),
+        ..PublishDeposits::default()
+    };
+    let many = birth((0..4096).map(|_| shot_run(&doc1(), &ca(1), 1)).collect());
+    let one = price_staged_bytes(world, &target, &many, &[], &wide(1));
+    let hundred = price_staged_bytes(world, &target, &many, &[], &wide(100));
+    let content_span = stored_span_bytes(&run(&pca(1), 1).iextent());
+    assert_eq!(hundred - one, 99 * (COPY_FIXED_BYTES + 4096 * content_span + stored_span_bytes(&skep_address::subtree_of(citation().tumbler()))));
+    assert!(one < ReadPrice::BYTE_BUDGET, "one wide entry over the many-run shot is inside the budget: {one}");
+    assert!(hundred > ReadPrice::BYTE_BUDGET, "a hundred are past it: {hundred} against {}", ReadPrice::BYTE_BUDGET);
 }
 
 /// THE WORST-CASE TABLE, PINNED (the link-sets design §5.6, M6): each
@@ -1100,9 +1404,10 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
 /// that moves with an encoding fails here, and the table is re-pinned.
 #[test]
 fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
+    use skep_address::subtree_of;
     use skep_links::{
-        CLAIM_BYTES, COPY_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES,
-        KEPT_PLACE_BYTES, MAX_SLOT_SPANS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
+        stored_span_bytes, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
+        EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAX_SLOT_SPANS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
         RETRACTION_BYTES, SHOT_BYTES,
     };
 
@@ -1163,12 +1468,32 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     };
     let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { links, retract, read_with };
     let copy = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![full.clone()], vec![], vec![]))) - shot_bytes;
+    // THE SHOT AT AN EMPTY HEAD: the shots above left the head a member of
+    // no positions, and a shot off it carries `base_extent` 0 — a zero
+    // `Nat` is four bytes shorter than 3 — so every records-less shot from
+    // here is measured against this shot of the same shape, not the first
+    // (which S4 subtracted, leaving two of its figures four bytes low).
+    let shot_bytes_at_an_empty_head = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &none));
+    assert_eq!(shot_bytes - shot_bytes_at_an_empty_head, 4, "a zero base extent is one 32-bit digit shorter");
+    // The copy's fixed part and a span's own bytes, each at its depth (lane
+    // F4): the copy with `from` and `to` empty and one type address; then
+    // one content span in `from`; then a second type address — the two
+    // differences the span function must price, and the fixed part what is
+    // left of the first once its one span is taken off.
+    let bare = |from: EndArg, ty: &[&Address]| with(vec![entry(NamedAddress::Member, from, addrs(&[]), addrs(ty), None)], vec![], vec![]);
+    let other_type = a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, 1]);
+    let empty_copy = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &bare(EndArg::Spans(vec![]), &[&citation()]))) - shot_bytes_at_an_empty_head;
+    let one_content_span = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &bare(ispans(&pca(1), 3), &[&citation()]))) - shot_bytes_at_an_empty_head;
+    let two_types = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &bare(EndArg::Spans(vec![]), &[&citation(), &other_type]))) - shot_bytes_at_an_empty_head;
+    assert_eq!(one_content_span - empty_copy, stored_span_bytes(&run(&pca(1), 3).iextent()), "a content span's bytes, as the function prices them");
+    assert_eq!(two_types - empty_copy, stored_span_bytes(&subtree_of(other_type.tumbler())), "a ten-component unit span's bytes");
+    let copy_fixed = empty_copy - stored_span_bytes(&subtree_of(citation().tumbler()));
     let small = |old: Option<Address>| entry(NamedAddress::Member, ispans(&pca(1), 3), addrs(&[&doc2()]), addrs(&[&citation()]), old);
     let small_alone = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![small(None)], vec![], vec![])));
     let small_claimed = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![small(Some(l.clone()))], vec![], vec![])));
     let claim = small_claimed - small_alone;
-    let retraction = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![m.clone()], vec![]))) - shot_bytes;
-    let read_with = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![], vec![set_s()]))) - shot_bytes;
+    let retraction = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![m.clone()], vec![]))) - shot_bytes_at_an_empty_head;
+    let read_with = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![], vec![set_s()]))) - shot_bytes_at_an_empty_head;
     // The re-insert: an atom at ca(4), a byte at ca(5), a byte at ca(6)
     // re-windowed at its place — each shot placing its one fresh run, and
     // minting its one record.
@@ -1195,6 +1520,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let table = [
         ("CORRESPONDENCE_RECORD_BYTES", record, CORRESPONDENCE_RECORD_BYTES),
         ("COPY_BYTES", copy, COPY_BYTES),
+        ("COPY_FIXED_BYTES", copy_fixed, COPY_FIXED_BYTES),
         ("CLAIM_BYTES", claim, CLAIM_BYTES),
         ("RETRACTION_BYTES", retraction, RETRACTION_BYTES),
         ("READ_WITH_BYTES", read_with, READ_WITH_BYTES),
@@ -1207,7 +1533,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     ];
     println!(
         "the marker: {marker}; a one-byte value's stretch and range mint: {byte}; a birth shot: {birth_s}; a copy at one span a slot: {}",
-        small_alone - shot_bytes
+        small_alone - shot_bytes_at_an_empty_head
     );
     for (name, measured, pinned) in table {
         println!("{name}: measured {measured}, pinned {pinned}");
@@ -1217,8 +1543,15 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     }
     // The figures the module's cards quote beside the table: the marker the
     // kernel's own card states, the birth shape's shot, a byte run's stretch
-    // and the one-span copy the arithmetic's second verdict reads.
-    assert_eq!((marker, birth_s, byte, small_alone - shot_bytes), (109, 258, 301, 1_025), "the quoted figures");
+    // and the one-span copy the arithmetic's second verdict reads — the
+    // copy's fixed part and its three spans at their depths.
+    let one_span_copy = small_alone - shot_bytes_at_an_empty_head;
+    assert_eq!((marker, birth_s, byte, one_span_copy), (109, 258, 301, 1_029), "the quoted figures");
+    assert_eq!(
+        one_span_copy,
+        COPY_FIXED_BYTES + stored_span_bytes(&run(&pca(1), 3).iextent()) + stored_span_bytes(&subtree_of(doc2().tumbler())) + stored_span_bytes(&subtree_of(citation().tumbler())),
+        "the one-span copy is the fixed part and its three spans"
+    );
 }
 
 #[test]

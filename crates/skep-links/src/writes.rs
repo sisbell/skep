@@ -83,13 +83,14 @@ pub use makelink::{slot_endset, SlotArg};
 pub use nullify::retraction_tuple;
 pub use publication::{
     canonical_member_spans, edition_type, member_end, member_image, names_read_with,
-    plan_deposits, price_publication_reads, read_with_in, read_with_type, request_image,
-    resolve_end, stage_correspondence, stage_publication, DepositPlan, EndArg, LinkEntry,
-    MemberEnd, MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome,
-    PublishDeposits, PublishTarget, ReadPrice, CLAIM_BYTES, COPY_BYTES,
-    CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES, KEPT_PLACE_BYTES,
-    MAXIMAL_PUBLICATION_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
-    RETRACTION_BYTES, SHOT_BYTES,
+    plan_deposits, price_publication_reads, price_staged_bytes, read_with_in, read_with_type,
+    request_image, resolve_end, stage_correspondence, stage_publication, stored_span_bytes,
+    stored_tumbler_bytes, DepositPlan, EndArg, LinkEntry, MemberEnd, MemberSpan, NamedAddress,
+    PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PublishDeposits, PublishTarget,
+    ReadPrice, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,
+    EDITION_CLAIM_BYTES, EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAXIMAL_PUBLICATION_BYTES,
+    PLACED_RUN_BYTES, READ_WITH_BYTES, REACHABLE_PUBLICATION_BYTES, REINSERTED_VALUE_BYTES,
+    REQUEST_BODY_BYTES, RETRACTION_BYTES, SHOT_BYTES,
 };
 pub use supersession::{supersession_claim, Edit};
 

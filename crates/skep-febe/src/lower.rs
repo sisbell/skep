@@ -455,6 +455,12 @@ impl Lower for PublicationError {
                 RejectCode::KeptPlaceMoved,
                 Some(FaultSite { index: Some(index), ..FaultSite::default() }),
             ),
+            // The stray places' record read: `site.index` the `runs` entry
+            // no record of the draft covers whole, and nothing else.
+            PublicationError::StrayPlaceUnrecorded { index } => (
+                RejectCode::StrayPlaceUnrecorded,
+                Some(FaultSite { index: Some(index), ..FaultSite::default() }),
+            ),
             // The re-window's placement and removal lower through M5's
             // tables, so they read as `reinstate`'s and `delete`'s.
             PublicationError::Reinstate(e) => e.lower(),

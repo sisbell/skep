@@ -110,6 +110,18 @@ fn kept_place_moved_names_its_runs_entry_and_nothing_else() {
     assert!(site.addr.is_none() && site.slot.is_none() && site.fault.is_none());
     assert!(site.operand.is_none() && site.region.is_none());
     assert!(rej.detail.is_none(), "no detail rides the code");
+    // The stray places' record read (lane F4), the same shape: the entry in
+    // `site.index`, permanent, nothing else.
+    let rej = lower_txn(
+        OpKind::Publish,
+        TxnError::Rejected(PublicationError::StrayPlaceUnrecorded { index: 2 }),
+    );
+    assert_eq!(rej.code, RejectCode::StrayPlaceUnrecorded);
+    assert_eq!(rej.disposition, Disposition::Permanent, "a record names fresh identity once");
+    let site = rej.site.expect("the entry rides the site");
+    assert_eq!(site.index, Some(2));
+    assert!(site.addr.is_none() && site.slot.is_none() && site.fault.is_none());
+    assert!(rej.detail.is_none(), "no detail rides the code");
 }
 
 /// §5's nested-error rule as a LAW over every wrapper: each wrapper variant
@@ -481,6 +493,7 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(PublicationError::NotOwner(doc()));
     same_name(PublicationError::AlreadyPublished { site: doc() });
     same_name(PublicationError::KeptPlaceMoved { index: 0 });
+    same_name(PublicationError::StrayPlaceUnrecorded { index: 0 });
     // The deposit plan's (lane S3): the six of the lane's own, the
     // slot-form and class-fence verdicts `make_link` answers — the three
     // fenced classes deviating as `make_link`'s do — and the two shape

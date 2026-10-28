@@ -371,6 +371,19 @@ pub enum RejectCode {
     /// the act that exists is a re-read of the draft and a request with the
     /// places composed afresh. Nothing is committed.
     KeptPlaceMoved,
+    /// A kept place stands beside a run of the document's own identity — a
+    /// stray run, re-composed by reference to a correspondence record's
+    /// published words — and no record homed in the draft names that
+    /// identity whole as its `to` (the link-sets design §5.7's stray places).
+    ///
+    /// The records covering the run's span leave a gap, or there is none:
+    /// the identity was minted from another draft's words, or the client
+    /// mis-read the records. `site.index` is the `runs` entry. Permanent by
+    /// the catch-all: a record names fresh identity once, at the publication
+    /// that minted it, so no later commit can cover the span — the act that
+    /// exists is a re-read of the draft's records and a run re-composed by
+    /// them. Nothing is committed.
+    StrayPlaceUnrecorded,
     // ── M7 link ──
     /// A `Resolve` V-spec fails its well-formedness check.
     IllFormedSpec,

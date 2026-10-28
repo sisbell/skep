@@ -705,9 +705,71 @@ fn doc_states_the_kept_places_and_their_refusal() {
     }
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
     assert!(
-        codes.contains("and `kept_place_moved` (the publication's re-window"),
+        codes.contains("`kept_place_moved` (the publication's re-window"),
         "§Rejection codes carries the token"
     );
+}
+
+/// THE STRAY PLACES (the link-sets design §5.7, "AND THE STRAY PLACES WITH
+/// THEM"; lane F4): §Arrangement's `places` names a run of either kind — the
+/// draft's, or a stray run of `doc`'s own identity re-composed by reference
+/// to a record — and the window it still refuses; §The publish shot and
+/// head-float states the stray arm, its record read, its check and its
+/// token; §Rejection codes carries the token and its table row. The
+/// daemon's answers are pinned in `publish.rs` and the stores' suites; this
+/// pins that the contract says so.
+#[test]
+fn doc_states_the_stray_places_and_their_refusal() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "or, for a STRAY run — a run of `doc`'s own identity",
+        "re-composed by reference to a correspondence record of the draft",
+        "`stray_place_unrecorded` where no record of the draft names a stray run's identity whole",
+        "neither the `draft` nor `doc`'s own trunk — a window onto another document, never re-windowed",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "AND THE STRAY PLACES WITH THEM",
+        "re-composes such a run BY REFERENCE to the record's `to`",
+        "checks that the draft still arranges the record's `from` words at the place, by identity as above",
+        "re-windows them there onto the record's `to` in the same transaction",
+        "no identity is minted and no record written",
+        "A stray run no record of the draft covers whole is refused `stray_place_unrecorded`",
+        "| `stray_place_unrecorded` | permanent | `index` = the `runs` entry |",
+        "* `stray_place_unrecorded` —",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(codes.contains("and `stray_place_unrecorded` (the re-window's stray arm"), "§Rejection codes carries the token");
+}
+
+/// THE STAGED BYTES, THE PRICE's FIFTH TERM (the link-sets design §5.6, M6;
+/// lane F4): §The publish shot and head-float's budget paragraph states the
+/// term, its table, the transaction budget it is held to and why the body
+/// cap alone does not hold it; §Rejection codes' entry carries the second
+/// cause and the figure.
+#[test]
+fn doc_states_the_staged_bytes_term_of_the_publication_price() {
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "AND THE STAGED BYTES, the price's fifth term".to_string(),
+        "priced from the worst-case table off the request".to_string(),
+        format!("against the kernel's transaction budget, `MAX_TXN_BYTES` = {} (64 MiB)", skep_links::ReadPrice::BYTE_BUDGET),
+        "so the kernel's own `txn_over_budget` is met only by a bug or a race".to_string(),
+        "`detail` naming the bound passed with its figures".to_string(),
+        "a `links` entry's member-position slot is up to 4096 stored spans for 36 bytes of body".to_string(),
+        "a stored span is about ten times its spelling".to_string(),
+    ] {
+        assert!(shot.contains(&fact), "§The publish shot and head-float says {fact:?}");
+    }
+    assert_eq!(skep_links::ReadPrice::BYTE_BUDGET, 64 * 1024 * 1024, "the budget as the document states it");
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(codes.contains("its in-lock reads and its staged bytes, `publication_over_budget`"), "§Rejection codes names the second cause");
+    assert!(codes.contains(&format!("past the kernel's `MAX_TXN_BYTES` = {}", skep_links::ReadPrice::BYTE_BUDGET)), "§Rejection codes states the figure");
+    assert!(shot.contains("| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS`, or the bytes its commit would stage past the kernel's `MAX_TXN_BYTES`"), "the table row's second cause");
 }
 
 /// THE TEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):

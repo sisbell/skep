@@ -1108,8 +1108,11 @@ fn the_birth_version_is_one_commit_and_a_refused_shot_leaves_no_residue() {
 /// `kept_place_moved`, permanent, `site.index` the `runs` entry and nothing
 /// else, no detail, nothing committed and the draft as the rearrangement
 /// left it. And the shape is the codec's, ahead of every store: a place on
-/// a run whose origin is the edition, and a list longer than `runs`, are
-/// `malformed` with `site.index` the entry.
+/// a window onto another document, and a list longer than `runs`, are
+/// `malformed` with `site.index` the entry — while a place on a run of the
+/// edition's own identity is a STRAY place (lane F4), admitted by the codec
+/// and refused by the store `stray_place_unrecorded` where no record of the
+/// draft names that identity.
 #[test]
 fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1175,15 +1178,129 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
     assert!(changes_since(port, before).is_empty());
     assert_eq!(text_as(port, Some(&bare), &d2, 1, 3), "yxz", "the draft as the rearrangement left it");
 
-    // The shape, refused at the codec with the entry, before any store.
-    let both = publish(&e, Some((&member, 2)), Some(&d2), &[run(&e, &format!("{e}.0.1.1"), 2), run(&d2, &yz, 2)]);
-    let v = op_as_written(port, Some(&signed), &placed(&both, serde_json::json!([{"subspace": "1", "ordinal": "1"}, null])).to_string());
+    // The shape, refused at the codec with the entry, before any store: a
+    // window onto a third document, and a list longer than `runs`.
+    let d3 = draft_with(port, &bare, "q");
+    let before = head(port);
+    let windowed = publish(&e, Some((&member, 2)), Some(&d2), &[run(&d3, &format!("{d3}.0.1.1"), 1), run(&d2, &yz, 2)]);
+    let v = op_as_written(port, Some(&signed), &placed(&windowed, serde_json::json!([{"subspace": "1", "ordinal": "1"}, null])).to_string());
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");
-    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "a place on the edition's own run: {v}");
-    let v = op_as_written(port, Some(&signed), &placed(&both, serde_json::json!([null, null, null])).to_string());
+    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "a place on a window onto another document: {v}");
+    let v = op_as_written(port, Some(&signed), &placed(&windowed, serde_json::json!([null, null, null])).to_string());
     assert_eq!(expect_resp(&v, "rejected")["site"], serde_json::json!({"index": 2}), "longer than runs: {v}");
     assert_eq!(head(port), before);
+    // A place on the edition's own run is a stray place: admitted by the
+    // codec, and refused by the store where no record of the draft names
+    // that identity — `d2` has none — `stray_place_unrecorded`, the entry.
+    let both = publish(&e, Some((&member, 2)), Some(&d2), &[run(&e, &format!("{e}.0.1.1"), 2), run(&d2, &yz, 2)]);
+    let v = op(port, Some(&signed), &placed(&both, serde_json::json!([{"subspace": "1", "ordinal": "1"}, null])).to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("stray_place_unrecorded"), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "the runs entry, and nothing else: {v}");
+    assert!(rej.get("detail").is_none(), "{v}");
+    assert_eq!(head(port), before, "nothing committed");
+    sd.shutdown();
+}
+
+/// THE STRAY PLACES ON THE WIRE (the link-sets design §5.7, "AND THE STRAY
+/// PLACES WITH THEM"; wire.md §The publish shot and head-float, the kept
+/// places; lane F4): a draft published with `b c` at its place, then a raw
+/// `reinstate` of the draft's own `b c` after them — the record's draft
+/// words back in the draft as private text — and a second shot whose
+/// `runs` re-compose them BY REFERENCE to the record's published words,
+/// E's own identity, with their kept place beside: the draft, read back as
+/// its owner, holds the same text and images E's identity at the place,
+/// its own words nowhere; the member holds the run by reference, twice;
+/// no new record (the draft's second link address is empty); the feed row
+/// one commit with its `attest` kept and the member alone in its `docs` —
+/// the row names the draft where a record was minted in it, and a
+/// stray-only shot mints none; and the signature the suite's signer made
+/// over the frame WITHOUT `places` verifies the frame with them. Then identity of
+/// E minted from another draft's words, re-composed from this draft with a
+/// place, is refused `stray_place_unrecorded`, permanent, `site.index` the
+/// entry and nothing else, nothing committed.
+#[test]
+fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire_and_an_unrecorded_one_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    let d = draft_with(port, &bare, "abc");
+    let b = format!("{d}.0.1.2");
+    let fresh = format!("{e}.0.1.1");
+    let placed = |frame: &str, places: Value| -> Value {
+        let mut v: Value = serde_json::from_str(frame).expect("a frame");
+        v["places"] = places;
+        v
+    };
+    // E.1: `b c` with its place — the draft re-windowed, as S2 left it.
+    let first = placed(&publish(&e, None, Some(&d), &[run(&d, &b, 2)]), serde_json::json!([{"subspace": "1", "ordinal": "2"}]));
+    let member = acked_addr(&op(port, Some(&signed), &first.to_string()));
+    assert_eq!(member, format!("{e}.1"));
+    assert_eq!(image_as(port, Some(&bare), &d, 2, 2), vec![(fresh.clone(), "2".to_string())]);
+    // The stray act: the draft's own `b c`, reinstated after them.
+    expect_resp(&op(port, Some(&bare), &reinstate_frame(&d, 4, &[(&d, &b, 2)])), "ack");
+    assert_eq!(text_as(port, Some(&bare), &d, 1, 5), "abcbc");
+    assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(b.clone(), "2".to_string())], "the record's draft words, private text again");
+    // The second shot: the head's `b c` by reference, then the stray run
+    // re-composed by reference to the record's `to`, its place beside it —
+    // the signature over the frame without places, attached to the frame
+    // with them.
+    let unplaced = publish(&e, Some((&member, 2)), Some(&d), &[run(&e, &fresh, 2), run(&e, &fresh, 2)]);
+    let attested: Value = serde_json::from_str(&attach_attest(port, &signed, &unplaced)).expect("a frame");
+    let attest = attested["attest"].clone();
+    assert!(attest.is_object(), "the suite's signer attested the shot: {attested}");
+    let mut shot = placed(&unplaced, serde_json::json!([null, {"subspace": "1", "ordinal": "4"}]));
+    shot["attest"] = attest;
+    let before = head(port);
+    let second = acked_addr(&op_as_written(port, Some(&signed), &shot.to_string()));
+    assert_eq!(second, format!("{e}.2"));
+    assert_eq!(text_as(port, Some(&bare), &d, 1, 5), "abcbc", "the draft reads the same text");
+    assert_eq!(content_extent_as(port, Some(&bare), &d), 5);
+    assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(fresh.clone(), "2".to_string())], "E's identity at the place");
+    assert_eq!(image_as(port, Some(&bare), &d, 2, 2), vec![(fresh.clone(), "2".to_string())], "and where S2 put it");
+    assert_eq!(text(port, &second, 1, 4), "bcbc");
+    // `image` answers a SET of distinct runs, so the run held twice is read
+    // at each place.
+    assert_eq!(image(port, &second, 1, 2), vec![(fresh.clone(), "2".to_string())], "the member holds the run by reference");
+    assert_eq!(image(port, &second, 3, 2), vec![(fresh.clone(), "2".to_string())], "twice");
+    let record = read_link(port, Some(&bare), &format!("{d}.0.2.1"));
+    assert_eq!(record["slots"][0][0]["start"].as_str(), Some(b.as_str()), "the S1 record stands: {record}");
+    let none = read_link(port, Some(&bare), &format!("{d}.0.2.2"));
+    assert!(none["link"].is_null(), "no new record: {none}");
+    // The row: ONE commit, its `attest` kept — and the member alone in its
+    // `docs`: the feed names the staging draft "where the shot minted a
+    // correspondence record in it" (§The change feed), and a stray-only
+    // shot mints none, though it re-windows the draft's content.
+    let owners = changes_since_as(port, Some(&signed), before);
+    assert_eq!(owners.len(), 1, "one commit: {owners:?}");
+    assert_eq!(owners[0]["docs"], serde_json::json!([second]), "the member, no record minted in the draft: {}", owners[0]);
+    assert!(owners[0]["attest"].is_object(), "{}", owners[0]);
+    // Unrecorded: `x y` minted into E from a second draft — recorded there,
+    // not in `d` — re-composed from `d` with a place.
+    let d2 = draft_with(port, &bare, "xy");
+    let x = format!("{d2}.0.1.1");
+    let third = acked_addr(&op(port, Some(&signed), &publish(&e, Some((&second, 4)), Some(&d2), &[run(&e, &fresh, 2), run(&e, &fresh, 2), run(&d2, &x, 2)])));
+    assert_eq!(third, format!("{e}.3"));
+    let xy = format!("{e}.0.1.3");
+    assert_eq!(image(port, &third, 5, 2), vec![(xy.clone(), "2".to_string())]);
+    let stale = placed(
+        &publish(&e, Some((&third, 6)), Some(&d), &[run(&e, &fresh, 2), run(&e, &fresh, 2), run(&e, &xy, 2)]),
+        serde_json::json!([null, null, {"subspace": "1", "ordinal": "1"}]),
+    );
+    let before = head(port);
+    let v = op(port, Some(&signed), &stale.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("stray_place_unrecorded"), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"index": 2}), "the runs entry, and nothing else: {v}");
+    assert!(rej.get("detail").is_none(), "no detail rides the code: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    assert!(changes_since(port, before).is_empty());
     sd.shutdown();
 }
 
@@ -1601,6 +1718,63 @@ fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool
     // An ordinary shot off the fragmented draft, priced 18, lands.
     let member = acked_addr(&op(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &[run(&b.d, &b.d_text, 1)])));
     assert_eq!(member, format!("{}.1", b.e));
+    sd.shutdown();
+}
+
+/// THE STAGED BYTES PRICED AHEAD OF THE LOCK over the wire (the link-sets
+/// design §5.6, M6; lane F4): a shot of 4096 runs, one per byte of a
+/// 4096-byte burst in the draft, and a hundred `links` entries whose `from`
+/// names the member's 4096 positions in the member-position form — each up
+/// to 4096 stored spans for 36 bytes of body, which the price bounds by the
+/// runs — prices past `MAX_TXN_BYTES` with the reads inside their budget,
+/// and is refused `publication_over_budget`, permanent, no `site`, its
+/// `detail` the bytes and the transaction budget and no word of the reads,
+/// WITH EVERY WRITE PERMIT HELD: ahead of the pool, both locks and the
+/// admission (the frame is sent unsigned); nothing committed. One such
+/// entry prices inside both budgets and passes the step, the unsigned frame
+/// then meeting the admission.
+#[test]
+fn a_publication_priced_past_the_transaction_budget_is_refused_ahead_of_the_write_pool_and_commits_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    // Four thousand and ninety-six bytes after `a b c`, one run of the
+    // draft from `{d}.0.1.4`; the shot names each as a run of its own.
+    let burst: String = "x".repeat(4096);
+    expect_resp(&op(port, Some(&b.bare), &insert(&b.d, 4, &burst, false)), "ack_addr");
+    let runs: Vec<String> = (0..4096u64).map(|i| run(&b.d, &format!("{}.0.1.{}", b.d, 4 + i), 1)).collect();
+    let wide = |count: usize| {
+        let entries: Vec<Value> = (0..count)
+            .map(|_| serde_json::json!({"home": "member", "from": {"member": [{"ordinal": "1", "width": "4096"}]}, "to": {"addrs": []}, "ty": {"addrs": [format!("{}.0.3.6.1", b.e)]}}))
+            .collect();
+        with_members(&publish(&b.e, None, Some(&b.d), &runs), serde_json::json!({"links": entries}))
+    };
+    let before = head(port);
+    let mut held = Vec::new();
+    while let Some(permit) = sd.daemon().try_hold_write_permit() {
+        held.push(permit);
+    }
+    assert!(!held.is_empty(), "the pool's permits, every one held");
+    let v = op_as_written(port, Some(&b.signed), &wide(100));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert!(rej.get("site").is_none(), "no site: {v}");
+    let detail = rej["detail"].as_str().expect("the price's detail");
+    let budget = skep_links::ReadPrice::BYTE_BUDGET;
+    assert!(detail.ends_with(&format!(" bytes would be staged against the transaction budget of {budget}; narrow the request")), "{detail}");
+    assert!(!detail.contains("in-lock reads"), "the bytes, not the reads: {detail}");
+    let bytes: u64 = detail.split(' ').next().and_then(|n| n.parse().ok()).expect("the bytes lead the detail");
+    assert!(bytes > budget && bytes < 2 * budget, "{bytes} against {budget}");
+    drop(held);
+    assert_eq!(head(port), before, "nothing committed");
+    // One wide entry: inside both budgets; the unsigned frame then meets the
+    // admission, never the price.
+    let v = op_as_written(port, Some(&b.signed), &wide(1));
+    let rej = expect_resp(&v, "rejected");
+    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "inside the budgets the price admits: {v}");
+    assert_eq!(head(port), before);
     sd.shutdown();
 }
 

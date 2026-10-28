@@ -287,20 +287,25 @@ pub enum Op {
     /// **The kept places** (the link-sets design §5.7). `places` is parallel
     /// to `shot.runs` by index: for a draft-native run, the V-position it
     /// held in the staging draft when the client composed the request, read
-    /// off the draft's image, or `None`; empty where the request carries
-    /// none, which is today's shot, writing nothing of the draft. The
-    /// composite checks, in the shot's one commit, that the draft still
-    /// arranges each such run's identity at its place and replaces it there
-    /// by the fresh run it became, refusing the whole publication
-    /// (`KeptPlaceMoved`, `site.index` the entry) where it does not. They
-    /// ride BESIDE the shot and not in it: the shot is the member's
-    /// arrangement, what the entry signature is composed over, and a place
-    /// is a fact about the draft, outside the signed preimage as `draft` is
-    /// — so the composer reads `shot` and `doc` alone, and every builder of
-    /// a `Shot` stands. The wire's codec holds the list to `runs`' length,
-    /// each place to a draft-native run and the content subspace, padded
-    /// with `None` to `runs`' length where any place is present; M10 hands
-    /// it through verbatim.
+    /// off the draft's image — or, for a STRAY run, one of the document's
+    /// own identity the client re-composed by reference to a correspondence
+    /// record's published words where the draft still arranges the record's
+    /// draft words, the place those words hold — or `None`; empty where the
+    /// request carries none, which is today's shot, writing nothing of the
+    /// draft. The composite checks, in the shot's one commit, that the
+    /// draft still arranges each such run's draft words at its place and
+    /// replaces them there by the published identity, refusing the whole
+    /// publication where it does not (`KeptPlaceMoved`, `site.index` the
+    /// entry) or where no record of the draft names a stray run's identity
+    /// whole (`StrayPlaceUnrecorded`, the same site). They ride BESIDE the
+    /// shot and not in it: the shot is the member's arrangement, what the
+    /// entry signature is composed over, and a place is a fact about the
+    /// draft, outside the signed preimage as `draft` is — so the composer
+    /// reads `shot` and `doc` alone, and every builder of a `Shot` stands.
+    /// The wire's codec holds the list to `runs`' length, each place to a
+    /// run of the draft or of `doc`'s own trunk and to the content subspace,
+    /// padded with `None` to `runs`' length where any place is present; M10
+    /// hands it through verbatim.
     ///
     /// **The target and the deposits** (the link-sets design §5.7; lane
     /// S3). `target` is where the publication lands: a published document

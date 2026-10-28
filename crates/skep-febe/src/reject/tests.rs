@@ -50,6 +50,7 @@ fn invariant_forced_and_state_dependent_codes_are_permanent() {
         RejectCode::BaseSuperseded,
         RejectCode::BaseExtentTooLarge,
         RejectCode::AlreadyPublished,
+        RejectCode::StrayPlaceUnrecorded,
     ] {
         assert_eq!(code.disposition(), Disposition::Permanent);
     }
@@ -257,6 +258,9 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::BaseExtentTooLarge
         | RejectCode::AlreadyPublished
         | RejectCode::KeptPlaceMoved
+        // The stray places' record read (lane F4): a record names fresh
+        // identity once, so no later commit covers the span.
+        | RejectCode::StrayPlaceUnrecorded
         | RejectCode::IllFormedSpec
         | RejectCode::SlotTooLarge
         | RejectCode::EmptyTypeResolution
@@ -298,7 +302,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 88] = [
+const ALL_CODES: [RejectCode; 89] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -357,6 +361,7 @@ const ALL_CODES: [RejectCode; 88] = [
     RejectCode::BaseExtentTooLarge,
     RejectCode::AlreadyPublished,
     RejectCode::KeptPlaceMoved,
+    RejectCode::StrayPlaceUnrecorded,
     RejectCode::IllFormedSpec,
     RejectCode::SlotTooLarge,
     RejectCode::EmptyTypeResolution,

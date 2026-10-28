@@ -1194,9 +1194,12 @@ publish shot staged with its correspondence records and its deposits in
 one transaction, over `skep-arrangement`'s exported shot bound; beneath
 it, `writes/publication/plan.rs` holds the request members and the
 deposit plan, the one function the composite stages from and the
-daemon's composer signs from, and `writes/publication/sizes.rs` the
+daemon's composer signs from, `writes/publication/sizes.rs` the
 worst-case table, the staged bytes per entry kind as the kernel prices
-them, with the maximal request's sum.
+them, the price of a request's staged bytes from it and the maximal and
+the reachable request's sums, and `writes/publication/stray.rs` the
+stray places' record read, which turns a run of the document's own
+identity back into the draft words the re-window checks and replaces.
 
 Rules that hold across its files:
 

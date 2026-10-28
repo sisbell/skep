@@ -275,10 +275,12 @@ pub fn retract_class_refusal(
     })
 }
 
-/// A publication's in-lock reads priced past their budget (the link-sets
+/// A publication priced past a budget ahead of the lock (the link-sets
 /// design §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE
-/// LOCK): the price's four terms, its total and the budget, for the daemon's
-/// `publication_over_budget` refusal and its detail.
+/// LOCK; §5.6, M6): the price's four read terms, their total and budget,
+/// and its fifth term, the staged bytes, with the transaction budget — for
+/// the daemon's `publication_over_budget` refusal and its detail, which
+/// names the bound passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicationReadRefusal {
     /// The caller's link-holding homes, `homes_under` of the account.
@@ -289,45 +291,66 @@ pub struct PublicationReadRefusal {
     pub draft_runs: usize,
     /// The request's runs.
     pub runs: usize,
-    /// The price: `homes × entries + draft_runs × runs`.
+    /// The reads' price: `homes × entries + draft_runs × runs`.
     pub total: usize,
-    /// The budget, M7's `MAX_PUBLICATION_READS`.
+    /// The reads' budget, M7's `MAX_PUBLICATION_READS`.
     pub budget: usize,
+    /// The bytes the commit would stage, priced from M7's worst-case table.
+    pub staged_bytes: u64,
+    /// The staged bytes' budget, the kernel's `MAX_TXN_BYTES`.
+    pub byte_budget: u64,
 }
 
-/// Returns a publication whose in-lock reads are priced past their budget —
-/// the producer behind `publication_over_budget`, the daemon's own cell,
-/// asked AHEAD of the serialization lock.
+impl PublicationReadRefusal {
+    /// Returns whether the reads passed their budget.
+    pub fn reads_over(&self) -> bool {
+        self.total > self.budget
+    }
+
+    /// Returns whether the staged bytes passed the transaction budget.
+    pub fn bytes_over(&self) -> bool {
+        self.staged_bytes > self.byte_budget
+    }
+}
+
+/// Returns a publication priced past a budget — the producer behind
+/// `publication_over_budget`, the daemon's own cell, asked AHEAD of the
+/// serialization lock.
 ///
 /// It is M7's [`price_publication_reads`] over `world` as the caller — the
 /// caller's link-holding homes × (`links` + `read_with` entries), plus the
 /// draft's content runs × the request's runs, the work of the composite's
-/// four in-lock reads counted before any is made — against M7's one budget
-/// ([`ReadPrice::over_budget`], the one comparison), answered with every
-/// term where it is past it. `None` for an op that is no `publish`, or one
-/// inside the budget.
+/// four in-lock reads counted before any is made, against M7's one reads
+/// budget; and the bytes the commit would stage, priced from M7's
+/// worst-case table off the request, against the kernel's transaction
+/// budget, so no request reaches the kernel's `txn_over_budget` with its
+/// records staged — [`ReadPrice::over_budget`], the one comparison,
+/// answered with every term where either bound is passed. `None` for an op
+/// that is no `publish`, or one inside both budgets.
 ///
 /// **Its place in the write order:** ahead of the plain sequence's permit
-/// and both of its locks — a pure read of a lock-free snapshot and the
-/// frame, so a refused request costs no permit and parks behind no writer —
-/// which is why it takes no guard: the snapshot is one the daemon took
-/// before its lock, and the counts may move before the composite reads
-/// them. The budget is conservative by design (`MAX_PUBLICATION_READS`'s
-/// card): a request refused here would have cost at least its price, and
-/// one admitted may cost a little more. The twin fence, the plan's reads
-/// and the kept-place check stay where the composite makes them; this
-/// bounds them and reads nothing of theirs.
+/// and both of its locks — a read of a lock-free snapshot and the frame, so
+/// a refused request costs no permit and parks behind no writer — which is
+/// why it takes no guard: the snapshot is one the daemon took before its
+/// lock, and the counts may move before the composite reads them. The
+/// budget is conservative by design (`MAX_PUBLICATION_READS`'s card, and the
+/// bytes an upper bound): a request refused here would have cost at least
+/// its price, and one admitted may cost a little more. The twin fence, the
+/// plan's reads and the kept-place check stay where the composite makes
+/// them; this bounds them and reads nothing of theirs but one stab of the
+/// draft's records per stray place.
 pub fn publication_read_refusal(
     world: &World,
     op: &Op,
     principal: PrincipalId,
 ) -> Option<PublicationReadRefusal> {
-    let Op::Publish { shot, deposits, .. } = op else { return None };
-    let price = price_publication_reads(world, Caller::Principal(principal), shot, deposits);
+    let Op::Publish { target, shot, places, deposits } = op else { return None };
+    let price =
+        price_publication_reads(world, Caller::Principal(principal), target, shot, places, deposits);
     if !price.over_budget() {
         return None;
     }
-    let ReadPrice { homes, entries, draft_runs, runs } = price;
+    let ReadPrice { homes, entries, draft_runs, runs, staged_bytes } = price;
     Some(PublicationReadRefusal {
         homes,
         entries,
@@ -335,6 +358,8 @@ pub fn publication_read_refusal(
         runs,
         total: price.total(),
         budget: ReadPrice::BUDGET,
+        staged_bytes,
+        byte_budget: ReadPrice::BYTE_BUDGET,
     })
 }
 

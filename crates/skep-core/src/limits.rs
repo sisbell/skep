@@ -217,3 +217,17 @@ pub const MAX_CHANGES_PAGE_BYTES: usize = 256 * 8 * 1024;
 ///
 /// A test build moves it through `commits::set_feed_resident_window`.
 pub const FEED_RESIDENT_WINDOW: u64 = 2 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The link store states the frame routes' body cap for its reachable
+    /// maximum (`skep_links::REQUEST_BODY_BYTES`, the link-sets design §5.6;
+    /// lane F4): the one figure, pinned equal here where the cap is owned, so
+    /// a move of either is a visible decision.
+    #[test]
+    fn the_link_stores_body_cap_is_this_one() {
+        assert_eq!(skep_links::REQUEST_BODY_BYTES, MAX_REQUEST_BODY as u64);
+    }
+}

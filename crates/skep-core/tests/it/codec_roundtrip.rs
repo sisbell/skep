@@ -642,20 +642,23 @@ fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
     assert!(document.contains(&RunError::NotAnElementPosition.to_string()), "{document}");
 }
 
-/// The publish shot's kept places (the link-sets design §5.7; lane S2):
-/// `places` is a list parallel to `runs` by index, each entry a V-position
-/// as `reinstate`'s `at` is spelled or `null`. Absent, empty, or `null` at
-/// every entry — a short list included — is today's shot and parses to no
-/// place, and marshals to no member; a list with a place parses to `runs`'
-/// length, a short one padded with `null`, and marshals as that list, which
-/// parses back to the same request. The shape refusals name their entry in
-/// the `malformed` rejection's `site.index`: a list longer than `runs` (the
-/// first entry past them), a place on a run whose `origin` is not the
-/// request's `draft` — a request naming no draft included — a place
-/// outside the content subspace, one that is no V-position, one with a
-/// member of its own; a `places` that is no array is refused with no site.
-/// The member is read against the envelope as every other is: `extra`
-/// beside it stays refused.
+/// The publish shot's kept places (the link-sets design §5.7; lanes S2 and
+/// F4): `places` is a list parallel to `runs` by index, each entry a
+/// V-position as `reinstate`'s `at` is spelled or `null`. Absent, empty, or
+/// `null` at every entry — a short list included — is today's shot and
+/// parses to no place, and marshals to no member; a list with a place
+/// parses to `runs`' length, a short one padded with `null`, and marshals
+/// as that list, which parses back to the same request. A place stands
+/// beside a draft-native run or beside a run of `doc`'s own identity — a
+/// STRAY run, re-composed by reference to a record's published words — and
+/// the shape refusals name their entry in the `malformed` rejection's
+/// `site.index`: a list longer than `runs` (the first entry past them), a
+/// place on a window onto any other document, a place with no draft named,
+/// a place beside any run at the mint form (the edition has no identity
+/// before the commit), a place outside the content subspace, one that is
+/// no V-position, one with a member of its own; a `places` that is no array
+/// is refused with no site. The member is read against the envelope as
+/// every other is: `extra` beside it stays refused.
 #[test]
 fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     let codec = JsonCodec;
@@ -708,8 +711,25 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
         site.and_then(|s| s.index)
     };
     assert_eq!(index_of(&drafted(r#","places":[null,null,null]"#)), Some(2), "longer than runs: the first entry past them");
-    assert_eq!(index_of(&drafted(r#","places":[{"subspace":"1","ordinal":"1"},null]"#)), Some(0), "a place on the edition's own run");
+    // A place on the edition's own run: a stray run, admitted (lane F4) —
+    // the list as given, and the canonical form carries it.
+    let req = parse_ok(&codec, &drafted(r#","places":[{"subspace":"1","ordinal":"1"},null]"#));
+    assert_eq!(places_of(&req), vec![Some(vp(1, 1)), None], "a place on the edition's own run is a stray place");
+    assert!(canonical(&req).contains(r#""places":[{"ordinal":"1","subspace":"1"},null]"#));
+    // A window onto another document, with the draft named, stays refused;
+    // so does any run at the mint form, where no run is the edition's own.
+    let windowed = |places: &str| {
+        format!(
+            r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","runs":[{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}},{{"origin":"1.0.1.0.9","i_start":"1.0.1.0.9.0.1.1","width":"1"}}]{places}}}"#
+        )
+        .into_bytes()
+    };
+    assert_eq!(index_of(&windowed(r#","places":[null,{"subspace":"1","ordinal":"3"}]"#)), Some(1), "a window onto another document");
+    assert_eq!(places_of(&parse_ok(&codec, &windowed(r#","places":[{"subspace":"1","ordinal":"1"},null]"#))), vec![Some(vp(1, 1)), None], "the draft's run beside it, admitted");
+    let minted = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.7","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
+    assert_eq!(index_of(minted), Some(0), "at the mint form no run is the edition's own");
     assert_eq!(index_of(&frame("", r#","places":[null,{"subspace":"1","ordinal":"4"}]"#)), Some(1), "no draft named: no run is draft-native");
+    assert_eq!(index_of(&frame("", r#","places":[{"subspace":"1","ordinal":"1"},null]"#)), Some(0), "no draft named: no stray run either, the records living in the draft");
     assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"2","ordinal":"1"}]"#)), Some(1), "the link subspace");
     assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"1"}]"#)), Some(1), "no V-position");
     assert_eq!(index_of(&drafted(r#","places":[null,7]"#)), Some(1), "no object");
@@ -1477,14 +1497,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 88 codes, pinned.
+/// The full `RejectCode` wire-name table — all 89 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 88] = [
+    let table: [(RejectCode, &str); 89] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1543,6 +1563,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::BaseExtentTooLarge, "base_extent_too_large"),
         (RejectCode::AlreadyPublished, "already_published"),
         (RejectCode::KeptPlaceMoved, "kept_place_moved"),
+        (RejectCode::StrayPlaceUnrecorded, "stray_place_unrecorded"),
         (RejectCode::IllFormedSpec, "ill_formed_spec"),
         (RejectCode::SlotTooLarge, "slot_too_large"),
         (RejectCode::EmptyTypeResolution, "empty_type_resolution"),

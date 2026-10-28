@@ -1642,12 +1642,18 @@ twin fence: a draft-native run of the shot whose I-span overlaps a span
 a correspondence record homed in the draft already names as its
 from-span — the words were re-inserted by an earlier shot, and
 `site.addr` is the member they were published into; permanent, the
-record standing for good), and `kept_place_moved` (the publication's
-re-window: the draft no longer arranges a draft-native run's identity
-at the kept place the request carries for it in its places member —
-moved, split, deleted or rearranged since the client read it —
-`site.index` the runs entry; permanent, the client re-reads the draft
-and composes its places afresh); the publication's deposits (§The
+record standing for good), `kept_place_moved` (the publication's
+re-window: the draft no longer arranges a run's draft words — a
+draft-native run's identity, a stray run's record from-span — at the
+kept place the request carries for it in its places member — moved,
+split, deleted or rearranged since the client read it — `site.index`
+the runs entry; permanent, the client re-reads the draft and composes
+its places afresh) and `stray_place_unrecorded` (the re-window's stray
+arm: a kept place beside a run of the document's own identity that no
+correspondence record homed in the draft names whole as its to-span —
+`site.index` the runs entry; permanent, a record naming fresh identity
+once, so the client re-reads the draft's records and re-composes the
+run by them); the publication's deposits (§The
 publish shot and head-float, the deposits), each permanent, each
 carrying `site.index` — the entry's position in its own list, the links
 list, the retract list or the read-with list: `link_home_refused` (a
@@ -1667,12 +1673,18 @@ the nullify class refuses to retract: audit_view, not_retraction for a
 credential, not_revocation for a grant), and `read_with_refused` (a
 read-with entry, with `detail` naming which: not_registered,
 not_document, not_owner, not_published), and the publication's budget on
-its in-lock reads, `publication_over_budget` (the reads the one commit
+its in-lock reads and its staged bytes, `publication_over_budget` (the reads the one commit
 makes under the daemon's serialization lock, priced AHEAD of the lock
 off a lock-free snapshot — the caller's link-holding home count × the
 links and read-with entries, plus the draft's content run count × the
-request's runs — past M7's `MAX_PUBLICATION_READS` = 65536; permanent,
-no site, `detail` the price's four terms, its total and the budget;
+request's runs — past M7's `MAX_PUBLICATION_READS` = 65536; or the
+bytes the commit would stage, priced from M7's worst-case table off the
+request — a record per piece a run mints, a copy at its slots' spans and
+its claim per links entry, a retraction, a read-with, the re-window's two
+records per piece at a kept place, the shot's placement and its values
+— past the kernel's `MAX_TXN_BYTES` = 67108864, so the kernel's own
+`txn_over_budget` is met only by a bug or a race; permanent,
+no site, `detail` naming the bound passed with its figures;
 nothing committed, no write permit taken and no lock — §The publish
 shot and head-float, the in-lock reads' budget); and three more of M5's — `not_link_address`
 (make-link's seat step, M5 §8: the address it is to seat is not a full
@@ -1938,13 +1950,35 @@ or arranges it elsewhere or in another order since the place was read
 `site.index` the `runs` entry and nothing else, nothing committed: the
 client re-reads the draft and composes the places afresh (the editor
 orders its own bursts around the act, and the race face that names
-whose write moved the run is the client's). A request that sends no
+whose write moved the run is the client's). AND THE STRAY PLACES WITH
+THEM: where the draft arranges words a correspondence record homed in
+it already names as its `from` — left there by an act the editor's
+mapping does not reach, a second device's undo made before it learned
+the records, an agent's raw `reinstate` — the client re-composes such
+a run BY REFERENCE to the record's `to`, the published identity (a run
+whose `origin` is `doc`'s own trunk), and sends its kept place beside
+it as it sends a draft-native run's; the commit reads the records
+homed in the draft whose `to` covers the run — one record, a piece of
+one at its offset, or several adjoining records piece by piece, the
+two slots of a record being of one width — checks that the draft still
+arranges the record's `from` words at the place, by identity as above,
+and re-windows them there onto the record's `to` in the same
+transaction: the member places the run by reference as any run of the
+document's own, no identity is minted and no record written, the
+draft's link run-list is untouched (links move with identity), and
+the words show as published wherever the draft is read from then on.
+A stray run no record of the draft covers whole is refused
+`stray_place_unrecorded`, permanent, `site.index` the `runs` entry and
+nothing else, nothing committed: a record names fresh identity once,
+at the publication that minted it, so the client re-reads the draft's
+records and re-composes the run by them. A request that sends no
 places, or `null` at every entry, is the shot as before: the draft is
 left as it stands. The shape is the codec's, refused ahead of every
 store: a list longer than `runs`, a place beside a run whose `origin`
-is not the `draft`, one outside the content subspace, or one that is
-no V-position is `malformed` with `site.index` the entry. The board's
-own producers send none.
+is neither the `draft` nor `doc`'s own trunk (a window onto another
+document), one beside any run at the mint form, one outside the
+content subspace, or one that is no V-position is `malformed` with
+`site.index` the entry. The board's own producers send none.
 
 **The deposits** (the link-sets design §5.7). A publication may carry,
 beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes and
@@ -2030,21 +2064,42 @@ draft's run-list per placed run — are PRICED BEFORE THE LOCK IS TAKEN,
 off a lock-free snapshot of the head: the caller's link-holding home
 count × (`links` entries + `read_with` entries), plus the draft's
 content run count × the request's runs, against `MAX_PUBLICATION_READS`
-= 65536 (16 × `MAX_SLOT_SPANS`), and a request past it is refused
-`publication_over_budget` — permanent, no `site`, `detail` the four
-terms, the total and the budget — ahead of the write permit, both locks
-and every other refusal of a publication's, the publish-class gate
-included, so a refused request costs no permit, parks behind no writer
-and commits nothing. The counts may move between the pricing and the
-commit: the budget is conservative by design, a request it admits may
-cost a little more under the lock and one it refuses would have cost
-at least its price. What it admits: 4096 entries over 16 link-holding
-homes, 1024 over 64, 256 over 256; a draft of 256 content runs
-re-supplied as 256 runs, or 4096 runs windowing a draft of 16; the two
-terms share the one budget. The same board prices the same request the
-same, so the act that exists is a narrower request — fewer entries, or
-a draft re-read into fewer runs — which the ceremony prices before the
-act.
+= 65536 (16 × `MAX_SLOT_SPANS`) — AND THE STAGED BYTES, the price's
+fifth term (the link-sets design §5.6, M6): the bytes the one commit
+would stage, priced from the worst-case table off the request — per
+draft-native run its placement and its correspondence record, per piece
+the pairing cuts it into, and its values; per kept place the
+re-window's two records per piece, a stray place's per record covering
+it; per `links` entry its copy at the spans its slots spell (an address
+as its unit span, an I-span as itself, a member-position span as up to
+the fewer of its width and the request's runs) and its claim; a
+retraction per `retract` entry, a read-with per `read_with` entry; the
+shot's own records and, at the mint form, the edition's mint and claim
+— against the kernel's transaction budget, `MAX_TXN_BYTES` = 67108864
+(64 MiB), an upper bound on what the kernel charges, so the kernel's
+own `txn_over_budget` is met only by a bug or a race; and a request
+past either budget is refused `publication_over_budget` — permanent,
+no `site`, `detail` naming the bound passed with its figures: the four
+read terms, their total and budget, or the bytes and the transaction
+budget — ahead of the write permit, both locks and every other refusal
+of a publication's, the publish-class gate included, so a refused
+request costs no permit, parks behind no writer and commits nothing.
+The counts may move between the pricing and the commit: the budget is
+conservative by design, a request it admits may cost a little more
+under the lock and one it refuses would have cost at least its price.
+What the reads admit: 4096 entries over 16 link-holding homes, 1024
+over 64, 256 over 256; a draft of 256 content runs re-supplied as 256
+runs, or 4096 runs windowing a draft of 16; the two terms share the one
+budget. What the bytes refuse that the caps alone do not: a request
+within the 8 MiB body can command far more staged bytes than one
+transaction holds — a `links` entry's member-position slot is up to
+4096 stored spans for 36 bytes of body, a stored span is about ten
+times its spelling, and a run re-supplying the positions of many
+earlier runs is re-windowed piece by piece — so the price, not the
+body cap, is what keeps a publication's staging inside the budget. The
+same board prices the same request the same, so the act that exists is
+a narrower request — fewer entries, narrower slots, or a draft re-read
+into fewer runs — which the ceremony prices before the act.
 
 **The position-fenced read** (the link-sets design §5.7). A home's link
 ordinals RISE WITH COMMIT POSITION — within one commit in the order
@@ -2121,7 +2176,7 @@ commits nothing:
 
 | code | disposition | `site` | when |
 | --- | --- | --- | --- |
-| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS` (the in-lock reads' budget, above) — off a lock-free snapshot ahead of the write permit, both locks and every refusal below, the daemon's publish-class gate included; `detail` the price's terms and the budget |
+| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS`, or the bytes its commit would stage past the kernel's `MAX_TXN_BYTES` (the in-lock reads' budget, above) — off a lock-free snapshot ahead of the write permit, both locks and every refusal below, the daemon's publish-class gate included; `detail` names the bound passed with its figures |
 | `doc_not_registered` | reorder | — | `doc` is not registered — answered ahead of ownership, so an unregistered address never discloses an ownership verdict |
 | `not_owner` | permanent | `addr` = `doc` | the session principal does not own `doc` (PUB-6.36's slot 1, judged once `doc` is registered) |
 | `source_not_registered` | reorder | — | `base`, `draft`, or a run's `origin` is not registered (in that order) |
@@ -2136,7 +2191,8 @@ commits nothing:
 | `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values; a position two runs name counts once) — arithmetic on the request, asked ahead of existence |
 | `dangling_source` | permanent | — | an address a run names holds no value |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget — or, with a kept place, the draft's run-list at its re-window |
-| `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's run at the kept place the request carries for it (the kept places, above) — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
+| `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's draft words at the kept place the request carries for it (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
+| `stray_place_unrecorded` | permanent | `index` = the `runs` entry | a kept place stands beside a run of `doc`'s own identity and no correspondence record homed in the `draft` names that identity whole as its `to` (the stray places, above) — read inside the transaction at the re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
 | `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
 
@@ -2163,6 +2219,10 @@ document named and ⟨O⟩ the origin withheld:
   you selected moved since you read them; look again and publish" (the
   DRAFT face; the race face that names whose write moved them is the
   client's, read off the change feed).
+* `stray_place_unrecorded` — the client's own arithmetic is wrong: it
+  re-composed a run by reference to published words no record of ⟨D⟩
+  names; there is no user-facing act to offer, the client re-reads the
+  records.
 * `not_owner` naming the draft — "⟨D⟩ is not yours — a publication
   keeps its records in the draft it was staged in; publish from a draft
   of your own" (DRAFT).
@@ -3073,15 +3133,22 @@ publish shot and head-float, the kept places): a list parallel to `runs`
 by index, each entry a V-position as `reinstate`'s `at` is spelled —
 for a run of the `draft`, the place it held in the draft when the
 client composed the request, read off the draft's image (`image`) at
-the confirmation — or `null`; a shorter list is padded with `null`, and
-absent or all-`null` is the shot as before, writing nothing of the
-draft. With a place the commit re-windows the draft there, the fresh
-run replacing the draft's own, and refuses the publication
-`kept_place_moved` where the draft no longer arranges the run at it. A
-place beside a run whose `origin` is not the `draft`, outside the
-content subspace, or past the runs is `malformed`, `site.index` the
-entry. The places lie OUTSIDE the signed frame, as `draft` does: a shot
-with places signs as the same shot without them. Owner-gated, and the
+the confirmation; or, for a STRAY run — a run of `doc`'s own identity
+the client re-composed by reference to a correspondence record of the
+draft, the record's published words, where the draft still arranges the
+record's draft words — the place those words hold — or `null`; a
+shorter list is padded with `null`, and absent or all-`null` is the
+shot as before, writing nothing of the draft. With a place the commit
+re-windows the draft there, the published identity replacing the
+draft's own words, and refuses the publication `kept_place_moved`
+where the draft no longer arranges those words at it, or
+`stray_place_unrecorded` where no record of the draft names a stray
+run's identity whole. A place beside a run whose `origin` is neither
+the `draft` nor `doc`'s own trunk — a window onto another document,
+never re-windowed — or any run at the mint form, outside the content
+subspace, or past the runs is `malformed`, `site.index` the entry. The
+places lie OUTSIDE the signed frame, as `draft` does: a shot with
+places signs as the same shot without them. Owner-gated, and the
 publish class's input from any session.
 THE TARGET takes one of two forms: `doc`, the published document whose
 chain the shot appends — the form above — or THE MINT FORM, `account`

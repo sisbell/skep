@@ -392,15 +392,19 @@ impl Daemon {
     /// the store — is [`skep_media::door`]'s to state.
     ///
     /// **The price ahead of the lock** (the link-sets design §5.7, EVERY
-    /// IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK; lane S4). A
-    /// `publish` is priced before the permit, off a lock-free snapshot of the
-    /// head and the pre-lock resolution's principal: the caller's
-    /// link-holding home count × (`links` entries + `read_with` entries),
-    /// plus the draft's content run count × the request's runs — the work of
-    /// the four reads the composite makes under the lock — against M7's
-    /// `MAX_PUBLICATION_READS`, and refused `publication_over_budget` past it
-    /// with every term in its detail: a refusal that costs no permit, takes
-    /// no lock and commits nothing. Ahead of `serial_lock()` means off a
+    /// IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK; §5.6, M6;
+    /// lanes S4 and F4). A `publish` is priced before the permit, off a
+    /// lock-free snapshot of the head and the pre-lock resolution's
+    /// principal: the caller's link-holding home count × (`links` entries +
+    /// `read_with` entries), plus the draft's content run count × the
+    /// request's runs — the work of the four reads the composite makes under
+    /// the lock — against M7's `MAX_PUBLICATION_READS`; and, its fifth
+    /// term, the bytes the commit would stage, priced from M7's worst-case
+    /// table off the request, against the kernel's `MAX_TXN_BYTES` — so the
+    /// kernel's own `txn_over_budget` is met only by a bug or a race; past
+    /// either, refused `publication_over_budget` with the bound passed and
+    /// its terms in the detail: a refusal that costs no permit, takes no
+    /// lock and commits nothing. Ahead of `serial_lock()` means off a
     /// snapshot the lock does not cover (the survey's C8): the counts may
     /// move before the composite reads them, and the budget is conservative
     /// by design. A guest is not priced — the sequence refuses it below as

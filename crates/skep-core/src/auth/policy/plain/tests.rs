@@ -65,8 +65,9 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     use serde_json::json;
     use skep_address::Nat;
     use skep_arrangement::HasM5;
-    use skep_febe::{PublishDeposits, PublishTarget, Run, Shot, ShotRun};
-    use skep_links::MAX_PUBLICATION_READS;
+    use skep_febe::{EndArg, LinkEntry, MemberSpan, NamedAddress, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
+    use skep_kernel::MAX_TXN_BYTES;
+    use skep_links::{MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, SHOT_BYTES};
 
     use crate::auth::policy::{publication_read_refusal, PublicationReadRefusal};
 
@@ -97,23 +98,56 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     assert_eq!(publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id), None, "16 × 4096 is the budget");
     fragment(1);
     let snap = board.engine.kernel().snapshot();
+    // The staged bytes beside the reads: the shot and 4096 by-reference
+    // placements, inside the transaction budget.
+    let staged = SHOT_BYTES + 4096 * PLACED_RUN_BYTES;
     assert_eq!(
         publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id),
-        Some(PublicationReadRefusal { homes: 0, entries: 0, draft_runs: 17, runs: 4096, total: 17 * 4096, budget: MAX_PUBLICATION_READS }),
+        Some(PublicationReadRefusal { homes: 0, entries: 0, draft_runs: 17, runs: 4096, total: 17 * 4096, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
         "17 × 4096 is past it: every term named"
     );
     // The home term: one link-holding home, a list one entry past the budget.
     exec(&board.febe, maker, json!({"op": "make_link", "home": board.home, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
     let snap = board.engine.kernel().snapshot();
     let over = publish(shot(None, 0), MAX_PUBLICATION_READS + 1);
+    let staged = SHOT_BYTES + (MAX_PUBLICATION_READS as u64 + 1) * READ_WITH_BYTES;
+    assert!(staged <= MAX_TXN_BYTES, "the read-withs stage inside the transaction budget: {staged}");
     assert_eq!(
         publication_read_refusal(snap.world(), &over, maker_id),
-        Some(PublicationReadRefusal { homes: 1, entries: MAX_PUBLICATION_READS + 1, draft_runs: 0, runs: 0, total: MAX_PUBLICATION_READS + 1, budget: MAX_PUBLICATION_READS }),
+        Some(PublicationReadRefusal { homes: 1, entries: MAX_PUBLICATION_READS + 1, draft_runs: 0, runs: 0, total: MAX_PUBLICATION_READS + 1, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
         "one home times one entry past the budget"
     );
     assert_eq!(publication_read_refusal(snap.world(), &publish(shot(None, 0), MAX_PUBLICATION_READS), maker_id), None, "at the budget");
     assert_eq!(publication_read_refusal(snap.world(), &over, board.other.0), None, "the other holds no link-holding home");
     assert_eq!(publication_read_refusal(snap.world(), &Op::Fork { published: None }, maker_id), None, "no publish, no price");
+    // THE FIFTH TERM (lane F4): the staged bytes past the transaction budget
+    // with the reads inside theirs — a hundred `links` entries whose `from`
+    // names the member's 4096 positions over a 4096-run shot, each resolving
+    // to up to 4096 stored spans — refused with the bytes named; one such
+    // entry is inside both budgets.
+    let wide = |count: usize| Op::Publish {
+        target: PublishTarget::Document(home.clone()),
+        shot: shot(None, 4096),
+        places: Vec::new(),
+        deposits: PublishDeposits {
+            links: (0..count)
+                .map(|_| LinkEntry {
+                    home: NamedAddress::Member,
+                    from: EndArg::Member(vec![MemberSpan { ordinal: 1, width: 4096 }]),
+                    to: EndArg::Addrs(Vec::new()),
+                    ty: EndArg::Addrs(vec![NamedAddress::Address(addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 13]))]),
+                    old: None,
+                })
+                .collect(),
+            retract: Vec::new(),
+            read_with: Vec::new(),
+        },
+    };
+    assert_eq!(publication_read_refusal(snap.world(), &wide(1), maker_id), None, "one wide entry is inside both budgets");
+    let refusal = publication_read_refusal(snap.world(), &wide(100), maker_id).expect("a hundred are past the transaction budget");
+    assert!(refusal.bytes_over() && !refusal.reads_over(), "the bytes, not the reads: {refusal:?}");
+    assert_eq!((refusal.homes, refusal.entries, refusal.draft_runs, refusal.runs, refusal.byte_budget), (1, 100, 0, 4096, MAX_TXN_BYTES));
+    assert!(refusal.staged_bytes > MAX_TXN_BYTES && refusal.staged_bytes < 2 * MAX_TXN_BYTES, "{}", refusal.staged_bytes);
 }
 
 /// Executes `frame` through M10 as `sid`, answering the ack's address.

@@ -850,24 +850,38 @@ pub(super) fn retract_refused(kind: OpKind, r: RetractClassRefusal) -> Reply {
     op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }
 
-/// Returns a publication whose in-lock reads are priced past their budget
-/// as its 200-enveloped rejection (the link-sets design §5.7; lane S4).
+/// Returns a publication priced past a budget ahead of the lock as its
+/// 200-enveloped rejection (the link-sets design §5.7; lanes S4 and F4).
 ///
 /// It is M10's own `publication_over_budget` — permanent, no `site` — built
-/// as M10 builds it ([`Rejection::classified`]) with the price's four terms,
-/// its total and the budget as its `detail`, in one fixed sentence: `{total}
-/// in-lock reads priced over the budget of {budget}: {homes} link-holding
-/// homes × {entries} links and read-with entries + {draft_runs} draft runs
-/// × {runs} runs; narrow the request`. The daemon's one cell of that code,
-/// answered ahead of the plain sequence's permit and locks
+/// as M10 builds it ([`Rejection::classified`]) with the bound passed and
+/// its figures as its `detail`, in fixed sentences: for the reads,
+/// `{total} in-lock reads priced over the budget of {budget}: {homes}
+/// link-holding homes × {entries} links and read-with entries +
+/// {draft_runs} draft runs × {runs} runs`; for the staged bytes,
+/// `{staged_bytes} bytes would be staged against the transaction budget of
+/// {byte_budget}`; both where both are passed, joined by `; `; and
+/// `; narrow the request` closing either. The daemon's one cell of that
+/// code, answered ahead of the plain sequence's permit and locks
 /// (`publication_read_refusal`), marshaled by the one codec.
 pub(super) fn publication_over_budget(kind: OpKind, price: &PublicationReadRefusal) -> Reply {
     let mut rejection = Rejection::classified(kind, RejectCode::PublicationOverBudget, None);
-    rejection.detail = Some(format!(
-        "{} in-lock reads priced over the budget of {}: {} link-holding homes × {} links and \
-         read-with entries + {} draft runs × {} runs; narrow the request",
-        price.total, price.budget, price.homes, price.entries, price.draft_runs, price.runs
-    ));
+    let mut bounds: Vec<String> = Vec::new();
+    if price.reads_over() {
+        bounds.push(format!(
+            "{} in-lock reads priced over the budget of {}: {} link-holding homes × {} links and \
+             read-with entries + {} draft runs × {} runs",
+            price.total, price.budget, price.homes, price.entries, price.draft_runs, price.runs
+        ));
+    }
+    if price.bytes_over() {
+        bounds.push(format!(
+            "{} bytes would be staged against the transaction budget of {}",
+            price.staged_bytes, price.byte_budget
+        ));
+    }
+    bounds.push("narrow the request".to_string());
+    rejection.detail = Some(bounds.join("; "));
     op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }
 

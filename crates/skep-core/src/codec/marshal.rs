@@ -1366,6 +1366,9 @@ fn code_name(c: RejectCode) -> &'static str {
         // shot and head-float.
         RejectCode::AlreadyPublished => "already_published",
         RejectCode::KeptPlaceMoved => "kept_place_moved",
+        // The stray places' record read (the link-sets design §5.7; lane
+        // F4), tabled beside the two.
+        RejectCode::StrayPlaceUnrecorded => "stray_place_unrecorded",
         RejectCode::IllFormedSpec => "ill_formed_spec",
         RejectCode::SlotTooLarge => "slot_too_large",
         RejectCode::EmptyTypeResolution => "empty_type_resolution",

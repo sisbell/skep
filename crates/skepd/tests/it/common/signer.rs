@@ -324,20 +324,26 @@ fn origin_values(port: u16, token: &str, origin: &str) -> Option<HashMap<String,
         if image["resp"].as_str() != Some("runs") {
             return None;
         }
-        let addrs = expand_runs(&runs_in(&image));
-        let delivery = op_as_written(port, Some(token), &retrieve_frame(origin, 1, extent));
-        if delivery["resp"].as_str() != Some("delivery") {
-            return None;
-        }
-        let mut values = Vec::new();
-        for item in delivery["items"].as_array()? {
-            delivery_item_values(item, &mut values)?;
-        }
-        if values.len() != addrs.len() {
-            return None;
-        }
-        for (a, v) in addrs.into_iter().zip(values) {
-            map.insert(a, v);
+        // The image is a SET of distinct runs — a run the document holds
+        // twice (a stray run re-windowed beside the place S2 put it, a member
+        // placing one identity twice) is answered once — so each run's values
+        // are read by its own I-span, never zipped against the V-ordered
+        // delivery of the whole.
+        for (start, width) in runs_in(&image) {
+            let frame = format!(r#"{{"op":"retrieve_i","spans":[{{"start":"{start}","width":"{width}"}}]}}"#);
+            let delivery = op_as_written(port, Some(token), &frame);
+            if delivery["resp"].as_str() != Some("i_delivery") {
+                return None;
+            }
+            // One item per I-position, `at` the address and `value` the one
+            // delivery value M4 holds there — never `null` for an address an
+            // arrangement holds.
+            for item in delivery["items"].as_array()? {
+                let mut values = Vec::new();
+                delivery_item_values(&item["value"], &mut values)?;
+                let [value] = <[Vec<u8>; 1]>::try_from(values).ok()?;
+                map.insert(item["at"].as_str()?.to_string(), value);
+            }
         }
     }
     Some(map)

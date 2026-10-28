@@ -119,6 +119,29 @@ pub enum AuditClass {
     /// pin but M7's own constant (`1.1.0.1.0.1.0.1.4`), read from M7's
     /// registry by the builder.
     Supersession,
+    /// The correspondence record — the publish shot's own record that a
+    /// draft run's identity became the member's, typed the commons subtype
+    /// `correspondence` under `counterpart` (the link-sets design §5.5, §5.7;
+    /// PUB-6.64's member, its boundary sentence owed to the PUB RES).
+    ///
+    /// The shot mints one per run of draft identity it re-minted, in its own
+    /// transaction, homed in the draft, `from` the run's draft-native span
+    /// and `to` the member's span it became. The records are read on the
+    /// ACTIVE view — the next publication's enumeration and every act that
+    /// maps a draft-homed link's end through them — so a retraction would
+    /// un-correspond a run the version already holds. The class has ONE
+    /// writer and every other door refuses it (M7's
+    /// `is_correspondence_class`, the daemon's
+    /// `correspondence_not_standalone`), so until that writer lands no link
+    /// of the class exists to be retracted; the arm stands so the refusal is
+    /// in place the day one does. Homed in the draft, private by rule, so
+    /// membership waits on no home read
+    /// ([`AuditClass::requires_published_home`] answers `false`) and on no
+    /// endpoint read ([`AuditClass::requires_published_new`] answers
+    /// `false`). The address is the commons pin `3.102.1`
+    /// (`skep_engine::types::t_correspondence`); the parent `3.102` is an
+    /// ordinary type, no class address being it.
+    Correspondence,
 }
 
 impl AuditClass {
@@ -131,7 +154,7 @@ impl AuditClass {
     /// [`AuditClass::requires_published_new`], whose exhaustive matches are
     /// where a new class first fails to compile, so the class joins it in
     /// that edit.
-    const ALL: [AuditClass; 11] = [
+    const ALL: [AuditClass; 12] = [
         AuditClass::SuccessorOf,
         AuditClass::DelegatorEndorsement,
         AuditClass::ConsumptionMarker,
@@ -143,6 +166,7 @@ impl AuditClass {
         AuditClass::TakedownRecord,
         AuditClass::PolicyLink,
         AuditClass::Supersession,
+        AuditClass::Correspondence,
     ];
 
     /// Returns whether membership needs the link's own home published.
@@ -167,7 +191,8 @@ impl AuditClass {
             | AuditClass::Binding
             | AuditClass::TakedownRecord
             | AuditClass::PolicyLink
-            | AuditClass::Supersession => false,
+            | AuditClass::Supersession
+            | AuditClass::Correspondence => false,
         }
     }
 
@@ -205,7 +230,8 @@ impl AuditClass {
             | AuditClass::Replaces
             | AuditClass::Binding
             | AuditClass::TakedownRecord
-            | AuditClass::PolicyLink => false,
+            | AuditClass::PolicyLink
+            | AuditClass::Correspondence => false,
         }
     }
 }

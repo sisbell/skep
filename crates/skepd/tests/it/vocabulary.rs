@@ -361,7 +361,7 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
     use skep_engine::types;
 
     let row = |a: &skep_address::Address| definition_at(a).map(|d| d.name);
-    let typed: [(&str, &skep_address::Address); 23] = [
+    let typed: [(&str, &skep_address::Address); 26] = [
         ("enroll", types::t_enroll()),
         ("retire", types::t_retire()),
         ("claim", types::t_claim()),
@@ -385,6 +385,9 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
         ("expulsion-ground", types::t_expulsion_ground()),
         ("succession-ground", types::t_succession_ground()),
         ("succession-policy", types::t_succession_policy()),
+        ("read-with", types::t_read_with()),
+        ("correspondence", types::t_correspondence()),
+        ("held-removal", types::t_held_removal()),
     ];
     for (name, pin) in typed {
         assert_eq!(row(pin), Some(name), "the engine's pin {pin} is the row named {name}");
@@ -393,6 +396,7 @@ fn every_pin_the_workspace_holds_is_a_row_of_the_table() {
         assert!(row(&r.address).is_some(), "the registry row {} is in the table", r.address);
     }
     assert_eq!(row(skep_links::replaces_type()), Some("replaces"), "the link store's own spelling");
+    assert_eq!(row(skep_links::correspondence_type()), Some("correspondence"), "the link store's second own spelling");
     let address = |s: &str| skep_core::codec::wire_address(s).expect("an address");
     assert_eq!(row(&address(skep_media::cell::KIND)), Some("picture-cell"), "the picture cell's kind");
     assert_eq!(row(&address(BLIND_KIND)), Some("blind-cell"), "the blind cell's kind, as the suites spell it");

@@ -30,6 +30,10 @@ const T_POLICY_LINK: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 58];
 // subspace, as the real one does (M7's reserved ghost tumbler, not a
 // commons pin): prefix-free against every `…0.2.x` placeholder above.
 const T_SUPERSESSION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 1, 4];
+// The correspondence record's placeholder is a SUBTYPE row's shape, two
+// ordinals deep, as the real one is (`3.102.1` under counterpart): no
+// placeholder above sits at `…0.2.102`, so it is prefix-free against all.
+const T_CORRESPONDENCE: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 102, 1];
 
 fn credential() -> TypeAddrs {
     TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM))
@@ -49,6 +53,7 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
         (AuditClass::TakedownRecord, addr(T_TAKEDOWN_RECORD)),
         (AuditClass::PolicyLink, addr(T_POLICY_LINK)),
         (AuditClass::Supersession, addr(T_SUPERSESSION)),
+        (AuditClass::Correspondence, addr(T_CORRESPONDENCE)),
     ]
 }
 
@@ -99,6 +104,13 @@ fn an_unclassified_address_is_ordinary() {
         t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2])]),
         None,
         "the classes' parent, above every class"
+    );
+    // A subtype-row class is exact upward too: the type its row nests under
+    // (the correspondence's `counterpart`) is above the class, so ordinary.
+    assert_eq!(
+        t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 102])]),
+        None,
+        "the parent of a subtype-row class, above it"
     );
 }
 
@@ -208,6 +220,7 @@ fn the_declared_order_of_the_classes_decides_nothing() {
         T_TAKEDOWN_RECORD,
         T_POLICY_LINK,
         T_SUPERSESSION,
+        T_CORRESPONDENCE,
     ] {
         let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
         for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {

@@ -13,7 +13,10 @@ use skep_arrangement::{
 use skep_kernel::{Seq, Staging, TxnError};
 use skep_namespace::{M3Rec, M3State};
 
-use super::{emit_core, home_gate, replaces_class, replaces_type, Gate, LinkWriter, Visibility};
+use super::{
+    correspondence_class, emit_core, home_gate, replaces_class, replaces_type, Gate, LinkWriter,
+    Visibility,
+};
 use crate::budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
@@ -236,7 +239,7 @@ pub fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
 /// Stages the record half of MAKELINK, in a transaction the caller opened.
 ///
 /// That half is the home gate, the specs' well-formedness, the I-spans'
-/// shape, the three slots' endsets under their budgets, the three
+/// shape, the three slots' endsets under their budgets, the four
 /// sole-writer fences, the deposit under the Open gate and its seat —
 /// everything [`LinkWriter::makelink`] states — answering the record's
 /// address. One body, which both MAKELINK forms stage:
@@ -249,8 +252,9 @@ pub fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
 /// `home`, asked of the base; `IllFormedSpec` for a spec of any slot;
 /// `NotContentSpan` for the first I-span of any slot that is no content
 /// I-span, slots in declared order; `SlotTooLarge` for the first slot over a
-/// budget; `RetractionClass`, `SupersessionClass` or `ReplacesClass` for the
-/// resolved type slot's class; `EmptyTypeResolution` from the Open gate on
+/// budget; `RetractionClass`, `SupersessionClass`, `ReplacesClass` or
+/// `CorrespondenceClass` for the resolved type slot's class;
+/// `EmptyTypeResolution` from the Open gate on
 /// an empty type slot; `Mint` where the mint fails; and `Seat` where the
 /// seat step refuses.
 fn stage_record<W>(
@@ -295,13 +299,14 @@ where
     // M5's construction, a `Spans` slot by the shape check above, and an
     // `Addrs` slot is address-denoting, which are the same grounds under
     // which the fold classifies this very value one step later. `⟨⟩`
-    // classifies as the empty denoted antichain, which is none of the three
+    // classifies as the empty denoted antichain, which is none of the four
     // classes, so ML6 stays the deposit gate's check and no input can
     // satisfy both. A content extent wider than one position classes as an
-    // extent, never as any of the three; a width-1 content I-span at a
+    // extent, never as any of the four; a width-1 content I-span at a
     // reserved ghost tumbler IS that tumbler's unit span and classes as its
     // class, so the two fenced ghosts are refused here in this form as in
-    // the address form.
+    // the address form (the two commons classes are subspace-3 addresses no
+    // content I-span can spell — the content clause above refuses those).
     let e3_class = coverage_class(&e3);
     if e3_class == *r_class {
         return Err(MakeLinkError::RetractionClass); // K ≁ R
@@ -311,6 +316,9 @@ where
     }
     if e3_class == *replaces_class() {
         return Err(MakeLinkError::ReplacesClass); // PUB-5.15, RES-309
+    }
+    if e3_class == *correspondence_class() {
+        return Err(MakeLinkError::CorrespondenceClass); // link-sets §5.7
     }
     let value = Link::triple(e1, e2, e3);
     // `minted`, because the seat below names this address: the Open gate
@@ -342,7 +350,7 @@ where
     /// byte-identical — M3's contract). No shape gate, no idem dedup
     /// (distinct links always — ML0), no provenance.
     ///
-    /// The three sole-writer fences listed under Errors below are the open
+    /// The four sole-writer fences listed under Errors below are the open
     /// surface's whole type discipline, and they are not optional —
     /// [`crate::LinkState::apply_link`]'s hint fold recognizes a deposit by
     /// its type slot's coverage class alone, so an `[R]`-classed link
@@ -353,7 +361,10 @@ where
     /// `replaces`-classed one, landing at a record's next address, would name
     /// a state for a record whose signed bytes named none — the grant fold
     /// reads a record's `replaces` there ([`LinkWriter::makelink_replacing`]
-    /// is that class's one writer).
+    /// is that class's one writer); and a correspondence-classed one would
+    /// state that a draft run became a member's span, an identity only the
+    /// publish shot computes and mints — its one writer, not yet built
+    /// ([`is_correspondence_class`](crate::is_correspondence_class)).
     ///
     /// Returns `(link, seq)`: the address of the deposited link, which is
     /// also the one seated in `home`'s link subspace.
@@ -374,11 +385,14 @@ where
     /// steps — both refused `SlotTooLarge`, both charged inside this
     /// transact, under the applier lock the whole engine writes through. The
     /// two constants say why the request that carried a slot bounds neither.
-    /// The three sole-writer fences apply here as they do on the managed
+    /// The four sole-writer fences apply here as they do on the managed
     /// surface: a resolved type slot in the `[R]` class
-    /// (`RetractionClass`), the `[K_sup]` class (`SupersessionClass`) or the
+    /// (`RetractionClass`), the `[K_sup]` class (`SupersessionClass`), the
     /// `replaces` class (`ReplacesClass`,
-    /// [`is_replaces_class`](crate::is_replaces_class)) is refused. An empty
+    /// [`is_replaces_class`](crate::is_replaces_class)) or the correspondence
+    /// class (`CorrespondenceClass`,
+    /// [`is_correspondence_class`](crate::is_correspondence_class)) is
+    /// refused. An empty
     /// type endset is refused as given (ML6, so an empty `Addrs` list and an
     /// empty `Resolve` resolution are one rejection; the check belongs to the
     /// deposit gate every link passes, and its verdict arrives here as
@@ -408,7 +422,7 @@ where
     ///
     /// One transaction (PUB-5.15 (iii), (iv); RES-308, RES-309, RES-310; the
     /// authority link type investigation §3 (A′)) deposits the record exactly
-    /// as [`LinkWriter::makelink`] does — its slots, its three fences, its
+    /// as [`LinkWriter::makelink`] does — its slots, its four fences, its
     /// seat — and then its `replaces` link,
     /// `(enc([record]), enc([replaces]), enc([replaces_type()]))`: `from` the
     /// record, filled from the address this transaction minted the way

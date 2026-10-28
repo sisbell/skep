@@ -20,14 +20,33 @@
 //! mode's two values, and the tree designation `3.28`; the core set the
 //! seeding plan curates (`3.5` to `3.21` with their subtypes, `3.30`, `3.40`
 //! to `3.45`, `3.50` the meta-type) with `3.4` correction in the plan's own
-//! slot; `3.70` layout, the presentation tier's first; and Nelson's literary
+//! slot; `3.70` layout, the presentation tier's first; Nelson's literary
 //! set `3.100` to `3.105` — title, author, counterpart, quote, jump with its
 //! one subtype modal, certification — as Literary Machines 4/52 to 4/55
-//! lists them (the owner, 2026-10-21). WHAT IT DOES NOT: the reserved ordinals of `3.22` to
+//! lists them (the owner, 2026-10-21); and the link-sets rows the commons
+//! seeding round pinned (the owner, 2026-10-27) — `3.23` inline, the
+//! emphasis family's parent, with its seven sub-types `3.23.1` to `3.23.7`,
+//! `3.24` the held removal, `3.71` read-with beside layout, and `3.102.1`
+//! the correspondence record, a subtype under counterpart. WHAT IT DOES
+//! NOT: the reserved ordinals of `3.22` to
 //! `3.29` and `3.46` to `3.49` beyond the built ones, `3.51` to `3.54` (the
 //! registry-machinery reserve, unallocated), `3.87` (reserved for the proxy
 //! kind), the test-only `3.90.1`, and every range the map marks
 //! unallocated — nothing is named at an ordinal nobody allocated.
+//!
+//! THE ENDSETS ARE SAID BY ROLE (the commons map's standing rule THE
+//! ENDSETS, BY ROLE — F5, the owner 2026-10-27; the `3.27` family's rule
+//! generalized): `from` holds what a link brings of its own — its text or
+//! atom, or the account or prefix that speaks; `to` holds what it is about.
+//! A link with one side empties the slot it has no content for: a MARK —
+//! formatting, a designation, a lifted takedown, a policy link — has an
+//! empty `from` and its matter in `to`; a SAYING with no subject — an
+//! endpoint, a targetless binding — has an empty `to`. The claim `3.3`
+//! stands as built (`from` the claimant, `to` empty), the rule's one named
+//! exception. So the heading, the paragraph family, lang, the inline family
+//! and the held removal each say "from: empty; to: …", as the `3.27`
+//! family already did. A board seeded under an earlier wording keeps its
+//! old section text: a reopen writes only the rows it lacks.
 //!
 //! THE NAMES are the seeding plan's words where the plan has one and the
 //! code's doc-comment word where the code names a type the plan does not
@@ -102,7 +121,7 @@ struct Spelling {
 }
 
 /// The rows, in path order.
-const SPELLINGS: [Spelling; 108] = [
+const SPELLINGS: [Spelling; 119] = [
     // ── the credential kinds (AUTH-7.1 horn B) ───────────────────────────
     Spelling {
         ordinals: &[1],
@@ -422,69 +441,132 @@ const SPELLINGS: [Spelling; 108] = [
         ordinals: &[20],
         name: "heading",
         purpose: "A heading over a passage; its level rides as a parameter span.",
-        endsets: "from: the heading's text; to: the passage it heads.",
+        endsets: "from: empty; to: the heading's text; its level a parameter span in the type slot.",
     },
     Spelling {
         ordinals: &[21],
         name: "paragraph",
         purpose: "A paragraph: a run of text classed as one unit.",
-        endsets: "from: the paragraph's text; to: empty.",
+        endsets: "from: empty; to: the paragraph's text.",
     },
     Spelling {
         ordinals: &[21, 1],
         name: "numbered",
         purpose: "A numbered paragraph.",
-        endsets: "from: the paragraph's text; to: empty.",
+        endsets: "from: empty; to: the paragraph's text.",
     },
     Spelling {
         ordinals: &[21, 2],
         name: "blockquote",
         purpose: "A paragraph quoted as a block.",
-        endsets: "from: the quoted text; to: empty.",
+        endsets: "from: empty; to: the quoted text.",
     },
     Spelling {
         ordinals: &[21, 3],
         name: "code",
         purpose: "A paragraph of code, set as written.",
-        endsets: "from: the code's text; to: empty.",
+        endsets: "from: empty; to: the code's text.",
     },
     Spelling {
         ordinals: &[21, 4],
         name: "list",
         purpose: "A paragraph that is a list.",
-        endsets: "from: the list's text; to: empty.",
+        endsets: "from: empty; to: the list's text.",
     },
     Spelling {
         ordinals: &[21, 5],
         name: "note",
         purpose: "A paragraph set apart as a note.",
-        endsets: "from: the note's text; to: empty.",
+        endsets: "from: empty; to: the note's text.",
     },
     Spelling {
         ordinals: &[21, 6],
         name: "definition",
         purpose: "A paragraph that defines a term.",
-        endsets: "from: the definition's text; to: empty.",
+        endsets: "from: empty; to: the definition's text.",
     },
     Spelling {
         ordinals: &[21, 7],
         name: "example",
         purpose: "A paragraph that gives an example.",
-        endsets: "from: the example's text; to: empty.",
+        endsets: "from: empty; to: the example's text.",
     },
     Spelling {
         ordinals: &[21, 8],
         name: "warning",
         purpose: "A paragraph set apart as a warning.",
-        endsets: "from: the warning's text; to: empty.",
+        endsets: "from: empty; to: the warning's text.",
     },
-    // ── the structural extension (3.22–3.29): the built ones ─────────────
+    // ── the structural extension (3.22–3.29): the built ones — the marks
+    //    among them say their endsets by role (the module doc's rule) ──────
     Spelling {
         ordinals: &[22],
         name: "journal-designation",
         purpose: "The journal designation: a typed self-link marking a document as a role's \
                   journal, the consumption journal first.",
         endsets: "from: the journal itself; to: the journal itself; homed in the journal.",
+    },
+    // The emphasis family (the link-sets rows, pinned 2026-10-27): the
+    // catalog's `2.22 inline` restored at a new number, its seven styles the
+    // sub-types — the third ruled exception to the parameters rule.
+    Spelling {
+        ordinals: &[23],
+        name: "inline",
+        purpose: "The emphasis family's parent: the catalog's inline text styles restored at a \
+                  new number, each a style under this one; a link typed at the parent itself is \
+                  written by nothing.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 1],
+        name: "emphasis",
+        purpose: "Emphasis (italic): a one-sided mark on the span it styles.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 2],
+        name: "strong",
+        purpose: "Strong (bold): the chord's type, a one-sided mark on the span it styles.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 3],
+        name: "code",
+        purpose: "Inline code: a one-sided mark on the span it styles.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 4],
+        name: "mark",
+        purpose: "Highlighted text: in the family and off the formatting line, offered in its \
+                  set's own row.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 5],
+        name: "strikethrough",
+        purpose: "Deleted or struck text: a one-sided mark on the span it styles.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 6],
+        name: "subscript",
+        purpose: "Subscript: a one-sided mark on the span it styles.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[23, 7],
+        name: "superscript",
+        purpose: "Superscript: a one-sided mark on the span it styles.",
+        endsets: "from: empty; to: the span styled.",
+    },
+    Spelling {
+        ordinals: &[24],
+        name: "held-removal",
+        purpose: "The held removal: a published mark taken off in a draft, written at the chord \
+                  and retracted at the next publication of its words, its own retraction the \
+                  chord's undo; no picker lists it.",
+        endsets: "from: empty; to: the published mark, by address.",
     },
     Spelling {
         ordinals: &[27],
@@ -537,7 +619,7 @@ const SPELLINGS: [Spelling; 108] = [
         ordinals: &[30],
         name: "lang",
         purpose: "The language of a passage; the language code rides as a parameter span.",
-        endsets: "from: the passage; to: empty.",
+        endsets: "from: empty; to: the passage.",
     },
     Spelling {
         ordinals: &[40],
@@ -718,6 +800,14 @@ const SPELLINGS: [Spelling; 108] = [
         purpose: "Layout, typography and epigraphy instructions for showing a text — recommendations a reader may ignore (LM 4/54).",
         endsets: "from: the instructions; to: the content they are for.",
     },
+    Spelling {
+        ordinals: &[71],
+        name: "read-with",
+        purpose: "Read this document with that set: a reader's instruction, nothing the daemon \
+                  checks, one per document and set — from the document to the set, against \
+                  the tier's stylesheet-to-content direction.",
+        endsets: "from: the document's bare address; to: the set's address.",
+    },
     // ── the media range (3.80–3.89): the two cell kinds ──────────────────
     Spelling {
         ordinals: &[88],
@@ -767,6 +857,15 @@ const SPELLINGS: [Spelling; 108] = [
         name: "counterpart",
         purpose: "A counterpart: correspondences between two equivalent documents, sections or passages (LM 4/53).",
         endsets: "from: the one passage; to: its counterpart.",
+    },
+    Spelling {
+        ordinals: &[102, 1],
+        name: "correspondence",
+        purpose: "The correspondence record: the publish shot's own record that a draft run's \
+                  identity became the member's, minted by the shot alone and homed in the \
+                  draft; no picker lists it and no user act writes it.",
+        endsets: "from: the run's draft-native span; to: the member's span it became, both of \
+                  one width.",
     },
     Spelling {
         ordinals: &[103],

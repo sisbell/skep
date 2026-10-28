@@ -12,9 +12,9 @@ type Reader = fn() -> &'static Address;
 /// obligations are the ledger's rather than that pin's — three hand-kept
 /// lists would be three places to be forgotten, and a pin absent from
 /// all of them reaches the daemon's refusal set with nothing here
-/// failing. So this is the single gate a twenty-first pin passes
+/// failing. So this is the single gate the next pin passes
 /// through, and each test below is one question asked of every row.
-const PINS: [(Reader, &str); 23] = [
+const PINS: [(Reader, &str); 26] = [
     (t_enroll, "1"),
     (t_retire, "2"),
     (t_claim, "3"),
@@ -38,6 +38,9 @@ const PINS: [(Reader, &str); 23] = [
     (t_expulsion_ground, "58.3"),
     (t_succession_ground, "58.4"),
     (t_succession_policy, "58.5"),
+    (t_read_with, "71"),
+    (t_correspondence, "102.1"),
+    (t_held_removal, "24"),
 ];
 
 /// Whether `a` is a registry row — one of `skep-registry`'s twelve.
@@ -96,8 +99,8 @@ fn the_commons_pins_are_pairwise_prefix_free_but_for_the_registrys_own_nesting()
 /// edition claim, `successor-of`) a member the insert door admits a
 /// declared deposit under — and none sits above or beneath one, which
 /// would make the daemon's prefix-recognizing write path read a credential
-/// as that pin's class or subtype. Walked off the same ONE list, so a
-/// twenty-fourth pin meets the set where it joins.
+/// as that pin's class or subtype. Walked off the same ONE list, so the
+/// next pin meets the set where it joins.
 #[test]
 fn the_deposit_class_types_are_the_four_pins_they_spell_again_and_prefix_free_otherwise() {
     let spelled: Vec<&Address> = skep_arrangement::deposit_class_types().iter().collect();
@@ -203,6 +206,28 @@ fn the_registry_rows_are_the_crates_table_and_successor_of_is_held_equal() {
 fn the_replaces_pin_is_the_address_m7_fences_and_mints() {
     assert_eq!(t_replaces(), skep_links::replaces_type());
     assert!(skep_links::is_replaces_class(&skep_links::enc([t_replaces()])));
+}
+
+/// THE SECOND PIN SPELLED TWICE (the module doc): [`t_correspondence`] and
+/// M7's own spelling, which its sole-writer fences read ahead of the one
+/// writer the publish lane will build, are one address — so the class the
+/// daemon refuses a `nullify` at is the class M7 fences, and a renumbering
+/// of either fails here. The class is subtype-exact: the parent
+/// `counterpart` `3.102`, which is no pin, is not it, and the two
+/// sole-writer classes are disjoint.
+#[test]
+fn the_correspondence_pin_is_the_address_m7_fences() {
+    use skep_links::{enc, is_correspondence_class, is_replaces_class};
+
+    assert_eq!(t_correspondence(), skep_links::correspondence_type());
+    assert_eq!(t_correspondence().tumbler().to_string(), "1.1.0.1.0.1.0.3.102.1");
+    assert!(is_correspondence_class(&enc([t_correspondence()])));
+    let parent = commons_type(102);
+    assert!(is_prefix(parent.tumbler(), t_correspondence().tumbler()), "a subtype under counterpart");
+    assert!(!is_correspondence_class(&enc([&parent])), "the parent is not the class");
+    assert!(!is_correspondence_class(&enc([&parent, t_correspondence()])), "the parent covers its subtype");
+    assert!(!is_replaces_class(&enc([t_correspondence()])) && !is_correspondence_class(&enc([t_replaces()])));
+    assert!(PINS.iter().all(|(read, _)| *read() != parent), "`3.102` is no pin");
 }
 
 /// A pin is ONE value, held: two reads hand back the same address, not

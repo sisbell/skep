@@ -30,12 +30,23 @@
 //! confirmation; a pin is never silently renumbered — a change is a
 //! confirmed row there and a changed line here.
 //!
-//! **One pin is spelled twice.** It is [`t_replaces`], the authority
+//! **Two pins are spelled twice.** [`t_replaces`], the authority
 //! successor's type, by the same rule as the credential types: it has a
 //! writer below this crate — M7's sole-writer fences and the one MAKELINK
 //! that mints it — so M7 holds its own spelling where those can read it
 //! ([`skep_links::replaces_type`]), and the ledger's tests hold the two
-//! equal.
+//! equal. And [`t_correspondence`], the publish shot's record class, whose
+//! sole-writer fences M7 holds the same way
+//! ([`skep_links::correspondence_type`]) ahead of the one writer the shot's
+//! lane will build; the ledger's tests hold that pair equal too.
+//!
+//! The link-sets rows the commons seeding round pinned (2026-10-27) join as
+//! three pins — [`t_read_with`], [`t_correspondence`], [`t_held_removal`] —
+//! the daemon's write path reading the correspondence as PUB-6.64's member
+//! and the client's constants keying on all three; the registry's subtype
+//! rows and the correspondence are the ledger's two-ordinal pins, the
+//! correspondence built by `commons_subtype` as `commons_type` builds a
+//! type's.
 //!
 //! The registry's twelve rows (REG-1.14, REG-1.15; commons-map's table of
 //! them) are `skep-registry`'s table, read through readers here —
@@ -88,6 +99,28 @@ fn commons_type(ordinal: u32) -> Address {
     validate(
         Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, ordinal].into_iter().map(Nat::from))
             .expect("the commons type components are nonempty"),
+    )
+    .expect("a subspace-3 element of the ghost document is T4-valid by construction")
+}
+
+/// Returns the commons subtype address at `path` — a type's ordinal then
+/// its subtype's, `[102, 1]` for `3.102.1`.
+///
+/// It is `commons_type`'s twin for the two-ordinal rows the registry builds
+/// its subtype rows from (`skep_registry::commons_type` takes the same
+/// path), one component deeper under the ghost document's subspace 3.
+/// Called once per pin, at that pin's first read.
+///
+/// # Panics
+///
+/// Panics where the components are empty or not T4-valid, which a subspace-3
+/// element of the ghost document never is.
+fn commons_subtype(path: &[u32]) -> Address {
+    validate(
+        Tumbler::new(
+            [1u32, 1, 0, 1, 0, 1, 0, 3].into_iter().chain(path.iter().copied()).map(Nat::from),
+        )
+        .expect("the commons type components are nonempty"),
     )
     .expect("a subspace-3 element of the ghost document is T4-valid by construction")
 }
@@ -274,7 +307,8 @@ pub fn t_succession_policy() -> &'static Address {
 ///
 /// The order is the ledger's — the grant, the edition claim, endorse, the
 /// consumption marker, the journal designation, the rail record, the
-/// steward's classification and `replaces` — and the list is the parent's
+/// steward's classification, `replaces`, then the link-sets rows: read-with,
+/// the correspondence and the held removal — and the list is the parent's
 /// domain as the engine sees it (REG-1.31), which the seeding check compares
 /// the registry's rows against at every genesis (REG-1.30, REG-1.32). The
 /// three credential types stand beside this list rather than in it — they
@@ -284,7 +318,7 @@ pub fn t_succession_policy() -> &'static Address {
 /// [`t_retire`], [`t_claim`]) and by M5's deposit-class spellings. The
 /// ledger's tests hold this list to be exactly the pins outside the
 /// registry's table but those three.
-pub fn pins_outside_the_registry() -> [&'static Address; 8] {
+pub fn pins_outside_the_registry() -> [&'static Address; 11] {
     [
         t_grant(),
         t_edition(),
@@ -294,6 +328,9 @@ pub fn pins_outside_the_registry() -> [&'static Address; 8] {
         t_rail_record(),
         t_steward_classification(),
         t_replaces(),
+        t_read_with(),
+        t_correspondence(),
+        t_held_removal(),
     ]
 }
 
@@ -385,6 +422,57 @@ pub fn t_replaces() -> &'static Address {
 /// tier is reserved for".
 pub fn t_steward_classification() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(61));
+    &ADDR
+}
+
+// ── the link-sets rows (the commons seeding round, pinned 2026-10-27) ──────
+
+/// Returns the read-with type: `1.1.0.1.0.1.0.3.71`.
+///
+/// commons-map.md's link-sets row: "`3.71` | READ-WITH, name `read-with` —
+/// 'read this version with that set': 'a link, no new op' (D7) … 'a
+/// reader's instruction and nothing the daemon checks'" — the presentation
+/// tier's second ordinal, beside `3.70` layout. Pinned 2026-10-27 (the
+/// owner: "pin as proposed"). No daemon index reads it and no refusal keys
+/// on it: the client's constant, pinned here so one ledger names every
+/// commons address the build spells.
+pub fn t_read_with() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(71));
+    &ADDR
+}
+
+/// Returns the correspondence record's type: `1.1.0.1.0.1.0.3.102.1`.
+///
+/// commons-map.md's link-sets row: "`3.102.1` | THE CORRESPONDENCE RECORD,
+/// name `correspondence` — 'a counterpart subtype no picker lists and no
+/// user act writes' (C2 (a)), 'MINTED BY THE `publish` SHOT in its own
+/// transaction' … 'the CLASS HAS ONE WRITER and is refused elsewhere by
+/// coverage-class equality … `nullify` is REFUSED on it — an `AuditClass`
+/// arm, PUB-6.64's member'". The first subtype under Nelson's counterpart
+/// `3.102`, pinned 2026-10-27, so a pin of two ordinals — the ledger's one
+/// two-ordinal pin outside the registry's own nesting, prefix-related to no
+/// other pin (`3.102` itself is no pin). The daemon's write path refuses a
+/// `nullify` at it (PUB-6.64's class), and M7 spells it a second time for
+/// its sole-writer fences ([`skep_links::correspondence_type`]), the ledger's
+/// tests holding the two equal; the one writer, the shot's own record mint,
+/// is the publish lane's and not yet built.
+pub fn t_correspondence() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_subtype(&[102, 1]));
+    &ADDR
+}
+
+/// Returns the held removal's type: `1.1.0.1.0.1.0.3.24`.
+///
+/// commons-map.md's link-sets row: "`3.24` | THE HELD-REMOVAL RECORD, name
+/// `held-removal` (W2) — 'a second record subtype, `from` none, `to` a
+/// published mark by address, written at the chord and retractable as its
+/// undo'" — a type of its own in the structural reserve (the owner,
+/// 2026-10-27: "pin as proposed, held removal at 3.24"). Written by the
+/// chord through `make_link` and retracted by `nullify` as the chord's undo,
+/// so no refusal keys on it; the client's constant, pinned here as
+/// [`t_read_with`] is.
+pub fn t_held_removal() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(24));
     &ADDR
 }
 

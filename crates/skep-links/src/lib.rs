@@ -113,8 +113,9 @@ mod error;
 // coverage index `stab` answers from, grouped by home.
 mod state;
 // `LinkWriter` and what its ops share — `emit_core`, the one deposit gate,
-// the lock set, the `replaces` class; one file per op family beneath, each
-// with the public function that builds what its ops deposit.
+// the lock set, the `replaces` and correspondence classes; one file per op
+// family beneath, each with the public function that builds what its ops
+// deposit.
 mod writes;
 
 pub use budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
@@ -135,8 +136,8 @@ pub use state::{
     CurrentMember, LinkRec, LinkState, Pattern, Tip, Touch, Tuple, View, FROM, TO, TYPE,
 };
 pub use writes::{
-    emit_tuple, is_replaces_class, replaces_type, retraction_tuple, slot_endset,
-    supersession_claim, Edit, LinkWriter, SlotArg, Visibility,
+    correspondence_type, emit_tuple, is_correspondence_class, is_replaces_class, replaces_type,
+    retraction_tuple, slot_endset, supersession_claim, Edit, LinkWriter, SlotArg, Visibility,
 };
 
 /// The auto traits M7's slice promises without saying.

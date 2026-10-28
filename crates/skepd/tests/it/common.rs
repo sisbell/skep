@@ -74,8 +74,9 @@ pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
 /// × the vocabulary's size`. The ONE constant every position pin of a fresh
 /// board derives from — the ceremony's five commits land at `SEED_HEAD + 2`,
 /// `+ 3`, `+ 6`, `+ 9`, `+ 12` — held equal to what a fresh board counts by
-/// `vocabulary.rs`'s own test; a type the table gains moves it by three.
-pub const SEED_HEAD: u64 = 332;
+/// `vocabulary.rs`'s own test; a type the table gains moves it by three (the
+/// link-sets rows, eleven of them, moved it from 332 to 365).
+pub const SEED_HEAD: u64 = 365;
 
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key

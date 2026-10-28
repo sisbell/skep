@@ -16,9 +16,10 @@
 //!   well-formedness checks — so an unregistered or unowned home is refused
 //!   on hit and miss, whatever else the input violates (Conflicts §8);
 //! * [`EmitError::NonAddressDenotingType`], [`EmitError::SupersessionClass`],
-//!   [`EmitError::ReplacesClass`] and [`EmitError::SlotTooLarge`] are
-//!   pre-transact — in that firing order — so all four outrank every
-//!   in-transaction verdict including the home/ω pair;
+//!   [`EmitError::ReplacesClass`], [`EmitError::CorrespondenceClass`] and
+//!   [`EmitError::SlotTooLarge`] are pre-transact — in that firing order —
+//!   so all five outrank every in-transaction verdict including the home/ω
+//!   pair;
 //! * [`RetractStaleError::NotBh4`] is likewise pre-transact, ahead of the
 //!   constituent nullifies' own rejections.
 
@@ -116,6 +117,20 @@ pub enum MakeLinkError {
     /// states for its class. Refused whether or not the op carries a member:
     /// a record of this class is itself a `replaces` link.
     ReplacesClass,
+    /// The resolved type slot lands in the correspondence class.
+    ///
+    /// That class ([`crate::correspondence_type`], `1.1.0.1.0.1.0.3.102.1`;
+    /// the link-sets design §5.7, "the CLASS HAS ONE WRITER") is the publish
+    /// shot's own record — that a draft run's identity became the member's —
+    /// whose one writer is the shot's record mint in the shot's own
+    /// transaction, not yet built, so today nothing deposits the class at
+    /// all. Its readers take a record's `from` and `to` as the exact
+    /// correspondence the shot computed, so a record of the class put there
+    /// by any other act would state an identity the shot never minted — the
+    /// sole-writer fence the two above state for theirs. PUB-6.64's member
+    /// beside them: its `nullify` is refused too. The parent `counterpart`
+    /// `3.102` is an ordinary type and is not fenced.
+    CorrespondenceClass,
     /// M3's mint failed structurally.
     Mint(MintError),
     /// M5's seat step refused (CL-OWN/CL-UNIQ).
@@ -130,7 +145,9 @@ pub enum MakeLinkError {
 /// exact parallel of the `[R]` fence, making `assert_sup`/`editlink` the sole
 /// `[K_sup]`-writers so every stored claim is schema-conformant, which the
 /// walk family leans on. `ReplacesClass` is the `replaces` class's fence,
-/// making [`crate::LinkWriter::makelink_replacing`] that class's sole writer.
+/// making [`crate::LinkWriter::makelink_replacing`] that class's sole writer;
+/// `CorrespondenceClass` the correspondence class's, whose sole writer is
+/// the publish shot's record mint, not yet built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
     /// `home` is not a registered Document (P0).
@@ -167,6 +184,14 @@ pub enum EmitError {
     /// Managed gate's `NotRegistered` would refuse it — the fence is what
     /// keeps it refused if a registration ever names it.
     ReplacesClass,
+    /// `ty ~ correspondence` — the publish shot's record class, which has
+    /// one writer.
+    ///
+    /// That writer is the shot's own record mint (the link-sets design
+    /// §5.7), not yet built. Pre-transact, behind `ReplacesClass` and
+    /// independent of the registry as it is: a commons value no registration
+    /// holds.
+    CorrespondenceClass,
     /// `ty` is not address-denoting.
     ///
     /// Rejected before any class computation (§Core data model totality).
@@ -247,8 +272,10 @@ pub enum EditLinkError {
     ///
     /// It is retraction-typed, `replaces`-typed (that class's one writer
     /// being [`crate::LinkWriter::makelink_replacing`] — PUB-5.15, RES-309),
-    /// or `[K_sup]`-typed without the Df-DISC(ii) schema (unit-depth
-    /// single-addr F/G, resident endpoints, irreflexive).
+    /// correspondence-typed (that class's one writer the publish shot's
+    /// record mint — the link-sets design §5.7), or `[K_sup]`-typed without
+    /// the Df-DISC(ii) schema (unit-depth single-addr F/G, resident
+    /// endpoints, irreflexive).
     DcViolation,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -336,6 +363,9 @@ impl fmt::Display for MakeLinkError {
             MakeLinkError::ReplacesClass => f.write_str(
                 "makelink: ty ~ replaces — the authority successor writes only through a record's own makelink_replacing",
             ),
+            MakeLinkError::CorrespondenceClass => f.write_str(
+                "makelink: ty ~ correspondence — the publish shot's record class writes only through the shot's own mint",
+            ),
             MakeLinkError::Mint(e) => write!(f, "makelink: mint failed: {e}"),
             MakeLinkError::Seat(e) => write!(f, "makelink: seat refused: {e}"),
         }
@@ -372,6 +402,9 @@ impl fmt::Display for EmitError {
             ),
             EmitError::ReplacesClass => f.write_str(
                 "emit: ty ~ replaces — the authority successor writes only through a record's own makelink_replacing",
+            ),
+            EmitError::CorrespondenceClass => f.write_str(
+                "emit: ty ~ correspondence — the publish shot's record class writes only through the shot's own mint",
             ),
             EmitError::NonAddressDenotingType => {
                 f.write_str("emit: ty is not address-denoting (rejected before class computation)")
@@ -468,7 +501,7 @@ impl fmt::Display for EditLinkError {
                 "editlink: successor arity ≠ 3, empty type slot, or a non-level-uniform span in some slot (Conflicts §11)",
             ),
             EditLinkError::DcViolation => f.write_str(
-                "editlink: DC — retraction- or replaces-typed successor, or schema-non-conforming [K_sup]-typed successor",
+                "editlink: DC — retraction-, replaces- or correspondence-typed successor, or schema-non-conforming [K_sup]-typed successor",
             ),
             EditLinkError::Mint(e) => write!(f, "editlink: mint failed: {e}"),
         }

@@ -1,6 +1,8 @@
 //! The sole-writer fences over a real kernel: the `[R]` and `[K_sup]` fences
-//! on the open surface beside the classes they do not name, and the `replaces`
-//! class's fence on all three open writes beside that class's one writer.
+//! on the open surface beside the classes they do not name, the `replaces`
+//! class's fence on all three open writes beside that class's one writer, and
+//! the correspondence class's fence on the same three writes — a class whose
+//! one writer, the publish shot's record mint, is not yet built.
 
 use crate::common;
 
@@ -9,8 +11,9 @@ use skep_address::{subtree_of, Address};
 use skep_arrangement::HasM5;
 use skep_kernel::{Attestation, HistoryError, Seq, TxnError};
 use skep_links::{
-    coverage_class, enc, is_replaces_class, replaces_type, EditLinkError, EmitError, Endset,
-    HasLinks, Link, LinkWriter, MakeLinkError, SlotArg, View, TYPE,
+    correspondence_type, coverage_class, enc, is_correspondence_class, is_replaces_class,
+    replaces_type, EditLinkError, EmitError, Endset, HasLinks, Link, LinkWriter, MakeLinkError,
+    SlotArg, View, TYPE,
 };
 
 // ---- the sole-writer fences, on the open surface ----
@@ -98,13 +101,25 @@ fn makelink_cannot_forge_a_supersession_claim() {
 
 #[test]
 fn makelink_still_admits_every_class_the_fences_do_not_name() {
-    // The control for the two fences above: they name two classes, not the
-    // registry. A shipped class with no sole writer (Retired), a second
-    // shipped class, and a class outside the registry all deposit through the
-    // open surface as before.
+    // The control for the fences: they name four classes, not the registry
+    // and not the commons. A shipped class with no sole writer (Retired), a
+    // second shipped class, a class outside the registry, and the commons
+    // types a client writes by `make_link` — the counterpart `3.102` (the
+    // correspondence's parent, which the subtype-exact fence leaves alone),
+    // a read-with `3.71`, a held removal `3.24` and a bold `3.23.2` — all
+    // deposit through the open surface as before.
     let k = kernel();
     let w = writer(&k);
-    for ty in [reserved().retired, reserved().pred_def, unregistered_ta(10)] {
+    let commons = |path: &[u32]| a(&[&[1u32, 1, 0, 1, 0, 1, 0, 3][..], path].concat());
+    for ty in [
+        reserved().retired,
+        reserved().pred_def,
+        unregistered_ta(10),
+        commons(&[102]),
+        commons(&[71]),
+        commons(&[24]),
+        commons(&[23, 2]),
+    ] {
         w.makelink(
             P1,
             &doc1(),
@@ -184,6 +199,96 @@ fn makelink_cannot_forge_an_authority_successor() {
     assert!(is_replaces_class(&enc([&replaces, &subtype])));
     assert!(!is_replaces_class(&enc([&subtype])), "a subtype alone is not the class");
     assert!(!is_replaces_class(&Endset::from_spans([iext(1, 3)])), "content is not the class");
+}
+
+/// THE CORRESPONDENCE FENCE, the `replaces` fence's twin (the link-sets
+/// design §5.7: "the CLASS HAS ONE WRITER and is refused elsewhere by
+/// coverage-class equality"): the publish shot's own record — that a draft
+/// run's identity became the member's — has ONE writer, the shot's record
+/// mint, which is not yet built, so TODAY nothing deposits the class at all.
+/// The class `3.102.1` is refused on all three open writes — `makelink`,
+/// alone and beside a subtype of its own (one coverage class), `emit`
+/// (pre-transact) and an `editlink` successor — and at `makelink_replacing`
+/// where its RECORD is of the class; the I-span form never reaches the
+/// fence, a subspace-3 address being no content I-span (the content clause
+/// refuses it first, by slot and index). Nothing commits, and the class's
+/// slice stays empty. The rule is subtype-exact: a slot naming the PARENT
+/// `counterpart` `3.102` — alone, or beside the subtype, which it then
+/// covers — is not the class and deposits, and the two sole-writer classes
+/// are disjoint.
+#[test]
+fn makelink_cannot_forge_a_correspondence_record() {
+    let k = kernel();
+    let w = writer(&k);
+    let record = open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(10)]);
+    let correspondence = correspondence_type().clone();
+    let parent = a(&[1, 1, 0, 1, 0, 1, 0, 3, 102]);
+    let subtype = a(&[1, 1, 0, 1, 0, 1, 0, 3, 102, 1, 1]);
+    let before = k.current_seq();
+    for ty in [vec![correspondence.clone()], vec![correspondence.clone(), subtype.clone()]] {
+        assert!(
+            matches!(
+                w.makelink(
+                    P1,
+                    &doc1(),
+                    SlotArg::Addrs(vec![ca(1)]),
+                    SlotArg::Addrs(vec![ca(2)]),
+                    SlotArg::Addrs(ty.clone()),
+                ),
+                Err(TxnError::Rejected(MakeLinkError::CorrespondenceClass))
+            ),
+            "a bare makelink typed {ty:?}"
+        );
+    }
+    assert!(matches!(
+        w.emit(P1, &doc1(), &enc([&correspondence]), &record, &[la(9)]),
+        Err(TxnError::Rejected(EmitError::CorrespondenceClass))
+    ));
+    let successor = Link::triple(enc([&ca(1)]), enc([&ca(2)]), enc([&correspondence]));
+    assert!(matches!(
+        w.editlink(P1, &record, successor, &doc1(), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::DcViolation))
+    ));
+    assert!(matches!(
+        w.makelink_replacing(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![correspondence.clone()]),
+            &la(9),
+        ),
+        Err(TxnError::Rejected(MakeLinkError::CorrespondenceClass))
+    ));
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Spans(vec![subtree_of(correspondence.tumbler())]),
+        ),
+        Err(TxnError::Rejected(MakeLinkError::NotContentSpan { slot: TYPE, index: 0 }))
+    ));
+    assert_eq!(k.current_seq(), before, "every refusal is pre-deposit");
+    assert!(
+        k.snapshot().world().links().type_slice(&enc([&correspondence]), View::Audit).is_empty(),
+        "no correspondence record was deposited"
+    );
+    // The one predicate every fence above reads, and its subtype-exactness.
+    assert!(is_correspondence_class(&enc([&correspondence])));
+    assert!(is_correspondence_class(&enc([&correspondence, &subtype])));
+    assert!(!is_correspondence_class(&enc([&subtype])), "a subtype of the class alone is not the class");
+    assert!(!is_correspondence_class(&enc([&parent])), "the parent is not the class");
+    assert!(!is_correspondence_class(&enc([&parent, &correspondence])), "the parent covers its subtype: counterpart's class");
+    assert!(!is_correspondence_class(&Endset::from_spans([iext(1, 3)])), "content is not the class");
+    assert!(!is_replaces_class(&enc([&correspondence])) && !is_correspondence_class(&enc([replaces_type()])), "disjoint");
+    // The parent deposits — the counterpart a picker lists — alone and
+    // beside the subtype it covers.
+    for ty in [vec![parent.clone()], vec![parent.clone(), correspondence.clone()]] {
+        w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(ty.clone()))
+            .unwrap_or_else(|e| panic!("the parent counterpart deposits as {ty:?}: {e:?}"));
+    }
 }
 
 /// THE ONE WRITER (PUB-5.15 (iii); RES-308/309): `makelink_replacing` stages
@@ -271,10 +376,11 @@ fn makelink_replacing_commits_record_and_link_together() {
 /// with a sole writer are content positions, so a width-1 I-span at either
 /// IS its unit span and classes as its class: the same fence refuses it in
 /// this form as in the address form, and the fold never meets a forged
-/// retraction or claim. The `replaces` type is a subspace-3 address no
-/// I-span can spell: the content clause refuses it ahead of the fence, by
-/// slot and index. A reserved class with no sole writer (`retired`) deposits
-/// in this form as in the address form — the control.
+/// retraction or claim. The `replaces` type and the correspondence type are
+/// subspace-3 addresses no I-span can spell: the content clause refuses each
+/// ahead of the fence, by slot and index. A reserved class with no sole
+/// writer (`retired`) deposits in this form as in the address form — the
+/// control.
 #[test]
 fn the_fences_hold_over_an_ispan_type_slot() {
     let k = kernel();
@@ -294,6 +400,10 @@ fn the_fences_hold_over_an_ispan_type_slot() {
         w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![]), unit(replaces_type())),
         Err(TxnError::Rejected(MakeLinkError::NotContentSpan { slot: TYPE, index: 0 }))
     ));
+    assert!(matches!(
+        w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![]), unit(correspondence_type())),
+        Err(TxnError::Rejected(MakeLinkError::NotContentSpan { slot: TYPE, index: 0 }))
+    ));
     assert_eq!(k.current_seq(), before, "every refusal is pre-deposit");
     {
         let snap = k.snapshot();
@@ -311,6 +421,7 @@ fn the_fences_hold_over_an_ispan_type_slot() {
     assert_eq!(ty, Endset::from_spans([iext(1, 3)]));
     assert!(coverage_class(&ty).denoted().is_none(), "an extent classes as an extent, not as a denoted set");
     assert!(!is_replaces_class(&ty));
+    assert!(!is_correspondence_class(&ty));
     // The control: a reserved class with no sole writer deposits in this
     // form as in the address form.
     w.makelink(P1, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![]), unit(&reserved().retired))

@@ -393,6 +393,13 @@ impl Lower for MakeLinkError {
             // `replaces_not_standalone` (PUB-5.15). Permanent: the class is
             // minted only beside its record, by MAKELINK's `replaces` member.
             MakeLinkError::ReplacesClass => (RejectCode::DcViolation, None),
+            // The correspondence class's fence, the `replaces` fence's twin
+            // (the link-sets design §5.7) — the same near leaf. Reached
+            // Engine-direct alone: the daemon refuses the same slots ahead of
+            // the transaction under its own token,
+            // `correspondence_not_standalone`. Permanent: the class's one
+            // writer is the publish shot's own record mint.
+            MakeLinkError::CorrespondenceClass => (RejectCode::DcViolation, None),
             MakeLinkError::Mint(m) => m.lower(),
             MakeLinkError::Seat(s) => s.lower(),
         }
@@ -416,6 +423,10 @@ impl Lower for EmitError {
             EmitError::SupersessionClass => (RejectCode::DcViolation, None),
             // The `replaces` class's fence, as MakeLinkError's lowers it.
             EmitError::ReplacesClass => (RejectCode::DcViolation, None),
+            // The correspondence class's fence, as MakeLinkError's lowers it
+            // — the daemon's token, `correspondence_not_standalone`, speaks
+            // ahead of the transaction over the wire.
+            EmitError::CorrespondenceClass => (RejectCode::DcViolation, None),
             EmitError::NonAddressDenotingType => (RejectCode::NonAddressDenotingType, None),
             // The same per-slot span budget MAKELINK's slots carry, on `to`
             // and `ty` — so the same leaf, and permanent for the same reason:

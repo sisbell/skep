@@ -582,6 +582,46 @@ fn doc_states_the_record_grade_beside_the_entry_grade() {
     );
 }
 
+/// THE LINK-SETS ROWS' CONTRACT (lane S0; the commons seeding round,
+/// 2026-10-27): §Credential refusals carries the correspondence class's
+/// sole-writer fence beside the `replaces` one — the class, the token, ONE
+/// writer (the `publish` shot's own record class; nothing deposits one by
+/// itself), PERMANENT, who it answers, the parent outside it and its
+/// `nullify`'s refusal — and §Links (writes) glosses the slots by ORDINAL and
+/// ROLE in the standing rule's words (the one-sided link record's decision
+/// 5 (a)), the keys and their order kept as sealed. The daemon's answers are
+/// pinned in `vectors.rs`, `nullify_class.rs` and skep-core's own suite;
+/// this pins that the contract says so.
+#[test]
+fn doc_states_the_correspondence_fence_and_the_slots_ordinal_and_role_reading() {
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    for fact in [
+        "The `replaces` class — `replaces_not_standalone`",
+        "The correspondence class — `correspondence_not_standalone`",
+        "`1.1.0.1.0.1.0.3.102.1`",
+        "the `publish` shot's own record class",
+        "nothing deposits one by itself",
+        "the parent `counterpart` `1.1.0.1.0.1.0.3.102` is no member",
+        "PERMANENT. It answers the owner of every home the write names",
+        "Its `nullify` is refused `nullify_audit_view`",
+    ] {
+        assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
+    }
+    let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
+    for fact in [
+        "glossed by ORDINAL and ROLE",
+        "slot 1 (`from`) holds what a link brings of its own",
+        "slot 2 (`to`) holds what it is about",
+        "a one-sided link leaves empty the slot it has no content for",
+        "a MARK",
+        "has an empty `from` and its matter in `to`",
+        "The claim `3.3` stands as built",
+        "The keys `from`/`to`/`ty` and their order stay as every signed row seals them",
+    ] {
+        assert!(links.contains(fact), "§Links (writes) says {fact:?}");
+    }
+}
+
 /// THE TEN CELLS AND THE STORED SLOT ROW (SO-I6 (a), (h); SO-I7 (f)):
 /// §Credential refusals names the ten kinds the check runs on and states
 /// the frame's rows once — the stored slot row under `0x03`, its EMPTY

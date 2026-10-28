@@ -10,7 +10,7 @@ use skep_arrangement::Caller;
 use skep_kernel::{Seq, TxnError};
 use skep_namespace::M3Rec;
 
-use super::{deposit_lock_set, emit_core, replaces_class, Gate, LinkWriter};
+use super::{correspondence_class, deposit_lock_set, emit_core, replaces_class, Gate, LinkWriter};
 use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
@@ -101,10 +101,14 @@ where
     /// `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts §10);
     /// `ty ~ replaces` (`ReplacesClass` — [`LinkWriter::makelink_replacing`]
     /// is that class's sole writer,
-    /// [`is_replaces_class`](crate::is_replaces_class); PUB-5.15); and either
-    /// caller-sized slot past [`MAX_SLOT_SPANS`] spans (`SlotTooLarge`,
-    /// [`emit_tuple`]'s budget) — all four ahead of `ShapeViolation`, which
-    /// an over-budget `to` also satisfies. Then, inside the transaction:
+    /// [`is_replaces_class`](crate::is_replaces_class); PUB-5.15); `ty ~
+    /// correspondence` (`CorrespondenceClass` — the publish shot's record
+    /// mint is that class's sole writer,
+    /// [`is_correspondence_class`](crate::is_correspondence_class); the
+    /// link-sets design §5.7); and either caller-sized slot past
+    /// [`MAX_SLOT_SPANS`] spans (`SlotTooLarge`, [`emit_tuple`]'s budget) —
+    /// all five ahead of `ShapeViolation`, which an over-budget `to` also
+    /// satisfies. Then, inside the transaction:
     /// `HomeNotRegistered` and `NotOwner` for `home`, the Managed gate's
     /// `NotRegistered`, `RetractionClass` (`ty ~ [R]`) and `ShapeViolation`,
     /// and `Mint` where the mint fails. The kernel's own failures —
@@ -127,6 +131,9 @@ where
         }
         if class == *replaces_class() {
             return Err(TxnError::Rejected(EmitError::ReplacesClass));
+        }
+        if class == *correspondence_class() {
+            return Err(TxnError::Rejected(EmitError::CorrespondenceClass));
         }
         let value = emit_tuple(ty, from, to).ok_or(TxnError::Rejected(EmitError::SlotTooLarge))?;
         let keys = deposit_lock_set(&value, home);

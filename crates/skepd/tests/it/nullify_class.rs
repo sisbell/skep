@@ -5,7 +5,9 @@
 //! AUDIT-VIEW class (PUB-6.64, `nullify_audit_view` — the succession pair,
 //! the consumption marker, the journal designation, the rail record, the
 //! steward's classification link where its home is published, the `replaces`
-//! link a re-share is deposited with, PUB-5.15). Each cell ×
+//! link a re-share is deposited with, PUB-5.15; and the correspondence
+//! record, the link-sets design §5.7, whose daemon-level cell waits on its
+//! one writer, the publish shot's). Each cell ×
 //! the caller classes the pack names: the OWNER (signed), a STRANGER (signed,
 //! non-entitled), the GUEST, and the BARE OWNER on a published home — plus
 //! the negative cell (the edition claim's owner retraction ADMITTED) and the
@@ -328,6 +330,42 @@ fn a_replaces_link_nullify_is_refused_to_the_owner_and_masked_for_strangers() {
     assert_eq!(head(port), before, "the refusals commit nothing");
     assert!(link_resident(port, None, &pair), "nothing was retracted");
     assert_eq!(universal_grants(port, Some(&bare)), row, "and the re-share stands");
+    sd.shutdown();
+}
+
+/// THE CORRESPONDENCE RECORD (PUB-6.64's member; the link-sets design §5.7)
+/// has NO WRITER until the publish shot's lane lands: every door refuses the
+/// class `3.102.1` to its owner — `correspondence_not_standalone`, permanent,
+/// bare and signed alike — so no link of the class exists for a `nullify`
+/// cell to target, and the daemon-level cell (the owner's
+/// `nullify_audit_view`, a stranger's `not_owner`) is that lane's; the unit
+/// level pins the refusal today over a record staged directly (skep-core's
+/// `plain/tests.rs`). What stands at the daemon: the class is subtype-exact
+/// — a link typed the PARENT `counterpart` `3.102` is an ordinary link,
+/// admitted into the owner's draft, its owner's `nullify` LANDING, bare and
+/// signed alike.
+#[test]
+fn the_correspondence_class_has_no_writer_yet_and_its_parent_is_an_ordinary_link() {
+    const T_COUNTERPART: &str = "1.1.0.1.0.1.0.3.102";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let draft = owner_draft(port, &bare);
+    let before = head(port);
+    for token in [&bare, &signed] {
+        let v = typed_link(port, token, &draft, &[], &[draft.as_str()], T_CORRESPONDENCE);
+        assert_eq!(verdict(&v), "credential_refused:correspondence_not_standalone", "{v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    }
+    assert_eq!(head(port), before, "the refusals commit nothing: no record of the class exists to retract");
+    for token in [&bare, &signed] {
+        let counterpart = typed_link_addr(port, token, &draft, &[draft.as_str()], &[draft.as_str()], T_COUNTERPART);
+        expect_resp(&nullify(port, Some(token), &draft, &counterpart), "ack_addr");
+        assert!(link_resident(port, Some(&bare), &counterpart), "retracted, the link stays resident (R3)");
+    }
     sd.shutdown();
 }
 

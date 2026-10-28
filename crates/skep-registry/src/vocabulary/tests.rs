@@ -8,25 +8,26 @@ use crate::rows;
 /// Every type the brief's table names, by path, in the order the table
 /// holds them — the table transcribed once more, so a row dropped or
 /// renumbered in `vocabulary.rs` fails here by name.
-const PATHS: [&str; 108] = [
+const PATHS: [&str; 119] = [
     "1", "2", "3", "4", "5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10",
     "6", "6.1", "6.2", "6.3", "7", "8", "9", "9.1", "9.2", "9.3", "10", "10.1", "10.2", "10.3",
     "10.4", "11", "12", "13", "14", "14.1", "14.2", "14.3", "14.4", "14.5", "15", "15.1", "15.2",
     "15.3", "15.4", "16", "17", "18", "18.1", "18.2", "18.3", "19", "20", "21", "21.1", "21.2",
-    "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
+    "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "23", "23.1", "23.2", "23.3", "23.4", "23.5", "23.6", "23.7", "24", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
     "42.1", "42.2", "42.3", "43", "44", "44.1", "44.2", "45", "50", "55", "56", "57", "57.1",
-    "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "70", "88", "89", "90", "91", "100", "101", "102", "103", "104", "104.1", "105",
+    "57.2", "58", "58.1", "58.2", "58.3", "58.4", "58.5", "59", "60", "61", "70", "71", "88", "89", "90", "91", "100", "101", "102", "102.1", "103", "104", "104.1", "105",
 ];
 
 /// The ordinals the table must NOT name: the reserved structural and
-/// social extensions beyond the built ones, the registry-machinery reserve
-/// `3.51`–`3.54`, the proxy kind's `3.87`, the test-only `3.90.1`, the
-/// file-metadata family's reserved `3.27.4`, the literary set's free
-/// `3.106`, and the unallocated ranges' first ordinals.
-const NOT_SEEDED: [&[u32]; 22] = [
+/// social extensions beyond the built ones — `3.23` inline and `3.24` the
+/// held removal now seeded, `3.25`, `3.26` and `3.29` still free — the
+/// registry-machinery reserve `3.51`–`3.54`, the proxy kind's `3.87`, the
+/// test-only `3.90.1`, the file-metadata family's reserved `3.27.4`, the
+/// literary set's free `3.106`, and the unallocated ranges' first ordinals
+/// (`3.71` read-with now seeded beside layout, the tier's next free `3.72`
+/// unnamed).
+const NOT_SEEDED: [&[u32]; 19] = [
     &[27, 4],
-    &[23],
-    &[24],
     &[25],
     &[26],
     &[29],
@@ -39,7 +40,6 @@ const NOT_SEEDED: [&[u32]; 22] = [
     &[53],
     &[54],
     &[62],
-    &[71],
     &[80],
     &[87],
     &[90, 1],
@@ -156,7 +156,9 @@ fn the_registry_rows_are_in_the_table_as_rows_rs_spells_them() {
 /// WHAT IS NOT SEEDED answers no definition: the reserved ordinals beyond
 /// the built ones, the unallocated reserve, the proxy kind's `3.87`, the
 /// test-only `3.90.1`, the file-metadata family's reserved `3.27.4`, the
-/// literary set's free ordinals, and an address beneath or above a row.
+/// literary set's free ordinals, and an address beneath or above a row —
+/// the inline family's eighth style and the counterpart's second subtype
+/// among the last.
 #[test]
 fn nothing_is_named_at_an_ordinal_nobody_allocated() {
     for ordinals in NOT_SEEDED {
@@ -166,6 +168,87 @@ fn nothing_is_named_at_an_ordinal_nobody_allocated() {
     let subspace = skep_address::validate(subspace).expect("T4-valid");
     assert_eq!(definition_at(&subspace), None, "the subspace itself is no row");
     assert_eq!(definition_at(&commons_type(&[13, 1])), None, "beneath citation");
+    assert_eq!(definition_at(&commons_type(&[23, 8])), None, "beneath inline, past its seven");
+    assert_eq!(definition_at(&commons_type(&[102, 2])), None, "beneath counterpart, past the correspondence");
+}
+
+/// THE LINK-SETS ROWS (the commons seeding round, pinned 2026-10-27): the
+/// eleven rows stand at the addresses the map pins, under the map's token
+/// names — `inline` the family's parent with its seven styles nested under
+/// it, `held-removal` a type of its own in the structural reserve,
+/// `read-with` in the presentation tier beside layout, `correspondence` a
+/// subtype under counterpart — and the correspondence's and the held
+/// removal's rows are the shapes the design states, the parent `counterpart`
+/// keeping its own two-sided one.
+#[test]
+fn the_link_sets_rows_stand_at_their_pinned_addresses() {
+    let name = |ordinals: &[u32]| definition_at(&commons_type(ordinals)).map(|d| d.name);
+    assert_eq!(name(&[23]), Some("inline"));
+    for (ordinal, style) in [
+        (1, "emphasis"),
+        (2, "strong"),
+        (3, "code"),
+        (4, "mark"),
+        (5, "strikethrough"),
+        (6, "subscript"),
+        (7, "superscript"),
+    ] {
+        let row = definition_at(&commons_type(&[23, ordinal])).expect("a style's row");
+        assert_eq!(row.name, style);
+        assert_eq!(row.endsets, "from: empty; to: the span styled.", "{style}: a mark's shape");
+    }
+    assert_eq!(name(&[24]), Some("held-removal"));
+    assert_eq!(name(&[71]), Some("read-with"));
+    assert_eq!(name(&[102, 1]), Some("correspondence"));
+    assert_eq!(name(&[102]), Some("counterpart"), "the parent keeps its own row");
+    let held = definition_at(&commons_type(&[24])).expect("the held removal's row");
+    assert_eq!(held.endsets, "from: empty; to: the published mark, by address.");
+    let correspondence = definition_at(&commons_type(&[102, 1])).expect("the correspondence's row");
+    assert_eq!(
+        correspondence.endsets,
+        "from: the run's draft-native span; to: the member's span it became, both of one width."
+    );
+    assert_eq!(
+        definition_at(&commons_type(&[102])).expect("counterpart").endsets,
+        "from: the one passage; to: its counterpart."
+    );
+}
+
+/// THE ENDSETS BY ROLE (the commons map's standing rule, F5): every mark —
+/// the heading, the paragraph and its eight kinds, lang, the inline family,
+/// the held removal, the file-metadata family's bare facts — has an empty
+/// `from` and its matter in `to`; the claim `3.3` stands as built, the
+/// rule's one named exception, and no row says "to: empty" but the sayings
+/// with no subject (the claim, the endpoint, the targetless binding's and
+/// the any-principal grant's alternatives).
+#[test]
+fn every_mark_says_from_empty_and_its_matter_in_to() {
+    let endsets = |ordinals: &[u32]| definition_at(&commons_type(ordinals)).expect("a row").endsets;
+    assert_eq!(endsets(&[20]), "from: empty; to: the heading's text; its level a parameter span in the type slot.");
+    assert_eq!(endsets(&[21]), "from: empty; to: the paragraph's text.");
+    for (ordinal, matter) in [
+        (1, "the paragraph's text"),
+        (2, "the quoted text"),
+        (3, "the code's text"),
+        (4, "the list's text"),
+        (5, "the note's text"),
+        (6, "the definition's text"),
+        (7, "the example's text"),
+        (8, "the warning's text"),
+    ] {
+        assert_eq!(endsets(&[21, ordinal]), format!("from: empty; to: {matter}."), "3.21.{ordinal}");
+    }
+    assert_eq!(endsets(&[30]), "from: empty; to: the passage.");
+    for ordinals in [&[23][..], &[23, 2], &[24], &[27, 2], &[27, 2, 1], &[57, 2], &[58, 1]] {
+        assert!(endsets(ordinals).starts_with("from: empty; to: "), "3.{ordinals:?}: a mark");
+    }
+    assert_eq!(endsets(&[3]), "from: the claiming account; to: empty.", "the claim stands as built");
+    let to_empty: Vec<&str> = vocabulary()
+        .iter()
+        .filter(|d| d.endsets.ends_with("to: empty."))
+        .map(|d| d.name)
+        .collect();
+    assert_eq!(to_empty, ["claim", "endpoint"], "the sayings with no subject alone");
 }
 
 /// THE META-TYPE is `3.50`, named `defines`, held once, and it is the one

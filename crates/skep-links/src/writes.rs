@@ -4,7 +4,10 @@
 //! choke point, with its two-disciplines gate (§2); beside them sit the M2
 //! keyed dedup sections (§3) and the seven public ops (six deposits —
 //! MAKELINK in its two forms — plus the BH4 batch), with the `replaces` class
-//! ([`replaces_type`]) whose one writer is the second MAKELINK.
+//! ([`replaces_type`]) whose one writer is the second MAKELINK, and the
+//! correspondence class ([`correspondence_type`]) whose one writer is the
+//! publish shot's own record mint, not yet built — so today nothing deposits
+//! it at all.
 //!
 //! Concurrency belongs to the kernel: nothing here locks, threads, or caches
 //! world state. The type registry every gate reads is the module's compiled
@@ -26,8 +29,9 @@
 //!
 //! Layout: this file is the handle and what its ops share — the visibility
 //! class, the deposit gate [`emit_core`] with its two disciplines and its §2
-//! error tables, the home doorkeeper, the dedup lock set and the `replaces`
-//! class. Each op family is a child module — `writes/makelink.rs`,
+//! error tables, the home doorkeeper, the dedup lock set and the two
+//! sole-writer commons classes, `replaces` and the correspondence. Each op
+//! family is a child module — `writes/makelink.rs`,
 //! `writes/emit.rs`, `writes/nullify.rs` and `writes/supersession.rs` —
 //! holding one `impl LinkWriter` block and the public function that builds
 //! what its ops deposit ([`slot_endset`], [`emit_tuple`],
@@ -765,4 +769,75 @@ fn replaces_class() -> &'static CoverageClass {
 /// caller-built slot.
 pub fn is_replaces_class(ty: &Endset) -> bool {
     ty.is_address_denoting() && coverage_class(ty) == *replaces_class()
+}
+
+// ── the correspondence class — the publish shot's own record (link-sets §5.7)
+
+/// Returns the correspondence record's type — the commons value
+/// `1.1.0.1.0.1.0.3.102.1`.
+///
+/// It is the subtype row under Nelson's counterpart `3.102` the commons
+/// seeding round pinned (2026-10-27): the type of the record a publish shot
+/// mints for each run of draft identity it re-minted into the member —
+/// `from` the run's draft-native span, `to` the member's span it became,
+/// both of one width, homed in the draft (the link-sets design §5.5, §5.7).
+/// A value, never a registration, as [`replaces_type`] is.
+///
+/// M7's own spelling, where its one reader here can read it — the class the
+/// sole-writer fences compare against (`correspondence_class`, below) — M7
+/// sitting below the engine, whose commons ledger pins the same address
+/// again (`skep_engine::types::t_correspondence`) and whose ledger test
+/// holds the two spellings equal. The class HAS ONE WRITER, the shot's own
+/// record mint in the shot's transaction, which is not yet built: until it
+/// lands nothing deposits the class, every door refusing it. Held, not
+/// built per call, as the class built from it is.
+///
+/// # Panics
+///
+/// Panics if `1.1.0.1.0.1.0.3.102.1` is not a nonempty T4-valid address,
+/// which can only happen if the constant itself is edited.
+pub fn correspondence_type() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| {
+        validate(
+            Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, 102, 1].into_iter().map(Nat::from))
+                .expect("the commons type components are nonempty"),
+        )
+        .expect("a subspace-3 element of the ghost document is T4-valid by construction")
+    });
+    &ADDR
+}
+
+/// Returns the correspondence class's coverage class.
+///
+/// It is what the three fences compare a type slot's own class to, exactly
+/// as they compare it to [`replaces_class`]'s answer.
+fn correspondence_class() -> &'static CoverageClass {
+    static CLASS: LazyLock<CoverageClass> =
+        LazyLock::new(|| coverage_class(&enc([correspondence_type()])));
+    &CLASS
+}
+
+/// Returns whether the type slot `ty` lands in the correspondence class.
+///
+/// It is the class's sole-writer fence (the link-sets design §5.7: "the
+/// CLASS HAS ONE WRITER and is refused elsewhere by coverage-class
+/// equality") as a total predicate, [`is_replaces_class`]'s twin: the
+/// daemon asks it of a request ahead of the transaction, so the wire's code
+/// (`correspondence_not_standalone`) and the store's refusal fall on the
+/// same slots. Every write that takes a caller's type slot refuses exactly
+/// the slots this answers `true` for — MAKELINK in both forms
+/// ([`MakeLinkError::CorrespondenceClass`]), `emit`
+/// ([`EmitError::CorrespondenceClass`]) and an `editlink` successor
+/// ([`EditLinkError::DcViolation`]).
+///
+/// Coverage-class equality, the `[K_sup]` fence's rule: a slot naming the
+/// type, alone or beside its own subtypes, is the class; a slot naming the
+/// parent `counterpart` `3.102` — alone or beside this subtype, which the
+/// parent then covers — is not, and stays the ordinary type a picker lists.
+///
+/// Total over every endset, as [`is_replaces_class`] is: only an
+/// address-denoting slot can name the type, so any other answers `false`
+/// before a class is computed.
+pub fn is_correspondence_class(ty: &Endset) -> bool {
+    ty.is_address_denoting() && coverage_class(ty) == *correspondence_class()
 }

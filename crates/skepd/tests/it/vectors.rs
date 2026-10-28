@@ -256,6 +256,66 @@ fn m2_6_the_replaces_fence_stands_behind_the_destination_s_owner_and_ahead_of_th
     sd.shutdown();
 }
 
+/// 2.6 — THE CORRESPONDENCE FENCE's PLACE (the link-sets design §5.7: "the
+/// CLASS HAS ONE WRITER and is refused elsewhere by coverage-class equality
+/// — a fence token, `replaces_not_standalone`'s shape"): the publish shot's
+/// own record class `3.102.1` is refused `correspondence_not_standalone` to
+/// the home's OWNER at every door — a bare `make_link`, an `emit`, an
+/// `edit_link` successor — AFTER the destination's `not_owner` (slot 1) and
+/// AHEAD of the board-state gate (slot 4) and the check, bare and signed
+/// alike, in the published doc 1 and in a draft; PERMANENT. The class has no
+/// writer until the shot's lane lands, so nothing deposits it. The rule is
+/// subtype-exact: the parent `counterpart` `3.102`, a read-with `3.71`, a
+/// held removal `3.24` and a bold `3.23.2` are ordinary types a client
+/// writes by `make_link`, admitted into the owner's draft.
+#[test]
+fn m2_6_the_correspondence_fence_stands_beside_the_replaces_fence_and_the_parent_deposits() {
+    const T_COUNTERPART: &str = "1.1.0.1.0.1.0.3.102";
+    const T_READ_WITH: &str = "1.1.0.1.0.1.0.3.71";
+    const T_HELD_REMOVAL: &str = "1.1.0.1.0.1.0.3.24";
+    const T_STRONG: &str = "1.1.0.1.0.1.0.3.23.2";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (sg, br) = (signed.as_str(), bare.as_str());
+    let d = owner_draft(port, br);
+    let pub_l = ghost_link(port, sg, CLAIMANT_DOC1, 1);
+    let s = seat_stranger(port, 972);
+    let fence = "credential_refused:correspondence_not_standalone";
+    let typed = |home: &str, ty: &str| typed_link_frame(home, &[&pub_l], &[], ty);
+    let emitted = format!(
+        r#"{{"op":"emit","home":"{CLAIMANT_DOC1}","ty":{},"from":"{pub_l}","to":[]}}"#,
+        unit_span(T_CORRESPONDENCE)
+    );
+    let edited =
+        edit_link_frame(&pub_l, CLAIMANT_DOC1, CLAIMANT_DOC1, "[]", &addrs_slot(&[T_CORRESPONDENCE]));
+
+    let cells: Vec<(&str, &str, String, &str)> = vec![
+        ("slot 1 ahead of the fence: a stranger's bare correspondence-typed link into the owner's doc 1", s.session.as_str(), typed(CLAIMANT_DOC1, T_CORRESPONDENCE), "not_owner"),
+        ("the fence ahead of slot 4: the bare owner's correspondence-typed link into its published doc 1", br, typed(CLAIMANT_DOC1, T_CORRESPONDENCE), fence),
+        ("the fence ahead of the check: the signed owner's, attested", sg, typed(CLAIMANT_DOC1, T_CORRESPONDENCE), fence),
+        ("the fence on a draft home: the owner's correspondence-typed link into its draft", br, typed(&d, T_CORRESPONDENCE), fence),
+        ("the fence on emit: the owner's emit typed correspondence", sg, emitted, fence),
+        ("the fence on edit_link: the owner's successor typed correspondence", sg, edited, fence),
+        ("the parent is no member: the owner's counterpart-typed link into its draft", br, typed(&d, T_COUNTERPART), "ok"),
+        ("a read-with is an ordinary type: the owner's into its draft", br, typed(&d, T_READ_WITH), "ok"),
+        ("a held removal is an ordinary type: the owner's into its draft", br, typed(&d, T_HELD_REMOVAL), "ok"),
+        ("a bold is an ordinary type: the owner's into its draft", br, typed(&d, T_STRONG), "ok"),
+    ];
+    walk(port, "2.6, the correspondence fence's place", &cells);
+    let v = op_as_written(port, Some(sg), &typed(CLAIMANT_DOC1, T_CORRESPONDENCE));
+    assert_eq!(
+        verdict(&v),
+        fence,
+        "the signed owner's, with no attest — never attestation_required: {v}"
+    );
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    sd.shutdown();
+}
+
 /// 2.6 — slot 5 ahead of slot 6: PUB-6.36 evaluates THE MODEL'S REFUSALS
 /// (the in-place advance refusal, PUB-2.11) in slot 5 and the per-source
 /// consult (PUB-6.23) in slot 6, so a `copy` from a source the caller may

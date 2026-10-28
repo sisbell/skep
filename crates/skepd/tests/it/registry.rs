@@ -551,7 +551,7 @@ fn the_seeding_check_passes_the_shipped_lists_and_refuses_each_arm_on_a_mutated_
         .chain([T_ENROLL, T_RETIRE, T_CLAIM].iter().map(|c| addr(c)))
         .chain(deposit_class_types().iter().filter(|ty| row_at(ty).is_none()).cloned())
         .collect();
-    assert_eq!(domain.len(), 8 + 3 + 2);
+    assert_eq!(domain.len(), 11 + 3 + 2, "eleven pins, three credential types, M5's two credential members");
     assert_eq!(seeding_check(rows(), &domain), Ok(()));
 
     let mut collided = domain.clone();

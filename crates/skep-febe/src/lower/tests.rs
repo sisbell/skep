@@ -249,7 +249,7 @@ fn deviates<E: Lower>(name: &str, e: E, expected: RejectCode) {
 
 /// §5's mechanical claim over the whole table rather than a sample of it:
 /// EVERY flat variant of EVERY upstream error enum lowers to the leaf
-/// with its own name, and the seven documented deviations are the only
+/// with its own name, and the nine documented deviations are the only
 /// ones. Wrapper variants belong to `wrappers_recurse`.
 #[test]
 fn flat_variants_lower_to_the_same_named_code() {
@@ -364,6 +364,9 @@ fn flat_variants_lower_to_the_same_named_code() {
     );
     // …and the `replaces` class's, the same leaf on both enums.
     deviates("ReplacesClass", MakeLinkError::ReplacesClass, RejectCode::DcViolation);
+    // …and the correspondence class's, the `replaces` fence's twin, the
+    // same leaf on both enums (the daemon's own token speaks over the wire).
+    deviates("CorrespondenceClass", MakeLinkError::CorrespondenceClass, RejectCode::DcViolation);
     same_name(EmitError::HomeNotRegistered);
     same_name(EmitError::NotOwner(doc()));
     same_name(EmitError::NotRegistered);
@@ -373,6 +376,7 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(EmitError::SlotTooLarge);
     deviates("SupersessionClass", EmitError::SupersessionClass, RejectCode::DcViolation);
     deviates("ReplacesClass", EmitError::ReplacesClass, RejectCode::DcViolation);
+    deviates("CorrespondenceClass", EmitError::CorrespondenceClass, RejectCode::DcViolation);
     same_name(NullifyError::HomeNotRegistered);
     same_name(NullifyError::NotOwner(doc()));
     same_name(NullifyError::BadTarget);

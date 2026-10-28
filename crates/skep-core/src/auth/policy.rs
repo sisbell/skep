@@ -19,7 +19,8 @@
 //!   lock's read arm, and the seeding check the open runs ahead of every
 //!   genesis;
 //! - `plain` — the plain sequence's admission (AUTH-3.35): the mint class,
-//!   the `replaces` fence, the board-state pair and the nullify class, in
+//!   the sole-writer fences (the `replaces` class's and the correspondence
+//!   class's, one producer), the board-state pair and the nullify class, in
 //!   their pinned order;
 //! - `attestation` — the write-path check (signed ops), run behind the plain
 //!   sequence's publish-class gate on a claimed board, whose admitted
@@ -31,7 +32,7 @@
 //!   bytes into the blob store at all, kept beside the sequences' gates.
 //!
 //! `addr_spans`, the one spelling of a type slot the sequences and the check
-//! read — save the `replaces` fence, which asks its class test of `enc`
+//! read — save the sole-writer fences, which ask their class tests of `enc`
 //! itself, and the entry frame, which reads the slot as the store will hold
 //! it — lives here, where each child sees it without a widening.
 
@@ -336,6 +337,24 @@ pub enum CredentialRefusal {
     /// the same act is never admitted. Its face is I8 (a)'s (PUB-3.83), owed
     /// to the UX track and written into no rule.
     ReplacesNotStandalone,
+    /// The correspondence class's sole-writer fence (the link-sets design
+    /// §5.7).
+    ///
+    /// The `replaces` fence's twin, in its shape — the design's "a fence
+    /// token, `replaces_not_standalone`'s shape": a write whose own type slot
+    /// lands in the correspondence class `1.1.0.1.0.1.0.3.102.1` — a bare
+    /// `make_link`, an `emit`, an `edit_link` successor — from its home's
+    /// owner. The class has one writer, the `publish` shot's own record
+    /// mint, which deposits one record per run of draft identity the shot
+    /// re-minted, in the shot's own transaction, homed in the draft (S1's,
+    /// not yet built — so today nothing deposits the class at all); a record
+    /// of the class any other act deposited would state a correspondence the
+    /// shot never computed, which the next publication's enumeration would
+    /// then read as fact. The parent `counterpart` `3.102` is no member.
+    /// Token `correspondence_not_standalone`; permanent, the family's: the
+    /// same act is never admitted. Its face is owed to the UX track and
+    /// written into no rule.
+    CorrespondenceNotStandalone,
     /// The credential deposit's `replaces` fence (signed ops).
     ///
     /// A credential-typed `make_link` carrying a `replaces` member. A
@@ -559,6 +578,7 @@ impl CredentialRefusal {
             CredentialRefusal::NullifyNotRevocation => "nullify_not_revocation".into(),
             CredentialRefusal::NullifyAuditView => "nullify_audit_view".into(),
             CredentialRefusal::ReplacesNotStandalone => "replaces_not_standalone".into(),
+            CredentialRefusal::CorrespondenceNotStandalone => "correspondence_not_standalone".into(),
             CredentialRefusal::ReplacesNotCredential => "replaces_not_credential".into(),
             CredentialRefusal::ContentSession => "content_session".into(),
             CredentialRefusal::AnchorSessionRequired => "anchor_session_required".into(),

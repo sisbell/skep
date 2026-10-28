@@ -512,13 +512,13 @@ mod tests {
 
     /// Checks that the shipped domain passes the seeding check.
     ///
-    /// It holds the eight class pins outside the registry, the three
+    /// It holds the eleven class pins outside the registry, the three
     /// credential pins and M5's two credential members, no registry row — and
     /// the check over it passes, so a daemon opens.
     #[test]
     fn the_shipped_domain_passes_the_seeding_check() {
         let domain = seeding_domain();
-        assert_eq!(domain.len(), 8 + 3 + 2);
+        assert_eq!(domain.len(), 11 + 3 + 2, "eleven pins, three credential types, M5's two");
         assert!(domain.iter().all(|a| skep_registry::row_at(a).is_none()));
         for c in [t_enroll(), t_retire(), t_claim()] {
             assert!(domain.contains(c));

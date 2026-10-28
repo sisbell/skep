@@ -11,7 +11,9 @@ use skep_arrangement::Caller;
 use skep_kernel::{Seq, TxnError};
 use skep_namespace::{M3Rec, M3State};
 
-use super::{deposit_lock_set, emit_core, home_gate, replaces_class, Gate, LinkWriter};
+use super::{
+    correspondence_class, deposit_lock_set, emit_core, home_gate, replaces_class, Gate, LinkWriter,
+};
 use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
@@ -178,9 +180,12 @@ where
     /// fold's dedup key); DC — a retraction-typed successor, a
     /// `replaces`-typed one (that class's one writer is
     /// [`LinkWriter::makelink_replacing`], so an edit mints no authority
-    /// successor — PUB-5.15, RES-309), or a `[K_sup]`-typed one without the
-    /// Df-DISC(ii) schema (unit-depth single-addr F/G, resident endpoints,
-    /// irreflexive) (`DcViolation`); then `Mint` where the mint fails. The
+    /// successor — PUB-5.15, RES-309), a correspondence-typed one (that
+    /// class's one writer the publish shot's record mint, so an edit mints
+    /// no correspondence record — the link-sets design §5.7), or a
+    /// `[K_sup]`-typed one without the Df-DISC(ii) schema (unit-depth
+    /// single-addr F/G, resident endpoints, irreflexive) (`DcViolation`);
+    /// then `Mint` where the mint fails. The
     /// kernel's own failures — `Durability`, `Unencodable`, `OverBudget`,
     /// `Poisoned` — come back as `transact` returns them.
     pub fn editlink(
@@ -239,7 +244,7 @@ where
                 //
                 // `e₃ ≠ ∅` is not restated here: it is the deposit gate's
                 // check, and `⟨⟩` classifies as the empty denoted antichain —
-                // none of the three classes the guard refuses — so it passes
+                // none of the four classes the guard refuses — so it passes
                 // the DC guard untouched and comes back from the gate as
                 // `IllFormedSuccessor`.
                 let well_formed = successor_value.arity() == 3
@@ -250,7 +255,10 @@ where
                 // DC guard — total: every slot was just checked
                 // level-uniform.
                 let successor_class = coverage_class(successor_value.type_slot());
-                if successor_class == *r_class || successor_class == *replaces_class() {
+                if successor_class == *r_class
+                    || successor_class == *replaces_class()
+                    || successor_class == *correspondence_class()
+                {
                     return Err(EditLinkError::DcViolation);
                 }
                 if successor_class == *sup_class

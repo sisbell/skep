@@ -6,6 +6,243 @@ use skep_engine::types::t_enroll;
 use super::*;
 use crate::auth::policy::addr_of;
 
+/// An in-memory engine built through M10 alone, its board unclaimed, with
+/// two bootstrap-delegated accounts — the MAKER `1.0.1` (principal 900) and
+/// ANOTHER `1.0.2` (901) — each holding its born-published home, and the
+/// maker a private draft beside it; the exec closure every cell below writes
+/// through. The shape the supersession cell builds, lifted out so the fence
+/// cells and the correspondence cell build theirs the same way.
+struct TwoAccounts {
+    engine: skep_engine::Engine,
+    febe: skep_febe::OperationSurface<skep_engine::World>,
+    maker: (PrincipalId, skep_febe::SessionId),
+    other: (PrincipalId, skep_febe::SessionId),
+    home: String,
+    other_home: String,
+    draft: String,
+}
+
+impl TwoAccounts {
+    fn open() -> TwoAccounts {
+        use serde_json::json;
+        use skep_febe::OperationSurface;
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
+        let (maker_id, other_id) = (PrincipalId(900), PrincipalId(901));
+        let boot = febe.bootstrap_session();
+        let delegate = |prefix: &str, id: PrincipalId| json!({"op": "delegate", "new_prefix": prefix, "new_id": id.0});
+        exec(&febe, boot, delegate("1.0.1", maker_id));
+        exec(&febe, boot, delegate("1.0.2", other_id));
+        let (maker, other) = (febe.open_session(maker_id), febe.open_session(other_id));
+        let mint = |sid, account: &str| exec(&febe, sid, json!({"op": "create_new_document", "account": account})).to_string();
+        let (home, other_home) = (mint(maker, "1.0.1"), mint(other, "1.0.2"));
+        let draft = mint(maker, "1.0.1");
+        TwoAccounts { engine, febe, maker: (maker_id, maker), other: (other_id, other), home, other_home, draft }
+    }
+}
+
+/// Executes `frame` through M10 as `sid`, answering the ack's address.
+///
+/// # Panics
+///
+/// Panics where the frame does not parse or the surface answers anything but
+/// an `ack_addr`.
+fn exec(febe: &skep_febe::OperationSurface<skep_engine::World>, sid: skep_febe::SessionId, frame: serde_json::Value) -> Address {
+    use skep_febe::{Codec, Response};
+
+    use crate::codec::JsonCodec;
+
+    let req = JsonCodec.parse(frame.to_string().as_bytes()).unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
+    match febe.execute(sid, req) {
+        Response::AckAddr { addr, .. } => addr,
+        other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
+    }
+}
+
+/// Checks the sole-writer fence's correspondence half (the link-sets design
+/// §5.7, the `replaces` fence's twin).
+///
+/// Over an unclaimed board, where ownership alone decides the producer: a
+/// `make_link`, an `emit` and an `edit_link` successor typed the class by
+/// the home's owner answer `correspondence_not_standalone`; from another
+/// account they answer nothing — the destination's `not_owner` is
+/// `execute`'s, downstream, the ordering pin; the parent `counterpart`
+/// `3.102`, alone or beside the subtype it covers, is no class and answers
+/// nothing; a `Resolve` and an I-span slot name content and answer nothing;
+/// and the `replaces` half keeps its own token through the one producer.
+#[test]
+fn the_sole_writer_fence_refuses_the_correspondence_class_to_the_owner_alone() {
+    use skep_engine::types::{t_correspondence, t_replaces};
+    use skep_febe::SuccessorSpec;
+
+    use crate::auth::CredentialLock;
+
+    let board = TwoAccounts::open();
+    let snap = board.engine.kernel().snapshot();
+    let world = snap.world();
+    let lock = CredentialLock::new();
+    let home = crate::codec::wire_address(&board.home).expect("the home's address");
+    let draft = crate::codec::wire_address(&board.draft).expect("the draft's address");
+    let other_home = crate::codec::wire_address(&board.other_home).expect("the other home's address");
+    let parent = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 102]);
+    let fence = |op: &Op, principal: PrincipalId| sole_writer_refusal(&lock.read(), world, op, principal);
+    let make_link = |home: &Address, ty: SlotArg| Op::MakeLink {
+        home: home.clone(),
+        from: SlotArg::Addrs(Vec::new()),
+        to: SlotArg::Addrs(Vec::new()),
+        ty,
+        replaces: None,
+    };
+    let emit = |home: &Address, ty: &Address| Op::Emit { home: home.clone(), ty: enc([ty]), from: home.clone(), to: Vec::new() };
+    let edit_link = |home: &Address, ty: SlotArg| Op::EditLink {
+        original: home.clone(),
+        successor: SuccessorSpec { from: Vec::new().into(), to: Vec::new().into(), ty },
+        d_s: home.clone(),
+        d_a: home.clone(),
+    };
+    let addrs = |ty: &Address| SlotArg::Addrs(vec![ty.clone()]);
+    let (maker, other) = (board.maker.0, board.other.0);
+    let token = Some(CredentialRefusal::CorrespondenceNotStandalone);
+
+    // The owner, at each door, in the published home and in the draft alike.
+    for home in [&home, &draft] {
+        assert_eq!(fence(&make_link(home, addrs(t_correspondence())), maker), token, "make_link into {home}");
+        assert_eq!(fence(&emit(home, t_correspondence()), maker), token, "emit into {home}");
+        assert_eq!(fence(&edit_link(home, addrs(t_correspondence())), maker), token, "edit_link into {home}");
+        // Beside a subtype of its own: one coverage class, the fence's.
+        let beside = SlotArg::Addrs(vec![t_correspondence().clone(), addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 102, 1, 1])]);
+        assert_eq!(fence(&make_link(home, beside), maker), token, "the class beside its own subtype");
+    }
+    // Another account: nothing here — `not_owner` is `execute`'s, downstream.
+    assert_eq!(fence(&make_link(&home, addrs(t_correspondence())), other), None);
+    assert_eq!(fence(&emit(&home, t_correspondence()), other), None);
+    assert_eq!(fence(&edit_link(&home, addrs(t_correspondence())), other), None);
+    // …and the owner of one home of an edit's two is no owner of both.
+    let straddling = Op::EditLink {
+        original: home.clone(),
+        successor: SuccessorSpec { from: Vec::new().into(), to: Vec::new().into(), ty: addrs(t_correspondence()) },
+        d_s: home.clone(),
+        d_a: other_home.clone(),
+    };
+    assert_eq!(fence(&straddling, maker), None, "an edit naming another's home: `not_owner` downstream");
+    // The parent is no class, alone or covering its subtype.
+    assert_eq!(fence(&make_link(&home, addrs(&parent)), maker), None, "the parent counterpart");
+    assert_eq!(fence(&emit(&home, &parent), maker), None);
+    let covering = SlotArg::Addrs(vec![parent.clone(), t_correspondence().clone()]);
+    assert_eq!(fence(&make_link(&home, covering), maker), None, "the parent covers the subtype: counterpart's class");
+    // The content forms name no class.
+    assert_eq!(fence(&make_link(&home, SlotArg::Resolve(Vec::new())), maker), None);
+    assert_eq!(fence(&make_link(&home, SlotArg::Spans(vec![subtree_of(t_correspondence().tumbler())])), maker), None);
+    // The `replaces` half, through the one producer.
+    assert_eq!(fence(&make_link(&home, addrs(t_replaces())), maker), Some(CredentialRefusal::ReplacesNotStandalone));
+    assert_eq!(fence(&make_link(&home, addrs(t_replaces())), other), None);
+    assert_eq!(CredentialRefusal::CorrespondenceNotStandalone.token(), "correspondence_not_standalone");
+    assert_eq!(CredentialRefusal::CorrespondenceNotStandalone.disposition(), skep_febe::Disposition::Permanent);
+}
+
+/// Checks the correspondence class's `nullify` cell (PUB-6.64's member; the
+/// link-sets design §5.7).
+///
+/// The class has no writer until the publish shot's lane lands — every door
+/// refuses it — so the one link of the class here is STAGED DIRECTLY into
+/// the kernel, as a replayed journal frame reaches M7's fold: an M7 record
+/// decoded from its own serde shape, with none of M7's write gates between,
+/// at the address M3 mints for the maker's draft. The board is CLAIMED
+/// through M10 (the ceremony, no head), so entitlement decides the answer:
+/// the maker's `nullify` of the record, homed in its draft, answers
+/// `nullify_audit_view`; another account's answers nothing — `not_owner`
+/// downstream, the ordering pin; and a link typed the parent `counterpart`
+/// `3.102`, deposited through `make_link` as any client may, is an ordinary
+/// link whose owner's retraction this producer admits.
+#[test]
+fn a_correspondence_records_nullify_is_refused_to_its_owner_and_falls_through_for_a_stranger() {
+    use serde_json::json;
+    use skep_engine::types::{t_claim, t_correspondence, t_enroll};
+    use skep_identity::{encode_enroll, Enrollment};
+    use skep_links::LinkRec;
+    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+
+    use crate::auth::CredentialLock;
+
+    let board = TwoAccounts::open();
+    let (maker_id, maker) = board.maker;
+    let (other_id, _) = board.other;
+    // The ceremony's last three steps through M10 alone: the genesis atom,
+    // its enroll link and the claim (as `commits::feed::attest`'s tests
+    // claim their boards).
+    let key = |n: u8| HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[n; 32]).expect("tag 1").public_key().clone();
+    let genesis = encode_enroll(&[
+        Enrollment::new(key(1), true, None).expect("no label"),
+        Enrollment::new(key(2), false, None).expect("no label"),
+    ]);
+    let home = board.home.as_str();
+    let atom = exec(
+        &board.febe,
+        maker,
+        json!({"op": "insert", "doc": home, "at": {"subspace": "1", "ordinal": "1"},
+               "values": [{"atom": genesis}], "deposit": t_enroll().to_string()}),
+    )
+    .to_string();
+    let link = |from: &str, to: &[&str], ty: &Address| {
+        json!({"op": "make_link", "home": home, "from": {"addrs": [from]},
+               "to": {"addrs": to}, "ty": {"addrs": [ty.to_string()]}})
+    };
+    exec(&board.febe, maker, link(&atom, &["1.0.1"], t_enroll()));
+    exec(&board.febe, maker, link("1.0.1", &[], t_claim()));
+    assert!(board.engine.kernel().snapshot().world().identity().claimant().is_some(), "the premise: claimed");
+
+    // The parent-typed link, through the door every client has.
+    let draft = board.draft.as_str();
+    let counterpart = exec(
+        &board.febe,
+        maker,
+        json!({"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": []},
+               "ty": {"addrs": ["1.1.0.1.0.1.0.3.102"]}}),
+    );
+    // The correspondence record, staged directly: M3's mint for the draft's
+    // link subspace, then M7's deposit record decoded from its serde shape —
+    // `LinkRec` being `#[non_exhaustive]`, no crate but M7 builds one by
+    // literal.
+    let draft_addr = crate::codec::wire_address(draft).expect("the draft's address");
+    let run = addr_of(&[1, 0, 1, 0, 3, 0, 1, 1]);
+    let member = addr_of(&[1, 0, 1, 0, 1, 1, 0, 1, 1]);
+    let value = Link::triple(enc([&run]), enc([&member]), enc([t_correspondence()]));
+    let (record, _) = board
+        .engine
+        .kernel()
+        .transact(&[], |stg| {
+            let (addr, m3rec) = stg.working().m3().mint_link(&draft_addr).expect("a registered draft mints a link");
+            stg.push(skep_engine::Record::Namespace(m3rec));
+            let raw = json!({"Deposit": {
+                "addr": serde_json::to_value(addr.tumbler()).expect("a tumbler serializes"),
+                "value": serde_json::to_value(&value).expect("a link serializes"),
+            }});
+            let rec: LinkRec = serde_json::from_value(raw).expect("M7's record decodes from its own serde shape");
+            stg.push(skep_engine::Record::Links(rec));
+            Ok::<Address, ()>(addr)
+        })
+        .expect("the staged deposit commits");
+
+    let snap = board.engine.kernel().snapshot();
+    let world = snap.world();
+    assert_eq!(world.links().readlink(&record).map(|l| l.type_slot().clone()), Some(enc([t_correspondence()])), "the record stands, typed the class");
+    let lock = CredentialLock::new();
+    let class_of = |target: &Address, caller: PrincipalId| {
+        let op = Op::Nullify { home: draft_addr.clone(), target: target.clone() };
+        nullify_refusal(&lock.read(), world, &op, caller)
+    };
+    assert_eq!(class_of(&record, maker_id), Some(CredentialRefusal::NullifyAuditView), "the owner: PUB-6.64's cell");
+    assert_eq!(class_of(&record, other_id), None, "a stranger: nothing here, `not_owner` downstream");
+    assert_eq!(class_of(&counterpart, maker_id), None, "the parent counterpart: an ordinary link, its retraction admitted");
+}
+
 /// Checks that PUB-2.15's projection is address arithmetic and total.
 ///
 /// A version member answers its document, a document answers itself, a
@@ -55,6 +292,7 @@ fn the_write_path_input_recognizes_every_pinned_class() {
         (AuditClass::TakedownRecord, t_takedown()),
         (AuditClass::PolicyLink, t_policy_link()),
         (AuditClass::Supersession, &supersedes_type()),
+        (AuditClass::Correspondence, t_correspondence()),
     ] {
         assert_eq!(
             types.target_class(&unit(addr)),
@@ -63,6 +301,10 @@ fn the_write_path_input_recognizes_every_pinned_class() {
             addr.tumbler()
         );
     }
+    // The correspondence class is a subtype row under counterpart `3.102`
+    // (the link-sets design §5.7): the parent is no class — an ordinary type
+    // a picker lists, its owner's retraction admitted.
+    assert_eq!(types.target_class(&unit(&addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 102]))), None);
     // The supersession class's address is M7's reserved ghost tumbler,
     // read from M7 and spelled here only to pin the reading: a stored
     // claim's type slot is exactly that class.
@@ -115,39 +357,16 @@ fn the_write_path_input_recognizes_every_pinned_class() {
 #[test]
 fn a_supersession_claim_is_a_member_only_over_its_makers_own_old() {
     use serde_json::json;
-    use skep_febe::{Codec, OperationSurface, Response};
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 
     use crate::auth::CredentialLock;
-    use crate::codec::JsonCodec;
 
-    let engine = skep_engine::Engine::open(KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        salt: SaltSource::Seeded(0),
-    })
-    .expect("in-memory genesis cannot fail");
-    let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
-    let exec = |sid, frame: serde_json::Value| -> Address {
-        let req = JsonCodec
-            .parse(frame.to_string().as_bytes())
-            .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail));
-        match febe.execute(sid, req) {
-            Response::AckAddr { addr, .. } => addr,
-            other => panic!("{frame}: {}", String::from_utf8_lossy(&JsonCodec.marshal(&other))),
-        }
-    };
-    let (maker_id, other_id) = (PrincipalId(900), PrincipalId(901));
-    let boot = febe.bootstrap_session();
-    exec(boot, json!({"op": "delegate", "new_prefix": "1.0.1", "new_id": maker_id.0}));
-    exec(boot, json!({"op": "delegate", "new_prefix": "1.0.2", "new_id": other_id.0}));
-    let (maker, other) = (febe.open_session(maker_id), febe.open_session(other_id));
-    // Each account's home, born published; then the maker's private notes.
-    let mint = |sid, account: &str| {
-        exec(sid, json!({"op": "create_new_document", "account": account})).to_string()
-    };
-    let (home, other_home) = (mint(maker, "1.0.1"), mint(other, "1.0.2"));
-    let notes = mint(maker, "1.0.1");
+    let board = TwoAccounts::open();
+    let (engine, febe) = (&board.engine, &board.febe);
+    let exec = |sid, frame: serde_json::Value| -> Address { exec(febe, sid, frame) };
+    let (maker_id, maker) = board.maker;
+    let (other_id, other) = board.other;
+    // Each account's home, born published; the maker's private notes.
+    let (home, other_home, notes) = (board.home.clone(), board.other_home.clone(), board.draft.clone());
     let link = |sid, doc: &str, n: u32| -> String {
         exec(
             sid,

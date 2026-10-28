@@ -1,25 +1,30 @@
 //! The plain sequence's admission (AUTH-3.35).
 //!
 //! It holds its ordered producers ([`plain_admission`]) — the mint class, the
-//! `replaces` class's fence, the claim-complementary board-state pair and the
-//! nullify class — with the publish-class classification (PUB-6.43) the pair
-//! reads and the type-recognition input the nullify class reads.
+//! sole-writer fences of the two commons classes with one writer (the
+//! `replaces` class's and the correspondence class's, one producer), the
+//! claim-complementary board-state pair and the nullify class — with the
+//! publish-class classification (PUB-6.43) the pair reads and the
+//! type-recognition input the nullify class reads.
 
 use std::sync::LazyLock;
 
 use skep_address::{document_of, validate, Address};
 use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_engine::types::{
-    t_binding, t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_policy_link,
-    t_rail_record, t_replaces, t_steward_classification, t_successor_of, t_takedown,
-    IDENTITY_TYPES,
+    t_binding, t_consumption_marker, t_correspondence, t_endorse, t_grant,
+    t_journal_designation, t_policy_link, t_rail_record, t_replaces, t_steward_classification,
+    t_successor_of, t_takedown, IDENTITY_TYPES,
 };
 use skep_febe::Op;
 use skep_identity::{
     single_address, AuditClass, Fingerprint, HasIdentity, TargetClass, WriteTypes,
 };
 use skep_kernel::Attestation;
-use skep_links::{enc, is_replaces_class, registry, HasLinks, Link, ShippedType, SlotArg};
+use skep_links::{
+    enc, is_correspondence_class, is_replaces_class, registry, Endset, HasLinks, Link,
+    ShippedType, SlotArg,
+};
 use skep_namespace::{
     first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
@@ -54,7 +59,12 @@ use skep_engine::World;
 /// `nullify` effective (REG-1.11). One member is no commons pin: the
 /// supersession claim's type is M7's own reserved ghost tumbler
 /// `1.1.0.1.0.1.0.1.4`, read from M7's registry ([`supersedes_type`]) and
-/// spelled nowhere else. Adding a member of PUB-6.64's class is one
+/// spelled nowhere else. The last is the ledger's one two-ordinal pin
+/// outside the registry's rows, the correspondence record `3.102.1` (the
+/// link-sets design §5.7; the publish shot's own record class) — a subtype
+/// under counterpart `3.102`, which is no class address, so the parent stays
+/// an ordinary type and the prefix-free assertion below holds against every
+/// other class (none is `3.102`). Adding a member of PUB-6.64's class is one
 /// `AuditClass` arm and one address in this list; the refusal that reads
 /// them takes no edit. The list order is the recognition order and every
 /// address is pairwise prefix-free.
@@ -82,6 +92,7 @@ fn write_types() -> &'static WriteTypes {
                 (AuditClass::TakedownRecord, t_takedown().clone()),
                 (AuditClass::PolicyLink, t_policy_link().clone()),
                 (AuditClass::Supersession, supersedes_type()),
+                (AuditClass::Correspondence, t_correspondence().clone()),
             ],
         )
     });
@@ -413,28 +424,43 @@ fn first_mint_private_refusal(
     }
 }
 
-// ── replaces_refusal — the `replaces` class's sole-writer fence (PUB-5.15) ──
+// ── sole_writer_refusal — the two commons classes with one writer: the
+//    `replaces` class (PUB-5.15) and the correspondence class (the link-sets
+//    design §5.7) ────────────────────────────────────────────────────────────
 
-/// Answers the `replaces` type's one-writer fence (PUB-5.15).
+/// Answers the sole-writer fences of the `replaces` type (PUB-5.15) and the
+/// correspondence type (the link-sets design §5.7).
 ///
-/// The fence is RES-309's, its code RES-310's: `Some(ReplacesNotStandalone)`
-/// iff `op` is a link write whose own type slot lands in the `replaces`
-/// class — a `make_link`'s `ty`, an `emit`'s, an `edit_link` successor's —
-/// and `principal` owns every home it would deposit into. The class's one
-/// writer is the `make_link` that carries the `replaces` member, which mints
-/// the link beside its record in the record's own transaction; a link of the
-/// class deposited by itself would sit where the grant fold reads a record's
-/// pair and name a state for a record whose signed bytes named none. The
-/// class test is M7's own, [`skep_links::is_replaces_class`], asked of the
-/// slot the store would deposit — `enc(addrs)` for the address form, and
-/// nothing for a `Resolve` or an I-span slot, which name content and never
-/// the class — so this refusal and the store's own fence fall on the same
-/// slots, and the wire answers `replaces_not_standalone` where the store
-/// would have answered `dc_violation`. A `replaces`-typed write is never a
-/// credential deposit, so the fence is the plain sequence's alone.
+/// The first fence is RES-309's, its code RES-310's; the second is the
+/// design's "a fence token, `replaces_not_standalone`'s shape". `Some(token)`
+/// iff `op` is a link write whose own type slot lands in one of the two
+/// classes — a `make_link`'s `ty`, an `emit`'s, an `edit_link` successor's —
+/// and `principal` owns every home it would deposit into:
+/// `ReplacesNotStandalone` for the `replaces` class, whose one writer is the
+/// `make_link` that carries the `replaces` member, minting the link beside
+/// its record in the record's own transaction (a link of the class deposited
+/// by itself would sit where the grant fold reads a record's pair and name a
+/// state for a record whose signed bytes named none);
+/// `CorrespondenceNotStandalone` for the correspondence class, whose one
+/// writer is the `publish` shot's own record mint (S1's, not yet built —
+/// today nothing deposits the class at all; a record any other act deposited
+/// would state a correspondence the shot never computed). ONE producer for
+/// the two: the slot the store would deposit is read once — `enc(addrs)` for
+/// the address form, and nothing for a `Resolve` or an I-span slot, which
+/// name content and never a subspace-3 class — and asked M7's own two class
+/// tests, [`skep_links::is_replaces_class`] and
+/// [`skep_links::is_correspondence_class`], which are disjoint (two coverage
+/// classes), so this refusal and the store's own fences fall on the same
+/// slots, and the wire answers the class's token where the store would have
+/// answered `dc_violation`. Neither class is a credential type, so the
+/// fences are the plain sequence's alone. A slot naming the correspondence's
+/// parent `counterpart` `3.102` is in neither class (coverage-class equality,
+/// the `[K_sup]` fence's rule) and passes.
 ///
 /// **Its place in the write order** (PUB-5.15: its "place in the write
-/// path's order" is owed at the build): in the plain path's admission, after
+/// path's order" is owed at the build; the correspondence takes the same
+/// slot, one producer, so `plain_admission`'s order is unchanged): in the
+/// plain path's admission, after
 /// the mint class — which reads no link write, so the two are disjoint — and
 /// *ahead* of the board-state pair: the pre-claim gate, the publish-class
 /// gate and the write-path check behind it. So the home's owner is told the
@@ -450,34 +476,43 @@ fn first_mint_private_refusal(
 ///
 /// **Precondition.** `world` must be the snapshot taken under the read guard
 /// for this request; the guard argument is that contract's cheap half.
-fn replaces_refusal(
+fn sole_writer_refusal(
     _lock: &LockRead<'_>,
     world: &World,
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
-    // The two content forms never name the class: a `Resolve` slot resolves
-    // to content, and an I-span slot is held by M7's content clause to
-    // content-subspace starts, under which the `replaces` type — a
-    // subspace-3 address — has no span.
-    let in_class = |slot: &SlotArg| match slot {
-        SlotArg::Addrs(addrs) => is_replaces_class(&enc(addrs.iter())),
-        SlotArg::Resolve(_) | SlotArg::Spans(_) => false,
+    // The class a deposited slot lands in, read once: the two tests are
+    // disjoint coverage classes, so at most one answers.
+    let fenced = |ty: &Endset| -> Option<CredentialRefusal> {
+        if is_replaces_class(ty) {
+            Some(CredentialRefusal::ReplacesNotStandalone)
+        } else if is_correspondence_class(ty) {
+            Some(CredentialRefusal::CorrespondenceNotStandalone)
+        } else {
+            None
+        }
     };
-    let (replaces_typed, homes): (bool, Vec<&Address>) = match op {
+    // The two content forms never name a class: a `Resolve` slot resolves
+    // to content, and an I-span slot is held by M7's content clause to
+    // content-subspace starts, under which a subspace-3 type address has no
+    // span.
+    let in_class = |slot: &SlotArg| match slot {
+        SlotArg::Addrs(addrs) => fenced(&enc(addrs.iter())),
+        SlotArg::Resolve(_) | SlotArg::Spans(_) => None,
+    };
+    let (refusal, homes): (Option<CredentialRefusal>, Vec<&Address>) = match op {
         Op::MakeLink { home, ty, .. } => (in_class(ty), vec![home]),
-        Op::Emit { home, ty, .. } => (is_replaces_class(ty), vec![home]),
+        Op::Emit { home, ty, .. } => (fenced(ty), vec![home]),
         Op::EditLink { successor, d_s, d_a, .. } => (in_class(&successor.ty), vec![d_s, d_a]),
         _ => return None,
     };
-    if !replaces_typed {
-        return None;
-    }
+    let refusal = refusal?;
     let m3 = world.m3();
     homes
         .into_iter()
         .all(|home| Caller::Principal(principal).passes_ownership_gate(m3, home))
-        .then_some(CredentialRefusal::ReplacesNotStandalone)
+        .then_some(refusal)
 }
 
 // ── board_state_admission — the two claim-complementary gates (AUTH-3.78) ─
@@ -854,8 +889,10 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// `mint_home_refusal` fires only on `fork`/`version`, so its position
 /// relative to the `nullify` cell is inert either way.
 ///
-/// **The `replaces` fence's place** is this build's (PUB-5.15 leaves it
-/// owed): it reads link writes alone, so it is disjoint from the mint class
+/// **The sole-writer fences' place** is this build's (PUB-5.15 leaves the
+/// `replaces` fence's owed; the correspondence fence takes the same
+/// producer, so the order gained no slot): it reads link writes alone, so it
+/// is disjoint from the mint class
 /// and its position against that class is inert; it stands ahead of the
 /// board-state pair, so a write that can never be admitted is refused as
 /// such before the pair asks its owner to claim, to sign or to attach an
@@ -872,8 +909,9 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 ///
 /// The order is the mint class — the first-mint publication door's
 /// `mint_home_public`, then mint-first's `mint_home_first`; then the
-/// `replaces` class's fence, `replaces_not_standalone` (`replaces_refusal`,
-/// PUB-5.15); then the claim-complementary board-state pair
+/// sole-writer fences, `replaces_not_standalone` and
+/// `correspondence_not_standalone` (`sole_writer_refusal`, PUB-5.15 and the
+/// link-sets design §5.7); then the claim-complementary board-state pair
 /// (`board_state_admission`); then the nullify class (`nullify_refusal`).
 ///
 /// Named an admission and not a refusal because both sides of its answer
@@ -896,7 +934,7 @@ pub fn plain_admission(
     if let Some(r) = mint_home_refusal(lock, world, op, principal) {
         return Err(r);
     }
-    if let Some(r) = replaces_refusal(lock, world, op, principal) {
+    if let Some(r) = sole_writer_refusal(lock, world, op, principal) {
         return Err(r);
     }
     // The board-state pair — and, inside its claimed arm, the write-path

@@ -2065,7 +2065,7 @@ guest write (no token, unknown token, dead entry) answers M10's own
 stays `execute`'s own code — never a `credential_refused` detail — and
 resolves AFTER every token below.
 
-**Ordinary (non-deposit) writes** pass four gates, in the built order
+**Ordinary (non-deposit) writes** pass five gates, in the built order
 (PUB-6.36 as RES-195 places the `nullify` cells), after the actor resolves:
 
 1. The MINT class:
@@ -2090,7 +2090,26 @@ resolves AFTER every token below.
    `not_owner` (or `home_not_registered`), as for any link. Ahead of the
    board-state gate, so the owner is told before being asked to claim,
    to sign or to attach an `attest`.
-3. The board-state gate, one arm per mode:
+3. The correspondence class — `correspondence_not_standalone` (the
+   link-sets design §5.7, "the CLASS HAS ONE WRITER"; PUB-6.64's member):
+   a link write whose OWN type slot names the correspondence record's type
+   `1.1.0.1.0.1.0.3.102.1` — a `make_link`'s `ty`, an `emit`'s, an
+   `edit_link` successor's, alone or beside a subtype of its own; the
+   parent `counterpart` `1.1.0.1.0.1.0.3.102` is no member and stays the
+   ordinary type a picker lists. The type has ONE writer, the `publish`
+   shot's own record class — one record per run of draft identity the
+   shot re-minted, `from` the run's draft-native span and `to` the
+   member's span it became, minted in the shot's own transaction and
+   homed in the draft; nothing deposits one by itself, and until the
+   shot's lane lands nothing deposits one at all. PERMANENT. It answers
+   the owner of every home the write names; anyone else falls through to
+   `execute`'s own `not_owner` (or `home_not_registered`), as for any
+   link. Ahead of the board-state gate, beside the `replaces` fence, so
+   the owner is told before being asked to claim, to sign or to attach an
+   `attest`. Its `nullify` is refused `nullify_audit_view` (item 5): the
+   records are read on the ACTIVE view, so a retraction would
+   un-correspond a run the version already holds.
+4. The board-state gate, one arm per mode:
    * claimed — `signed_session_required` (the publish class): a
      bare-session op whose write lands in the PUBLISHED world. The
      inputs (PUB-6.43): an **explicit** `published:true` on any mint
@@ -2127,7 +2146,7 @@ resolves AFTER every token below.
      `create_new_document` into an account holding no documents, an
      `insert` into the caller's own doc 1 — from bare and signed
      sessions alike; every other write refuses. Reads are untouched.
-4. The `nullify` CLASS — three cells, one for each class of target link
+5. The `nullify` CLASS — three cells, one for each class of target link
    the write path recognizes off its own type-recognition input (the
    credential kinds, the GRANTS class, and PUB-6.64's audit-view classes;
    a subtype by prefix is its class's member). Evaluated **behind** the
@@ -3754,7 +3773,7 @@ that no act legitimately retracts; a claim whose `new` is private, or
 whose `old` is another account's ordinary link or a credential naming
 another account, stays retractable by its owner) is refused
 `nullify_audit_view` — each to the record's owner alone, anyone else
-answering plain `not_owner` (§Credential refusals, item 3). And the
+answering plain `not_owner` (§Credential refusals, item 5). And the
 publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
 lands at its TARGET, so on a claimed board a bare session's `nullify`
 whose record home OR target home is published is
@@ -3818,6 +3837,22 @@ The declared slot order — here and in `edit_link`'s successor — is
 `from`, `to`, `ty`: the same positional order links read back in
 (slot 1 = FROM, 2 = TO, 3 = TYPE). A pin or diagnostic that speaks of a
 link write's slots "in declared order" means this order.
+
+The slots are glossed by ORDINAL and ROLE (the commons map's standing rule
+THE ENDSETS, BY ROLE — F5; the one-sided link record's decision 5 (a)).
+The keys `from`/`to`/`ty` and their order stay as every signed row seals
+them; the gloss says what each slot holds: slot 1 (`from`) holds what a
+link brings of its own — its text or atom, or the account or prefix that
+speaks; slot 2 (`to`) holds what it is about. A link with one side
+empties the slot it has no content for — a one-sided link leaves empty
+the slot it has no content for: a MARK — formatting, a designation, a
+lifted takedown, a policy link — has an empty `from` and its matter in
+`to`; a SAYING with no subject — an endpoint, a targetless binding — has
+an empty `to`. The claim `3.3` stands as built (`from` the claimant, `to`
+empty), the rule's one named exception. A reader of marks tests the SHAPE
+— one side and the type — and takes the matter from the side that holds
+it; each registry section's `endsets` line says its type's shape in the
+same words (§Registry).
 
 The type slot must be nonempty **as given** (an empty `addrs` list or
 `spans` list, like a V-spec set resolving to nothing, rejects
@@ -3954,7 +3989,7 @@ board a bare session's `nullify` whose `home` or whose target's home is
 published is `signed_session_required`, and a target that is
 credential-typed, grant-typed, or of an audit-view class is refused to
 its owner with the class's token — retraction is not how those records
-end (§Links (writes) above; §Credential refusals, item 3). A signed
+end (§Links (writes) above; §Credential refusals, item 5). A signed
 session's carries the optional top-level `attest` member (signed ops),
 judged by the write-path check AHEAD of the class tokens: the entry
 signature over the frame whose `doc` is `home`, `op` `nullify` and
@@ -4634,12 +4669,12 @@ the position alone):
 <!-- wire: sse commit_event -->
 ```
 event: commit
-data: {"log_position":352}
+data: {"log_position":385}
 ```
 
 A worked exchange on a board the registry seed and the claim ceremony
-have left at 351 (§The change feed) — connect, receive the initial head
-(351), then a write elsewhere commits at 352:
+have left at 384 (§The change feed) — connect, receive the initial head
+(384), then a write elsewhere commits at 385:
 
 ```
 GET /events HTTP/1.1
@@ -4653,12 +4688,12 @@ Content-Type: text/event-stream
 Cache-Control: no-cache
 
 event: commit
-data: {"log_position":351}
+data: {"log_position":384}
 
 :ka
 
 event: commit
-data: {"log_position":352}
+data: {"log_position":385}
 ```
 
 Rules:
@@ -4926,38 +4961,38 @@ the system account's staging-draft mint at 1 and the one insert of every
 type's section into it at 4 — writes into the system account's private
 draft, masked at every class but the system's — then the publish of the
 member that holds the sections into `1.1.0.1.0.1` at 8 and one `defines`
-link per type, three records apart, to 332, each a public entry with
-`key: "system"`, so a fresh board stands at 332 before any client writes.
-The claim ceremony's five commits follow (§A first board): positions 334,
-335, 338, 341, 344 — the delegate, the home mint, the record insert, the
+link per type, three records apart, to 365, each a public entry with
+`key: "system"`, so a fresh board stands at 365 before any client writes.
+The claim ceremony's five commits follow (§A first board): positions 367,
+368, 371, 374, 377 — the delegate, the home mint, the record insert, the
 genesis link, the claim link — and the claim's own step then writes the
 board's first head `H.1` (§The other endpoints, the published head
-document): the head record's insert into the staging draft at 347 — the
+document): the head record's insert into the staging draft at 380 — the
 draft stands from the seed, so the claim's head mints none — and the
-publish into `H` at 351, the publish a public entry with `key: "system"`,
+publish into `H` at 384, the publish a public entry with `key: "system"`,
 the insert masked at every class but the system's. The flow behind the
 examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
 so every `key` reads `"bare"`, and no entry is signed, so no row carries
-`attest`): `delegate` commits at position 353 — its row carrying the
-minted pair —, the home mint at 354, a second — private — document at 355
+`attest`): `delegate` commits at position 386 — its row carrying the
+minted pair —, the home mint at 387, a second — private — document at 388
 (the account's doc 1 is born published, where bare writes are gated by
 design, so the flow's content goes to a draft document), a two-byte
-`insert` at 358 (one range mint, one stretch, one placement), `make_link`
-at 361 — its row carrying the minted link's address. The feed past the
-seed, the ceremony and its head, `GET /changes?since=351`, read AS
+`insert` at 391 (one range mint, one stretch, one placement), `make_link`
+at 394 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=384`, read AS
 PRINCIPAL 1 — the owner of the private document, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":353,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":354,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":355,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":358,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":361,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":361,"more":false}
+{"changes":[{"at":386,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":387,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":388,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":391,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":394,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":394,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=351&limit=2`:
+The first page of the same feed, `GET /changes?since=384&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":353,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":354,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":354,"more":true}
+{"changes":[{"at":386,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":387,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":387,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -4966,7 +5001,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":353,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":354,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":354,"more":false}
+{"changes":[{"at":386,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":387,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":387,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the

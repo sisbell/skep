@@ -203,7 +203,7 @@ fn the_seeding_check_passes_over_what_the_engine_sees() {
         .into_iter()
         .chain(deposit_class_types().iter().filter(|ty| skep_registry::row_at(ty).is_none()))
         .collect();
-    assert_eq!(domain.len(), 8 + 2, "eight pins and the two credential members of M5's set");
+    assert_eq!(domain.len(), 11 + 2, "eleven pins and the two credential members of M5's set");
     assert_eq!(skep_registry::seeding_check(skep_registry::rows(), domain), Ok(()));
 }
 

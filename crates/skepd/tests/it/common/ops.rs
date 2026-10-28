@@ -26,9 +26,15 @@ pub const T_RAIL_RECORD: &str = "1.1.0.1.0.1.0.3.60";
 pub const T_STEWARD_CLASSIFICATION: &str = "1.1.0.1.0.1.0.3.61";
 pub const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
 /// The `replaces` type (PUB-5.15; RES-310's `3.12`): the audit-view class of
-/// the link a re-share is deposited with, and the one type a bare link write
-/// may not carry (`replaces_not_standalone`).
+/// the link a re-share is deposited with, and one of the two types a bare
+/// link write may not carry (`replaces_not_standalone`).
 pub const T_REPLACES: &str = "1.1.0.1.0.1.0.3.12";
+/// The correspondence record's type (the link-sets design §5.7; the commons
+/// seeding round's `3.102.1`, a subtype under counterpart): the audit-view
+/// class of the publish shot's own record, and the other type a bare link
+/// write may not carry (`correspondence_not_standalone`) — its one writer the
+/// shot's record mint, not yet built.
+pub const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
 
 /// The daemon's publish-class refusal, in the `auth_wire` `code:detail`
 /// convention — the verdict every bare-session cell of the gate answers.

@@ -339,6 +339,17 @@ pub enum RejectCode {
     BaseSuperseded,
     /// The base extent exceeds the base's current content count.
     BaseExtentTooLarge,
+    /// A draft-native run of the shot is already published (the link-sets
+    /// design §5.7's twin fence).
+    ///
+    /// Its I-span overlaps a span a correspondence record homed in the draft
+    /// already names as its `from` — any part of it — so the words were
+    /// re-inserted by an earlier shot, and `site.addr` is the member that
+    /// shot minted them into, the record's `to`'s member. Permanent by the
+    /// catch-all: the record stands for good, so the same request can never
+    /// land; the act that exists is a shot re-composing the run by reference
+    /// to the published words. Nothing is committed.
+    AlreadyPublished,
     // ── M7 link ──
     /// A `Resolve` V-spec fails its well-formedness check.
     IllFormedSpec,

@@ -33,9 +33,14 @@ fn head(port: u16) -> u64 {
     json(&get(port, "/health").1)["log_position"].as_u64().expect("log_position")
 }
 
-/// The change-feed entries past `since`.
+/// The change-feed entries past `since`, as the guest.
 fn changes_since(port: u16, since: u64) -> Vec<Value> {
-    let (st, body) = http(port, "GET", &format!("/changes?since={since}"), None, b"");
+    changes_since_as(port, None, since)
+}
+
+/// The change-feed entries past `since`, as `token`'s class.
+fn changes_since_as(port: u16, token: Option<&str>, since: u64) -> Vec<Value> {
+    let (st, body) = http(port, "GET", &format!("/changes?since={since}"), token, b"");
     assert_eq!(st, 200, "/changes: {}", String::from_utf8_lossy(&body));
     json(&body)["changes"].as_array().expect("changes").clone()
 }
@@ -705,6 +710,80 @@ fn the_pointwise_pair_floats_to_the_trunk_head_and_delete_orphans_reads_the_addr
         Some("out_of_bounds"),
         "the head holds two positions: {v}"
     );
+    sd.shutdown();
+}
+
+/// THE PUBLICATION's FEED ROW AND ITS RECORDS (the link-sets design §5.7;
+/// wire.md §The change feed, §The publish shot and head-float): a drafted
+/// shot's ONE commit mints, per piece of draft identity it re-inserts, one
+/// correspondence record homed in the draft — `from` the draft-native
+/// I-span, `to` the member's span it became, typed `3.102.1`, the draft's
+/// first link, readable to the draft's owner and withheld from a guest —
+/// and its row names the member FIRST and the draft beside it to the
+/// owner, the member alone to the guest, KEEPING its `attest` on both pages
+/// (the exemption: the preimage names no member the reduction withholds).
+/// A second shot re-inserting a run the record names is refused
+/// `already_published`, permanent, `site.addr` the member, nothing
+/// committed; one re-inserting nothing names the member alone on every
+/// page and mints no record.
+#[test]
+fn a_drafted_shots_row_names_the_draft_beside_the_member_for_its_owner_and_keeps_its_attest() {
+    const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    let d = draft_with(port, &bare, "abc");
+    let d_text = format!("{d}.0.1.1");
+
+    let before = head(port);
+    let member = acked_addr(&op(port, Some(&signed), &publish(&e, None, Some(&d), &[run(&d, &d_text, 3)])));
+    assert_eq!(member, format!("{e}.1"));
+    // The record: the draft's first link, from the draft's run to the
+    // member's fresh run.
+    let record = read_link(port, Some(&bare), &format!("{d}.0.2.1"));
+    assert_eq!(record["slots"][0][0]["start"].as_str(), Some(d_text.as_str()), "`from` the draft's run: {record}");
+    assert_eq!(
+        record["slots"][1][0]["start"].as_str(),
+        Some(image(port, &member, 1, 3)[0].0.as_str()),
+        "`to` the member's fresh run: {record}"
+    );
+    assert_eq!(record["slots"][2][0]["start"].as_str(), Some(T_CORRESPONDENCE), "{record}");
+    assert!(
+        read_link(port, None, &format!("{d}.0.2.1")).is_null(),
+        "the draft is withheld from a guest: a link read of it answers absence, as for an address never deposited"
+    );
+    // The row: the member first and the draft beside it for the owner, the
+    // member alone for the guest, the `attest` kept on both.
+    let owners = changes_since_as(port, Some(&signed), before);
+    let guests = changes_since(port, before);
+    assert_eq!((owners.len(), guests.len()), (1, 1), "one commit: {owners:?} / {guests:?}");
+    assert_eq!(owners[0]["docs"], serde_json::json!([member, d]), "the member first, the draft beside it: {}", owners[0]);
+    assert_eq!(guests[0]["docs"], serde_json::json!([member]), "reduced to the member: {}", guests[0]);
+    assert!(owners[0]["attest"].is_object(), "the owner's row carries the attest: {}", owners[0]);
+    assert_eq!(guests[0]["attest"], owners[0]["attest"], "the guest's reduced row keeps it: the exemption");
+    assert!(guests[0].get("key").is_none(), "a signed row carries no key: {}", guests[0]);
+
+    // The twin fence: the same words again, whole or a piece.
+    let before = head(port);
+    for width in [3, 1] {
+        let v = op(port, Some(&signed), &publish(&e, Some((&member, 3)), Some(&d), &[run(&d, &d_text, width)]));
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("already_published"), "{v}");
+        assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+        assert_eq!(rej["site"]["addr"].as_str(), Some(member.as_str()), "the member the words were published into: {v}");
+    }
+    assert_eq!(head(port), before, "nothing committed");
+    assert!(changes_since(port, before).is_empty());
+
+    // A shot re-inserting nothing: the member alone on every page, no record.
+    let m2 = acked_addr(&op(port, Some(&signed), &publish(&e, Some((&member, 3)), Some(&d), &[run(&e, &image(port, &member, 1, 3)[0].0, 3)])));
+    assert_eq!(m2, format!("{e}.2"));
+    let owners = changes_since_as(port, Some(&signed), before);
+    assert_eq!(owners[0]["docs"], serde_json::json!([m2]), "nothing re-inserted: no draft on the row: {}", owners[0]);
+    assert!(read_link(port, Some(&bare), &format!("{d}.0.2.2")).is_null(), "no second record");
     sd.shutdown();
 }
 

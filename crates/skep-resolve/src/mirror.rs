@@ -888,8 +888,11 @@ enum Row {
     /// A `nullify`: its position, and the documents it names — the homes
     /// whose deposits a retraction may take off the active view.
     Nullify { at: u64, docs: Vec<Address> },
-    /// A `publish` or a `version`: the members it names, which the chain
-    /// walk learns.
+    /// A `publish` or a `version`: the member it names, which the chain
+    /// walk learns — its FIRST document. A `publish` row names the member
+    /// first and, for a reader of the staging draft, the draft beside it
+    /// (the link-sets design §5.7's pinned order; wire.md §The change feed),
+    /// so the member is read by position and never by a test of its shape.
     Chain { members: Vec<Address> },
     /// Every other row — an attested `make_link`, one naming no link or no
     /// home, a write of another op: nothing the fold takes.
@@ -908,7 +911,9 @@ impl Row {
                 }
             }
             Some("nullify") => Row::Nullify { at: position(row).unwrap_or(0), docs: docs_of(row) },
-            Some("publish") | Some("version") => Row::Chain { members: docs_of(row) },
+            Some("publish") | Some("version") => {
+                Row::Chain { members: docs_of(row).into_iter().take(1).collect() }
+            }
             _ => Row::Other,
         }
     }

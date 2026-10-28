@@ -265,7 +265,13 @@ pub enum VersionError {
 /// shot is the document's, whichever member names it.
 ///
 /// * `DocNotRegistered` / `NotOwner(doc)` — the registration and ω of the
-///   address named; the payload is that address.
+///   address named; the payload is that address. `NotOwner` carries the
+///   DRAFT's document instead where `draft` is named and the caller does not
+///   own the document it projects to — the link-sets design §5.7's
+///   unowned-draft edge, asked right after the draft's registration and
+///   ahead of every readability question; the records a publication keeps
+///   are homed in the draft, so the shot refuses a draft the caller does not
+///   own, readable or not.
 /// * `SourceNotRegistered` — the base, the document the draft projects to
 ///   (PUB-2.15), or a run's origin document is not a registered document.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
@@ -303,7 +309,7 @@ pub enum VersionError {
 ///   and the shot share; a shot cannot be split to meet it.
 /// * `TooManyValues` — the values the shot re-inserts
 ///   ([`Shot::reinserted_values`](crate::Shot::reinserted_values): the
-///   draft-native runs' widths, summed) exceed
+///   distinct positions the draft-native runs name) exceed
 ///   [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES): each such value
 ///   is re-inserted as fresh identity, two staged records apiece where every
 ///   value is an atom, and two for a whole run of single-byte values.
@@ -317,7 +323,8 @@ pub enum VersionError {
 pub enum PublishError {
     /// `doc`, the address the shot names, is not a registered document.
     DocNotRegistered,
-    /// The caller is not `doc`'s effective owner (ω); carries `doc`.
+    /// The caller is not the effective owner (ω) of `doc`, or of the draft
+    /// the shot names; carries the document that failed.
     NotOwner(Address),
     /// The base, the draft's document or a run's origin is not registered.
     SourceNotRegistered,

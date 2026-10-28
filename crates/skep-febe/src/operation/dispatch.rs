@@ -215,18 +215,24 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // The shot (PUB-2.33, PUB-8.1): M5's composite decides the
-            // destination, places the runs by origin and runs the source
-            // gate; what M10 adds is the session's visibility class
-            // (`visible_to`) — the same value the five link writes lend M7 —
-            // which M5 evaluates per origin over the shot's own working world,
-            // the world in which it has just found each origin registered
-            // (PUB-6.37). The ack is the member's address (PUB-2.37).
+            // The shot (PUB-2.33, PUB-8.1), as THE PUBLICATION (the
+            // link-sets design §5.7): M7's composite stages M5's shot — which
+            // decides the destination, places the runs by origin, each draft
+            // identity once, and runs the source gate — and, for every piece
+            // of draft identity the shot minted, one correspondence record
+            // homed in the draft, in ONE transaction, behind the twin fence
+            // that refuses a run a record already names. What M10 adds is
+            // the session's visibility class (`visible_to`) — the same value
+            // the five link writes lend M7 — which M5 evaluates per origin
+            // over the shot's own working world, the world in which it has
+            // just found each origin registered (PUB-6.37), and M7 lends the
+            // records' deposit gate. The ack is the member's address
+            // (PUB-2.37); the records are the draft's to read back.
             Op::Publish { doc, shot } => {
                 let (addr, at) = self
                     .stores
-                    .vstream_attested(attest)
-                    .publish(wc.caller(), &doc, &shot, &visibility)
+                    .linkstore_attested(&visibility, attest)
+                    .publication(wc.caller(), &doc, &shot)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }

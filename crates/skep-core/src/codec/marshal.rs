@@ -1280,6 +1280,9 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::BaseNotInChain => "base_not_in_chain",
         RejectCode::BaseSuperseded => "base_superseded",
         RejectCode::BaseExtentTooLarge => "base_extent_too_large",
+        // The publication's twin fence (the link-sets design §5.7), tabled
+        // with the shot's codes in §The publish shot and head-float.
+        RejectCode::AlreadyPublished => "already_published",
         RejectCode::IllFormedSpec => "ill_formed_spec",
         RejectCode::SlotTooLarge => "slot_too_large",
         RejectCode::EmptyTypeResolution => "empty_type_resolution",

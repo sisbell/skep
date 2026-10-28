@@ -334,18 +334,23 @@ fn a_replaces_link_nullify_is_refused_to_the_owner_and_masked_for_strangers() {
 }
 
 /// THE CORRESPONDENCE RECORD (PUB-6.64's member; the link-sets design §5.7)
-/// has NO WRITER until the publish shot's lane lands: every door refuses the
-/// class `3.102.1` to its owner — `correspondence_not_standalone`, permanent,
-/// bare and signed alike — so no link of the class exists for a `nullify`
-/// cell to target, and the daemon-level cell (the owner's
-/// `nullify_audit_view`, a stranger's `not_owner`) is that lane's; the unit
-/// level pins the refusal today over a record staged directly (skep-core's
-/// `plain/tests.rs`). What stands at the daemon: the class is subtype-exact
-/// — a link typed the PARENT `counterpart` `3.102` is an ordinary link,
-/// admitted into the owner's draft, its owner's `nullify` LANDING, bare and
-/// signed alike.
+/// has ONE WRITER, the publish shot: a drafted shot from the owner's draft
+/// mints one record of the class `3.102.1` in the draft, in its own commit
+/// (`publish.rs` pins the records' slots), while every request-typed door
+/// refuses the class to its owner — `correspondence_not_standalone`,
+/// permanent, bare and signed alike — so no record is deposited by itself.
+/// The record's `nullify` is refused `nullify_audit_view`, permanent, to the
+/// draft's owner, bare and signed alike (a draft-homed record against a
+/// draft-homed target takes no publish gate): the records are read on the
+/// ACTIVE view, and a retraction would un-correspond a run the version
+/// holds; a stranger answers `not_owner`, occupancy-blind — byte-identical
+/// to its answer for an EMPTY address of the draft's link subspace — and
+/// the guest `unauthenticated`; the record stands. The class is
+/// subtype-exact: a link typed the PARENT `counterpart` `3.102` is an
+/// ordinary link, admitted into the owner's draft, its owner's `nullify`
+/// LANDING, bare and signed alike.
 #[test]
-fn the_correspondence_class_has_no_writer_yet_and_its_parent_is_an_ordinary_link() {
+fn the_correspondence_record_a_shot_minted_is_refused_retraction_to_its_owner_and_masked_for_strangers() {
     const T_COUNTERPART: &str = "1.1.0.1.0.1.0.3.102";
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -353,6 +358,7 @@ fn the_correspondence_class_has_no_writer_yet_and_its_parent_is_an_ordinary_link
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (_, stranger_signed) = signed_stranger(port, &signed, 962, 62);
     let draft = owner_draft(port, &bare);
     let before = head(port);
     for token in [&bare, &signed] {
@@ -360,7 +366,49 @@ fn the_correspondence_class_has_no_writer_yet_and_its_parent_is_an_ordinary_link
         assert_eq!(verdict(&v), "credential_refused:correspondence_not_standalone", "{v}");
         assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
     }
-    assert_eq!(head(port), before, "the refusals commit nothing: no record of the class exists to retract");
+    assert_eq!(head(port), before, "the request-typed doors commit nothing of the class");
+
+    // THE ONE WRITER: the owner's draft holding `ab`, published into the
+    // owner's doc 1 from the signed session — the shot's one commit mints
+    // the record in the draft, its first link.
+    let v = op(
+        port,
+        Some(&bare),
+        &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["ab"]}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let extent = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1) - 1;
+    let shot = format!(
+        r#"{{"op":"publish","doc":"{CLAIMANT_DOC1}","base":"{CLAIMANT_DOC1}","base_extent":"{extent}","draft":"{draft}","runs":[{{"origin":"{draft}","i_start":"{draft}.0.1.1","width":"2"}}]}}"#
+    );
+    let member = acked_addr(&op(port, Some(&signed), &shot));
+    assert_eq!(member, format!("{CLAIMANT_DOC1}.1"), "doc 1's first member");
+    let record = format!("{draft}.0.2.1");
+    let link = read_link(port, Some(&bare), &record);
+    assert_eq!(
+        link["slots"][2][0]["start"].as_str(),
+        Some(T_CORRESPONDENCE),
+        "the shot's record, typed the class, is the draft's first link: {link}"
+    );
+    let before = head(port);
+    // THE OWNER, bare and signed alike: the class cell answers.
+    for token in [&bare, &signed] {
+        let v = nullify(port, Some(token), &draft, &record);
+        assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "{v}");
+        assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    }
+    assert!(link_resident(port, Some(&bare), &record), "the record stands");
+    // A STRANGER: `not_owner`, occupancy-blind — the bytes of an empty
+    // address of the same link subspace.
+    let empty = format!("{draft}.0.2.99");
+    let (_, on_record) = http(port, "POST", "/op", Some(&stranger_signed), nullify_frame(&draft, &record).as_bytes());
+    let (_, on_empty) = http(port, "POST", "/op", Some(&stranger_signed), nullify_frame(&draft, &empty).as_bytes());
+    assert_not_owner(&json(&on_empty), &draft);
+    assert_eq!(on_record, on_empty, "the record's occupancy is invisible to a stranger");
+    assert_eq!(verdict(&nullify(port, None, &draft, &record)), "unauthenticated");
+    assert_eq!(head(port), before, "the refusals commit nothing");
+
+    // The parent type: an ordinary link, retractable by its owner.
     for token in [&bare, &signed] {
         let counterpart = typed_link_addr(port, token, &draft, &[draft.as_str()], &[draft.as_str()], T_COUNTERPART);
         expect_resp(&nullify(port, Some(token), &draft, &counterpart), "ack_addr");

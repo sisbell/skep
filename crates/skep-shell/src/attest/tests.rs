@@ -277,20 +277,23 @@ fn run(origin: &str, i_start: &str, width: u64) -> Value {
 }
 
 /// A SHOT is held to its ARITHMETIC before any read: runs past the wire's
-/// list, the staging draft's widths past the store's re-insert budget, the
-/// copied positions past what a body under the budget can carry, and a
-/// count past `be64` (a window of width 2^64 − 1 and a run after it — a
-/// panic in the signer's own builder) are each refused with nothing read;
-/// a draft at the re-insert budget passes it, and is read.
+/// list, the staging draft's DISTINCT positions past the store's re-insert
+/// budget (two disjoint runs past it together; the store mints each draft
+/// identity once per shot, so a run named twice counts once), the copied
+/// positions past what a body under the budget can carry, and a count past
+/// `be64` (a window of width 2^64 − 1 and a run after it — a panic in the
+/// signer's own builder) are each refused with nothing read; a draft at the
+/// re-insert budget passes it, named once or twice over, and is read.
 #[test]
 fn a_shot_is_held_to_its_arithmetic_before_any_read() {
     let g = Ground::over(Fake::default());
     let c = g.composer();
     let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": runs});
     let draft_run = |width: u64| run("1.0.1.0.2", "1.0.1.0.2.0.1.1", width);
+    let past_the_draft = run("1.0.1.0.2", &format!("1.0.1.0.2.0.1.{}", MAX_REINSERTED_VALUES + 1), 1);
     let cells = [
         ("runs past the wire's list", shot(vec![draft_run(1); MAX_WIRE_LIST + 1]), "elements"),
-        ("the draft past the re-insert budget", shot(vec![draft_run(MAX_REINSERTED_VALUES), draft_run(1)]), "re-inserts"),
+        ("the draft past the re-insert budget", shot(vec![draft_run(MAX_REINSERTED_VALUES), past_the_draft]), "re-inserts"),
         ("the copied positions past a body", shot(vec![run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", MAX_COPIED_POSITIONS + 1)]), "copies in"),
         ("a count past be64", shot(vec![run("1.0.9.0.1", "1.0.9.0.1.0.1.1", u64::MAX), run("1.0.9.0.1", "1.0.9.0.1.0.1.1", 1)]), "2^64"),
     ];
@@ -299,9 +302,15 @@ fn a_shot_is_held_to_its_arithmetic_before_any_read() {
         assert!(refused.to_string().contains(says), "{cell}: {refused}");
         assert!(g.fake.dialed().is_empty(), "{cell}: nothing is read: {:?}", g.fake.dialed());
     }
-    let refused = c.publish_body(&shot(vec![draft_run(MAX_REINSERTED_VALUES)]), "1.0.1.0.1").unwrap_err();
-    assert!(!refused.to_string().contains("re-inserts"), "the draft at the budget passes it: {refused}");
-    assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "and is read");
+    for (cell, runs) in [
+        ("the draft at the budget", vec![draft_run(MAX_REINSERTED_VALUES)]),
+        ("the draft at the budget, named twice — the distinct count", vec![draft_run(MAX_REINSERTED_VALUES), draft_run(1)]),
+    ] {
+        let refused = c.publish_body(&shot(runs), "1.0.1.0.1").unwrap_err();
+        assert!(!refused.to_string().contains("re-inserts"), "{cell} passes it: {refused}");
+        assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "{cell}: and is read");
+        g.fake.dialed.lock().unwrap().clear();
+    }
 }
 
 /// THE READ-BACK is held to what one delivery can carry and to the map the

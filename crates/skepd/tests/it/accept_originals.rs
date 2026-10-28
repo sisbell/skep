@@ -74,6 +74,9 @@ use serde_json::{json, Value};
 /// The citation type, a seeded commons type (`3.13`), named in the address
 /// form: the one type every link here carries.
 const T_CITATION: &str = "1.1.0.1.0.1.0.3.13";
+/// The publish shot's correspondence record class (the link-sets design
+/// §5.7), excluded from every enumeration of originals by its exact type.
+const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
 
 /// The passages, per-byte: P the edition's standing text, Q a second passage
 /// beside it, Z the note, W the draft's new words.
@@ -300,6 +303,12 @@ fn candidates(port: u16, token: Option<&str>, doc: &str, from: u64, width: u64) 
         }
         let value = read_link(port, token, &link);
         let slots = value["slots"].as_array().expect("slots");
+        // The shot's own correspondence record (lane S1), excluded by its
+        // EXACT type (the link-sets design §5.1's "What is NOT in it"): a
+        // record of what the shot minted, never an original to offer.
+        if slots[2][0]["start"].as_str() == Some(T_CORRESPONDENCE) {
+            continue;
+        }
         let mut ends = addresses(&slot_runs(&slots[0]));
         ends.extend(addresses(&slot_runs(&slots[1])));
         let on_selection: BTreeSet<String> = ends.intersection(&selection).cloned().collect();
@@ -567,7 +576,10 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
 
     let a3 = accept(port, &signed, &e3, &d, &m, &vspec(&e3, P_LEN + 1, W_LEN), NONE);
     assert_eq!(a3.copy, format!("{e3}.0.2.1"), "the copy, E.3's first link");
-    assert_eq!(a3.claim, format!("{d}.0.2.2"), "the claim, D's next link");
+    // D's second link is the shot's own correspondence record (lane S1: the
+    // publication mints one in the draft per run it re-inserts), so the
+    // claim is D's third.
+    assert_eq!(a3.claim, format!("{d}.0.2.3"), "the claim, D's next link after the shot's record");
     assert_eq!(
         a3.copy_link["slots"],
         json!([i_slot(&w_fresh_3.0, W_LEN), [], i_slot(T_CITATION, 1)]),
@@ -595,10 +607,14 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
     expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN)), "ack");
     expect_resp(&copy_span(port, &bare, &d, 1, &e3, P_LEN + 1, W_LEN), "ack");
     assert_eq!(image_runs(port, Some(&bare), &d, 1, W_LEN), vec![w_fresh_3.clone()], "D windows E.3's fresh spans");
+    // The shot's own correspondence record (lane S1), D's second link, `to`
+    // E.3's fresh W: it stands on the re-windowed text too, and being a
+    // record and no original it is no candidate.
+    let record = format!("{d}.0.2.2");
     assert_eq!(
         find_links_v(port, Some(&signed), &d, 1, W_LEN),
-        floor_and(&[&a3.copy]),
-        "the copy by identity; M stands on no position of the re-windowed text"
+        floor_and(&[&a3.copy, &record]),
+        "the copy by identity and the shot's record; M stands on no position of the re-windowed text"
     );
     assert_eq!(offered(port, Some(&signed), &d, 1, W_LEN), Vec::<String>::new(), "NOT M: no candidate");
 
@@ -610,8 +626,8 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
     assert_eq!(text_of(port, Some(&bare), &d, 1, W_LEN), W);
     assert_eq!(
         find_links_v(port, Some(&signed), &d, 1, W_LEN),
-        floor_and(&[&m]),
-        "M is back with its words; the copy is on E.3's identity, not here"
+        floor_and(&[&m, &record]),
+        "M is back with its words, and the record whose `from` they are; the copy is on E.3's identity, not here"
     );
     assert_eq!(
         offered(port, Some(&signed), &d, 1, W_LEN),
@@ -620,31 +636,47 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
     );
 
     // Shot 4 off E.3: P by reference, W from the draft as fresh identity a
-    // SECOND time.
+    // SECOND time — THE TWIN FENCE (the link-sets design §5.7, lane S1): the
+    // put-back run is one the shot's record names as its `from`, so the
+    // shot is refused `already_published`, permanent, `site.addr` E.3, the
+    // member the words were published into, nothing committed; the words
+    // are published once, and the counterpart is offered first — the run
+    // RE-COMPOSED BY REFERENCE to the record's `to`, E.3's fresh W, which
+    // is E's own I-space and so places by reference, minting nothing: one
+    // identity, the quote live, no copy made.
+    let before = head_position(port);
     let mut runs = shot_runs(port, None, &e3, 1, P_LEN);
     runs.push(run(&d, &w_native.0, W_LEN));
+    let v = op(port, Some(&signed), &publish_frame(e, Some((&e3, P_LEN + W_LEN)), Some(&d), &runs));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("already_published"), "W is published already: {v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"]["addr"].as_str(), Some(e3.as_str()), "the member W was published into: {v}");
+    assert_eq!(head_position(port), before, "nothing committed");
+    let mut runs = shot_runs(port, None, &e3, 1, P_LEN);
+    runs.push(run(e, &w_fresh_3.0, W_LEN));
     let e4 = shot(port, &signed, e, Some((&e3, P_LEN + W_LEN)), Some(&d), &runs);
     assert_eq!(e4, format!("{e}.4"));
-    let w_fresh_4 = (format!("{e}.0.1.{}", P_LEN + W_LEN + 1), W_LEN);
-    assert_eq!(image_runs(port, None, &e4, P_LEN + 1, W_LEN), vec![w_fresh_4.clone()], "a second fresh identity");
+    assert_eq!(image_runs(port, None, &e4, P_LEN + 1, W_LEN), vec![w_fresh_3.clone()], "the one fresh identity, by reference");
+    assert!(read_link(port, Some(&bare), &format!("{d}.0.2.4")).is_null(), "nothing re-inserted: no second record");
 
     let a4 = accept(port, &signed, &e4, &d, &m, &vspec(&e4, P_LEN + 1, W_LEN), NONE);
     assert_eq!(a4.copy, format!("{e4}.0.2.1"), "the second copy, E.4's first link");
-    assert_eq!(a4.claim, format!("{d}.0.2.3"), "the second claim on one original, admitted");
-    assert_eq!(a4.copy_link["slots"][0], i_slot(&w_fresh_4.0, W_LEN));
+    assert_eq!(a4.claim, format!("{d}.0.2.4"), "the second claim on one original, admitted");
+    assert_eq!(a4.copy_link["slots"][0], i_slot(&w_fresh_3.0, W_LEN), "the second copy stands on the one identity");
     assert_eq!(
         claim_rows(port, Some(&signed), &m, "active"),
         vec![claim_row(&a3.claim, &d, &m, &a3.copy), claim_row(&a4.claim, &d, &m, &a4.copy)],
         "both claims, both active"
     );
-    // The found fact G1 closed: read at `E`'s trunk HEAD (PUB-2.49, the
-    // pointwise pair floats) the first copy, retracted by no one, reads as
-    // not discoverable once the second shot lands — an older member's
-    // new-words copy is "active" at its own member alone. Read at D, G1's
-    // key, both copies answer by D's own arrangement, which holds W's native
-    // identity and so neither copy's words: nothing floats.
+    // G1 under one identity: read at `E`'s trunk HEAD (PUB-2.49, the
+    // pointwise pair floats) the first copy stays discoverable once the
+    // second shot lands — E.4 arranges the same fresh W by reference, so
+    // an older member's new-words copy is live at the head too. Read at D,
+    // G1's key, both copies answer by D's own arrangement, which holds W's
+    // native identity and so neither copy's words: nothing floats.
     assert!(discoverable_from(port, Some(&signed), &a3.copy, &e3), "the first copy, at its own member");
-    assert!(!discoverable_from(port, Some(&signed), &a3.copy, e), "…and no longer from E, floated to E.4");
+    assert!(discoverable_from(port, Some(&signed), &a3.copy, e), "…and from E still: the head holds the one identity");
     assert!(discoverable_from(port, Some(&signed), &a4.copy, e), "the second copy, at the head");
     assert_eq!(
         candidates(port, Some(&signed), &d, 1, W_LEN)
@@ -656,10 +688,15 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
     );
     assert_eq!(offered(port, Some(&signed), &d, 1, W_LEN), vec![m.clone()], "at D's own text, still offered");
 
-    // The re-window onto E.4 takes it off the list again.
+    // The re-window onto E.4 takes it off the list again: both copies and
+    // the record stand on the one identity.
     expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN)), "ack");
     expect_resp(&copy_span(port, &bare, &d, 1, &e4, P_LEN + 1, W_LEN), "ack");
-    assert_eq!(find_links_v(port, Some(&signed), &d, 1, W_LEN), floor_and(&[&a4.copy]), "E.4's copy alone, by identity");
+    assert_eq!(
+        find_links_v(port, Some(&signed), &d, 1, W_LEN),
+        floor_and(&[&a3.copy, &a4.copy, &record]),
+        "both copies by identity, and the record"
+    );
     assert_eq!(offered(port, Some(&signed), &d, 1, W_LEN), Vec::<String>::new(), "NOT M");
     sd.shutdown();
 }
@@ -969,11 +1006,15 @@ fn a_daughters_accepted_originals_are_not_offered_again_on_its_line() {
     assert!(discoverable_from(port, Some(&signed), &am.copy, &d), "read at D: active");
     assert!(discoverable_from(port, Some(&signed), &al.copy, &d));
 
-    // Nothing on the daughter's line is offered again.
+    // Nothing on the daughter's line is offered again. The shot's own
+    // correspondence record (lane S1: D's second link, `to` the daughter's
+    // fresh W, which D now arranges) stands on the re-windowed text too; a
+    // record, not an original, it is no candidate.
+    let record = format!("{d}.0.2.2");
     assert_eq!(
         find_links_v(port, Some(&signed), &d, 1, P_LEN + W_LEN),
-        floor_and(&[&al.copy, &am.copy, &l]),
-        "the two copies by identity and L on P; M stands on no position of the re-windowed text"
+        floor_and(&[&al.copy, &am.copy, &l, &record]),
+        "the two copies by identity, L on P and the shot's record on the fresh W; M stands on no position of the re-windowed text"
     );
     assert_eq!(
         candidates(port, Some(&signed), &d, 1, P_LEN + W_LEN),

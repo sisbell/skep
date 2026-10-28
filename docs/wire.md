@@ -1608,7 +1608,12 @@ reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run` (a shot's or a reinstate's run: its start is no content
 element, or its stated origin is not the document that minted it),
 `base_not_in_chain`, `base_superseded`,
-`base_extent_too_large`; and three more of M5's — `not_link_address`
+`base_extent_too_large`, and `already_published` (the publication's
+twin fence: a draft-native run of the shot whose I-span overlaps a span
+a correspondence record homed in the draft already names as its
+from-span — the words were re-inserted by an earlier shot, and
+`site.addr` is the member they were published into; permanent, the
+record standing for good); and three more of M5's — `not_link_address`
 (make-link's seat step, M5 §8: the address it is to seat is not a full
 element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
@@ -1621,8 +1626,9 @@ source's arranged end is refused for the work it would do while keeping
 nothing — one code for both causes, told apart by the store's message;
 permanent, a copy or a reinstate past it is split by its caller; the
 publish table below carries the first) and `too_many_values` (a shot whose draft-native runs
-re-insert more than M5's `MAX_REINSERTED_VALUES` = 131072 values, their
-widths summed — arithmetic on the request, asked after the source gate
+name more than M5's `MAX_REINSERTED_VALUES` = 131072 distinct positions —
+a position two runs name counted once, each draft identity being minted
+once per shot — arithmetic on the request, asked after the source gate
 and ahead of existence; permanent, a shot cannot be split to meet it;
 the publish table carries it too).
 
@@ -1787,9 +1793,20 @@ origin's relation to `doc`: the document's own I-space (its own chain
 or any member's) by reference; the staging `draft`'s RE-INSERTED as
 fresh identity under the document's own I-space — one content mint
 and one write per maximal run of single-byte values and per atom, the
-bytes read at the draft's addresses — so no address of the draft
-survives in the member; any OTHER document's
-stays a window, answering its origin. `origin` must be the document
+bytes read at the draft's addresses, EACH DRAFT IDENTITY ONCE PER SHOT:
+in `runs`' order the shot mints a draft-native run the first time it
+meets it and places every later occurrence of it, whole or in part, by
+reference to the fresh identity it minted (a run overlapping an earlier
+one in part splits into a referenced piece and a minted piece), so one
+draft identity has one fresh identity in the member and words the draft
+holds as one text stay one text in the edition — so no address of the
+draft survives in the member; any OTHER document's
+stays a window, answering its origin. The draft must be the caller's
+OWN: a shot naming a draft the session principal does not own — a
+grantee's, an ancestor's or a descendant's, readable or not — is refused
+`not_owner` with `site.addr` the draft, asked right after the draft's
+registration and ahead of every readability question, since the records
+below are homed in the draft. `origin` must be the document
 that minted the run's addresses (`bad_run` otherwise; a link element is
 no content run). Then the composite APPENDS the base's positions past
 `base_extent` — the extent the staged copy took: a published member
@@ -1802,6 +1819,37 @@ composite appends what the client could not have seen; nothing is
 positionally applied to an advanced head. `base` and `base_extent`
 travel together — either both or neither. An empty `runs` lands an
 empty member.
+
+**The correspondence records** (the link-sets design §5.5, §5.7). The
+shot's ONE commit carries, for every piece of draft identity it minted,
+one private record homed in the staging `draft`: a link typed the
+correspondence class `1.1.0.1.0.1.0.3.102.1` (§Credential refusals —
+the class's one writer is this shot; no request deposits one), `from`
+the piece's draft-native I-span and `to` the member's I-span it became,
+both stored as the permanent I-spans they are and of one width, so a
+position of either maps onto the other by its offset; the records are
+seated in the draft's link subspace in minting order, and the draft's
+readers read them as they read any link of the draft (`read_link`,
+`find_links_ftt` with `home` the draft and `ty` the class — each row
+kept by the stored type slot's exact test, the parent `counterpart`
+being an ordinary type). They lie outside the shot's signed preimage,
+which spells a draft-native run by its values and never by a draft
+address. THE TWIN FENCE: a draft-native run of a later shot whose I-span
+overlaps a span a record homed in the draft already names as its `from`
+— any part of it, so a sub-run of published words split from its run by
+an edit on a stale device is no way past — is refused
+`already_published`, permanent, `site.addr` the member the record's `to`
+was minted into, nothing committed; the client re-composes such a run
+by reference to the record's `to`, at the run's offset into the
+record's `from`. The fence reads the draft's own records alone, one
+stab per run, inside the transaction — so a second shot of the same
+new words from a stale device, a restarted runtime or a raw op commits
+nothing, at every principal. A shot naming no `draft`, or re-inserting
+nothing, mints no record and commits as the shot alone. The board's own
+producers — the published head document's writer, the time writer and
+the registry seed — shoot from the system account's staging draft and
+mint their records there (§The other endpoints; §Registry; §The change
+feed's positions), each run fresh, so the fence never meets them.
 
 **Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
 of a bare DOCUMENT address answers the document's trunk HEAD — the
@@ -1861,13 +1909,15 @@ commits nothing:
 | `doc_not_registered` | reorder | — | `doc` is not registered — answered ahead of ownership, so an unregistered address never discloses an ownership verdict |
 | `not_owner` | permanent | `addr` = `doc` | the session principal does not own `doc` (PUB-6.36's slot 1, judged once `doc` is registered) |
 | `source_not_registered` | reorder | — | `base`, `draft`, or a run's `origin` is not registered (in that order) |
+| `not_owner` | permanent | `addr` = the draft | the session principal does not own the `draft` named — the unowned-draft edge, asked right after the draft's registration and ahead of the runs, the source gate and every readability question |
 | `bad_run` | permanent | — | a run's `origin` is not the document that minted its `i_start`, or `i_start` is not a content element |
 | `private_source_versionless` | permanent | — | `doc` is PRIVATE — a private document has no chain (PUB-2.9's flag-`true` face) |
 | `base_not_in_chain` | permanent | — | `base` is a document, or a member, outside `doc`'s chain |
 | `base_superseded` | permanent | — | `doc` already has a member and the shot names the memberless base (or none) |
 | `base_extent_too_large` | permanent | — | `base_extent` exceeds the base's arranged content count |
 | `withheld` | reorder | `addr` = the origin's document | a run's origin is not readable to the session principal |
-| `too_many_values` | permanent | — | the draft-native runs' widths, summed, exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values) — arithmetic on the request, asked ahead of existence |
+| `already_published` | permanent | `addr` = the member the words were published into | a draft-native run overlaps the `from` of a correspondence record homed in the draft (the twin fence, above) — read inside the transaction, after the shot's own table through the source gate and ahead of the count and the existence walk |
+| `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values; a position two runs name counts once) — arithmetic on the request, asked ahead of existence |
 | `dangling_source` | permanent | — | an address a run names holds no value |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget |
 
@@ -1885,6 +1935,13 @@ the origin withheld:
 * `base_not_in_chain` — "the base is not a version of ⟨D⟩."
 * `bad_run`, `base_extent_too_large` — the client's own arithmetic is
   wrong; there is no user-facing act to offer.
+* `already_published` — "these words are already published as version
+  ⟨k⟩ — reload this draft, and publish again only what you have changed
+  since" (the link-sets design's DRAFT face; the member `site.addr`
+  names is ⟨k⟩).
+* `not_owner` naming the draft — "⟨D⟩ is not yours — a publication
+  keeps its records in the draft it was staged in; publish from a draft
+  of your own" (DRAFT).
 * `private_source_versionless` on `publish` — the flag-`true` face of
   §The version-chain refusals: "⟨D⟩ is private — publishing means
   minting a separate edition."
@@ -2100,8 +2157,8 @@ resolves AFTER every token below.
    shot's own record class — one record per run of draft identity the
    shot re-minted, `from` the run's draft-native span and `to` the
    member's span it became, minted in the shot's own transaction and
-   homed in the draft; nothing deposits one by itself, and until the
-   shot's lane lands nothing deposits one at all. PERMANENT. It answers
+   homed in the draft (§The publish shot and head-float, the
+   correspondence records); nothing deposits one by itself. PERMANENT. It answers
    the owner of every home the write names; anyone else falls through to
    `execute`'s own `not_owner` (or `home_not_registered`), as for any
    link. Ahead of the board-state gate, beside the `replaces` fence, so
@@ -2778,8 +2835,13 @@ member the draft was staged from — `doc` itself while the chain is
 empty — with `base_extent` the number of content positions the staged
 copy took, both present or neither (neither is the birth version);
 `draft` names the staging draft whose runs are re-inserted as fresh
-identity under `doc`'s own I-space; each run is `origin`, `i_start`,
-`width`. Owner-gated, and the publish class's input from any session.
+identity under `doc`'s own I-space — each draft identity once per shot,
+the draft the caller's own, and for each piece re-inserted one
+correspondence record homed in the draft, in the shot's one commit; a
+run a record already names is refused `already_published` (§The publish
+shot and head-float, the correspondence records); each run is `origin`,
+`i_start`, `width`. Owner-gated, and the publish class's input from any
+session.
 On a CLAIMED board the shot carries the optional top-level `attest`
 member (signed ops; the object `insert` describes): the entry signature
 over the frame whose `doc` is the trunk document, `op` `publish` and
@@ -2818,7 +2880,10 @@ terms and its address, with no request in hand (§Namespace,
 `doc_metadata`). A REPLAYED shot verifies as it did and names a `base`
 its own commit left no longer the head, so the store's rule mints that
 base's DAUGHTER, never the trunk's next: the document's current text does
-not move.
+not move — where it re-inserts nothing from a draft; a replayed shot
+that does meets the twin fence instead, refused `already_published`
+with the member its words were published into, nothing minted (§The
+publish shot and head-float, the correspondence records).
 → `ack_addr` (the member's address). `content` and `gate` are defences,
 as at `insert` (§Rejection codes). This example publishes a draft
 staged off the second member: the edition's own three positions by
@@ -2937,7 +3002,6 @@ every value naming the kind, in this order:
 | code | op | disposition | when |
 | --- | --- | --- | --- |
 | `published_target` | `insert` | permanent | `doc` is a PUBLISHED document (or a member of one) the caller owns, WHATEVER the insert's `deposit` declaration: the declared deposit is M5's one door at a published target and it judges the TYPE, not the atom, so this arm is what refuses a cell declared under a deposit class — ahead of both refusals below, and the same code M5 answers an undeclared insert |
-| `not_owner`, `site.addr` the draft | `publish` | permanent | a draft-native run of the shot holds a value naming the kind and the caller does not OWN the draft (ω, exact — the same test `not_owner` makes of `doc`): a grantee's, an ancestor's or a descendant's shot naming the owner's draft re-mints no cell |
 | `credential_refused`, `detail` `unbound_cell` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal did not deposit under its own lease — THE BINDING's refusal (lane B), read off this principal's own lease record first and never off the file's presence: never deposited, lapsed past the horizon, another account's deposit of the same bytes, or a deposit whole on disk whose length the cell's `size` contradicts (the size check, at the same door); permanent for the request as sent — the act that exists is a PUT of the bytes, then the cell the PUT's answer spells |
 | `credential_refused`, `detail` `unknown_cell_schema` | `insert` into a draft; the owner's own `publish` | permanent | the value names the kind and parses under no schema this board reads — D13's halt at a permanent act, so no second schema ever finds an unbound cell planted under this one; the same bytes are never admitted, and the act that exists is a cell in the form above |
 | `credential_refused`, `detail` `lease_lapsed` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal DID deposit, and the deposit is gone: the lease lapsed within the horizon, or is live over a file that is not there or not whole — the binding's LAPSED arm, told apart from `unbound_cell` so a resume can be written against it; the act is a re-PUT of the bytes, which re-takes the lease. This build answers it too over a file whose size the store could not read, which is no absence — never admitted, and said on the operator stream — until the design gives a storage fault an answer of its own |
@@ -4669,12 +4733,12 @@ the position alone):
 <!-- wire: sse commit_event -->
 ```
 event: commit
-data: {"log_position":385}
+data: {"log_position":391}
 ```
 
 A worked exchange on a board the registry seed and the claim ceremony
-have left at 384 (§The change feed) — connect, receive the initial head
-(384), then a write elsewhere commits at 385:
+have left at 390 (§The change feed) — connect, receive the initial head
+(390), then a write elsewhere commits at 391:
 
 ```
 GET /events HTTP/1.1
@@ -4688,12 +4752,12 @@ Content-Type: text/event-stream
 Cache-Control: no-cache
 
 event: commit
-data: {"log_position":384}
+data: {"log_position":390}
 
 :ka
 
 event: commit
-data: {"log_position":385}
+data: {"log_position":391}
 ```
 
 Rules:
@@ -4740,8 +4804,12 @@ Each entry:
   SET with each document named once, so a same-home retraction carries
   one name); the **minted** document for
   `create_new_document`/`fork`/`version`,
-  and the minted MEMBER for `publish` (`1.0.1.0.1.2`, whose
-  trunk is the document it advances); `delegate` and `register_node`
+  and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
+  trunk is the document it advances) FIRST, then the staging draft where
+  the shot minted a correspondence record in it — `[member, D]`, the
+  member first by rule, the order a mirror reads the member by (§The
+  publish shot and head-float) — reduced to the member alone for a reader
+  who cannot read the draft; `delegate` and `register_node`
   touch no document and carry `[]`. A declared deposit into a
   published chain names the address the `insert` was written to,
   though the arrangement it lands in is the chain's head member (§The
@@ -4789,7 +4857,13 @@ Each entry:
   atom), the ceremony's rows, the head writer's `system` rows — and ABSENT
   on a row whose `docs` your class REDUCES (the straddle renderings
   above), the third absence: there the entry may well be signed, and its
-  verdict is undeterminable from your feed alone. On the
+  verdict is undeterminable from your feed alone — save a `publish` row
+  reduced from `[member, D]` to `[member]`, which KEEPS its `attest`: THE
+  EXEMPTION, a row keeping its signature where THE PREIMAGE NAMES NO
+  MEMBER THE REDUCTION WITHHOLDS — the shot signs the member's runs by
+  value and the base, never the draft, so a reader of the member
+  composes the body from public reads alone and the signature confirms
+  nothing about the draft. On the
   origin's own feed an absent `attest` above the claim on a row served
   WHOLE is a verdict — the entry is unsigned — so a party re-serving this
   feed carries the member as it received it and never drops it. On a bare
@@ -4886,7 +4960,10 @@ page is answered from:
   `attest` member — ABSENT, not `null` — the entry's signature being a
   function of the home the row withholds, which served would confirm a
   guess at that home; the row carries no `key` either, so its verdict is
-  undeterminable from your feed, and whole on the owner's.
+  undeterminable from your feed, and whole on the owner's. The one
+  reduced row that keeps its `attest` is a `publish`'s whose reduction
+  dropped the staging draft alone (the `attest` member above): its
+  preimage names no member the reduction withholds.
 
 A principal's page is its SUPPLEMENT merged over the published stream:
 its own account's draft writes, its ancestor accounts' and its
@@ -4960,39 +5037,43 @@ registry's seed (§Registry), the board's own daemon's at its first open:
 the system account's staging-draft mint at 1 and the one insert of every
 type's section into it at 4 — writes into the system account's private
 draft, masked at every class but the system's — then the publish of the
-member that holds the sections into `1.1.0.1.0.1` at 8 and one `defines`
-link per type, three records apart, to 365, each a public entry with
-`key: "system"`, so a fresh board stands at 365 before any client writes.
-The claim ceremony's five commits follow (§A first board): positions 367,
-368, 371, 374, 377 — the delegate, the home mint, the record insert, the
+member that holds the sections into `1.1.0.1.0.1` at 11 (seven records:
+the shot's four and its correspondence record's three, the record homed
+in the staging draft — the row's `docs` the member alone to every class
+but the system's, which sees the draft beside it) and one `defines`
+link per type, three records apart, to 368, each a public entry with
+`key: "system"`, so a fresh board stands at 368 before any client writes.
+The claim ceremony's five commits follow (§A first board): positions 370,
+371, 374, 377, 380 — the delegate, the home mint, the record insert, the
 genesis link, the claim link — and the claim's own step then writes the
 board's first head `H.1` (§The other endpoints, the published head
-document): the head record's insert into the staging draft at 380 — the
+document): the head record's insert into the staging draft at 383 — the
 draft stands from the seed, so the claim's head mints none — and the
-publish into `H` at 384, the publish a public entry with `key: "system"`,
+publish into `H` at 390, seven records with its correspondence record,
+the publish a public entry with `key: "system"`,
 the insert masked at every class but the system's. The flow behind the
 examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
 so every `key` reads `"bare"`, and no entry is signed, so no row carries
-`attest`): `delegate` commits at position 386 — its row carrying the
-minted pair —, the home mint at 387, a second — private — document at 388
+`attest`): `delegate` commits at position 392 — its row carrying the
+minted pair —, the home mint at 393, a second — private — document at 394
 (the account's doc 1 is born published, where bare writes are gated by
 design, so the flow's content goes to a draft document), a two-byte
-`insert` at 391 (one range mint, one stretch, one placement), `make_link`
-at 394 — its row carrying the minted link's address. The feed past the
-seed, the ceremony and its head, `GET /changes?since=384`, read AS
+`insert` at 397 (one range mint, one stretch, one placement), `make_link`
+at 400 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=390`, read AS
 PRINCIPAL 1 — the owner of the private document, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":386,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":387,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":388,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":391,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":394,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":394,"more":false}
+{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":394,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":397,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":400,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":400,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=384&limit=2`:
+The first page of the same feed, `GET /changes?since=390&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":386,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":387,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":387,"more":true}
+{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -5001,7 +5082,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":386,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":387,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":387,"more":false}
+{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the

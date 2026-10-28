@@ -558,7 +558,10 @@ fn under_prefix(prefix: &str, doc: &str) -> bool {
 /// everything but `time`, the one field a live daemon cannot reproduce; and
 /// ONE member the reduction itself withholds (mi7-E2; SO-I5 (e)): a row
 /// whose `docs` the class REDUCES carries no `attest`, whatever hand the
-/// fixture stated — the third absence, beside LOST and NEVER.
+/// fixture stated — the third absence, beside LOST and NEVER — save a
+/// `publish` row whose reduction dropped the staging draft alone, its member
+/// still first: THE EXEMPTION (the link-sets design §5.7), the preimage
+/// naming no member the reduction withholds, so the row keeps its `attest`.
 fn expected(
     log: &[Entry],
     drafts: &BTreeSet<String>,
@@ -582,12 +585,15 @@ fn expected(
             continue;
         }
         let whole = reduced.len() == e.docs.len();
+        // The exemption: a `publish` row still naming its member first keeps
+        // its `attest` though the draft beside it was reduced away.
+        let composable = e.op == "publish" && reduced.first() == e.docs.first();
         let mut entry = Map::new();
         entry.insert("at".into(), Value::Number(e.at.into()));
         entry.insert("docs".into(), Value::Array(reduced.into_iter().map(Value::String).collect()));
         entry.insert("op".into(), Value::String(e.op.into()));
         for (k, v) in &e.rest {
-            if k == "attest" && !whole {
+            if k == "attest" && !(whole || composable) {
                 continue; // the third absence: a reduced row serves no signature
             }
             entry.insert(k.clone(), v.clone());

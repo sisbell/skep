@@ -706,7 +706,6 @@ fn doc_states_the_media_cell_and_its_door() {
         "`1.1.0.1.0.1.0.3.89`",
         "crates/skepd/tests/it/fixtures/media/cells.json",
         "| `published_target` | `insert` | permanent |",
-        "| `not_owner`, `site.addr` the draft | `publish` | permanent |",
         "| `credential_refused`, `detail` `unbound_cell` |",
         "| `credential_refused`, `detail` `unknown_cell_schema` |",
         "no deposit of yours here is this picture's cell as written",
@@ -720,6 +719,10 @@ fn doc_states_the_media_cell_and_its_door() {
     assert!(
         !media.contains("this picture's bytes were not deposited here under your account"),
         "the face that said none was made is gone"
+    );
+    assert!(
+        !media.contains("| `not_owner`, `site.addr` the draft | `publish` | permanent |"),
+        "the draft-owner arm left the door: the shot's own admission asks it of every drafted shot"
     );
     let fixture: Value = serde_json::from_str(
         &std::fs::read_to_string(

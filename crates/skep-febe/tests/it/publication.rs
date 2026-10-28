@@ -8,14 +8,91 @@
 //! hands a client the answer set and never the index — every served row
 //! carrying the one issuer ω answers for its prefix, the guest answered empty
 //! without the index being walked, which a principal's answer walks once.
+//! And THE PUBLICATION's dispatch (the link-sets design §5.7): a drafted
+//! `publish` is M7's composite — the member and the shot's correspondence
+//! records in one commit, the twin fence lowered to `already_published`
+//! with the member as its site, and a same-id retry replaying its ack ahead
+//! of every fence.
 
 use std::collections::BTreeSet;
 
 use crate::common;
 
 use common::*;
-use skep_febe::{Op, RejectCode, SessionId, UniversalGrant, UniversalIndexRow};
+use skep_febe::{
+    Base, Op, RejectCode, Run, SessionId, Shot, ShotRun, UniversalGrant, UniversalIndexRow, FROM,
+    TO, TYPE,
+};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
+
+/// THE PUBLICATION THROUGH THE FRONT DOOR (the link-sets design §5.7): a
+/// drafted shot's dispatch is M7's composite — the member minted and, per
+/// piece of draft identity re-inserted, one correspondence record homed in
+/// the draft, in ONE commit (the ack's `at` is the log position after it,
+/// no commit between) — the record readable through `read_link`, typed the
+/// correspondence class, `from` the draft's run and `to` the member's. A
+/// second shot naming the same run is lowered `already_published`,
+/// permanent, `site.addr` the member, committing nothing. THE MEMO AHEAD OF
+/// THE FENCE: `execute` reads the retry memo before it dispatches, and the
+/// fence sits inside the transaction, so a retry of the committed shot
+/// under the same session and `id` replays its ack — the same member, the
+/// same position — and never meets the fence; a fresh `id` does.
+#[test]
+fn a_drafted_shot_mints_its_records_in_one_commit_and_the_fence_refuses_a_second_naming_the_run() {
+    let fx = setup();
+    let edition = create_edition(&fx);
+    let draft = create_doc(&fx);
+    let (draft_start, _) = insert3(&fx, &draft);
+    let shot = |width: u32| Shot {
+        base: None,
+        draft: Some(draft.clone()),
+        runs: vec![ShotRun {
+            origin: draft.clone(),
+            run: Run::new(draft_start.clone(), nat(width)).expect("a content run"),
+        }],
+    };
+    let before = fx.febe.log_position();
+    let (member, at) = ack_addr(ex_id(&fx.febe, fx.user, b"shot", Op::Publish { doc: edition.clone(), shot: shot(3) }));
+    assert_eq!(at, fx.febe.log_position(), "the ack names the one commit's position");
+    assert!(at > before);
+    // The record, in the draft's link subspace: the draft's first link.
+    let record = link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: under(&draft, &[0, 2, 1]) })).expect("the shot's record");
+    let one_span = |slot: usize| record.slot(slot).expect("a slot").spans().next().expect("one span").clone();
+    assert_eq!(one_span(FROM), Run::new(draft_start.clone(), nat(3)).expect("a run").iextent(), "`from` the draft's run");
+    assert_eq!(
+        one_span(TO),
+        Run::new(under(&edition, &[0, 1, 1]), nat(3)).expect("a run").iextent(),
+        "`to` the member's fresh run: the edition's content chain from its first address"
+    );
+    assert_eq!(
+        one_span(TYPE),
+        skep_febe::enc([&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 102, 1])]).spans().next().expect("a span").clone(),
+        "typed the correspondence class"
+    );
+
+    // The twin fence through the lowering: the code, the site, the class.
+    let before = fx.febe.log_position();
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { doc: edition.clone(), shot: Shot { base: Some(Base { member: member.clone(), extent: nat(3) }), ..shot(1) } }));
+    assert_eq!(rej.code, RejectCode::AlreadyPublished, "{rej}");
+    assert_eq!(rej.disposition, skep_febe::Disposition::Permanent);
+    assert_eq!(rej.site.expect("the member rides the site").addr.as_ref(), Some(&member));
+    assert_eq!(fx.febe.log_position(), before, "the fence commits nothing");
+
+    // The memo ahead of the fence: the same id replays the ack.
+    let (replayed, at2) = ack_addr(ex_id(&fx.febe, fx.user, b"shot", Op::Publish { doc: edition.clone(), shot: shot(3) }));
+    assert_eq!((replayed, at2), (member.clone(), at), "the committed shot's ack, replayed; no fence read");
+    assert_eq!(fx.febe.log_position(), before, "a replayed ack commits nothing");
+    // A fresh id meets the fence.
+    let rej = rejected(ex_id(&fx.febe, fx.user, b"shot-again", Op::Publish { doc: edition, shot: Shot { base: Some(Base { member: member.clone(), extent: 3u32.into() }), ..shot(3) } }));
+    assert_eq!(rej.code, RejectCode::AlreadyPublished, "{rej}");
+}
+
+/// The address `doc` followed by `tail`: `doc.0.1.1` for its first content
+/// element, `doc.0.2.1` for its first link.
+fn under(doc: &skep_address::Address, tail: &[u32]) -> skep_address::Address {
+    let comps = doc.tumbler().iter().cloned().chain(tail.iter().map(|&c| nat(c)));
+    skep_address::validate(skep_address::Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
+}
 
 /// The two publication reads that take a document (PUB-8.12, PUB-8.46),
 /// payload and all.

@@ -168,7 +168,6 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
         (MediaRefusal::UnknownCellSchema, Some("unknown_cell_schema")),
         (MediaRefusal::LeaseLapsed, Some("lease_lapsed")),
         (MediaRefusal::PublishedTarget, None),
-        (MediaRefusal::NotOwner { draft: draft.clone() }, None),
     ] {
         assert_eq!(refusal.token(), token);
         assert_eq!(refusal.disposition(), Disposition::Permanent);

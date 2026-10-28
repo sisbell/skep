@@ -124,9 +124,15 @@
 //! runs ([`Shot`], PUB-8.1) and never from any draft's arrangement. The
 //! document's own runs stay by reference, the staging draft's are re-inserted
 //! as fresh identity under the document's own I-space (the draft lying
-//! outside the chain, as [`Shot`] requires), and any other document's stay
-//! windows behind the source gate (PUB-2.40, PUB-6.23); the base's
-//! post-render deposits are carried after them (PUB-2.42, PUB-2.45). The
+//! outside the chain, as [`Shot`] requires; the caller owning it, the shot's
+//! own door asks), each draft identity once per shot, and any other
+//! document's stay windows behind the source gate (PUB-2.40, PUB-6.23); the
+//! base's post-render deposits are carried after them (PUB-2.42, PUB-2.45).
+//! The shot's body is a staging function, [`stage_publish`], under the one
+//! bound [`PublishWorld`], returning the member and the pairing of each
+//! minted draft piece with its fresh run ([`Pairing`]) — so a composite in
+//! the link store stages the shot and its correspondence records under one
+//! transaction. The
 //! birth version is minted by the same composite in either of two shapes:
 //! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the
 //! memberless document named as its own base, carrying the deposits it took
@@ -248,8 +254,8 @@ pub use error::{
     VersionError,
 };
 pub use ops::{
-    head_lock_key, shot_admission, stage_delete_at, stage_publish, stage_reinstate_at, Vstream,
-    MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    head_lock_key, shot_admission, stage_delete_at, stage_publish, stage_reinstate_at, MintedRun,
+    Pairing, PublishWorld, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};

@@ -1318,22 +1318,29 @@ fn a_staging_draft_its_principal_may_not_read_is_refused_unread_and_never_copied
     let before = head_position(port);
 
     // CARRIED, D the staging draft: the store would re-insert D's five values
-    // into F's next member. Refused, whatever is attached.
+    // into F's next member. Refused, whatever is attached — `not_owner`
+    // naming D, the shot's own draft slot (the link-sets design §5.7's
+    // unowned-draft edge: ω of the draft, asked right after its registration
+    // and ahead of every readability question — so ω speaks and the source
+    // gate's `withheld` never does), standing at or before the source gate,
+    // so the check passes the frame through to the store unread.
     let carried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(1), 5)]);
-    let withheld =
-        ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string());
+    let not_owner = ("not_owner".to_string(), "permanent".to_string());
     let required = ("credential_refused:attestation_required".to_string(), "reorder".to_string());
     let v = op_as_written(port, Some(&b_signed), &carried);
     assert_eq!(refusal(&v), required, "unattested: (1), ahead of the composition: {v}");
     let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcde"));
-    assert_eq!(refusal(&v), withheld, "signed over D's true bytes: {v}");
+    assert_eq!(refusal(&v), not_owner, "signed over D's true bytes: {v}");
+    assert_eq!(v["site"]["addr"].as_str(), Some(d.as_str()), "the draft, named: {v}");
     let v = op_with_publish_values(port, &b_signed, &carried, &per_byte("abcdz"));
-    assert_eq!(refusal(&v), withheld, "signed over a wrong guess: {v}");
-    // NOT CARRIED: D's sixth address — the store's own gate answers.
+    assert_eq!(refusal(&v), not_owner, "signed over a wrong guess: {v}");
+    // NOT CARRIED: D's sixth address — the same slot, ahead of the gate.
     let uncarried = publish_frame(&f, Some((&f, 5)), Some(&d), &[run(&d, &d_addr(6), 1)]);
     let v = op_as_written(port, Some(&b_signed), &uncarried);
     assert_eq!(refusal(&v), required, "unattested: {v}");
-    assert_withheld(&op_with_publish_values(port, &b_signed, &uncarried, &per_byte("f")), &d);
+    let v = op_with_publish_values(port, &b_signed, &uncarried, &per_byte("f"));
+    assert_eq!(refusal(&v), not_owner, "{v}");
+    assert_eq!(v["site"]["addr"].as_str(), Some(d.as_str()), "{v}");
     assert_eq!(head_position(port), before, "nothing committed: D's bytes reached no member of F");
 }
 
@@ -1504,13 +1511,21 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let signed = open_owner_session(port);
-    let d = draft_with(port, &signed, &"x".repeat(stretch as usize));
-    let first = format!("{d}.0.1.1");
-    // `count` draft-native values: the stretch, again and again, then a tail.
+    // The draft holds the budget's worth of values, so a shot at the budget
+    // names stored values alone and is walked; one past it names a position
+    // the draft does not hold, which the count — request arithmetic, asked
+    // ahead of existence — never learns.
+    let d = draft_with(port, &signed, &"x".repeat(budget as usize));
+    // `count` DISTINCT draft-native positions: the stretch, then the next
+    // stretch of the draft's content chain, and so on, then a tail — each
+    // run at its own offset, since the store counts a position once however
+    // many runs name it (each draft identity minted once per shot, the
+    // link-sets design §5.7).
     let shot_frame = |count: u64| {
-        let mut runs = vec![run(&d, &first, stretch); (count / stretch) as usize];
+        let at = |offset: u64| format!("{d}.0.1.{}", offset + 1);
+        let mut runs: Vec<String> = (0..count / stretch).map(|i| run(&d, &at(i * stretch), stretch)).collect();
         if !count.is_multiple_of(stretch) {
-            runs.push(run(&d, &first, count % stretch));
+            runs.push(run(&d, &at(count / stretch * stretch), count % stretch));
         }
         publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), Some(&d), &runs)
     };
@@ -1540,6 +1555,18 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
         refusal(&op_as_written(port, Some(&signed), &at_budget)),
         ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
         "at the budget the values are walked and the attest judged"
+    );
+    // The same stretch named past the budget's worth of times over: one
+    // thousand and twenty-four distinct positions, inside the budget — the
+    // count is of distinct positions, so the values are walked and the
+    // attest judged, never `too_many_values`.
+    let first = format!("{d}.0.1.1");
+    let repeated = vec![run(&d, &first, stretch); (budget / stretch) as usize + 1];
+    let repeated = with_unverifiable_attest(&publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), Some(&d), &repeated));
+    assert_eq!(
+        refusal(&op_as_written(port, Some(&signed), &repeated)),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "one stretch named many times over is one stretch to the count"
     );
     assert_eq!(head_position(port), before, "nothing committed");
 }
@@ -2238,12 +2265,21 @@ fn a_replayed_signed_share_grants_nothing_and_a_re_share_naming_the_standing_rev
 /// carrier): the `publish` signature binds the shot's base EXTENT and its
 /// runs in the address form, and `base` is derived from the minted member's
 /// address. D.1 is minted from the memberless edition; D.2 over D.1 by a
-/// signed request kept byte for byte; D.3 over D.2. The same D.2 request
-/// sent again verifies as it did — nothing it signed has moved — and its
-/// commit names `base` D.1, no longer the head, so the store's own rule
-/// mints D.1's DAUGHTER `D.1.1` (PUB-2.39), attested; the trunk's current
-/// version stays D.3, and every floating reader still answers D.3's text.
-/// The side-copy remains, as the ruling accepts.
+/// signed request kept byte for byte, re-inserting a draft's two; D.3 over
+/// D.2, by a signed request kept too, placing the edition's own by
+/// reference and nothing from a draft; D.4 over D.3. The D.3 request sent
+/// again verifies as it did — nothing it signed has moved — and its commit
+/// names `base` D.2, no longer the head, so the store's own rule mints
+/// D.2's DAUGHTER `D.2.1` (PUB-2.39), attested; the trunk's current version
+/// stays D.4, and every floating reader still answers D.4's text. The
+/// side-copy remains, as the ruling accepts. THE DRAFTED REPLAY IS THE
+/// EXCEPTION (the link-sets design §5.7, the twin fence): the D.2 request
+/// sent again verifies as it did and meets the fence — its draft-native
+/// run is one a correspondence record homed in the draft names — refused
+/// `already_published`, permanent, `site.addr` D.2, the member its words
+/// were published into, nothing minted: "a second shot of the same new
+/// words from a stale device, a restarted runtime or a raw op commits
+/// NOTHING, at EVERY principal".
 #[test]
 fn a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands() {
     let dir = tempdir().unwrap();
@@ -2267,28 +2303,42 @@ fn a_replayed_shot_mints_its_bases_daughter_and_the_current_version_stands() {
     assert_eq!(d2, format!("{edition}.2"), "the trunk's next: {v}");
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested");
     assert_eq!(text_of(port, None, &edition, 1, 5), "abcxy", "the head is D.2");
-    // D.3 over D.2.
+    // D.3 over D.2 — a records-less shot, kept verbatim too.
     let runs3 = shot_runs(port, Some(&signed), &d2, 1, 5);
-    let d3 = shot(port, &signed, &edition, Some((&d2, 5)), None, &runs3);
+    let d3_request = attach_attest(port, &signed, &publish_frame(&edition, Some((&d2, 5)), None, &runs3));
+    let d3 = acked_addr(&op_as_written(port, Some(&signed), &d3_request));
     assert_eq!(d3, format!("{edition}.3"));
+    // D.4 over D.3.
+    let runs4 = shot_runs(port, Some(&signed), &d3, 1, 5);
+    let d4 = shot(port, &signed, &edition, Some((&d3, 5)), None, &runs4);
+    assert_eq!(d4, format!("{edition}.4"));
     let head_image = image_runs(port, None, &edition, 1, 5);
-    assert_eq!(head_image, image_runs(port, None, &d3, 1, 5), "the head is D.3");
-    // THE REPLAY: D.2's request again, byte for byte.
-    let v = op_as_written(port, Some(&signed), &d2_request);
+    assert_eq!(head_image, image_runs(port, None, &d4, 1, 5), "the head is D.4");
+    // THE REPLAY: D.3's request again, byte for byte.
+    let v = op_as_written(port, Some(&signed), &d3_request);
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the replay commits: {v}");
     let replayed = acked_addr(&v);
-    assert_eq!(replayed, format!("{d1}.1"), "D.1's daughter, never D.4");
+    assert_eq!(replayed, format!("{d2}.1"), "D.2's daughter, never D.5");
     assert!(
         sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(),
         "the replayed signature verifies: nothing it bound has moved"
     );
     assert_eq!(text_of(port, None, &replayed, 1, 5), "abcxy", "the author's old content, at a second address");
-    assert_eq!(image_runs(port, None, &edition, 1, 5), head_image, "the current version is still D.3");
+    assert_eq!(image_runs(port, None, &edition, 1, 5), head_image, "the current version is still D.4");
     assert_eq!(
         expect_resp(&doc_metadata(port, None, &replayed), "doc_metadata")["placed"].as_str(),
         Some("5"),
         "the daughter carries the replayed shot's own terms"
     );
+    // THE DRAFTED REPLAY: D.2's request again, byte for byte — the fence.
+    let before = head_position(port);
+    let v = op_as_written(port, Some(&signed), &d2_request);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("already_published"), "the draft's words are published: {v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"]["addr"].as_str(), Some(d2.as_str()), "the member the words were published into: {v}");
+    assert_eq!(head_position(port), before, "nothing committed");
+    assert_eq!(image_runs(port, None, &edition, 1, 5), head_image, "the current version is still D.4");
 }
 
 /// THE FRAME IS CHECKABLE LATER (l6-A4; D25's (c′); fam1-L1; the base

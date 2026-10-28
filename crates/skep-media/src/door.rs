@@ -146,23 +146,19 @@ use crate::gate::{Binding, MediaGate};
 
 /// The door's answer: one variant per arm of the armed set.
 ///
-/// They come in the module's order. Two are M10's own codes, raised here on
+/// They come in the module's order. One is M10's own code, raised here on
 /// the daemon's channel with M10's classification; four are the daemon's
 /// tokens, riding `credential_refused` as every daemon-side refusal but the
 /// registry sequence's does (AUTH-3.53's family; wire.md §Credential
-/// refusals).
+/// refusals). The shot's draft-owner test — once this door's arm 2 — is
+/// M5's own now, at every drafted shot (the link-sets design §5.7's
+/// unowned-draft edge: `not_owner`, `site.addr` the draft, asked in the
+/// shot's admission right after the draft's registration), so this door
+/// walks the draft-native runs of a shot whose draft is the caller's own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaRefusal {
     /// Arm 1: `published_target`, M10's code, no site.
     PublishedTarget,
-    /// Arm 2: `not_owner`, M10's code, `site.addr` the draft.
-    ///
-    /// The draft is the document that failed the ω test, as every
-    /// `not_owner` names one.
-    NotOwner {
-        /// The staging draft, judged as the document it projects to.
-        draft: Address,
-    },
     /// Arm 3: the binding's refusal, token `unbound_cell`.
     ///
     /// A hash this principal did not deposit under its own lease, or a
@@ -193,7 +189,7 @@ impl MediaRefusal {
     /// the index's halt marks record it too.
     pub fn token(&self) -> Option<&'static str> {
         match self {
-            MediaRefusal::PublishedTarget | MediaRefusal::NotOwner { .. } => None,
+            MediaRefusal::PublishedTarget => None,
             MediaRefusal::UnboundCell => Some("unbound_cell"),
             MediaRefusal::UnknownCellSchema => Some(cell::UNKNOWN_SCHEMA_TOKEN),
             MediaRefusal::LeaseLapsed => Some("lease_lapsed"),
@@ -203,9 +199,9 @@ impl MediaRefusal {
 
     /// Returns the class of each refusal.
     ///
-    /// The two M10 codes are asked of M10's own classification
+    /// The M10 code is asked of M10's own classification
     /// ([`RejectCode::disposition`]) — the row `Rejection::classified`
-    /// applies to the reply built for them — so this answer and that reply
+    /// applies to the reply built for it — so this answer and that reply
     /// cannot drift. The tokens: permanent for three — for the request as
     /// sent no act admits it: a value under an unknown schema is never
     /// admitted, and an unbound or lapsed cell is admitted only after a PUT,
@@ -217,7 +213,6 @@ impl MediaRefusal {
     pub fn disposition(&self) -> Disposition {
         match self {
             MediaRefusal::PublishedTarget => RejectCode::PublishedTarget.disposition(),
-            MediaRefusal::NotOwner { .. } => RejectCode::NotOwner.disposition(),
             MediaRefusal::UnboundCell
             | MediaRefusal::UnknownCellSchema
             | MediaRefusal::LeaseLapsed => Disposition::Permanent,
@@ -393,20 +388,23 @@ fn insert_arm<W: FebeWorld>(
     named.find_map(|named| value_arm(named, media_gate, principal))
 }
 
-/// Answers the `publish` arms, 2 to 6.
+/// Answers the `publish` arms, 3 to 6.
 ///
 /// They are read only where M5's own admission of the shot passes it
-/// through the source gate, the staging draft is readable to the caller, and
+/// through the source gate — the draft's registration and ownership among
+/// its slots, so the draft here is the caller's own — the staging draft is
+/// readable to the caller, and
 /// the re-insert is within M5's budget — so every refusal the store gives
 /// ahead of its existence walk stands ahead of this door, in the store's own
 /// words, and the door reads no value the caller may not read. The
 /// draft-native runs are walked as the commit re-mints them
-/// ([`Shot::reinserted_runs`], M5's own family rule, in the commit's order),
-/// each position read by M4's point read — a one-byte piece inside a stretch
+/// ([`Shot::reinserted_runs`], M5's own family rule, in the commit's order —
+/// a run named twice walked twice, the verdict the same either way), each
+/// position read by M4's point read — a one-byte piece inside a stretch
 /// names no kind and is passed over by the classification itself; every
-/// value naming the kind is judged (M-I1 (a)) — the owner test once, at the
-/// first, then each value's own verdict in placement order, the first
-/// refusal answering. Per address still, bounded by the re-insert's cap.
+/// value naming the kind is judged (M-I1 (a)), each value's own verdict in
+/// placement order, the first refusal answering. Per address still, bounded
+/// by the re-insert's cap.
 fn publish_arm<W: FebeWorld>(
     world: &W,
     doc: &Address,
@@ -443,12 +441,11 @@ fn publish_arm<W: FebeWorld>(
     if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
         return None;
     }
-    // Every draft-native value naming the kind is judged (M-I1 (a)): the
-    // owner test once, at the first such value, ahead of every value's own
-    // verdict; then each value in placement order, the first refusal
-    // answering.
+    // Every draft-native value naming the kind is judged (M-I1 (a)): each
+    // value in placement order, the first refusal answering. The owner test
+    // the shot once took here is the admission's above — ω of the draft,
+    // asked of every drafted shot, cell or none.
     let content = world.content();
-    let mut owner_tested = false;
     // The runs the commit re-mints, in its order — M5's own family rule
     // (PUB-2.40): a run of the trunk's own I-space is placed by reference
     // and a window kept as one, and neither mints.
@@ -461,13 +458,6 @@ fn publish_arm<W: FebeWorld>(
             else {
                 continue;
             };
-            // Arm 2 — the owner test, ω exact, the same predicate as `doc`'s.
-            if !owner_tested {
-                if !caller.is_owner(world.m3(), &draft) {
-                    return Some(MediaRefusal::NotOwner { draft });
-                }
-                owner_tested = true;
-            }
             if let Some(refusal) = value_arm(named, media_gate, principal) {
                 return Some(refusal);
             }

@@ -69,14 +69,20 @@ pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
 /// once its first open has seeded the link-type registry (wire.md §Registry;
 /// `skep-core`'s `commits/registry.rs`) and before any client writes — the
 /// staging draft's mint (1 record), the one insert of every type's section
-/// (3), the one publish of the member that holds them (4), then one
-/// `defines` link per type of `skep-registry`'s vocabulary (3 each): `8 + 3
-/// × the vocabulary's size`. The ONE constant every position pin of a fresh
-/// board derives from — the ceremony's five commits land at `SEED_HEAD + 2`,
-/// `+ 3`, `+ 6`, `+ 9`, `+ 12` — held equal to what a fresh board counts by
-/// `vocabulary.rs`'s own test; a type the table gains moves it by three (the
-/// link-sets rows, eleven of them, moved it from 332 to 365).
-pub const SEED_HEAD: u64 = 365;
+/// (3: a range mint, a stretch, a placement), the one publish of the member
+/// that holds them (7: the sections' range mint and stretch re-inserted as
+/// fresh identity, the member's mint and its placing record — 4 — and the
+/// publication's one correspondence record homed in the staging draft, the
+/// link-sets design §5.7: its link mint, its deposit and its seat — 3),
+/// then one `defines` link per type of `skep-registry`'s vocabulary (3
+/// each): `11 + 3 × the vocabulary's size`, 119 types. The ONE constant
+/// every position pin of a fresh board derives from — the ceremony's five
+/// commits land at `SEED_HEAD + 2`, `+ 3`, `+ 6`, `+ 9`, `+ 12` — held equal
+/// to what a fresh board counts by `vocabulary.rs`'s own test; a type the
+/// table gains moves it by three (the link-sets rows, eleven of them, moved
+/// it from 332 to 365), and the seed's publish gaining its record moved it
+/// from 365 to 368 (lane S1).
+pub const SEED_HEAD: u64 = 368;
 
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key

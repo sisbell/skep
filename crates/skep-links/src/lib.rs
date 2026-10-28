@@ -70,11 +70,17 @@
 //! [`retraction_tuple`] and [`supersession_claim`] for the managed writes'
 //! tuples.
 //!
-//! One commons value is spelled here, beside the fences that read it: the
-//! `replaces` type ([`replaces_type`]; PUB-5.15), the authority successor
-//! whose one writer is [`LinkWriter::makelink_replacing`] — a type no
-//! registration holds, which every write that takes a caller's type slot
-//! refuses: exactly the slots [`is_replaces_class`] answers `true` for.
+//! Two commons values are spelled here, beside the fences that read them:
+//! the `replaces` type ([`replaces_type`]; PUB-5.15), the authority
+//! successor whose one writer is [`LinkWriter::makelink_replacing`], and
+//! the correspondence type ([`correspondence_type`]; the link-sets design
+//! §5.7), the publish shot's record whose one writer is
+//! [`LinkWriter::publication`] — the shot staged with one record per piece
+//! of draft identity it minted, in one transaction, the composite a
+//! staging function ([`stage_publication`], [`stage_correspondence`]) over
+//! M5's exported shot bound. Each a type no registration holds, which every
+//! write that takes a caller's type slot refuses: exactly the slots
+//! [`is_replaces_class`] and [`is_correspondence_class`] answer `true` for.
 
 #![forbid(unsafe_code)]
 
@@ -115,7 +121,7 @@ mod state;
 // `LinkWriter` and what its ops share — `emit_core`, the one deposit gate,
 // the lock set, the `replaces` and correspondence classes; one file per op
 // family beneath, each with the public function that builds what its ops
-// deposit.
+// deposit, and the publication's with the staging functions it composes.
 mod writes;
 
 pub use budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
@@ -127,7 +133,7 @@ pub use endset::{enc, Endset, IntoSpans, Link, Spans};
 pub use skep_arrangement::Caller;
 pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
-    RetractStaleError,
+    PublicationError, RetractStaleError,
 };
 pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
@@ -137,7 +143,8 @@ pub use state::{
 };
 pub use writes::{
     correspondence_type, emit_tuple, is_correspondence_class, is_replaces_class, replaces_type,
-    retraction_tuple, slot_endset, supersession_claim, Edit, LinkWriter, SlotArg, Visibility,
+    retraction_tuple, slot_endset, stage_correspondence, stage_publication, supersession_claim,
+    Edit, LinkWriter, SlotArg, Visibility,
 };
 
 /// The auto traits M7's slice promises without saying.
@@ -168,6 +175,7 @@ const _: fn() = || {
     owed::<NullifyError>();
     owed::<AssertSupError>();
     owed::<EditLinkError>();
+    owed::<PublicationError>();
     owed::<NotBh4>();
     owed::<Invalid>();
     owed::<RetractStaleError>();

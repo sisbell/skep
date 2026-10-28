@@ -224,8 +224,9 @@ fn a_board_seeded_under_a_smaller_table_gains_the_added_row_alone() {
     unhide_every_type_from_the_seed(dir.path());
     let (engine, wp) = open(dir.path());
     assert_eq!(seed(&wp), Seeded { written: 1, stood: table.len() - 1, refused: None });
-    // One insert, one publish, one link: 3 + 4 + 3 records.
-    assert_eq!(engine.kernel().current_seq().0, position + 10, "the addition's three commits");
+    // One insert, one publish with its correspondence record, one link:
+    // 3 + 7 + 3 records.
+    assert_eq!(engine.kernel().current_seq().0, position + 13, "the addition's three commits");
     let member = registry_head(&engine).expect("a member");
     assert_eq!(member.tumbler().to_string(), "1.1.0.1.0.1.2", "a second member");
     let snap = engine.kernel().snapshot();

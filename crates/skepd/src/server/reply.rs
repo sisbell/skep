@@ -3,7 +3,7 @@
 use serde_json::Value;
 use skep_address::Address;
 use skep_engine::HistoryError;
-use skep_febe::{Codec, FaultSite, OpKind, RejectCode, Rejection, Response};
+use skep_febe::{Codec, OpKind, RejectCode, Rejection, Response};
 use skep_media::door::MediaRefusal;
 use skep_media::serve::{Admitted, FetchRefusal, NamedBlob};
 use skep_util::json::obj;
@@ -845,11 +845,13 @@ pub(super) fn registry_refused(kind: OpKind, r: &RegistryRefusal) -> Reply {
 
 /// Returns the media door's refusal as its 200-enveloped rejection.
 ///
-/// The two arms that are M10's own codes (wire.md §Media) —
-/// `published_target`, and `not_owner` naming the draft — are built as M10
-/// builds them, [`Rejection::classified`] over the flat code (its
-/// disposition and standing detail M10's own, so the bytes are the store's
-/// bytes) and marshaled by the one codec; the four that are the daemon's
+/// The one arm that is M10's own code (wire.md §Media) —
+/// `published_target` — is built as M10 builds it, [`Rejection::classified`]
+/// over the flat code (its disposition and standing detail M10's own, so the
+/// bytes are the store's bytes) and marshaled by the one codec; the shot's
+/// draft-owner `not_owner` is the store's own now, M5's admission answering
+/// it at every drafted shot (the link-sets design §5.7), so no arm of this
+/// door names the draft. The four that are the daemon's
 /// tokens ride `credential_refused` as every daemon-side refusal but the
 /// registry sequence's does ([`credential_refused`]'s row), the token and
 /// the class the refusal's own ([`MediaRefusal::token`],
@@ -870,11 +872,6 @@ pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
         MediaRefusal::PublishedTarget => {
             Rejection::classified(kind, RejectCode::PublishedTarget, None)
         }
-        MediaRefusal::NotOwner { draft } => Rejection::classified(
-            kind,
-            RejectCode::NotOwner,
-            Some(FaultSite { addr: Some(draft), ..FaultSite::default() }),
-        ),
         // All four carry a token: answered above.
         MediaRefusal::UnboundCell
         | MediaRefusal::UnknownCellSchema

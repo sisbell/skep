@@ -3,11 +3,16 @@
 //! The member is born published in one commit from the runs the client
 //! supplied. Here too are its admission ([`shot_admission`]), its checks
 //! through the source gate, offered to a door as a query — and `SettledRun`,
-//! the one value its source gate, existence check and placement each walk.
+//! the one value its source gate, existence check and placement each walk;
+//! [`PublishWorld`], the bound the shot's staging needs, exported so a
+//! composite in another crate names it and nothing beneath it; and
+//! [`MintedRun`], the pairing of a draft-native run with the fresh run the
+//! shot minted for it, which [`stage_publish`] returns beside the member.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use num_traits::Zero;
 use skep_address::{Address, Nat};
 use skep_content::{ContentStretch, ContentWrite, HasContent, Piece, Val};
 use skep_kernel::{Seq, Staging, TxnError, WorldState};
@@ -45,10 +50,168 @@ enum Part {
     Atom(Val),
 }
 
+/// The world the shot's staging needs: what [`stage_publish`] reads and the
+/// records it stages, as one name.
+///
+/// It stands for `publish`'s own bound — M3 read (the registration, the
+/// mints), M4 read (the existence walk, the re-insert's bytes) and M5 read
+/// (the base's tail, the member's placement), with the records the staging
+/// pushes liftable into the world's own: an M3 mint, a content write or
+/// stretch, an M5 placement. Blanket-implemented, so every world meeting it
+/// has it — the engine's, and any test world of the three slices. Exported so
+/// a composite that stages the shot inside a transaction of its own in
+/// another crate (the link store's publication, which mints the shot's
+/// correspondence records beside the member — the link-sets design §5.7)
+/// names this one bound and takes no edge to the content crate for it.
+pub trait PublishWorld:
+    WorldState<Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>>
+    + HasM5
+    + HasM3
+    + HasContent
+{
+}
+impl<W> PublishWorld for W where
+    W: WorldState<Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>>
+        + HasM5
+        + HasM3
+        + HasContent
+{
+}
+
+/// One piece of draft identity the shot minted, beside the fresh run it became.
+///
+/// `from` is the piece of a draft-native run the shot met for the first
+/// time — a whole run, or the part of one no earlier run of the shot had
+/// minted — and `to` the run of fresh identity it was re-inserted as, under
+/// the content chain of the document the shot names: the two of one width,
+/// so a position of either maps onto the other by its offset (the link-sets
+/// design §5.5's "`from` and `to` of one width"). What the correspondence
+/// record homed in the draft names as its two spans, and what a re-window of
+/// the draft at the run's kept place places there.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MintedRun {
+    /// The draft-native piece, at the draft's own addresses.
+    pub from: Run,
+    /// The fresh run it became, at the edition's.
+    pub to: Run,
+}
+
+/// The pairing [`stage_publish`] returns: every piece of draft identity the
+/// shot minted, in minting order — `runs`' order, each run's pieces in
+/// I-order — each beside the fresh run it became.
+///
+/// A list and not an index into the member's runs, because the placement
+/// coalesces: the member holds I-adjacent fresh runs as one run, and a
+/// by-reference run beside a fresh one merges with it where they are
+/// adjacent, so the member's `k`-th run is not the `k`-th run of the request
+/// once any two coalesce, and a caller pairing by index would pair a draft
+/// run with a run that holds other identity too (the S-gate's ruling). Empty
+/// for a shot that names no draft or re-inserts nothing.
+pub type Pairing = Vec<MintedRun>;
+
+/// How one draft-native run is placed, piece by piece, once the identities
+/// the shot already minted are taken out of it.
+///
+/// EACH DRAFT IDENTITY ONCE PER SHOT (the link-sets design §5.7): a position
+/// an earlier run of the shot minted is placed by reference to the fresh run
+/// it became; the rest is minted. A run that overlaps an earlier one in part
+/// splits into the two kinds, in I-order.
+enum Portion {
+    /// A piece an earlier run minted: the fresh run to place by reference.
+    Referenced(Run),
+    /// A piece no earlier run minted: the draft-native run to re-insert.
+    Unminted(Run),
+}
+
+/// The draft identities this shot has minted so far, with where each landed.
+///
+/// Keyed by the content chain the draft identity lies on — every component
+/// of its address but the ordinal — and then by the piece's first ordinal:
+/// its width and the fresh run's start. The pieces of one chain never
+/// overlap, since each was minted for exactly the positions no earlier piece
+/// held, so the pieces a run overlaps are contiguous in ordinal order and
+/// one range walk finds them: `O(log n)` per run plus its overlaps, `n` the
+/// pieces minted so far, bounded by the request's runs.
+#[derive(Default)]
+struct MintedIdentity {
+    chains: BTreeMap<Vec<Nat>, BTreeMap<Nat, (Nat, Address)>>,
+}
+
+/// Returns a content address as its chain (every component but the last)
+/// and its ordinal — the key [`MintedIdentity`] files a piece under.
+fn chain_and_ordinal(a: &Address) -> (Vec<Nat>, Nat) {
+    let mut chain: Vec<Nat> = a.tumbler().iter().cloned().collect();
+    let ord = chain.pop().expect("a tumbler is nonempty");
+    (chain, ord)
+}
+
+impl MintedIdentity {
+    /// Returns how `run`, a draft-native run, is placed: by reference where
+    /// an earlier run of the shot minted the identity, minted elsewhere —
+    /// the portions in I-order, which is the order they take in the member.
+    fn portions_of(&self, run: &Run) -> Vec<Portion> {
+        let (chain, start) = chain_and_ordinal(run.i_start());
+        let reach = &start + run.width();
+        // The pieces minted on this chain that overlap `[start, reach)`,
+        // ascending: those starting below the reach, walked back while they
+        // still reach past the start — contiguous, the pieces being disjoint.
+        let mut covered: Vec<(Nat, Nat, Address)> = Vec::new(); // (lo, hi, fresh at lo)
+        if let Some(pieces) = self.chains.get(&chain) {
+            for (first, (width, fresh)) in pieces.range(..reach.clone()).rev() {
+                let piece_reach = first + width;
+                if piece_reach <= start {
+                    break;
+                }
+                let lo = if *first > start { first.clone() } else { start.clone() };
+                let hi = if piece_reach < reach { piece_reach } else { reach.clone() };
+                let fresh_at_lo =
+                    Run::new(fresh.clone(), width.clone()).expect("a minted piece's fresh run").addr_at(&(&lo - first));
+                covered.push((lo, hi, fresh_at_lo));
+            }
+        }
+        covered.reverse();
+        let mut portions = Vec::new();
+        let mut cursor = start.clone();
+        let piece = |lo: &Nat, hi: &Nat| -> Run {
+            Run::new(run.addr_at(&(lo - &start)), hi - lo)
+                .expect("a nonempty piece of a run starts at a full element position")
+        };
+        for (lo, hi, fresh_at_lo) in covered {
+            if cursor < lo {
+                portions.push(Portion::Unminted(piece(&cursor, &lo)));
+            }
+            portions.push(Portion::Referenced(
+                Run::new(fresh_at_lo, &hi - &lo).expect("a piece of a fresh run is a run"),
+            ));
+            cursor = hi;
+        }
+        if cursor < reach {
+            portions.push(Portion::Unminted(piece(&cursor, &reach)));
+        }
+        portions
+    }
+
+    /// Notes that `piece`, a draft-native run no earlier run had minted, was
+    /// re-inserted as `fresh` — the runs its re-insert allocated, in order,
+    /// of the piece's width together — and appends the pairing of each.
+    fn note(&mut self, piece: &Run, fresh: &[Run], pairing: &mut Pairing) {
+        let (chain, first) = chain_and_ordinal(piece.i_start());
+        let pieces = self.chains.entry(chain).or_default();
+        let mut offset = Nat::zero();
+        for to in fresh {
+            let from = Run::new(piece.addr_at(&offset), to.width().clone())
+                .expect("a piece of a draft-native run is a run");
+            pieces.insert(&first + &offset, (to.width().clone(), to.i_start().clone()));
+            offset = &offset + to.width();
+            pairing.push(MintedRun { from, to: to.clone() });
+        }
+        debug_assert_eq!(&offset, piece.width(), "the fresh runs are the piece's width together");
+    }
+}
+
 impl<W> Vstream<'_, W>
 where
-    W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (writes, and the shot's byte reads) + M5
-    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>, // stages M3Rec + ContentWrite/ContentStretch + M5Rec
+    W: PublishWorld, // reads M3 (registration, mints) + M4 (writes, and the shot's byte reads) + M5; stages M3Rec + ContentWrite/ContentStretch + M5Rec
 {
     /// Appends the next member of `doc`'s chain, born published, in one commit.
     ///
@@ -126,21 +289,33 @@ where
     /// **Where the fresh identity lands** (PUB-2.40), stated because a reader
     /// the ack does not tell reads it back. The values
     /// [`Shot::reinserted_runs`](crate::Shot::reinserted_runs) names —
-    /// [`Shot::reinserted_values`](crate::Shot::reinserted_values) of them, a
-    /// run named twice minted twice — are minted in that order, one after
-    /// another, under the content chain of the document `doc` projects to
-    /// (the member's own trunk), and the commit mints nothing else under that
-    /// content chain: the member itself is minted on a version chain. Each
-    /// content mint takes the content chain's next ordinal
-    /// (`M3State::mint_content`, `M3State::mint_content_range`), the fact
-    /// INSERT's one run rests on too, so in the world the commit leaves they
-    /// are that content chain's last `reinserted_values()` addresses, just
-    /// below its frontier (`M3State::next_content_address`) — where
+    /// [`Shot::reinserted_values`](crate::Shot::reinserted_values) of them,
+    /// EACH DRAFT IDENTITY ONCE PER SHOT (the link-sets design §5.7): in
+    /// `runs`' order the shot mints a draft-native position the first time it
+    /// meets it and places every later occurrence of it, whole or in part, by
+    /// reference to the fresh identity it minted, a run overlapping an
+    /// earlier one in part splitting into a referenced piece and a minted
+    /// piece — are minted in that order, one after another, under the
+    /// content chain of the document `doc` projects to (the member's own
+    /// trunk), and the commit mints nothing else under that content chain:
+    /// the member itself is minted on a version chain, and the
+    /// correspondence records a composite stages beside the shot are link
+    /// mints in the draft. Each content mint takes the content chain's next
+    /// ordinal (`M3State::mint_content`, `M3State::mint_content_range`), the
+    /// fact INSERT's one run rests on too, so in the world the commit leaves
+    /// they are that content chain's last `reinserted_values()` addresses,
+    /// just below its frontier (`M3State::next_content_address`) — where
     /// skep-media's cell index reads them, off the commit's own world, to
     /// enter any reference cell among them. A later content mint under that
-    /// content chain moves its frontier past them.
+    /// content chain moves its frontier past them. So one draft identity has
+    /// one fresh identity in the member, and words the draft holds as one
+    /// text stay one text in the edition; the signed body is unchanged, a
+    /// value stretch being spelled by its values however its positions were
+    /// placed. Which draft piece became which fresh run is
+    /// [`stage_publish`]'s to return ([`Pairing`]).
     /// `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
-    /// pins the order, the content chain and the "nothing else", and
+    /// pins the order, the content chain, the once-per-identity rule and the
+    /// "nothing else", and
     /// `a_shot_judges_every_address_it_names_as_the_document_it_projects_to`
     /// the content chain of a shot a member names.
     ///
@@ -227,10 +402,16 @@ where
     ///
     /// Each refusal comes as `TxnError::Rejected`, in this order (which error
     /// wins), PUB-6.36's slots: `DocNotRegistered` → `NotOwner` (slot 1, ω on
-    /// the address named — the only question the shot asks of its caller, and
-    /// one [`Caller::System`] passes) → registration (slot 3):
-    /// `SourceNotRegistered` for the base, then the document the draft
-    /// projects to (PUB-2.15), then each run's origin document in run order,
+    /// the address named — a question [`Caller::System`] passes) →
+    /// registration (slot 3): `SourceNotRegistered` for the base, then the
+    /// document the draft projects to (PUB-2.15) — and, right after the
+    /// draft's registration, THE UNOWNED-DRAFT EDGE (the link-sets design
+    /// §5.7): whenever `draft` is named the caller must own the document it
+    /// projects to, else `NotOwner` carrying that document, ahead of every
+    /// readability question, so ω speaks and readability never does — a
+    /// readable draft of a sub-account's or a grantor's is refused here too,
+    /// the shot's records being homed in the draft — then each run's origin
+    /// document in run order,
     /// each run's shape (`BadRun`) settled as its origin document is derived →
     /// `PrivateSourceVersionless` (slot 5: a private document has no chain,
     /// PUB-2.9's `true` face) → the base's shape: `BaseNotInChain` →
@@ -278,9 +459,10 @@ where
         // The attested arm (signed ops): `transact` itself where this handle
         // carries no attestation, else the same commit with its marker's
         // signature slot filled. The body is `stage_publish`, which this
-        // method opens the transaction for.
+        // method opens the transaction for; the pairing it returns beside the
+        // member is a composite's input, not this op's answer.
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            stage_publish(stg, caller, doc, shot, readable)
+            stage_publish(stg, caller, doc, shot, readable).map(|(member, _pairing)| member)
         })
     }
 }
@@ -290,19 +472,28 @@ where
 /// It is [`Vstream::publish`]'s closure as a function over a caller-opened
 /// [`Staging`]: the shot's admission, the re-insert's count, the existence
 /// walk, the placement — the draft-native runs re-inserted as fresh identity,
-/// the base's tail carried — the member's mint and its one
-/// [`M5Rec::ShotPlace`], every check in the order `publish` states, every
-/// refusal and every record pushed `publish`'s own. Returns the member's
-/// address; the commit's `Seq` is the transaction's to report. Offered so a
-/// caller can compose the shot with other stagings under ONE transaction,
-/// which the public ops cannot, each opening a transaction of its own and the
-/// kernel refusing a nested one: the link-sets design's one commit, the
-/// member minted and the draft re-windowed at its kept places — "a
-/// `reinstate` of the fresh I-run at the run's place and a `delete` of the
-/// draft-native run, staged in the same commit and applied in turn so
-/// positions stay true" ([`stage_reinstate_at`](crate::stage_reinstate_at),
+/// each draft identity once, the base's tail carried — the member's mint and
+/// its one [`M5Rec::ShotPlace`], every check in the order `publish` states,
+/// every refusal and every record pushed `publish`'s own. Returns the
+/// member's address and THE PAIRING ([`Pairing`]): every piece of draft
+/// identity the shot minted, in minting order, beside the fresh run it
+/// became — the correspondence a composite records in the draft, one record
+/// per minted piece (the link-sets design §5.5, §5.7), and what a re-window
+/// of the draft at a run's kept place places there. A list, because the
+/// member's runs coalesce and an index into them pairs nothing once two
+/// have; empty where the shot names no draft or re-inserts nothing. The
+/// commit's `Seq` is the transaction's to report. Offered so a caller can
+/// compose the shot with other stagings under ONE transaction, which the
+/// public ops cannot, each opening a transaction of its own and the kernel
+/// refusing a nested one: the link-sets design's one commit, the member
+/// minted with its correspondence records and the draft re-windowed at its
+/// kept places — "a `reinstate` of the fresh I-run at the run's place and a
+/// `delete` of the draft-native run, staged in the same commit and applied
+/// in turn so positions stay true"
+/// ([`stage_reinstate_at`](crate::stage_reinstate_at),
 /// [`stage_delete_at`](crate::stage_delete_at)) — a transaction that "either
-/// stands whole or not at all" (the link-sets design, §5.7).
+/// stands whole or not at all" (the link-sets design, §5.7). Its bound is
+/// [`PublishWorld`], so such a caller names one trait.
 ///
 /// It reads the transaction's working world, `stg.working()` — the admission
 /// and the base's tail off its registry and arrangement slices, the existence
@@ -329,17 +520,13 @@ where
 /// # Panics
 ///
 /// As `publish`: where `readable` calls `transact` on the caller's kernel.
-pub fn stage_publish<W>(
+pub fn stage_publish<W: PublishWorld>(
     stg: &mut Staging<W>,
     caller: Caller,
     doc: &Address,
     shot: &Shot,
     readable: &dyn Fn(&W, &Address) -> bool,
-) -> Result<Address, PublishError>
-where
-    W: WorldState + HasM5 + HasM3 + HasContent,
-    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>,
-{
+) -> Result<(Address, Pairing), PublishError> {
     let trunk = trunk_of(doc);
     // The values the shot re-inserts: request arithmetic, reading no world —
     // `Shot::reinserted_values`, the count's one spelling, which a caller
@@ -402,68 +589,29 @@ where
     let placed = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
     // The member's placement: the client's runs in order — the
     // draft-native ones re-inserted as fresh identity under the
-    // document's own I-space — then the base's post-render deposits.
+    // document's own I-space, each draft identity once — then the base's
+    // post-render deposits.
     let mut placement: Vec<Run> = Vec::new();
+    let mut minted = MintedIdentity::default();
+    let mut pairing: Pairing = Vec::new();
     for SettledRun { run, origin_doc } in supplied {
         if draft_native(&origin_doc) {
-            // The walk completes before the first stage ([`Part`]):
-            // the run's pieces, read by M4's run read off the working
-            // slice, are copied into an owned, ordered list — every
-            // `Bytes` piece and every one-byte `Value` extending the
-            // pending byte-run, every other `Value` (an atom of two
-            // bytes or more, or an empty one) closing it and taking
-            // its `Val` by clone — `covered` is asked, the borrow of
-            // the working slice ends, and only then is each part
-            // staged in the list's order: a maximal byte-run as one
-            // stretch under the trunk's chain, each other value as
-            // its own mint and write. So a draft typed in bursts and
-            // published unscattered is one stretch in the member, and
-            // one whose edits scattered its arrangement into K runs
-            // costs K.
-            let parts = {
-                let content = stg.working().content();
-                let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
-                let mut parts: Vec<Part> = Vec::new();
-                let mut pending: Vec<u8> = Vec::new();
-                for piece in pieces.by_ref() {
-                    match piece {
-                        Piece::Bytes(bytes) => pending.extend_from_slice(bytes),
-                        // The length test: a one-byte value is a
-                        // per-byte value, and joins the run.
-                        Piece::Value(v) if v.len() == 1 => {
-                            pending.extend_from_slice(v.as_bytes());
-                        }
-                        Piece::Value(v) => {
-                            if !pending.is_empty() {
-                                parts.push(Part::Run(std::mem::take(&mut pending)));
-                            }
-                            parts.push(Part::Atom(v.clone()));
+            // EACH DRAFT IDENTITY ONCE PER SHOT: the run split by the
+            // identities this shot already minted, each referenced piece
+            // placed as the fresh run it became and each unminted piece
+            // re-inserted, then noted with the fresh runs it became —
+            // one pairing entry per fresh run, which is one per piece on
+            // the frontier allocator M3 has.
+            for portion in minted.portions_of(run) {
+                match portion {
+                    Portion::Referenced(fresh) => extend_or_push_run(&mut placement, fresh),
+                    Portion::Unminted(piece) => {
+                        let fresh = reinsert(stg, &trunk, &piece)?;
+                        minted.note(&piece, &fresh, &mut pairing);
+                        for run in fresh {
+                            extend_or_push_run(&mut placement, run);
                         }
                     }
-                }
-                assert!(
-                    pieces.covered(),
-                    "the existence check found a value at every address of every run, and M4's fold only adds"
-                );
-                if !pending.is_empty() {
-                    parts.push(Part::Run(pending));
-                }
-                parts
-            };
-            for part in parts {
-                match part {
-                    Part::Run(bytes) => allocate_stretch_for_placement::<_, PublishError>(
-                        stg,
-                        &trunk,
-                        Arc::from(bytes),
-                        &mut placement,
-                    )?,
-                    Part::Atom(value) => allocate_for_placement::<_, PublishError>(
-                        stg,
-                        &trunk,
-                        value,
-                        &mut placement,
-                    )?,
                 }
             }
         } else {
@@ -503,7 +651,86 @@ where
         }
         .into(),
     );
-    Ok(member)
+    Ok((member, pairing))
+}
+
+/// Re-inserts one unminted piece of a draft-native run as fresh identity
+/// under `trunk`'s content chain, and returns the fresh runs it became.
+///
+/// The walk completes before the first stage ([`Part`]): the piece's
+/// values, read by M4's run read off the working slice, are copied into an
+/// owned, ordered list — every `Bytes` piece and every one-byte `Value`
+/// extending the pending byte-run, every other `Value` (an atom of two bytes
+/// or more, or an empty one) closing it and taking its `Val` by clone —
+/// `covered` is asked, the borrow of the working slice ends, and only then
+/// is each part staged in the list's order: a maximal byte-run as one
+/// stretch under the trunk's chain, each other value as its own mint and
+/// write. So a draft typed in bursts and published unscattered is one
+/// stretch in the member, and one whose edits scattered its arrangement
+/// into K runs costs K. The fresh runs come back as the two allocation
+/// steps accumulated them — one run, the addresses being I-adjacent under
+/// one frontier — of the piece's width together.
+///
+/// # Errors
+///
+/// `Mint` where a content mint is refused, `Content` where a write is — the
+/// two steps' own, in their order.
+///
+/// # Panics
+///
+/// Panics where the piece's addresses are not all held by M4, which the
+/// existence walk ahead of every re-insert rules out and M4's add-only fold
+/// keeps ruled out.
+fn reinsert<W: PublishWorld>(
+    stg: &mut Staging<W>,
+    trunk: &Address,
+    piece: &Run,
+) -> Result<Vec<Run>, PublishError> {
+    let parts = {
+        let content = stg.working().content();
+        let mut pieces = content.pieces(piece.i_start().tumbler(), piece.width());
+        let mut parts: Vec<Part> = Vec::new();
+        let mut pending: Vec<u8> = Vec::new();
+        for value in pieces.by_ref() {
+            match value {
+                Piece::Bytes(bytes) => pending.extend_from_slice(bytes),
+                // The length test: a one-byte value is a per-byte value,
+                // and joins the run.
+                Piece::Value(v) if v.len() == 1 => {
+                    pending.extend_from_slice(v.as_bytes());
+                }
+                Piece::Value(v) => {
+                    if !pending.is_empty() {
+                        parts.push(Part::Run(std::mem::take(&mut pending)));
+                    }
+                    parts.push(Part::Atom(v.clone()));
+                }
+            }
+        }
+        assert!(
+            pieces.covered(),
+            "the existence check found a value at every address of every run, and M4's fold only adds"
+        );
+        if !pending.is_empty() {
+            parts.push(Part::Run(pending));
+        }
+        parts
+    };
+    let mut fresh: Vec<Run> = Vec::new();
+    for part in parts {
+        match part {
+            Part::Run(bytes) => allocate_stretch_for_placement::<_, PublishError>(
+                stg,
+                trunk,
+                Arc::from(bytes),
+                &mut fresh,
+            )?,
+            Part::Atom(value) => {
+                allocate_for_placement::<_, PublishError>(stg, trunk, value, &mut fresh)?;
+            }
+        }
+    }
+    Ok(fresh)
 }
 
 /// Returns the shot's admission: `publish`'s checks through its source gate.
@@ -590,6 +817,15 @@ fn admit<'s, W: HasM3 + HasM5>(
     if let Some(draft_doc) = shot.draft_document() {
         if !m3.is_registered_document(&draft_doc) {
             return Err(PublishError::SourceNotRegistered);
+        }
+        // THE UNOWNED-DRAFT EDGE (the link-sets design §5.7): whenever a
+        // draft is named the caller owns it — ω exact, the predicate slot 1
+        // asks of `doc` — asked right after the draft's registration and
+        // ahead of every readability question, so ω speaks and readability
+        // never does; a draft-native run present or not, the shot's records
+        // being homed in the draft. `System` passes, as it passes slot 1.
+        if !caller.is_owner(m3, &draft_doc) {
+            return Err(PublishError::NotOwner(draft_doc));
         }
     }
     // Each run settled beside its origin document (`SettledRun`): derived

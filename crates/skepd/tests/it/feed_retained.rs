@@ -49,8 +49,10 @@ use crate::common::{
     CLAIMANT_PRINCIPAL,
 };
 
-/// The registry seed's first public row: the member's publish at 8.
-const SEED_PUBLISH_AT: u64 = 8;
+/// The registry seed's first public row: the member's publish at 11 (seven
+/// records past the sections' insert: the shot's four and its
+/// correspondence record's three, lane S1).
+const SEED_PUBLISH_AT: u64 = 11;
 
 /// The window K2 and K3 set for their boards, in positions.
 const SMALL_WINDOW: u64 = 64;

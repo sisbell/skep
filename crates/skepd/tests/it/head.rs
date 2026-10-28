@@ -16,7 +16,7 @@
 //! returns a board whose `H.1` the claim's own step wrote, naming the claim's
 //! position, so the first head a test FORCES here is `H.2`, every `prev`
 //! chain starts at the claim's head, and the cadence's counters start from it;
-//! the positions the determinism pins name include `H.1`'s eight records. The
+//! the positions the determinism pins name include `H.1`'s ten records. The
 //! claim's own rule — one head, at the claim, the cadence counting from it, and
 //! none on the unclaimed board — has its own cells under (vi).
 
@@ -27,8 +27,9 @@ use std::path::Path;
 use common::{
     acked_addr, acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
     device_key, doc_metadata, expect_resp, get, head_position, http, json, op, op_as_written,
-    open_session, open_signed_session, spawn, spawn_seeded, spawn_unclaimed, typed_link_frame,
-    verdict, Sse, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, SEED_HEAD, T_GRANT,
+    open_session, open_signed_session, read_link, region, spawn, spawn_seeded, spawn_unclaimed,
+    typed_link_frame, verdict, Sse, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, SEED_HEAD,
+    T_GRANT,
 };
 use serde_json::Value;
 use skep_kernel::Step;
@@ -871,7 +872,9 @@ fn the_hour_since_the_last_head_survives_a_restart() {
 /// the loss, a restart, and the next head comes no sooner than the 17th
 /// commit after it and no later than the 24th — never at the 64th, where a
 /// resume that started the count at zero would put it, 104 commits past the
-/// last head. The heads' own chain is the journal's and survives the loss:
+/// last head. (The head's own records are ten since lane S1, the publish
+/// carrying its correspondence record — the bounds below read the constant.)
+/// The heads' own chain is the journal's and survives the loss:
 /// the new head's `prev` is the head before it.
 #[test]
 fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
@@ -910,8 +913,8 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
     }
     let (i, at) = next.expect("a head by the 24th commit after the loss: the seq counts");
     assert!(
-        i >= 64 - 40 - 7 - FIRST_TIME_RECORD_RECORDS,
-        "early by at most the head's own seven records and the first time record's eight, \
+        i >= 64 - 40 - H1_RECORDS - FIRST_TIME_RECORD_RECORDS,
+        "early by at most the head's own ten records and the first time record's eleven, \
          never more: the head came at +{i}"
     );
     let rec = expect_latest_head(port);
@@ -1104,6 +1107,63 @@ fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
         Some("doc_not_registered"),
         "the heads minted no second draft under the system account: {next}"
     );
+    sd.shutdown();
+}
+
+/// THE PRODUCERS SHOT TWICE FROM ONE DRAFT (the link-sets design §5.7; Lane
+/// S's acceptance): every head and every time record is a publish shot from
+/// the staging draft that re-inserts the atom just inserted, so each mints
+/// ONE correspondence record homed in the draft — the seed's and the claim's
+/// `H.1`'s stand before any forced head; two forced hours bring `H.2` with
+/// `T.1` and `H.3` with `T.2`, four shots from the one draft, NO refusal
+/// (each run fresh, the fence meets none) — and each record, read as the
+/// system principal, the draft's owner, is typed the correspondence class,
+/// `from` a run of the staging draft's own content and `to` the fresh run of
+/// the member the shot minted: the second head's record names the second
+/// head's run. A guest reads none of them: the draft is withheld.
+#[test]
+fn every_due_head_and_time_record_mints_a_correspondence_record_in_the_staging_draft() {
+    const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let system = open_session(port, SYSTEM_PRINCIPAL.0);
+    let mut clock = clock_origin();
+    let records = || -> Vec<Value> {
+        (1u64..)
+            .map_while(|k| {
+                let link = read_link(port, Some(&system), &format!("{STAGING_DRAFT}.0.2.{k}"));
+                (!link.is_null()).then_some(link)
+            })
+            .collect()
+    };
+    let run_of = |member: &str| -> String {
+        let v = op(port, None, &format!(r#"{{"op":"image",{}}}"#, region(member, 1, 1)));
+        expect_resp(&v, "runs")["runs"][0]["i_start"].as_str().expect("the member's one run").to_string()
+    };
+    assert_eq!(records().len(), 2, "the seed's publish and the claim's H.1: one record each");
+
+    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.2, then the hour's T.1
+    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.3, then T.2
+    assert!(head_record(port, &head_member(3)).is_some(), "three heads: the claim's and two forced");
+    let after = records();
+    assert_eq!(after.len(), 6, "two heads and two time records minted one record each, none refused");
+    let members = [head_member(2), format!("{TIME_DOCUMENT}.1"), head_member(3), format!("{TIME_DOCUMENT}.2")];
+    for (record, member) in after[2..].iter().zip(members) {
+        let slots = record["slots"].as_array().expect("three slots");
+        let (from, to, ty) = (&slots[0][0], &slots[1][0], &slots[2][0]);
+        assert!(
+            from["start"].as_str().is_some_and(|s| s.starts_with(&format!("{STAGING_DRAFT}.0.1."))),
+            "`from` is a run of the staging draft's own content: {record}"
+        );
+        assert_eq!(to["start"].as_str(), Some(run_of(&member).as_str()), "`to` is {member}'s fresh run: {record}");
+        assert_eq!(ty["start"].as_str(), Some(T_CORRESPONDENCE), "typed the correspondence class: {record}");
+    }
+    // A guest reads none of them: the draft is private, and a link read of
+    // a home the reader cannot read answers absence — `null`, as for an
+    // address never deposited.
+    assert!(read_link(port, None, &format!("{STAGING_DRAFT}.0.2.1")).is_null(), "withheld from a guest: null");
     sd.shutdown();
 }
 
@@ -1446,7 +1506,8 @@ fn the_head_writers_turn_after_the_claim_can_write_a_head_and_the_claim_still_co
 /// `spawn` claims has its first head at the claim's ack — `H.1` naming the
 /// claim link's position, `prev` null, `base` null — and no `H.2`; the head's
 /// two commits (the record's insert into the staging draft the open's
-/// registry seed minted, the publish shot: seven records) are the whole
+/// registry seed minted, the publish shot with its correspondence record:
+/// ten records) are the whole
 /// distance from the claim to the live head; and with the clock frozen and
 /// no checkpoint taken, the 64th commit
 /// after the claim writes `H.2` naming itself, with `prev` the claim's head —
@@ -1879,33 +1940,38 @@ fn board_under(dir: &Path, seed: Option<u64>, origin: u64) -> Board {
 /// The claim link's position on a fresh board — the ceremony's fifth commit,
 /// twelve records above the seeded board's head (`common::SEED_HEAD`;
 /// wire.md §A first board) — and `H.1`'s records above it: the head record's
-/// insert (3) and the publish shot into `H` (4); the staging draft stands
-/// from the open's registry seed, so the claim's head mints none. `H.1` is
-/// the claim's own (signed ops, s1).
+/// insert (3) and the publish shot into `H` (7: the shot's four — the atom
+/// re-inserted as fresh identity, its mint and write, the member's mint and
+/// its placing record — and the correspondence record the publication homes
+/// in the staging draft, its link mint, deposit and seat; the link-sets
+/// design §5.7); the staging draft stands from the open's registry seed, so
+/// the claim's head mints none. `H.1` is the claim's own (signed ops, s1).
 const CLAIM_POSITION: u64 = SEED_HEAD + 12;
-const H1_RECORDS: u64 = 7;
+const H1_RECORDS: u64 = 10;
 
 /// The time record's records (wire.md §The other endpoints, the time document):
-/// its insert into the staging draft (3) and its publish shot into `T` (4),
+/// its insert into the staging draft (3) and its publish shot into `T` (7),
 /// the head's own shape — and, at the board's first record, the time
 /// document's mint ahead of them (1). The time writer measures its hour on
 /// the head writer's clock, so every forced hour here that moves the
 /// position writes a time record after the head: the first one minting `T`.
-const TIME_RECORD_RECORDS: u64 = 7;
+const TIME_RECORD_RECORDS: u64 = 10;
 const FIRST_TIME_RECORD_RECORDS: u64 = 1 + TIME_RECORD_RECORDS;
 
 /// THE POSITIONS, pinned off the one constant: the head names the triggering
 /// commit — the seed's commits, the ceremony's (12 records), the claim's own
-/// `H.1` (7), three creates and the fourth — and the live head is that plus
-/// the head's own insert and publish (7 more) and the first time record's
-/// mint, insert and publish (8 more), due at the same forced hour. The salt adds no record and
+/// `H.1` (10), three creates and the fourth — and the live head is that plus
+/// the head's own insert and publish (10 more) and the first time record's
+/// mint, insert and publish (11 more), due at the same forced hour. The salt adds no record and
 /// moves no coordinate: the same ops produced 16 and 24 at `d77bfa4`, before
 /// it, and again after it, until s1 (2026-09-25) moved the first head into
-/// the claim's own step and the registry seed (2026-10-21) put the seed's
-/// commits and the draft's mint ahead of the ceremony — the two re-pins. A
-/// position moving here otherwise is a STOP, not a number to update.
+/// the claim's own step, the registry seed (2026-10-21) put the seed's
+/// commits and the draft's mint ahead of the ceremony, and lane S1
+/// (2026-10-27) gave every drafted shot its correspondence record — the
+/// three re-pins. A position moving here otherwise is a STOP, not a number
+/// to update.
 const TRIGGER_POSITION: u64 = CLAIM_POSITION + H1_RECORDS + 4;
-const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + 7 + FIRST_TIME_RECORD_RECORDS;
+const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + H1_RECORDS + FIRST_TIME_RECORD_RECORDS;
 
 /// (viii) — two daemons over ONE op sequence write byte-identical heads. The
 /// head record carries no timestamp and no board-unique term, so identical

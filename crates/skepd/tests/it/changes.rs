@@ -41,9 +41,12 @@ mod mirror;
 /// The registry seed's rows a guest sees on a fresh board (wire.md
 /// §Registry): the member's publish at `SEED_PUBLISH_AT` — the staging
 /// draft's mint at 1 and the one insert of every type's section at 4 are the
-/// system account's private writes, masked at every class but the system's —
-/// then one `make_link` per type, three records apart, to `SEED_HEAD`.
-const SEED_PUBLISH_AT: u64 = 8;
+/// system account's private writes, masked at every class but the system's;
+/// the publish is seven records (the shot's four and its correspondence
+/// record's three, homed in the draft and reduced away for every class but
+/// the system's) — then one `make_link` per type, three records apart, to
+/// `SEED_HEAD`.
+const SEED_PUBLISH_AT: u64 = 11;
 
 fn seed_ats() -> Vec<u64> {
     (SEED_PUBLISH_AT..=SEED_HEAD).step_by(3).collect()
@@ -68,11 +71,14 @@ const CEREMONY_ATS: [u64; 5] =
     [SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12];
 
 /// `H.1`'s two commits, in the claim's own step: the head record's insert
-/// into the staging draft — which stands from the open's registry seed, so
-/// the claim's head mints none — and the publish shot into `H`. The insert
+/// into the staging draft (3 records) — which stands from the open's
+/// registry seed, so the claim's head mints none — and the publish shot into
+/// `H` (7: the shot's four and its correspondence record's three). The insert
 /// writes the system account's PRIVATE draft and is masked at every class
-/// but the system's; the publish is public, `key: "system"`.
-const H1_ATS: [u64; 2] = [CLAIM_POSITION + 3, CLAIM_POSITION + 7];
+/// but the system's; the publish is public, `key: "system"`, its `docs` the
+/// member alone for every class but the system's, which sees the draft
+/// beside it.
+const H1_ATS: [u64; 2] = [CLAIM_POSITION + 3, CLAIM_POSITION + 10];
 
 /// `H.1`'s publish — the one head entry every class sees.
 const H1_PUBLISH_AT: u64 = H1_ATS[1];

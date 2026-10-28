@@ -288,7 +288,7 @@ says "from" it at its end.
   is `transact` around it, with its keys and its attested arm, so a
   composite opens one transaction over the union of the keys and the
   kernel's reentrancy panic is never met.
-  **Holds it:** `crates/skep-arrangement/src/ops/publish.rs` (`stage_publish`/`publish`), `ops/reinstate.rs` (`stage_reinstate_at`/`reinstate`), `ops/delete.rs` (`stage_delete_at`/`delete`), `src/seat.rs` (`stage_seat_link`/`seat_link`); `crates/skep-content` (`stage_write`/`write`).
+  **Holds it:** `crates/skep-arrangement/src/ops/publish.rs` (`stage_publish`/`publish`), `ops/reinstate.rs` (`stage_reinstate_at`/`reinstate`), `ops/delete.rs` (`stage_delete_at`/`delete`), `src/seat.rs` (`stage_seat_link`/`seat_link`); `crates/skep-content` (`stage_write`/`write`); `crates/skep-links/src/writes/publication.rs` (`stage_publication`/`LinkWriter::publication`, the composite over the union of the shot's keys and the draft's link key; `stage_correspondence`, the record's deposit and seat, staged by the publication alone).
   **Checked by:** `crates/skep-arrangement/tests/it/rewindow.rs` (the three compose under one `transact`); the per-op-bound cells in `crates/skep-arrangement/src/ops/tests.rs` and `src/ops/reinstate/tests.rs`; no test yet holds a new store op to the form — one would list the staging functions and assert each public op's body is the `transact` wrapper alone.
   **Closed:** #680.
 

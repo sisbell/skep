@@ -2,12 +2,12 @@
 //!
 //! [`LinkWriter`] is the kernel handle and [`emit_core`] the shared single
 //! choke point, with its two-disciplines gate (§2); beside them sit the M2
-//! keyed dedup sections (§3) and the seven public ops (six deposits —
-//! MAKELINK in its two forms — plus the BH4 batch), with the `replaces` class
-//! ([`replaces_type`]) whose one writer is the second MAKELINK, and the
-//! correspondence class ([`correspondence_type`]) whose one writer is the
-//! publish shot's own record mint, not yet built — so today nothing deposits
-//! it at all.
+//! keyed dedup sections (§3) and the eight public ops (six deposits —
+//! MAKELINK in its two forms — the publication, and the BH4 batch), with
+//! the `replaces` class ([`replaces_type`]) whose one writer is the second
+//! MAKELINK, and the correspondence class ([`correspondence_type`]) whose
+//! one writer is the publication ([`LinkWriter::publication`]) — the publish
+//! shot's own record mint, in the shot's transaction.
 //!
 //! Concurrency belongs to the kernel: nothing here locks, threads, or caches
 //! world state. The type registry every gate reads is the module's compiled
@@ -32,13 +32,16 @@
 //! error tables, the home doorkeeper, the dedup lock set and the two
 //! sole-writer commons classes, `replaces` and the correspondence. Each op
 //! family is a child module — `writes/makelink.rs`,
-//! `writes/emit.rs`, `writes/nullify.rs` and `writes/supersession.rs` —
+//! `writes/emit.rs`, `writes/nullify.rs`, `writes/supersession.rs` and
+//! `writes/publication.rs` —
 //! holding one `impl LinkWriter` block and the public function that builds
 //! what its ops deposit ([`slot_endset`], [`emit_tuple`],
-//! [`retraction_tuple`], [`supersession_claim`]); each sees this file's
+//! [`retraction_tuple`], [`supersession_claim`]) or stages it
+//! ([`stage_publication`], [`stage_correspondence`]); each sees this file's
 //! private items and none of its siblings'. Each block's bounds name the
-//! slices its ops read and the records they stage: MAKELINK's alone adds
-//! `HasM5`, MAKELINK being the one op that seats.
+//! slices its ops read and the records they stage: MAKELINK's adds
+//! `HasM5`, MAKELINK seating what it deposits, and the publication's is
+//! M5's own shot bound beside `HasLinks`, the publication staging the shot.
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -69,10 +72,16 @@ mod nullify;
 // `supersession_claim`, the claim both deposit, and the pair an edit
 // deposits.
 mod supersession;
+// The publication: the publish shot staged with its correspondence records
+// in one transaction — `stage_publication`, the composite as a staging
+// function, `stage_correspondence`, one record's deposit and seat, and the
+// public op over the union of the keys.
+mod publication;
 
 pub use emit::emit_tuple;
 pub use makelink::{slot_endset, SlotArg};
 pub use nullify::retraction_tuple;
+pub use publication::{stage_correspondence, stage_publication};
 pub use supersession::{supersession_claim, Edit};
 
 /// The caller's visibility class (PUB-6.25): its read predicate on documents.
@@ -783,14 +792,15 @@ pub fn is_replaces_class(ty: &Endset) -> bool {
 /// both of one width, homed in the draft (the link-sets design §5.5, §5.7).
 /// A value, never a registration, as [`replaces_type`] is.
 ///
-/// M7's own spelling, where its one reader here can read it — the class the
-/// sole-writer fences compare against (`correspondence_class`, below) — M7
-/// sitting below the engine, whose commons ledger pins the same address
-/// again (`skep_engine::types::t_correspondence`) and whose ledger test
-/// holds the two spellings equal. The class HAS ONE WRITER, the shot's own
-/// record mint in the shot's transaction, which is not yet built: until it
-/// lands nothing deposits the class, every door refusing it. Held, not
-/// built per call, as the class built from it is.
+/// M7's own spelling, where its two readers here can read it — the class
+/// the sole-writer fences compare against (`correspondence_class`, below)
+/// and the one write that mints the class, the publication's record
+/// ([`stage_correspondence`]) — M7 sitting below the engine, whose commons
+/// ledger pins the same address again (`skep_engine::types::t_correspondence`)
+/// and whose ledger test holds the two spellings equal. The class HAS ONE
+/// WRITER, the shot's own record mint in the shot's transaction
+/// ([`LinkWriter::publication`]); every door that takes a caller's type slot
+/// refuses it. Held, not built per call, as the class built from it is.
 ///
 /// # Panics
 ///
@@ -828,7 +838,9 @@ fn correspondence_class() -> &'static CoverageClass {
 /// the slots this answers `true` for — MAKELINK in both forms
 /// ([`MakeLinkError::CorrespondenceClass`]), `emit`
 /// ([`EmitError::CorrespondenceClass`]) and an `editlink` successor
-/// ([`EditLinkError::DcViolation`]).
+/// ([`EditLinkError::DcViolation`]). The publication's twin fence asks it of
+/// each stored record it stabs, the exact test that keeps a link typed the
+/// parent `counterpart` from passing for a record.
 ///
 /// Coverage-class equality, the `[K_sup]` fence's rule: a slot naming the
 /// type, alone or beside its own subtypes, is the class; a slot naming the

@@ -768,7 +768,11 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
     // due — its insert into the staging draft and its publish into `H`, the
     // head of the board at the kill, both in the region the walk re-covers.
     let at_the_kill = head_position(port);
-    assert_eq!(at_the_kill, admitted + 7, "the head's insert and publish after the write");
+    assert_eq!(
+        at_the_kill,
+        admitted + H1_RECORDS,
+        "the head's insert and publish, with its correspondence record, after the write"
+    );
     let (st, body) = get(port, &format!("/changes?since={low}"));
     assert_eq!((st, json(&body)["error"].as_str()), (503, Some("feed_rebuilding")), "{}", String::from_utf8_lossy(&body));
     child.kill();
@@ -818,11 +822,11 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
 }
 
 /// The registry seed's rows a guest's feed shows on a fresh board: the
-/// member's publish at 8, then one `make_link` per type three records apart
+/// member's publish at 11, then one `make_link` per type three records apart
 /// to `SEED_HEAD` — the draft's mint and the sections' insert being the
 /// system account's private writes, masked (`changes.rs` pins them).
 fn seed_rows() -> Vec<u64> {
-    (8..=SEED_HEAD).step_by(3).collect()
+    (11..=SEED_HEAD).step_by(3).collect()
 }
 
 // ── G. Disk exhaustion (best-effort, dedicated tiny volume) ──────────────
@@ -1015,9 +1019,10 @@ const CLAIM_CRASH_DIR: &str = "SKEP_HAZARD_CLAIM_CRASH_DIR";
 const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 
 /// `H.1`'s records above the claim: the head record's insert (3) and the
-/// publish shot into `H` (4) — the staging draft stands from the open's
-/// registry seed, so the claim's head mints none.
-const H1_RECORDS: u64 = 7;
+/// publish shot into `H` (7: the shot's four and the correspondence record
+/// it homes in the staging draft, lane S1) — the staging draft stands from
+/// the open's registry seed, so the claim's head mints none.
+const H1_RECORDS: u64 = 10;
 
 /// The kernel below the daemon's door, opened to LOOK and write nothing: a
 /// manual checkpoint policy, the production retention, the salt unused by a
@@ -1153,7 +1158,7 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     assert_eq!(
         head_position(port),
         CLAIM_POSITION + H1_RECORDS,
-        "FINDING (H): the open did not write H.1's seven records above the claim"
+        "FINDING (H): the open did not write H.1's ten records above the claim"
     );
     let h1 = board_term(port).expect("FINDING (H): no H.1 after the reopen");
     assert_eq!(h1.log_position, CLAIM_POSITION, "H.1 names the claim's own position");

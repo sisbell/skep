@@ -56,7 +56,9 @@
 //! three of the modules hold their op's body as a function over a
 //! caller-opened staging — [`stage_publish`], [`stage_reinstate_at`],
 //! [`stage_delete_at`] — the public op a wrapper that opens the transaction,
-//! so a caller can stage the three under one commit. Each
+//! so a caller can stage the three under one commit; `ops/publish.rs` names
+//! the shot's bound as one trait ([`PublishWorld`]) and the pairing its
+//! staging returns ([`MintedRun`], [`Pairing`]), for such a caller. Each
 //! block's trait bounds name the slices its op reads and the records it
 //! stages — `version`'s names `HasM5` as well, which its op does not read —
 //! so a minimal test world can drive `delete`/`rearrange` with
@@ -103,7 +105,7 @@ mod reinstate;
 mod version;
 
 pub use delete::stage_delete_at;
-pub use publish::{shot_admission, stage_publish};
+pub use publish::{shot_admission, stage_publish, MintedRun, Pairing, PublishWorld};
 pub use reinstate::stage_reinstate_at;
 
 /// The most runs one COPY, one REINSTATE, or one publish shot may place.
@@ -171,15 +173,16 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// mint record and a content record per atom or run of single-byte values,
 /// each carrying an address, and the working world's new content entry. How
 /// many values a shot re-inserts is
-/// [`Shot::reinserted_values`](crate::Shot::reinserted_values), its
-/// draft-native runs' widths summed, and that sum is the request's to choose
-/// — a run may name any stored I-extent of the draft, as often as the wire's
-/// run list allows — while [`MAX_PLACED_RUNS`] does not see it, the fresh
-/// addresses being I-adjacent and so coalescing into one run. Without this
-/// count a request of a kilobyte stages the draft's stored content as many
-/// times over as its run list repeats it, before any refusal can arrive. The
-/// count is request arithmetic, taken before any address is probed, so it
-/// bounds the existence walk over the draft-native runs as well.
+/// [`Shot::reinserted_values`](crate::Shot::reinserted_values), the distinct
+/// positions its draft-native runs name — each draft identity is minted once
+/// per shot, a later occurrence placed by reference — and that count is the
+/// request's to choose: a run may name any stored I-extent of the draft,
+/// while [`MAX_PLACED_RUNS`] does not see it, the fresh addresses being
+/// I-adjacent and so coalescing into one run. Without this count a request
+/// of a kilobyte stages the whole stored content its runs reach, before any
+/// refusal can arrive. The count is request arithmetic, taken before any
+/// address is probed, so it bounds the existence walk over the draft-native
+/// runs as well.
 ///
 /// **The budget**, measured at the worst case that holds: every re-inserted
 /// value an atom — a `Piece::Value` of two bytes or more, which stages two

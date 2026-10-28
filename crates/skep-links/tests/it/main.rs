@@ -6,7 +6,9 @@
 //! exercises: one module per op family — `makelink`, `emit`, `nullify`, and
 //! `supersession` for the `[K_sup]` op pair and the graph it builds — one per
 //! gate that crosses them — `dedup` at the caller's visibility class,
-//! `ownership`, the sole-writer `fences`, the per-slot `budget` — and
+//! `ownership`, the sole-writer `fences`, the per-slot `budget` — the
+//! publish shot's one commit with its correspondence records in
+//! `publication` — and
 //! `attested` for the commit marker, `recovery` for the hints a checkpoint
 //! must rebuild, the typed reads in `reads`, the §G primitives in
 //! `discovery`, and in `spanfilade` the coverage index `stab` answers from —
@@ -32,6 +34,7 @@ mod fences;
 mod makelink;
 mod nullify;
 mod ownership;
+mod publication;
 mod reads;
 mod recovery;
 mod spanfilade;

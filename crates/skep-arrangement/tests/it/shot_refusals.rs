@@ -8,7 +8,7 @@ use skep_arrangement::{
     reading_surface, shot_admission, trunk_head, Base, Caller, Deposit, HasM5, PublishError, Run,
     Shot, ShotRun, Vstream, MAX_REINSERTED_VALUES,
 };
-use skep_content::Val;
+use skep_content::{HasContent, Val};
 use skep_kernel::{Kernel, TxnError};
 use skep_namespace::{HasM3, Namespace, PrincipalId};
 
@@ -574,58 +574,154 @@ fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any(
 }
 
 #[test]
-fn a_shot_rendering_its_drafts_content_past_the_reinsert_budget_is_refused_before_it_stages() {
-    // The re-insert's size is the draft-native positions a shot renders, and
-    // a small request can render a draft's stored content many times over:
-    // here 4096 runs, each naming the same forty stored values — 163,840
-    // re-inserts, a mint and a content write apiece, commanded by a request of
-    // a few hundred kilobytes, where M2 prices a transaction only once its
-    // closure has staged all of it. The count refuses it as request
-    // arithmetic, before any address is probed: nothing commits and no
-    // member is minted. Rendered once, the same draft is re-inserted whole, the
-    // fresh identities continuing the edition's own content chain from where
-    // the deposits left it — so the refused shot minted nothing that survived
-    // it. Corpus seed for the hazard tier: widen the draft and the repeats,
-    // and the refusal stays this cheap.
+fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once() {
+    // The re-insert's size is the DISTINCT draft-native positions a shot
+    // renders, and a small request can render a draft's stored content many
+    // times over: here 4096 runs, each naming the same forty stored values —
+    // 163,840 positions placed, commanded by a request of a few hundred
+    // kilobytes. Under the old sum that was a refusal; under EACH DRAFT
+    // IDENTITY ONCE PER SHOT (the link-sets design §5.7) it is forty mints:
+    // the first run re-inserts the forty, one stretch, and every later run
+    // places the fresh run it became by reference, writing nothing — so the
+    // count is forty, inside the budget, the commit stages two records for
+    // the content however many times the request repeats it, and the member
+    // holds 163,840 positions over 4096 runs. Rendered once after the
+    // edition's own three, the fresh identities continue the edition's
+    // content chain from where the deposits left it. The budget binds the
+    // distinct count, which `ops/publish/tests.rs` pins without a world.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: pca(1..3), memberless
     let forty: Vec<Val> = (0..40u8).map(|b| val(&[b'a' + b % 26])).collect();
     vs.insert(P1, &doc1(), vp(1, 1), forty, Deposit::Undeclared)
         .expect("the draft holds forty values");
     let repeats = 4096;
-    assert!(repeats * 40 > MAX_REINSERTED_VALUES, "the fixture renders past the budget");
+    assert!(repeats * 40 > MAX_REINSERTED_VALUES, "the fixture renders past the old sum");
     let readable = readable_by(PrincipalId(1));
     let rendered = |runs: Vec<ShotRun>| Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
         runs,
     };
+    let repeated = rendered((0..repeats).map(|_| shot_run(&doc1(), &ca(1), 40)).collect());
+    assert_eq!(repeated.reinserted_values(), n(40), "forty distinct positions, named 4096 times");
+    let stored = k.snapshot().world().content().len();
+    let (member, _) = vs
+        .publish(P1, &pdoc(), &repeated, &readable)
+        .expect("forty distinct positions are inside the budget");
+    let s = k.snapshot();
+    assert_eq!(s.world().content().len() - stored, 1, "one stretch: the forty, minted once");
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(44)));
+    let runs: Vec<Run> = s.world().m5().content_runs(&member).cloned().collect();
+    assert_eq!(runs.len(), repeats, "one run per repeat, each the fresh run by reference");
+    assert!(
+        runs.iter().all(|run| *run == Run::new(pca(4), n(40)).expect("a run")),
+        "every repeat is the one fresh run"
+    );
+    assert_eq!(s.world().m5().content_count(&member), n(40 * repeats as u32));
+    // The control: the draft rendered once, after the edition's own three,
+    // into the next member — its forty already the edition's own, placed by
+    // reference as the edition's I-space is, nothing minted.
+    let (member2, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: Some(base(&member, 40 * repeats as u32)),
+                draft: Some(doc1()),
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 40)],
+            },
+            &readable,
+        )
+        .expect("a re-insert inside the budget commits");
+    let s = k.snapshot();
+    assert_eq!(
+        s.world().m5().content_runs(&member2).cloned().collect::<Vec<_>>(),
+        vec![Run::new(pca(1), n(3)).expect("a content run"), Run::new(pca(44), n(40)).expect("a content run")],
+        "the edition's own three, then forty fresh identities from pca(44): the draft is minted again at a later shot"
+    );
+}
+
+#[test]
+fn a_draft_the_caller_does_not_own_is_refused_at_the_shots_own_door() {
+    // THE UNOWNED-DRAFT EDGE (the link-sets design §5.7): "the shot REFUSES
+    // A DRAFT THE CALLER DOES NOT OWN WHENEVER `draft` IS NAMED — a
+    // draft-native run present or not; a readable draft of a sub-account's
+    // or a grantor's is refused too — answered `not_owner` with `site.addr`
+    // the draft … asked in `admit` right after the draft's registration and
+    // ahead of every readability question, so ω speaks and readability never
+    // does". P1 shoots into its edition naming the sub-account's draft: (a)
+    // under a consult admitting every origin — the draft readable — the shot
+    // is refused `NotOwner` carrying the draft, where the source gate had
+    // nothing to say; (b) under P1's own class, which cannot read the draft,
+    // the same `NotOwner` — never `Withheld`; (c) with no draft-native run at
+    // all, the same; (d) the slot sits right after the draft's registration:
+    // an unregistered draft answers `SourceNotRegistered`, and a malformed run
+    // beside an unowned draft answers the draft, the runs being settled after
+    // it; (e) `shot_admission` answers the same, being the same checks; (f)
+    // nothing is committed; and (g) `System` passes the slot as it passes
+    // slot 1, so the system producers' staging draft is theirs to name.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    let sub = Caller::Principal(PrincipalId(3));
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    let (start, _) = vs
+        .insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+        .expect("the sub-account's draft holds a byte");
+    let anyone = |_: &World, _: &Address| true;
+    let own_class = readable_by(PrincipalId(1));
+    let from_subdoc = |runs: Vec<ShotRun>| Shot { base: Some(base(&pdoc(), 3)), draft: Some(subdoc.clone()), runs };
     let before = k.current_seq();
+    // (a), (b): readable or not, the draft is not P1's.
+    for (what, consult) in [("readable", &anyone as &dyn Fn(&World, &Address) -> bool), ("unreadable", &own_class)] {
+        assert!(
+            matches!(
+                rejected(vs.publish(P1, &pdoc(), &from_subdoc(vec![shot_run(&subdoc, &start, 1)]), consult)),
+                PublishError::NotOwner(d) if d == subdoc
+            ),
+            "{what}: the draft is not the caller's, whatever the consult says"
+        );
+    }
+    // (c): no draft-native run present — the draft named is enough.
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), &from_subdoc(vec![shot_run(&pdoc(), &pca(1), 3)]), &anyone)),
+        PublishError::NotOwner(d) if d == subdoc
+    ));
+    // (d): right after the draft's registration, ahead of the runs.
+    let unregistered = a(&[1, 0, 1, 1, 0, 9]);
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &rendered((0..repeats).map(|_| shot_run(&doc1(), &ca(1), 40)).collect()),
-            &readable
+            &Shot { base: Some(base(&pdoc(), 3)), draft: Some(unregistered), runs: vec![] },
+            &anyone
         )),
-        PublishError::TooManyValues
+        PublishError::SourceNotRegistered
     ));
-    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
-    assert!(!k.snapshot().world().m3().is_registered_document(&vdoc()), "no member");
-    // The control: the draft rendered once, after the edition's own three.
-    let (member1, _) = vs
-        .publish(
-            P1,
-            &pdoc(),
-            &rendered(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 40)]),
-            &readable,
-        )
-        .expect("a re-insert inside the budget commits");
-    assert_eq!(
-        k.snapshot().world().m5().content_runs(&member1).cloned().collect::<Vec<_>>(),
-        vec![Run::new(pca(1), n(43)).expect("a content run")],
-        "pca(4..43) fresh, one run with the edition's own three"
+    let malformed = ShotRun { origin: subdoc.clone(), run: Run::new(a(&[1, 0, 1, 1, 0, 1, 0, 2, 1]), n(1)).expect("a link run") };
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), &from_subdoc(vec![malformed.clone()]), &anyone)),
+        PublishError::NotOwner(d) if d == subdoc
+    ));
+    assert!(
+        matches!(
+            rejected(vs.publish(P1, &pdoc(), &Shot { draft: Some(doc1()), ..from_subdoc(vec![malformed]) }, &anyone)),
+            PublishError::BadRun
+        ),
+        "the control: the caller's own draft beside the same run answers the run"
     );
+    // (e): the admission is the same checks.
+    assert_eq!(
+        shot_admission(k.snapshot().world(), P1, &pdoc(), &from_subdoc(vec![shot_run(&subdoc, &start, 1)]), &anyone),
+        Err(PublishError::NotOwner(subdoc.clone()))
+    );
+    // (f): nothing committed.
+    assert_eq!(k.current_seq(), before, "every refusal commits nothing");
+    assert_eq!(trunk_head(k.snapshot().world().m3(), &pdoc()), None, "no member");
+    // (g): the system caller passes, and the shot lands.
+    let (member, _) = vs
+        .publish(Caller::System, &pdoc(), &from_subdoc(vec![shot_run(&subdoc, &start, 1)]), &anyone)
+        .expect("System is exempt from ω at the draft as at the document");
+    assert_eq!(bytes_of(&k.snapshot(), &member), vec![b"s".to_vec()]);
 }
 
 #[test]

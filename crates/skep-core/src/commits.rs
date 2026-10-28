@@ -167,7 +167,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
-use skep_address::{document_of, Address};
+use skep_address::{document_of, Address, Nat};
 use skep_arrangement::HasM5;
 use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{MintTime, Op, OpKind, RejectCode, Rejection, Response, Stores, TimeSource};
@@ -1330,6 +1330,21 @@ impl Commits {
                 );
                 minted.cloned().map(|a| vec![a]).unwrap_or_default()
             }
+            // The publication's row: the member first, then the draft its
+            // records are homed in — the order the mirror reads the member
+            // by; the draft is reduced away for a reader who cannot read it,
+            // and the row keeps its `attest` all the same (`feed::Inner::visible`).
+            AffectedDocs::Published { draft } => {
+                debug_assert!(
+                    minted.is_some(),
+                    "a publish answers AckAddr, the ack carrying the member it minted"
+                );
+                let mut docs: Vec<Address> = minted.cloned().into_iter().collect();
+                if !docs.is_empty() {
+                    docs.extend(draft);
+                }
+                docs
+            }
         };
         let post = self.stores.kernel().snapshot();
         if post.seq() == at {
@@ -1936,6 +1951,20 @@ enum AffectedDocs {
     /// address is the minted document — see [`Commits::record`]'s `Minted`
     /// arm, which is the other half of this decision.
     Minted,
+    /// A publication's documents: the member the shot mints, known only
+    /// from its ack, FIRST, then the staging draft where the commit homed a
+    /// correspondence record in it (the link-sets design §5.7's feed row —
+    /// "`docs` the UNION of every home the commit touched, `[member, D, …]`",
+    /// the member first, a pinned order the mirror reads the member by).
+    ///
+    /// `draft` is the document the shot's `draft` projects to, `Some` where
+    /// a draft is named and a draft-native run re-inserted — the one case
+    /// the commit mints a record, since the shot mints each draft identity
+    /// it meets the first time it meets it, and the twin fence refuses one
+    /// a record already names; `None` otherwise, the row then naming the
+    /// member alone as `Minted` would. The same `AckAddr` obligation as
+    /// `Minted`'s.
+    Published { draft: Option<Address> },
 }
 
 /// Which of the op's own terms (`sidecar::OpTerms`) its row carries.
@@ -2111,15 +2140,22 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
         // The shot mints the chain's next member, known only from its ack —
         // the document it advances is the member's own trunk — and
-        // re-inserts the draft's values as fresh identity under it.
-        Op::Publish { shot, .. } => meta(
-            OpKind::Publish,
-            AffectedDocs::Minted,
-            RowTerms::Publish,
-            Minting::Publish {
-                reinserted: u64::try_from(&shot.reinserted_values()).unwrap_or(u64::MAX),
-            },
-        ),
+        // re-inserts the draft's values as fresh identity under it, minting
+        // one correspondence record in the draft per piece of draft identity
+        // it re-inserts (the link-sets design §5.7): the row names the draft
+        // beside the member exactly when a draft is named and a run is
+        // re-inserted, the count being request arithmetic.
+        Op::Publish { shot, .. } => {
+            let reinserted = shot.reinserted_values();
+            meta(
+                OpKind::Publish,
+                AffectedDocs::Published {
+                    draft: shot.draft_document().filter(|_| reinserted > Nat::from(0u32)),
+                },
+                RowTerms::Publish,
+                Minting::Publish { reinserted: u64::try_from(&reinserted).unwrap_or(u64::MAX) },
+            )
+        }
         Op::MakeLink { home, .. } => {
             meta(OpKind::MakeLink, one(home), RowTerms::MakeLink, no_cell)
         }

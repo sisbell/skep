@@ -1748,7 +1748,10 @@ impl Feed {
             // of the home the row withholds, and served it would confirm a
             // guess at that home, the confirmation the chain's salt exists to
             // deny. The verdict there is undeterminable from this feed; the
-            // owner's own page carries the member whole.
+            // owner's own page carries the member whole. The one row that
+            // keeps its `attest` reduced is a `publish`'s whose reduction
+            // dropped the staging draft alone (`Inner::visible` decides it):
+            // the preimage names no member the reduction withholds.
             if !whole {
                 entry.as_object_mut().expect("an entry is an object").remove("attest");
             }
@@ -3026,9 +3029,21 @@ impl Inner {
     ///
     /// Beside the mask it tests the narrowings' per-entry predicates, and
     /// answers the row ([`Row`]): the entry's meta and its docs reduced to
-    /// the requester's readable ones — and whether the reduction kept the
-    /// record's docs whole, which is what decides the row's `attest` (the
-    /// third absence, which [`Feed::page`] states) — or `None` when the
+    /// the requester's readable ones — and whether the row keeps its
+    /// `attest`: the reduction kept the record's docs whole, which decides
+    /// it for every row but one (the third absence, which [`Feed::page`]
+    /// states), the exception a `publish` row reduced from `[member, D]` to
+    /// `[member]`, which KEEPS it — THE EXEMPTION, as the link-sets design
+    /// §5.7 widens PUB-6.47's: a row keeps its `attest` where THE PREIMAGE
+    /// NAMES NO MEMBER THE REDUCTION WITHHOLDS. The shot's preimage is the
+    /// member, the runs by value and the base, never `D` — the records ride
+    /// outside it — so a reader of the member composes it from public reads
+    /// alone, and the signature confirms nothing about the draft. Stated as
+    /// the rule it is, on the row's op and its first document: the member is
+    /// first by `AffectedDocs::Published`'s pin (`commits.rs`), so a reduced
+    /// `publish` row keeps its `attest` exactly where it still names its
+    /// first document.
+    /// — or `None` when the
     /// entry is omitted. A candidate the twins put forward answers off the
     /// twins; one the files put forward carries its own meta, documents and
     /// slot ([`Candidate`]), and the one test runs over both, which is what
@@ -3068,8 +3083,14 @@ impl Inner {
             return None;
         }
         let whole = reduced.len() == docs.len();
+        // The exemption: a `publish` row whose reduction withheld only the
+        // draft — the member, its first document, still named — keeps its
+        // `attest`, the preimage naming no member the reduction withholds.
+        let composable = matches!(meta, CommitMeta::Recorded { op, .. } if op == "publish")
+            && reduced.first().map(|d| &d.addr) == docs.first().map(|d| &d.addr);
+        let keeps_attest = whole || composable;
         let reduced: Vec<String> = reduced.iter().map(|d| d.addr.to_string()).collect();
-        Some((at, meta.clone(), reduced, whole, slot))
+        Some((at, meta.clone(), reduced, keeps_attest, slot))
     }
 
     /// Returns the candidate sources for `class` and `query`.

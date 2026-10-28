@@ -28,7 +28,7 @@ use skepd::Skepd;
 
 use crate::common::{
     addrs_of, board_term, claim_board, doc_metadata, expect_resp, get, head_position, json, op,
-    read_link, spawn, spawn_unclaimed, BLIND_KIND, SEED_HEAD,
+    open_session, read_link, region, spawn, spawn_unclaimed, BLIND_KIND, SEED_HEAD,
 };
 
 /// The registry document: doc 1 of the system account.
@@ -40,9 +40,11 @@ const STAGING_DRAFT: &str = "1.1.0.1.0.3";
 /// The registry seed's positions a guest sees: the member's publish at 8 —
 /// the draft's mint at 1 and the sections' insert at 4 are the system
 /// account's private writes, masked at every class but the system's — then
-/// one `make_link` per type, three records apart, to `SEED_HEAD`.
+/// one `make_link` per type, three records apart, to `SEED_HEAD` — the
+/// publish at 11, seven records past the sections' insert: the shot's four
+/// and its correspondence record's three (lane S1).
 fn seed_ats() -> Vec<u64> {
-    (8..=SEED_HEAD).step_by(3).collect()
+    (11..=SEED_HEAD).step_by(3).collect()
 }
 
 /// The unit span of `addr` as a client spells a type in a four-set slot or
@@ -118,8 +120,10 @@ fn log_position(port: u16) -> u64 {
 /// table one `defines` link, its `to` the type's address in addrs form, its
 /// `from` a span in the registry document that reads back as the section,
 /// the name alone on the first line; a type not in the table answers none.
-/// R6's constant too: the fresh board stands at `SEED_HEAD`, which is eight
-/// records and three per type, and the `open:` line says every type written.
+/// R6's constant too: the fresh board stands at `SEED_HEAD`, which is eleven
+/// records — the draft's mint, the sections' insert, the publish with its
+/// correspondence record — and three per type, and the `open:` line says
+/// every type written.
 #[test]
 fn a_fresh_board_names_every_type_once_to_a_guest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -128,7 +132,7 @@ fn a_fresh_board_names_every_type_once_to_a_guest() {
     let table = vocabulary();
 
     assert_eq!(log_position(port), SEED_HEAD, "the fresh board stands at the seed's head");
-    assert_eq!(SEED_HEAD, 8 + 3 * table.len() as u64, "eight records, then three per type");
+    assert_eq!(SEED_HEAD, 11 + 3 * table.len() as u64, "eleven records, then three per type");
     assert_eq!(
         open_line(&sd, table.len(), 0).len(),
         1,
@@ -212,10 +216,48 @@ fn a_board_seeded_under_a_smaller_table_gains_the_added_row_at_the_next_open() {
         seed_lines(&sd),
         "the one line: one type written, the rest stood"
     );
-    assert_eq!(log_position(port), position + 10, "one insert, one publish, one link");
+    assert_eq!(
+        log_position(port),
+        position + 13,
+        "one insert (3), one publish with its correspondence record (7), one link (3)"
+    );
     let links = definition_links(port, None, citation);
     assert_eq!(links.len(), 1, "the added row's link");
     assert_eq!(from_text(port, None, &links[0]), citation_def.section());
+    // THE SEED SHOT TWICE FROM ONE DRAFT (the link-sets design §5.7; Lane
+    // S's acceptance): the first open's publish and this addition's each
+    // minted one correspondence record in the staging draft — read as the
+    // system principal, the draft's owner — the second's `from` the
+    // addition's run, which begins right after the first seed's sections
+    // (the first record's `from`, from position 1, as wide as those bytes),
+    // and its `to` the second member's own run; no fence met, the run
+    // fresh.
+    let system = open_session(port, 9_000_000_000_000_000);
+    let record = |k: u64| read_link(port, Some(&system), &format!("{STAGING_DRAFT}.0.2.{k}"));
+    let (first, second) = (record(1), record(2));
+    assert!(record(3).is_null(), "two seeds, two records: {}", record(3));
+    let span = |r: &Value, slot: usize| -> (String, u64) {
+        let s = &r["slots"][slot][0];
+        let width = s["width"].as_str().expect("a width").rsplit('.').next().expect("a last component");
+        (s["start"].as_str().expect("a start").to_string(), width.parse().expect("a count"))
+    };
+    let (first_from, first_width) = span(&first, 0);
+    assert_eq!(first_from, format!("{STAGING_DRAFT}.0.1.1"), "the first seed's sections, from the draft's first position");
+    let (second_from, second_width) = span(&second, 0);
+    assert_eq!(
+        second_from,
+        format!("{STAGING_DRAFT}.0.1.{}", first_width + 1),
+        "the addition's section follows the first seed's bytes in the draft"
+    );
+    assert_eq!(second_width as usize, citation_def.section().len(), "as wide as the added section");
+    let (second_to, _) = span(&second, 1);
+    let v = op(port, None, &format!(r#"{{"op":"image",{}}}"#, region(&format!("{REGISTRY}.2"), 1, 1)));
+    assert_eq!(
+        expect_resp(&v, "runs")["runs"][0]["i_start"].as_str(),
+        Some(second_to.as_str()),
+        "the second record's `to` is the second member's own run"
+    );
+    assert_eq!(span(&second, 2).0, "1.1.0.1.0.1.0.3.102.1", "typed the correspondence class");
     for def in table {
         let links = definition_links(port, None, &def.address.to_string());
         assert_eq!(links.len(), 1, "{}: one link, never two", def.address);
@@ -263,7 +305,11 @@ fn a_seed_cut_short_by_a_refusal_is_said_once_and_finished_at_the_next_open() {
         assert_eq!(definition_links(port, None, &enroll).len(), 1);
         assert!(definition_links(port, None, &retire.address.to_string()).is_empty());
         assert!(definition_links(port, None, &table[2].address.to_string()).is_empty());
-        assert_eq!(log_position(port), 8 + 3 * 2, "the mint, the insert, the publish and two links");
+        assert_eq!(
+            log_position(port),
+            11 + 3 * 2,
+            "the mint, the insert, the publish with its correspondence record, and two links"
+        );
         sd.shutdown();
     }
     let sd = spawn_unclaimed(dir.path());
@@ -335,13 +381,17 @@ fn the_claim_lands_twelve_records_above_the_seed_and_the_feed_lists_the_seed_fir
     claim_board(port);
     let claim_at = board_term(port).expect("H.1").log_position;
     assert_eq!(claim_at, SEED_HEAD + 12, "the ceremony's fifth commit, twelve records above the seed");
-    assert_eq!(head_position(port), claim_at + 7, "H.1: the insert and the publish, no draft mint");
+    assert_eq!(
+        head_position(port),
+        claim_at + 10,
+        "H.1: the insert (3) and the publish with its correspondence record (7), no draft mint"
+    );
     let (st, body) = get(port, "/changes?since=0&limit=4096");
     assert_eq!(st, 200);
     let rows = json(&body)["changes"].as_array().expect("changes").clone();
     let ats: Vec<u64> = rows.iter().map(|r| r["at"].as_u64().expect("at")).collect();
     let mut want = seed_ats();
-    want.extend([SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12, claim_at + 7]);
+    want.extend([SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12, claim_at + 10]);
     assert_eq!(ats, want, "the seed's rows, the ceremony's five, H.1's publish");
     for row in rows.iter().take(seed_ats().len()) {
         assert_eq!(row["key"].as_str(), Some("system"), "{row}");

@@ -1166,11 +1166,13 @@ fn a_declared_deposit_of_a_cell_at_a_published_target_answers_published_target_a
 /// hash, a reference whose file is not on disk: the deposit is gone and
 /// the act is the PUT — and `unknown_cell_schema` for the unknown form,
 /// entered as a halt mark and counted in no base; a stranger who cannot
-/// read the draft meets the store's `withheld` attested and the check's
-/// `attestation_required` unattested, BEFORE this door; and prose or a def
-/// in the same position takes the ordinary answer — the reader's shot
-/// lands. The whole armed set lands together: every refusal commits
-/// nothing.
+/// read the draft meets the store's `not_owner` naming the draft attested
+/// (the shot's own draft slot, ahead of every readability question — lane
+/// S1) and the check's `attestation_required` unattested, BEFORE this
+/// door; and prose or a def in the same position takes the ordinary answer
+/// — the reader's shot from ITS OWN draft lands, the owner's draft being
+/// `not_owner` to it whatever it holds. The whole armed set lands together:
+/// every refusal commits nothing.
 #[test]
 fn a_readers_shot_naming_a_draft_holding_a_cell_is_refused_not_owner_and_the_owners_own_in_p10s_form() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1232,12 +1234,15 @@ fn a_readers_shot_naming_a_draft_holding_a_cell_is_refused_not_owner_and_the_own
     let usage = json(&blob_deposit_read(port, Some(&bare)).2);
     assert_eq!(usage["base"].as_u64(), Some(5), "the pre-fence cell counts at its size; the halt mark counts nothing: {usage}");
 
-    // Ahead of the door — the unreadable draft: the store's `withheld`
-    // attested over a guess at the bytes, the check's `attestation_required`
-    // unattested; neither answer turns on what the draft holds.
+    // Ahead of the door — the unreadable draft: the store's `not_owner`
+    // naming the draft attested over a guess at the bytes (the shot's own
+    // draft-owner slot, ahead of every readability question — the link-sets
+    // design §5.7; `withheld` until lane S1), the check's
+    // `attestation_required` unattested; neither answer turns on what the
+    // draft holds.
     let frame = publish_frame(&stranger.doc1, None, Some(&d_cell), &cell_run(&d_cell));
     let guess: Vec<&[u8]> = vec![b"not the cell"];
-    assert_withheld(&op_with_publish_values(port, &stranger_signed, &frame, &guess), &d_cell);
+    assert_not_owner(&op_with_publish_values(port, &stranger_signed, &frame, &guess), "publish", &d_cell);
     let v = op_as_written(port, Some(&stranger_signed), &frame);
     assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
 
@@ -1246,15 +1251,23 @@ fn a_readers_shot_naming_a_draft_holding_a_cell_is_refused_not_owner_and_the_own
         assert_eq!(content_extent(port, None, target), 0, "{target} stays empty: no cell is minted");
     }
 
-    // The ordinary answer in the same positions: a reader's shot re-inserting
-    // the owner's prose lands, and one re-inserting a def lands — neither
+    // A reader's shot naming the owner's draft is the store's `not_owner`
+    // whatever the draft holds — prose as much as a cell, the draft slot
+    // being ω's (the link-sets design §5.7) — so the ordinary answer in the
+    // same positions is the reader's shot from ITS OWN draft: one
+    // re-inserting prose lands, and one re-inserting a def lands — neither
     // names the kind, so neither meets the door.
     let d_prose = draft_with(port, &bare, "abc");
-    let m = acked_addr(&op(port, Some(&sub_signed), &publish_frame(&sub.doc1, None, Some(&d_prose), &[run(&d_prose, &format!("{d_prose}.0.1.1"), 3)])));
+    let v = op(port, Some(&sub_signed), &publish_frame(&sub.doc1, None, Some(&d_prose), &[run(&d_prose, &format!("{d_prose}.0.1.1"), 3)]));
+    assert_not_owner(&v, "publish", &d_prose);
+    let sub_bare = open_session(port, 12);
+    let own_prose = acked_addr(&op(port, Some(&sub_bare), &create_frame(&sub.account, None)));
+    expect_resp(&insert_text(port, &sub_bare, &own_prose, 1, "abc"), "ack_addr");
+    let m = acked_addr(&op(port, Some(&sub_signed), &publish_frame(&sub.doc1, None, Some(&own_prose), &[run(&own_prose, &format!("{own_prose}.0.1.1"), 3)])));
     assert_eq!(m, format!("{}.1", sub.doc1));
     assert_eq!(text_of(port, None, &m, 1, 3), "abc");
-    let d_def = owner_draft(port, &bare);
-    expect_resp(&op(port, Some(&bare), &atom_frame(&d_def, 1, json!({"atom_hex": DEF_HEX}), None)), "ack_addr");
+    let d_def = acked_addr(&op(port, Some(&sub_bare), &create_frame(&sub.account, None)));
+    expect_resp(&op(port, Some(&sub_bare), &atom_frame(&d_def, 1, json!({"atom_hex": DEF_HEX}), None)), "ack_addr");
     let sub_edition = acked_addr(&op(port, Some(&sub_signed), &create_frame(&sub.account, Some(true))));
     let m = acked_addr(&op(port, Some(&sub_signed), &publish_frame(&sub_edition, None, Some(&d_def), &cell_run(&d_def))));
     assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom_hex": DEF_HEX}]));

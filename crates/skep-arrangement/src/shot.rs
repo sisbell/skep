@@ -22,6 +22,7 @@ use skep_address::{content_subspace, document_of, Address, Nat};
 use crate::chain::trunk_of;
 use crate::run::Run;
 use crate::run_list::extend_or_push_run;
+use crate::run_union::RunUnion;
 use crate::state::M5State;
 
 /// Returns a supplied run's origin document.
@@ -236,16 +237,24 @@ impl Shot {
 
     /// Returns how many values this shot re-inserts.
     ///
-    /// It is [`reinserted_runs`](Shot::reinserted_runs)' widths summed, two
-    /// staged records apiece where every value is an atom, and two for a whole
-    /// run of single-byte values; zero with no draft. It is the count
+    /// It is the DISTINCT positions [`reinserted_runs`](Shot::reinserted_runs)
+    /// name — the runs' I-extents merged (the run union, the carried-run
+    /// test's own merge) and their widths
+    /// summed, a position two runs name counted once, since the commit mints
+    /// each draft identity once per shot and places every later occurrence
+    /// by reference (the link-sets design §5.7;
+    /// [`Vstream::publish`](crate::Vstream::publish) states where the fresh
+    /// identity lands) — two staged records apiece where
+    /// every value is an atom, and two for a whole run of single-byte
+    /// values; zero with no draft. It is the count
     /// [`Vstream::publish`](crate::Vstream::publish) holds to
     /// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES)
     /// (`TooManyValues`), and its one spelling: request arithmetic, reading
     /// nothing — so a caller pricing a shot ahead of its transaction asks
-    /// this, and its refusal and the store's cannot part.
+    /// this, and its refusal and the store's cannot part. `O(n log n)` in
+    /// the draft-native runs, the merge's sort.
     pub fn reinserted_values(&self) -> Nat {
-        self.reinserted_runs().map(Run::width).sum()
+        RunUnion::of(self.reinserted_runs()).runs().map(|run| run.width().clone()).sum()
     }
 
     /// Returns the document `draft` projects to (PUB-2.15), if one is named.

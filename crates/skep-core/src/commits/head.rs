@@ -1008,9 +1008,16 @@ impl HeadWriter {
     /// Commits one publish `shot` into `doc`'s chain, as the system
     /// principal, through [`HeadWriter::run_commit`].
     ///
-    /// `doc` is `H` for a head, the registry document for the seed. Answers
-    /// the member minted, or `None` where the driver refused, which `refused`
-    /// has said.
+    /// `doc` is `H` for a head, the registry document for the seed, `T` for
+    /// the time writer. The shot is THE PUBLICATION (the link-sets design
+    /// §5.7), as the front door commits a session's: M7's composite stages
+    /// M5's shot and, for the run it re-inserts from the staging draft, one
+    /// correspondence record homed in the draft, in the one commit — three
+    /// records beside the shot's own, accruing in the draft at every head,
+    /// time record and seed; each producer's run is the atom or the sections
+    /// it just inserted, fresh identity no record names, so the twin fence
+    /// never fires for it. Answers the member minted, or `None` where the
+    /// driver refused, which `refused` has said.
     pub(super) fn commit_publish(
         &self,
         wp: &Commits,
@@ -1026,18 +1033,14 @@ impl HeadWriter {
         };
         // The source consult at the system principal's class, never System's
         // (PUB-6.65): the system account owns H and the draft, so no origin is
-        // withheld. The refusal lowered as the front door lowers a
-        // `publish`'s.
+        // withheld, and the draft is the system principal's own, so the
+        // shot's draft slot passes. The refusal lowered as the front door
+        // lowers a `publish`'s.
         let visibility = World::visible_to(Caller::Principal(SYSTEM_PRINCIPAL));
         self.run_commit(wp, serial, meta, refused, move || {
             self.stores
-                .vstream()
-                .publish(
-                    Caller::Principal(SYSTEM_PRINCIPAL),
-                    &doc,
-                    &shot,
-                    &visibility,
-                )
+                .linkstore(&visibility)
+                .publication(Caller::Principal(SYSTEM_PRINCIPAL), &doc, &shot)
                 .map_err(|e| lower_txn(OpKind::Publish, e))
         })
     }

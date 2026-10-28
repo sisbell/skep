@@ -1039,7 +1039,16 @@ impl<'b> Consumer<'b> {
             for d in docs.iter().filter_map(Value::as_str) {
                 let Some(addr) = parse_address(d) else { continue };
                 let Some(doc) = bare_document(&addr) else { continue };
-                if addr != doc && face == Face::Published {
+                if addr != doc {
+                    // A member names an edition's version, never a draft: on
+                    // the published face it moves the edition's head; on the
+                    // drafts face it is passed over — a `publish` row reaches
+                    // that face naming the member first and, beside it, the
+                    // staging draft its records are homed in (wire.md §The
+                    // change feed), and the draft alone is that face's.
+                    if face != Face::Published {
+                        continue;
+                    }
                     let current = heads.get(&doc).or_else(|| engine.heads.get(&doc));
                     if let Some(new_head) = moved_head(&doc, current, &addr) {
                         if row["key"].as_str() == Some("system") && op == Some("publish") && doc == head_doc {

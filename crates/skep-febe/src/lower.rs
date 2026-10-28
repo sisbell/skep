@@ -27,7 +27,9 @@ use skep_arrangement::{
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
 use skep_kernel::TxnError;
-use skep_links::{AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError};
+use skep_links::{
+    AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, PublicationError,
+};
 use skep_namespace::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 
@@ -354,6 +356,26 @@ impl Lower for PublishError {
 }
 
 // ─────────────────────────────── M7 (links) ────────────────────────────────
+
+impl Lower for PublicationError {
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        match self {
+            // The shot's own verdicts lower through M5's table, so the
+            // publication's refusals read as `publish`'s, slot for slot.
+            PublicationError::Publish(e) => e.lower(),
+            // The twin fence: `site.addr` the member the record's `to` was
+            // minted into, and nothing else rides the code.
+            PublicationError::AlreadyPublished { site } => (
+                RejectCode::AlreadyPublished,
+                Some(FaultSite { addr: Some(site), ..FaultSite::default() }),
+            ),
+            PublicationError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
+            PublicationError::NotOwner(a) => not_owner(a),
+            PublicationError::Mint(m) => m.lower(),
+            PublicationError::Seat(s) => s.lower(),
+        }
+    }
+}
 
 impl Lower for MakeLinkError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {

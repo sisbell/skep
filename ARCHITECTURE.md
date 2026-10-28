@@ -1188,8 +1188,10 @@ and an item by its home module, never through the root's re-exports.
 `state/reads.rs` holds the read surface and `state/spanfilade.rs` the
 coverage index `stab` answers from. `writes.rs` is the handle and what
 its ops share; beneath it, `writes/makelink.rs`, `writes/emit.rs`,
-`writes/nullify.rs` and `writes/supersession.rs` each hold one op family's
-`impl` block.
+`writes/nullify.rs`, `writes/supersession.rs` and `writes/publication.rs`
+each hold one op family's `impl` block — the last the publication, the
+publish shot staged with its correspondence records in one transaction,
+over `skep-arrangement`'s exported shot bound.
 
 Rules that hold across its files:
 
@@ -1217,13 +1219,14 @@ Rules that hold across its files:
   `skep-kernel`'s golden fixture deposits links, so its pinned bytes cover
   them.
 
-Its integration suite is one binary, `tests/it/`: one file per op family,
-per gate that crosses them and per part of the read surface, over the
-shared `common` world and the kernels it opens; `carrier`, the contracts
-that need no kernel; `recovery`, the hints a checkpoint must rebuild;
-`spanfilade`, the coverage index against a scan of the store; `heap`, the
-binary's byte-counting allocator; and `tidy`, which checks the module map
-and the first rule.
+Its integration suite is one binary, `tests/it/`: one file per op family
+(`publication` among them, the shot's one commit with its records and
+the twin fence), per gate that crosses them and per part of the read
+surface, over the shared `common` world and the kernels it opens;
+`carrier`, the contracts that need no kernel; `recovery`, the hints a
+checkpoint must rebuild; `spanfilade`, the coverage index against a scan
+of the store; `heap`, the binary's byte-counting allocator; and `tidy`,
+which checks the module map and the first rule.
 
 Its rules of mechanism: SP-21, SP-29.
 

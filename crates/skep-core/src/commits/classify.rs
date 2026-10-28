@@ -112,15 +112,22 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 /// They are the documents the commit from `before` to `after` touched, as
 /// the two worlds show them — read through the engine's public surface alone
 /// (the kernel's journal reader stays closed, and the records themselves are
-/// reachable by no read the daemon holds). Three witnesses, together exact
+/// reachable by no read the daemon holds). Four witnesses, together exact
 /// for the mask:
 ///
+/// 0. the version member the commit minted ([`minted_member`]) with M5's
+///    placing record for it — a `publish`'s member, named FIRST, as the
+///    recorded row names it (the link-sets design §5.7's pinned order, the
+///    one the mirror reads the member by): a published document, so it
+///    moves no mask, and it is named so a bare `publish` row whose records
+///    put the draft in its class still leads with the member;
 /// 1. the drafts the commit minted — every draft of `after` absent from
 ///    `before` (`create_new_document`/`fork`/`version` resolving private);
 /// 2. the links the commit deposited — every link of `after` absent from
 ///    `before`, each one's home, and for a retraction (the shipped `[R]`
 ///    class) its targets' homes too, which is `nullify`'s own `docs` rule
-///    (PUB-6.46); `edit_link`'s two homes fall out as two deposits;
+///    (PUB-6.46); `edit_link`'s two homes fall out as two deposits, and a
+///    publication's correspondence records as the draft they are homed in;
 /// 3. the drafts whose arrangement the commit moved — an insert, delete,
 ///    copy, rearrange or seat into a draft that already existed.
 ///
@@ -143,22 +150,29 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 ///
 /// **Cost.** One full-link enumeration per world (`match_links` with no
 /// constraint — the whole audit slice), one `readlink` per new link, one
+/// pass over M3's registered documents at `after` with a registration probe
+/// at `before` per document, one
 /// probe of `before`'s exception set per draft `after` holds, and, where the
 /// arrangement slice moved at all, a second such pass with a comparison of
 /// the content and the link run lists per draft `before` held. Paid once per
 /// bare boundary at the open that reconstructs it, never at serve.
 pub(super) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
-    derived_docs_over(before, after, &new_links(before, after))
+    derived_docs_over(before, after, &new_links(before, after), minted_member(before, after))
 }
 
 /// Returns the journal's whole answer for one bare commit.
 ///
 /// That is its documents ([`derived_docs`]) and its terms
-/// ([`derived_terms_over`]), the links deposited enumerated *once* for both
-/// — what the reconstruction walk asks per boundary.
+/// ([`derived_terms_over`]), the links deposited and the member minted each
+/// enumerated *once* for both — what the reconstruction walk asks per
+/// boundary.
 pub(super) fn derived_journal(before: &World, after: &World) -> (Vec<Address>, JournalTerms) {
     let links = new_links(before, after);
-    (derived_docs_over(before, after, &links), derived_terms_over(before, after, &links))
+    let member = minted_member(before, after);
+    (
+        derived_docs_over(before, after, &links, member.clone()),
+        derived_terms_over(before, after, &links, member),
+    )
 }
 
 /// Returns the links `after` holds and `before` does not.
@@ -176,8 +190,19 @@ fn new_links(before: &World, after: &World) -> Vec<Address> {
         .collect()
 }
 
-/// Returns [`derived_docs`]'s answer over `links` already enumerated.
-fn derived_docs_over(before: &World, after: &World, links: &[Address]) -> Vec<Address> {
+/// Returns [`derived_docs`]'s answer over `links` and `member` already
+/// enumerated: the shot's member first where the commit minted one with its
+/// placing record, then the rest in address order.
+fn derived_docs_over(
+    before: &World,
+    after: &World,
+    links: &[Address],
+    member: Option<Address>,
+) -> Vec<Address> {
+    // 0. The member a shot minted, led with — `shot_terms` tells a shot's
+    //    member from a `version`'s, whose row names it as `Minted` does and
+    //    whose mask it moves as little.
+    let shot_member = member.filter(|m| after.m5().shot_terms(m).is_some());
     let mut docs: BTreeSet<Address> = BTreeSet::new();
     // 1. Drafts minted by this commit.
     for draft in after.drafts() {
@@ -220,7 +245,13 @@ fn derived_docs_over(before: &World, after: &World, links: &[Address]) -> Vec<Ad
             }
         }
     }
-    docs.into_iter().collect()
+    let mut out: Vec<Address> = Vec::with_capacity(docs.len() + 1);
+    if let Some(member) = shot_member {
+        docs.remove(&member);
+        out.push(member);
+    }
+    out.extend(docs);
+    out
 }
 
 /// Returns the journal's terms for one bare commit (SO-I5 (e)).
@@ -267,20 +298,25 @@ fn derived_docs_over(before: &World, after: &World, links: &[Address]) -> Vec<Ad
 /// member no witness decides stays `null`.
 ///
 /// **Cost.** Beside [`derived_docs`]'s, one walk of the board's principal
-/// list at `after` with a frontier read at `before` per account or node, and
-/// — where no principal was seated — one pass over M3's registered documents
-/// at `after`, versions included, with a registration probe at `before` per
-/// document. Paid once per bare boundary — by the walk that reconstructs it,
-/// or at the commit whose unwind left it bare — never at serve. Reached
-/// through [`derived_journal`] alone, over the links it enumerated.
-fn derived_terms_over(before: &World, after: &World, links: &[Address]) -> JournalTerms {
+/// list at `after` with a frontier read at `before` per account or node; the
+/// member minted arrives enumerated, the documents' pass being
+/// [`derived_docs`]'s. Paid once per bare boundary — by the walk that
+/// reconstructs it, or at the commit whose unwind left it bare — never at
+/// serve. Reached through [`derived_journal`] alone, over the links and the
+/// member it enumerated.
+fn derived_terms_over(
+    before: &World,
+    after: &World,
+    links: &[Address],
+    member: Option<Address>,
+) -> JournalTerms {
     if let Some((prefix, id)) = seated_principal(before, after) {
         return JournalTerms {
             op: Some("delegate".into()),
             terms: Some(OpTerms::Delegate { new_prefix: prefix.to_string(), new_id: id.0 }),
         };
     }
-    if let Some(member) = minted_member(before, after) {
+    if let Some(member) = member {
         return match after.m5().shot_terms(&member) {
             Some(t) if before.m5().shot_terms(&member).is_none() => JournalTerms {
                 op: Some("publish".into()),

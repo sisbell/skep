@@ -13,11 +13,12 @@
 //! either stands whole or not at all".
 //!
 //! What is composed is ONE `Kernel::transact` over the union of the three
-//! stagings' keys, its closure `stage_publish` (the member), the pairing of
-//! the shot's draft-native run with the fresh run it became (the member's
-//! run of the same index, read off the working M5), the check by identity
-//! (`project` on `stg.working()` against the kept place the client read
-//! before the transaction), `stage_reinstate_at` at that place and
+//! stagings' keys, its closure `stage_publish` (the member, and THE PAIRING
+//! of the shot's draft-native run with the fresh run it became — returned
+//! beside the member, since the member's runs coalesce and an index into
+//! them pairs nothing once two have; the S-gate's ruling), the check by
+//! identity (`project` on `stg.working()` against the kept place the client
+//! read before the transaction), `stage_reinstate_at` at that place and
 //! `stage_delete_at` at the draft-native run's position re-derived AFTER the
 //! placement — the composite the public ops cannot make, each opening a
 //! transaction of its own and M2 refusing a nested one. The kept place is a
@@ -83,8 +84,9 @@ impl From<DeleteError> for Refused {
 /// (`head_lock_key`, the edition's `content_lock_key`; no base, so no base
 /// key) and the draft's `content_lock_key` — whose closure (i) stages the
 /// shot of `shot`'s one draft-native run from `draft` into `pdoc()`, (ii)
-/// pairs that run with the fresh run it became, the member's run of the same
-/// index (0) read off the working M5, (iii) checks by identity that `draft`
+/// takes the fresh run that run became off the pairing the staging returns
+/// — its one entry, the run being the shot's one draft identity — (iii)
+/// checks by identity that `draft`
 /// still arranges the run's I-span at `kept`, exactly, (iv) stages the fresh
 /// run's placement at that place and (v) re-derives the draft-native run's
 /// position off the working world — it moved by the fresh run's width — and
@@ -108,17 +110,20 @@ fn rewindow(
     let readable = readable_by(PrincipalId(1));
     k.transact(&keys, |stg| {
         // (i) The member, the shot's fresh identity minted under the
-        // edition's own content chain.
-        let member = stage_publish(stg, P1, &doc, shot, &readable)?;
-        // (ii) The fresh run the draft-native run became: the member's run
-        // at the shot run's index, off the working M5.
-        let fresh = stg
-            .working()
-            .m5()
-            .content_runs(&member)
-            .next()
-            .cloned()
-            .expect("the member arranges the run the shot placed");
+        // edition's own content chain — and the pairing.
+        let (member, pairing) = stage_publish(stg, P1, &doc, shot, &readable)?;
+        // (ii) The fresh run the draft-native run became: the pairing's one
+        // entry, which names the run it was minted for.
+        let [minted] = pairing.as_slice() else {
+            panic!("one draft-native run, one minted piece: {pairing:?}");
+        };
+        assert_eq!(&minted.from, run, "the pairing names the draft-native run it was minted for");
+        let fresh = minted.to.clone();
+        assert_eq!(
+            stg.working().m5().content_runs(&member).next(),
+            Some(&fresh),
+            "the member's one run IS the fresh run the pairing names"
+        );
         // (iii) The check by identity, against the place the client read:
         // one V-span, the run's width, at the place — exactly.
         let now = stg.working().m5().project(draft, &coverage);

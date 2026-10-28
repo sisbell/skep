@@ -215,15 +215,17 @@ fn the_shot_refuses_a_carried_tail_past_the_run_budget() {
 #[test]
 fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
     // MAX_REINSERTED_VALUES binds how many values one SHOT re-inserts
-    // from its draft, and the count is request arithmetic — the
-    // draft-native runs' widths, summed — answered before any address is
+    // from its draft, and the count is request arithmetic — the DISTINCT
+    // positions the draft-native runs name — answered before any address is
     // probed. Nothing of doc1 is stored in this world, so every probe of
     // the draft answers `DanglingSource`: a shot refused `TooManyValues`
-    // here was refused without one. What is bounded is the SUM, so two
-    // runs over one I-extent, each inside the budget, are refused
-    // together; a by-reference run is placed as one run and never
-    // re-inserted, so its width is not counted; and the source gate still
-    // speaks first.
+    // here was refused without one. What is bounded is the distinct count,
+    // each draft identity being minted once per shot: two runs over ONE
+    // I-extent, each past half the budget, pass the count together and
+    // meet the existence walk, while two over DISJOINT extents, each past
+    // half, are refused together; a by-reference run is placed as one run
+    // and never re-inserted, so its width is not counted; and the source
+    // gate still speaks first.
     let p1 = Caller::Principal(PrincipalId(1));
     let k = shot_kernel(vec![], &[]);
     let vs = Vstream::new(&k);
@@ -237,31 +239,43 @@ fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
         draft: Some(doc1()),
         runs,
     };
-    let from_the_draft = |widths: &[usize]| {
+    // Runs of the draft, each `(first ordinal, width)`.
+    let from_the_draft = |runs: &[(u32, usize)]| {
         shot_from(
-            widths
-                .iter()
-                .map(|&w| ShotRun {
+            runs.iter()
+                .map(|&(first, w)| ShotRun {
                     origin: doc1(),
-                    run: run(&ca(1), w as u32),
+                    run: run(&ca(first), w as u32),
                 })
                 .collect(),
         )
     };
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &anyone)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[(1, MAX_REINSERTED_VALUES + 1)]), &anyone)),
         PublishError::TooManyValues
     ));
     let past_half = MAX_REINSERTED_VALUES / 2 + 1;
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[past_half, past_half]), &anyone)),
+        rejected(vs.publish(
+            p1,
+            &pdoc(),
+            &from_the_draft(&[(1, past_half), (past_half as u32 + 1, past_half)]),
+            &anyone
+        )),
         PublishError::TooManyValues
     ));
+    assert!(
+        matches!(
+            rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[(1, past_half), (1, past_half)]), &anyone)),
+            PublishError::DanglingSource
+        ),
+        "one I-extent named twice is counted once: inside the budget, so the walk is reached"
+    );
     // Exactly the budget passes the count, and its first probe finds the
     // draft's first address holding nothing.
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[MAX_REINSERTED_VALUES]), &anyone)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[(1, MAX_REINSERTED_VALUES)]), &anyone)),
         PublishError::DanglingSource
     ));
     // A run of the edition's own I-space past the budget, beside the same
@@ -277,7 +291,7 @@ fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
     // A draft its shooter may not read is withheld, however much of it
     // the shot names.
     assert!(matches!(
-        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &no_one)),
+        rejected(vs.publish(p1, &pdoc(), &from_the_draft(&[(1, MAX_REINSERTED_VALUES + 1)]), &no_one)),
         PublishError::Withheld(d) if d == doc1()
     ));
     assert_eq!(k.current_seq(), before, "every refusal commits nothing");

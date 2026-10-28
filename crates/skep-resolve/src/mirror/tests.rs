@@ -405,6 +405,12 @@ fn a_link_row_is_an_unattested_make_link() {
     assert_eq!(Row::of(&nullify), Row::Nullify { at: 8, docs: vec![a("1.0.2.0.1")] });
     let publish = json!({ "at": 9, "op": "publish", "docs": ["1.0.2.0.1.1"] });
     assert_eq!(Row::of(&publish), Row::Chain { members: vec![a("1.0.2.0.1.1")] });
+    // A `publish` row served whole to a reader of the staging draft names
+    // the draft beside the member, the member FIRST (the link-sets design
+    // §5.7's pinned order): the chain gains the member alone, never the
+    // draft.
+    let two_docs = json!({ "at": 10, "op": "publish", "docs": ["1.0.2.0.1.2", "1.0.2.0.7"] });
+    assert_eq!(Row::of(&two_docs), Row::Chain { members: vec![a("1.0.2.0.1.2")] });
 }
 
 /// A LINE CUT SHORT IS NEVER RUN INTO, AND HOLDS NOTHING: a held cache a

@@ -150,9 +150,11 @@ const MAX_SLOT_SPANS: usize = 4096;
 
 /// The most values a shot may re-insert: M5's `MAX_REINSERTED_VALUES`.
 ///
-/// It bounds the staging draft's runs' widths, summed, refused by the store
-/// as `too_many_values` by its request's arithmetic before a value is read
-/// (wire.md §The publish shot). Pinned equal to M5's by the suite.
+/// It bounds the DISTINCT positions the staging draft's runs name — the
+/// store mints each draft identity once per shot and places a later
+/// occurrence by reference (the link-sets design §5.7) — refused by the
+/// store as `too_many_values` by its request's arithmetic before a value is
+/// read (wire.md §The publish shot). Pinned equal to M5's by the suite.
 const MAX_REINSERTED_VALUES: u64 = 1 << 17;
 
 /// The most positions a shot may copy in by value.
@@ -307,6 +309,30 @@ impl<'a> IRange<'a> {
     fn width(self) -> u64 {
         self.reach - self.first
     }
+}
+
+/// Returns how many distinct positions `ranges` name, merging them in place.
+///
+/// It is the count the store holds a shot's re-insert to: the ranges sorted
+/// by prefix then first position, each walked against the reach the merge
+/// holds for its prefix, so a position two ranges name counts once and a
+/// range inside an earlier one adds nothing. `O(n log n)` in the ranges.
+fn distinct_positions(ranges: &mut [IRange<'_>]) -> u64 {
+    ranges.sort_by(|a, b| a.prefix.cmp(b.prefix).then(a.first.cmp(&b.first)));
+    let mut count = 0u64;
+    let mut held: Option<(&str, u64)> = None; // the prefix and the reach merged so far
+    for range in ranges.iter() {
+        let reach = match held {
+            Some((prefix, reach)) if prefix == range.prefix => reach,
+            _ => range.first,
+        };
+        let from = range.first.max(reach);
+        if range.reach > from {
+            count += range.reach - from;
+        }
+        held = Some((range.prefix, range.reach.max(reach)));
+    }
+    count
 }
 
 /// One run of a shot as its body takes it, in the shot's V-order.
@@ -815,7 +841,10 @@ impl Composer<'_> {
         let draft_trunk = draft.and_then(trunk_text);
         let runs = frame["runs"].as_array().ok_or_else(|| fault("the shot names no `runs`", "a `publish` frame carries its runs in V-order"))?;
         check_wire_list(runs, "runs")?;
-        let (mut placed, mut reinserted, mut copied) = (0u64, 0u64, 0u64);
+        let (mut placed, mut copied) = (0u64, 0u64);
+        // The draft-native ranges, for the distinct count the store holds
+        // to its budget: merged once every run is read.
+        let mut draft_ranges: Vec<IRange<'_>> = Vec::new();
         let mut parts: Vec<ShotPart<'_>> = Vec::with_capacity(runs.len());
         let mut origins: HashMap<&str, usize> = HashMap::new();
         let mut wants: Vec<Wanted<'_>> = Vec::new();
@@ -830,11 +859,11 @@ impl Composer<'_> {
                 let range = split_i(i_start)
                     .and_then(|(prefix, first)| IRange::new(prefix, first, width.get()))
                     .ok_or_else(|| fault("a copied run's `i_start` is no I-address its width can follow", run.to_string()))?;
-                // Each a sum of some of the runs `placed` sums, so neither
+                // A sum of some of the runs `placed` sums, so it never
                 // passes it.
                 copied += width.get();
                 if draft_native {
-                    reinserted += width.get();
+                    draft_ranges.push(range);
                 }
                 let i = *origins.entry(origin).or_insert_with(|| {
                     wants.push(Wanted::new(origin));
@@ -846,9 +875,13 @@ impl Composer<'_> {
                 parts.push(ShotPart::Window { start: addr(i_start, "runs[].i_start")?, width });
             }
         }
+        // The distinct positions the draft-native runs name, as the store
+        // counts them: the ranges of each prefix merged, each position once
+        // however many runs name it.
+        let reinserted = distinct_positions(&mut draft_ranges);
         if reinserted > MAX_REINSERTED_VALUES {
             return Err(fault(
-                format!("the shot re-inserts {reinserted} values from its draft, past the store's {MAX_REINSERTED_VALUES}"),
+                format!("the shot re-inserts {reinserted} distinct values from its draft, past the store's {MAX_REINSERTED_VALUES}"),
                 "the board refuses such a shot `too_many_values`, by its request's arithmetic",
             )
             .into());

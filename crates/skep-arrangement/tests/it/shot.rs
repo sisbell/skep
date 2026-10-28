@@ -5,11 +5,11 @@
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
-    reading_surface, seat_link, trunk_head, Base, Deposit, HasM5, M5State, PublishError, Run,
-    SegmentRun, Shot, ShotTerms, VSpec, Vstream,
+    head_lock_key, reading_surface, seat_link, stage_publish, trunk_head, Base, Deposit, HasM5,
+    M5State, MintedRun, PublishError, Run, SegmentRun, Shot, ShotTerms, VSpec, Vstream,
 };
 use skep_content::{ContentStore, HasContent};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::{HasM3, M3State, PrincipalId};
 
 use crate::common::*;
 
@@ -577,16 +577,19 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
 
 #[test]
 fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
-    // `Shot::reinserted_runs` names the values the commit re-inserts and
-    // `Shot::reinserted_values` counts them — THE count `publish` holds to
-    // MAX_REINSERTED_VALUES, and the one a caller pricing a shot ahead of its
-    // transaction asks — so they must be exactly the values the commit
-    // writes: the draft-native runs, a run the client names twice re-inserted
-    // twice, and no position of the document's own I-space or of a window.
-    // And WHERE it writes them, as `publish` states it: in that order, as the
-    // last addresses of the trunk's content chain, nothing else minted there
-    // — which is how skep-media's cell index, told only the member by the
-    // ack, finds the reference cells among the values a shot re-inserts.
+    // `Shot::reinserted_runs` names the runs the commit re-inserts and
+    // `Shot::reinserted_values` counts their DISTINCT positions — THE count
+    // `publish` holds to MAX_REINSERTED_VALUES, and the one a caller pricing
+    // a shot ahead of its transaction asks — so they must be exactly the
+    // values the commit writes: the draft-native runs' positions, EACH DRAFT
+    // IDENTITY ONCE PER SHOT (the link-sets design §5.7) — a run the client
+    // names twice re-inserted once, its second occurrence placed by
+    // reference to the fresh run the first became — and no position of the
+    // document's own I-space or of a window. And WHERE it writes them, as
+    // `publish` states it: in that order, as the last addresses of the
+    // trunk's content chain, nothing else minted there — which is how
+    // skep-media's cell index, told only the member by the ack, finds the
+    // reference cells among the values a shot re-inserts.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -611,7 +614,11 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         ],
         "the draft's two runs, in the order given"
     );
-    assert_eq!(shot.reinserted_values(), n(3), "their widths, 2 and 1");
+    assert_eq!(
+        shot.reinserted_values(),
+        n(2),
+        "the DISTINCT positions, ca(2) and ca(3): the second run names ca(2) again, counted once"
+    );
     let no_draft = Shot {
         draft: None,
         ..shot.clone()
@@ -631,23 +638,25 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         Some(doc1()),
         "a draft named by a member of its chain is judged as its document (PUB-2.15)"
     );
-    assert_eq!(draft_named_by_its_member.reinserted_values(), n(3));
+    assert_eq!(draft_named_by_its_member.reinserted_values(), n(2));
     let stored = k.snapshot().world().content().len();
-    vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
+    let (member, _) = vs
+        .publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
         .expect("the shot commits");
     let s = k.snapshot();
     let content = s.world().content();
-    // Two draft-native runs of single-byte values, two stretches: the three
-    // values the shot said it re-inserts, as two entries — one per run.
+    // One minted piece of single-byte values, one stretch: the two distinct
+    // values the shot re-inserts, as one entry — the second run, naming an
+    // identity the first minted, writes nothing.
     assert_eq!(
         content.len() - stored,
-        2,
-        "the commit wrote one stretch per draft-native run the shot re-inserts"
+        1,
+        "the commit wrote one stretch for the one piece of draft identity it minted"
     );
     assert_eq!(
         s.world().m3().next_content_address(&pdoc()),
-        Some(pca(7)),
-        "three fresh identities past the edition's three, and nothing else minted under its content chain"
+        Some(pca(6)),
+        "two fresh identities past the edition's three, and nothing else minted under its content chain"
     );
     let value = |address: &Address| {
         content
@@ -656,17 +665,91 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
             .as_bytes()
             .to_vec()
     };
-    let landed: Vec<Vec<u8>> = (4..=6).map(|ordinal| value(&pca(ordinal))).collect();
-    let named: Vec<Vec<u8>> = shot
-        .reinserted_runs()
-        .flat_map(Run::addrs)
-        .map(|address| value(&address))
-        .collect();
+    let landed: Vec<Vec<u8>> = (4..=5).map(|ordinal| value(&pca(ordinal))).collect();
     assert_eq!(
-        landed, named,
-        "the content chain's last three addresses, in the order the shot names them"
+        landed,
+        vec![b"b".to_vec(), b"c".to_vec()],
+        "the content chain's last two addresses, in the order the shot names them"
     );
-    assert_eq!(named, vec![b"b".to_vec(), b"c".to_vec(), b"b".to_vec()]);
+    // The member names the fresh run twice: once as it was minted, merged
+    // with the edition's own three it is I-adjacent to, and once by
+    // reference for the run's second occurrence — a window between them.
+    assert_eq!(
+        s.world().m5().content_runs(&member).cloned().collect::<Vec<_>>(),
+        vec![
+            Run::new(pca(1), n(5)).expect("a run"),
+            Run::new(w.clone(), n(1)).expect("a run"),
+            Run::new(pca(4), n(1)).expect("a run"),
+        ],
+        "the placement names the fresh run twice, the second time by reference"
+    );
+    assert_eq!(
+        bytes_of(&s, &member),
+        [b"a", b"b", b"c", b"b", b"c", b"w", b"b"].map(|b| b.to_vec()).to_vec(),
+        "the member reads every occurrence the client placed"
+    );
+}
+
+#[test]
+fn a_run_overlapping_an_earlier_one_in_part_is_split_into_a_referenced_piece_and_a_minted_piece() {
+    // EACH DRAFT IDENTITY ONCE PER SHOT, at the partial overlap (the
+    // link-sets design §5.7): "a run that overlaps an earlier one in part
+    // splits into a referenced piece and a minted piece, one record per
+    // minted piece". The draft holds a b c as one run; the shot names b c,
+    // then a b c. The first run is minted whole; of the second, a — the one
+    // position no earlier run minted — is minted, and b c placed by
+    // reference to the fresh run the first run became. The pairing
+    // `stage_publish` returns is the two minted pieces in minting order,
+    // each beside the fresh run it became — the correspondence a composite
+    // records in the draft, one record per minted piece — and the member
+    // reads every occurrence the client placed. Staged through the public
+    // staging function under a transaction of the test's own, the one way to
+    // read the pairing.
+    let k = mem_kernel();
+    deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    let shot = Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: Some(doc1()),
+        runs: vec![
+            shot_run(&pdoc(), &pca(1), 3),
+            shot_run(&doc1(), &ca(2), 2),
+            shot_run(&doc1(), &ca(1), 3),
+        ],
+    };
+    assert_eq!(shot.reinserted_values(), n(3), "three distinct positions over the two runs");
+    let readable = readable_by(PrincipalId(1));
+    let stored = k.snapshot().world().content().len();
+    let keys = [head_lock_key(&pdoc()), M3State::content_lock_key(&pdoc())];
+    let ((member, pairing), _) = k
+        .transact(&keys, |stg| stage_publish(stg, P1, &pdoc(), &shot, &readable))
+        .expect("the shot commits");
+    let run = |start: &Address, width: u32| Run::new(start.clone(), n(width)).expect("a run");
+    assert_eq!(
+        pairing,
+        vec![
+            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2) },
+            MintedRun { from: run(&ca(1), 1), to: run(&pca(6), 1) },
+        ],
+        "the two minted pieces in minting order, each beside the fresh run it became"
+    );
+    let s = k.snapshot();
+    assert_eq!(
+        s.world().content().len() - stored,
+        2,
+        "two stretches: the first run's two bytes, then the one byte the second run adds"
+    );
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(7)));
+    assert_eq!(
+        s.world().m5().content_runs(&member).cloned().collect::<Vec<_>>(),
+        vec![run(&pca(1), 6), run(&pca(4), 2)],
+        "the edition's three, the fresh b c and the fresh a as one run; then b c by reference"
+    );
+    assert_eq!(
+        bytes_of(&s, &member),
+        [b"a", b"b", b"c", b"b", b"c", b"a", b"b", b"c"].map(|b| b.to_vec()).to_vec(),
+        "a b c, then b c, then a b c — every occurrence the client placed"
+    );
 }
 
 #[test]

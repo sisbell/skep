@@ -27,7 +27,7 @@ use std::error::Error;
 use std::fmt;
 
 use skep_address::Address;
-use skep_arrangement::SeatError;
+use skep_arrangement::{PublishError, SeatError};
 use skep_namespace::MintError;
 
 // Ownership: every op that deposits into a home document's link subspace
@@ -315,6 +315,53 @@ impl From<NullifyError> for RetractStaleError {
     }
 }
 
+/// The publication's rejection (the link-sets design §5.7): the shot's own
+/// verdicts, the twin fence, and the correspondence records' backstops.
+///
+/// In the order the composite answers: the shot's admission through its
+/// source gate (`Publish`, M5's verdicts as `publish` states their order,
+/// the draft's registration and ownership among them); then THE TWIN FENCE
+/// (`AlreadyPublished`), before anything is staged; then the shot's staging
+/// (`Publish` again: the re-insert's count, the existence walk, the
+/// placement, the member's mint); then, per correspondence record, the
+/// deposit gate's home check (`HomeNotRegistered`, `NotOwner`) — a backstop
+/// the admission's draft slots make unreachable on the composite's path,
+/// reachable through [`stage_correspondence`](crate::stage_correspondence)
+/// alone — and the record's mint and seat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationError {
+    /// The shot's own refusal, as `publish` states it.
+    Publish(PublishError),
+    /// A draft-native run of the request overlaps a span a correspondence
+    /// record homed in the draft already names as its `from`: those words
+    /// are published already, in the member `site` names — the record's
+    /// `to`'s member. Permanent: the record stands for good.
+    AlreadyPublished {
+        /// The member the record's `to` span was minted into.
+        site: Address,
+    },
+    /// The draft a record is homed in is not a registered document.
+    HomeNotRegistered,
+    /// The caller is not the draft's effective owner (ω, exact account match).
+    NotOwner(Address),
+    /// A record's link mint was refused.
+    Mint(MintError),
+    /// A record's seat in the draft's link subspace was refused.
+    Seat(SeatError),
+}
+
+impl From<PublishError> for PublicationError {
+    fn from(e: PublishError) -> Self {
+        PublicationError::Publish(e)
+    }
+}
+
+impl From<SeatError> for PublicationError {
+    fn from(e: SeatError) -> Self {
+        PublicationError::Seat(e)
+    }
+}
+
 /// FOLLOWLINK's ⊥: link or slot absent (§E).
 ///
 /// Distinct from `Ok(⟨⟩)` — a valid-but-empty endset — so `⟨⟩ ≠ ⊥` is
@@ -511,6 +558,36 @@ impl Error for EditLinkError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             EditLinkError::Mint(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for PublicationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // This layer only — the shot's own words are the `source`.
+            PublicationError::Publish(_) => f.write_str("publication: the shot refused"),
+            PublicationError::AlreadyPublished { .. } => f.write_str(
+                "publication: a draft-native run of the request is already published — a correspondence record homed in the draft names its words",
+            ),
+            PublicationError::HomeNotRegistered => {
+                f.write_str("publication: the draft a record is homed in is not a registered Document")
+            }
+            PublicationError::NotOwner(_) => {
+                f.write_str("publication: the caller is not the draft's effective owner (ω)")
+            }
+            PublicationError::Mint(e) => write!(f, "publication: a record's mint failed: {e}"),
+            PublicationError::Seat(e) => write!(f, "publication: a record's seat refused: {e}"),
+        }
+    }
+}
+impl Error for PublicationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            PublicationError::Publish(e) => Some(e),
+            PublicationError::Mint(e) => Some(e),
+            PublicationError::Seat(e) => Some(e),
             _ => None,
         }
     }

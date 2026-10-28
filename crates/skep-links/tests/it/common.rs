@@ -350,6 +350,35 @@ pub fn sib_doc() -> Address {
     a(&[1, 0, 2, 0, 1])
 }
 
+/// Principal 1's PUBLISHED edition: `[1,0,1,0,3]`, registered by
+/// [`edition_world`] alone — the target the publication suite's shots
+/// append to, M5's `pdoc` by another name.
+pub fn pdoc() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
+/// The edition's content element at `ordinal`: `[1,0,1,0,3,0,1,k]`, where
+/// a shot's fresh identity lands.
+pub fn pca(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, 0, 1, k])
+}
+
+/// The edition's `k`-th trunk member: `[1,0,1,0,3,k]`.
+pub fn pmember(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, k])
+}
+
+/// [`genesis_world`] with [`pdoc`] registered published, an explicit `true`
+/// at its mint — the one document of the owner's a shot may append to,
+/// doc1 and doc2 being the drafts it is staged from.
+pub fn edition_world() -> World {
+    let world = genesis_world();
+    World {
+        m3: world.m3.apply_m3(Seq(0), &M3Rec::allocate(pdoc(), true)),
+        ..world
+    }
+}
+
 /// Document `d` of the owner's account: `[1,0,1,0,d]` — doc1 at 1, doc2 at
 /// 2, and the homes [`many_documents`] registers past them.
 pub fn doc(d: u32) -> Address {
@@ -453,6 +482,13 @@ impl Deref for Journaled {
 /// suite that reads an attestation back with `Kernel::attestation_at` opens
 /// this one — an in-memory kernel refuses that read as `Unjournaled`.
 pub fn journaled() -> Journaled {
+    journaled_over(genesis_world())
+}
+
+/// [`journaled`] over `world` — the edition world, for a suite whose
+/// commits it counts with `Kernel::boundaries_above`, a read the journal
+/// alone answers.
+pub fn journaled_over(world: World) -> Journaled {
     let dir = tempdir().expect("a temporary journal directory");
     let cfg = KernelConfig {
         durability: Durability::Fsync {
@@ -465,7 +501,7 @@ pub fn journaled() -> Journaled {
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0),
     };
-    let kernel = Kernel::open(cfg, genesis_world()).expect("journaled open");
+    let kernel = Kernel::open(cfg, world).expect("journaled open");
     Journaled { kernel, _dir: dir }
 }
 

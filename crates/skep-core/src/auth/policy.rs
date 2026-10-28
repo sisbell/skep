@@ -43,7 +43,10 @@ mod registry;
 mod upload;
 
 pub use credential::{op_shape_refusal, precheck, DepositSpans, RecordSig};
-pub use plain::{plain_admission, retract_class_refusal, RetractClassRefusal};
+pub use plain::{
+    plain_admission, publication_read_refusal, retract_class_refusal, PublicationReadRefusal,
+    RetractClassRefusal,
+};
 pub use registry::{
     deposits_registry_link, genesis_seeding_check, registry_admission, RegistryRefusal,
 };

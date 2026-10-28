@@ -1477,14 +1477,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 87 codes, pinned.
+/// The full `RejectCode` wire-name table — all 88 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 87] = [
+    let table: [(RejectCode, &str); 88] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1559,6 +1559,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::ReadWithInLinks, "read_with_in_links"),
         (RejectCode::RetractRefused, "retract_refused"),
         (RejectCode::ReadWithRefused, "read_with_refused"),
+        (RejectCode::PublicationOverBudget, "publication_over_budget"),
         (RejectCode::NoSuchSubspace, "no_such_subspace"),
         (RejectCode::EmptySubspace, "empty_subspace"),
         (RejectCode::DepthIncompatible, "depth_incompatible"),

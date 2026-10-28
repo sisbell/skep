@@ -48,6 +48,74 @@ impl TwoAccounts {
     }
 }
 
+/// THE PRICE AHEAD OF THE LOCK (the link-sets design §5.7, W8 (1)): the
+/// producer answers the four terms where a publication's in-lock reads are
+/// priced past `MAX_PUBLICATION_READS`, and nothing at the budget. The
+/// draft term: the maker's draft fragmented into seventeen runs by
+/// seventeen inserts at its first position — each value's identity above
+/// the last's, so no run merges — and a shot of 4096 runs over it prices at
+/// 17 × 4096, past the budget's 16 × 4096; the same shot off a sixteen-run
+/// draft is at the budget and admitted. The home term: one link deposited
+/// in the maker's home makes it the one link-holding home, and a read-with
+/// list one entry past the budget is refused on it where the shot names no
+/// draft. The other's account prices no homes of the maker's, and an op
+/// that is no publish is nothing's.
+#[test]
+fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
+    use serde_json::json;
+    use skep_address::Nat;
+    use skep_arrangement::HasM5;
+    use skep_febe::{PublishDeposits, PublishTarget, Run, Shot, ShotRun};
+    use skep_links::MAX_PUBLICATION_READS;
+
+    use crate::auth::policy::{publication_read_refusal, PublicationReadRefusal};
+
+    let board = TwoAccounts::open();
+    let (maker_id, maker) = board.maker;
+    let draft = crate::codec::wire_address(&board.draft).expect("the draft's address");
+    let home = crate::codec::wire_address(&board.home).expect("the home's address");
+    let fragment = |count: usize| {
+        for _ in 0..count {
+            exec(&board.febe, maker, json!({"op": "insert", "doc": board.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}));
+        }
+    };
+    let shot = |draft: Option<Address>, runs: usize| Shot {
+        base: None,
+        draft,
+        runs: vec![ShotRun { origin: home.clone(), run: Run::new(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(1u32)).expect("a run") }; runs],
+    };
+    let publish = |shot: Shot, read_with: usize| Op::Publish {
+        target: PublishTarget::Document(home.clone()),
+        shot,
+        places: Vec::new(),
+        deposits: PublishDeposits { links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with] },
+    };
+    // The draft term, at the budget and one run past it.
+    fragment(16);
+    let snap = board.engine.kernel().snapshot();
+    assert_eq!(snap.world().m5().content_run_count(&draft), 16, "sixteen inserts at the front: sixteen runs");
+    assert_eq!(publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id), None, "16 × 4096 is the budget");
+    fragment(1);
+    let snap = board.engine.kernel().snapshot();
+    assert_eq!(
+        publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id),
+        Some(PublicationReadRefusal { homes: 0, entries: 0, draft_runs: 17, runs: 4096, total: 17 * 4096, budget: MAX_PUBLICATION_READS }),
+        "17 × 4096 is past it: every term named"
+    );
+    // The home term: one link-holding home, a list one entry past the budget.
+    exec(&board.febe, maker, json!({"op": "make_link", "home": board.home, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+    let snap = board.engine.kernel().snapshot();
+    let over = publish(shot(None, 0), MAX_PUBLICATION_READS + 1);
+    assert_eq!(
+        publication_read_refusal(snap.world(), &over, maker_id),
+        Some(PublicationReadRefusal { homes: 1, entries: MAX_PUBLICATION_READS + 1, draft_runs: 0, runs: 0, total: MAX_PUBLICATION_READS + 1, budget: MAX_PUBLICATION_READS }),
+        "one home times one entry past the budget"
+    );
+    assert_eq!(publication_read_refusal(snap.world(), &publish(shot(None, 0), MAX_PUBLICATION_READS), maker_id), None, "at the budget");
+    assert_eq!(publication_read_refusal(snap.world(), &over, board.other.0), None, "the other holds no link-holding home");
+    assert_eq!(publication_read_refusal(snap.world(), &Op::Fork { published: None }, maker_id), None, "no publish, no price");
+}
+
 /// Executes `frame` through M10 as `sid`, answering the ack's address.
 ///
 /// # Panics

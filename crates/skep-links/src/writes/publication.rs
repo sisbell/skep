@@ -25,6 +25,14 @@
 //! home's link addresses rise in the order the daemon mints them — THE
 //! PIN, stated at `mint_link`'s frontier read and held by
 //! `tests/it/publication.rs`.
+//!
+//! Beside the composite sit its two bounds: [`price_publication_reads`],
+//! the price of the four reads the composite makes under the lock, which a
+//! transport asks of a snapshot ahead of its lock and refuses past
+//! [`MAX_PUBLICATION_READS`] — the
+//! composite reads as it did, the price merely bounds it — and the child
+//! module `sizes`, the worst-case bytes per entry kind as the kernel prices
+//! them, the table a panel prices a request's records from before the act.
 
 use skep_address::{document_of, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
@@ -41,7 +49,7 @@ use super::{
     correspondence_type, emit_core, is_correspondence_class, EmitCoreError, Gate, HomeFault,
     LinkWriter, Visibility,
 };
-use crate::budget::MAX_SLOT_SPANS;
+use crate::budget::{MAX_PUBLICATION_READS, MAX_SLOT_SPANS};
 use crate::endset::{enc, Endset, Link};
 use crate::error::{PlanFault, PublicationError};
 use crate::state::{LinkRec, View, FROM, TYPE};
@@ -51,6 +59,10 @@ use crate::LinkWorld;
 // shot, the one function that validates them and plans the deposits, and
 // the member-position end's one function.
 mod plan;
+// The worst-case table: the staged bytes per entry kind as the kernel
+// prices them, and the maximal request's sum against the transaction
+// budget.
+mod sizes;
 
 pub use plan::{
     canonical_member_spans, edition_type, member_end, member_image, names_read_with,
@@ -58,6 +70,101 @@ pub use plan::{
     LinkEntry, MemberEnd, MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit, PlannedEnd,
     PlannedHome, PublishDeposits, PublishTarget,
 };
+pub use sizes::{
+    CLAIM_BYTES, COPY_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES,
+    EDITION_MINT_BYTES, KEPT_PLACE_BYTES, MAXIMAL_PUBLICATION_BYTES, PLACED_RUN_BYTES,
+    READ_WITH_BYTES, REINSERTED_VALUE_BYTES, RETRACTION_BYTES, SHOT_BYTES,
+};
+
+/// The price of a publication's in-lock reads: the four terms the design
+/// names, read off one snapshot (the link-sets design §5.7, EVERY IN-LOCK
+/// READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK).
+///
+/// It is what [`price_publication_reads`] answers and a transport refuses
+/// on ([`ReadPrice::over_budget`]), carried whole so the refusal can name
+/// each term: the caller's link-holding home count, the entries that read
+/// per home, the draft's content run count and the request's runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadPrice {
+    /// The caller's link-holding homes: `homes_under` of the caller's
+    /// account — every document under it holding a resident link, the
+    /// plan's `own_homes` before its ownership filter, so at or above the
+    /// homes the plan reads.
+    pub homes: usize,
+    /// The `links` entries and the `read_with` entries, summed: the entries
+    /// whose read ranges over the caller's homes — (3)'s claim read and
+    /// (5)'s presence read.
+    pub entries: usize,
+    /// The draft's content runs, `content_run_count` of the draft the shot
+    /// names; `0` for a shot naming none.
+    pub draft_runs: usize,
+    /// The request's runs, `shot.runs.len()`: the kept-place check costs
+    /// the draft's run count per placed run, and the twin fence one stab per
+    /// re-inserted run, so the runs bound both.
+    pub runs: usize,
+}
+
+impl ReadPrice {
+    /// The budget the price is held to:
+    /// [`MAX_PUBLICATION_READS`].
+    pub const BUDGET: usize = MAX_PUBLICATION_READS;
+
+    /// Returns the price: `homes × entries + draft_runs × runs`, saturating.
+    pub fn total(&self) -> usize {
+        self.homes
+            .saturating_mul(self.entries)
+            .saturating_add(self.draft_runs.saturating_mul(self.runs))
+    }
+
+    /// Returns whether the price is past [`ReadPrice::BUDGET`].
+    ///
+    /// The one comparison against the budget (PATTERNS SP-23): a transport
+    /// refuses where this answers `true` and reads the terms off the price
+    /// for its refusal's detail.
+    pub fn over_budget(&self) -> bool {
+        self.total() > Self::BUDGET
+    }
+}
+
+/// Prices a publication's in-lock reads over `world`: [`ReadPrice`]'s four
+/// terms, read off the snapshot a transport admits on, ahead of its lock.
+///
+/// It reads two counts of the world and two of the request, and walks
+/// nothing: the caller's link-holding homes by [`homes_under`] of the
+/// caller's account (one seek per home found, the account's prefix read
+/// off M3's principal table), the draft's content run count by M5's one map
+/// lookup, the entries and the runs off the request's lists. A caller that
+/// is no principal — `Caller::System`, which no request path carries — has
+/// no account and so no homes, and prices the draft term alone. The counts
+/// may move between this read and the composite's own, where the transport
+/// takes its lock after it (the survey's C8): the budget is conservative
+/// by design, and the composite reads under the lock exactly as it did
+/// before it was priced.
+///
+/// [`homes_under`]: crate::LinkState::homes_under
+pub fn price_publication_reads<W: LinkWorld + HasM5>(
+    world: &W,
+    caller: Caller,
+    shot: &Shot,
+    deposits: &PublishDeposits,
+) -> ReadPrice {
+    let homes = match caller {
+        Caller::Principal(p) => world
+            .m3()
+            .principal_prefix(p)
+            .map_or(0, |account| world.links().homes_under(&enc([account])).len()),
+        Caller::System => 0,
+    };
+    let draft_runs = shot
+        .draft_document()
+        .map_or(0, |draft| world.m5().content_run_count(&draft));
+    ReadPrice {
+        homes,
+        entries: deposits.links.len().saturating_add(deposits.read_with.len()),
+        draft_runs,
+        runs: shot.runs.len(),
+    }
+}
 
 impl From<HomeFault> for PublicationError {
     fn from(e: HomeFault) -> Self {

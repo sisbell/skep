@@ -1968,6 +1968,22 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     let every = StandingLine {
         halted_at: Some(Seq(17)),
         poisoned: Some(Seq(17)),
+        refused_producers: vec![
+            skep_core::commits::ProducerRefusal {
+                producer: "head",
+                act: "insert",
+                cause: "durability: the test seam's refusal".to_string(),
+                position: 17,
+                attempts: 3,
+            },
+            skep_core::commits::ProducerRefusal {
+                producer: "registry",
+                act: "make_link",
+                cause: "poisoned".to_string(),
+                position: 16,
+                attempts: 1,
+            },
+        ],
         history_damaged: Some(JournalDamageSite(&corrupt).to_string()),
         stopped_files: vec![
             StoppedFile { name: "commits.log", since: 9 },
@@ -1990,7 +2006,11 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         every.to_string(),
         format!(
             "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned \
-             since position 17; a history read found the journal unreadable at position 9; \
+             since position 17; the head producer's last shot was refused at its insert \
+             (durability: the test seam's refusal) at position 17, 3 attempts refused since its \
+             last landing; the registry producer's last shot was refused at its make_link \
+             (poisoned) at position 16, 1 attempts refused since its last landing; a history read \
+             found the journal unreadable at position 9; \
              commits.log stopped since position 9; feed-index.log stopped since position 12; the \
              pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
              uncovered; the cell index failed to build; deposits refused at the floor (free space \
@@ -2001,6 +2021,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     let one = StandingLine {
         halted_at: None,
         poisoned: None,
+        refused_producers: Vec::new(),
         history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: true,
@@ -2028,6 +2049,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     );
     let poisoned = StandingLine {
         poisoned: Some(Seq(1203)),
+        refused_producers: Vec::new(),
         history_damaged: None,
         claimed_permissive: true,
         ..damaged
@@ -2040,6 +2062,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     let none = StandingLine {
         halted_at: None,
         poisoned: None,
+        refused_producers: Vec::new(),
         history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: false,
@@ -2057,6 +2080,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     let kept = StandingLine {
         halted_at: None,
         poisoned: None,
+        refused_producers: Vec::new(),
         history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: false,
@@ -2139,6 +2163,13 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
     let every = StandingLine {
         halted_at: Some(Seq(9001)),
         poisoned: Some(Seq(9001)),
+        refused_producers: vec![skep_core::commits::ProducerRefusal {
+            producer: "{producer}",
+            act: "{act}",
+            cause: "{cause}".to_string(),
+            position: 9001,
+            attempts: 9006,
+        }],
         history_damaged: Some("at position 9001".to_string()),
         stopped_files: vec![StoppedFile { name: "{file}", since: 9001 }],
         pruner_gone: true,

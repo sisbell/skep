@@ -65,8 +65,13 @@
 //! commit refused and the cause as the wire renders a rejection), the record
 //! skipped for this cycle, the last record and the origin as they were, and
 //! the triggering write untouched; the next landed commit retries, the hour
-//! standing due. A landing clears the memo, so the next refusal is news
-//! again.
+//! standing due. While the memo stands the refusal is a DAEMON CONDITION
+//! (the link-sets design §5.7, W8 (5)): [`TimeWriter::refusal`] reads it as
+//! the producer `time`'s — the commit refused, the cause, the position the
+//! record would have named and the attempts since the last landing — for
+//! `/health`'s `conditions` member and the standing line's clause, echoed
+//! as the write halt is. A landing clears the memo, so the next refusal is
+//! news again and the condition is gone.
 //!
 //! **The reads.** [`hour_at`] answers the newest record at or below a
 //! position off the world — `T`'s members read by position, a binary search
@@ -79,16 +84,16 @@ use skep_address::{ordinal, shift, validate, Address, Nat};
 use skep_arrangement::{trunk_head, Base, HasM5, Run, Shot, ShotRun, VPos};
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
-use skep_febe::{lower_txn, Op, OpKind, Stores};
+use skep_febe::{lower_txn, Op, OpKind, Rejection, Stores};
 use skep_namespace::{
     first_version_address, system_account, time_document, HasM3, SYSTEM_PRINCIPAL,
 };
 use skep_util::notice::Class;
 
 use super::feed::Feed;
-use super::head::{Refused, SYSTEM_TESTIMONY, TIME_BOUND_MILLIS};
+use super::head::{malformed_run, render_cause, Refused, SYSTEM_TESTIMONY, TIME_BOUND_MILLIS};
 use super::sidecar::wall_clock_millis;
-use super::{write_meta, Commits, Lines};
+use super::{write_meta, Commits, Lines, ProducerRefusal, RefusalMemo};
 use crate::codec::op_name;
 use crate::serial::SerialGuard;
 
@@ -161,11 +166,14 @@ struct TimeState {
     last_seen_position: u64,
     /// The time document, found at open or minted at the first record.
     time_document: Option<Address>,
-    /// The memo of the last refusal said: the commit refused and its cause.
+    /// The memo of the last refusal said: the commit refused, its cause, the
+    /// position the record would have named and the attempts since the last
+    /// landing ([`RefusalMemo`]).
     ///
     /// A refusal at the same commit rendering the same is not said again
-    /// while it stands; cleared when a record lands.
-    last_refusal: Option<(&'static str, String)>,
+    /// while it stands, but is counted; read as the producer `time`'s
+    /// condition ([`TimeWriter::refusal`]); cleared when a record lands.
+    last_refusal: Option<RefusalMemo>,
 }
 
 /// The time writer, owned by [`Commits`] beside the head writer.
@@ -275,7 +283,7 @@ impl TimeWriter {
     fn write_record(&self, wp: &Commits, serial: &SerialGuard<'_>, record: &TimeRecord) -> bool {
         let position = record.position;
         let refused =
-            |act: &'static str, cause: String| self.say_the_refusal_once(position, act, cause);
+            |act: &'static str, refusal: &Rejection| self.say_the_refusal_once(position, act, refusal);
         let Some(draft) = wp.head_writer.ensure_draft(wp, serial, &refused) else {
             return false;
         };
@@ -311,12 +319,9 @@ impl TimeWriter {
             Ok(run) => run,
             Err(e) => {
                 // Unreachable — the insert answered a content element start —
-                // and named rather than silent (I11 (c)).
-                self.say_the_refusal_once(
-                    position,
-                    op_name(OpKind::Publish),
-                    format!("its atom's run is malformed: {e}"),
-                );
+                // and named rather than silent (I11 (c)), as the head
+                // writer names it.
+                self.say_the_refusal_once(position, op_name(OpKind::Publish), &malformed_run(&e));
                 return false;
             }
         };
@@ -373,17 +378,32 @@ impl TimeWriter {
     /// Says the refusal line, once per commit and cause.
     ///
     /// `act` is the op of the record's commit the refusal was met at, as the
-    /// wire names it, and `cause` the refusal as the wire renders a
-    /// rejection. Compared under the state lock with the last one said: the
-    /// same commit and cause is not said again while it stands; a landing
-    /// clears the memo.
-    fn say_the_refusal_once(&self, position: u64, act: &'static str, cause: String) {
+    /// wire names it, and `refusal` the rejection, rendered as the wire
+    /// renders one (`render_cause`, the head writer's). Compared under the
+    /// state lock with the last one said: the same commit and cause is not
+    /// said again while it stands, but counted, and the memo moves to this
+    /// position; another is said and remembered. A landing clears the memo.
+    fn say_the_refusal_once(&self, position: u64, act: &'static str, refusal: &Rejection) {
+        let cause = render_cause(refusal);
         let mut state = self.state.lock();
-        if state.last_refusal.as_ref().is_some_and(|(a, c)| *a == act && *c == cause) {
+        if let Some(memo) = state.last_refusal.as_mut().filter(|m| m.act == act && m.cause == cause) {
+            memo.attempts += 1;
+            memo.position = position;
             return;
         }
+        let attempts = state.last_refusal.as_ref().map_or(0, |m| m.attempts) + 1;
         self.lines.say(Class::Failure, TimeRefusedLine { position, act, cause: &cause });
-        state.last_refusal = Some((act, cause));
+        state.last_refusal = Some(RefusalMemo { act, cause, position, attempts });
+    }
+
+    /// Returns the time writer's standing refusal as the producer `time`'s
+    /// condition, or `None` where its last record landed.
+    ///
+    /// It is the memo read under the state lock and no guard, for
+    /// [`Commits::producer_refusals`] — the read behind `/health`'s
+    /// `conditions` member and the standing line's clause.
+    pub(super) fn refusal(&self) -> Option<ProducerRefusal> {
+        self.state.lock().last_refusal.as_ref().map(|memo| memo.condition("time"))
     }
 }
 

@@ -125,7 +125,7 @@ mod state;
 // deposit, and the publication's with the staging functions it composes.
 mod writes;
 
-pub use budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
+pub use budget::{MAX_PUBLICATION_READS, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
 pub use class::{coverage_class, CoverageClass};
 pub use endset::{enc, Endset, IntoSpans, Link, Spans};
 // The one caller-identity type of the write-surface ownership gate —
@@ -144,11 +144,15 @@ pub use state::{
 };
 pub use writes::{
     canonical_member_spans, correspondence_type, edition_type, emit_tuple, is_correspondence_class,
-    is_replaces_class, member_end, member_image, names_read_with, plan_deposits, read_with_in,
-    read_with_type, replaces_type, request_image, resolve_end, retraction_tuple, slot_endset,
-    stage_correspondence, stage_publication, supersession_claim, DepositPlan, Edit, EndArg,
-    LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit,
-    PlannedEnd, PlannedHome, PublishDeposits, PublishTarget, SlotArg, Visibility,
+    is_replaces_class, member_end, member_image, names_read_with, plan_deposits,
+    price_publication_reads, read_with_in, read_with_type, replaces_type, request_image,
+    resolve_end, retraction_tuple, slot_endset, stage_correspondence, stage_publication,
+    supersession_claim, DepositPlan, Edit, EndArg, LinkEntry, LinkWriter, MemberEnd, MemberSpan,
+    NamedAddress, PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PublishDeposits,
+    PublishTarget, ReadPrice, SlotArg, Visibility, CLAIM_BYTES, COPY_BYTES,
+    CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES, KEPT_PLACE_BYTES,
+    MAXIMAL_PUBLICATION_BYTES, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
+    RETRACTION_BYTES, SHOT_BYTES,
 };
 
 /// The auto traits M7's slice promises without saying.

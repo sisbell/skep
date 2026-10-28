@@ -275,6 +275,10 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::ReadWithInLinks
         | RejectCode::RetractRefused
         | RejectCode::ReadWithRefused
+        // The publication's in-lock reads priced past their budget (lane
+        // S4): the same board prices the same request the same, so a
+        // reissue cannot help and the client narrows.
+        | RejectCode::PublicationOverBudget
         | RejectCode::NoSuchSubspace
         | RejectCode::EmptySubspace
         | RejectCode::DepthIncompatible
@@ -294,7 +298,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 87] = [
+const ALL_CODES: [RejectCode; 88] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -369,6 +373,7 @@ const ALL_CODES: [RejectCode; 87] = [
     RejectCode::ReadWithInLinks,
     RejectCode::RetractRefused,
     RejectCode::ReadWithRefused,
+    RejectCode::PublicationOverBudget,
     RejectCode::NoSuchSubspace,
     RejectCode::EmptySubspace,
     RejectCode::DepthIncompatible,

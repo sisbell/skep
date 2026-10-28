@@ -1384,6 +1384,10 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::ReadWithInLinks => "read_with_in_links",
         RejectCode::RetractRefused => "retract_refused",
         RejectCode::ReadWithRefused => "read_with_refused",
+        // The publication's in-lock reads priced past their budget ahead of
+        // the daemon's lock (the link-sets design §5.7; lane S4), tabled in
+        // §Rejection codes beside the deposits' six.
+        RejectCode::PublicationOverBudget => "publication_over_budget",
         RejectCode::NoSuchSubspace => "no_such_subspace",
         RejectCode::EmptySubspace => "empty_subspace",
         RejectCode::DepthIncompatible => "depth_incompatible",

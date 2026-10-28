@@ -992,6 +992,235 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
 /// request alone — the same world, the same plan, twice, and over the
 /// transaction's own base the plan the composite stages equals it, deposit
 /// for deposit, the skipped entries absent from both.
+/// THE PIN ACROSS COMMITS (the link-sets design §5.7, W7 (3); `state.rs`'s
+/// `next_link_address`): a home's link ordinals rise with commit position.
+/// Three commits deposit into `S` — two entries, then three, then one — and
+/// each commit's deposits are one contiguous run of `S`'s ordinals, every
+/// ordinal above the commit before it, `minted_at` equal within a commit and
+/// rising across them; so the middle commit's deposits are exactly the
+/// ordinals whose `minted_at` is its position, found by a binary search over
+/// the ordinals that reads `O(log n)` of them.
+#[test]
+fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
+    let k = kernel_over(deposits_world());
+    board(&k);
+    let ty = |n: u32| addrs(&[&a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, n])]);
+    let into_s = |n: u32| entry(NamedAddress::Address(set_s()), ispans(&pca(1), 3), addrs(&[]), ty(n), None);
+    let mut seqs = Vec::new();
+    for (commit, count) in [2u32, 3, 1].into_iter().enumerate() {
+        let the_shot = shot_off_head(&k, vec![]);
+        let base = 10 * commit as u32;
+        let deposits = PublishDeposits { links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![] };
+        let (_, seq) = publish(&k, &the_shot, &deposits).expect("the commit");
+        seqs.push(seq);
+    }
+    assert!(seqs[0] < seqs[1] && seqs[1] < seqs[2], "three commits in order: {seqs:?}");
+    let s = k.snapshot();
+    let (links, m3) = (s.world().links(), s.world().m3());
+    // The ordinals, each at its commit: 1–2 the first's, 3–5 the second's, 6
+    // the third's — contiguous runs rising with position.
+    let at = |ordinal: u32| m3.minted_at(&link_of(&set_s(), ordinal)).expect("a minted link");
+    assert_eq!([at(1), at(2)], [seqs[0], seqs[0]], "the first commit's run");
+    assert_eq!([at(3), at(4), at(5)], [seqs[1], seqs[1], seqs[1]], "the second's, above the first's");
+    assert_eq!(at(6), seqs[2], "the third's, above the second's");
+    assert_eq!(links.readlink(&link_of(&set_s(), 7)), None, "the frontier");
+    // The position-fenced read: the first ordinal at or past the middle
+    // commit's position and the first past it, each by a binary search over
+    // the ordinals' ages — the deposits of the commit, by reading its
+    // position and the ordinals alone, never the plan.
+    let frontier = 6u32;
+    let lower_bound = |target: Seq, strict: bool| -> u32 {
+        let (mut lo, mut hi) = (1u32, frontier + 1);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let past = if strict { at(mid) > target } else { at(mid) >= target };
+            if past {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    };
+    let first = lower_bound(seqs[1], false);
+    let past = lower_bound(seqs[1], true);
+    assert_eq!((first, past), (3, 6), "the middle commit's deposits are ordinals 3 through 5");
+}
+
+/// THE PRICE OF THE IN-LOCK READS (the link-sets design §5.7, W8 (1)): the
+/// four terms read off one snapshot — the caller's link-holding homes by
+/// `homes_under` of the account (doc1 holding the record of `E.1`'s shot,
+/// `N` holding `L`, `E.1` holding `M`: three, whatever the caller may read of
+/// them), the `links` and `read_with` entries summed, the draft's content
+/// runs and the request's runs — and the one comparison against
+/// `MAX_PUBLICATION_READS`: a request at the budget is inside it, one past
+/// it is over, the system caller prices no homes, and a shot naming no draft
+/// no runs of one.
+#[test]
+fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() {
+    use skep_links::{price_publication_reads, ReadPrice, MAX_PUBLICATION_READS};
+
+    let k = kernel_over(deposits_world());
+    let (l, m) = board(&k);
+    let s = k.snapshot();
+    let world = s.world();
+    let the_shot = shot_off_head(&k, vec![shot_run(&doc1(), &ca(1), 3)]);
+    let deposits = PublishDeposits {
+        links: vec![entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l))],
+        retract: vec![m],
+        read_with: vec![set_s(), set_s()],
+    };
+    let price = price_publication_reads(world, P1, &the_shot, &deposits);
+    assert_eq!(
+        price,
+        ReadPrice { homes: 3, entries: 3, draft_runs: 1, runs: 2 },
+        "three link-holding homes under the account; one links entry and two read-withs; one run in doc1; two runs in the shot"
+    );
+    assert_eq!(price.total(), 3 * 3 + 2, "homes × entries + draft runs × runs");
+    assert!(!price.over_budget());
+    assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
+    let at_budget = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 0, runs: 0 };
+    assert!(!at_budget.over_budget(), "at the budget is inside it");
+    let past = ReadPrice { homes: 1, entries: MAX_PUBLICATION_READS, draft_runs: 1, runs: 1 };
+    assert!(past.over_budget(), "one past the budget is over");
+    let huge = ReadPrice { homes: usize::MAX, entries: 2, draft_runs: usize::MAX, runs: 2 };
+    assert_eq!(huge.total(), usize::MAX, "the price saturates");
+    assert_eq!(price_publication_reads(world, Caller::System, &the_shot, &deposits).homes, 0, "no account, no homes");
+    let draftless = Shot { draft: None, ..the_shot.clone() };
+    assert_eq!(price_publication_reads(world, P1, &draftless, &deposits).draft_runs, 0, "no draft, no draft runs");
+}
+
+/// THE WORST-CASE TABLE, PINNED (the link-sets design §5.6, M6): each
+/// constant of `sizes.rs` is the bytes the kernel prices the kind's records
+/// at — measured here as the journal's growth across one commit staging the
+/// kind, less the growth of the same commit without it, on a journaled
+/// kernel at the shallow depth the table states. The commit marker is read
+/// off two commits of one and two correspondence records; every other figure
+/// is a difference of two commits of the same shape but the kind. A figure
+/// that moves with an encoding fails here, and the table is re-pinned.
+#[test]
+fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
+    use skep_links::{
+        CLAIM_BYTES, COPY_BYTES, CORRESPONDENCE_RECORD_BYTES, EDITION_CLAIM_BYTES, EDITION_MINT_BYTES,
+        KEPT_PLACE_BYTES, MAX_SLOT_SPANS, PLACED_RUN_BYTES, READ_WITH_BYTES, REINSERTED_VALUE_BYTES,
+        RETRACTION_BYTES, SHOT_BYTES,
+    };
+
+    // The marker and the record, off a kernel of their own: one record,
+    // then two — the marker is what one commit costs past its records.
+    let records = journaled_over(deposits_world());
+    let correspondence = |count: u32| {
+        let before = records.journal_bytes();
+        records
+            .transact(&[M3State::link_lock_key(&doc1())], |stg| {
+                for i in 0..count {
+                    let (from, to) = (run(&ca(100 + 10 * i), 3), run(&pca(100 + 10 * i), 3));
+                    stage_correspondence(stg, &ALL_VISIBLE, P1, &doc1(), &from, &to)?;
+                }
+                Ok::<(), PublicationError>(())
+            })
+            .expect("the records commit");
+        records.journal_bytes() - before
+    };
+    let one = correspondence(1);
+    let two = correspondence(2);
+    let record = two - one;
+    let marker = one - record;
+    assert!(marker > 0 && record > marker, "one record outweighs the marker: {record} against {marker}");
+
+    // The board, and the shots measured on it: each off the head with the
+    // extent whole, so nothing is carried and the member holds `fresh` alone.
+    let k = journaled_over(deposits_world());
+    let (l, m) = board(&k);
+    let base_shot = |fresh: Vec<ShotRun>| {
+        let s = k.snapshot();
+        let head = trunk_head(s.world().m3(), &pdoc()).expect("a head");
+        let extent = s.world().m5().content_count(&head);
+        let draft = (!fresh.is_empty()).then(doc1);
+        Shot { base: Some(skep_arrangement::Base { member: head, extent }), draft, runs: fresh }
+    };
+    let measure = |f: &dyn Fn()| {
+        let before = k.journal_bytes();
+        f();
+        k.journal_bytes() - before - marker
+    };
+    let commit = |target: &PublishTarget, the_shot: &Shot, places: &[Option<VPos>], deposits: &PublishDeposits| {
+        writer(&k).publication(P1, target, the_shot, places, deposits).expect("the commit");
+    };
+    let into_e = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let shot_bytes = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &none));
+    let window = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&pdoc(), &pca(1), 3)]), &[], &none));
+    let placed_run = window - shot_bytes;
+    // The copy at every slot's budget: `from` and `to` at `MAX_SLOT_SPANS`
+    // content I-spans of the shallow depth, the type at as many unit spans.
+    let full = LinkEntry {
+        home: NamedAddress::Member,
+        from: EndArg::Spans((1..=MAX_SLOT_SPANS as u32).map(|i| run(&pca(i), 1).iextent()).collect()),
+        to: EndArg::Spans((1..=MAX_SLOT_SPANS as u32).map(|i| run(&pca(i), 1).iextent()).collect()),
+        ty: EndArg::Addrs((1..=MAX_SLOT_SPANS as u32).map(|i| NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, i]))).collect()),
+        old: None,
+    };
+    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { links, retract, read_with };
+    let copy = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![full.clone()], vec![], vec![]))) - shot_bytes;
+    let small = |old: Option<Address>| entry(NamedAddress::Member, ispans(&pca(1), 3), addrs(&[&doc2()]), addrs(&[&citation()]), old);
+    let small_alone = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![small(None)], vec![], vec![])));
+    let small_claimed = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![small(Some(l.clone()))], vec![], vec![])));
+    let claim = small_claimed - small_alone;
+    let retraction = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![m.clone()], vec![]))) - shot_bytes;
+    let read_with = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![], vec![], vec![set_s()]))) - shot_bytes;
+    // The re-insert: an atom at ca(4), a byte at ca(5), a byte at ca(6)
+    // re-windowed at its place — each shot placing its one fresh run, and
+    // minting its one record.
+    let vs = Vstream::new(&k);
+    vs.insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'x', b'y'])], Deposit::Undeclared).expect("an atom at ca(4)");
+    vs.insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'd'])], Deposit::Undeclared).expect("d at ca(5)");
+    vs.insert(P1, &doc1(), vp(1, 6), vec![Val::new([b'e'])], Deposit::Undeclared).expect("e at ca(6)");
+    let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes - placed_run - record;
+    let byte = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(5), 1)]), &[], &none)) - shot_bytes - placed_run - record;
+    let byte_placed = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(6), 1)]), &places(1, &[(0, 6)]), &none)) - shot_bytes - placed_run - record;
+    let kept_place = byte_placed - byte;
+    assert_eq!(bytes_of(&k, &doc1()), "abcxyde", "doc1 reads as it did, its last byte re-windowed");
+    // The mint form: the edition's mint over a birth shot into `S`, the
+    // claim over the mint form without one.
+    let birth = Shot { base: None, draft: None, runs: vec![] };
+    let birth_s = measure(&|| commit(&PublishTarget::Document(set_s()), &birth, &[], &none));
+    let account = a(&[1, 0, 1]);
+    let minted = measure(&|| commit(&PublishTarget::Mint { account: account.clone(), claim: false }, &birth, &[], &none));
+    let edition_mint = minted - birth_s;
+    let drafted = Shot { base: None, draft: Some(doc1()), runs: vec![] };
+    let claimed = measure(&|| commit(&PublishTarget::Mint { account: account.clone(), claim: true }, &drafted, &[], &none));
+    let edition_claim = claimed - minted;
+
+    let table = [
+        ("CORRESPONDENCE_RECORD_BYTES", record, CORRESPONDENCE_RECORD_BYTES),
+        ("COPY_BYTES", copy, COPY_BYTES),
+        ("CLAIM_BYTES", claim, CLAIM_BYTES),
+        ("RETRACTION_BYTES", retraction, RETRACTION_BYTES),
+        ("READ_WITH_BYTES", read_with, READ_WITH_BYTES),
+        ("KEPT_PLACE_BYTES", kept_place, KEPT_PLACE_BYTES),
+        ("PLACED_RUN_BYTES", placed_run, PLACED_RUN_BYTES),
+        ("REINSERTED_VALUE_BYTES", atom, REINSERTED_VALUE_BYTES),
+        ("SHOT_BYTES", shot_bytes, SHOT_BYTES),
+        ("EDITION_MINT_BYTES", edition_mint, EDITION_MINT_BYTES),
+        ("EDITION_CLAIM_BYTES", edition_claim, EDITION_CLAIM_BYTES),
+    ];
+    println!(
+        "the marker: {marker}; a one-byte value's stretch and range mint: {byte}; a birth shot: {birth_s}; a copy at one span a slot: {}",
+        small_alone - shot_bytes
+    );
+    for (name, measured, pinned) in table {
+        println!("{name}: measured {measured}, pinned {pinned}");
+    }
+    for (name, measured, pinned) in table {
+        assert_eq!(measured, pinned, "{name} moved: the kernel prices the kind at {measured} bytes, the table says {pinned}");
+    }
+    // The figures the module's cards quote beside the table: the marker the
+    // kernel's own card states, the birth shape's shot, a byte run's stretch
+    // and the one-span copy the arithmetic's second verdict reads.
+    assert_eq!((marker, birth_s, byte, small_alone - shot_bytes), (109, 258, 301, 1_025), "the quoted figures");
+}
+
 #[test]
 fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
     let k = kernel_over(deposits_world());

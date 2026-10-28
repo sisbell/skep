@@ -1483,6 +1483,306 @@ fn each_refused_deposit_names_its_entry_and_commits_nothing() {
     sd.shutdown();
 }
 
+// ───────────────────────── the ops items (lane S4) ─────────────────────────
+
+/// THE HOLD's RELEASE on every path (`write_pool.rs`'s shape): a worker
+/// parked at the guard's hold is one the daemon's stop joins, so a claim
+/// that armed the hold releases it before its daemon drops.
+struct Released;
+
+impl Drop for Released {
+    fn drop(&mut self) {
+        skepd::Daemon::release_the_write_guard();
+    }
+}
+
+/// Sends one `POST /op` as `token` and DROPS the connection without reading
+/// its answer: the frame is on the daemon's socket whole, and its client is
+/// gone (wire.md §Transport, a frame received is applied).
+fn send_and_drop(port: u16, token: &str, frame: &str) {
+    use std::io::Write as _;
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+    let head = format!(
+        "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n\
+         Skepd-Session: {token}\r\nContent-Type: application/json\r\n\r\n",
+        frame.len()
+    );
+    stream.write_all(head.as_bytes()).expect("the request head");
+    stream.write_all(frame.as_bytes()).expect("the request body");
+    stream.flush().expect("flushed");
+}
+
+/// A records-less publish off `member`, which holds `abc` as one fresh run:
+/// the next member of `E` with the same words, placed by reference, naming
+/// no draft and so minting no record.
+fn records_less_shot(port: u16, b: &DepositBoard, member: &str) -> String {
+    let fresh_start = image(port, member, 1, 3)[0].0.clone();
+    publish(&b.e, Some((member, 3)), None, &[run(&b.e, &fresh_start, 3)])
+}
+
+/// Whether `doc` — a member among them — is registered: `doc_metadata`
+/// answers it rather than refusing.
+fn registered(port: u16, doc: &str) -> bool {
+    op(port, None, &doc_metadata_frame(doc))["resp"].as_str() == Some("doc_metadata")
+}
+
+/// The hold's shape for the pending-frame cells: the guard armed, one
+/// writer parked at it holding the serialization lock — THE LARGE COMMIT
+/// the design holds the applier with — then `frame` sent under `token` and
+/// its connection dropped, then the re-ask of `frame` on a thread, each
+/// given its moment to be received and to park at the lock; the guard
+/// released, the parked writer joined and the re-ask's answer returned.
+fn pending_then_re_ask(sd: &skepd::Skepd, b: &DepositBoard, frame: &str) -> Value {
+    let port = sd.port();
+    skepd::Daemon::hold_the_write_guard();
+    let _released = Released;
+    let parked = {
+        let bare = b.bare.clone();
+        std::thread::spawn(move || op(port, Some(&bare), &create_frame(CLAIMANT_ACCOUNT, None)))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    send_and_drop(port, &b.signed, frame);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let re_ask = {
+        let (token, frame) = (b.signed.clone(), frame.to_string());
+        std::thread::spawn(move || op_as_written(port, Some(&token), &frame))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    skepd::Daemon::release_the_write_guard();
+    expect_resp(&parked.join().expect("the parked writer"), "ack_addr");
+    re_ask.join().expect("the re-ask")
+}
+
+/// THE PRICE AHEAD OF THE LOCK over the wire (the link-sets design §5.7, W8
+/// (1)): the draft fragmented into eighteen content runs by seventeen inserts
+/// at its first position, and a shot of 4096 runs over it priced at
+/// 18 × 4096 — past `MAX_PUBLICATION_READS` — is refused
+/// `publication_over_budget`, permanent, no `site`, its `detail` the four
+/// terms, the total and the budget, WITH EVERY WRITE PERMIT HELD: the refusal
+/// stands ahead of the pool, so ahead of both locks and of the admission
+/// (the frame is sent unsigned, and the price answers before the signature
+/// is asked for); nothing committed. The same draft under 3640 runs prices
+/// inside the budget and passes the step, the admission then answering for
+/// the unsigned frame; and an ordinary one-run shot off the fragmented
+/// draft, priced 18, lands.
+#[test]
+fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool_and_commits_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    for _ in 0..17 {
+        expect_resp(&op(port, Some(&b.bare), &insert(&b.d, 1, "x", false)), "ack_addr");
+    }
+    let runs: Vec<String> = (0..4096).map(|_| run(&b.d, &b.d_text, 1)).collect();
+    let over = publish(&b.e, None, Some(&b.d), &runs);
+    let before = head(port);
+    let mut held = Vec::new();
+    while let Some(permit) = sd.daemon().try_hold_write_permit() {
+        held.push(permit);
+    }
+    assert!(!held.is_empty(), "the pool's permits, every one held");
+    let v = op_as_written(port, Some(&b.signed), &over);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("publication_over_budget"), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert!(rej.get("site").is_none(), "no site: {v}");
+    let detail = rej["detail"].as_str().expect("the price's detail");
+    assert!(detail.starts_with(&format!("{} in-lock reads priced over the budget of {}: ", 18 * 4096, skep_links::MAX_PUBLICATION_READS)), "{detail}");
+    assert!(detail.ends_with("link-holding homes × 0 links and read-with entries + 18 draft runs × 4096 runs; narrow the request"), "{detail}");
+    drop(held);
+    assert_eq!(head(port), before, "nothing committed");
+    // Inside the budget: 18 × 3640 = 65520 passes the price; the unsigned
+    // frame then meets the admission, never the price.
+    let v = op_as_written(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &runs[..3640]));
+    let rej = expect_resp(&v, "rejected");
+    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "at the budget the price admits: {v}");
+    assert_eq!(head(port), before);
+    // An ordinary shot off the fragmented draft, priced 18, lands.
+    let member = acked_addr(&op(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &[run(&b.d, &b.d_text, 1)])));
+    assert_eq!(member, format!("{}.1", b.e));
+    sd.shutdown();
+}
+
+/// THE PENDING FRAME (a) (the link-sets design §5.7, W8 (2)): the applier
+/// held with a large commit, a records-less publish sent under an `id` and
+/// its connection dropped before its answer, the same frame re-asked under
+/// the same `id` on the same session while the first still waits — the
+/// re-ask WAITS and is answered the acknowledgment: the one member the frame
+/// landed, by reference to the words `E.1` holds, and ONE version — no
+/// daughter under `E.1` and no third member — one publish row on the feed.
+/// A second execution queued behind the first would land `E.1.1`.
+#[test]
+fn a_re_ask_under_a_pending_records_less_frames_id_waits_and_lands_one_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let member1 = acked_addr(&op(port, Some(&b.signed), &b.shot()));
+    let frame = with_members(&records_less_shot(port, &b, &member1), serde_json::json!({"id": "pending-a"}));
+    let signed = attach_attest(port, &b.signed, &frame);
+    let before = head(port);
+    let answer = pending_then_re_ask(&sd, &b, &signed);
+    let member2 = acked_addr(&answer);
+    assert_eq!(member2, format!("{}.2", b.e), "the re-ask is answered the acknowledgment of the one version: {answer}");
+    assert_eq!(text(port, &member2, 1, 3), "abc");
+    assert!(!registered(port, &format!("{}.1.1", b.e)), "no daughter: the frame ran once");
+    assert!(!registered(port, &format!("{}.3", b.e)), "no third member");
+    let rows = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(rows.iter().filter(|r| r["op"].as_str() == Some("publish")).count(), 1, "one publish commit: {rows:?}");
+    sd.shutdown();
+}
+
+/// THE PENDING FRAME (b): the same with links — S3's deposit board's full
+/// publication, its copy, claim, retraction and read-with — re-asked while
+/// the first frame waits: the acknowledgment read, never `old_refused` for
+/// the original the first frame's own commit made public (no race face);
+/// the copy in the member once, the claim in `N` once, one publish row.
+#[test]
+fn a_re_ask_under_a_pending_publications_id_is_answered_its_acknowledgment_and_never_a_race_face() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let frame = with_members(&b.full(), serde_json::json!({"id": "pending-b"}));
+    let signed = attach_attest(port, &b.signed, &frame);
+    let before = head(port);
+    let answer = pending_then_re_ask(&sd, &b, &signed);
+    let member = acked_addr(&answer);
+    assert_eq!(member, format!("{}.1", b.e), "the acknowledgment, not old_refused: {answer}");
+    assert!(!read_link(port, None, &format!("{member}.0.2.1")).is_null(), "the copy, the member's first link");
+    assert!(read_link(port, None, &format!("{member}.0.2.2")).is_null(), "…and its only one");
+    assert!(!read_link(port, Some(&b.bare), &format!("{}.0.2.2", b.n)).is_null(), "the claim in N");
+    assert!(read_link(port, Some(&b.bare), &format!("{}.0.2.3", b.n)).is_null(), "one claim, not two");
+    assert!(!registered(port, &format!("{}.2", b.e)), "one version");
+    let rows = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(rows.iter().filter(|r| r["op"].as_str() == Some("publish")).count(), 1, "one publish commit: {rows:?}");
+    sd.shutdown();
+}
+
+/// THE PENDING FRAME (c), THE ONE GAP: a `500` injected AFTER the commit —
+/// the checkpoint thread held and the byte bound at one, so the
+/// publication's own commit runs the backstop's checkpoint inline past its
+/// install, armed to panic — answers `500 internal_panic` with the version
+/// committed and its acknowledgment never memoized. THE READ BEFORE ANY
+/// RE-SEND finds it: the trunk head is the member holding the request's
+/// runs, so the landed test passes and the client re-sends nothing. The
+/// hazard the read prevents, pinned as the wire states it: a blind re-send
+/// under the same `id` re-executes and lands a daughter.
+#[test]
+fn a_publication_answered_500_after_its_commit_stands_and_the_read_precedes_any_re_send() {
+    use skep_kernel::Step;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let member1 = acked_addr(&op(port, Some(&b.signed), &b.shot()));
+    let frame = with_members(&records_less_shot(port, &b, &member1), serde_json::json!({"id": "lost-c"}));
+    let signed = attach_attest(port, &b.signed, &frame);
+    sd.daemon().hold_the_checkpoint_thread();
+    sd.daemon().set_checkpoint_bytes_bound(1);
+    // The first crossing sets the due flag; the publication's crossing then
+    // runs the backstop inline, which panics past the commit's install.
+    expect_resp(&op(port, Some(&b.bare), &create_frame(CLAIMANT_ACCOUNT, None)), "ack_addr");
+    let before = head(port);
+    sd.daemon().panic_at_the_next_kernel_step(Step::CheckpointCreate);
+    let (st, body) = http(port, "POST", "/op", Some(&b.signed), signed.as_bytes());
+    assert_eq!(st, 500, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("internal_panic"), "{}", String::from_utf8_lossy(&body));
+    // THE READ: the version stands, the commit recorded, nothing to re-send.
+    let member2 = format!("{}.2", b.e);
+    assert!(head(port) > before, "committed past the position before it");
+    assert_eq!(text(port, &member2, 1, 3), "abc", "the version the 500 hid stands");
+    assert!(!registered(port, &format!("{}.1.1", b.e)) && !registered(port, &format!("{}.3", b.e)), "one version");
+    // The hazard: a blind re-send under the same id, with no memo to answer
+    // it, re-executes — off a base the trunk has moved past, a daughter.
+    let again = op_as_written(port, Some(&b.signed), &signed);
+    assert_eq!(acked_addr(&again), format!("{}.1.1", b.e), "the wire's gap: a retry after a 500 may re-execute");
+    sd.daemon().release_the_checkpoint_thread();
+    sd.shutdown();
+}
+
+/// THE POSITION-FENCED READ (the link-sets design §5.7, W7 (3)): three
+/// publications deposit links homed in `SET` — two, three, one — after the
+/// board's own `R` at ordinal 1; the client, holding the middle commit's
+/// position and the home, finds that commit's deposits over `read_link`
+/// alone: the frontier by a galloping probe — `read_link` past it answers
+/// `link_value` with a null `link` and no `at` — then a binary search over
+/// the ordinals' `at` for the first at or past the position and the first
+/// past it, `O(log n)` reads in all; the run found is exactly the middle
+/// commit's, ordinals 4 through 6, in its declared order.
+#[test]
+fn a_commits_deposits_in_a_home_are_the_contiguous_ordinals_a_binary_search_over_read_links_at_finds() {
+    use std::cell::Cell;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = deposit_board(port);
+    let member1 = acked_addr(&op(port, Some(&b.signed), &b.shot()));
+    let entry = |k: u32| serde_json::json!({"home": b.set, "from": {"addrs": [b.e]}, "to": {"addrs": []}, "ty": {"addrs": [format!("{}.0.3.6.{k}", b.e)]}});
+    let mut member = member1;
+    let mut ats = Vec::new();
+    for (commit, count) in [2u32, 3, 1].into_iter().enumerate() {
+        let links: Vec<Value> = (1..=count).map(|n| entry(10 * commit as u32 + n)).collect();
+        let v = op(port, Some(&b.signed), &with_members(&records_less_shot(port, &b, &member), serde_json::json!({"links": links})));
+        member = acked_addr(&v);
+        ats.push(acked_at(&v));
+    }
+    assert!(ats[0] < ats[1] && ats[1] < ats[2]);
+    // The client's reads, counted: `read_link` at SET's ordinal `k`.
+    let reads = Cell::new(0u32);
+    let at_of = |k: u32| -> Option<u64> {
+        reads.set(reads.get() + 1);
+        let v = op(port, None, &read_link_frame(&format!("{}.0.2.{k}", b.set)));
+        expect_resp(&v, "link_value");
+        if v["link"].is_null() {
+            assert!(v["at"].is_null(), "past the frontier: a null link and no at: {v}");
+            return None;
+        }
+        Some(v["at"].as_u64().expect("a link's at"))
+    };
+    // The frontier: gallop to the first null, then the search between.
+    let mut probe = 1u32;
+    while at_of(probe).is_some() {
+        probe *= 2;
+    }
+    let (mut lo, mut hi) = (probe / 2, probe);
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if at_of(mid).is_some() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let frontier = lo;
+    assert_eq!(frontier, 7, "R, then two, three and one deposits");
+    let lower_bound = |target: u64, strict: bool| -> u32 {
+        let (mut lo, mut hi) = (1u32, frontier + 1);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let at = at_of(mid).expect("inside the frontier");
+            if if strict { at > target } else { at >= target } {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    };
+    let (first, past) = (lower_bound(ats[1], false), lower_bound(ats[1], true));
+    assert_eq!((first, past), (4, 7), "the middle commit's deposits are SET's ordinals 4 through 6");
+    for (i, k) in (first..past).enumerate() {
+        let link = read_link(port, None, &format!("{}.0.2.{k}", b.set));
+        assert_eq!(slot_span(&link, 2).0, format!("{}.0.3.6.{}", b.e, 11 + i as u32), "in the declared order");
+    }
+    let log2 = (frontier + 1).next_power_of_two().trailing_zeros();
+    assert!(reads.get() <= 5 * log2, "{} reads over a frontier of {frontier}: past 5·⌈log₂⌉", reads.get());
+    sd.shutdown();
+}
+
 /// THE MEMO AHEAD OF THE ADMISSION (ruling 4): a publication that accepted
 /// an original, retried under the same `id` on the same session after its
 /// ack, is answered its acknowledgment — the same member, the same position

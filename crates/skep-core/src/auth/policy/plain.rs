@@ -22,8 +22,8 @@ use skep_identity::{
 };
 use skep_kernel::Attestation;
 use skep_links::{
-    enc, is_correspondence_class, is_replaces_class, registry, EndArg, Endset, HasLinks, Link,
-    NamedAddress, PublishTarget, ShippedType, SlotArg,
+    enc, is_correspondence_class, is_replaces_class, price_publication_reads, registry, EndArg,
+    Endset, HasLinks, Link, NamedAddress, PublishTarget, ReadPrice, ShippedType, SlotArg,
 };
 use skep_namespace::{
     first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
@@ -272,6 +272,69 @@ pub fn retract_class_refusal(
             other => unreachable!("the retraction class producer answers a class token, not {other:?}"),
         };
         Some(RetractClassRefusal { index, cause })
+    })
+}
+
+/// A publication's in-lock reads priced past their budget (the link-sets
+/// design §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE
+/// LOCK): the price's four terms, its total and the budget, for the daemon's
+/// `publication_over_budget` refusal and its detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublicationReadRefusal {
+    /// The caller's link-holding homes, `homes_under` of the account.
+    pub homes: usize,
+    /// The `links` entries and the `read_with` entries, summed.
+    pub entries: usize,
+    /// The draft's content runs; `0` for a shot naming no draft.
+    pub draft_runs: usize,
+    /// The request's runs.
+    pub runs: usize,
+    /// The price: `homes × entries + draft_runs × runs`.
+    pub total: usize,
+    /// The budget, M7's `MAX_PUBLICATION_READS`.
+    pub budget: usize,
+}
+
+/// Returns a publication whose in-lock reads are priced past their budget —
+/// the producer behind `publication_over_budget`, the daemon's own cell,
+/// asked AHEAD of the serialization lock.
+///
+/// It is M7's [`price_publication_reads`] over `world` as the caller — the
+/// caller's link-holding homes × (`links` + `read_with` entries), plus the
+/// draft's content runs × the request's runs, the work of the composite's
+/// four in-lock reads counted before any is made — against M7's one budget
+/// ([`ReadPrice::over_budget`], the one comparison), answered with every
+/// term where it is past it. `None` for an op that is no `publish`, or one
+/// inside the budget.
+///
+/// **Its place in the write order:** ahead of the plain sequence's permit
+/// and both of its locks — a pure read of a lock-free snapshot and the
+/// frame, so a refused request costs no permit and parks behind no writer —
+/// which is why it takes no guard: the snapshot is one the daemon took
+/// before its lock, and the counts may move before the composite reads
+/// them. The budget is conservative by design (`MAX_PUBLICATION_READS`'s
+/// card): a request refused here would have cost at least its price, and
+/// one admitted may cost a little more. The twin fence, the plan's reads
+/// and the kept-place check stay where the composite makes them; this
+/// bounds them and reads nothing of theirs.
+pub fn publication_read_refusal(
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<PublicationReadRefusal> {
+    let Op::Publish { shot, deposits, .. } = op else { return None };
+    let price = price_publication_reads(world, Caller::Principal(principal), shot, deposits);
+    if !price.over_budget() {
+        return None;
+    }
+    let ReadPrice { homes, entries, draft_runs, runs } = price;
+    Some(PublicationReadRefusal {
+        homes,
+        entries,
+        draft_runs,
+        runs,
+        total: price.total(),
+        budget: ReadPrice::BUDGET,
     })
 }
 

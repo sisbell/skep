@@ -141,11 +141,12 @@ impl Daemon {
         // world): transport metadata, never invented, and never an older
         // position's time offered in the head's place.
         //
-        // Four independent reads, no lock held ACROSS them — this, the auth
+        // Five independent reads, no lock held ACROSS them — this, the auth
         // object's own head snapshot (whose World carries the key table),
-        // the `(log_position, chain_head)` pair at the end, and the `writes`
-        // member's two atomic loads beside them — so this answer may
-        // straddle one in-flight commit at either seam. A `head_time` correct
+        // the `(log_position, chain_head)` pair at the end, the `writes`
+        // member's two atomic loads beside them and the `conditions`
+        // member's three memo locks — so this answer may straddle one
+        // in-flight commit at either seam. A `head_time` correct
         // for the position the sidecar last recorded sits beside a
         // `log_position` one commit newer; and a client polling for the claim
         // flip can see the position advance before `claimant` appears, or
@@ -192,6 +193,33 @@ impl Daemon {
         // uptime and so actionable without a race, a `false` one moment's
         // reading.
         let halted = self.commits.halted_at().is_some() || self.engine.kernel().is_poisoned();
+        // The `conditions` array (wire.md §The other endpoints; the link-sets
+        // design §5.7, W8 (5)): the system producers' standing refusals —
+        // the head writer's, the time writer's, the registry seed's — one
+        // object per producer whose last shot was refused, read off each
+        // producer's memo under its own lock (`Commits::producer_refusals`)
+        // and empty on a healthy board; the same memos the standing line's
+        // clause reads, so the operator stream and the wire say one fact.
+        // Each object: the `producer`, the `act` the refusal met, the `code`
+        // as the wire spells it and its `detail` where one rides (null
+        // where none), the `position` the shot was to stand above and the
+        // `attempts` since the producer last landed. Beside `writes.halted`,
+        // not inside it: a refusal is no halt.
+        let conditions = self
+            .commits
+            .producer_refusals()
+            .into_iter()
+            .map(|refusal| {
+                obj(vec![
+                    ("act", Value::String(refusal.act.into())),
+                    ("attempts", Value::Number(refusal.attempts.into())),
+                    ("code", Value::String(refusal.code().into())),
+                    ("detail", refusal.detail().map_or(Value::Null, |d| Value::String(d.into()))),
+                    ("position", Value::Number(refusal.position.into())),
+                    ("producer", Value::String(refusal.producer.into())),
+                ])
+            })
+            .collect();
         // The media object (wire.md §Media, the upload setting): the upload
         // switch echoed where its state lives (`MediaGate::health_object`),
         // a boundary setting read once by the client before any face that
@@ -203,6 +231,7 @@ impl Daemon {
             obj(vec![
                 ("auth", auth),
                 ("chain_head", Value::String(skep_util::json::hex_string(&chain_head))),
+                ("conditions", Value::Array(conditions)),
                 ("head_time", head_time),
                 ("log_position", Value::Number(log_position.0.into())),
                 ("media", self.media.health_object()),

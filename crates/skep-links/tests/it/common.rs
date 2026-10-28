@@ -477,6 +477,21 @@ impl Deref for Journaled {
     }
 }
 
+impl Journaled {
+    /// Returns the bytes the journal directory holds: every regular file's
+    /// length, summed — what a transaction's commit grows by the frames and
+    /// the marker the kernel priced it at (its `MAX_TXN_BYTES` accounting),
+    /// so two readings around one commit measure that commit's bytes.
+    pub fn journal_bytes(&self) -> u64 {
+        std::fs::read_dir(self._dir.path())
+            .expect("the journal directory lists")
+            .map(|entry| entry.expect("an entry").metadata().expect("a length"))
+            .filter(|meta| meta.is_file())
+            .map(|meta| meta.len())
+            .sum()
+    }
+}
+
 /// A journaled kernel over the seeded genesis world, its journal in a fresh
 /// temporary directory. Only a journaled kernel writes commit markers, so a
 /// suite that reads an attestation back with `Kernel::attestation_at` opens

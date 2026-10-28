@@ -38,6 +38,7 @@ mod fuzz_http;
 mod h1_residue;
 mod hazard;
 mod head;
+mod health;
 mod history;
 mod http_lifecycle;
 mod identity_slice;

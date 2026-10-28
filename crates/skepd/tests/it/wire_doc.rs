@@ -1779,21 +1779,33 @@ fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
 }
 
 /// D23 — `/health`'s `writes` MEMBER (wire.md §The other endpoints; op-D10
-/// (a)) and the object's ORDER RULE: the section names the member, its one
-/// boolean `halted`, what the boolean means and the count of members a
-/// consumer is written to; its example carries `"writes":{"halted":false}`
-/// in its place; the example's top-level keys stand in the order the
-/// daemon's key-sorting `obj` writes them — alphabetical, `writes` after
-/// `ok` — and a live daemon's `/health` answers the same keys in the same
-/// order, `writes` false on a healthy board.
+/// (a)), its `conditions` MEMBER (the link-sets design §5.7, W8 (5); lane
+/// S4) and the object's ORDER RULE: the section names the two members, the
+/// one boolean `halted`, what the boolean means, the array's object and
+/// when it clears, and the count of members a consumer is written to; its
+/// example carries `"conditions":[]` and `"writes":{"halted":false}` in
+/// their places; the example's top-level keys stand in the order the
+/// daemon's key-sorting `obj` writes them — alphabetical, `conditions`
+/// after `chain_head`, `writes` after `ok` — and a live daemon's `/health`
+/// answers the same keys in the same order, `writes` false and
+/// `conditions` empty on a healthy board.
 #[test]
 fn doc_states_the_writes_member_and_the_health_examples_keys_are_the_daemons_in_its_order() {
     let health = prose("\n## The other endpoints", &["\n## A first board, end to end"]);
     for fact in [
         "`writes` is an object with one boolean, `halted`",
         "`writes.halted` is `false` on a healthy board",
-        "these seven members",
-        "must not treat an eighth as a violation",
+        "`conditions` is an array, EMPTY on a healthy board, else one object per system producer whose last shot was refused",
+        "the published head's writer, the time writer and the registry seed",
+        "Each object carries `producer` (`head`, `time` or `registry`), `act`",
+        "`position` (the committed position the refused shot was to stand above",
+        "`attempts` (the attempts refused since the producer last landed",
+        "clears when that producer NEXT LANDS",
+        "A refusal is not a halt: `writes.halted` stands beside it as before",
+        r#"`{"act":"insert","attempts":3,"code":"durability","detail":"the volume is full","position":42,"producer":"head"}`"#,
+        "the operator stream's standing line carries the same fact as its clause",
+        "these eight members",
+        "must not treat a ninth as a violation",
     ] {
         assert!(health.contains(fact), "§The other endpoints says {fact:?}");
     }
@@ -1812,8 +1824,8 @@ fn doc_states_the_writes_member_and_the_health_examples_keys_are_the_daemons_in_
     assert_eq!(keys, sorted, "the example's keys stand in obj's alphabetical order");
     assert_eq!(
         keys,
-        ["auth", "chain_head", "head_time", "log_position", "media", "ok", "writes"],
-        "the seven members, each once"
+        ["auth", "chain_head", "conditions", "head_time", "log_position", "media", "ok", "writes"],
+        "the eight members, each once"
     );
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = crate::common::spawn_unclaimed(dir.path());
@@ -1823,7 +1835,68 @@ fn doc_states_the_writes_member_and_the_health_examples_keys_are_the_daemons_in_
     assert_eq!(top_level_keys(served), keys, "the daemon's /health carries the example's keys in its order");
     let v: Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(v["writes"], serde_json::json!({"halted": false}), "a healthy board: {v}");
+    assert_eq!(v["conditions"], serde_json::json!([]), "a healthy board: no condition: {v}");
     sd.shutdown();
+}
+
+/// THE FOUR STATEMENTS OF LANE S4 (the link-sets design §5.7, W8 (1), W8
+/// (2), W7 (3)): §Transport states that a frame the daemon has received is
+/// applied whatever became of its connection, its answer not taken dropped;
+/// §Correlation and idempotency states that a re-ask under a pending
+/// frame's `id` waits at the serialization lock and is answered the
+/// acknowledgment from the memo, a refusal judged afresh, the `500` the one
+/// gap; §The publish shot and head-float states the in-lock reads' budget
+/// — the four terms, the constant, the refusal ahead of the permit and the
+/// locks, its table row — and the position-fenced read, the ordinals'
+/// pin across commits and the frontier's galloping probe; and §Rejection
+/// codes carries the budget's token with the constant. The daemon's
+/// answers are pinned in `publish.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_the_received_frame_the_pending_frame_the_reads_budget_and_the_fenced_read() {
+    let transport = prose("\n### Transport", &["\n### Identity"]);
+    for fact in [
+        "A FRAME THE DAEMON HAS RECEIVED IS APPLIED whatever became of its connection",
+        "the request is read whole, then routed, and nothing between the two looks at the socket",
+        "the answer not taken is dropped as a stalled reader's is",
+        "never reads the loss as the frame dropped",
+    ] {
+        assert!(transport.contains(fact), "§Transport says {fact:?}");
+    }
+    let memo = prose("\n### Correlation and idempotency", &["\n### HTTP status codes"]);
+    for fact in [
+        "THE `id` ANSWERS A PENDING FRAME",
+        "WAITS at that lock for the first frame's turn",
+        "an acknowledgment is answered from the memo, executing nothing, never a second execution queued behind the first",
+        "a refusal is not memoized, so the re-ask is judged afresh",
+        "a client reads the board before any re-send after a `500`",
+    ] {
+        assert!(memo.contains(fact), "§Correlation and idempotency says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "**The in-lock reads' budget**".to_string(),
+        "PRICED BEFORE THE LOCK IS TAKEN".to_string(),
+        "the caller's link-holding home count × (`links` entries + `read_with` entries), plus the draft's content run count × the request's runs".to_string(),
+        format!("`MAX_PUBLICATION_READS` = {} (16 × `MAX_SLOT_SPANS`)", skep_links::MAX_PUBLICATION_READS),
+        "ahead of the write permit, both locks and every other refusal of a publication's".to_string(),
+        "the budget is conservative by design".to_string(),
+        "| `publication_over_budget` | permanent | — |".to_string(),
+        "**The position-fenced read**".to_string(),
+        "RISE WITH COMMIT POSITION".to_string(),
+        "ONE CONTIGUOUS RUN of the home's ordinals".to_string(),
+        "`read_link` past the frontier answers `link_value` with a null `link` and a null `at`".to_string(),
+        "a galloping probe".to_string(),
+        "the in-lock reads' price stands ahead of the gate".to_string(),
+    ] {
+        assert!(shot.contains(&fact), "§The publish shot and head-float says {fact:?}");
+    }
+    assert_eq!(skep_links::MAX_PUBLICATION_READS, 16 * skep_links::MAX_SLOT_SPANS, "the constant as the document derives it");
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    assert!(codes.contains("`publication_over_budget` (the reads the one commit makes"), "§Rejection codes carries the token");
+    assert!(
+        codes.contains(&format!("`MAX_PUBLICATION_READS` = {}", skep_links::MAX_PUBLICATION_READS)),
+        "§Rejection codes states the constant"
+    );
 }
 
 /// The member names of one JSON object's text at its top level, in the

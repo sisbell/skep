@@ -431,6 +431,21 @@ pub enum RejectCode {
     /// `detail` names which: `not_registered`, `not_document` (a member),
     /// `not_owner`, or `not_published`.
     ReadWithRefused,
+    /// A publication's in-lock reads are priced past their budget (the
+    /// link-sets design §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL
+    /// AHEAD OF THE LOCK; lane S4).
+    ///
+    /// The daemon's own cell, raised ahead of its serialization lock off a
+    /// lock-free snapshot: the caller's link-holding home count × (`links`
+    /// entries + `read_with` entries) + the draft's content run count × the
+    /// request's runs, past M7's `MAX_PUBLICATION_READS` — the four reads
+    /// the composite makes under the lock, bounded before it is taken.
+    /// `detail` names the price's four terms and the budget, `site` nothing.
+    /// Permanent by the catch-all: the same board prices the same request
+    /// the same, so the act that exists is a narrower request — fewer
+    /// entries, or a draft re-read into fewer runs. Nothing is committed
+    /// and no lock was taken.
+    PublicationOverBudget,
     // ── M6 content/provenance read (MalformedSpan also covers
     //    RetrieveError::MalformedSpec; the last four are M6's own budget
     //    refusals — two for COMPARE, whose join squares in the request, one
@@ -502,7 +517,10 @@ impl RejectCode {
     /// `NotRegistered` (genesis-immutable registry), `NotFresh` (append-only
     /// allocations), `Gate` (a minting defect, which its detail calls store
     /// corruption), `TxnOverBudget` (M2's per-transaction byte budget — no
-    /// retry shrinks a transaction; the client splits it), `TxnUnencodable`
+    /// retry shrinks a transaction; the client splits it) and
+    /// `PublicationOverBudget` beside it (the daemon's budget on a
+    /// publication's in-lock reads — the same board prices the same request
+    /// the same; the client narrows it), `TxnUnencodable`
     /// (a record M2 could not frame, its serializer refusing it or the frame
     /// cap — the same request re-presented stages the same record), the
     /// recovery-steering `NotNextForm` (re-derive via `NextAccountPrefix`, a

@@ -9,7 +9,9 @@ use skep_media::serve::{Admitted, FetchRefusal, NamedBlob};
 use skep_util::json::obj;
 
 use super::scan::ScanBusy;
-use skep_core::auth::policy::{CredentialRefusal, RegistryRefusal, RetractClassRefusal};
+use skep_core::auth::policy::{
+    CredentialRefusal, PublicationReadRefusal, RegistryRefusal, RetractClassRefusal,
+};
 use skep_core::auth::session::HandshakeRefusal;
 use skep_core::codec::{
     credential_refused_reply, op_name, registry_refused_reply, to_bytes, JsonCodec,
@@ -845,6 +847,27 @@ pub(super) fn retract_refused(kind: OpKind, r: RetractClassRefusal) -> Reply {
     let site = FaultSite { index: Some(r.index), ..FaultSite::default() };
     let mut rejection = Rejection::classified(kind, RejectCode::RetractRefused, Some(site));
     rejection.detail = Some(r.cause.to_string());
+    op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
+}
+
+/// Returns a publication whose in-lock reads are priced past their budget
+/// as its 200-enveloped rejection (the link-sets design §5.7; lane S4).
+///
+/// It is M10's own `publication_over_budget` — permanent, no `site` — built
+/// as M10 builds it ([`Rejection::classified`]) with the price's four terms,
+/// its total and the budget as its `detail`, in one fixed sentence: `{total}
+/// in-lock reads priced over the budget of {budget}: {homes} link-holding
+/// homes × {entries} links and read-with entries + {draft_runs} draft runs
+/// × {runs} runs; narrow the request`. The daemon's one cell of that code,
+/// answered ahead of the plain sequence's permit and locks
+/// (`publication_read_refusal`), marshaled by the one codec.
+pub(super) fn publication_over_budget(kind: OpKind, price: &PublicationReadRefusal) -> Reply {
+    let mut rejection = Rejection::classified(kind, RejectCode::PublicationOverBudget, None);
+    rejection.detail = Some(format!(
+        "{} in-lock reads priced over the budget of {}: {} link-holding homes × {} links and \
+         read-with entries + {} draft runs × {} runs; narrow the request",
+        price.total, price.budget, price.homes, price.entries, price.draft_runs, price.runs
+    ));
     op_answer(JsonCodec.marshal(&Response::Rejected(rejection)))
 }
 

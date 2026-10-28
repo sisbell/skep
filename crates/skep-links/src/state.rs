@@ -417,6 +417,17 @@ impl LinkState {
     /// `homed_in` answer a home-constrained query from without an index of
     /// their own.
     ///
+    /// THE TWO PINS (the link-sets design §5.7's M3 and W7 (3)): within one
+    /// commit a home's link ordinals rise in the order the commit mints
+    /// them — each mint reads the frontier the mint before it moved — and
+    /// ACROSS COMMITS they rise with commit position: the frontier is folded
+    /// state, moved by every committed mint and by nothing else, so a later
+    /// commit's links in a home take ordinals above every ordinal an earlier
+    /// commit minted there, and `minted_at` rises with the ordinal. A
+    /// commit's deposits in a home are therefore one contiguous run of its
+    /// ordinals, which a reader fences by position with `O(log n)` reads of
+    /// the ordinals' `minted_at`. `tests/it/publication.rs` holds both.
+    ///
     /// # Panics
     ///
     /// Panics if `home` is not a document address. `home` is a registered

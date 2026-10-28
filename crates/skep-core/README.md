@@ -42,7 +42,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The policy**, `auth::policy` — the three write sequences' admission:
   `plain_admission` and, behind it, `retract_class_refusal`
   (`RetractClassRefusal`); `precheck` with `RecordSig`, `DepositSpans` (`of`,
-  `deposit`) and `op_shape_refusal`; `registry_admission` and
+  `deposit`) and `op_shape_refusal`; `publication_read_refusal`
+  (`PublicationReadRefusal`: the price's four terms, its total and the
+  budget) — a publication's in-lock reads priced past M7's
+  `MAX_PUBLICATION_READS`, asked of a lock-free snapshot ahead of the plain
+  sequence's permit and locks; `registry_admission` and
   `genesis_seeding_check`; `upload_admission` (`UploadRefusal`, `token`);
   the two classifiers `deposits_credential_link` and
   `deposits_registry_link`; the refusals `CredentialRefusal` and
@@ -70,7 +74,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   an hour has passed on the head writer's clock and the position moved,
   the head record itself untouched — `changes` (`ChangesQuery`,
   `ChangesAnswer`, `FeedClass` with `of`), `head_time`, `next_step`
-  (`StreamStep`), `announced`, `halted_at`, `say_the_kernels_halt_once`,
+  (`StreamStep`), `announced`, `halted_at`, `producer_refusals`
+  (`ProducerRefusal` with `code` and `detail`: the system producers'
+  standing refusals — the head writer's, the time writer's, the registry
+  seed's — each read off its own memo, the daemon condition `/health`'s
+  `conditions` member and the standing line's clause carry, cleared by
+  that producer's next landed shot), `say_the_kernels_halt_once`,
   `feed_walk_gone` (`FeedPending` with `is_empty`, what the walk behind the
   listener has yet to land: the region a lost or torn `commits.log` left
   uncovered, and the bare positions a lost `feed-index.log` left unsorted,

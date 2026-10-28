@@ -100,6 +100,16 @@ capped at **64 KiB**: a longer one is refused `400 malformed_http` with
 the detail `request head exceeds the 65536-byte cap`, before the body is
 read; frames ride in the body, under the caps above.
 
+A FRAME THE DAEMON HAS RECEIVED IS APPLIED whatever became of its
+connection: the request is read whole, then routed, and nothing between
+the two looks at the socket — a write whose client closed before its
+answer still waits its turn at the serialization lock, commits, is
+recorded and announced, and the answer not taken is dropped as a stalled
+reader's is. A client that lost its connection therefore never reads the
+loss as the frame dropped: it re-asks under the request's `id`
+(§Correlation and idempotency), or reads the board, before it sends the
+write again.
+
 THE LARGEST SINGLE ANSWER a reader must accept is the route's, and no one
 figure bounds every route: `GET /blob?i=` streams one file up to the
 per-file cap, **64 MiB**, its `Content-Length` the file's size and a RESET
@@ -838,6 +848,20 @@ locks the judgment takes: a retry of a committed `publish` that carried
 deposits is answered its acknowledgment and is never refused for what
 its own commit changed (§The publish shot and head-float, the
 deposits).
+
+THE `id` ANSWERS A PENDING FRAME. A re-ask under an `id` whose frame the
+daemon has admitted and not yet answered — one still waiting at the
+serialization lock behind another's commit, its connection closed or
+not (§Transport) — WAITS at that lock for the first frame's turn and is
+judged on the state it left: an acknowledgment is answered from the
+memo, executing nothing, never a second execution queued behind the
+first; a refusal is not memoized, so the re-ask is judged afresh on the
+same state and meets the same refusal. The one gap is the `500` above: a
+first frame that committed and was then answered `500 internal_panic`
+left no memo, so a re-ask after it re-executes — which is why a client
+reads the board before any re-send after a `500`, and never the memo
+alone. The memo is the best-effort hint it was: nothing here survives a
+restart.
 
 ### HTTP status codes
 
@@ -1642,7 +1666,15 @@ homed in a published document of yours — or the target's class, which
 the nullify class refuses to retract: audit_view, not_retraction for a
 credential, not_revocation for a grant), and `read_with_refused` (a
 read-with entry, with `detail` naming which: not_registered,
-not_document, not_owner, not_published); and three more of M5's — `not_link_address`
+not_document, not_owner, not_published), and the publication's budget on
+its in-lock reads, `publication_over_budget` (the reads the one commit
+makes under the daemon's serialization lock, priced AHEAD of the lock
+off a lock-free snapshot — the caller's link-holding home count × the
+links and read-with entries, plus the draft's content run count × the
+request's runs — past M7's `MAX_PUBLICATION_READS` = 65536; permanent,
+no site, `detail` the price's four terms, its total and the budget;
+nothing committed, no write permit taken and no lock — §The publish
+shot and head-float, the in-lock reads' budget); and three more of M5's — `not_link_address`
 (make-link's seat step, M5 §8: the address it is to seat is not a full
 element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
@@ -1989,6 +2021,51 @@ touched in address order (§The change feed). THE EDITION CLAIM's
 reader is `edition_claims` (§Namespace), and a minting publication's
 member is `E.1` of the edition `E` the ack's address lies under.
 
+**The in-lock reads' budget** (the link-sets design §5.7). The four
+reads the one commit makes under the daemon's serialization lock — the
+claim read per `links` entry and the presence read per `read_with`
+entry, each over the caller's link-holding homes; the twin fence's stab
+per re-inserted run; and the kept-place check's resolution over the
+draft's run-list per placed run — are PRICED BEFORE THE LOCK IS TAKEN,
+off a lock-free snapshot of the head: the caller's link-holding home
+count × (`links` entries + `read_with` entries), plus the draft's
+content run count × the request's runs, against `MAX_PUBLICATION_READS`
+= 65536 (16 × `MAX_SLOT_SPANS`), and a request past it is refused
+`publication_over_budget` — permanent, no `site`, `detail` the four
+terms, the total and the budget — ahead of the write permit, both locks
+and every other refusal of a publication's, the publish-class gate
+included, so a refused request costs no permit, parks behind no writer
+and commits nothing. The counts may move between the pricing and the
+commit: the budget is conservative by design, a request it admits may
+cost a little more under the lock and one it refuses would have cost
+at least its price. What it admits: 4096 entries over 16 link-holding
+homes, 1024 over 64, 256 over 256; a draft of 256 content runs
+re-supplied as 256 runs, or 4096 runs windowing a draft of 16; the two
+terms share the one budget. The same board prices the same request the
+same, so the act that exists is a narrower request — fewer entries, or
+a draft re-read into fewer runs — which the ceremony prices before the
+act.
+
+**The position-fenced read** (the link-sets design §5.7). A home's link
+ordinals RISE WITH COMMIT POSITION — within one commit in the order
+above, and across commits: the frontier a mint reads is folded state,
+moved by every committed mint and by nothing else, so a later commit's
+links in a home take ordinals above every ordinal an earlier commit
+minted there, and `read_link`'s `at` rises with the ordinal. A commit's
+deposits in a home are therefore ONE CONTIGUOUS RUN of the home's
+ordinals — those whose `at` is the row's position — and a verifier or a
+log holding the row's position and its `docs` finds them home by home
+with `O(log n)` `read_link`s: a binary search over the home's ordinals
+for the first whose `at` is at or past the position, and for the first
+past it. No read serves a home's link frontier by itself: `read_link`
+past the frontier answers `link_value` with a null `link` and a null `at`,
+exactly as an address in a home the reader may not read does, so a
+reader of a home it may read finds the frontier by a galloping probe —
+ordinals 1, 2, 4, 8, … until the null, then a binary search between
+the last link and the first null — `O(log n)` `read_link`s more; a
+retracted link still answers its value and its `at`, so the run has no
+hole.
+
 **Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
 of a bare DOCUMENT address answers the document's trunk HEAD — the
 latest trunk member — and never the pre-chain arrangement a shot
@@ -2044,6 +2121,7 @@ commits nothing:
 
 | code | disposition | `site` | when |
 | --- | --- | --- | --- |
+| `publication_over_budget` | permanent | — | the request's in-lock reads are priced past `MAX_PUBLICATION_READS` (the in-lock reads' budget, above) — off a lock-free snapshot ahead of the write permit, both locks and every refusal below, the daemon's publish-class gate included; `detail` the price's terms and the budget |
 | `doc_not_registered` | reorder | — | `doc` is not registered — answered ahead of ownership, so an unregistered address never discloses an ownership verdict |
 | `not_owner` | permanent | `addr` = `doc` | the session principal does not own `doc` (PUB-6.36's slot 1, judged once `doc` is registered) |
 | `source_not_registered` | reorder | — | `base`, `draft`, or a run's `origin` is not registered (in that order) |
@@ -2065,8 +2143,9 @@ commits nothing:
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
 `doc`'s state, so from a bare session it is refused there even on a
-private document. The faces (PUB-6.7), ⟨D⟩ the document named and ⟨O⟩
-the origin withheld:
+private document — and the in-lock reads' price stands ahead of the
+gate, before the daemon takes any lock. The faces (PUB-6.7), ⟨D⟩ the
+document named and ⟨O⟩ the origin withheld:
 
 * `withheld` — "⟨O⟩ is not shared with you — the shot windows it.
   Remove that window, or wait for its owner's grant." Nothing about
@@ -5419,7 +5498,8 @@ are never renumbered per class; and the two straddle renderings above.
 ## The other endpoints
 
 **`GET /health`** → `200` with `ok`, `log_position`, `head_time`,
-`chain_head` and the `auth` object. Token-blind, and
+`chain_head`, `conditions`, the `auth` object and the `media` and
+`writes` objects. Token-blind, and
 class-invariant (§Cross-origin access: it carries neither cache header —
 the one answer for every requester). `head_time` is the newest recorded
 commit's wall-clock unix milliseconds (§The change feed's timestamp
@@ -5447,12 +5527,12 @@ the other — and every such reading corrects itself on the next probe.
 The forward rule the change feed states for its own members (§The change
 feed: "a client MUST ignore an entry member it does not know … a consumer
 written to today's members must not treat a later one as a protocol
-violation") holds here too: a consumer written to these seven members
-must not treat an eighth as a violation. A claimed board configured with
+violation") holds here too: a consumer written to these eight members
+must not treat a ninth as a violation. A claimed board configured with
 one origin answers, illustratively:
 
 ```json
-{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","head_time":1786838400047,"log_position":24,"media":{"uploads":true},"ok":true,"writes":{"halted":false}}
+{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","conditions":[],"head_time":1786838400047,"log_position":24,"media":{"uploads":true},"ok":true,"writes":{"halted":false}}
 ```
 
 `auth.claimant` is the claiming account's address, `null` while
@@ -5476,6 +5556,32 @@ could not complete — while reads serve; `writes.halted` is `false` on a
 healthy board, `true` for the rest of the uptime once either halt stands
 (every write then answers `poisoned` at the `halt` disposition, §Rejection
 codes), and `ok` stays `true` throughout, since the daemon is serving.
+`conditions` is an array, EMPTY on a healthy board, else one object per
+system producer whose last shot was refused — the board's own writers,
+which shoot from the system account's staging draft with no person and
+no face (§The publish shot and head-float, the correspondence records):
+the published head's writer, the time writer and the registry seed —
+echoed here as the write halt is, so a client reading `H` or the
+vocabulary derives "stale" from the echo and never from silence. Each
+object carries `producer` (`head`, `time` or `registry`), `act` (the op
+of the producer's commit the refusal met, as this document names the
+op: `create_new_document`, `insert`, `publish` or `make_link`), `code`
+(the refusal's code as §Rejection codes spells it) and `detail` (its
+detail, `null` where none rides), `position` (the committed position
+the refused shot was to stand above — the position the head or the time
+record would have named) and `attempts` (the attempts refused since the
+producer last landed, the ones its once-per-cause line on the operator
+stream kept unsaid among them); a consumer ignores an object member it
+does not know, as the forward rule says. The object is read off the
+producer's own memo and clears when that producer NEXT LANDS: the head
+writer's at the write whose turn lands a head, the time writer's at its
+next record, the registry seed's at the next open, which seeds the rows
+it lacks. A refusal is not a halt: `writes.halted` stands beside it as
+before, and a halted board's producers show here refused `poisoned`. A
+refused head writer answers, illustratively,
+`{"act":"insert","attempts":3,"code":"durability","detail":"the volume is full","position":42,"producer":"head"}`
+in the array, and the operator stream's standing line carries the same
+fact as its clause.
 The operator stream names each halt's cause and the act.
 
 The hosted image (the repository's `Dockerfile`; `README.md`, Running the

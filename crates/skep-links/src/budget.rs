@@ -1,11 +1,16 @@
-//! The two per-slot budgets caller-shaped slots are held to.
+//! The two per-slot budgets caller-shaped slots are held to, and the
+//! publication's budget on the reads it makes under the lock.
 //!
 //! They are the spans a slot keeps ([`MAX_SLOT_SPANS`]), which every
 //! caller-shaped slot is held to, and the run-list steps a `Resolve` slot's
 //! specs command ([`MAX_SLOT_RESOLVE_STEPS`]) — its result and its work,
 //! neither of which bounds the other. MAKELINK enforces both, and `emit` and
 //! `editlink` the first, each refusing an over-budget slot `SlotTooLarge`;
-//! the rejections' `Display` text names the numbers.
+//! the rejections' `Display` text names the numbers. The third,
+//! [`MAX_PUBLICATION_READS`], bounds the reads a publication's composite
+//! makes under the serialization lock, priced ahead of the lock by
+//! `price_publication_reads` (the publication's module) and refused there by
+//! the daemon; this crate compares against it and refuses nothing itself.
 
 /// The most spans one slot may carry.
 ///
@@ -111,3 +116,41 @@ pub const MAX_SLOT_SPANS: usize = 4096;
 ///
 /// [`M5State::content_run_count`]: skep_arrangement::M5State::content_run_count
 pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
+
+/// The most in-lock reads one publication may command (the link-sets design
+/// §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK).
+///
+/// It bounds the price `price_publication_reads` computes — the caller's
+/// link-holding home count × (`links` entries + `read_with` entries), plus
+/// the draft's content run count × the request's runs — which is the work
+/// the composite's four in-lock reads do, counted in the two units they are
+/// paid in: the first product in index probes (`stab_typed_in` of the
+/// supersession class per own home per `links` entry, twice — the claim's
+/// test and the successor's original's — and `read_with_in`'s probe per
+/// published own home per `read_with` entry), the second in run-list steps
+/// (the kept-place check's resolution of each placed run over the draft's
+/// run-list, and the twin fence's one stab per re-inserted run beside it).
+/// Like [`MAX_SLOT_RESOLVE_STEPS`] the charge is an upper bound read before
+/// the work — every own home is charged whether or not it holds a claim,
+/// every run whether or not it carries a place — so it is conservative in
+/// the one direction that is safe, and the daemon prices it on a snapshot
+/// taken before its lock, so the counts may have moved by the time the
+/// composite reads: a request refused here would have cost at least this
+/// much, and one admitted may cost a little more.
+///
+/// `16 × MAX_SLOT_SPANS`, a quarter of the run-list steps one `Resolve`
+/// slot may command under the applier lock. The two units differ: a
+/// run-list step is one `Nat` add-and-compare, order 50 ns, while an index
+/// probe descends the home's spanfilade and tests its hits, order one to a
+/// few microseconds — so at this budget the second term holds the lock for
+/// about a quarter of what [`MAX_SLOT_RESOLVE_STEPS`] tolerates per slot and
+/// the first for order a tenth of a second, inside the transport's 30 s
+/// deadlines by two orders and inside what a maximal shot's own staging
+/// already holds it for. What it admits: the wire's 4096 entries over 16
+/// link-holding homes, 1024 over 64, 256 over 256; a draft of 256 content
+/// runs re-supplied whole as 256 runs, or 4096 runs windowing a draft of 16;
+/// and the terms share the one budget, so a request near it on one has
+/// little room on the other. A refusal is permanent for the request as
+/// sent — the same board prices it the same — and the act that exists is a
+/// narrower one: fewer entries, or a draft re-read into fewer runs.
+pub const MAX_PUBLICATION_READS: usize = 16 * MAX_SLOT_SPANS;

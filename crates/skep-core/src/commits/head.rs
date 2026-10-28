@@ -114,14 +114,21 @@
 //! not said again (the trigger stays due and every landed commit retries
 //! it, so the same cause would otherwise be said per commit), and any other
 //! is a new cause and is said. Every refused attempt is counted all the
-//! same. The head is skipped for this cycle, the writer's last head and its
+//! same. While the memo stands the refusal is a DAEMON CONDITION (the
+//! link-sets design §5.7, W8 (5)): [`HeadWriter::refusal`] reads it as the
+//! producer `head`'s — the commit refused, the cause, the position the head
+//! would have named and the attempts — for `/health`'s `conditions` member
+//! and the standing line's clause, echoed as the write halt is, so a face
+//! that reads `H` derives "stale" from the echo and never from silence. The
+//! head is skipped for this cycle, the writer's last head and its
 //! counters as they were, and the triggering write is untouched — it
 //! committed, and its ack is owed whatever the daemon's own write did. When
 //! a head next lands the memo clears with one `landing:` line naming the
 //! head's position, the attempts refused, the first refused position and
 //! how long the refusals lasted ([`RefusalsClearedLine`]), so the next
-//! refusal is news again. The next landed commit retries a cadence head,
-//! whose trigger stays due.
+//! refusal is news again and the condition is gone at the same place the
+//! line is said. The next landed commit retries a cadence head, whose
+//! trigger stays due.
 //!
 //! **The claim's head, owed** (SO-I4 (a): the boundary is derived "from the
 //! write path's next turn wherever its first write was refused"). The first
@@ -178,9 +185,7 @@ use skep_arrangement::{
 };
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
-use skep_febe::{lower_txn, Codec, Op, OpKind, Rejection, Response, Stores};
-#[cfg(any(test, feature = "test-hooks"))]
-use skep_febe::RejectCode;
+use skep_febe::{lower_txn, Codec, Op, OpKind, RejectCode, Rejection, Response, Stores};
 use skep_identity::BoardTerm;
 use skep_kernel::Seq;
 use skep_links::{PublishDeposits, PublishTarget};
@@ -190,7 +195,7 @@ use skep_util::notice::Class;
 
 use super::feed::Feed;
 use super::sidecar::{wall_clock_millis, CommitMeta};
-use super::{write_meta, Lines, WriteMeta, Commits};
+use super::{write_meta, Commits, Lines, ProducerRefusal, WriteMeta};
 use crate::codec::{op_name, JsonCodec};
 use crate::serial::SerialGuard;
 
@@ -381,7 +386,8 @@ struct HeadState {
     refusals: Option<Refusals>,
 }
 
-/// The refusals since a head last landed, as the clearing line names them.
+/// The refusals since a head last landed, as the clearing line names them
+/// and the condition reads them.
 struct Refusals {
     /// The position the first refused head would have named.
     since: u64,
@@ -389,6 +395,8 @@ struct Refusals {
     began: Instant,
     /// Every refused attempt, counted whether the memo said it or not.
     attempts: u64,
+    /// The position the last refused head would have named: the condition's.
+    position: u64,
 }
 
 /// A committed pair: a position and the commit chain's value at it.
@@ -516,12 +524,14 @@ impl HeadRecord {
 /// Who says a refused commit of the system principal's, and how.
 ///
 /// It is handed to [`HeadWriter::run_commit`] and the three helpers over it
-/// with the op refused, as the wire names it, and the cause as the wire
-/// renders a rejection ([`render_cause`]): the head writer's own is row 38's
-/// memo, [`HeadWriter::say_the_refusal_once`] with the position the head
-/// would have named; the registry seed's is its own line, naming the type
-/// whose commit the refusal met.
-pub(super) type Refused<'a> = &'a dyn Fn(&'static str, String);
+/// with the op refused, as the wire names it, and the refusal itself — the
+/// rejection M10's one table lowered, which each sayer renders as the wire
+/// renders one ([`render_cause`]) and keeps as its condition: the head
+/// writer's own is row 38's memo, [`HeadWriter::say_the_refusal_once`] with
+/// the position the head would have named; the time writer's its own line
+/// and memo; the registry seed's its own line, naming the type whose commit
+/// the refusal met, and the memo the commits card holds for it.
+pub(super) type Refused<'a> = &'a dyn Fn(&'static str, &Rejection);
 
 /// A head that is due: the decision the turn reaches under the state lock.
 ///
@@ -856,7 +866,8 @@ impl HeadWriter {
         // The position the head names — what row 38's line names where any
         // of its commits is refused.
         let position = record.position;
-        let refused = |act: &'static str, cause: String| self.say_the_refusal_once(position, act, cause);
+        let refused =
+            |act: &'static str, refusal: &Rejection| self.say_the_refusal_once(position, act, refusal);
         let Some(draft) = self.ensure_draft(wp, serial, &refused) else {
             return false;
         };
@@ -891,12 +902,12 @@ impl HeadWriter {
             Err(e) => {
                 // Unreachable — the insert answered a content element start —
                 // but a silent arm is what I11 (c) forbids, so it is named:
-                // the error's own words (`RunError`'s `Display`, never its
-                // `Debug`), as row 38 names a refusal — the head's position,
-                // the publish it could not build, once per cause, and cleared
-                // by the head that next lands.
-                let cause = format!("its atom's run is malformed: {e}");
-                self.say_the_refusal_once(position, op_name(OpKind::Publish), cause);
+                // the shot's own `bad_run`, with the error's own words
+                // (`RunError`'s `Display`, never its `Debug`) as its detail,
+                // as row 38 names a refusal — the head's position, the
+                // publish it could not build, once per cause, and cleared by
+                // the head that next lands.
+                self.say_the_refusal_once(position, op_name(OpKind::Publish), &malformed_run(&e));
                 return false;
             }
         };
@@ -1096,7 +1107,7 @@ impl HeadWriter {
             match outcome {
                 Ok((addr, at)) => Response::AckAddr { addr, at },
                 Err(refusal) => {
-                    refused(op_name(kind), render_cause(&refusal));
+                    refused(op_name(kind), &refusal);
                     // A no-op answer `record` returns None for: nothing
                     // recorded, nothing announced. Dropped below, never on
                     // the wire.
@@ -1115,24 +1126,29 @@ impl HeadWriter {
     /// This is the line the module doc's account of a refusal names.
     /// `act` is the op of the head's commit the refusal was met at — the
     /// staging draft's mint, the record's insert or the shot's publish, as
-    /// the wire names it — and `cause` the refusal as the wire renders a
-    /// rejection, `{code}: {detail}` ([`render_cause`]), or, where the shot's
-    /// run would not build, that error's own words. Compared under the state
-    /// lock with the last one said: the same commit and cause is not said
-    /// again; another is said with `position`, the one the head would have
-    /// named, and remembered. Every attempt is counted, said or not, and the
-    /// first refused position since a landing kept with the moment, for the
-    /// clearing line. Said under the lock, so this line and the clearing a
-    /// landing says are one order on the stream. Where no head stands yet
-    /// the line says what that costs a claimed board ([`HeadRefusedLine`]).
-    fn say_the_refusal_once(&self, position: u64, act: &'static str, cause: String) {
+    /// the wire names it — and `refusal` the rejection, rendered as the wire
+    /// renders one, `{code}: {detail}` ([`render_cause`]), or, where the
+    /// shot's run would not build, `bad_run` with that error's own words
+    /// ([`malformed_run`]). Compared under the state lock with the last one
+    /// said: the same commit and cause is not said again; another is said
+    /// with `position`, the one the head would have named, and remembered.
+    /// Every attempt is counted, said or not, and the first refused position
+    /// since a landing kept with the moment, for the clearing line, the last
+    /// with it for the condition. Said under the lock, so this line and the
+    /// clearing a landing says are one order on the stream. Where no head
+    /// stands yet the line says what that costs a claimed board
+    /// ([`HeadRefusedLine`]).
+    fn say_the_refusal_once(&self, position: u64, act: &'static str, refusal: &Rejection) {
+        let cause = render_cause(refusal);
         let mut state = self.state.lock();
         let refusals = state.refusals.get_or_insert_with(|| Refusals {
             since: position,
             began: Instant::now(),
             attempts: 0,
+            position,
         });
         refusals.attempts += 1;
+        refusals.position = position;
         if state.last_refusal.as_ref().is_some_and(|(a, c)| *a == act && *c == cause) {
             return;
         }
@@ -1140,6 +1156,44 @@ impl HeadWriter {
         self.lines.say(Class::Failure, HeadRefusedLine { position, act, cause: &cause, first });
         state.last_refusal = Some((act, cause));
     }
+
+    /// Returns the head writer's standing refusal as the producer `head`'s
+    /// condition, or `None` where its last head landed.
+    ///
+    /// It is row 38's memo read as the condition the module doc names: the
+    /// commit refused and its cause, the position the last refused head
+    /// would have named and the attempts since the last landing, under the
+    /// state lock and no guard — for [`Commits::producer_refusals`], the
+    /// read behind `/health`'s `conditions` member and the standing line's
+    /// clause. Both memos are set at the first refusal and cleared together
+    /// at the landing, so the condition stands exactly while the clearing
+    /// line is owed.
+    pub(super) fn refusal(&self) -> Option<ProducerRefusal> {
+        let state = self.state.lock();
+        let (act, cause) = state.last_refusal.as_ref()?;
+        let refusals = state.refusals.as_ref()?;
+        Some(ProducerRefusal {
+            producer: "head",
+            act,
+            cause: cause.clone(),
+            position: refusals.position,
+            attempts: refusals.attempts,
+        })
+    }
+}
+
+/// Returns the refusal a shot whose run would not build is said as: the
+/// shot's own `bad_run`, the run error's words as its detail.
+///
+/// It is the one arm of a producer's write the driver never reaches —
+/// the insert answered a content element start — named rather than silent
+/// (I11 (c)) and rendered as every other refusal is, so the line and the
+/// condition carry a code the wire spells and the error's `Display`, never
+/// its `Debug`. The three producers share it.
+pub(super) fn malformed_run(e: &skep_arrangement::RunError) -> Rejection {
+    let mut refusal = Rejection::classified(OpKind::Publish, RejectCode::BadRun, None);
+    refusal.detail = Some(format!("its run is malformed: {e}"));
+    refusal
 }
 
 /// Returns row 38's cause as the wire renders a rejection: `{code}: {detail}`.
@@ -1190,8 +1244,9 @@ fn wire_code(refusal: &Rejection) -> String {
 /// record's `insert` or the shot's `publish`, the last a refusal that
 /// leaves the insert's atom an orphan in the draft — and the cause as
 /// [`render_cause`] renders it, or, where the shot's run would not build,
-/// that error's own words: `head writer: the head at position {p} was
-/// refused at its {op} ({cause}); no head written this cycle`.
+/// `bad_run` with that error's own words ([`malformed_run`]): `head writer:
+/// the head at position {p} was refused at its {op} ({cause}); no head
+/// written this cycle`.
 ///
 /// Where no head stands yet, the line adds what that costs: `; no head
 /// stands yet, so a claimed board refuses every attested write

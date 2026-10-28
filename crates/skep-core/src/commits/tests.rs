@@ -27,6 +27,35 @@ pub(super) fn fsync_engine(dir: &std::path::Path) -> Engine {
     .expect("a fresh engine")
 }
 
+/// A producer's condition reads its cause apart as the wire spells a
+/// rejection: the code up to the first `: `, the detail past it, and the
+/// code alone where no detail rides — so `/health` carries the two members
+/// the line joins, and a detail holding `: ` of its own stays whole.
+#[test]
+fn a_producer_refusal_reads_its_code_and_detail_off_the_rendered_cause() {
+    let refusal = |cause: &str| ProducerRefusal {
+        producer: "head",
+        act: "insert",
+        cause: cause.to_string(),
+        position: 42,
+        attempts: 3,
+    };
+    let seam = refusal("durability: the test seam's refusal");
+    assert_eq!((seam.code(), seam.detail()), ("durability", Some("the test seam's refusal")));
+    let bare = refusal("base_superseded");
+    assert_eq!((bare.code(), bare.detail()), ("base_superseded", None));
+    let full = refusal("durability: the volume is full (No space left on device (os error 28))");
+    assert_eq!(full.code(), "durability");
+    assert_eq!(full.detail(), Some("the volume is full (No space left on device (os error 28))"));
+    let nested = refusal("bad_run: its run is malformed: the width is zero");
+    assert_eq!((nested.code(), nested.detail()), ("bad_run", Some("its run is malformed: the width is zero")));
+    let memo = RefusalMemo { act: "make_link", cause: "poisoned".to_string(), position: 7, attempts: 1 };
+    assert_eq!(
+        memo.condition("registry"),
+        ProducerRefusal { producer: "registry", act: "make_link", cause: "poisoned".to_string(), position: 7, attempts: 1 }
+    );
+}
+
 /// Reads are exactly the ops the change feed records nothing for —
 /// M10's partition and this table's answer, agreeing on both sides.
 #[test]

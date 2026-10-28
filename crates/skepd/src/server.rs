@@ -270,7 +270,8 @@ use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
 use skep_core::commits::{
-    AttestStoreFigures, Commits, FeedFigures, FeedPending, FirstHead, Seeded, StoppedFile,
+    AttestStoreFigures, Commits, FeedFigures, FeedPending, FirstHead, ProducerRefusal, Seeded,
+    StoppedFile,
 };
 use skep_namespace::ghost_home_document;
 use skep_core::serial::SerialFigures;
@@ -2147,13 +2148,15 @@ impl Daemon {
     /// Says the standing line (`operations.md` §1, the rates; §1.1 m11).
     ///
     /// It is what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the ten reads —
+    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the eleven reads —
     /// each atomic loads or one lock, save the floor's fresh read of the
     /// volume and the unread deposit's fresh read of its file, and none under
     /// the serialization guard — in the order the line says them: (1) the
     /// write path's halt with its position, (2) the kernel's poison with the
     /// head it halted at — no commit lands past a poisoned kernel, so the
-    /// head at the tick is the position the halt line (m10) named — (3) the
+    /// head at the tick is the position the halt line (m10) named — (2b)
+    /// the system producers' standing refusals, each producer's memo under
+    /// its own lock, (3) the
     /// journal damage a history read met this uptime, by the site its line
     /// named (`Daemon::history_damage`; RUNBOOK §2), (4) the feed's stopped
     /// files with theirs, (5) the pruner's liveness flag, (6) the feed walk's
@@ -2176,6 +2179,9 @@ impl Daemon {
         let line = StandingLine {
             halted_at: self.commits.halted_at(),
             poisoned: kernel.is_poisoned().then(|| kernel.current_seq()),
+            // (2b) the system producers' standing refusals, each memo's own
+            // lock: the clause `/health`'s `conditions` member says the same.
+            refused_producers: self.commits.producer_refusals(),
             history_damaged: self.history_damage.get().cloned(),
             stopped_files: self.commits.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
@@ -4014,7 +4020,12 @@ impl fmt::Display for JournalDamageSite<'_> {
 /// and the logs, `kept files beside the journal and the logs: {n}
 /// ({names})` — `the write path is halted since position {p} (feed-attest.log)`;
 /// `the kernel is poisoned since position {p}`, the position the kernel's
-/// halt line named; `a history read found the journal unreadable at
+/// halt line named; `the {producer} producer's last shot was refused at
+/// its {act} ({cause}) at position {p}, {n} attempts refused since its last
+/// landing` once per system producer standing refused — the head writer,
+/// the time writer, the registry seed — in the words of the producer's own
+/// refusal line and `/health`'s `conditions` member (the link-sets design
+/// §5.7, W8 (5)); `a history read found the journal unreadable at
 /// position {p}` or `… ({error})` (the damage [`HistoryDamageLine`] said,
 /// which the next open reads, by its site — [`JournalDamageSite`]; RUNBOOK
 /// §2); `{file} stopped since position {p}` once per stopped file;
@@ -4044,6 +4055,14 @@ pub(super) struct StandingLine {
     /// No commit lands past a poisoned kernel, so `Kernel::current_seq` at
     /// the tick is the position the halt line (m10) named.
     pub(super) poisoned: Option<Seq>,
+    /// The system producers' standing refusals (the link-sets design §5.7,
+    /// W8 (5)).
+    ///
+    /// It is `Commits::producer_refusals`'s read: one per producer — the
+    /// head writer, the time writer, the registry seed — whose last shot was
+    /// refused, the same memos `/health`'s `conditions` member reads, so the
+    /// clause and the member say one fact; empty on a healthy board.
+    pub(super) refused_producers: Vec<ProducerRefusal>,
     /// Where a history read met the journal's damage this uptime.
     ///
     /// It is the site [`Daemon::refuse_history`] kept as it said
@@ -4096,6 +4115,7 @@ impl StandingLine {
     pub(super) fn stands(&self) -> bool {
         self.halted_at.is_some()
             || self.poisoned.is_some()
+            || !self.refused_producers.is_empty()
             || self.history_damaged.is_some()
             || !self.stopped_files.is_empty()
             || self.pruner_gone
@@ -4116,6 +4136,13 @@ impl fmt::Display for StandingLine {
         }
         if let Some(at) = self.poisoned {
             clauses.push(format!("the kernel is poisoned since position {at}"));
+        }
+        for refusal in &self.refused_producers {
+            clauses.push(format!(
+                "the {} producer's last shot was refused at its {} ({}) at position {}, {} \
+                 attempts refused since its last landing",
+                refusal.producer, refusal.act, refusal.cause, refusal.position, refusal.attempts
+            ));
         }
         if let Some(site) = &self.history_damaged {
             clauses.push(format!("a history read found the journal unreadable {site}"));

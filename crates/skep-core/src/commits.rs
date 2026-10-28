@@ -248,6 +248,86 @@ use crate::codec::op_name;
 use crate::serial::{Serial, SerialFigures, SerialGuard};
 use feed::Feed;
 
+/// A system producer's standing refusal: the daemon condition (the
+/// link-sets design §5.7, W8 (5)).
+///
+/// It is what `/health`'s `conditions` member and the standing line's
+/// clause carry, one per producer whose last shot was refused — the head
+/// writer's, the time writer's, the registry seed's — echoed as the write
+/// halt is, so a face that reads `H` or the vocabulary derives "stale" from
+/// the echo and never from silence. `producer` is the producer's name,
+/// `head`, `time` or `registry`; `act` the op of the producer's commit the
+/// refusal met, as the wire names it; `cause` the refusal as the operator
+/// line renders a rejection, `{code}: {detail}` or the code alone, which
+/// [`ProducerRefusal::code`] and [`ProducerRefusal::detail`] read apart;
+/// `position` the committed position the refused shot was to stand above —
+/// the one the head or the time record would have named, the kernel's head
+/// at the seed's refusal; and `attempts` every refused attempt since the
+/// producer last landed, the ones its once-per-cause line kept unsaid among
+/// them. Read off each producer's memo under that memo's own lock
+/// ([`Commits::producer_refusals`]) and cleared where the memo is: by that
+/// producer's next landed shot — the head's with its `landing:` line, the
+/// time writer's at its next record, the seed's at its next open, the one
+/// turn it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProducerRefusal {
+    /// The producer: `head`, `time` or `registry`.
+    pub producer: &'static str,
+    /// The op of the producer's commit the refusal met, as the wire names it.
+    pub act: &'static str,
+    /// The refusal as the line renders a rejection: `{code}: {detail}`, or
+    /// the code alone.
+    pub cause: String,
+    /// The committed position the refused shot was to stand above.
+    pub position: u64,
+    /// The attempts refused since the producer last landed.
+    pub attempts: u64,
+}
+
+impl ProducerRefusal {
+    /// Returns the refusal's code as the wire spells it: the cause up to its
+    /// first `: `, or the whole where none rides.
+    pub fn code(&self) -> &str {
+        self.cause.split_once(": ").map_or(self.cause.as_str(), |(code, _)| code)
+    }
+
+    /// Returns the refusal's detail where one rides: the cause past `: `.
+    pub fn detail(&self) -> Option<&str> {
+        self.cause.split_once(": ").map(|(_, detail)| detail)
+    }
+}
+
+/// A producer's memo of its standing refusal: the time writer's and the
+/// registry seed's own, kept under each one's lock and read as the
+/// condition it is.
+///
+/// The head writer keeps its own two (`head.rs`: the once-per-cause memo
+/// and the refusals its clearing line counts), which read as the same
+/// condition.
+pub(crate) struct RefusalMemo {
+    /// The op of the commit the last refusal met, as the wire names it.
+    pub(crate) act: &'static str,
+    /// The last refusal's cause, as the line renders a rejection.
+    pub(crate) cause: String,
+    /// The committed position the last refused shot was to stand above.
+    pub(crate) position: u64,
+    /// The attempts refused since the producer last landed.
+    pub(crate) attempts: u64,
+}
+
+impl RefusalMemo {
+    /// Returns the memo as `producer`'s condition.
+    pub(crate) fn condition(&self, producer: &'static str) -> ProducerRefusal {
+        ProducerRefusal {
+            producer,
+            act: self.act,
+            cause: self.cause.clone(),
+            position: self.position,
+            attempts: self.attempts,
+        }
+    }
+}
+
 // The feed walk's test seams, for the daemon's hooks: the hold the walk
 // parks at, the notice it writes as it parks, and its panic arm — and the
 // feed's resident window, moved before an open.
@@ -391,6 +471,15 @@ pub struct Commits {
     /// cleared under the serialization guard at the door; the lock is what
     /// makes it `Sync`.
     refused: Mutex<RefusedStretch>,
+    /// The registry seed's memo of its refusal (`registry.rs`).
+    ///
+    /// It is the seed's condition ([`ProducerRefusal`]): set where a driver
+    /// refusal cut the seed short at this open, beside the line that says
+    /// it, and standing for the uptime — the seed's next landed shot is its
+    /// next open's, which starts with the memo empty. Read by
+    /// [`Commits::producer_refusals`] under its own lock and no guard. The
+    /// head writer's and the time writer's memos are their own.
+    seed_refusal: Mutex<Option<RefusalMemo>>,
     /// The classed door with its record ([`Lines`]).
     ///
     /// Every line said from this card and the feed beneath it goes through
@@ -500,6 +589,7 @@ impl Commits {
             halted_at: AtomicU64::new(0),
             kernel_halt_said: AtomicBool::new(false),
             refused: Mutex::new(RefusedStretch::default()),
+            seed_refusal: Mutex::new(None),
             said,
             checkpoint_signal: CheckpointSignal::new(),
             inline_runs_seen: AtomicU64::new(0),
@@ -583,6 +673,27 @@ impl Commits {
     /// race; a `None` is the reading of one moment.
     pub fn halted_at(&self) -> Option<Seq> {
         self.halted.load(Ordering::Acquire).then(|| Seq(self.halted_at.load(Ordering::Acquire)))
+    }
+
+    /// Returns the system producers' standing refusals: the daemon
+    /// conditions (the link-sets design §5.7, W8 (5)).
+    ///
+    /// One per producer whose last shot was refused — the head writer's,
+    /// the time writer's, the registry seed's, in that order — each read off
+    /// its own memo under that memo's lock and no guard, as [`halted_at`]
+    /// is read: `/health`'s `conditions` member and the standing line's
+    /// clause, the two readers outside the door, so the operator stream and
+    /// the wire say one fact. Empty on a healthy board. A refusal is no
+    /// halt: `halted_at` stands beside this as today, and a halted board's
+    /// producers stand refused `poisoned` here beside it.
+    ///
+    /// [`halted_at`]: Commits::halted_at
+    pub fn producer_refusals(&self) -> Vec<ProducerRefusal> {
+        let mut out = Vec::new();
+        out.extend(self.head_writer.refusal());
+        out.extend(self.time_writer.refusal());
+        out.extend(self.seed_refusal.lock().as_ref().map(|memo| memo.condition("registry")));
+        out
     }
 
     /// Says the kernel's halt line, once per uptime, where the kernel halted.

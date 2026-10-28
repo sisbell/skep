@@ -488,7 +488,10 @@ apart.
    from a leak.
 
 8. **Watch between the lines.** `GET /health` answers
-   `writes.halted` as `true` while either halt stands. And once an
+   `writes.halted` as `true` while either halt stands, and
+   `conditions` as one object per system producer — the head writer,
+   the time writer, the registry seed — whose last shot was refused,
+   an empty list otherwise. And once an
    hour, while any bad state stands, the daemon writes one
    `standing:` line naming each, its clauses joined by `; `, in this
    order:
@@ -496,6 +499,7 @@ apart.
    ```
    the write path is halted since position {position} (feed-attest.log)
    the kernel is poisoned since position {position}
+   the {producer} producer's last shot was refused at its {act} ({cause}) at position {position}, {n} attempts refused since its last landing
    a history read found the journal unreadable at position {position}
    {file} stopped since position {position}
    the pruner's thread is gone
@@ -518,6 +522,12 @@ apart.
 
    - the write path's halt and the kernel's: a restart, once the
      volume has room and the device answers (step 5);
+   - a producer's refusal: that producer's next landed shot — the
+     head writer's at the first write after its cause is gone (room,
+     the device; step 5), the time writer's at the first write of the
+     next hour, the registry seed's at the next open, which seeds the
+     rows it lacks (Start, step 3); the clause names the cause as the
+     producer's own failure line did;
    - the history read's damage: a restart, after the acts Restore's
      lead names;
    - a stopped file: a restart once there is room (step 5). Restart

@@ -58,7 +58,15 @@
 //! ([`TypeRefusedLine`]), with the cause as the wire renders a rejection
 //! (`head.rs`'s rendering, so the two spell one way), how many types stand
 //! and that the rest wait for the next open, which writes them and nothing
-//! twice. The board serves on: a refused seed never refuses the open.
+//! twice. The board serves on: a refused seed never refuses the open. And
+//! the refusal is a DAEMON CONDITION for the uptime (the link-sets design
+//! §5.7, W8 (5)): the commits card's memo for the seed is set beside the
+//! line — the producer `registry`, the commit refused, the cause, the
+//! kernel's committed head at the refusal and one attempt — read for
+//! `/health`'s `conditions` member and the standing line's clause, echoed
+//! as the write halt is, so a face that reads the vocabulary derives
+//! "stale" from the echo and never from silence; cleared by the seed's
+//! next landed shot, which is the next open's, whose memo starts empty.
 //!
 //! **The cadence.** The seed's commits carry the system testimony, which the
 //! head writer's resume reads as the writer's own and counts toward no head;
@@ -92,8 +100,8 @@ use skep_namespace::{ghost_home_document, HasM3, SYSTEM_PRINCIPAL};
 use skep_registry::{defines_type, vocabulary, Definition};
 use skep_util::notice::Class;
 
-use super::head::{Refused, SYSTEM_TESTIMONY};
-use super::{write_meta, Commits};
+use super::head::{malformed_run, render_cause, Refused, SYSTEM_TESTIMONY};
+use super::{write_meta, Commits, RefusalMemo};
 use crate::serial::SerialGuard;
 
 /// What [`Commits::seed_registry`] came to.
@@ -184,8 +192,8 @@ impl Commits {
         let mut written = 0;
         if let Some(&first) = unwritten.first() {
             let standing = stood + written;
-            let refused = |act: &'static str, cause: String| {
-                self.say_type_refused(first, act, &cause, standing, total)
+            let refused = |act: &'static str, refusal: &Rejection| {
+                self.say_type_refused(first, act, refusal, standing, total)
             };
             let Some(draft) = self.head_writer.ensure_draft(self, serial, &refused) else {
                 return seed.cut_short(written, stood, first);
@@ -205,17 +213,15 @@ impl Commits {
             let Some(start) = seed.insert(&draft, next_ordinal, values, &refused) else {
                 return seed.cut_short(written, stood, first);
             };
-            let Ok(run) = Run::new(start, Nat::from(bytes.len())) else {
-                // Unreachable — the insert answered a content element start
-                // — and named, as the head writer names its own: I11 (c).
-                self.say_type_refused(
-                    first,
-                    "publish",
-                    "the sections' run is malformed",
-                    standing,
-                    total,
-                );
-                return seed.cut_short(written, stood, first);
+            let run = match Run::new(start, Nat::from(bytes.len())) {
+                Ok(run) => run,
+                Err(e) => {
+                    // Unreachable — the insert answered a content element
+                    // start — and named, as the head writer names its own:
+                    // I11 (c).
+                    self.say_type_refused(first, "publish", &malformed_run(&e), standing, total);
+                    return seed.cut_short(written, stood, first);
+                }
             };
             let base_member = {
                 let snap = self.stores.kernel().snapshot();
@@ -243,8 +249,8 @@ impl Commits {
                 continue; // unreachable: every lacking row was placed above
             };
             let standing = stood + written;
-            let refused = |act: &'static str, cause: String| {
-                self.say_type_refused(d, act, &cause, standing, total)
+            let refused = |act: &'static str, refusal: &Rejection| {
+                self.say_type_refused(d, act, refusal, standing, total)
             };
             let from = SlotArg::Resolve(vec![VSpec {
                 source: member.clone(),
@@ -262,16 +268,25 @@ impl Commits {
     }
 
     /// Says the seed's failure line, once per refusal — a refusal ends the
-    /// seed for this open, so once by construction.
+    /// seed for this open, so once by construction — and keeps the memo
+    /// that reads as the seed's condition.
+    ///
+    /// `refusal` is rendered as the head writer renders one, so the line,
+    /// the condition and the wire spell the code one way; the memo's
+    /// position is the kernel's committed head at the refusal, the position
+    /// the refused commit was to stand above, and its one attempt is this.
     fn say_type_refused(
         &self,
         def: &Definition,
         act: &'static str,
-        cause: &str,
+        refusal: &Rejection,
         standing: usize,
         total: usize,
     ) {
-        self.said.say(Class::Failure, TypeRefusedLine { def, act, cause, standing, total });
+        let cause = render_cause(refusal);
+        self.said.say(Class::Failure, TypeRefusedLine { def, act, cause: &cause, standing, total });
+        let position = self.stores.kernel().current_seq().0;
+        *self.seed_refusal.lock() = Some(RefusalMemo { act, cause, position, attempts: 1 });
     }
 
     /// Returns whether the test seam hides `def` from this board's seed.
@@ -394,9 +409,9 @@ impl Seed<'_> {
     }
 
     /// The seam's refusal, taken the way the driver's would be: said through
-    /// `refused` with the op and the cause, nothing committed.
+    /// `refused` with the op and the refusal, nothing committed.
     fn refuse(&self, kind: OpKind, refusal: Rejection, refused: Refused<'_>) -> Option<Address> {
-        refused(crate::codec::op_name(kind), super::head::render_cause(&refusal));
+        refused(crate::codec::op_name(kind), &refusal);
         None
     }
 }

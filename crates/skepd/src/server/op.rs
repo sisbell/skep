@@ -17,15 +17,16 @@ use skep_util::permits::{edge_clock_now, Permit, PoolEdgeLine};
 
 use super::actor::Resolved;
 use super::reply::{
-    credential_refused, media_door_refused, op_answer, refuse_scan_busy, refuse_write_busy,
-    registry_refused, retract_refused, with_signal, Reply,
+    credential_refused, media_door_refused, op_answer, publication_over_budget, refuse_scan_busy,
+    refuse_write_busy, registry_refused, retract_refused, with_signal, Reply,
 };
 use super::request::HttpRequest;
 use super::{ClaimLine, Daemon, WRITE_POOL};
 use skep_core::auth::key_set_of;
 use skep_core::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
-    registry_admission, retract_class_refusal, CredentialRefusal, DepositSpans, RecordSig,
+    publication_read_refusal, registry_admission, retract_class_refusal, CredentialRefusal,
+    DepositSpans, RecordSig,
 };
 use skep_core::auth::session::Actor;
 use skep_core::auth::LockWrite;
@@ -224,7 +225,7 @@ impl Daemon {
         } else if deposits_registry_link(&frame.op) {
             self.registry_sequence(resolved, meta, frame, req)
         } else {
-            self.plain_sequence(meta, frame, presented, req)
+            self.plain_sequence(resolved, meta, frame, presented, req)
         }
     }
 
@@ -369,35 +370,67 @@ impl Daemon {
 
     /// Runs the plain sequence (AUTH-3.35).
     ///
-    /// Its steps are the write pool's permit → the read lock → the
-    /// serialization lock → [`Daemon::locked_state`] (the head snapshot, the
-    /// key table it carries, and this site's own resolve) → the retry memo's
-    /// recall (`OperationSurface::recall`: a committed write's ack under the
-    /// same session, id and kind, answered before any producer judges the
-    /// retry — the link-sets design §5.7's ruling 4) → `plain_admission`'s
-    /// ordered producers → the `retract` class (`retract_class_refusal`, the
-    /// `nullify` class's own place) → the media door → execute. The
-    /// permit is the first act (`operations.md` §4 rows 25, 27): taken before
-    /// either lock, held in this frame through `commit_under`'s return, so a
-    /// write parked on the guard behind an inline backstop holds it the whole
-    /// wait and the pool bounds the workers writes occupy; a write that finds
-    /// none is refused `503 write_busy` at once, no lock taken and nothing
-    /// committed. The serial lock is taken before the snapshot so the gates'
-    /// answers and the execute they gate stand on one committed state; the
-    /// producers' order is `plain_admission`'s, not this site's, and the
-    /// media door's place — after every producer, ahead of the store — is
-    /// [`skep_media::door`]'s to state.
+    /// Its steps are the price of a publication's in-lock reads
+    /// (`publication_read_refusal`, ahead of everything, below) → the write
+    /// pool's permit → the read lock → the serialization lock →
+    /// [`Daemon::locked_state`] (the head snapshot, the key table it carries,
+    /// and this site's own resolve) → the retry memo's recall
+    /// (`OperationSurface::recall`: a committed write's ack under the same
+    /// session, id and kind, answered before any producer judges the retry —
+    /// the link-sets design §5.7's ruling 4) → `plain_admission`'s ordered
+    /// producers → the `retract` class (`retract_class_refusal`, the
+    /// `nullify` class's own place) → the media door → execute. The permit
+    /// is the first act past the price (`operations.md` §4 rows 25, 27):
+    /// taken before either lock, held in this frame through `commit_under`'s
+    /// return, so a write parked on the guard behind an inline backstop holds
+    /// it the whole wait and the pool bounds the workers writes occupy; a
+    /// write that finds none is refused `503 write_busy` at once, no lock
+    /// taken and nothing committed. The serial lock is taken before the
+    /// snapshot so the gates' answers and the execute they gate stand on one
+    /// committed state; the producers' order is `plain_admission`'s, not this
+    /// site's, and the media door's place — after every producer, ahead of
+    /// the store — is [`skep_media::door`]'s to state.
+    ///
+    /// **The price ahead of the lock** (the link-sets design §5.7, EVERY
+    /// IN-LOCK READ IS BOUNDED BY A REFUSAL AHEAD OF THE LOCK; lane S4). A
+    /// `publish` is priced before the permit, off a lock-free snapshot of the
+    /// head and the pre-lock resolution's principal: the caller's
+    /// link-holding home count × (`links` entries + `read_with` entries),
+    /// plus the draft's content run count × the request's runs — the work of
+    /// the four reads the composite makes under the lock — against M7's
+    /// `MAX_PUBLICATION_READS`, and refused `publication_over_budget` past it
+    /// with every term in its detail: a refusal that costs no permit, takes
+    /// no lock and commits nothing. Ahead of `serial_lock()` means off a
+    /// snapshot the lock does not cover (the survey's C8): the counts may
+    /// move before the composite reads them, and the budget is conservative
+    /// by design. A guest is not priced — the sequence refuses it below as
+    /// it did — and every other op passes the step untouched. The twin
+    /// fence, the plan's reads and the kept-place check stay where S1 and S2
+    /// put them; the price merely bounds them.
     fn plain_sequence(
         &self,
+        resolved: &Resolved,
         meta: FrameMeta,
         mut frame: Request,
         presented: Option<Attestation>,
         req: &HttpRequest,
     ) -> Reply {
-        // The write pool's permit, first (§4 rows 25, 27): one of
-        // `MAX_CONCURRENT_WRITES`, before the credential lock and the guard,
-        // or the refusal at once. Bound to this frame — declared ahead of the
-        // two guards, so it drops after them, once the answer below is built.
+        // The price of a publication's in-lock reads, ahead of the permit
+        // and both locks: a pure read of a lock-free snapshot and the frame,
+        // refused past the budget with nothing taken. No `with_signal`, for
+        // the credential path's reason: a pre-lock refusal carries the head
+        // resolution's death signal, which `token_route`'s wrap attaches.
+        if let Actor::Principal(binding) = &resolved.actor {
+            let snap = self.engine.kernel().snapshot();
+            if let Some(price) = publication_read_refusal(snap.world(), &frame.op, binding.principal) {
+                return publication_over_budget(meta.kind, &price);
+            }
+        }
+        // The write pool's permit, first past the price (§4 rows 25, 27):
+        // one of `MAX_CONCURRENT_WRITES`, before the credential lock and the
+        // guard, or the refusal at once. Bound to this frame — declared
+        // ahead of the two guards, so it drops after them, once the answer
+        // below is built.
         let Some(_permit) = self.take_write_permit() else {
             return refuse_write_busy(meta.kind);
         };

@@ -248,7 +248,8 @@ pub use error::{
     VersionError,
 };
 pub use ops::{
-    shot_admission, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    head_lock_key, shot_admission, stage_delete_at, stage_publish, stage_reinstate_at, Vstream,
+    MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};

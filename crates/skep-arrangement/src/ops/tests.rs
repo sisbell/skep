@@ -278,6 +278,38 @@ fn delete_and_rearrange_drive_a_minimal_world() {
 }
 
 #[test]
+fn a_staged_delete_keeps_deletes_bound_and_reads_what_the_staging_before_it_left() {
+    // The per-op-bound claim on the staging form: `stage_delete_at` drives
+    // the MINIMAL world — `HasM5 + HasM3`, `Record = M5Rec` — as `delete`
+    // does, so a caller composing it under a transaction of its own needs no
+    // content store and no `From<M3Rec>`. And it reads the working world:
+    // a second staging in the same transaction judges the positions the
+    // first moved, and the two commit as one.
+    let k = mini_kernel();
+    let p1 = Caller::Principal(PrincipalId(1));
+    let ((), seq) = k
+        .transact(&[M3State::content_lock_key(&doc1())], |stg| {
+            // [ca1, ca2, ca3, ca4, ca5] → [ca1, ca4, ca5].
+            stage_delete_at(stg, p1, &doc1(), vp(1, 2), n(2))?;
+            // Ordinal 4 is arranged no more: the staging before it left
+            // three positions.
+            assert_eq!(
+                stage_delete_at(stg, p1, &doc1(), vp(1, 4), n(1)),
+                Err(DeleteError::NotArranged)
+            );
+            // [ca1, ca4, ca5] → [ca1, ca4].
+            stage_delete_at(stg, p1, &doc1(), vp(1, 3), n(1))
+        })
+        .expect("the two deletes commit as one");
+    let s = k.snapshot();
+    assert_eq!(s.seq(), seq);
+    let m5 = s.world().m5();
+    assert_eq!(m5.content_count(&doc1()), n(2));
+    assert_eq!(m5.point(&doc1(), &vp(1, 1)), Some(ca(1)));
+    assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(4)));
+}
+
+#[test]
 fn the_in_place_refusal_needs_only_the_registry_and_the_arrangement() {
     // PUB-2.11 in the MINIMAL world: the published-target refusal reads
     // M3's bit and nothing else, so `delete`/`rearrange` refuse it under

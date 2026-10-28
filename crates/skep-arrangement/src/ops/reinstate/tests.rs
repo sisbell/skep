@@ -227,6 +227,45 @@ fn every_address_of_a_run_is_probed_not_its_start_alone() {
     assert_eq!(content_count(&k, &doc2()), n(2));
 }
 
+/// T1e — the staging form keeps REINSTATE's own bound and reads the working
+/// world. In `GateWorld` — `Record = M5Rec`, no mint and no byte write —
+/// placements staged under one transaction each judge the boundary the
+/// placement before them left: a second past it is refused, and the refusal
+/// discards the first with it, nothing committed; three in order commit as
+/// one, the arrangement what their order made.
+#[test]
+fn a_staged_reinstate_reads_the_working_world_and_a_refusal_discards_the_whole_transaction() {
+    let p1 = Caller::Principal(PrincipalId(1));
+    let k = gate_kernel(&[1, 2, 3]);
+    let key = [M3State::content_lock_key(&doc2())];
+    let before = k.current_seq();
+    // Ordinal 3 lies past the boundary the first placement leaves (one
+    // position arranged, so 2 is the append boundary): refused, and the
+    // first placement goes with it.
+    let refused = rejected(k.transact(&key, |stg| {
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 1), &[of_doc1(1, 1)])?;
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 3), &[of_doc1(2, 1)])
+    }));
+    assert_eq!(refused, ReinstateError::OutOfBounds);
+    assert_eq!(k.current_seq(), before, "the refusal commits nothing of the transaction");
+    assert_eq!(content_count(&k, &doc2()), n(0));
+    // In order: ca(1) at 1; ca(3) at the boundary the first left; ca(2)
+    // between them — one run, the run-list's own merge.
+    k.transact(&key, |stg| {
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 1), &[of_doc1(1, 1)])?;
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 2), &[of_doc1(3, 1)])?;
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 2), &[of_doc1(2, 1)])
+    })
+    .expect("three placements commit as one");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(m5.content_count(&doc2()), n(3));
+    for (ord, addr) in [(1, ca(1)), (2, ca(2)), (3, ca(3))] {
+        assert_eq!(m5.point(&doc2(), &vp(1, ord)), Some(addr), "ordinal {ord}");
+    }
+    assert_eq!(m5.content_run_count(&doc2()), 1);
+}
+
 /// T1d — the run budget and the empty list. The cap binds the ACCUMULATOR,
 /// measured as each run lands, so an over-budget list is refused at the cap
 /// with nothing placed; a list of exactly the budget is placed whole — and

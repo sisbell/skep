@@ -52,7 +52,11 @@
 //! `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
 //! `ops/version.rs` — and sees this file's private items and none of its
 //! siblings'. `ops/publish.rs` holds as well the shot's admission, the checks
-//! `publish` opens with, offered as a pure query ([`shot_admission`]). Each
+//! `publish` opens with, offered as a pure query ([`shot_admission`]); and
+//! three of the modules hold their op's body as a function over a
+//! caller-opened staging — [`stage_publish`], [`stage_reinstate_at`],
+//! [`stage_delete_at`] — the public op a wrapper that opens the transaction,
+//! so a caller can stage the three under one commit. Each
 //! block's trait bounds name the slices its op reads and the records it
 //! stages — `version`'s names `HasM5` as well, which its op does not read —
 //! so a minimal test world can drive `delete`/`rearrange` with
@@ -98,7 +102,9 @@ mod reinstate;
 // CREATENEWVERSION (ASN-0123): the fork.
 mod version;
 
-pub use publish::shot_admission;
+pub use delete::stage_delete_at;
+pub use publish::{shot_admission, stage_publish};
+pub use reinstate::stage_reinstate_at;
 
 /// The most runs one COPY, one REINSTATE, or one publish shot may place.
 ///
@@ -516,7 +522,13 @@ where
 /// never asks the frontier where the head is; nor is REINSTATE, which reads
 /// no origin's arrangement and of its own only the content count its bounds
 /// check asks.
-fn head_lock_key(doc: &Address) -> LockKey {
+///
+/// Public for the caller that opens a transaction of its own over
+/// [`stage_publish`]: the shot's keys are this, `content_lock_key` of the
+/// document the shot names projects to, and the base's own `version_lock_key`
+/// where the base is a member — and a caller composing several stagings under
+/// one transaction supplies the union of their keys, this among them.
+pub fn head_lock_key(doc: &Address) -> LockKey {
     M3State::version_lock_key(&trunk_of(doc))
 }
 

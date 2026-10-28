@@ -6,10 +6,10 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    deposit_class_types, ordinal_vspan, Base, Caller, Deposit, HasM5, M5State, Run, ShotRun, VPos,
-    Vstream,
+    as_ordinal_vspan, deposit_class_types, ordinal_vspan, Base, Caller, Deposit, HasM5, M5State,
+    Run, ShotRun, VPos, Vstream,
 };
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -284,6 +284,38 @@ pub fn read_v(s: &Snapshot<World>, doc: &Address, ord: u32) -> Vec<u8> {
         .expect("arranged content is present (S3★)")
         .as_bytes()
         .to_vec()
+}
+
+/// The bytes at every arranged content position of `doc`, in V-order —
+/// [`read_v`] at each ordinal of the dense prefix, off ONE snapshot.
+pub fn bytes_of(s: &Snapshot<World>, doc: &Address) -> Vec<Vec<u8>> {
+    (1u32..)
+        .map_while(|ord| s.world().m5().point(doc, &vp(1, ord)).map(|_| read_v(s, doc, ord)))
+        .collect()
+}
+
+/// `doc`'s content runs, V-ordered and owned, off one snapshot.
+pub fn content_runs_of(s: &Snapshot<World>, doc: &Address) -> Vec<Run> {
+    s.world().m5().content_runs(doc).cloned().collect()
+}
+
+/// One run's I-extent as a coverage: what `project` is asked about.
+pub fn coverage_of(run: &Run) -> SpanSet {
+    SpanSet::singleton(run.iextent())
+}
+
+/// The V-position a one-span footprint opens at — a kept place as `project`
+/// answers it, read back as the position a staging takes.
+///
+/// # Panics
+///
+/// Panics where `footprint` holds other than one V-span.
+pub fn place_of(footprint: &SpanSet) -> VPos {
+    let mut spans = footprint.iter();
+    let span = spans.next().expect("the footprint holds one V-span");
+    assert!(spans.next().is_none(), "the footprint holds one V-span: {footprint:?}");
+    let v = as_ordinal_vspan(span).expect("a V-span of project's is ordinal-level depth-2");
+    VPos { subspace: v.subspace.clone(), ordinal: v.ordinal.clone() }
 }
 
 /// Leave doc1 (the draft) holding `a`, `b`, `c` at content ordinals 1..3,

@@ -36,6 +36,7 @@ mod reads;
 mod rearrange;
 mod recovery;
 mod reinstate;
+mod rewindow;
 mod seat;
 mod shot;
 mod shot_refusals;

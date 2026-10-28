@@ -5,7 +5,7 @@
 
 use skep_address::Address;
 use skep_content::HasContent;
-use skep_kernel::{Seq, TxnError, WorldState};
+use skep_kernel::{Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3State};
 
 use super::{Vstream, MAX_PLACED_RUNS};
@@ -74,6 +74,11 @@ where
     /// arrangement, and of its own only the content count its bounds check
     /// asks, so it never asks where a head is.
     ///
+    /// **The body is [`stage_reinstate_at`]**, the closure this method opens
+    /// its transaction for: a caller composing the placement with other
+    /// stagings under one transaction calls it over a staging of its own,
+    /// under the union of the keys.
+    ///
     /// # Errors
     ///
     /// Each refusal comes as `TxnError::Rejected`, in this order (which error
@@ -108,71 +113,109 @@ where
     ) -> Result<Seq, TxnError<ReinstateError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
-            .transact(&[key], |stg| {
-                let world = stg.working();
-                gate_write(
-                    world.m3(),
-                    caller,
-                    doc,
-                    ReinstateError::DocNotRegistered,
-                    ReinstateError::NotOwner,
-                )?;
-                // PUB-6.36 slot 5: the in-place advance refusal on the
-                // destination (PUB-2.11) — the edition is append-only, and
-                // a re-placement is an edit in place.
-                if published_target(world.m3(), doc) {
-                    return Err(ReinstateError::PublishedTarget);
-                }
-                if !at.is_content() {
-                    return Err(ReinstateError::NotContentSubspace);
-                }
-                if !world.m5().admits_content_boundary(doc, &at.ordinal) {
-                    return Err(ReinstateError::OutOfBounds);
-                }
-                let (m3, content) = (world.m3(), world.content());
-                let mut placement: Vec<Run> = Vec::new();
-                for ShotRun { origin, run } in runs {
-                    // The shape, settled from the run's own start and
-                    // checked against the client's statement (the shot's
-                    // `BadRun`): address arithmetic, disclosing nothing.
-                    let origin_doc = run_origin_document(run).ok_or(ReinstateError::BadRun)?;
-                    if origin_doc != trunk_of(origin) {
-                        return Err(ReinstateError::BadRun);
-                    }
-                    if !m3.is_registered_document(&origin_doc) {
-                        return Err(ReinstateError::SourceNotRegistered);
-                    }
-                    // Existence (S3★) at every address: the run is the
-                    // client's I-extent and no arrangement's, so nothing
-                    // vouches for its interior but the probe itself — M4's run
-                    // read, which walks the extent piece by piece and says
-                    // whether every address of it is covered.
-                    if !content.pieces(run.i_start().tumbler(), run.width()).covered() {
-                        return Err(ReinstateError::DanglingSource);
-                    }
-                    extend_or_push_run(&mut placement, run.clone());
-                    // Measured where the run is accumulated, as COPY's and
-                    // the shot's placements are, so an over-budget list is
-                    // refused at the cap and never built past it.
-                    if placement.len() > MAX_PLACED_RUNS {
-                        return Err(ReinstateError::TooManyRuns);
-                    }
-                }
-                if placement.is_empty() {
-                    return Err(ReinstateError::EmptyResult);
-                }
-                stg.push(
-                    M5Rec::ContentPlace {
-                        doc: doc.clone(),
-                        at: at.ordinal,
-                        runs: placement,
-                    }
-                    .into(),
-                );
-                Ok(())
-            })
+            .transact(&[key], |stg| stage_reinstate_at(stg, caller, doc, at, runs))
             .map(|((), seq)| seq)
     }
+}
+
+/// Stages `reinstate`'s body into the caller's transaction.
+///
+/// It is [`Vstream::reinstate`]'s closure as a function over a caller-opened
+/// [`Staging`]: it places `runs` into `doc`'s content subspace at `at` by
+/// identity — every check in the order `reinstate` states, every refusal,
+/// and the one [`M5Rec::ContentPlace`] it pushes, `reinstate`'s own. Offered
+/// so a caller can compose the placement with other stagings under ONE
+/// transaction, which the public ops cannot, each opening a transaction of
+/// its own and the kernel refusing a nested one: the step the link-sets
+/// design's one commit takes after the shot
+/// ([`stage_publish`](crate::stage_publish)) to re-window the draft at a kept
+/// place — "a `reinstate` of the fresh I-run at the run's place and a
+/// `delete` of the draft-native run, staged in the same commit and applied in
+/// turn so positions stay true" (the link-sets design, §5.7;
+/// [`stage_delete_at`](crate::stage_delete_at) the delete).
+///
+/// It reads the transaction's working world, `stg.working()`: the registry
+/// for the gate, the publication bit and each origin's registration; the
+/// content slice for the existence probe, so a run minted earlier in the
+/// SAME staging is covered; and the arrangement as the records staged so far
+/// left it, so the boundary it admits is the one an earlier staging's
+/// placement moved to. It opens no transaction and takes no lock: the
+/// kernel's lock keys are the caller's, `reinstate`'s own being
+/// `content_lock_key(doc)` alone — a caller composing several stagings under
+/// one transaction supplies the union of their keys. `reinstate`'s
+/// precondition on the origins' readability is the caller's here as there.
+///
+/// # Errors
+///
+/// `reinstate`'s refusals, in the order it states — `DocNotRegistered`
+/// through `EmptyResult` — as the bare `ReinstateError` the caller's
+/// transaction answers as `TxnError::Rejected`; an `Err` commits nothing of
+/// that transaction, the records this staged and every other staging's alike.
+pub fn stage_reinstate_at<W>(
+    stg: &mut Staging<W>,
+    caller: Caller,
+    doc: &Address,
+    at: VPos,
+    runs: &[ShotRun],
+) -> Result<(), ReinstateError>
+where
+    W: WorldState + HasM5 + HasM3 + HasContent,
+    W::Record: From<M5Rec>,
+{
+    let world = stg.working();
+    gate_write(
+        world.m3(),
+        caller,
+        doc,
+        ReinstateError::DocNotRegistered,
+        ReinstateError::NotOwner,
+    )?;
+    // PUB-6.36 slot 5: the in-place advance refusal on the
+    // destination (PUB-2.11) — the edition is append-only, and
+    // a re-placement is an edit in place.
+    if published_target(world.m3(), doc) {
+        return Err(ReinstateError::PublishedTarget);
+    }
+    if !at.is_content() {
+        return Err(ReinstateError::NotContentSubspace);
+    }
+    if !world.m5().admits_content_boundary(doc, &at.ordinal) {
+        return Err(ReinstateError::OutOfBounds);
+    }
+    let (m3, content) = (world.m3(), world.content());
+    let mut placement: Vec<Run> = Vec::new();
+    for ShotRun { origin, run } in runs {
+        // The shape, settled from the run's own start and
+        // checked against the client's statement (the shot's
+        // `BadRun`): address arithmetic, disclosing nothing.
+        let origin_doc = run_origin_document(run).ok_or(ReinstateError::BadRun)?;
+        if origin_doc != trunk_of(origin) {
+            return Err(ReinstateError::BadRun);
+        }
+        if !m3.is_registered_document(&origin_doc) {
+            return Err(ReinstateError::SourceNotRegistered);
+        }
+        // Existence (S3★) at every address: the run is the
+        // client's I-extent and no arrangement's, so nothing
+        // vouches for its interior but the probe itself — M4's run
+        // read, which walks the extent piece by piece and says
+        // whether every address of it is covered.
+        if !content.pieces(run.i_start().tumbler(), run.width()).covered() {
+            return Err(ReinstateError::DanglingSource);
+        }
+        extend_or_push_run(&mut placement, run.clone());
+        // Measured where the run is accumulated, as COPY's and
+        // the shot's placements are, so an over-budget list is
+        // refused at the cap and never built past it.
+        if placement.len() > MAX_PLACED_RUNS {
+            return Err(ReinstateError::TooManyRuns);
+        }
+    }
+    if placement.is_empty() {
+        return Err(ReinstateError::EmptyResult);
+    }
+    stg.push(M5Rec::ContentPlace { doc: doc.clone(), at: at.ordinal, runs: placement }.into());
+    Ok(())
 }
 
 #[cfg(test)]

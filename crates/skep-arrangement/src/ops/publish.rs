@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use skep_address::{Address, Nat};
 use skep_content::{ContentStretch, ContentWrite, HasContent, Piece, Val};
-use skep_kernel::{Seq, TxnError, WorldState};
+use skep_kernel::{Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
 use super::{
@@ -181,6 +181,11 @@ where
     /// the document's, whichever member names it, and its publication, chain
     /// and base are judged on that document.
     ///
+    /// **The body is [`stage_publish`]**, the closure this method opens its
+    /// transaction for: a caller composing the shot with other stagings under
+    /// one transaction calls it over a staging of its own, under the union of
+    /// the keys, and fills the signature slot itself.
+    ///
     /// `shot` is borrowed, as [`shot_admission`] borrows it: the composite
     /// reads the request — its admission, the re-insert's count, the
     /// existence walk — and clones each by-reference run into the member's
@@ -264,12 +269,6 @@ where
         readable: &dyn Fn(&W, &Address) -> bool,
     ) -> Result<(Address, Seq), TxnError<PublishError>> {
         let trunk = trunk_of(doc);
-        // The values the shot re-inserts: request arithmetic, reading no
-        // world, so taken before the transaction opens —
-        // `Shot::reinserted_values`, the count's one spelling, which a caller
-        // pricing the shot ahead of this op asks too. Refused at its own
-        // slot, inside.
-        let reinserted = shot.reinserted_values();
         let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
         if let Some(base) = &shot.base {
             if base.member != trunk {
@@ -278,170 +277,233 @@ where
         }
         // The attested arm (signed ops): `transact` itself where this handle
         // carries no attestation, else the same commit with its marker's
-        // signature slot filled.
+        // signature slot filled. The body is `stage_publish`, which this
+        // method opens the transaction for.
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            // Slots 1 through 6 — the shot's admission, asked of this
-            // transaction's working world: its verdicts are `shot_admission`'s,
-            // and what the rest of the composite needs of it is the anchor
-            // the member is minted under and the runs settled beside their
-            // origin documents.
-            let Admission { anchor, supplied } =
-                admit(stg.working(), caller, doc, shot, readable)?;
-            // Which runs are the staging draft's, re-inserted as fresh
-            // identity rather than placed by reference (PUB-2.40) — the
-            // family rule `Shot` states, by which `Shot::reinserted_runs`
-            // names the runs this placement re-inserts: both compare the
-            // run's origin document with `Shot::draft_document`, and
-            // `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
-            // holds them to one answer, value for value and in the order they
-            // land.
-            let draft_doc = shot.draft_document();
-            let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
-            // The re-insert's size, refused before any address is probed:
-            // every address of every draft-native run is re-inserted below,
-            // two staged records per maximal byte-run or atom — two per value
-            // at the worst case, every value an atom — and nothing M2 measures
-            // stops the staging before it is whole. Request arithmetic
-            // (`reinserted`, counted before the transaction opened), so it
-            // discloses nothing — and refused here, it bounds the existence
-            // walk over those runs too.
-            if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
-                return Err(PublishError::TooManyValues);
-            }
-            // Existence (S3★): every address a run names holds a value. Each
-            // address is asked, not only the start: a by-reference run is the
-            // client's I-extent rather than one an arrangement resolved. Each
-            // is asked once, over the union of the supplied runs' I-extents
-            // (`RunUnion`), which holds every address any run names, each in
-            // one of its runs: a value found there is found for every run
-            // naming it, and a request naming one stored extent many times
-            // walks it once. And each is asked through `pieces`, M4's run
-            // read — one predecessor lookup per run of the union, then a walk
-            // piece by piece, `covered` saying whether every address answered
-            // — the accessor the re-insert below reads the draft-native bytes
-            // with. COPY places by reference and reads no value back, so
-            // presence is the whole of its question; the shot does read them,
-            // and asking with the read's own accessor makes the answer found
-            // here the answer the re-insert gets — M4's fold only ever adds
-            // (S0), so no write staged in between can take a value away.
-            let content = stg.working().content();
-            for run in RunUnion::of(supplied.iter().map(|settled| settled.run)).runs() {
-                if !content.pieces(run.i_start().tumbler(), run.width()).covered() {
-                    return Err(PublishError::DanglingSource);
-                }
-            }
-            // The shot's first term (signed-ops D25), `placed`: the positions
-            // the client placed — Σ width of its runs, whatever family each
-            // is — read off the request before the placement below erases
-            // the boundary between the last of them and the carried tail,
-            // which `placed` never counts.
-            let placed = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
-            // The member's placement: the client's runs in order — the
-            // draft-native ones re-inserted as fresh identity under the
-            // document's own I-space — then the base's post-render deposits.
-            let mut placement: Vec<Run> = Vec::new();
-            for SettledRun { run, origin_doc } in supplied {
-                if draft_native(&origin_doc) {
-                    // The walk completes before the first stage ([`Part`]):
-                    // the run's pieces, read by M4's run read off the working
-                    // slice, are copied into an owned, ordered list — every
-                    // `Bytes` piece and every one-byte `Value` extending the
-                    // pending byte-run, every other `Value` (an atom of two
-                    // bytes or more, or an empty one) closing it and taking
-                    // its `Val` by clone — `covered` is asked, the borrow of
-                    // the working slice ends, and only then is each part
-                    // staged in the list's order: a maximal byte-run as one
-                    // stretch under the trunk's chain, each other value as
-                    // its own mint and write. So a draft typed in bursts and
-                    // published unscattered is one stretch in the member, and
-                    // one whose edits scattered its arrangement into K runs
-                    // costs K.
-                    let parts = {
-                        let content = stg.working().content();
-                        let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
-                        let mut parts: Vec<Part> = Vec::new();
-                        let mut pending: Vec<u8> = Vec::new();
-                        for piece in pieces.by_ref() {
-                            match piece {
-                                Piece::Bytes(bytes) => pending.extend_from_slice(bytes),
-                                // The length test: a one-byte value is a
-                                // per-byte value, and joins the run.
-                                Piece::Value(v) if v.len() == 1 => {
-                                    pending.extend_from_slice(v.as_bytes());
-                                }
-                                Piece::Value(v) => {
-                                    if !pending.is_empty() {
-                                        parts.push(Part::Run(std::mem::take(&mut pending)));
-                                    }
-                                    parts.push(Part::Atom(v.clone()));
-                                }
-                            }
-                        }
-                        assert!(
-                            pieces.covered(),
-                            "the existence check found a value at every address of every run, and M4's fold only adds"
-                        );
-                        if !pending.is_empty() {
-                            parts.push(Part::Run(pending));
-                        }
-                        parts
-                    };
-                    for part in parts {
-                        match part {
-                            Part::Run(bytes) => allocate_stretch_for_placement::<_, PublishError>(
-                                stg,
-                                &trunk,
-                                Arc::from(bytes),
-                                &mut placement,
-                            )?,
-                            Part::Atom(value) => allocate_for_placement::<_, PublishError>(
-                                stg,
-                                &trunk,
-                                value,
-                                &mut placement,
-                            )?,
-                        }
-                    }
-                } else {
-                    extend_or_push_run(&mut placement, run.clone());
-                }
-                if placement.len() > MAX_PLACED_RUNS {
-                    return Err(PublishError::TooManyRuns);
-                }
-            }
-            // The base's positions past the extent its staged copy took are
-            // the deposits the render post-dates (PUB-2.43, PUB-2.45) — asked
-            // of the arrangement, which knows its own extent, and measured as
-            // each is accumulated, the walk stopping at the cap.
-            if let Some(base) = &shot.base {
-                for run in stg.working().m5().content_runs_past(&base.member, &base.extent) {
-                    extend_or_push_run(&mut placement, run);
-                    if placement.len() > MAX_PLACED_RUNS {
-                        return Err(PublishError::TooManyRuns);
-                    }
-                }
-            }
-            // The member: born published (PUB-2.5, PUB-2.10), under the
-            // anchor its admission decided.
-            let (member, m3rec) = stg.working().m3().mint_version(&anchor, true)?;
-            stg.push(m3rec.into());
-            // Its placing record, pushed whatever the placement holds: the
-            // whole arrangement and the shot's terms, the base's extent absent
-            // in the birth shape (signed-ops D25).
-            stg.push(
-                M5Rec::ShotPlace {
-                    doc: member.clone(),
-                    runs: placement,
-                    terms: ShotTerms {
-                        placed,
-                        base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
-                    },
-                }
-                .into(),
-            );
-            Ok(member)
+            stage_publish(stg, caller, doc, shot, readable)
         })
     }
+}
+
+/// Stages `publish`'s body into the caller's transaction.
+///
+/// It is [`Vstream::publish`]'s closure as a function over a caller-opened
+/// [`Staging`]: the shot's admission, the re-insert's count, the existence
+/// walk, the placement — the draft-native runs re-inserted as fresh identity,
+/// the base's tail carried — the member's mint and its one
+/// [`M5Rec::ShotPlace`], every check in the order `publish` states, every
+/// refusal and every record pushed `publish`'s own. Returns the member's
+/// address; the commit's `Seq` is the transaction's to report. Offered so a
+/// caller can compose the shot with other stagings under ONE transaction,
+/// which the public ops cannot, each opening a transaction of its own and the
+/// kernel refusing a nested one: the link-sets design's one commit, the
+/// member minted and the draft re-windowed at its kept places — "a
+/// `reinstate` of the fresh I-run at the run's place and a `delete` of the
+/// draft-native run, staged in the same commit and applied in turn so
+/// positions stay true" ([`stage_reinstate_at`](crate::stage_reinstate_at),
+/// [`stage_delete_at`](crate::stage_delete_at)) — a transaction that "either
+/// stands whole or not at all" (the link-sets design, §5.7).
+///
+/// It reads the transaction's working world, `stg.working()` — the admission
+/// and the base's tail off its registry and arrangement slices, the existence
+/// walk and the re-insert's bytes off its content slice, each mint off the
+/// frontier the records staged so far left — so what an earlier staging of
+/// the same transaction pushed is seen here, and what this pushes is seen by
+/// the next. It opens no transaction and takes no lock: the kernel's lock
+/// keys are the caller's, `publish`'s own being the chain's head key
+/// ([`head_lock_key`]`(doc)`), `content_lock_key` of the document `doc`
+/// projects to, and the base's own `version_lock_key` where the base is a
+/// member and not that document — a caller composing several stagings under
+/// one transaction supplies the union of their keys. It carries no
+/// attestation either: the signature slot is the transaction's, filled by
+/// the caller's `transact_attested` as `publish` fills it under the handle's
+/// arm.
+///
+/// # Errors
+///
+/// `publish`'s refusals, in the order it states — `DocNotRegistered` through
+/// the member's own `Mint` — as the bare `PublishError` the caller's
+/// transaction answers as `TxnError::Rejected`; an `Err` commits nothing of
+/// that transaction, the records this staged and every other staging's alike.
+///
+/// # Panics
+///
+/// As `publish`: where `readable` calls `transact` on the caller's kernel.
+pub fn stage_publish<W>(
+    stg: &mut Staging<W>,
+    caller: Caller,
+    doc: &Address,
+    shot: &Shot,
+    readable: &dyn Fn(&W, &Address) -> bool,
+) -> Result<Address, PublishError>
+where
+    W: WorldState + HasM5 + HasM3 + HasContent,
+    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>,
+{
+    let trunk = trunk_of(doc);
+    // The values the shot re-inserts: request arithmetic, reading no world —
+    // `Shot::reinserted_values`, the count's one spelling, which a caller
+    // pricing the shot ahead of this op asks too. Refused at its own slot,
+    // below.
+    let reinserted = shot.reinserted_values();
+    // Slots 1 through 6 — the shot's admission, asked of this transaction's
+    // working world: its verdicts are `shot_admission`'s, and what the rest
+    // of the composite needs of it is the anchor the member is minted under
+    // and the runs settled beside their origin documents.
+    let Admission { anchor, supplied } = admit(stg.working(), caller, doc, shot, readable)?;
+    // Which runs are the staging draft's, re-inserted as fresh
+    // identity rather than placed by reference (PUB-2.40) — the
+    // family rule `Shot` states, by which `Shot::reinserted_runs`
+    // names the runs this placement re-inserts: both compare the
+    // run's origin document with `Shot::draft_document`, and
+    // `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
+    // holds them to one answer, value for value and in the order they
+    // land.
+    let draft_doc = shot.draft_document();
+    let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
+    // The re-insert's size, refused before any address is probed:
+    // every address of every draft-native run is re-inserted below,
+    // two staged records per maximal byte-run or atom — two per value
+    // at the worst case, every value an atom — and nothing M2 measures
+    // stops the staging before it is whole. Request arithmetic
+    // (`reinserted`, counted above before any address is probed), so it
+    // discloses nothing — and refused here, it bounds the existence
+    // walk over those runs too.
+    if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
+        return Err(PublishError::TooManyValues);
+    }
+    // Existence (S3★): every address a run names holds a value. Each
+    // address is asked, not only the start: a by-reference run is the
+    // client's I-extent rather than one an arrangement resolved. Each
+    // is asked once, over the union of the supplied runs' I-extents
+    // (`RunUnion`), which holds every address any run names, each in
+    // one of its runs: a value found there is found for every run
+    // naming it, and a request naming one stored extent many times
+    // walks it once. And each is asked through `pieces`, M4's run
+    // read — one predecessor lookup per run of the union, then a walk
+    // piece by piece, `covered` saying whether every address answered
+    // — the accessor the re-insert below reads the draft-native bytes
+    // with. COPY places by reference and reads no value back, so
+    // presence is the whole of its question; the shot does read them,
+    // and asking with the read's own accessor makes the answer found
+    // here the answer the re-insert gets — M4's fold only ever adds
+    // (S0), so no write staged in between can take a value away.
+    let content = stg.working().content();
+    for run in RunUnion::of(supplied.iter().map(|settled| settled.run)).runs() {
+        if !content.pieces(run.i_start().tumbler(), run.width()).covered() {
+            return Err(PublishError::DanglingSource);
+        }
+    }
+    // The shot's first term (signed-ops D25), `placed`: the positions
+    // the client placed — Σ width of its runs, whatever family each
+    // is — read off the request before the placement below erases
+    // the boundary between the last of them and the carried tail,
+    // which `placed` never counts.
+    let placed = supplied.iter().map(|settled| settled.run.width()).sum::<Nat>();
+    // The member's placement: the client's runs in order — the
+    // draft-native ones re-inserted as fresh identity under the
+    // document's own I-space — then the base's post-render deposits.
+    let mut placement: Vec<Run> = Vec::new();
+    for SettledRun { run, origin_doc } in supplied {
+        if draft_native(&origin_doc) {
+            // The walk completes before the first stage ([`Part`]):
+            // the run's pieces, read by M4's run read off the working
+            // slice, are copied into an owned, ordered list — every
+            // `Bytes` piece and every one-byte `Value` extending the
+            // pending byte-run, every other `Value` (an atom of two
+            // bytes or more, or an empty one) closing it and taking
+            // its `Val` by clone — `covered` is asked, the borrow of
+            // the working slice ends, and only then is each part
+            // staged in the list's order: a maximal byte-run as one
+            // stretch under the trunk's chain, each other value as
+            // its own mint and write. So a draft typed in bursts and
+            // published unscattered is one stretch in the member, and
+            // one whose edits scattered its arrangement into K runs
+            // costs K.
+            let parts = {
+                let content = stg.working().content();
+                let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
+                let mut parts: Vec<Part> = Vec::new();
+                let mut pending: Vec<u8> = Vec::new();
+                for piece in pieces.by_ref() {
+                    match piece {
+                        Piece::Bytes(bytes) => pending.extend_from_slice(bytes),
+                        // The length test: a one-byte value is a
+                        // per-byte value, and joins the run.
+                        Piece::Value(v) if v.len() == 1 => {
+                            pending.extend_from_slice(v.as_bytes());
+                        }
+                        Piece::Value(v) => {
+                            if !pending.is_empty() {
+                                parts.push(Part::Run(std::mem::take(&mut pending)));
+                            }
+                            parts.push(Part::Atom(v.clone()));
+                        }
+                    }
+                }
+                assert!(
+                    pieces.covered(),
+                    "the existence check found a value at every address of every run, and M4's fold only adds"
+                );
+                if !pending.is_empty() {
+                    parts.push(Part::Run(pending));
+                }
+                parts
+            };
+            for part in parts {
+                match part {
+                    Part::Run(bytes) => allocate_stretch_for_placement::<_, PublishError>(
+                        stg,
+                        &trunk,
+                        Arc::from(bytes),
+                        &mut placement,
+                    )?,
+                    Part::Atom(value) => allocate_for_placement::<_, PublishError>(
+                        stg,
+                        &trunk,
+                        value,
+                        &mut placement,
+                    )?,
+                }
+            }
+        } else {
+            extend_or_push_run(&mut placement, run.clone());
+        }
+        if placement.len() > MAX_PLACED_RUNS {
+            return Err(PublishError::TooManyRuns);
+        }
+    }
+    // The base's positions past the extent its staged copy took are
+    // the deposits the render post-dates (PUB-2.43, PUB-2.45) — asked
+    // of the arrangement, which knows its own extent, and measured as
+    // each is accumulated, the walk stopping at the cap.
+    if let Some(base) = &shot.base {
+        for run in stg.working().m5().content_runs_past(&base.member, &base.extent) {
+            extend_or_push_run(&mut placement, run);
+            if placement.len() > MAX_PLACED_RUNS {
+                return Err(PublishError::TooManyRuns);
+            }
+        }
+    }
+    // The member: born published (PUB-2.5, PUB-2.10), under the
+    // anchor its admission decided.
+    let (member, m3rec) = stg.working().m3().mint_version(&anchor, true)?;
+    stg.push(m3rec.into());
+    // Its placing record, pushed whatever the placement holds: the
+    // whole arrangement and the shot's terms, the base's extent absent
+    // in the birth shape (signed-ops D25).
+    stg.push(
+        M5Rec::ShotPlace {
+            doc: member.clone(),
+            runs: placement,
+            terms: ShotTerms {
+                placed,
+                base_extent: shot.base.as_ref().map(|base| base.extent.clone()),
+            },
+        }
+        .into(),
+    );
+    Ok(member)
 }
 
 /// Returns the shot's admission: `publish`'s checks through its source gate.

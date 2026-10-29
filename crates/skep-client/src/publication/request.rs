@@ -28,16 +28,19 @@
 //! value, consecutive positions merged), `ty` verbatim, `old` the original;
 //! `retract` the job list's marks; `read_with` the switched-on rows'
 //! destinations other than the edition, once each, none where the edition
-//! is already read with it; `claim` with `mint` and `account` at a first
-//! publication of a free-standing draft; `places` beside `runs`; the signed
-//! body through the one body builder, `entry_body_publication`, from the
-//! request AS BUILT; a fresh `id`. INERT where the request changes nothing
-//! against its base. The price is computed on the request as built.
+//! is already read with it; `claim` where the caller asks it, at either
+//! form — with `mint` and `account` at a first publication of a
+//! free-standing draft, or at the document form where `doc` is an edition
+//! holding no member yet (the owner's ruling (i); skep #692), the claim row
+//! then homed in `doc`'s trunk by address, first in that home's group;
+//! `places` beside `runs`; the signed body through the one body builder,
+//! `entry_body_publication`, from the request AS BUILT; a fresh `id`. INERT
+//! where the request changes nothing against its base. The price is
+//! computed on the request as built.
 //!
-//! `todo`: `claim` WITHOUT `mint` — the claim admitted at a first version
-//! into an edition that holds no member yet (the owner's ruling (i)) — is
-//! the daemon's own lane; until it lands this builder sends `claim` only
-//! with `mint`, and gains the arm then.
+//! THE CLIENT DOES NOT DECIDE whether the edition is empty: it sends the
+//! claim where asked, and the board refuses `claim_refused` where a member
+//! already stands, which the send maps to its own arm naming the edition.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
@@ -276,7 +279,7 @@ pub struct Request {
     pub doc: Option<Address>,
     /// The parent account, at the mint form.
     pub mint: Option<Address>,
-    /// Whether the edition claim rides (with `mint` alone).
+    /// Whether the edition claim rides, at either form.
     pub claim: bool,
     /// The base member and extent.
     pub base: Option<(Address, u64)>,
@@ -358,7 +361,7 @@ impl Request {
             doc: doc.as_deref(),
             account: account.as_deref(),
             mint: self.mint.is_some(),
-            claim: self.claim && self.mint.is_some(),
+            claim: self.claim,
             base: base.as_ref().map(|(m, e)| (m.as_str(), *e)),
             draft: draft.as_deref(),
             runs: &runs,
@@ -380,8 +383,19 @@ impl Request {
         let mut push = |home: OwnedHome, kind: DepositKind, ty: OwnedSlot, from: OwnedSlot, to: OwnedSlot| {
             homes.entry(home.clone()).or_default().push(OwnedRow { home, kind, ty, from, to });
         };
-        if let (true, Some(_), Some(draft)) = (self.claim, &self.mint, &self.draft) {
-            push(OwnedHome::Edition, DepositKind::EditionClaim, OwnedSlot::unit(&address(T_EDITION)), OwnedSlot::Stored(vec![OwnedElement::Edition]), OwnedSlot::unit(draft));
+        if let (true, Some(draft)) = (self.claim, &self.draft) {
+            // The edition the claim is homed in: the one the commit mints,
+            // by tag, at the mint form; the trunk `doc` names, by address,
+            // at the document form — whether that edition holds no member
+            // yet is the board's to judge, never this builder's.
+            let (home, from) = match &self.mint {
+                Some(_) => (OwnedHome::Edition, OwnedSlot::Stored(vec![OwnedElement::Edition])),
+                None => {
+                    let edition = address(&super::trunk_of(&self.term().to_string()).unwrap_or_default());
+                    (OwnedHome::Addr(edition.clone()), OwnedSlot::unit(&edition))
+                }
+            };
+            push(home, DepositKind::EditionClaim, OwnedSlot::unit(&address(T_EDITION)), from, OwnedSlot::unit(draft));
         }
         for entry in &self.entries {
             let home = match &entry.home {
@@ -420,7 +434,7 @@ impl Request {
             draft: &draft,
             term: &term,
             mint: self.mint.is_some(),
-            claim: self.claim && self.mint.is_some(),
+            claim: self.claim,
             places: &self.places,
             stray_records: &self.stray_records,
             entries: &entries,
@@ -525,7 +539,7 @@ impl OwnedSlot {
 }
 
 impl OwnedRow {
-    fn borrow(&self) -> DepositRow<'_> {
+    pub(crate) fn borrow(&self) -> DepositRow<'_> {
         let home = match &self.home {
             OwnedHome::Member => DepositHome::Member,
             OwnedHome::Edition => DepositHome::Edition,

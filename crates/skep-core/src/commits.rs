@@ -2325,8 +2325,11 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             let rewindowed = places.iter().any(Option::is_some);
             // The homes the deposits name by address (the link-sets design
             // §5.7): a `links` entry's home, and the private home of the
-            // original it names, whose claim the commit writes there.
-            let homes: BTreeSet<Address> = deposits
+            // original it names, whose claim the commit writes there; and,
+            // where the deposits claim at the document form, the trunk `doc`
+            // names, the edition claim's home (skep #692) — the mint form's
+            // edition is named by `mints` instead.
+            let mut homes: BTreeSet<Address> = deposits
                 .links
                 .iter()
                 .flat_map(|entry| {
@@ -2337,6 +2340,9 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
                     home.into_iter().chain(entry.old.as_ref().and_then(document_of))
                 })
                 .collect();
+            if deposits.claim {
+                homes.extend(target.document().map(trunk_of));
+            }
             meta(
                 OpKind::Publish,
                 AffectedDocs::Published {

@@ -445,6 +445,8 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(PublishError::DanglingSource);
     same_name(PublishError::TooManyRuns);
     same_name(PublishError::TooManyValues);
+    // The edition claim's refusal (skep #692), threading the edition.
+    same_name(PublishError::ClaimRefused(doc()));
 
     // ── M7 (links) ──
     same_name(MakeLinkError::HomeNotRegistered);

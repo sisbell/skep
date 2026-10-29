@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use skep_address::Address;
-use skep_identity::PublicKey;
+use skep_identity::{unit_span, DepositHome, DepositKind, DepositSlot, PublicKey, SlotElement};
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
@@ -38,7 +38,7 @@ use crate::origin::Origin;
 use crate::sign::Signer;
 
 use super::panel::Destination;
-use super::request::{Answer as OriginAnswer, Confirmed, Inert, Piece};
+use super::request::{Answer as OriginAnswer, Confirmed, Inert, OwnedRow, Piece};
 use super::send::{AckVia, OwnFault, Refusal, Sent};
 use super::*;
 
@@ -568,6 +568,12 @@ impl World {
                 stray_froms.push((k, from));
             }
         }
+        // The claim's precondition at the document form (skep #692): the
+        // edition holds no member yet, else refused naming the edition.
+        let claims = frame["claim"].as_bool().unwrap_or(false);
+        if claims && !mint && self.trunk_head.contains_key(&trunk) {
+            return json!({"resp": "rejected", "code": "claim_refused", "detail": "member_stands", "disposition": "permanent", "op": "publish", "site": {"addr": trunk}});
+        }
         // The plan's entries: the home and the original, as the plan refuses them.
         let entries = frame["links"].as_array().cloned().unwrap_or_default();
         for (k, entry) in entries.iter().enumerate() {
@@ -653,10 +659,14 @@ impl World {
                 homes.push(d.clone());
             }
         }
-        // The edition claim.
-        if mint && frame["claim"].as_bool().unwrap_or(false) {
-            let e = edition.clone().unwrap();
+        // The edition claim: homed in the edition minted, or in the trunk
+        // `doc` names — then a home the deposits touched.
+        if claims {
+            let e = edition.clone().unwrap_or_else(|| trunk.clone());
             push_link(self, &e, vec![unit(&e)], vec![unit(draft.as_deref().unwrap())], vec![unit(T_EDITION)]);
+            if edition.is_none() && !homes.contains(&e) {
+                homes.push(e);
+            }
         }
         // The copies and their claims.
         let resolve = |end: &Value| -> Vec<(String, String)> {
@@ -1092,8 +1102,9 @@ fn the_panel_orders_the_rows_and_counts_each_line() {
 /// THE COUNT (PUB-3.8): ⟨l⟩ the switched-on sets' entries plus the read-with
 /// entries, ⟨n⟩ the line's marks that re-make nothing, ⟨r⟩ the take-offs no
 /// re-make covers, ⟨e⟩ the re-makes — in neither ⟨n⟩ nor ⟨r⟩ — the claim
-/// clause only at the mint form; a destination `E` is already read with
-/// needs no read-with, one it is not does.
+/// clause where the caller asks the claim, at either form (skep #692); a
+/// destination `E` is already read with needs no read-with, one it is not
+/// does.
 #[test]
 fn the_count_follows_the_switches_and_the_destinations() {
     let (world, _) = World::base();
@@ -1114,7 +1125,65 @@ fn the_count_follows_the_switches_and_the_destinations() {
     let minting = Inputs { mint: Some(a(ACCOUNT)), claim: true, ..inputs.clone() };
     assert!(count(&panel, &Switches::default(), &minting).claim);
     let claim_alone = Inputs { claim: true, ..inputs };
-    assert!(!count(&panel, &Switches::default(), &claim_alone).claim, "a claim without a mint is not sent in this build");
+    assert!(count(&panel, &Switches::default(), &claim_alone).claim, "the claim rides at the document form too; whether the edition holds a member is the board's to refuse");
+}
+
+/// THE CLAIM AT THE DOCUMENT FORM (skep #692): asked at the document form,
+/// `claim: true` rides the frame beside `doc` with no `mint`; the claim row
+/// leads the trunk's own group in the signed body — homed by ADDRESS,
+/// `from` the edition's unit span, `to` the draft, behind the member's
+/// group and ahead of every other row of the trunk's — the price adds the
+/// claim's bytes; and the builder asks nothing of the edition's members:
+/// the board refuses `claim_refused` where one stands, which the send maps
+/// to its arm naming the edition, and a board whose `E` holds no member
+/// lands the claim homed in `E`, `to` `D`.
+#[test]
+fn the_document_form_sends_the_claim_homed_in_the_trunk_and_maps_its_refusal() {
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let asked = Inputs { claim: true, ..inputs() };
+    let e = enumerate(&p, &asked).unwrap();
+    let panel = panel(&p, &asked, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &asked, &e, &panel, &switched(None)).unwrap() else { panic!() };
+    let frame = request.frame(None);
+    assert_eq!((frame["doc"].as_str(), frame["claim"].as_bool(), frame.get("mint"), frame.get("account")), (Some(E), Some(true), None, None));
+    assert!(request.count.claim);
+    let rows = request.rows();
+    let borrowed: Vec<_> = rows.iter().map(OwnedRow::borrow).collect();
+    let trunk = a(E);
+    let first_in_e = borrowed.iter().position(|r| r.home == DepositHome::Address(&trunk)).expect("the trunk's group");
+    assert!(borrowed[..first_in_e].iter().all(|r| r.home == DepositHome::Member), "the member's group ahead of the trunk's: {first_in_e}");
+    let (edition_ty, edition, draft) = (unit_span(&a(T_EDITION)), unit_span(&trunk), unit_span(&a(D)));
+    let claim_row = &borrowed[first_in_e];
+    assert_eq!(claim_row.kind, DepositKind::EditionClaim, "the claim first in the trunk's group");
+    assert_eq!(claim_row.ty, DepositSlot::Stored(vec![SlotElement::Span(&edition_ty)]));
+    assert_eq!(claim_row.from, DepositSlot::Stored(vec![SlotElement::Span(&edition)]), "from the edition's unit span, never the tag");
+    assert_eq!(claim_row.to, DepositSlot::Stored(vec![SlotElement::Span(&draft)]));
+    assert!(borrowed[first_in_e + 1..].iter().all(|r| r.kind != DepositKind::EditionClaim), "one claim row");
+    let mut plain = request.clone();
+    plain.claim = false;
+    assert_eq!(request.priced(3, 2).bytes - plain.priced(3, 2).bytes, price::EDITION_CLAIM_BYTES, "the claim's bytes at the document form");
+    assert!(request.body().as_bytes().len() > plain.body().as_bytes().len(), "the row is in the signed body");
+    // The board: `E` holds `E.1`, so the claim is refused naming `E`.
+    dialer.clear();
+    assert_eq!(send(&p, &asked, &mut request).unwrap(), Sent::Refused(Refusal::ClaimRefused { edition: Some(a(E)) }));
+    assert_eq!(dialer.frames("publish").len(), 1, "sent once, refused, no re-ask");
+    // An edition holding no member yet takes it: the birth shape into `E`
+    // with the claim, the claim homed in `E`, `to` `D`.
+    let (mut world, _) = World::base();
+    world.trunk_head.remove(E);
+    world.docs.remove(&format!("{E}.1"));
+    let (dialer2, board2, signer2) = open(world);
+    let p2 = publisher(&board2, &tok, &signer2);
+    let birth = Inputs { claim: true, base: None, ..inputs() };
+    let e2 = enumerate(&p2, &birth).unwrap();
+    let panel2 = super::panel::panel(&p2, &birth, &e2).unwrap();
+    let Built::Request(mut request2) = build(&p2, &birth, &e2, &panel2, &switched(None)).unwrap() else { panic!() };
+    let Sent::Acknowledged(ack) = send(&p2, &birth, &mut request2).unwrap() else { panic!() };
+    assert_eq!(ack.member.to_string(), format!("{E}.1"));
+    assert!(dialer2.world().links.iter().any(|l| l.home == E && l.ty[0].0 == T_EDITION && l.to[0].0 == D), "the claim homed in the edition named, to the draft");
 }
 
 // ── THE PRICE ────────────────────────────────────────────────────────────
@@ -1454,7 +1523,8 @@ fn an_unreadable_head_on_a_claimed_board_sends_nothing() {
 /// THE REFUSAL FAMILY's arms, each from the board's own refusal with its
 /// site: `kept_place_moved` with the entry and the race's key off the feed;
 /// `stray_place_unrecorded` the library's own; `publication_over_budget` a
-/// race where this price admitted; `not_owner` naming the draft; the six
+/// race where this price admitted; `not_owner` naming the draft;
+/// `claim_refused` naming the edition; the six
 /// deposit tokens with their entry and detail; `unparseable` on a request
 /// carrying members the older-board arm; the shot's table the library's
 /// own; `withheld` the window's origin; `signed_session_required`; and the
@@ -1487,6 +1557,8 @@ fn every_refusal_arm_carries_its_face_data() {
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::UnownedDraft { draft: a(D) }));
     refuse("not_owner", json!({"site": {"addr": E}}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::NotOwner { addr: Some(a(E)) }));
+    refuse("claim_refused", json!({"site": {"addr": E}, "detail": "member_stands"}));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::ClaimRefused { edition: Some(a(E)) }));
     for code in ["link_home_refused", "old_refused", "duplicate_original", "read_with_in_links", "retract_refused", "read_with_refused"] {
         refuse(code, json!({"site": {"index": 2}, "detail": "superseded"}));
         assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: code.into(), index: Some(2), detail: Some("superseded".into()) })));

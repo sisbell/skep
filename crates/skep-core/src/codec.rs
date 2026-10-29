@@ -655,18 +655,21 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         },
         "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
-        // The target, the shot, then its kept places and its deposits beside
-        // it (the link-sets design §5.7): the places parallel to the runs the
-        // shot just took, so they are read against them; the deposits' member
-        // positions read against the same runs.
+        // The target, the claim's flag, the shot, then its kept places and
+        // its deposits beside it (the link-sets design §5.7): the places
+        // parallel to the runs the shot just took, so they are read against
+        // them; the deposits' member positions read against the same runs.
+        // The claim rides either form (skep #692) and names the staging
+        // draft, so `draft` is required beside it at both.
         "publish" => {
             let target = fields.publish_target()?;
+            let claim = fields.flag("claim")?;
             let shot = fields.shot()?;
-            if target.claims() && shot.draft.is_none() {
+            if claim && shot.draft.is_none() {
                 return Err(PErr("field 'claim': the edition claim names the staging draft, so 'draft' is required beside it".into()).into());
             }
             let places = fields.places(&shot, &target)?;
-            let deposits = fields.deposits(&shot, &target)?;
+            let deposits = fields.deposits(&shot, &target, claim)?;
             Op::Publish { target, shot, places, deposits }
         }
         "make_link" => Op::MakeLink {
@@ -1216,34 +1219,25 @@ impl Fields {
     ///
     /// The document form is `doc`, the published document the shot appends;
     /// the mint form is `mint: true` with `account`, the parent account the
-    /// commit mints the edition under, `doc` ABSENT — and `claim: true`
-    /// beside it where the commit writes the edition claim. `mint` and
-    /// `claim` are flags: absent, `null` and `false` alike are the flag
-    /// unset, which is the one spelling the marshal writes back for it.
+    /// commit mints the edition under, `doc` ABSENT. `mint` is a flag:
+    /// absent, `null` and `false` alike are the flag unset, which is the one
+    /// spelling the marshal writes back for it. The edition claim's flag,
+    /// `claim`, is no part of the target: it rides either form (skep #692)
+    /// and the `publish` arm reads it into the deposits.
     ///
     /// # Errors
     ///
-    /// A [`PErr`] where a flag is no boolean, where `doc` or `account` is no
+    /// A [`PErr`] where `mint` is no boolean, where `doc` or `account` is no
     /// address, and for the shapes that name no one form: `doc` beside
     /// `mint`, `account` without `mint`, `mint` without `account`, neither
-    /// `doc` nor `account`, and `claim` without `mint` — a claim written
-    /// into an edition the request does not mint is not admitted in this
-    /// build.
+    /// `doc` nor `account`.
     fn publish_target(&mut self) -> PResult<PublishTarget> {
         let mint = self.flag("mint")?;
-        let claim = self.flag("claim")?;
         let doc = self.opt_addr("doc")?;
         let account = self.opt_addr("account")?;
         match (mint, doc, account) {
-            (false, Some(doc), None) => {
-                if claim {
-                    return Err(PErr(
-                        "field 'claim': a claim into an edition the request does not mint is not admitted in this build (send 'mint': true with 'account')".into(),
-                    ));
-                }
-                Ok(PublishTarget::Document(doc))
-            }
-            (true, None, Some(account)) => Ok(PublishTarget::Mint { account, claim }),
+            (false, Some(doc), None) => Ok(PublishTarget::Document(doc)),
+            (true, None, Some(account)) => Ok(PublishTarget::Mint { account }),
             (false, None, Some(_)) => Err(PErr("field 'account': carried without 'mint': true".into())),
             (false, None, None) => Err(PErr("missing field 'doc'".into())),
             (false, Some(_), Some(_)) => {
@@ -1270,7 +1264,8 @@ impl Fields {
 
     /// Takes a `publish`'s three deposit lists (the link-sets design §5.7):
     /// `links`, `retract` and `read_with`, each optional and read as the
-    /// empty list where absent.
+    /// empty list where absent — and carries `claim`, the edition claim's
+    /// flag the `publish` arm read ahead of the shot, beside them.
     ///
     /// Each list is one wire list under [`MAX_WIRE_LIST`]. A `links` entry
     /// is `{home, ty, from, to, old?}` ([`p_link_entry`]); a `retract` entry
@@ -1285,7 +1280,7 @@ impl Fields {
     /// A [`Refusal`] where a list is no array or is past the cap (no
     /// index), and naming the entry in its `index` — the `malformed`
     /// rejection's `site.index` — where an entry is refused.
-    fn deposits(&mut self, shot: &Shot, target: &PublishTarget) -> Result<PublishDeposits, Refusal> {
+    fn deposits(&mut self, shot: &Shot, target: &PublishTarget, claim: bool) -> Result<PublishDeposits, Refusal> {
         let image = request_image(shot);
         let mints = target.mints();
         let links = match self.take_opt("links") {
@@ -1300,7 +1295,7 @@ impl Fields {
             None => Vec::new(),
             Some(v) => indexed_list(&v, "read_with", p_addr)?,
         };
-        Ok(PublishDeposits { links, retract, read_with })
+        Ok(PublishDeposits { claim, links, retract, read_with })
     }
 }
 

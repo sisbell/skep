@@ -87,6 +87,52 @@ fn a_drafted_shot_mints_its_records_in_one_commit_and_the_fence_refuses_a_second
     assert_eq!(rej.code, RejectCode::AlreadyPublished, "{rej}");
 }
 
+/// THE CLAIM AT THE DOCUMENT FORM THROUGH THE FRONT DOOR (skep #692): a
+/// drafted shot into an EMPTY edition with `claim: true` and no mint writes
+/// the edition claim homed in the edition — its first link, typed the
+/// edition class, `from` the edition, `to` the draft — in the one commit
+/// with the member; a second claiming publication off that member is
+/// lowered `claim_refused`, permanent, `site.addr` the edition and `detail`
+/// `member_stands`, committing nothing; the same shot without its claim
+/// lands.
+#[test]
+fn a_first_version_into_an_empty_edition_carries_its_claim_and_a_second_claim_is_refused() {
+    let fx = setup();
+    let edition = create_edition(&fx);
+    let draft = create_doc(&fx);
+    let (draft_start, _) = insert3(&fx, &draft);
+    let first = Shot {
+        base: None,
+        draft: Some(draft.clone()),
+        runs: vec![ShotRun { origin: draft.clone(), run: Run::new(draft_start.clone(), nat(3)).expect("a content run") }],
+    };
+    let claimed = PublishDeposits { claim: true, ..PublishDeposits::default() };
+    let before = fx.febe.log_position();
+    let (member, at) = ack_addr(ex(&fx.febe, fx.user, Op::Publish { target: PublishTarget::Document(edition.clone()), shot: first, places: vec![], deposits: claimed.clone() }));
+    assert_eq!(member, under(&edition, &[1]), "the edition's first member");
+    assert_eq!(at, fx.febe.log_position(), "one commit");
+    assert!(at > before);
+    let claim = link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: under(&edition, &[0, 2, 1]) })).expect("the edition claim, the edition's first link");
+    let one_span = |slot: usize| claim.slot(slot).expect("a slot").spans().next().expect("one span").clone();
+    let unit = |a: &skep_address::Address| skep_febe::enc([a]).spans().next().expect("a span").clone();
+    assert_eq!(one_span(FROM), unit(&edition), "`from` the edition");
+    assert_eq!(one_span(TO), unit(&draft), "`to` the draft");
+    assert_eq!(one_span(TYPE), unit(&addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14])), "typed the edition class");
+    // A member stands: a claiming shot off it is refused naming the edition,
+    // the cause as its detail, nothing committed; without the claim it lands.
+    let before = fx.febe.log_position();
+    let off_member = Shot { base: Some(Base { member: member.clone(), extent: nat(3) }), draft: Some(draft.clone()), runs: vec![] };
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { target: PublishTarget::Document(edition.clone()), shot: off_member.clone(), places: vec![], deposits: claimed }));
+    assert_eq!(rej.code, RejectCode::ClaimRefused, "{rej}");
+    assert_eq!(rej.disposition, skep_febe::Disposition::Permanent);
+    let site = rej.site.expect("the edition rides the site");
+    assert_eq!((site.addr.as_ref(), site.index), (Some(&edition), None));
+    assert_eq!(rej.detail.as_deref(), Some("member_stands"));
+    assert_eq!(fx.febe.log_position(), before, "nothing committed");
+    let (second, _) = ack_addr(ex(&fx.febe, fx.user, Op::Publish { target: PublishTarget::Document(edition.clone()), shot: off_member, places: vec![], deposits: PublishDeposits::default() }));
+    assert_eq!(second, under(&edition, &[2]), "the same shot without its claim lands");
+}
+
 /// The address `doc` followed by `tail`: `doc.0.1.1` for its first content
 /// element, `doc.0.2.1` for its first link.
 fn under(doc: &skep_address::Address, tail: &[u32]) -> skep_address::Address {

@@ -311,14 +311,15 @@ pub enum Op {
     /// S3). `target` is where the publication lands: a published document
     /// of the caller's — today's `doc` — or, at the mint form, the parent
     /// account the commit mints an edition under (`mint: true` with
-    /// `account`, `doc` absent, `claim: true` beside it where the commit
-    /// writes the edition claim) — M7's [`PublishTarget`], an enum over the
-    /// two forms so a request names exactly one. `deposits` is the request's
-    /// three optional lists beside the shot — `links`, `retract`,
-    /// `read_with` (M7's [`PublishDeposits`]) — every public deposit the
-    /// one commit stages after the records and before the re-window; empty
-    /// where the request sends none, which with the document form is
-    /// today's shot. The deposits lie INSIDE the signed preimage: the body
+    /// `account`, `doc` absent) — M7's [`PublishTarget`], an enum over the
+    /// two forms so a request names exactly one. `deposits` is the edition
+    /// claim's flag (`claim: true`, at either form: the claim homed in the
+    /// edition the commit mints or the one `doc` names, which must hold no
+    /// member yet — skep #692) and the request's three optional lists
+    /// beside the shot — `links`, `retract`, `read_with` (M7's
+    /// [`PublishDeposits`]) — every public deposit the one commit stages
+    /// after the records and before the re-window; empty where the request
+    /// sends none, which with the document form is today's shot. The deposits lie INSIDE the signed preimage: the body
     /// is the shot's rows then each public deposit's, in the one order M7's
     /// plan gives them. M10 hands both through verbatim; the shape of each
     /// member is the codec's, and what each deposit is refused is M7's plan's,

@@ -8,13 +8,13 @@
 //!
 //! **The members** (THE REQUEST): [`PublishTarget`], where the publication
 //! lands — a published document of the caller's, or an edition minted under
-//! an account in the commit (`mint: true` with `account`, `doc` absent, and
-//! `claim: true` beside it where the edition claim is written);
-//! [`PublishDeposits`], the three lists — `links`, one [`LinkEntry`] per
-//! accepted link, `retract`, the held removals' marks by address, and
-//! `read_with`, the sets the document is newly read with. An entry names an
-//! address the commit mints by TAG ([`NamedAddress`]): the member by
-//! `member`, the edition by `edition`. An end is one of three forms
+//! an account in the commit (`mint: true` with `account`, `doc` absent);
+//! [`PublishDeposits`], the edition claim's flag (`claim: true`, at either
+//! form) and the three lists — `links`, one [`LinkEntry`] per accepted link,
+//! `retract`, the held removals' marks by address, and `read_with`, the sets
+//! the document is newly read with. An entry names an address the commit
+//! mints by TAG ([`NamedAddress`]): the member by `member`, the edition by
+//! `edition`. An end is one of three forms
 //! ([`EndArg`]): the address form, the I-span form, or THE MEMBER-POSITION
 //! FORM — spans of the member's positions inside `[1, placed]`
 //! ([`MemberSpan`]), the form an end on this shot's own new words takes,
@@ -30,7 +30,12 @@
 //! retraction whose target is already retracted, a read-with that stands in
 //! a published home of the caller's — and each copy's private claim beside
 //! it, outside the signed set. The first fault in list order refuses the
-//! whole ([`PlanFault`]), naming the entry.
+//! whole ([`PlanFault`]), naming the entry. The edition claim is homed in
+//! the edition whichever form names it — the tag `edition` at the mint
+//! form, the trunk's own address at the document form, where it sorts among
+//! the other homes — and the plan plans the row either way: whether the
+//! document form may carry it at all (the edition holding no member yet) is
+//! the composite's step, judged on the same base ahead of the plan.
 //!
 //! **One world, one plan.** Under the daemon's serialization lock the
 //! snapshot the admission reads IS the base the transaction opens on (the
@@ -63,25 +68,23 @@ use crate::LinkWorld;
 /// The document form is today's: `doc`, a published document of the
 /// caller's (a member names its document). The mint form (the design's (iv);
 /// sweep 6 W16) names the PARENT ACCOUNT alone — `doc` absent — the commit
-/// minting the edition under it and its first member beside it, `claim`
-/// saying whether the commit writes the edition claim homed in that
-/// edition. An enum and not an `Option<doc>` beside a flag: the two forms
-/// are two values with their own readers — the trunk of `doc` at the one,
-/// the account at the other — and every exhaustive match decides its mint
-/// arm, where an option would let a request carry both or neither and leave
-/// each reader to re-derive the form from two fields.
+/// minting the edition under it and its first member beside it. An enum and
+/// not an `Option<doc>` beside a flag: the two forms are two values with
+/// their own readers — the trunk of `doc` at the one, the account at the
+/// other — and every exhaustive match decides its mint arm, where an option
+/// would let a request carry both or neither and leave each reader to
+/// re-derive the form from two fields. Whether the commit writes the edition
+/// claim is no part of the target: the claim is a deposit, carried once on
+/// [`PublishDeposits::claim`] for either form.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PublishTarget {
     /// A published document of the caller's: the shot appends its chain.
     Document(Address),
     /// An edition minted in the commit under `account`, the shot its birth
-    /// version; `claim` writes the R20 edition claim in it.
+    /// version.
     Mint {
         /// The parent account the edition is minted under.
         account: Address,
-        /// Whether the commit writes the edition claim, `to` the staging
-        /// draft.
-        claim: bool,
     },
 }
 
@@ -105,11 +108,6 @@ impl PublishTarget {
     /// Returns whether the commit mints an edition.
     pub fn mints(&self) -> bool {
         matches!(self, PublishTarget::Mint { .. })
-    }
-
-    /// Returns whether the commit writes the edition claim.
-    pub fn claims(&self) -> bool {
-        matches!(self, PublishTarget::Mint { claim: true, .. })
     }
 
     /// Returns the frame's `doc` term: the document's trunk, or the account.
@@ -193,9 +191,20 @@ pub struct LinkEntry {
     pub old: Option<Address>,
 }
 
-/// The three optional lists a publication carries beside its shot.
+/// The deposits a publication carries beside its shot: the edition claim's
+/// flag and the three optional lists.
+///
+/// The claim is the first deposit of the edition's group whichever form
+/// minted or named the edition, so its flag lives here, once, beside the
+/// lists — never on the target. At the mint form the commit writes it homed
+/// in the edition it mints; at the document form homed in `doc`'s trunk,
+/// which must hold no member yet (the composite's refusal, `ClaimRefused`).
+/// Either way it names the staging draft, which the request must then carry.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct PublishDeposits {
+    /// Whether the commit writes the edition claim (`claim: true`): typed the
+    /// edition class, `from` the edition, `to` the staging draft.
+    pub claim: bool,
     /// One entry per accepted link.
     pub links: Vec<LinkEntry>,
     /// The held removals' marks, by address.
@@ -205,9 +214,10 @@ pub struct PublishDeposits {
 }
 
 impl PublishDeposits {
-    /// Returns whether the request carries none of the three.
+    /// Returns whether the request carries no deposit: no claim and none of
+    /// the three lists.
     pub fn is_empty(&self) -> bool {
-        self.links.is_empty() && self.retract.is_empty() && self.read_with.is_empty()
+        !self.claim && self.links.is_empty() && self.retract.is_empty() && self.read_with.is_empty()
     }
 }
 
@@ -382,8 +392,13 @@ impl DepositPlan {
 ///    homes only; at the mint form the edition is the tag, no presence can
 ///    stand, and the read-with is written.
 ///
-/// The edition claim, where the target claims, leads the edition's home,
-/// `to` the shot's draft.
+/// The edition claim, where the deposits claim, leads the edition's home,
+/// `to` the shot's draft: the tag `edition` at the mint form, the trunk of
+/// `doc` by its ADDRESS at the document form (the tag is for a home the
+/// commit mints), that home sorting among the other homes in address order.
+/// The plan does not ask whether the document form may carry it — that the
+/// trunk holds no member yet is the composite's refusal ahead of the plan,
+/// on the same base — so the row it plans is the row a signer composes.
 ///
 /// # Errors
 ///
@@ -397,10 +412,15 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
 ) -> Result<DepositPlan, PlanFault> {
     let (m3, links) = (world.m3(), world.links());
     let mut homes: BTreeMap<NamedAddress, Vec<PlannedDeposit>> = BTreeMap::new();
-    // The edition claim, first of the edition's deposits.
-    if target.claims() {
+    // The edition claim, first of the edition's deposits: the edition by tag
+    // where the commit mints it, by address where `doc` names it.
+    if deposits.claim {
         let origin = shot.draft_document().ok_or(PlanFault::ClaimWithoutDraft)?;
-        homes.entry(NamedAddress::Edition).or_default().push(PlannedDeposit::EditionClaim { origin });
+        let edition = match target {
+            PublishTarget::Document(doc) => NamedAddress::Address(trunk_of(doc)),
+            PublishTarget::Mint { .. } => NamedAddress::Edition,
+        };
+        homes.entry(edition).or_default().push(PlannedDeposit::EditionClaim { origin });
     }
     let image = request_image(shot);
     let mut originals: BTreeSet<&Address> = BTreeSet::new();

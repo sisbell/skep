@@ -976,8 +976,11 @@ impl Composer<'_> {
     /// §5.7's signed entry), as the board's composer spells them from its
     /// plan: per home in the signed order — the member by tag, then a minted
     /// edition, then every other home in address order — the edition claim
-    /// (`claim: true` with `mint`: `from` the edition by tag, `to` the
-    /// `draft`), the copies (`links`, in order: the type slot as stored, each
+    /// (`claim: true`, at either form: `from` the edition — by tag where
+    /// `mint` mints it, by its unit span where `doc` names it, the row then
+    /// first in `doc`'s own group — `to` the `draft`; whether the edition
+    /// `doc` names holds no member yet is the board's refusal,
+    /// `claim_refused`, never the signer's), the copies (`links`, in order: the type slot as stored, each
     /// end as spelled), the retractions (`retract`, in order, each homed in
     /// its target's document) and the read-withs (`read_with`, in order,
     /// each homed in its set, `from` the edition — the trunk, or the tag at
@@ -1006,9 +1009,17 @@ impl Composer<'_> {
         let mut push = |home: OwnedHome, kind, ty, from, to| {
             homes.entry(home.clone()).or_default().push(OwnedRow { home, kind, ty, from, to });
         };
-        if claims && mints {
+        if claims {
             let draft = addr(member(frame, "draft")?, "draft")?;
-            push(OwnedHome::Edition, DepositKind::EditionClaim, OwnedSlot::unit(&addr(T_EDITION, "edition type")?), OwnedSlot::Stored(vec![OwnedElement::Edition]), OwnedSlot::unit(&draft));
+            let (home, from) = match (mints, &trunk) {
+                (true, _) => (OwnedHome::Edition, OwnedSlot::Stored(vec![OwnedElement::Edition])),
+                (false, Some(trunk)) => {
+                    let edition = addr(trunk, "doc")?;
+                    (OwnedHome::Addr(edition.clone()), OwnedSlot::unit(&edition))
+                }
+                (false, None) => return Err(fault("the frame carries `claim` and names neither `doc` nor `mint`", "the edition claim is homed in the edition the commit mints or the one `doc` names (wire.md §Arrangement)").into()),
+            };
+            push(home, DepositKind::EditionClaim, OwnedSlot::unit(&addr(T_EDITION, "edition type")?), from, OwnedSlot::unit(&draft));
         }
         for entry in list("links")? {
             let home = match member(entry, "home")? {
@@ -1142,23 +1153,19 @@ impl Composer<'_> {
 
 /// Returns a `publish` frame's `doc` term (the link-sets design §5.7): the
 /// trunk of `doc` at the document form, the `account` at the mint form —
-/// `mint: true` with `account` and no `doc`.
+/// `mint: true` with `account` and no `doc`. `claim` rides either form
+/// (skep #692) and is no part of the term: whether the edition `doc` names
+/// may take the claim — it holds no member yet — is the board's refusal,
+/// `claim_refused`, never the signer's.
 ///
 /// # Errors
 ///
 /// Returns a halt where the frame is of neither form — `doc` beside `mint`,
-/// `account` without it, neither member, `claim` without `mint` — or where
-/// its `doc` has no trunk.
+/// `account` without it, neither member — or where its `doc` has no trunk.
 fn publish_term(frame: &Value) -> Result<String, Halt> {
     let mint = frame["mint"].as_bool().unwrap_or(false);
-    let claim = frame["claim"].as_bool().unwrap_or(false);
     match (frame["doc"].as_str(), frame["account"].as_str(), mint) {
-        (Some(doc), None, false) => {
-            if claim {
-                return Err(fault("the frame carries `claim` without `mint`", "a claim into an edition the request does not mint is not admitted in this build"));
-            }
-            trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "a publish's doc term is the document's trunk"))
-        }
+        (Some(doc), None, false) => trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "a publish's doc term is the document's trunk")),
         (None, Some(account), true) => Ok(account.to_string()),
         _ => Err(fault("the frame names neither `doc` alone nor `account` with `mint`", "a publish is the document form or the mint form (wire.md §Arrangement)")),
     }

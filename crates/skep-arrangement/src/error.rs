@@ -288,6 +288,14 @@ pub enum VersionError {
 ///   was staged from.
 /// * `BaseExtentTooLarge` — `base.extent` exceeds the base's current content
 ///   count: the render claims to have seen more than the member holds.
+/// * `ClaimRefused(edition)` — the publication's own verdict (the link-sets
+///   design §5.7; skep #692), raised by the publication composite above this
+///   crate and never by the shot: the request carries the edition claim at
+///   the document form and the document already holds a member. The claim
+///   is a first version's alone, written in the commit that gives the
+///   edition its first member — the mint form's, or the document form's
+///   into an edition holding none yet. The payload is the edition, the
+///   trunk, the refusal's `site.addr`.
 /// * `PrivateSourceVersionless` — the document is private: private documents
 ///   are versionless (PUB-2.9), and a shot appends a version. One code with
 ///   `version`'s own (the wire's `private_source_versionless`); the face is
@@ -336,6 +344,9 @@ pub enum PublishError {
     BaseSuperseded,
     /// `base.extent` exceeds the base's current content count.
     BaseExtentTooLarge,
+    /// The document form carries the edition claim and the document already
+    /// holds a member; carries the edition.
+    ClaimRefused(Address),
     /// The document is private: private documents are versionless.
     PrivateSourceVersionless,
     /// The source gate refused a run; carries that run's origin document.
@@ -431,6 +442,9 @@ impl fmt::Display for PublishError {
             ),
             PublishError::BaseExtentTooLarge => f.write_str(
                 "publish: the base extent exceeds the base's current content count",
+            ),
+            PublishError::ClaimRefused(_) => f.write_str(
+                "publish: the document already holds a member, so the edition claim is refused — the claim is a first version's alone; send the shot without it",
             ),
             PublishError::PrivateSourceVersionless => f.write_str(
                 "publish: the document is private — publishing means minting a separate edition; private documents are versionless (PUB-2.9)",

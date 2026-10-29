@@ -51,6 +51,7 @@ fn invariant_forced_and_state_dependent_codes_are_permanent() {
         RejectCode::BaseExtentTooLarge,
         RejectCode::AlreadyPublished,
         RejectCode::StrayPlaceUnrecorded,
+        RejectCode::ClaimRefused,
     ] {
         assert_eq!(code.disposition(), Disposition::Permanent);
     }
@@ -279,6 +280,10 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::ReadWithInLinks
         | RejectCode::RetractRefused
         | RejectCode::ReadWithRefused
+        // The edition claim into an edition that already holds a member
+        // (skep #692): the member stands for good, so the same request
+        // never lands and the client sends the shot without its claim.
+        | RejectCode::ClaimRefused
         // The publication's in-lock reads priced past their budget (lane
         // S4): the same board prices the same request the same, so a
         // reissue cannot help and the client narrows.
@@ -302,7 +307,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 89] = [
+const ALL_CODES: [RejectCode; 90] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -378,6 +383,7 @@ const ALL_CODES: [RejectCode; 89] = [
     RejectCode::ReadWithInLinks,
     RejectCode::RetractRefused,
     RejectCode::ReadWithRefused,
+    RejectCode::ClaimRefused,
     RejectCode::PublicationOverBudget,
     RejectCode::NoSuchSubspace,
     RejectCode::EmptySubspace,

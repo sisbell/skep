@@ -475,8 +475,8 @@ pub enum PlanFault {
         /// The entry's position in `links`.
         index: usize,
     },
-    /// The edition claim names no origin: the mint form claims with no
-    /// draft — the codec's refusal, a backstop here.
+    /// The edition claim names no origin: the request claims, at either
+    /// form, with no draft — the codec's refusal, a backstop here.
     ClaimWithoutDraft,
     /// A `retract` entry is refused, the cause named.
     Retract {

@@ -941,6 +941,7 @@ fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit() {
     let before = k.snapshot();
     let the_shot = shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 1)]);
     let deposits = PublishDeposits {
+        claim: false,
         links: vec![entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l.clone()))],
         retract: vec![m.clone()],
         read_with: vec![set_s()],
@@ -994,6 +995,7 @@ fn a_homes_link_addresses_rise_in_the_plans_order_within_one_commit() {
     let the_shot = shot_off_head(&k, vec![]);
     let ty = |n: u32| addrs(&[&a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, n])]);
     let deposits = PublishDeposits {
+        claim: false,
         links: vec![
             entry(NamedAddress::Member, member_spans(1, 1), addrs(&[]), ty(1), None),
             entry(NamedAddress::Member, member_spans(2, 1), addrs(&[]), ty(2), None),
@@ -1029,8 +1031,8 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     let account = a(&[1, 0, 1]);
     let before = k.snapshot();
     let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(1), 3)] };
-    let target = PublishTarget::Mint { account: account.clone(), claim: true };
-    let deposits = PublishDeposits { links: vec![], retract: vec![], read_with: vec![set_s()] };
+    let target = PublishTarget::Mint { account: account.clone() };
+    let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()] };
     let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &deposits).expect("the mint");
     let edition = a(&[1, 0, 1, 0, 5]);
     assert_eq!(member, a(&[1, 0, 1, 0, 5, 1]), "the edition's first member");
@@ -1055,7 +1057,7 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
         "the read-with's from is the minted edition"
     );
     // Another's account: `not_owner` naming it, nothing minted.
-    let theirs = PublishTarget::Mint { account: a(&[1, 0, 2]), claim: false };
+    let theirs = PublishTarget::Mint { account: a(&[1, 0, 2]) };
     let before = k.current_seq();
     assert_eq!(
         refused(writer(&k).publication(P1, &theirs, &Shot { base: None, draft: None, runs: vec![] }, &[], &PublishDeposits::default())),
@@ -1069,6 +1071,71 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
         PublicationError::Publish(PublishError::BaseNotInChain)
     );
     assert_eq!(k.current_seq(), before);
+}
+
+/// THE CLAIM AT THE DOCUMENT FORM (skep #692): a first version published
+/// from a draft into an EMPTY edition with `claim: true` — `doc` the
+/// edition, no mint — writes the edition claim homed in the edition's own
+/// address in the same commit as the member, the record the mint form
+/// writes (typed the edition class, `from` the edition, `to` the origin
+/// draft, seated), the plan homing it by the trunk's address and the price
+/// adding the claim's bytes at this form too; and a second publication
+/// claiming into the same edition — a member now standing — is refused
+/// `Publish(ClaimRefused)` naming the edition, nothing committed, the plan
+/// still planning the row (the refusal is the composite's, not the plan's)
+/// and the same shot without its claim landing.
+#[test]
+fn a_first_version_into_an_empty_edition_carries_its_claim_homed_in_it() {
+    use skep_links::{price_staged_bytes, EDITION_CLAIM_BYTES};
+
+    let k = journaled_over(deposits_world());
+    draft_holding(&k, "abc");
+    let before = k.snapshot();
+    let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(1), 3)] };
+    let claimed = PublishDeposits { claim: true, ..PublishDeposits::default() };
+    let target = PublishTarget::Document(pdoc());
+    // The plan homes the claim by the edition's address, first of that home.
+    let plan = plan_deposits(before.world(), P1, &target, &the_shot, &claimed).expect("a plan");
+    assert_eq!(plan.homes.len(), 1);
+    assert_eq!(plan.homes[0].home, NamedAddress::Address(pdoc()), "the edition by address, never the tag");
+    assert_eq!(plan.homes[0].deposits, vec![PlannedDeposit::EditionClaim { origin: doc1() }]);
+    assert_eq!(
+        price_staged_bytes(before.world(), &target, &the_shot, &[], &claimed) - price_staged_bytes(before.world(), &target, &the_shot, &[], &PublishDeposits::default()),
+        EDITION_CLAIM_BYTES,
+        "the claim's bytes priced at the document form"
+    );
+    let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &claimed).expect("the first version with its claim");
+    assert_eq!(member, pmember(1));
+    assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "one commit");
+    let s = k.snapshot();
+    let (m3, links) = (s.world().m3(), s.world().links());
+    assert_eq!(trunk_head(m3, &pdoc()), Some(member.clone()));
+    assert_eq!(bytes_of(&k, &member), "abc");
+    let claim = link_of(&pdoc(), 1);
+    assert_eq!(
+        links.readlink(&claim),
+        Some(&Link::triple(enc([&pdoc()]), enc([&doc1()]), enc([edition_type()]))),
+        "the edition claim: from the edition, to the origin D, typed edition — the mint form's record"
+    );
+    assert_eq!(s.world().m5().link_runs(&pdoc()).cloned().collect::<Vec<_>>(), vec![run(&claim, 1)], "seated in the edition");
+    assert_eq!(m3.minted_at(&claim), Some(seq), "minted at the one commit");
+    // A member stands: a second claiming publication is refused naming the
+    // edition, off the member so the shot's own table passes — the plan
+    // planning the row all the same, the composite refusing it.
+    let before = k.current_seq();
+    let second = Shot { base: Some(skep_arrangement::Base { member: member.clone(), extent: n(3) }), draft: Some(doc1()), runs: vec![] };
+    let snap = k.snapshot();
+    let plan = plan_deposits(snap.world(), P1, &target, &second, &claimed).expect("the plan plans the row; the composite refuses it");
+    assert_eq!(plan.homes[0].home, NamedAddress::Address(pdoc()));
+    assert_eq!(
+        refused(writer(&k).publication(P1, &target, &second, &[], &claimed)),
+        PublicationError::Publish(PublishError::ClaimRefused(pdoc()))
+    );
+    assert_eq!(k.current_seq(), before, "nothing committed");
+    assert_eq!(links.readlink(&link_of(&pdoc(), 2)), None, "no second claim");
+    // The same shot without its claim lands.
+    let (second_member, _) = writer(&k).publication(P1, &target, &second, &[], &PublishDeposits::default()).expect("the shot without its claim");
+    assert_eq!(second_member, pmember(2));
 }
 
 /// THE REFUSALS, each with its entry's index and nothing committed: a
@@ -1090,7 +1157,7 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     let theirs = w.makelink(P2, &sib_doc(), SlotArg::Addrs(vec![sib_doc()]), SlotArg::Addrs(vec![]), SlotArg::Addrs(vec![citation()])).expect("their link").0;
     let the_shot = shot_off_head(&k, vec![]);
     let copy = |home: NamedAddress, old: Option<Address>| entry(home, ispans(&pca(1), 3), addrs(&[&doc2()]), addrs(&[&citation()]), old);
-    let links_only = |links: Vec<LinkEntry>| PublishDeposits { links, retract: vec![], read_with: vec![] };
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(doc2()), None)])), PlanFault::LinkHome { index: 0 }, "a private home");
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(pmember(1)), None)])), PlanFault::LinkHome { index: 0 }, "a member");
     assert_eq!(refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Address(sib_doc()), None)])), PlanFault::NotOwner(sib_doc()), "another's");
@@ -1122,11 +1189,11 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
         PlanFault::MemberSpan { index: 0 },
         "past the member's placed positions"
     );
-    let retract_only = |retract: Vec<Address>| PublishDeposits { links: vec![], retract, read_with: vec![] };
+    let retract_only = |retract: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract, read_with: vec![] };
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![theirs.clone()])), PlanFault::Retract { index: 0, cause: RetractCause::NotOwner });
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![l.clone()])), PlanFault::Retract { index: 0, cause: RetractCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, retract_only(vec![m.clone(), link_of(&pmember(1), 7)])), PlanFault::Retract { index: 1, cause: RetractCause::Absent });
-    let read_with_only = |read_with: Vec<Address>| PublishDeposits { links: vec![], retract: vec![], read_with };
+    let read_with_only = |read_with: Vec<Address>| PublishDeposits { claim: false, links: vec![], retract: vec![], read_with };
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![doc2()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotPublished });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![set_s(), pmember(1)])), PlanFault::ReadWith { index: 1, cause: ReadWithCause::NotDocument });
     assert_eq!(refused_plan(&k, &the_shot, read_with_only(vec![sib_doc()])), PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotOwner });
@@ -1134,11 +1201,11 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     // The order: a links fault speaks ahead of a retract fault ahead of a
     // read-with fault.
     assert_eq!(
-        refused_plan(&k, &the_shot, PublishDeposits { links: vec![copy(NamedAddress::Address(doc2()), None)], retract: vec![theirs.clone()], read_with: vec![doc2()] }),
+        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![copy(NamedAddress::Address(doc2()), None)], retract: vec![theirs.clone()], read_with: vec![doc2()] }),
         PlanFault::LinkHome { index: 0 }
     );
     assert_eq!(
-        refused_plan(&k, &the_shot, PublishDeposits { links: vec![], retract: vec![theirs], read_with: vec![doc2()] }),
+        refused_plan(&k, &the_shot, PublishDeposits { claim: false, links: vec![], retract: vec![theirs], read_with: vec![doc2()] }),
         PlanFault::Retract { index: 0, cause: RetractCause::NotOwner }
     );
     // THE SUPERSEDED OLD: once `L` is accepted — its copy in the member,
@@ -1172,7 +1239,7 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
     // A read-with in the PRIVATE notes alone: not counted.
     w.makelink(P1, &doc2(), SlotArg::Addrs(vec![pdoc()]), SlotArg::Addrs(vec![set_s()]), SlotArg::Addrs(vec![read_with_type().clone()])).expect("a private read-with");
     let the_shot = shot_off_head(&k, vec![]);
-    let deposits = PublishDeposits { links: vec![], retract: vec![m.clone()], read_with: vec![set_s()] };
+    let deposits = PublishDeposits { claim: false, links: vec![], retract: vec![m.clone()], read_with: vec![set_s()] };
     let (m2, _) = publish(&k, &the_shot, &deposits).expect("the rest lands");
     assert_eq!(m2, pmember(2));
     let s = k.snapshot();
@@ -1185,13 +1252,13 @@ fn a_retracted_target_and_a_standing_read_with_are_skipped_and_a_private_one_is_
     );
     // Now the public one stands: a third publication's read-with is skipped.
     let the_shot = shot_off_head(&k, vec![]);
-    let (m3, _) = publish(&k, &the_shot, &PublishDeposits { links: vec![], retract: vec![], read_with: vec![set_s()] }).expect("the shot lands");
+    let (m3, _) = publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()] }).expect("the shot lands");
     assert_eq!(m3, pmember(3));
     assert_eq!(k.snapshot().world().links().readlink(&link_of(&set_s(), 2)), None, "the standing read-with skips the entry");
     // Retracted, the public read-with no longer stands, and the next is written.
     w.nullify(P1, &set_s(), &link_of(&set_s(), 1)).expect("retracted");
     let the_shot = shot_off_head(&k, vec![]);
-    publish(&k, &the_shot, &PublishDeposits { links: vec![], retract: vec![], read_with: vec![set_s()] }).expect("the shot lands");
+    publish(&k, &the_shot, &PublishDeposits { claim: false, links: vec![], retract: vec![], read_with: vec![set_s()] }).expect("the shot lands");
     assert_eq!(k.snapshot().world().links().readlink(&link_of(&set_s(), 3)).map(|l| l.type_slot().clone()), Some(enc([read_with_type()])));
 }
 
@@ -1217,7 +1284,7 @@ fn a_homes_link_ordinals_rise_with_commit_position_across_commits() {
     for (commit, count) in [2u32, 3, 1].into_iter().enumerate() {
         let the_shot = shot_off_head(&k, vec![]);
         let base = 10 * commit as u32;
-        let deposits = PublishDeposits { links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![] };
+        let deposits = PublishDeposits { claim: false, links: (1..=count).map(|n| into_s(base + n)).collect(), retract: vec![], read_with: vec![] };
         let (_, seq) = publish(&k, &the_shot, &deposits).expect("the commit");
         seqs.push(seq);
     }
@@ -1284,6 +1351,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
     let target = PublishTarget::Document(pdoc());
     let the_shot = shot_off_head(&k, vec![shot_run(&doc1(), &ca(1), 3)]);
     let deposits = PublishDeposits {
+        claim: false,
         links: vec![entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l))],
         retract: vec![m],
         read_with: vec![set_s(), set_s()],
@@ -1375,9 +1443,9 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     let unrecorded = birth(vec![shot_run(&pdoc(), &pca(9), 1)]);
     assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &none), SHOT_BYTES + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     // The mint form's two, and a copy in the I-span form at its own spans.
-    let mint = PublishTarget::Mint { account: a(&[1, 0, 1]), claim: true };
+    let mint = PublishTarget::Mint { account: a(&[1, 0, 1]) };
     let spans = EndArg::Spans(vec![run(&pca(1), 2).iextent(), run(&pca(5), 1).iextent()]);
-    let copy = PublishDeposits { links: vec![entry(NamedAddress::Edition, spans.clone(), spans, addrs(&[&citation()]), None)], ..PublishDeposits::default() };
+    let copy = PublishDeposits { claim: true, links: vec![entry(NamedAddress::Edition, spans.clone(), spans, addrs(&[&citation()]), None)], ..PublishDeposits::default() };
     let span_bytes: u64 = [run(&pca(1), 2), run(&pca(5), 1)].iter().map(|r| stored_span_bytes(&r.iextent())).sum();
     assert_eq!(
         price_staged_bytes(world, &mint, &birth(vec![]), &[], &copy),
@@ -1471,7 +1539,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ty: EndArg::Addrs((1..=MAX_SLOT_SPANS as u32).map(|i| NamedAddress::Address(a(&[1, 1, 0, 1, 0, 1, 0, 3, 23, i]))).collect()),
         old: None,
     };
-    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { links, retract, read_with };
+    let with = |links: Vec<LinkEntry>, retract: Vec<Address>, read_with: Vec<Address>| PublishDeposits { claim: false, links, retract, read_with };
     let copy = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &with(vec![full.clone()], vec![], vec![]))) - shot_bytes;
     // THE SHOT AT AN EMPTY HEAD: the shots above left the head a member of
     // no positions, and a shot off it carries `base_extent` 0 — a zero
@@ -1516,11 +1584,30 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let birth = Shot { base: None, draft: None, runs: vec![] };
     let birth_s = measure(&|| commit(&PublishTarget::Document(set_s()), &birth, &[], &none));
     let account = a(&[1, 0, 1]);
-    let minted = measure(&|| commit(&PublishTarget::Mint { account: account.clone(), claim: false }, &birth, &[], &none));
+    let minted = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &birth, &[], &none));
     let edition_mint = minted - birth_s;
     let drafted = Shot { base: None, draft: Some(doc1()), runs: vec![] };
-    let claimed = measure(&|| commit(&PublishTarget::Mint { account: account.clone(), claim: true }, &drafted, &[], &none));
+    let claimed_deposits = PublishDeposits { claim: true, ..PublishDeposits::default() };
+    let claimed = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &drafted, &[], &claimed_deposits));
     let edition_claim = claimed - minted;
+    // The claim at the document form (skep #692): a drafted birth claiming
+    // into an empty edition `doc` names, against the plain birth into
+    // another — two editions minted under the account for it, at the depth
+    // of the one the mint form mints — so the table's one figure stands for
+    // either form.
+    let fresh_edition = || {
+        k.transact(&[M3State::document_lock_key(&account)], |stg| {
+            let (edition, rec) = stg.working().m3().mint_document(&account, true).map_err(PublicationError::Mint)?;
+            stg.push(rec.into());
+            Ok::<Address, PublicationError>(edition)
+        })
+        .expect("an empty edition under the account")
+        .0
+    };
+    let (plain_edition, claimed_edition) = (fresh_edition(), fresh_edition());
+    let birth_plain = measure(&|| commit(&PublishTarget::Document(plain_edition.clone()), &birth, &[], &none));
+    let birth_claimed = measure(&|| commit(&PublishTarget::Document(claimed_edition.clone()), &drafted, &[], &claimed_deposits));
+    let document_claim = birth_claimed - birth_plain;
 
     let table = [
         ("CORRESPONDENCE_RECORD_BYTES", record, CORRESPONDENCE_RECORD_BYTES),
@@ -1535,6 +1622,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         ("SHOT_BYTES", shot_bytes, SHOT_BYTES),
         ("EDITION_MINT_BYTES", edition_mint, EDITION_MINT_BYTES),
         ("EDITION_CLAIM_BYTES", edition_claim, EDITION_CLAIM_BYTES),
+        ("EDITION_CLAIM_BYTES at the document form", document_claim, EDITION_CLAIM_BYTES),
     ];
     println!(
         "the marker: {marker}; a one-byte value's stretch and range mint: {byte}; a birth shot: {birth_s}; a copy at one span a slot: {}",
@@ -1566,6 +1654,7 @@ fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
     writer(&k).nullify(P1, &pmember(1), &m).expect("the mark taken off");
     let the_shot = shot_off_head(&k, vec![]);
     let deposits = PublishDeposits {
+        claim: false,
         links: vec![entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l.clone()))],
         retract: vec![m.clone()],
         read_with: vec![set_s()],

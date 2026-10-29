@@ -89,7 +89,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         target: PublishTarget::Document(home.clone()),
         shot,
         places: Vec::new(),
-        deposits: PublishDeposits { links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with] },
+        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with] },
     };
     // The draft term, at the budget and one run past it.
     fragment(16);
@@ -130,6 +130,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         shot: shot(None, 4096),
         places: Vec::new(),
         deposits: PublishDeposits {
+            claim: false,
             links: (0..count)
                 .map(|_| LinkEntry {
                     home: NamedAddress::Member,

@@ -643,7 +643,7 @@ fn publication_body(
     deposits: &PublishDeposits,
     shot_body: EntryBody,
 ) -> Result<EntryBody, ComposeFault> {
-    if deposits.is_empty() && !target.claims() {
+    if deposits.is_empty() {
         return Ok(shot_body);
     }
     let plan = plan_deposits(world, Caller::Principal(principal), target, shot, deposits)
@@ -751,8 +751,9 @@ impl OwnedRow {
 /// the link the composite stages (`skep_links`'s `stage_deposits`, the one
 /// other reader of the plan):
 ///
-/// * the edition claim: the edition type's unit span, `from` the edition
-///   by tag, `to` the staging draft's unit span;
+/// * the edition claim: the edition type's unit span, `from` the edition —
+///   by tag where the commit mints it, its unit span where `doc` names it,
+///   as the plan homes the row — `to` the staging draft's unit span;
 /// * a copy: the plan's type slot as stored, its ends as planned —
 ///   stored, named (a tag, or an address's unit span) or by the member's
 ///   positions; its private claim is in no row, outside the signed set;
@@ -770,7 +771,12 @@ fn deposit_rows(plan: &DepositPlan, edition: Option<&Address>) -> Vec<OwnedRow> 
                 PlannedDeposit::EditionClaim { origin } => row(
                     DepositKind::EditionClaim,
                     OwnedSlot::unit(edition_type()),
-                    OwnedSlot::Stored(vec![OwnedElement::Edition]),
+                    match home {
+                        NamedAddress::Address(edition) => OwnedSlot::unit(edition),
+                        NamedAddress::Member | NamedAddress::Edition => {
+                            OwnedSlot::Stored(vec![OwnedElement::Edition])
+                        }
+                    },
                     OwnedSlot::unit(origin),
                 ),
                 PlannedDeposit::Copy { ty, from, to, .. } => {

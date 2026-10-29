@@ -7,8 +7,10 @@
 //!
 //! [`stage_publication`] is the composite as a function over a caller-opened
 //! staging — at the mint form the edition's mint first; the shot's admission;
-//! THE TWIN FENCE; THE DEPOSIT PLAN ([`plan_deposits`], the child module
-//! `plan`, read on the transaction's base); the shot's staging
+//! THE TWIN FENCE; the edition claim's one precondition at the document form
+//! (the edition holds no member yet) and THE DEPOSIT PLAN ([`plan_deposits`],
+//! the child module `plan`, both read on the transaction's base); the shot's
+//! staging
 //! ([`stage_publish`], M5's); per piece of draft identity the shot minted
 //! one correspondence record homed in the draft ([`stage_correspondence`]);
 //! THE DEPOSITS, exactly as planned, per home in the signed entry's order;
@@ -41,7 +43,7 @@
 use skep_address::{document_of, shift, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
     head_lock_key, ordinal_vspan, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, stage_seat_link, trunk_of, Caller, HasM5, M5State, Pairing,
+    stage_reinstate_at, stage_seat_link, trunk_head, trunk_of, Caller, HasM5, M5State, Pairing,
     PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
 };
 use skep_kernel::{Seq, Staging, TxnError, MAX_TXN_BYTES};
@@ -274,13 +276,22 @@ impl From<EmitCoreError> for PublicationError {
 ///    published words, split from its run by an edit on a stale device, is
 ///    no way past, at every principal. It costs the request's overlaps, never
 ///    the draft's history.
-/// 4. THE DEPOSIT PLAN ([`plan_deposits`]) over `stg.base()` — THE
-///    VALIDATION's (3), (4) and (5), the first fault in list order refusing
-///    the whole as `Plan` — the same world the daemon's composer read for
-///    the body it checked the signature against (the survey's C8: under
-///    the serialization lock the admission's snapshot is the base), so the
+/// 4. THE CLAIM's PRECONDITION, then THE DEPOSIT PLAN, both over
+///    `stg.base()`. The edition claim is a first version's alone, written
+///    in the commit that gives the edition its first member: at the
+///    document form a request whose deposits claim is refused
+///    `Publish(ClaimRefused)` naming the edition where `doc`'s trunk
+///    already holds a member — the trunk's head, the read `base_superseded`
+///    makes (skep #692); the mint form's edition is memberless by
+///    construction. Then the plan ([`plan_deposits`]) — THE VALIDATION's
+///    (3), (4) and (5), the first fault in list order refusing the whole as
+///    `Plan` — the same world the daemon's composer read for the body it
+///    checked the signature against (the survey's C8: under the
+///    serialization lock the admission's snapshot is the base), so the
 ///    deposits staged below are the deposits the signature covers, by one
-///    function over one world.
+///    function over one world; the claim's row among them, homed in the
+///    edition by tag where the commit mints it and by address where `doc`
+///    names it.
 /// 5. THE SHOT: [`stage_publish`] — the admission again, one answer (its
 ///    card states why), the re-insert's count, the existence walk, the
 ///    placement with each draft identity minted once, the member's mint and
@@ -357,7 +368,8 @@ impl From<EmitCoreError> for PublicationError {
 /// In the order above, as the bare [`PublicationError`] the caller's
 /// transaction answers as `TxnError::Rejected`: the mint's (`Publish`,
 /// `Mint`), the shot's admission (`Publish`), the fence
-/// (`AlreadyPublished`), the plan's (`Plan`), the shot's staging
+/// (`AlreadyPublished`), the claim's precondition (`Publish(ClaimRefused)`
+/// with the edition), the plan's (`Plan`), the shot's staging
 /// (`Publish`), a record's or a deposit's backstops (`HomeNotRegistered`,
 /// `NotOwner`) and its `Mint` and `Seat` — and `Plan(SlotTooLarge)` where a
 /// member-position end resolves to more spans than a slot holds, which the
@@ -428,7 +440,13 @@ where
             }
         }
     }
-    // 4. The deposit plan, on the base the daemon's composer read.
+    // 4. The claim's precondition, then the deposit plan, both on the base
+    //    the daemon's composer read: at the document form the edition claim
+    //    is admitted into an edition holding no member yet, and refused,
+    //    naming the edition, where the trunk's head stands.
+    if deposits.claim && !target.mints() && trunk_head(stg.base().m3(), doc).is_some() {
+        return Err(skep_arrangement::PublishError::ClaimRefused(trunk_of(doc)).into());
+    }
     let plan = plan_deposits(stg.base(), caller, target, shot, deposits)?;
     // 5. The shot.
     let (member, pairing) = stage_publish(stg, caller, doc, shot, readable)?;
@@ -846,9 +864,11 @@ where
     /// carries a place (the re-window edits the draft's arrangement), the
     /// `link_lock_key` of every home a deposit names by address (a `links`
     /// entry's bare home, its `old`'s home, a `retract` target's home, a
-    /// `read_with` set) and, at the mint form, the account's
-    /// `document_lock_key` as `create_new_document` takes it — a home the
-    /// commit mints has no key to name before it —
+    /// `read_with` set, and the trunk of `doc` where the deposits claim at
+    /// the document form — the edition claim is minted in its link
+    /// subspace) and, at the mint form, the account's `document_lock_key`
+    /// as `create_new_document` takes it — a home the commit mints has no
+    /// key to name before it —
     /// sorted and deduped as `editlink`'s pair is, under this handle's
     /// attestation, and stages [`stage_publication`]: the mint, the shot's
     /// admission, the twin fence, the plan, the shot, the records, the
@@ -894,6 +914,12 @@ where
                     if base.member != trunk {
                         keys.push(M3State::version_lock_key(&base.member));
                     }
+                }
+                // The edition claim at the document form lands in the
+                // trunk's link subspace, a home that stands before the
+                // commit and so has a key to name.
+                if deposits.claim {
+                    keys.push(M3State::link_lock_key(&trunk));
                 }
                 keys
             }

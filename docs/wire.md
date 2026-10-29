@@ -1709,7 +1709,12 @@ homed in a published document of yours — or the target's class, which
 the nullify class refuses to retract: audit_view, not_retraction for a
 credential, not_revocation for a grant), and `read_with_refused` (a
 read-with entry, with `detail` naming which: not_registered,
-not_document, not_owner, not_published), and the publication's budget on
+not_document, not_owner, not_published); the edition claim's own,
+`claim_refused` (the document form carries claim: true and doc already
+holds a member — the edition claim is a first version's alone, written
+with the edition's first member: `site.addr` the edition, `detail`
+member_stands; permanent, the member standing for good, so the client
+sends the shot without its claim); and the publication's budget on
 its in-lock reads and its staged bytes, `publication_over_budget` (the reads the one commit
 makes under the daemon's serialization lock, priced AHEAD of the lock
 off a lock-free snapshot — the caller's link-holding home count × the
@@ -2020,17 +2025,25 @@ content subspace, or one that is no V-position is `malformed` with
 **The deposits** (the link-sets design §5.7). A publication may carry,
 beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes and
 THE READ-WITHS it declares — `links`, `retract`, `read_with`
-(§Arrangement) — and its target may be THE MINT FORM, an edition minted
-under `account` in the same commit with its first member, the edition
-claim (`claim: true`, typed `3.14`, `from` the edition, `to` the
-`draft`) homed in it. All of it lands in the shot's ONE commit, in one
-order: the mint, the shot's own table through the source gate, the
-twin fence, THE PLAN — the validation below, the first refused entry
-refusing the whole, nothing committed — the shot, the records, then
-the deposits per home (the member first, then a minted edition, then
-every other home in address order; inside a home the edition claim,
-the copies, the retractions, the read-withs, each list in its
-declared order), then the re-window. Within one commit a home's link
+(§Arrangement) — and THE EDITION CLAIM (`claim: true`, typed `3.14`,
+`from` the edition, `to` the `draft`), homed in the edition the commit
+mints OR names: its target may be THE MINT FORM, an edition minted
+under `account` in the same commit with its first member, the claim
+homed in it; or the document form's `doc` may be an edition holding no
+member yet, the claim then homed in `doc` and landing with its first
+version. The claim is a first version's alone: where `doc` already
+holds a member the publication is refused `claim_refused`, permanent,
+`detail` `member_stands`, `site.addr` the edition, nothing committed —
+read with the plan, behind the shot's own table and the twin fence —
+and the act that exists is the shot without its claim. All of it lands
+in the shot's ONE commit, in one order: the mint, the shot's own table
+through the source gate, the twin fence, THE PLAN — the validation
+below, the first refused entry refusing the whole, nothing committed —
+the shot, the records, then the deposits per home (the member first,
+then a minted edition, then every other home in address order, an
+edition `doc` names among them; inside a home the edition claim, the
+copies, the retractions, the read-withs, each list in its declared
+order), then the re-window. Within one commit a home's link
 addresses RISE in that order, so a reader sorting a home's links by
 address reads them as the signed entry lists them. THE PLAN, read on
 the committed state the transaction opens on: (3) each `links` entry's
@@ -2088,9 +2101,12 @@ originals its own commit made public would refuse it `old_refused`
 otherwise (§Correlation and idempotency). The feed row of the commit
 names the member first, then the edition at the mint form, then the
 draft where a record landed in it, then every other home the deposits
-touched in address order (§The change feed). THE EDITION CLAIM's
+touched in address order — the edition `doc` names, where the claim
+landed in it, among them (§The change feed). THE EDITION CLAIM's
 reader is `edition_claims` (§Namespace), and a minting publication's
-member is `E.1` of the edition `E` the ack's address lies under.
+member is `E.1` of the edition `E` the ack's address lies under, as a
+first version claimed into an empty edition is `E.1` of the `doc` it
+named.
 
 **The in-lock reads' budget** (the link-sets design §5.7). The four
 reads the one commit makes under the daemon's serialization lock — the
@@ -2232,6 +2248,7 @@ commits nothing:
 | `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's draft words at the kept place the request carries for it (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
 | `stray_place_unrecorded` | permanent | `index` = the `runs` entry | a kept place stands beside a run of `doc`'s own identity and no correspondence record homed in the `draft` names that identity whole as its `to` (the stray places, above) — read inside the transaction at the re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
+| `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
 | `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
 
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
@@ -3192,10 +3209,16 @@ THE TARGET takes one of two forms: `doc`, the published document whose
 chain the shot appends — the form above — or THE MINT FORM, `account`
 with `mint: true` and no `doc` (§The publish shot and head-float, the
 deposits): the commit mints a published EDITION under that parent
-account, the shot its birth version, and `claim: true` beside it writes
-the edition claim homed in the edition, `to` the `draft`, which is then
-required; `claim` without `mint` is not admitted in this build, and a
-frame naming both forms or neither is `malformed`. THE DEPOSITS, three
+account, the shot its birth version; a frame naming both forms or
+neither is `malformed`. `claim: true` rides either form and writes the
+edition claim, `to` the `draft`, which is then required beside it
+(`malformed` otherwise): at the mint form homed in the edition the
+commit mints; at the document form homed in `doc`, where `doc` is an
+edition holding no member yet, the claim landing in the same commit as
+its first version — where a member already stands the publication is
+refused `claim_refused` (`detail` `member_stands`, `site.addr` the
+edition, nothing committed): the claim is a first version's alone, and
+the shot without it is the act that exists. THE DEPOSITS, three
 optional lists beside the shot, land in the shot's one commit (§The
 publish shot and head-float, the deposits; the six codes in §Rejection
 codes): `links`, one entry per accepted link — `{home, ty, from, to,

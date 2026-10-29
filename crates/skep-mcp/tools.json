@@ -526,7 +526,7 @@
           },
           "claim": {
             "type": "boolean",
-            "description": "true with mint: the commit also writes the edition claim homed in the new edition, to the draft (which is then required). Not admitted without mint in this build."
+            "description": "true: the commit also writes the edition claim homed in the edition — the one it mints (with mint) or the one doc names, where that edition holds no member yet — to the draft (which is then required). Refused claim_refused where doc already holds a member."
           },
           "links": {
             "type": "array",

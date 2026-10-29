@@ -277,20 +277,18 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // one is present, the list `runs`' length with `null` at a run with
         // none, the form the parse pads a shorter list to — and so do the
         // deposits (the link-sets design §5.7): the target in its one form
-        // (`doc`, or `account` with `mint: true` and, where set, `claim:
-        // true`; an unset flag is no field), and each of `links`, `retract`
-        // and `read_with` only where it holds an entry.
+        // (`doc`, or `account` with `mint: true`), `claim: true` where the
+        // deposits claim, at either form (an unset flag is no field), and
+        // each of `links`, `retract` and `read_with` only where it holds an
+        // entry.
         Op::Publish { target, shot, places, deposits } => {
             let mut pairs = match target {
                 PublishTarget::Document(doc) => vec![("doc", j_addr(doc))],
-                PublishTarget::Mint { account, claim } => {
-                    let mut pairs = vec![("account", j_addr(account)), ("mint", Value::Bool(true))];
-                    if *claim {
-                        pairs.push(("claim", Value::Bool(true)));
-                    }
-                    pairs
-                }
+                PublishTarget::Mint { account } => vec![("account", j_addr(account)), ("mint", Value::Bool(true))],
             };
+            if deposits.claim {
+                pairs.push(("claim", Value::Bool(true)));
+            }
             pairs.push(("runs", j_shot_runs(&shot.runs)));
             if let Some(base) = &shot.base {
                 pairs.push(("base", j_addr(&base.member)));
@@ -1458,13 +1456,15 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::IllFormedSuccessor => "ill_formed_successor",
         RejectCode::DcViolation => "dc_violation",
         // The publication's deposits (the link-sets design §5.7; lane S3):
-        // six tokens, tabled in §Rejection codes.
+        // six tokens, tabled in §Rejection codes — and the edition claim's
+        // own beside them (skep #692).
         RejectCode::LinkHomeRefused => "link_home_refused",
         RejectCode::OldRefused => "old_refused",
         RejectCode::DuplicateOriginal => "duplicate_original",
         RejectCode::ReadWithInLinks => "read_with_in_links",
         RejectCode::RetractRefused => "retract_refused",
         RejectCode::ReadWithRefused => "read_with_refused",
+        RejectCode::ClaimRefused => "claim_refused",
         // The publication's in-lock reads priced past their budget ahead of
         // the daemon's lock (the link-sets design §5.7; lane S4), tabled in
         // §Rejection codes beside the deposits' six.

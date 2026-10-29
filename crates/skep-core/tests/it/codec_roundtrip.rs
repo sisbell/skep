@@ -223,6 +223,7 @@ fn all_requests() -> Vec<Request> {
                 },
                 places: vec![],
                 deposits: PublishDeposits {
+                    claim: false,
                     links: vec![
                         LinkEntry {
                             home: NamedAddress::Member,
@@ -249,7 +250,7 @@ fn all_requests() -> Vec<Request> {
         rq(
             None,
             Op::Publish {
-                target: PublishTarget::Mint { account: a(&[1, 0, 1]), claim: true },
+                target: PublishTarget::Mint { account: a(&[1, 0, 1]) },
                 shot: Shot {
                     base: None,
                     draft: Some(d3()),
@@ -257,6 +258,7 @@ fn all_requests() -> Vec<Request> {
                 },
                 places: vec![],
                 deposits: PublishDeposits {
+                    claim: true,
                     links: vec![LinkEntry {
                         home: NamedAddress::Member,
                         from: EndArg::Addrs(vec![NamedAddress::Edition]),
@@ -272,10 +274,21 @@ fn all_requests() -> Vec<Request> {
         rq(
             None,
             Op::Publish {
-                target: PublishTarget::Mint { account: a(&[1, 0, 1]), claim: false },
+                target: PublishTarget::Mint { account: a(&[1, 0, 1]) },
                 shot: Shot { base: None, draft: None, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
                 places: vec![],
                 deposits: PublishDeposits::default(),
+            },
+        ),
+        // The document form with the claim (skep #692): `doc` an edition
+        // holding no member yet, `claim: true` beside `draft`, no mint.
+        rq(
+            None,
+            Op::Publish {
+                target: PublishTarget::Document(d1()),
+                shot: Shot { base: None, draft: Some(d3()), runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2)] },
+                places: vec![],
+                deposits: PublishDeposits { claim: true, ..PublishDeposits::default() },
             },
         ),
         rq(
@@ -764,9 +777,9 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
 
 /// The publication's members (the link-sets design §5.7; lane S3), at the
 /// parse: the target is ONE of two forms — `doc`, or `account` with
-/// `mint: true` — and every other spelling is `malformed`, `claim` without
-/// `mint` among them (not admitted in this build), as is `claim` without
-/// `draft`; a `links` entry's ends take the address form (the tags `member`
+/// `mint: true` — and every other spelling is `malformed`; `claim: true`
+/// rides EITHER form (skep #692), round-tripping at both, and `claim`
+/// without `draft` is `malformed` at both; a `links` entry's ends take the address form (the tags `member`
 /// and, with `mint`, `edition` admitted among the addresses), the I-span
 /// form or the member-position form, and a V-spec array is refused in
 /// every entry; the member-position form is held to its canonical spelling
@@ -795,14 +808,23 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     let plain = parse_ok(&codec, &doc(""));
     assert!(matches!(&plain.op, Op::Publish { target: PublishTarget::Document(d), deposits, .. } if *d == d1() && deposits.is_empty()));
     let minted = parse_ok(&codec, &mint(r#","claim":true"#));
-    assert!(matches!(&minted.op, Op::Publish { target: PublishTarget::Mint { account, claim: true }, .. } if *account == a(&[1, 0, 1])));
+    assert!(matches!(&minted.op, Op::Publish { target: PublishTarget::Mint { account }, deposits, .. } if *account == a(&[1, 0, 1]) && deposits.claim));
     let unclaimed = parse_ok(&codec, &mint(r#","claim":false"#));
-    assert!(matches!(&unclaimed.op, Op::Publish { target: PublishTarget::Mint { claim: false, .. }, .. }));
+    assert!(matches!(&unclaimed.op, Op::Publish { target: PublishTarget::Mint { .. }, deposits, .. } if !deposits.claim));
     let canonical = String::from_utf8(codec.marshal_request(&unclaimed)).expect("utf-8");
     assert!(!canonical.contains("claim"), "an unset flag is no member: {canonical}");
     assert_eq!(parse_ok(&codec, canonical.as_bytes()), unclaimed);
+    // The document form carries the claim too (skep #692): the flag read
+    // into the deposits, written back as `claim: true`, the round trip a
+    // fixpoint; unset, no member at this form either.
+    let claimed_doc = parse_ok(&codec, &doc(r#","claim":true"#));
+    assert!(matches!(&claimed_doc.op, Op::Publish { target: PublishTarget::Document(d), deposits, .. } if *d == d1() && deposits.claim));
+    let canonical = String::from_utf8(codec.marshal_request(&claimed_doc)).expect("utf-8");
+    assert!(canonical.contains(r#""claim":true"#) && canonical.contains(r#""doc":"1.0.1.0.1""#), "{canonical}");
+    assert_eq!(parse_ok(&codec, canonical.as_bytes()), claimed_doc);
+    let unclaimed_doc = parse_ok(&codec, &doc(r#","claim":false"#));
+    assert!(!String::from_utf8(codec.marshal_request(&unclaimed_doc)).expect("utf-8").contains("claim"), "an unset flag is no member at the document form either");
     for (bad, why) in [
-        (frame(r#","doc":"1.0.1.0.1","claim":true"#, ""), "not admitted in this build"),
         (frame(r#","doc":"1.0.1.0.1","account":"1.0.1""#, ""), "'account'"),
         (frame(r#","doc":"1.0.1.0.1","mint":true"#, ""), "'doc'"),
         (frame(r#","account":"1.0.1""#, ""), "'account'"),
@@ -814,9 +836,12 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
         assert!(detail.contains(why), "{}: {detail}", String::from_utf8_lossy(&bad));
         assert_eq!(index_of(&bad), None, "the target names no entry");
     }
-    // `claim` without `draft`.
+    // `claim` without `draft`, at either form: the claim names the staging
+    // draft, so the member is required beside it.
     let claim_no_draft = format!(r#"{{"op":"publish","account":"1.0.1","mint":true,"claim":true,"runs":{RUNS}}}"#);
     assert!(detail_of(claim_no_draft.as_bytes()).contains("'draft'"));
+    let claim_no_draft_doc = format!(r#"{{"op":"publish","doc":"1.0.1.0.1","claim":true,"runs":{RUNS}}}"#);
+    assert!(detail_of(claim_no_draft_doc.as_bytes()).contains("'draft'"), "at the document form too");
     // The ends' three forms on one entry, the tags among the addresses, and
     // the canonical form parsing back.
     let entry = |home: &str, from: &str, to: &str, ty: &str, old: &str| {
@@ -1556,14 +1581,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 89 codes, pinned.
+/// The full `RejectCode` wire-name table — all 90 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 89] = [
+    let table: [(RejectCode, &str); 90] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1639,6 +1664,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::ReadWithInLinks, "read_with_in_links"),
         (RejectCode::RetractRefused, "retract_refused"),
         (RejectCode::ReadWithRefused, "read_with_refused"),
+        (RejectCode::ClaimRefused, "claim_refused"),
         (RejectCode::PublicationOverBudget, "publication_over_budget"),
         (RejectCode::NoSuchSubspace, "no_such_subspace"),
         (RejectCode::EmptySubspace, "empty_subspace"),

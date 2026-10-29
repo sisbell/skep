@@ -395,7 +395,10 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
 /// stands on the board is read as skipped and spells no row, exactly as the
 /// signer's own builder spells the same rows. The mint form's term is the
 /// account, its claim row homed in the edition by tag, `from` the edition,
-/// `to` the draft; `claim` without `mint` is the composer's halt.
+/// `to` the draft; `claim` at the document form (skep #692) is the claim
+/// row first in `doc`'s own group, homed by ADDRESS and `from` the edition's
+/// unit span — the signer asking nothing of the edition's members, which
+/// are the board's to refuse.
 #[test]
 fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction_is_skipped() {
     let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
@@ -481,8 +484,32 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
     ];
     let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
     assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the claim first in the edition, the read-with from the edition by tag");
-    let bare_claim = json!({"op": "publish", "doc": "1.0.1.0.1", "claim": true, "draft": "1.0.1.0.2", "runs": []});
-    assert!(c.doc_term_and_body(CheckedKind::Publish, &bare_claim).unwrap_err().to_string().contains("not admitted in this build"));
+    // The document form with the claim (skep #692): the term `doc`'s trunk;
+    // the claim row first in `doc`'s own group — homed by address, `from`
+    // the edition's unit span, never the tag — ahead of the read-with homed
+    // in a later address; nothing read of the edition's members.
+    let claimed = json!({"op": "publish", "doc": "1.0.1.0.1", "claim": true, "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)], "read_with": ["1.0.1.0.3"]});
+    let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &claimed).unwrap();
+    assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1.0.1")));
+    let edition = unit_span(&a("1.0.1.0.1"));
+    let rows = [
+        DepositRow {
+            home: DepositHome::Address(&a("1.0.1.0.1")),
+            kind: DepositKind::EditionClaim,
+            ty: stored(vec![SlotElement::Span(&edition_ty)]),
+            from: stored(vec![SlotElement::Span(&edition)]),
+            to: stored(vec![SlotElement::Span(&draft)]),
+        },
+        DepositRow {
+            home: DepositHome::Address(&a("1.0.1.0.3")),
+            kind: DepositKind::ReadWith,
+            ty: stored(vec![SlotElement::Span(&read_with_ty)]),
+            from: stored(vec![SlotElement::Span(&edition)]),
+            to: stored(vec![SlotElement::Span(&three)]),
+        },
+    ];
+    let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
+    assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the claim first in doc's group, by address; the read-with from the edition's unit span");
 }
 
 /// THE DEATH SIGNAL at a read the composer makes is the session's end and

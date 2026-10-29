@@ -136,7 +136,7 @@ pub struct Shape<'a> {
     pub term: &'a Address,
     /// Whether the request is the mint form.
     pub mint: bool,
-    /// Whether it carries the edition claim.
+    /// Whether it carries the edition claim, at either form.
     pub claim: bool,
     /// The kept places, parallel to the runs.
     pub places: &'a [Option<u64>],
@@ -288,9 +288,9 @@ pub fn price(shape: &Shape<'_>) -> Price {
     let mut bytes = SHOT_BYTES;
     if shape.mint {
         bytes += EDITION_MINT_BYTES;
-        if shape.claim {
-            bytes += EDITION_CLAIM_BYTES;
-        }
+    }
+    if shape.claim {
+        bytes += EDITION_CLAIM_BYTES;
     }
     let mut ends: Vec<u64> = shape.runs.iter().filter(|r| r.origin == *draft).flat_map(|r| [r.i_start, r.reach()]).collect();
     ends.sort_unstable();

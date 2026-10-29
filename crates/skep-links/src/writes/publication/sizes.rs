@@ -35,8 +35,9 @@
 //! ([`KEPT_PLACE_BYTES`], a placement and a removal), the shot's own
 //! placement per run ([`PLACED_RUN_BYTES`]) and its re-insert per value
 //! ([`REINSERTED_VALUE_BYTES`], the value's own bytes on top), the shot's
-//! fixed records ([`SHOT_BYTES`]) and, at the mint form, the edition's mint
-//! and its claim ([`EDITION_MINT_BYTES`], [`EDITION_CLAIM_BYTES`]). THE
+//! fixed records ([`SHOT_BYTES`]), at the mint form the edition's mint
+//! ([`EDITION_MINT_BYTES`]) and, where the deposits claim at either form,
+//! the edition claim ([`EDITION_CLAIM_BYTES`]). THE
 //! MAXIMAL REQUEST — every wire list at its cap, every placed run and every
 //! re-inserted value at M5's, every slot at its cap — sums to
 //! [`MAXIMAL_PUBLICATION_BYTES`]; THE REACHABLE REQUEST, bounded by the
@@ -120,6 +121,10 @@ pub const EDITION_MINT_BYTES: u64 = 109;
 
 /// The bytes the edition claim stages: its mint, its deposit — `from` the
 /// edition's unit span, `to` the draft's, the edition class — and its seat.
+/// One figure for either form: the edition the mint form mints and the
+/// edition the document form names lie at one depth under the account, so
+/// the claim's rows weigh the same (measured at both by
+/// `tests/it/publication.rs`).
 pub const EDITION_CLAIM_BYTES: u64 = 925;
 
 /// The request-body cap of the frame routes, 8 MiB, as this crate states it
@@ -263,8 +268,9 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///
 /// The terms, each at the table's figure:
 ///
-/// * the shot's fixed records ([`SHOT_BYTES`]) and, at the mint form, the
-///   edition's mint and its claim where `claim` is set;
+/// * the shot's fixed records ([`SHOT_BYTES`]), the edition's mint at the
+///   mint form, and the edition claim where the deposits claim, at either
+///   form;
 /// * per draft-native run, its PIECES × ([`PLACED_RUN_BYTES`] +
 ///   [`CORRESPONDENCE_RECORD_BYTES`]), and × [`KEPT_PLACE_BYTES`] beside
 ///   where the entry carries a place — the pieces bounded off the request
@@ -300,11 +306,11 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 pub fn price_staged_bytes<W: LinkWorld>(world: &W, target: &PublishTarget, shot: &Shot, places: &[Option<VPos>], deposits: &PublishDeposits) -> u64 {
     let (trunk, draft) = (target.term(), shot.draft_document());
     let mut bytes = SHOT_BYTES;
-    if let PublishTarget::Mint { claim, .. } = target {
+    if target.mints() {
         bytes += EDITION_MINT_BYTES;
-        if *claim {
-            bytes += EDITION_CLAIM_BYTES;
-        }
+    }
+    if deposits.claim {
+        bytes += EDITION_CLAIM_BYTES;
     }
     // The draft-native runs' endpoints, sorted: the pieces bound reads them.
     let mut ends: Vec<Tumbler> = shot.reinserted_runs().flat_map(|run| [run.i_start().tumbler().clone(), run.reach()]).collect();

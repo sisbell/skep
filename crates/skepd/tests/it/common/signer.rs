@@ -604,7 +604,9 @@ fn unit_span_slot(addr: &str) -> String {
 /// entry; lane S3), as the daemon's composer spells them from M7's plan:
 /// per home in the signed order — the member by tag, then a minted edition,
 /// then every other home in address order — the edition claim (`claim:
-/// true`, `from` the edition by tag, `to` the `draft`), the copies (`links`,
+/// true`, at either form: `from` the edition by tag where `mint` mints it,
+/// by its unit span where `doc` names it, homed there by address — skep
+/// #692 — `to` the `draft`), the copies (`links`,
 /// in order: the type slot as stored, each end as spelled), the retractions
 /// (`retract`, in order, each homed in its target's document: the
 /// retraction class, `from` the home, `to` the target) and the read-withs
@@ -625,15 +627,17 @@ pub fn deposit_rows(port: u16, token: &str, frame: &Value, account: &str, skippi
     let mut push = |home: SignerHome, kind, ty, from, to| {
         homes.entry(home.clone()).or_default().push(SignerRow { home, kind, ty, from, to });
     };
-    if claims && mints {
+    if claims {
         let draft = parse_addr(frame["draft"].as_str()?)?;
-        push(
-            SignerHome::Edition,
-            DepositKind::EditionClaim,
-            SignerSlot::unit(&parse_addr(T_EDITION)?),
-            SignerSlot::Stored(vec![SignerElement::Edition]),
-            SignerSlot::unit(&draft),
-        );
+        let (home, from) = match (mints, &trunk) {
+            (true, _) => (SignerHome::Edition, SignerSlot::Stored(vec![SignerElement::Edition])),
+            (false, Some(trunk)) => {
+                let edition = parse_addr(trunk)?;
+                (SignerHome::Addr(edition.clone()), SignerSlot::unit(&edition))
+            }
+            (false, None) => return None,
+        };
+        push(home, DepositKind::EditionClaim, SignerSlot::unit(&parse_addr(T_EDITION)?), from, SignerSlot::unit(&draft));
     }
     for entry in list("links") {
         let home = match entry["home"].as_str()? {

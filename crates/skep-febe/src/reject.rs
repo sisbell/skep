@@ -170,7 +170,9 @@ pub struct FaultSite {
     /// target link that failed the ω check; and every `Withheld` — M10's
     /// doc-argument consult and source consult, and M5's publish shot —
     /// naming the first unreadable document in declaration order (PUB-8.4's
-    /// pinned `site.addr`).
+    /// pinned `site.addr`) — and from the publication's own two:
+    /// `already_published` naming the member the words were published into,
+    /// `claim_refused` naming the edition that already holds a member.
     pub addr: Option<Address>,
 }
 
@@ -408,7 +410,8 @@ pub enum RejectCode {
     // ── M7 link: the publication's deposits (the link-sets design §5.7's
     //    validation (3)–(5); lane S3). Each is permanent, carries its
     //    entry's index in `site.index`, and the three that name a cause
-    //    carry it as `detail`. ──
+    //    carry it as `detail`; the edition claim's own, last of them, names
+    //    the edition in `site.addr` instead. ──
     /// A `links` entry's home is neither the tag `member` nor a published
     /// document of the caller's.
     ///
@@ -444,6 +447,17 @@ pub enum RejectCode {
     /// `detail` names which: `not_registered`, `not_document` (a member),
     /// `not_owner`, or `not_published`.
     ReadWithRefused,
+    /// The document form carries `claim: true` and `doc` already holds a
+    /// member (the link-sets design §5.7; skep #692).
+    ///
+    /// The edition claim is a first version's alone: it is written in the
+    /// same commit as the edition's first member — the one the mint form
+    /// mints, or the one the document form publishes into an edition holding
+    /// no member yet. `site.addr` is the edition, `detail` `member_stands`.
+    /// Permanent by the catch-all: the member stands for good, so the same
+    /// request never lands; the act that exists is the shot without its
+    /// claim. Nothing is committed.
+    ClaimRefused,
     /// A publication's in-lock reads are priced past their budget (the
     /// link-sets design §5.7, EVERY IN-LOCK READ IS BOUNDED BY A REFUSAL
     /// AHEAD OF THE LOCK; lane S4).

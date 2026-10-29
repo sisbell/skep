@@ -662,7 +662,8 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
     let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
     for fact in [
         "THE TARGET takes one of two forms",
-        "`claim` without `mint` is not admitted in this build",
+        "`claim: true` rides either form and writes the edition claim",
+        "refused `claim_refused` (`detail` `member_stands`, `site.addr` the edition, nothing committed)",
         "THE DEPOSITS, three",
         "THE MEMBER-POSITION",
         "A V-spec is admitted in no entry",
@@ -673,19 +674,22 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
     let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
     for fact in [
         "**The deposits**",
+        "homed in the edition the commit mints OR names",
         "THE PLAN, read on",
         "RETRACTED is SKIPPED",
         "standing in a published home of yours is SKIPPED",
         "A skipped entry has no",
         "answered from the retry memo BEFORE the admission judges it",
         "| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list |",
+        "| `claim_refused` | permanent | `addr` = the edition |",
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
-    for token in ["`link_home_refused`", "`old_refused`", "`duplicate_original`", "`read_with_in_links`", "`retract_refused`", "`read_with_refused`"] {
+    for token in ["`link_home_refused`", "`old_refused`", "`duplicate_original`", "`read_with_in_links`", "`retract_refused`", "`read_with_refused`", "`claim_refused`"] {
         assert!(codes.contains(token), "§Rejection codes carries {token}");
     }
+    assert!(codes.contains("`site.addr` the edition, `detail` member_stands"), "§Rejection codes states the claim refusal's site and detail");
     let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
     assert!(links.contains("refused `retract_refused` with the class as its"), "§Links (writes) states the retract entry's class cell");
     let memo = prose("\n### Correlation and idempotency", &["\n### HTTP status codes"]);

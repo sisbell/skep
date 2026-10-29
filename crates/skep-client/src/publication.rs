@@ -264,11 +264,11 @@ pub struct Inputs {
     /// The parent account the edition is minted under — THE MINT FORM, a
     /// first publication of a free-standing draft (§5.7 (iv)).
     pub mint: Option<Address>,
-    /// Whether the request carries the edition claim.
-    ///
-    /// Sent only with `mint` in this build: the claim admitted without a
-    /// mint (the owner's ruling (i)) is the daemon's own lane, and this
-    /// builder gains the arm then (`request`'s doc).
+    /// Whether the request carries the edition claim, at either form: with
+    /// `mint`, or at the document form where `doc` is an edition holding no
+    /// member yet (the owner's ruling (i); skep #692). The board, never this
+    /// library, judges the edition's members — `claim_refused` where one
+    /// stands (`send`'s arm).
     pub claim: bool,
     /// The base member and `base_extent` — `None` the birth shape.
     pub base: Option<(Address, u64)>,

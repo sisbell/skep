@@ -392,10 +392,12 @@ pub fn publish(
 /// The two forms the link-sets design §5.7 draws: the DOCUMENT form, `doc`
 /// present and `account` absent; THE MINT FORM, `account` present with
 /// `mint` and `doc` ABSENT — the edition minted in the commit, named by the
-/// tag `edition` and its member by the tag `member`. `claim` rides only with
-/// `mint` in this build (the catalog: "Not admitted without mint in this
-/// build"). A member left at its default is not spelled, so a frame carrying
-/// none of the optional members is the bare shot byte for byte.
+/// tag `edition` and its member by the tag `member`. `claim` rides either
+/// form (skep #692): with `mint`, the claim homed in the edition minted; at
+/// the document form, homed in `doc` where that edition holds no member yet
+/// (the board refuses `claim_refused` where one stands). A member left at
+/// its default is not spelled, so a frame carrying none of the optional
+/// members is the bare shot byte for byte.
 #[derive(Debug, Clone, Default)]
 pub struct PublishFrame<'a> {
     /// The published document, the trunk — the document form.
@@ -404,8 +406,8 @@ pub struct PublishFrame<'a> {
     pub account: Option<&'a str>,
     /// `mint: true`, with `account` and no `doc`.
     pub mint: bool,
-    /// `claim: true`: the edition claim homed in the minted edition, `to` the
-    /// draft.
+    /// `claim: true`: the edition claim homed in the edition — the one
+    /// minted, or the one `doc` names — `to` the draft.
     pub claim: bool,
     /// The base member and `base_extent`, together or neither.
     pub base: Option<(&'a str, u64)>,

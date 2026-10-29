@@ -1522,8 +1522,11 @@ fn a_body_missing_the_deposit_rows_or_naming_a_skipped_one_is_refused_for_its_si
 /// claim homed in `E′` `to` the draft (`edition_claims` lists it, active),
 /// and the read-with from `E′` in `SET`; the row names the member, then the
 /// edition, then the draft, then `SET`. A stranger's mint under the
-/// claimant's account is `not_owner` naming the account; `claim` without
-/// `mint` is `malformed`, unparsed.
+/// claimant's account is `not_owner` naming the account. And THE CLAIM AT
+/// THE DOCUMENT FORM WHERE A MEMBER STANDS (skep #692): once `E` holds a
+/// first version, a shot off it carrying `claim: true` is `claim_refused`,
+/// `member_stands`, `site.addr` the edition — the shot's own table ahead,
+/// the plan's step behind — nothing committed.
 #[test]
 fn the_mint_form_mints_the_edition_its_member_the_claim_and_the_read_with_in_one_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1557,11 +1560,83 @@ fn the_mint_form_mints_the_edition_its_member_the_claim_and_the_read_with_in_one
     let before = head(port);
     assert_not_owner(&op(port, Some(&boot), &mint), CLAIMANT_ACCOUNT);
     assert_eq!(head(port), before);
-    // `claim` without `mint`: not admitted in this build, at the codec.
-    let v = op_as_written(port, Some(&b.signed), &with_members(&b.shot(), serde_json::json!({"claim": true})));
+    // The claim at the document form where a member stands: a first version
+    // lands in `E` from a fresh draft (the deposit board's `D` is published
+    // already, its words fenced); then a shot off that member carrying
+    // `claim: true` is refused naming the edition, nothing committed.
+    let d2 = draft_with(port, &b.bare, "xyz");
+    let e1 = acked_addr(&op(port, Some(&b.signed), &publish(&b.e, None, Some(&d2), &[run(&d2, &format!("{d2}.0.1.1"), 3)])));
+    assert_eq!(e1, format!("{}.1", b.e));
+    let before = head(port);
+    let claiming = with_members(&publish(&b.e, Some((&e1, 3)), Some(&d2), &[]), serde_json::json!({"claim": true}));
+    let v = op(port, Some(&b.signed), &claiming);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["disposition"].as_str(), rej["detail"].as_str()), (Some("claim_refused"), Some("permanent"), Some("member_stands")), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": b.e}), "the edition, and nothing else: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    sd.shutdown();
+}
+
+/// THE CLAIM AT A FIRST VERSION INTO AN EMPTY EDITION (skep #692; the
+/// owner's publication-redesign decision 2 (i)): a published document with
+/// no version in it takes its first version from a staging draft by the
+/// DOCUMENT form — `doc` the edition, no mint — with `claim: true`, and the
+/// one commit writes the edition claim homed in the edition exactly as the
+/// mint form writes it: `edition_claims` of the draft lists it, active, its
+/// home the edition; the link is typed `3.14`, `from` the edition, `to` the
+/// draft; the feed's one row names the member, the draft, then the edition
+/// among the homes the deposits touched. A second publication claiming into
+/// the same edition, a member standing, is `claim_refused` with
+/// `member_stands` and `site.addr` the edition, nothing committed; `claim`
+/// at the document form with no `draft` is `malformed` naming `draft`, at
+/// the codec.
+#[test]
+fn a_first_version_into_an_empty_edition_carries_its_claim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    let d = draft_with(port, &bare, "abc");
+    let before = head(port);
+    let first = with_members(&publish(&e, None, Some(&d), &[run(&d, &format!("{d}.0.1.1"), 3)]), serde_json::json!({"claim": true}));
+    let member = acked_addr(&op(port, Some(&signed), &first));
+    assert_eq!(member, format!("{e}.1"), "the edition's first member");
+    assert_eq!(text(port, &member, 1, 3), "abc");
+    // The claim: listed by the draft, homed in the edition, active — the
+    // mint form's record, in the edition `doc` named.
+    let claims = op(port, Some(&bare), &format!(r#"{{"op":"edition_claims","target":"{d}"}}"#));
+    let rows = expect_resp(&claims, "edition_claims")["claims"].as_array().expect("claims").clone();
+    assert_eq!(rows.len(), 1, "the one claim: {claims}");
+    assert_eq!((rows[0]["home"].as_str(), rows[0]["active"].as_bool()), (Some(e.as_str()), Some(true)), "{claims}");
+    let claim = read_link(port, None, &format!("{e}.0.2.1"));
+    assert_eq!(slot_span(&claim, 2).0, T_EDITION, "typed the edition class: {claim}");
+    assert_eq!(slot_span(&claim, 0).0, e, "`from` the edition: {claim}");
+    assert_eq!(slot_span(&claim, 1).0, d, "`to` the draft: {claim}");
+    // One commit; its row names the member, the draft, then the edition.
+    let owners = changes_since_as(port, Some(&signed), before);
+    assert_eq!(owners.len(), 1, "one commit: {owners:?}");
+    assert_eq!(owners[0]["docs"], serde_json::json!([member, d, e]), "{}", owners[0]);
+    // A member stands: a second publication claiming into E — from a fresh
+    // draft, off the member, so the shot's own table and the twin fence are
+    // passed — is refused naming the edition, nothing committed.
+    let d2 = draft_with(port, &bare, "xyz");
+    let before = head(port);
+    let second = with_members(&publish(&e, Some((&member, 3)), Some(&d2), &[run(&d2, &format!("{d2}.0.1.1"), 3)]), serde_json::json!({"claim": true}));
+    let v = op(port, Some(&signed), &second);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["disposition"].as_str(), rej["detail"].as_str()), (Some("claim_refused"), Some("permanent"), Some("member_stands")), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": e}), "the edition, and nothing else: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    assert!(changes_since(port, before).is_empty());
+    // The same shot without its claim lands as the second member.
+    assert_eq!(acked_addr(&op(port, Some(&signed), &publish(&e, Some((&member, 3)), Some(&d2), &[run(&d2, &format!("{d2}.0.1.1"), 3)]))), format!("{e}.2"));
+    // `claim` with no `draft`: the codec's refusal, naming the member owed.
+    let v = op_as_written(port, Some(&signed), &with_members(&publish(&e, Some((&member, 3)), None, &[]), serde_json::json!({"claim": true})));
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "{v}");
-    assert!(rej["detail"].as_str().is_some_and(|d| d.contains("not admitted in this build")), "{v}");
+    assert!(rej["detail"].as_str().is_some_and(|d| d.contains("'draft'")), "{v}");
     sd.shutdown();
 }
 

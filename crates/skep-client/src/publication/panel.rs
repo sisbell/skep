@@ -489,5 +489,7 @@ pub fn count(panel: &Panel, switches: &Switches, inputs: &Inputs) -> Count {
     let e = panel.formatting.removals.iter().filter(|r| r.listed() && r.remake.is_some()).count();
     let n = panel.formatting.marks.iter().filter(|m| !remakes.contains(m)).count();
     let r = panel.formatting.removals.iter().filter(|r| r.listed() && r.remake.is_none()).count();
-    Count { l, n, r, e, claim: inputs.claim && inputs.mint.is_some(), read_with }
+    // The claim clause where the caller asks the claim, at either form:
+    // whether the edition may take it is the board's to refuse.
+    Count { l, n, r, e, claim: inputs.claim, read_with }
 }

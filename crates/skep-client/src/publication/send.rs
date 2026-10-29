@@ -27,7 +27,9 @@
 //! `publication_over_budget` → the price's verdict re-run: a race where this
 //! price admitted the request, the library's own bug where it did not;
 //! `not_owner` naming the draft → the unowned draft, named; `not_owner` on
-//! `doc` or the account → named too; the six deposit tokens → own-bug arms
+//! `doc` or the account → named too; `claim_refused` → the edition named
+//! already holds a member, so the claim is a first version's no longer (skep
+//! #692) — the caller sends the shot without it; the six deposit tokens → own-bug arms
 //! with their entry and detail; `attestation_invalid:signature` → ONE
 //! re-sign with the skipped deposits dropped — presence re-read for every
 //! `retract` and `read_with` entry — under a fresh `id`; `unparseable` on a
@@ -158,6 +160,14 @@ pub enum Refusal {
     NotOwner {
         /// The address named.
         addr: Option<Address>,
+    },
+    /// `claim_refused`: the edition `doc` names already holds a member, so
+    /// the edition claim — a first version's alone — is refused; the caller
+    /// sends the shot without it. The board judges the edition's members,
+    /// never this library.
+    ClaimRefused {
+        /// The edition, `site.addr`.
+        edition: Option<Address>,
     },
     /// `withheld`: a window's origin is not readable to the session.
     WindowWithheld {
@@ -291,6 +301,7 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
                     _ => Refusal::NotOwner { addr },
                 }
             }
+            "claim_refused" => Refusal::ClaimRefused { edition: site.addr.as_deref().and_then(parse_address) },
             "attestation_invalid:signature" if !resigned => {
                 let (retract_skipped, read_with_skipped) = skipped(door, p, request)?;
                 if retract_skipped.is_empty() && read_with_skipped.is_empty() {
@@ -315,9 +326,11 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
     }
 }
 
-/// Whether the request carries a member an older daemon would not parse.
+/// Whether the request carries a member an older daemon would not parse —
+/// a `claim` at the document form among them, which a board before skep
+/// #692 refused `malformed`.
 fn carries_members(request: &Request) -> bool {
-    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || request.places.iter().any(Option::is_some) || request.mint.is_some()
+    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || request.places.iter().any(Option::is_some) || request.mint.is_some() || request.claim
 }
 
 /// A lost answer: the board read first, through the landed test from the

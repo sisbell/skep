@@ -57,10 +57,11 @@ pub trait Lower {
     /// carries, where its code names a cause beside its site.
     ///
     /// The three deposit codes that do (`old_refused`, `retract_refused`,
-    /// `read_with_refused`; the link-sets design §5.7) override this; every
-    /// other error carries none, and this is [`Lower::lower`] with `None`
-    /// beside it. [`lower_txn`] lowers through it, so a cause reaches the
-    /// rejection's `detail` by the one table.
+    /// `read_with_refused`; the link-sets design §5.7) and the edition
+    /// claim's (`claim_refused`, `member_stands`; skep #692) override this;
+    /// every other error carries none, and this is [`Lower::lower`] with
+    /// `None` beside it. [`lower_txn`] lowers through it, so a cause reaches
+    /// the rejection's `detail` by the one table.
     fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>)
     where
         Self: Sized,
@@ -357,6 +358,13 @@ impl Lower for PublishError {
             PublishError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
             PublishError::BaseSuperseded => (RejectCode::BaseSuperseded, None),
             PublishError::BaseExtentTooLarge => (RejectCode::BaseExtentTooLarge, None),
+            // The edition claim into an edition that already holds a member
+            // (skep #692): `site.addr` is the edition, and the one cause
+            // rides as `detail` through `lower_with_detail` below.
+            PublishError::ClaimRefused(edition) => (
+                RejectCode::ClaimRefused,
+                Some(FaultSite { addr: Some(edition), ..FaultSite::default() }),
+            ),
             // One code with `version`'s (PUB-2.9): the face is that code's
             // `true` arm, the intent being publication.
             PublishError::PrivateSourceVersionless => (RejectCode::PrivateSourceVersionless, None),
@@ -373,6 +381,14 @@ impl Lower for PublishError {
             PublishError::Mint(m) => m.lower(),
             PublishError::Content(c) => c.lower(),
         }
+    }
+
+    /// The claim's refusal carries its one cause, `member_stands`, as
+    /// `detail` beside the edition in `site.addr`.
+    fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>) {
+        let detail = matches!(self, PublishError::ClaimRefused(_)).then(|| "member_stands".to_string());
+        let (code, site) = self.lower();
+        (code, site, detail)
     }
 }
 
@@ -468,10 +484,12 @@ impl Lower for PublicationError {
         }
     }
 
-    /// The deposit plan's detailed refusals carry their cause through.
+    /// The deposit plan's detailed refusals carry their cause through, and
+    /// so does the shot's table's one (`claim_refused`'s `member_stands`).
     fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>) {
         match self {
             PublicationError::Plan(f) => f.lower_with_detail(),
+            PublicationError::Publish(e) => e.lower_with_detail(),
             other => {
                 let (code, site) = other.lower();
                 (code, site, None)

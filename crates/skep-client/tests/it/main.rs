@@ -15,7 +15,10 @@
 //! the lost answer — over three keyed siblings on a claimed permissive board;
 //! `removals` drives the ceremonies' removals of anchor files against a
 //! directory that refuses the unlink, over the loss arm, and `cut_short`
-//! the face a cut-short anchor file meets at the import.
+//! the face a cut-short anchor file meets at the import; `publication`
+//! drives the `publication` module — the enumeration against the daemon's
+//! own filter, the one request, the acknowledgment, the twin, a moved place
+//! and a cut connection — over a claimed permissive board.
 
 mod backup;
 mod claim;
@@ -27,6 +30,7 @@ mod handshake;
 mod hosted;
 mod loss;
 mod merge;
+mod publication;
 mod recover;
 mod removals;
 mod retire;

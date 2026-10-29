@@ -2696,6 +2696,37 @@ mod scripted {
             matches!(&err, Refusal::Halt(h) if h.exit_code() == 3 && h.to_string().contains("base_superseded")),
             "{err}"
         );
+        // The publication family's arms: `not_owner` naming the DRAFT side is
+        // the board's refusal verbatim with the draft in its site — never the
+        // library's own fault — while naming `doc` is the own fault; the twin
+        // fence's member and the budget's detail ride verbatim too; a place's
+        // token, which this frame never carries, the library's own fault.
+        let drafted = || Landing::Shot { merger: merger(&session, &signer), draft: Some(a(S)), journal: None };
+        let verbatim = |err: Refusal, code: &str| -> crate::halt::Refused {
+            match err {
+                Refusal::Halt(Halt::Refused(r)) if r.code == code => r,
+                other => panic!("not the board's {code} verbatim: {other:?}"),
+            }
+        };
+        refuse("not_owner", Some(S));
+        let unowned = verbatim(land(&board, &merged, drafted()).unwrap_err(), "not_owner");
+        assert_eq!(unowned.body["site"]["addr"].as_str(), Some(S), "the draft side named");
+        refuse("not_owner", Some(D));
+        let err = land(&board, &merged, drafted()).expect_err("own fault");
+        assert!(matches!(&err, Refusal::Halt(Halt::Halt(_))), "{err}");
+        assert!(err.to_string().contains("not_owner"), "{err}");
+        refuse("already_published", Some(&format!("{D}.3")));
+        let twin = verbatim(land(&board, &merged, drafted()).unwrap_err(), "already_published");
+        assert_eq!(twin.body["site"]["addr"].as_str(), Some(format!("{D}.3").as_str()));
+        dialer.world().memo.insert(
+            format!("{}.publish", merged.key.text()),
+            json!({"resp": "rejected", "code": "publication_over_budget", "detail": "70000 in-lock reads priced over the budget of 65536", "disposition": "permanent", "op": "publish"}),
+        );
+        let budget = verbatim(land(&board, &merged, drafted()).unwrap_err(), "publication_over_budget");
+        assert_eq!(budget.detail.as_deref(), Some("70000 in-lock reads priced over the budget of 65536"));
+        refuse("kept_place_moved", None);
+        let err = land(&board, &merged, drafted()).expect_err("own fault");
+        assert!(matches!(&err, Refusal::Halt(h) if h.to_string().contains("kept_place_moved")), "{err}");
         assert!(
             dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
             "nothing after a refused shot"

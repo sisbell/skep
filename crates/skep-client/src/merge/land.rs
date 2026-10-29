@@ -13,7 +13,13 @@
 //! whose first `placed` positions already hold M — else one `publish` from
 //! the head, its body every copied run's bytes re-read through the side that
 //! holds them and every window signed by address, re-asked once under the
-//! same per-session `id` where the acknowledgment was lost. A daughter in
+//! same per-session `id` where the acknowledgment was lost. The frame and
+//! its body go through the publication composition's request builder
+//! (`crate::publication::Request`) BARE — no `links`, `retract` or
+//! `read_with` entry, no place beside any run, the document form — the
+//! merge's one delta from a publication (the link-sets design §5.5: "the
+//! walk's base the `base` it holds"), so a request carrying no deposit
+//! signs today's body byte for byte through the one body builder. A daughter in
 //! the acknowledgment is reported at once ([`Landed::AsDaughter`]): the head
 //! moved under the merge, the library never re-runs, the embedder does with
 //! `retries` one higher (decision 17). The record: the links of the kind to
@@ -36,18 +42,16 @@
 //! a reader at the daughter finds by `find_links_ftt{ty, to}`. A claim over
 //! version members is the wire's to admit, not a frame this library sends.
 
-use std::num::NonZeroU64;
-
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_identity::{
     entry_body_make_link, entry_frame, unit_span, DocTerm, EntryBody, EntrySlot, LinkSlots,
-    PublishBody, PublishRefusal, ShotBase,
 };
 
 use crate::address::{doc_1_of, parse_address};
 use crate::board::{acked_addr, acked_at, answers, frames, Answer, Board, Rejection, Token};
 use crate::halt::Halt;
+use crate::publication::{self, Piece};
 use crate::sign::{sig_hex, Signer};
 
 use super::compose::{script, InPlaceOp, Run};
@@ -62,8 +66,8 @@ use super::record::{read_record, RecordLanding};
 ///
 /// It is the frame routes' request-body cap, 8 MiB (wire.md §HTTP status
 /// codes, `413 payload_too_large`), the parity the daemon holds a shot's
-/// body to. The body is composed under it ([`PublishBody::within`]) and a
-/// body past it is refused by name, never built.
+/// body to. The body is composed through the publication's request
+/// builder and measured against it; a body past it is refused by name.
 pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 
 /// The merger: a signed session's facts and its hand.
@@ -205,9 +209,11 @@ impl<'a> Landing<'a> {
 /// - [`Refusal::OverCap`], before any frame;
 /// - the reads' refusals, for a member or a draft already holding M;
 /// - the shot's: the value reads' refusals, [`Refusal::WindowWithheld`],
-///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], and a
-///   lost acknowledgment as the dialer's halt after one re-ask, for
-///   [`resume`] to complete — or the draft landing's edits':
+///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
+///   board's `not_owner` naming the draft side, `already_published` and
+///   `publication_over_budget` verbatim as [`Refusal::Halt`] (never the
+///   library's fault), and a lost acknowledgment as the dialer's halt after
+///   one re-ask, for [`resume`] to complete — or the draft landing's edits':
 ///   [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`], and a
 ///   lost acknowledgment as the dialer's halt, with no re-ask;
 /// - the claim's and the record's reads' refusals, then the record's
@@ -426,22 +432,26 @@ impl Writer<'_> {
 
     /// Sends the shot, answering the member minted and the ack's position.
     ///
-    /// The body goes through [`PublishBody`] — every copied run's values
-    /// re-read through the side that holds them, every window by address,
-    /// the base group the head and its extent as read — then the frame with
-    /// its `attest` and its id, one re-ask under the same id on a lost
+    /// The frame and its body go through the publication's request builder
+    /// with no member and no place — every copied run's values re-read
+    /// through the side that holds them, every window by address, the base
+    /// group the head and its extent as read — then the frame with its
+    /// `attest` and its id, one re-ask under the same id on a lost
     /// acknowledgment.
     ///
     /// # Errors
     ///
     /// [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`] and
-    /// [`Refusal::NoSuchDocument`] as the board answers them; the value
-    /// reads' refusals; the attest's halts; a body past
-    /// [`SHOT_BODY_BUDGET`], a run with no address, a window of width 0, and
-    /// the board's refusal of the frame's substance, as the library's own
-    /// faults; an answer of a shape this client does not know, faced; the
-    /// death signal; a dial fault after the one re-ask; the board's other
-    /// refusals verbatim.
+    /// [`Refusal::NoSuchDocument`] as the board answers them; `not_owner`
+    /// naming the draft side, `already_published` and
+    /// `publication_over_budget` as the board's refusal verbatim, never this
+    /// library's fault; the value reads' refusals; the attest's halts; a
+    /// body past [`SHOT_BODY_BUDGET`], a run with no address, a window of
+    /// width 0, and the board's refusal of the frame's substance — the
+    /// shot's own table, a place's or a deposit's token, which this frame
+    /// never carries — as the library's own faults; an answer of a shape
+    /// this client does not know, faced; the death signal; a dial fault after
+    /// the one re-ask; the board's other refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
@@ -451,26 +461,20 @@ impl Writer<'_> {
         });
         let fresh = merged.families.contains(&Family::DraftNative);
         let draft = draft.cloned().or(if fresh { draft_side } else { None });
-        let past_budget = |e: PublishRefusal| -> Refusal {
-            own_fault_face("the shot's body cannot be composed", format!("{e}: the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)"))
-        };
-        let mut body = PublishBody::within(
-            SHOT_BODY_BUDGET,
-            Some(ShotBase { member: head, extent: merged.head_extent }),
-        )
-        .map_err(past_budget)?;
         let mut runs = Vec::with_capacity(merged.composed.runs.len());
+        let mut pieces = Vec::with_capacity(merged.composed.runs.len());
         for (placed, family) in merged.composed.runs.iter().zip(&merged.families) {
             let run = &placed.run;
             let i_start = run
                 .address_at(0)
                 .ok_or_else(|| own_fault_face("a run of M names no address", format!("{run:?}")))?;
-            runs.push(frames::shot_run(&run.origin.to_string(), &i_start.to_string(), run.width));
+            runs.push(publication::Run::new(run.origin.clone(), run.i_start, run.width));
             match family {
                 Family::Window => {
-                    let width = NonZeroU64::new(run.width)
-                        .ok_or_else(|| own_fault_face("a window of width 0", format!("{run:?}")))?;
-                    body = body.window(&i_start, width).map_err(past_budget)?;
+                    if run.width == 0 {
+                        return Err(own_fault_face("a window of width 0", format!("{run:?}")));
+                    }
+                    pieces.push(Piece::Window { start: i_start, width: run.width });
                 }
                 Family::Own | Family::DraftNative => {
                     let items = values_for(
@@ -479,24 +483,39 @@ impl Writer<'_> {
                         placed.side.map(|s| s.0 as usize),
                         run,
                     )?;
-                    for item in &items {
-                        body = body.push(item).map_err(past_budget)?;
-                    }
+                    pieces.push(Piece::Values(items));
                 }
             }
         }
-        let body = body.finish();
+        // THE REQUEST BUILDER, bare: the merge's delta from a publication is
+        // no member and no place.
+        let n = runs.len();
+        let request = publication::Request {
+            doc: Some(doc.clone()),
+            mint: None,
+            claim: false,
+            base: Some((head.clone(), merged.head_extent)),
+            draft: draft.clone(),
+            runs,
+            places: vec![None; n],
+            stray_records: vec![0; n],
+            pieces,
+            entries: Vec::new(),
+            retract: Vec::new(),
+            read_with: Vec::new(),
+            unspellable: Vec::new(),
+            counterparts: Vec::new(),
+            id: format!("{}.publish", merged.key.text()),
+            count: publication::Count::default(),
+            price: publication::Price::default(),
+            as_of: self.reader.as_of(),
+        };
+        let body = request.body();
+        if body.as_bytes().len() > SHOT_BODY_BUDGET {
+            return Err(own_fault_face("the shot's body cannot be composed", format!("the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)")));
+        }
         let attest = self.attest(doc, &body)?;
-        let id = format!("{}.publish", merged.key.text());
-        let draft_text = draft.as_ref().map(ToString::to_string);
-        let frame = frames::publish(
-            &doc.to_string(),
-            Some((&head.to_string(), merged.head_extent)),
-            draft_text.as_deref(),
-            &runs,
-            attest,
-            Some(&id),
-        );
+        let frame = request.frame(attest);
         // A lost acknowledgment is re-asked once under the same id in the same
         // session (§1.5: the per-session idempotency key), else `resume`.
         let answer = match self.board.op(Some(self.merger.token), &frame) {
@@ -512,12 +531,15 @@ impl Writer<'_> {
             return Ok((member, at));
         }
         let Some(r) = Rejection::of(&v) else { return Err(shape_face("publish", &v).into()) };
+        let site = r.site().addr.as_deref().and_then(parse_address);
         Err(match r.key() {
-            "withheld" => Refusal::WindowWithheld(
-                v["site"]["addr"].as_str().and_then(parse_address).unwrap_or_else(|| doc.clone()),
-            ),
+            "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| doc.clone())),
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(doc.clone()),
+            // The publication's own refusals of the shot, verbatim: the unowned
+            // draft side, the twin fence's member, the budget's detail.
+            "not_owner" if site.is_some() && site == draft => Refusal::Halt(r.refused(&v)),
+            "already_published" | "publication_over_budget" => Refusal::Halt(r.refused(&v)),
             "base_superseded"
             | "base_not_in_chain"
             | "base_extent_too_large"
@@ -527,7 +549,16 @@ impl Writer<'_> {
             | "not_owner"
             | "too_many_runs"
             | "too_many_values"
-            | "private_source_versionless" => own_fault("the shot", &r),
+            | "private_source_versionless"
+            | "kept_place_moved"
+            | "stray_place_unrecorded"
+            | "link_home_refused"
+            | "old_refused"
+            | "duplicate_original"
+            | "read_with_in_links"
+            | "retract_refused"
+            | "read_with_refused"
+            | "malformed" => own_fault("the shot", &r),
             k if k.starts_with("attestation_") => own_fault("the shot's attest", &r),
             _ => Refusal::Halt(r.refused(&v)),
         })

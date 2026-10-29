@@ -58,6 +58,11 @@ pub(crate) mod fake;
 #[cfg(test)]
 mod tests;
 
+pub use answers::{
+    edition_claims as edition_claim_rows, history, homes, link_value, EditionClaim, History,
+    HistoryRow, HomeCount, LinkSpan, LinkValue,
+};
+
 /// The enroll credential type address, the first of the three.
 ///
 /// The three credential type addresses (AUTH-7.1 horn B; wire.md §The claim
@@ -76,6 +81,17 @@ pub const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
 /// and the type the supersession trail's resume read discovers by
 /// (AUTH-5.59 step 2).
 pub const T_SUPERSEDES: &str = "1.1.0.1.0.1.0.1.4";
+
+/// The retraction class's reserved ghost tumbler, `[R]`.
+///
+/// It is the fifth of the format's five (`1.1.0.1.0.1.0.1.x`, x = 1..=5:
+/// pred_def, pred_stable, retired, supersedes, retraction) — the type slot
+/// of the tuple a `nullify` deposits and of a publication's `retract` entry
+/// (wire.md §The publish shot and head-float, the deposits: "a retraction is
+/// `nullify`'s tuple at the target's home"), and the type the
+/// retraction-stands read discovers by: a tuple of this class whose `to`
+/// names the target.
+pub const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
 
 /// The published head document `H` (wire.md §The other endpoints, PUB-6.65).
 ///
@@ -554,16 +570,37 @@ impl fmt::Debug for Board {
     }
 }
 
+/// A rejection's `site` (wire.md §Rejections): where in the request the
+/// refusal is about, each member where the code carries it.
+///
+/// `addr` names a document or a member — `withheld`'s origin, `not_owner`'s
+/// `doc`, draft or account, `already_published`'s member; `index` an entry
+/// in a list — a `runs` entry at `kept_place_moved` and
+/// `stray_place_unrecorded`, a deposit's entry in its own list at the six
+/// deposit tokens; `fault` a code's own sub-token where one rides. Empty
+/// where the code carries no site.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Site {
+    /// `site.addr`.
+    pub addr: Option<String>,
+    /// `site.index`.
+    pub index: Option<u64>,
+    /// `site.fault`.
+    pub fault: Option<String>,
+}
+
 /// A `rejected` document, decoded (wire.md §Rejections).
 ///
 /// Its parts are read through [`Rejection::key`], the one token a walk
-/// dispatches on, and are otherwise rendered whole — [`Rejection::token`]
-/// for a face, [`Rejection::refused`] for surfacing.
+/// dispatches on, [`Rejection::site`], where the code names a site, and are
+/// otherwise rendered whole — [`Rejection::token`] for a face,
+/// [`Rejection::refused`] for surfacing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
     code: String,
     detail: Option<String>,
     op: Option<String>,
+    site: Site,
 }
 
 impl Rejection {
@@ -576,7 +613,32 @@ impl Rejection {
             code: v["code"].as_str().unwrap_or("?").to_string(),
             detail: v["detail"].as_str().map(str::to_string),
             op: v["op"].as_str().map(str::to_string),
+            site: Site {
+                addr: v["site"]["addr"].as_str().map(str::to_string),
+                index: v["site"]["index"].as_u64(),
+                fault: v["site"]["fault"].as_str().map(str::to_string),
+            },
         })
+    }
+
+    /// Returns the `code`.
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Returns the `detail`, where one rode.
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+
+    /// Returns the `op` the rejection answers, where the document names one.
+    pub fn op(&self) -> Option<&str> {
+        self.op.as_deref()
+    }
+
+    /// Returns the `site`, empty where the code carries none.
+    pub fn site(&self) -> &Site {
+        &self.site
     }
 
     /// Returns the one token a walk dispatches on.

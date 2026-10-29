@@ -715,6 +715,17 @@ each ceremony:
   SURFACES the `skep merge` command is built — `skep-cli`'s
   `commands/merge.rs`, the one embedder that turns the feature on (§The
   command) — and no agent surface is.
+- Under `acting`, beside `merge` and naming no ceremony — THE PUBLICATION
+  COMPOSITION, a draft's one `publish` request as one composition family
+  (P28): `publication.rs` the module, the reading door and the shared
+  types; `publication/enumerate.rs` the enumeration; `publication/panel.rs`
+  the panel's data and the count; `publication/price.rs` the price against
+  the caps; `publication/request.rs` the re-read and the request;
+  `publication/send.rs` the send and the refusal family;
+  `publication/landed.rs` the twin pre-check and the landed test — its unit
+  suite in `publication/tests.rs` over a scripted board, its daemon suite in
+  `tests/it/publication.rs`. The merge landing builds its bare shot through
+  the request builder.
 
 Rules that hold across its files:
 
@@ -737,7 +748,7 @@ Rules that hold across its files:
 
 | Feature | Default | Adds | Compiled by the gate |
 |---|---|---|---|
-| `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
+| `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`, `publication`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
 | `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build (its dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm, for `seed` and for `serve` alike; `serve` takes `search` through `skep-shell` and, under `skep-cli`'s `dev-hooks` alone, the daemon's `test-hooks`); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
 | `test-hooks` | off | implies `acting`; `person::scripted` | every test build (the crate's self dev-dependency, and `skep-cli`'s dev-dependency); `scripts/gate-full.sh`'s `--features acting` check builds the library without it, and `tests/it/tidy.rs` checks its gate |
 | `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
@@ -746,9 +757,10 @@ Its integration suite is one binary, `tests/it/`: the walks driven through
 the scripted person against a daemon spawned in-process, another hand's
 acts re-driven over the wire (`common::wire_*`) and never by a ceremony;
 `backup`, the moment with no daemon; `tidy`, the arrangement above and the
-two feature gates; `share`; and `search/` (`consumer`, `resume`,
-`directory`, `bridge`) over a claimed board whose published text the
-attested shot mints. Its unit suites pin what a composition sends and what
+two feature gates; `share`; `publication`, the composition against the
+daemon's own filter; and `search/` (`consumer`, `resume`, `directory`,
+`bridge`) over a claimed board whose published text the attested shot
+mints. Its unit suites pin what a composition sends and what
 it makes of each answer with no daemon, over `board/fake.rs`'s fake board;
 the search module's over a scripted board of its own (`search/tests.rs`).
 

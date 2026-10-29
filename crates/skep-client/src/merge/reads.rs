@@ -341,7 +341,15 @@ pub enum Refusal {
     ///
     /// The fault is a frame the board refused as malformed in substance, a
     /// shape it does not know; the board's other refusals ride here verbatim,
-    /// and every transport halt.
+    /// and every transport halt. The publication's own refusals of the shot
+    /// ride here VERBATIM too, never as the library's fault — `not_owner`
+    /// naming the DRAFT side (a sub-account's or an agent's proposal draft,
+    /// wire.md §The publish shot and head-float, the unowned-draft edge),
+    /// `already_published` naming the member the draft's words were published
+    /// into, `publication_over_budget` with the daemon's detail — each a
+    /// `Halt::Refused` whose `body` carries the `site`; a variant of their
+    /// own is owed with the `skep merge` command's face, whose exhaustive
+    /// match over this enum stands outside the client lane's first brief.
     Halt(Halt),
 }
 

@@ -65,6 +65,22 @@ pub fn parse_address(s: &str) -> Option<Address> {
     validate(Tumbler::new(comps?).ok()?).ok()
 }
 
+/// Returns the account an address lies in, `N.0.U`, as the wire reads
+/// ownership off an address (wire.md §The read predicate).
+///
+/// It is the node field, the account separator and the account field — the
+/// prefix every document, link and element of the account lies under. The
+/// publication's owned-home test compares it to the person's account
+/// EXACTLY (the link-sets design §5.1: "its account the person's exactly …
+/// never an account nested under theirs"), so a sub-account's home is not
+/// the person's. `None` for a node, or a text that is no address.
+pub fn account_of(addr: &str) -> Option<String> {
+    let parsed = parse_address(addr)?;
+    let node: Vec<String> = parsed.node_field().iter().map(ToString::to_string).collect();
+    let account: Vec<String> = parsed.account_field()?.iter().map(ToString::to_string).collect();
+    Some(format!("{}.0.{}", node.join("."), account.join(".")))
+}
+
 /// Returns the document an element or link address lies in.
 ///
 /// The document is the components through the one after the second `0`
@@ -110,6 +126,20 @@ mod tests {
         assert_eq!(document_of("1.0.1.0.1.0.1.1"), Some("1.0.1.0.1".into()));
         assert_eq!(document_of("1.0.1.1.0.1.0.2.1"), Some("1.0.1.1.0.1".into()));
         assert_eq!(document_of("1.0.1"), None);
+    }
+
+    /// The account an address lies in, as the wire reads ownership: a
+    /// sub-account's home is the sub-account's, never its parent's — the
+    /// owned-home test compares exactly.
+    #[test]
+    fn the_account_of_an_address_is_its_own_and_never_a_parents() {
+        assert_eq!(account_of("1.0.1.0.2.0.2.3"), Some("1.0.1".into()));
+        assert_eq!(account_of("1.0.1.0.2"), Some("1.0.1".into()));
+        assert_eq!(account_of("1.0.1.2.0.1.0.1.4"), Some("1.0.1.2".into()));
+        assert_eq!(account_of("1.0.1"), Some("1.0.1".into()));
+        assert_eq!(account_of("1"), None, "a node");
+        assert_eq!(account_of("1.x"), None);
+        assert_ne!(account_of("1.0.1.2.0.1"), Some("1.0.1".into()), "nested under, not the person's");
     }
 
     /// The text test admits the one spelling; the parse takes dotted naturals.

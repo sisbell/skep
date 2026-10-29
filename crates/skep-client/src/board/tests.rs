@@ -50,6 +50,91 @@ fn the_frames_spell_the_wire() {
     assert_eq!(r.token(), "credential_refused:content_session");
 }
 
+/// wire.md's own request examples, spelled by the builders: each the line
+/// under its `<!-- wire: request … -->` marker — `find_links_v` over one
+/// span (§Link discovery reads), `find_links_ftt`'s four-set with a `from`
+/// list and an `empty` type, `count_v_by_home` with its `except`,
+/// `find_links_v_history` at the start, `project`, `edition_claims`,
+/// `out_claims` (the example's view is `audit`; this crate reads the active
+/// view, the one member that differs) and the `publish` example with every
+/// optional member (§Arrangement). A region of several spans is one array.
+#[test]
+fn the_builders_spell_the_wires_own_examples() {
+    assert_eq!(frames::find_links_v("1.0.1.0.1", &[(1, 5)]), json!({"d":"1.0.1.0.1","op":"find_links_v","region":[{"start":"1.1","width":"0.5"}]}));
+    assert_eq!(frames::find_links_v("1.0.1.0.1", &[(1, 5), (9, 2)])["region"], json!([{"start":"1.1","width":"0.5"},{"start":"1.9","width":"0.2"}]));
+    let from = [frames::i_span("1.0.1.0.1.0.1.1", 5)];
+    assert_eq!(
+        frames::find_links_four(frames::Slot::Any, frames::Slot::Spans(&from), frames::Slot::Any, frames::Slot::Empty),
+        json!({"op":"find_links_ftt","q":{"from":[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],"home":"any","to":"any","ty":"empty"}})
+    );
+    assert_eq!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &["1.0.1.0.2"]), json!({"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}));
+    assert!(frames::count_v_by_home("1.0.1.0.1", &[(1, 5)], 64, &[]).get("except").is_none(), "no `except` where none is named");
+    assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], None, 16), json!({"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}));
+    assert_eq!(frames::find_links_v_history("1.0.1.0.1", &[(1, 5)], Some("1.0.1.0.1.0.2.2"), 16)["cur"], "1.0.1.0.1.0.2.2");
+    assert_eq!(frames::project("1.0.1.0.1.0.2.1", 2, "1.0.1.0.2"), json!({"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.2","op":"project","slot":2}));
+    assert_eq!(frames::edition_claims("1.0.1.0.1"), json!({"op":"edition_claims","target":"1.0.1.0.1"}));
+    let out = frames::out_claims("1.0.1.0.1.0.2.2");
+    assert_eq!((out["op"].as_str(), out["x"].as_str(), out["view"].as_str()), (Some("out_claims"), Some("1.0.1.0.1.0.2.2"), Some("active")));
+    let runs = [frames::shot_run("1.0.1.0.1", "1.0.1.0.1.0.1.1", 3), frames::shot_run("1.0.1.0.7", "1.0.1.0.7.0.1.1", 2)];
+    let places = [Value::Null, frames::place(4)];
+    let links = [frames::link_entry("member", frames::member_end(&[(4, 2)]), frames::addrs_end(&["1.0.1.0.2"]), frames::addrs_end(&["1.1.0.1.0.1.0.3.13"]), Some("1.0.1.0.7.0.2.1"))];
+    let frame = frames::publication(&frames::PublishFrame {
+        doc: Some("1.0.1.0.1"),
+        base: Some(("1.0.1.0.1.2", 3)),
+        draft: Some("1.0.1.0.7"),
+        runs: &runs,
+        places: &places,
+        links: &links,
+        retract: &["1.0.1.0.1.0.2.1"],
+        read_with: &["1.0.1.0.2"],
+        ..frames::PublishFrame::default()
+    });
+    assert_eq!(
+        frame,
+        json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]})
+    );
+    // The bare shot is the grown builder with no member — byte for byte.
+    assert_eq!(frames::publish("1.0.1.0.1", Some(("1.0.1.0.1.2", 3)), Some("1.0.1.0.7"), &runs, None, Some("k")), json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","id":"k","op":"publish","runs":runs}));
+    // The mint form: `account` with `mint` and `claim`, no `doc`; a list of
+    // nulls is no `places` member.
+    let mint = frames::publication(&frames::PublishFrame { account: Some("1.0.1"), mint: true, claim: true, draft: Some("1.0.1.0.7"), runs: &runs[1..], places: &[Value::Null], ..frames::PublishFrame::default() });
+    assert_eq!(mint, json!({"account":"1.0.1","claim":true,"draft":"1.0.1.0.7","mint":true,"op":"publish","runs":runs[1..]}));
+}
+
+/// The four type constants the publication reads by, each the wire's own
+/// spelling (a literal, with its line): the correspondence class the
+/// publish shot's records are typed (wire.md §The publish shot and
+/// head-float: "`1.1.0.1.0.1.0.3.102.1`"), the held removal (the
+/// vocabulary's `3.24`), the read-with ("typed `3.71`") and the edition
+/// claim ("typed `3.14`"); the retraction class, the format's fifth
+/// reserved tumbler, beside them.
+#[test]
+fn the_type_constants_are_the_wires_spellings() {
+    assert_eq!(frames::T_CORRESPONDENCE, "1.1.0.1.0.1.0.3.102.1");
+    assert_eq!(frames::T_HELD_REMOVAL, "1.1.0.1.0.1.0.3.24");
+    assert_eq!(frames::T_READ_WITH, "1.1.0.1.0.1.0.3.71");
+    assert_eq!(frames::T_EDITION, "1.1.0.1.0.1.0.3.14");
+    assert_eq!(T_RETRACTION, "1.1.0.1.0.1.0.1.5");
+    assert_eq!(frames::REGISTRY_DOCUMENT, "1.1.0.1.0.1");
+    assert_eq!(frames::i_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"0.0.0.0.0.0.0.2"}), "a slot's span: the width a displacement");
+    assert_eq!(frames::end_span("1.0.1.0.1.0.1.4", 2), json!({"start":"1.0.1.0.1.0.1.4","width":"2"}), "a request end's span: the width a natural");
+}
+
+/// wire.md §Rejections: a rejection's `site` — `addr` at `already_published`
+/// (the member), `index` at `kept_place_moved` and the deposit tokens, both
+/// absent where the code carries none.
+#[test]
+fn a_rejection_carries_its_site_where_the_code_names_one() {
+    let twin = Rejection::of(&json!({"code":"already_published","disposition":"permanent","op":"publish","resp":"rejected","site":{"addr":"1.0.1.0.2.3"}})).unwrap();
+    assert_eq!((twin.site().addr.as_deref(), twin.site().index, twin.code()), (Some("1.0.1.0.2.3"), None, "already_published"));
+    let moved = Rejection::of(&json!({"code":"kept_place_moved","disposition":"permanent","op":"publish","resp":"rejected","site":{"index":2}})).unwrap();
+    assert_eq!((moved.site().addr.as_deref(), moved.site().index), (None, Some(2)));
+    let old = Rejection::of(&json!({"code":"old_refused","detail":"superseded","disposition":"permanent","op":"publish","resp":"rejected","site":{"index":0}})).unwrap();
+    assert_eq!((old.key(), old.detail(), old.site().index, old.op()), ("old_refused", Some("superseded"), Some(0), Some("publish")));
+    let bare = Rejection::of(&json!({"code":"signed_session_required","disposition":"permanent","op":"publish","resp":"rejected"})).unwrap();
+    assert_eq!(*bare.site(), Site::default());
+}
+
 /// wire.md §Rejections: a walk keys on the `detail` of the two families
 /// that carry a machine token there, and on the `code` everywhere else —
 /// never on a `detail` that is prose.

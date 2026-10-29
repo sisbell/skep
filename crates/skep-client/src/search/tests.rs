@@ -559,6 +559,64 @@ fn a_minting_row_moves_the_head_a_daughter_moves_none_and_an_unnamed_trunk_is_pr
     assert!(reads.contains(&"1.0.1.0.2.2".to_string()) && !reads.contains(&"1.0.1.0.2".to_string()), "{reads:?}");
 }
 
+/// THE PUBLICATION's FEED ROW names every home its one commit touched —
+/// `[member, D, N…, S…, E.j]` (wire.md §The change feed; the link-sets design
+/// §5.7, THE FEED ROW), reduced per class — and the consumer reads it as it
+/// reads any row: on the PUBLISHED face the member moves the edition's head
+/// and the public set `S` is re-read as changed, while the older member
+/// `E.j` a retraction landed in moves no head back and the bare `E` is never
+/// read; on the DRAFTS face the member is passed over and the drafts `D` and
+/// `N` are re-read. COST: one `retrieve_v` per home the row names on the
+/// face that reads it — the set, the two drafts — beside the member's own,
+/// correct and paid for by the publication's reach, not by a defect; the
+/// consumer is unchanged.
+#[test]
+fn a_publications_row_re_reads_each_home_it_names_on_the_face_that_reads_it() {
+    let mut w = World::claimed();
+    w.publish_member("1.0.1.0.2", 1, "first edition");
+    w.publish_member("1.0.1.0.2", 2, "second edition");
+    w.publish("1.0.1.0.3", "the public set");
+    w.draft("1.0.1.0.5", b"the staging draft");
+    w.draft("1.0.1.0.6", b"the notes");
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    let tok = token();
+    consumer.widen(session(&tok)).unwrap();
+    assert_eq!(hits(&consumer, Who::Guest, "second"), ["1.0.1.0.2"]);
+    // THE ROW: the member first, then the draft, then the other homes in
+    // address order — on the published page reduced to its public homes, on
+    // the drafts page whole.
+    {
+        let mut w = world.lock().unwrap();
+        let at = w.next();
+        w.docs.insert("1.0.1.0.2.3".to_string(), Doc { text: b"third edition published with links".to_vec(), refuse: None });
+        w.registered.insert("1.0.1.0.2.3".to_string());
+        w.docs.insert("1.0.1.0.3".to_string(), Doc { text: b"the public set with a copy".to_vec(), refuse: None });
+        w.docs.insert("1.0.1.0.5".to_string(), Doc { text: b"the staging draft re-windowed".to_vec(), refuse: None });
+        w.docs.insert("1.0.1.0.6".to_string(), Doc { text: b"the notes with a claim".to_vec(), refuse: None });
+        w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.2.3".into(), "1.0.1.0.3".into(), "1.0.1.0.2.2".into()]), key: None, draft: false });
+        w.rows.push(Row { at, op: Some("publish"), docs: Some(vec!["1.0.1.0.2.3".into(), "1.0.1.0.5".into(), "1.0.1.0.6".into(), "1.0.1.0.3".into(), "1.0.1.0.2.2".into()]), key: None, draft: true });
+    }
+    dialer.clear();
+    consumer.poll().unwrap();
+    let served = dialer.served.lock().unwrap().clone();
+    let reads: Vec<(String, bool)> = served.iter().filter(|s| s.line == "POST /op retrieve_v").map(|s| (serde_json::from_slice::<Value>(&s.body).unwrap()["specs"][0]["doc"].as_str().unwrap().to_string(), s.token)).collect();
+    assert!(reads.contains(&("1.0.1.0.2.3".to_string(), false)), "the member moves the head and is read at its address: {reads:?}");
+    assert!(reads.contains(&("1.0.1.0.3".to_string(), false)), "the public set is re-read as changed: {reads:?}");
+    assert!(!reads.iter().any(|(d, _)| d == "1.0.1.0.2.2" || d == "1.0.1.0.2"), "an older member moves no head back; the bare edition is never read: {reads:?}");
+    assert!(reads.contains(&("1.0.1.0.5".to_string(), true)) && reads.contains(&("1.0.1.0.6".to_string(), true)), "the drafts are re-read under the session's token: {reads:?}");
+    assert_eq!(reads.iter().filter(|(d, t)| d == "1.0.1.0.2.3" && *t).count(), 0, "the member is passed over on the drafts face");
+    assert_eq!(hits(&consumer, Who::Guest, "third"), ["1.0.1.0.2"]);
+    assert_eq!(hits(&consumer, Who::Guest, "copy"), ["1.0.1.0.3"]);
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "re-windowed"), ["1.0.1.0.5"]);
+    assert_eq!(hits(&consumer, Who::Session(session(&tok)), "claim"), ["1.0.1.0.6"]);
+    let answer = consumer.search(Who::Guest, "third", &SearchOpts::default()).unwrap();
+    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.2.3"), "the head is the member the row named first");
+}
+
 /// `search.md` §5.4: "a BARE ROW whose `op` is `null` or `publish` … is
 /// COUNTED against the range it arrived on … While a range's count stands
 /// the state WITHHOLDS `complete`" — §4b.2's `unplaced`; the REFRESH clears

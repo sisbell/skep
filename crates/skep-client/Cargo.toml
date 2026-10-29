@@ -123,3 +123,10 @@ skep-signature = { path = "../skep-signature", features = ["sign"] }
 # vector set holds the daemon's grammar (P5). Already in the graph through
 # skepd.
 skep-namespace = { path = "../skep-namespace" }
+# The daemon's worst-case table and the two budgets the publication's price
+# mirrors — M7's `MAX_SLOT_SPANS`, `MAX_PUBLICATION_READS`, the per-kind
+# figures, `stored_span_bytes` — and M5's `MAX_REINSERTED_VALUES`: the
+# price's suite holds its copies equal, as the shell's composer pins its
+# three. Already in the graph through skepd; linked by no shipped build.
+skep-links = { path = "../skep-links" }
+skep-arrangement = { path = "../skep-arrangement" }

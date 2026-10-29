@@ -2,12 +2,15 @@
 //!
 //! The module is the read-side counterpart of [`frames`](super::frames),
 //! each answer shape this crate reads spelled once — a discovery's `addrs`,
-//! a `read_link`'s slots, a `delivery`'s first value, a `span_set`'s
-//! content extent and a `runs` answer's I-map, and behind `search` and
-//! `merge` a `delivery`'s typed items and its values, a `doc_metadata`'s
-//! terms, a `universal_grants` answer's rows, a head member's pair, a
-//! `compare` answer's pairs, a `claims` answer's rows and an answer's
-//! `as_of`. Pure functions of a document the caller already holds: the
+//! a `read_link`'s slots (the first starts, and whole as spans with the
+//! link's age, [`LinkValue`]), a `delivery`'s first value, a `span_set`'s
+//! content extent and a `runs` answer's I-map, the count by home's `homes`,
+//! the retracted-links read's `links` window and an `edition_claims`
+//! answer's rows, and behind `search` and `merge` a `delivery`'s typed items
+//! and its values, a `doc_metadata`'s terms, a `universal_grants` answer's
+//! rows, a head member's pair, a `compare` answer's pairs, a `claims`
+//! answer's rows and an answer's `as_of`. Pure functions of a document the
+//! caller already holds: the
 //! dial stays the caller's — under its token or as a guest — and with it
 //! what the death signal means. The ack and refusal readers (`acked_at`,
 //! `acked_addr`, [`Rejection`](super::Rejection)) and the registry reads'
@@ -62,6 +65,197 @@ fn slot_start(v: &Value, index: usize) -> Option<&str> {
 pub(crate) fn link_slot_starts(v: &Value, index: usize) -> Option<Vec<&str>> {
     let slots = v["link"]["slots"].as_array()?;
     Some(slots.get(index)?.as_array()?.iter().filter_map(|s| s["start"].as_str()).collect())
+}
+
+/// One span of a `read_link` answer's slot, as stored (wire.md §Value
+/// encodings).
+///
+/// It is the span's `start` and `width` in their dotted spelling, kept
+/// verbatim: [`LinkSpan::count`] reads a width that is one count at the
+/// start's depth — a content I-span's, a unit span's — and [`LinkSpan::is_unit`]
+/// whether it is the unit span at `start`, the address form's spelling of
+/// one address.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LinkSpan {
+    /// The span's start, a dotted address.
+    pub start: String,
+    /// The span's width, a dotted displacement.
+    pub width: String,
+}
+
+impl LinkSpan {
+    /// Returns the width as a count where it is zeros then one natural at
+    /// the start's depth — `0.0.0.0.0.0.0.5` under an eight-component start —
+    /// and `None` for any other shape.
+    pub fn count(&self) -> Option<u64> {
+        let (starts, widths): (Vec<&str>, Vec<&str>) = (self.start.split('.').collect(), self.width.split('.').collect());
+        if starts.len() != widths.len() || widths.len() < 2 {
+            return None;
+        }
+        if widths[..widths.len() - 1].iter().any(|c| *c != "0") {
+            return None;
+        }
+        natural(widths[widths.len() - 1])
+    }
+
+    /// Returns whether the span is the unit span at `start`.
+    pub fn is_unit(&self) -> bool {
+        self.count() == Some(1)
+    }
+}
+
+/// A `read_link` answer's value: the three slots as spans, and the link's age
+/// (wire.md §The response envelope, `link_value`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkValue {
+    /// The `from` slot, in the order served.
+    pub from: Vec<LinkSpan>,
+    /// The `to` slot.
+    pub to: Vec<LinkSpan>,
+    /// The type slot.
+    pub ty: Vec<LinkSpan>,
+    /// The position of the commit that minted the link; `None` where the
+    /// board serves `null` — a link a build before the position map minted.
+    pub at: Option<u64>,
+}
+
+impl LinkValue {
+    /// Returns the type slot's first address — the type a one-span slot
+    /// names, which every exact-type test this crate makes reads.
+    pub fn type_address(&self) -> Option<&str> {
+        self.ty.first().map(|s| s.start.as_str())
+    }
+
+    /// Returns whether the stored type slot is EXACTLY the unit span at `ty`.
+    ///
+    /// It is the reader's own exact test (the link-sets design's wire-lane
+    /// decision 9): the wire matches a type slot by overlap, so a query over
+    /// a subtype answers its parent's links too, and a row is kept only
+    /// where its stored slot is the one address.
+    pub fn typed_exactly(&self, ty: &str) -> bool {
+        self.ty.len() == 1 && self.ty[0].start == ty && self.ty[0].is_unit()
+    }
+}
+
+/// Decodes a `read_link` answer: `Some(None)` for `link: null`, the absent
+/// address's answer (wire.md §The read predicate), `Some(Some(value))` for a
+/// link, `None` for a document that is no `link_value` answer or whose slots
+/// do not read as three lists of spans.
+pub fn link_value(v: &Value) -> Option<Option<LinkValue>> {
+    if v["resp"].as_str() != Some("link_value") {
+        return None;
+    }
+    if v["link"].is_null() {
+        return Some(None);
+    }
+    let slots = v["link"]["slots"].as_array()?;
+    if slots.len() != 3 {
+        return None;
+    }
+    let slot = |index: usize| -> Option<Vec<LinkSpan>> {
+        slots[index]
+            .as_array()?
+            .iter()
+            .map(|s| Some(LinkSpan { start: s["start"].as_str()?.to_string(), width: s["width"].as_str()?.to_string() }))
+            .collect()
+    };
+    Some(Some(LinkValue { from: slot(0)?, to: slot(1)?, ty: slot(2)?, at: v["at"].as_u64() }))
+}
+
+/// One row of a `count_v_by_home` answer (wire.md §The response envelope,
+/// `homes`): a home and how many of its distinct active links touch the
+/// region.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeCount {
+    /// The home: a document or a version member.
+    pub home: String,
+    /// Its distinct active links touching the region.
+    pub n: u64,
+}
+
+/// Decodes a `homes` answer: the rows in the order served and `exhausted`.
+///
+/// `None` for a document that is no such answer, or a row missing a member.
+pub fn homes(v: &Value) -> Option<(Vec<HomeCount>, bool)> {
+    if v["resp"].as_str() != Some("homes") {
+        return None;
+    }
+    let rows = v["homes"].as_array()?.iter().map(|r| Some(HomeCount { home: r["home"].as_str()?.to_string(), n: r["n"].as_u64()? })).collect::<Option<Vec<_>>>()?;
+    Some((rows, v["exhausted"].as_bool()?))
+}
+
+/// One row of a `find_links_v_history` answer (wire.md §The response
+/// envelope, `links`): the link, the position that minted it and the
+/// position of its earliest retraction, `None` where the board serves
+/// `null` — active, or before the position map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryRow {
+    /// The link.
+    pub a: String,
+    /// The position of the commit that minted it.
+    pub at: Option<u64>,
+    /// The position of its earliest retraction; `None` where active.
+    pub retracted_at: Option<u64>,
+}
+
+/// One window of the retracted-links read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct History {
+    /// The rows, in ascending address order past the cursor.
+    pub links: Vec<HistoryRow>,
+    /// The continuation cursor.
+    pub next: Option<String>,
+    /// Whether the window is terminal.
+    pub exhausted: bool,
+}
+
+/// Decodes a `links` answer — the retracted-links read's window.
+///
+/// `None` for a document that is no such answer, or a row missing its link.
+pub fn history(v: &Value) -> Option<History> {
+    if v["resp"].as_str() != Some("links") {
+        return None;
+    }
+    let links = v["links"]
+        .as_array()?
+        .iter()
+        .map(|r| Some(HistoryRow { a: r["a"].as_str()?.to_string(), at: r["at"].as_u64(), retracted_at: r["retracted_at"].as_u64() }))
+        .collect::<Option<Vec<_>>>()?;
+    Some(History { links, next: v["next"].as_str().map(str::to_string), exhausted: v["exhausted"].as_bool()? })
+}
+
+/// One row of an `edition_claims` answer (wire.md §The response envelope):
+/// a claim of the edition class, its home the edition, the endset its `to`
+/// denotes and whether the home has retracted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditionClaim {
+    /// The claim link's address.
+    pub claim: String,
+    /// The edition the claim is homed in.
+    pub home: String,
+    /// The endset the claim's `to` denotes.
+    pub to: Vec<LinkSpan>,
+    /// `false` where the home has retracted it.
+    pub active: bool,
+}
+
+/// Decodes an `edition_claims` answer's rows in the order served.
+///
+/// Empty for a document that is no such answer; a row missing a member is
+/// dropped, save `active`, which an absent member leaves true.
+pub fn edition_claims(v: &Value) -> Vec<EditionClaim> {
+    if v["resp"].as_str() != Some("edition_claims") {
+        return Vec::new();
+    }
+    v["claims"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let to = row["to"].as_array()?.iter().map(|s| Some(LinkSpan { start: s["start"].as_str()?.to_string(), width: s["width"].as_str()?.to_string() })).collect::<Option<Vec<_>>>()?;
+            Some(EditionClaim { claim: row["claim"].as_str()?.to_string(), home: row["home"].as_str()?.to_string(), to, active: row["active"].as_bool().unwrap_or(true) })
+        })
+        .collect()
 }
 
 /// Returns a `delivery`'s first item as the one composite value a record is.
@@ -266,7 +460,7 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
 /// `base_extent` — and `source`, the address a `version`-minted document
 /// was born sharing (the member or bare document its snapshot took), each
 /// `None` where the address carries none.
-#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
     pub(crate) published: bool,
@@ -274,6 +468,11 @@ pub(crate) struct Metadata {
     pub(crate) placed: Option<u64>,
     pub(crate) base_extent: Option<u64>,
     pub(crate) source: Option<String>,
+    /// The position of the commit that minted the address named — a version
+    /// member its own mint (wire.md §The response envelope, `doc_metadata`,
+    /// "the age of the address named"); `None` where the board serves
+    /// `null`, an address a build before the position map minted.
+    pub(crate) at: Option<u64>,
 }
 
 /// Decodes a `doc_metadata` answer.
@@ -282,7 +481,7 @@ pub(crate) struct Metadata {
 /// or one without its owner or its `published` bit. A `source` that is
 /// neither a string nor absent reads as absent: the merge checks the address
 /// it names itself.
-#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
         return None;
@@ -294,6 +493,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         placed: count("placed"),
         base_extent: count("base_extent"),
         source: v["source"].as_str().map(str::to_string),
+        at: v["at"].as_u64(),
     })
 }
 
@@ -370,15 +570,15 @@ pub(crate) const MAX_IMAGE_RUNS: usize = 1 << 12;
 /// `prefix` and one ordinal — arranged from V-ordinal `ordinal` on, in
 /// order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IRun {
+pub struct IRun {
     /// The I-addresses' components before their last.
-    pub(crate) prefix: String,
+    pub prefix: String,
     /// The first I-address's last component.
-    pub(crate) first: u64,
+    pub first: u64,
     /// The I-addresses the run holds.
-    pub(crate) width: u64,
+    pub width: u64,
     /// The V-ordinal the run's first I-address is arranged at.
-    pub(crate) ordinal: u64,
+    pub ordinal: u64,
 }
 
 /// Returns an `image` answer's I-map over content ordinals `1 ..= extent`.
@@ -446,7 +646,11 @@ mod tests {
     /// wire.md's own example answers, decoded.
     ///
     /// They are the `addrs` of a discovery, the slots of a `read_link`, the
-    /// extent of a `span_set`.
+    /// extent of a `span_set`; and, each the line under its `<!-- wire:
+    /// response … -->` marker in §The response envelope, the `link_value`
+    /// example with its age and the null form, the `homes` example, the
+    /// `links` window, the `edition_claims` row and the `doc_metadata`
+    /// example's `at`.
     #[test]
     fn the_reads_decode_the_wires_own_examples() {
         assert_eq!(addrs(&json!({"addrs":["1.0.1.0.1.0.2.1"],"as_of":9,"resp":"addrs"})), ["1.0.1.0.1.0.2.1"]);
@@ -456,6 +660,30 @@ mod tests {
         assert_eq!(link_to(&json!({"as_of":9,"link":null,"resp":"link_value"})), None);
         assert_eq!(content_extent(&json!({"as_of":9,"resp":"span_set","set":[{"start":"1.1","width":"0.5"}]})), 5);
         assert_eq!(content_extent(&json!({"as_of":9,"resp":"span_set","set":[]})), 0);
+        // `<!-- wire: response link_value -->`: the three slots as spans with the age.
+        let aged = json!({"as_of":9,"at":7,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.2.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.3.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value","time":1786838400047u64,"time_from":"feed"});
+        let value = link_value(&aged).expect("a link_value answer").expect("a link");
+        assert_eq!((value.from.len(), value.to.len(), value.ty.len(), value.at), (1, 1, 1, Some(7)));
+        assert_eq!((value.from[0].count(), value.to[0].count(), value.ty[0].is_unit()), (Some(5), Some(6), true));
+        assert_eq!(value.type_address(), Some("1.0.1.0.3.0.1.1"));
+        assert!(value.typed_exactly("1.0.1.0.3.0.1.1") && !value.typed_exactly("1.0.1.0.3.0.1"));
+        // `<!-- wire: response link_value_null -->`: the absent address's answer.
+        assert_eq!(link_value(&json!({"as_of":9,"at":null,"link":null,"resp":"link_value","time":null,"time_from":null})), Some(None));
+        assert_eq!(link_value(&json!({"as_of":9,"n":2,"resp":"count"})), None);
+        // `<!-- wire: response homes -->`.
+        let (rows, exhausted) = homes(&json!({"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.2","n":1}],"resp":"homes"})).expect("a homes answer");
+        assert_eq!((rows, exhausted), (vec![HomeCount { home: "1.0.1.0.1".into(), n: 2 }, HomeCount { home: "1.0.1.0.2".into(), n: 1 }], true));
+        // `<!-- wire: response links -->`: an active link beside one retracted at 8.
+        let window = history(&json!({"as_of":9,"exhausted":false,"links":[{"a":"1.0.1.0.1.0.2.1","at":5,"retracted_at":null},{"a":"1.0.1.0.1.0.2.2","at":6,"retracted_at":8}],"next":"1.0.1.0.1.0.2.2","resp":"links"})).expect("a links answer");
+        assert_eq!(window.links, vec![HistoryRow { a: "1.0.1.0.1.0.2.1".into(), at: Some(5), retracted_at: None }, HistoryRow { a: "1.0.1.0.1.0.2.2".into(), at: Some(6), retracted_at: Some(8) }]);
+        assert_eq!((window.next.as_deref(), window.exhausted), (Some("1.0.1.0.1.0.2.2"), false));
+        // `<!-- wire: response edition_claims -->`.
+        let claims = edition_claims(&json!({"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.5.0.2.1","home":"1.0.1.0.5","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}));
+        assert_eq!(claims, vec![EditionClaim { claim: "1.0.1.0.5.0.2.1".into(), home: "1.0.1.0.5".into(), to: vec![LinkSpan { start: "1.0.1.0.1".into(), width: "0.0.0.0.1".into() }], active: true }]);
+        assert!(claims[0].to[0].is_unit(), "a unit span at the document");
+        // `<!-- wire: response doc_metadata -->`: the member's own mint at 7.
+        let meta = metadata(&json!({"as_of":9,"at":7,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
+        assert_eq!((meta.at, meta.placed, meta.base_extent, meta.published, meta.owner.as_str()), (Some(7), Some(5), Some(3), true, "1.0.1"));
     }
 
     /// A record's value is a delivery's composite item, `atom` or `atom_hex`.

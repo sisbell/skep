@@ -146,6 +146,8 @@ pub mod ceremony;
 #[cfg(feature = "acting")]
 pub mod person;
 #[cfg(feature = "acting")]
+pub mod publication;
+#[cfg(feature = "acting")]
 pub mod resolve;
 #[cfg(feature = "acting")]
 pub mod share;

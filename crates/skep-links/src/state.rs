@@ -132,6 +132,21 @@ struct Hints {
     /// ([`crate::LinkState::is_filtered`]), and the two regimes must not be
     /// read across.
     nullified: OrdSet<Tumbler>,
+    /// Retraction root → the addresses of the `[R]` records that retracted
+    /// it (the link-sets design §7, lane 7; the owner's ruling B (1),
+    /// 2026-10-28) — the record beside the tombstone, so a read can answer
+    /// WHICH record retracted a link and not only that one did.
+    ///
+    /// Folded at the same site as `nullified`, from the same `[R]` tuple: a
+    /// second home's retraction of one target adds a second address under
+    /// the one root; a retraction of a retraction roots the RETRACTION and
+    /// adds nothing under the target. Keyed and valued by store keys, as
+    /// [`Hints::sup_fwd`] is, and rebuilt from `links` alone: the set form
+    /// is order-free, so a live fold and a rebuild agree whatever order the
+    /// retractions landed in. Which of a root's retractions came FIRST is
+    /// not a fact of this slice — the position map is M3's — and a reader
+    /// after the earliest asks M3 of each address here.
+    retractions: HashMap<Tumbler, OrdSet<Tumbler>>,
     /// I0-class → addrs (audit; active-filtered at the check).
     ///
     /// Registered idem⊤ classes only (I1).
@@ -550,6 +565,14 @@ fn fold_hints(out: &mut Hints, addr: &Tumbler, value: &Link) {
     if class == *registry.shipped_class(ShippedType::Retraction) {
         for root in value.to_slot().addrs() {
             out.nullified.insert(root.clone());
+            // retractions — the record beside the tombstone: this `[R]`
+            // tuple's own address under the root it retracts, so the set
+            // under a root grows by one per distinct retraction of it and a
+            // retraction of a retraction files under the retraction alone.
+            out.retractions
+                .entry(root.clone())
+                .or_default()
+                .insert(addr.clone());
         }
     }
 

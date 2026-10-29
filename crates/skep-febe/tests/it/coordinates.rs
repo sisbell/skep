@@ -70,10 +70,10 @@ fn a_deduplicated_write_acknowledges_at_the_base_it_found_its_incumbent_in() {
 
 /// A2/V1: `as_of` on EVERY read is the coordinate of the snapshot the answer
 /// came from. Nothing writes during the loop, so the committed head taken
-/// once ahead of it is that coordinate for all 28 — a read that reports
+/// once ahead of it is that coordinate for all 30 — a read that reports
 /// anything else is telling the client it has seen a position it has not.
 ///
-/// The 28 answer in all nineteen read shapes, so the law is also the one
+/// The 30 answer in all twenty-one read shapes, so the law is also the one
 /// check on [`Response::as_of`] and [`Response::as_of_mut`]: each is asked of
 /// every read shape and must answer the head, so a shape either accessor
 /// moved into its `None` arm — a stamp a historical door would then skip —
@@ -140,6 +140,8 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
         Op::CountFtt { q: q() },
         Op::WindowV { d: draft.clone(), region: region(), cur: None, n: 1 },
         Op::WindowFtt { q: q(), cur: None, n: 1 },
+        Op::CountVByHome { d: draft.clone(), region: region(), n: 1, except: vec![] },
+        Op::FindLinksVHistory { d: draft.clone(), region: region(), cur: None, n: 1 },
         Op::RetrieveEndsets { d: draft.clone(), region: region() },
         Op::Project { a: l1.clone(), slot: FROM, d: draft.clone() },
         Op::DiscoverableFrom { a: l1.clone(), d: draft.clone() },
@@ -152,7 +154,7 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
     ];
 
     let kinds: Vec<OpKind> = reads.iter().map(Op::kind).collect();
-    assert_eq!(kinds.len(), 28, "the read half of the partition is 28 operations");
+    assert_eq!(kinds.len(), 30, "the read half of the partition is 30 operations");
     for (i, a) in kinds.iter().enumerate() {
         for b in &kinds[i + 1..] {
             assert_ne!(a, b, "{a:?} is covered twice");
@@ -172,6 +174,6 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
         );
         shapes.insert(std::mem::discriminant(&r));
     }
-    assert_eq!(shapes.len(), 19, "the 28 reads answer in every one of the nineteen read shapes");
+    assert_eq!(shapes.len(), 21, "the 30 reads answer in every one of the twenty-one read shapes");
     assert_eq!(fx.febe.log_position(), head, "no read moves the log");
 }

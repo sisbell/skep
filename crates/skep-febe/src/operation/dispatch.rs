@@ -16,8 +16,9 @@ use skep_arrangement::{published_target, trunk_of, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
-    delete_orphans_on, findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on,
-    project_on, retrieve_endsets_on, window_ftt_on, window_v_on, HomeCounts,
+    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_on,
+    in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on,
+    HomeCounts, LinkRows,
 };
 use skep_kernel::Attestation;
 use skep_links::{Invalid, LinkRec};
@@ -336,6 +337,7 @@ where
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -624,6 +626,15 @@ where
                     count_v_by_home_on(&snap, &d, &region, n, &except, &readable)
                         .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Homes { homes, exhausted, as_of })
+            }
+            // The retracted-links read (the link-sets design §7, lane 7): `d`
+            // was consulted above; the rows are the readable homes' audit
+            // hits, each with its position and its earliest retraction's.
+            Op::FindLinksVHistory { d, region, cur, n } => {
+                let LinkRows { links, next, exhausted } =
+                    find_links_v_history_on(&snap, &d, &region, cur, n, &readable)
+                        .map_err(|e| lower_read(kind, e))?;
+                Ok(Response::Links { links, next, exhausted, as_of })
             }
             Op::RetrieveEndsets { d, region } => {
                 let pairs = retrieve_endsets_on(&snap, &d, &region, &readable)

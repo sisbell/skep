@@ -62,6 +62,7 @@ mod registry;
 mod reinstate;
 mod resolve;
 mod restart;
+mod retracted_links;
 mod runbook_doc;
 mod scan_bound;
 mod signed_ops;

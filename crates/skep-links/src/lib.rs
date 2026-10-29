@@ -9,7 +9,9 @@
 //! (MAKELINK \[ASN-0120\], Emit_K/Nullify \[ASN-0086/0126/0128\],
 //! assert_sup/editlink \[ASN-0125\]), the raw reads (READLINK/FOLLOWLINK
 //! \[ASN-0111/0114\]), the typed-relation observers (Observe + the behavior
-//! atoms BH1–BH4 \[ASN-0128\]), the immutable type/shape registry, idempotent
+//! atoms BH1–BH4 \[ASN-0128\]) with the tombstone's record beside it
+//! (`retractions_of`, the `[R]` records that retracted a root), the immutable
+//! type/shape registry, idempotent
 //! de-duplication, and the discovery primitives for M8: the spanfilade's
 //! `stab` and `match_links`, the homes-first pair beneath them —
 //! `homes_touching`, the candidate homes a query could meet, and `stab_in`,

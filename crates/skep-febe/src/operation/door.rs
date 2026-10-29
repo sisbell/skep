@@ -411,6 +411,7 @@ impl Op {
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -486,6 +487,7 @@ impl Op {
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -564,6 +566,7 @@ impl Op {
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }

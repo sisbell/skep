@@ -737,6 +737,14 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
             n: fields.usize("n")?,
             except: fields.addrs_opt("except")?,
         },
+        // The retracted-links read (wire.md §Link discovery reads): `d`,
+        // `region`, `cur` and `n` as `window_v`'s, the view the read's own.
+        "find_links_v_history" => Op::FindLinksVHistory {
+            d: fields.addr("d")?,
+            region: fields.spans("region")?,
+            cur: fields.cursor("cur")?,
+            n: fields.usize("n")?,
+        },
         "retrieve_endsets" => {
             Op::RetrieveEndsets { d: fields.addr("d")?, region: fields.spans("region")? }
         }

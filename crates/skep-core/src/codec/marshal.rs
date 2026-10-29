@@ -11,7 +11,7 @@ use serde_json::Value;
 use skep_address::{Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
-use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
+use skep_discovery::{FourSet, LinkRow, SlotSpec, SupClaim, Window};
 use skep_febe::{
     Deposit, Disposition, EditionClaim, FaultSite, IItem, ISpan, MintTime, Op, OpKind, RejectCode,
     Rejection, Response, SlotArg, SuccessorSpec, TimeSource, UniversalGrant,
@@ -417,6 +417,17 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
                 ("except", j_addrs(except)),
             ],
         ),
+        // The retracted-links read: `window_v`'s four members, the canonical
+        // form carrying `cur: null` where the request named none.
+        Op::FindLinksVHistory { d, region, cur, n } => (
+            op_name(OpKind::FindLinksVHistory),
+            vec![
+                ("d", j_addr(d)),
+                ("region", j_spans(region)),
+                ("cur", j_cursor(cur)),
+                ("n", j_usize(*n)),
+            ],
+        ),
         Op::RetrieveEndsets { d, region } => {
             (op_name(OpKind::RetrieveEndsets), vec![("d", j_addr(d)), ("region", j_spans(region))])
         }
@@ -513,6 +524,19 @@ pub(super) fn j_response(r: &Response) -> Value {
             "homes",
             vec![
                 ("homes", j_home_counts(homes)),
+                ("exhausted", Value::Bool(*exhausted)),
+                ("as_of", j_seq(*as_of)),
+            ],
+        ),
+        // The retracted-links read (wire.md §Link discovery reads): one row
+        // per link, `{a, at, retracted_at}`, the two positions `null` where
+        // unknown or, for `retracted_at`, where the link is active; `next`
+        // and `exhausted` as a `page`'s window carries them.
+        Response::Links { links, next, exhausted, as_of } => (
+            "links",
+            vec![
+                ("links", j_link_rows(links)),
+                ("next", j_cursor(next)),
                 ("exhausted", Value::Bool(*exhausted)),
                 ("as_of", j_seq(*as_of)),
             ],
@@ -1036,6 +1060,25 @@ fn j_home_counts(homes: &[(Address, usize)]) -> Value {
     )
 }
 
+/// Renders the retracted-links read's rows: `[{"a": <address>, "at":
+/// <position>|null, "retracted_at": <position>|null}]`, in the order the
+/// read answered them — `at` null for a link a build before the position
+/// map minted, `retracted_at` null for an active link and for one whose
+/// every retraction predates the map.
+fn j_link_rows(rows: &[LinkRow]) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|row| {
+                obj(vec![
+                    ("a", j_addr(&row.a)),
+                    ("at", row.at.map(j_seq).unwrap_or(Value::Null)),
+                    ("retracted_at", row.retracted_at.map(j_seq).unwrap_or(Value::Null)),
+                ])
+            })
+            .collect(),
+    )
+}
+
 /// Renders a delivery's items.
 ///
 /// They follow [`ValueItems`]' rule with the `{"content"}` run form, plus
@@ -1284,6 +1327,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::WindowV => "window_v",
         OpKind::WindowFtt => "window_ftt",
         OpKind::CountVByHome => "count_v_by_home",
+        OpKind::FindLinksVHistory => "find_links_v_history",
         OpKind::RetrieveEndsets => "retrieve_endsets",
         OpKind::Project => "project",
         OpKind::DiscoverableFrom => "discoverable_from",

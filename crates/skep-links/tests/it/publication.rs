@@ -967,6 +967,11 @@ fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit() {
     assert!(links.is_active(&l), "the original stands, superseded");
     assert_eq!(links.readlink(&link_of(&pmember(1), 2)), Some(&retraction_tuple(&pmember(1), &m)), "the retraction at the mark's home");
     assert!(!links.is_active(&m), "the mark is off the active view");
+    assert_eq!(
+        links.retractions_of(&m).collect::<Vec<_>>(),
+        vec![link_of(&pmember(1), 2)],
+        "the record beside the tombstone is the shot's retraction, minted at the shot's position"
+    );
     let rw = link_of(&set_s(), 1);
     assert_eq!(links.readlink(&rw), Some(&Link::triple(enc([&pdoc()]), enc([&set_s()]), enc([read_with_type()]))), "the read-with in S");
     assert_eq!(s.world().m5().link_runs(&set_s()).cloned().collect::<Vec<_>>(), vec![run(&rw, 1)], "seated in S");

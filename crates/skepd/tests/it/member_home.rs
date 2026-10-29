@@ -95,6 +95,24 @@ fn citation(home: &str, from: &str, to: &str) -> String {
     link_frame(home, from, to, &addrs_slot(&[T_CITATION]))
 }
 
+/// The retracted-links read over content ordinals `from ..` of `d`, as
+/// `token`, from the start: `(a, at, retracted_at)` per row.
+fn history_rows(port: u16, token: Option<&str>, d: &str, from: u64, width: u64) -> Vec<(String, Option<u64>, Option<u64>)> {
+    let v = op(
+        port,
+        token,
+        &format!(
+            r#"{{"op":"find_links_v_history","cur":null,"n":64,"d":"{d}","region":[{{"start":"1.{from}","width":"0.{width}"}}]}}"#
+        ),
+    );
+    expect_resp(&v, "links")["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|r| (r["a"].as_str().expect("a").to_string(), r["at"].as_u64(), r["retracted_at"].as_u64()))
+        .collect()
+}
+
 /// The board's chain: `E` holding P, `E.1` and `E.2`, and `F`.
 fn chain(port: u16, signed: &str, bare: &str) -> Chain {
     let e = edition_with(port, signed, P);
@@ -437,7 +455,8 @@ fn a_retraction_homed_in_the_member_removes_the_link_everywhere() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let Chain { e, e1, e2, f } = chain(port, &signed, &bare);
-    let l1 = acked_addr(&op(port, Some(&signed), &citation(&e2, &vspec(&e2, 1, P_LEN), &vspec(&e1, 1, P_LEN))));
+    let made = op(port, Some(&signed), &citation(&e2, &vspec(&e2, 1, P_LEN), &vspec(&e1, 1, P_LEN)));
+    let (l1, l1_at) = (acked_addr(&made), acked_at(&made));
     assert_eq!(l1, format!("{e2}.0.2.1"));
     for d in [e1.as_str(), e2.as_str(), e.as_str()] {
         assert_eq!(find_links_v(port, None, d, 1, P_LEN), floor_and(&[&l1]), "before: at {d}");
@@ -448,11 +467,24 @@ fn a_retraction_homed_in_the_member_removes_the_link_everywhere() {
     assert_eq!(head_position(port), before);
     let v = op(port, Some(&signed), &nullify_frame(&e2, &l1));
     assert_eq!(verdict(&v), "ok", "{v}");
-    let retraction = acked_addr(&v);
+    let (retraction, retracted_at) = (acked_addr(&v), acked_at(&v));
     assert_eq!(retraction, format!("{e2}.0.2.2"), "the retraction, the member's next link");
 
     for d in [e1.as_str(), e2.as_str(), e.as_str()] {
         assert_eq!(find_links_v(port, None, d, 1, P_LEN), floor_and(&[]), "after: at {d}");
+    }
+    // The retracted-links read (the link-sets design §7, lane 7) still lists
+    // the link at every version sharing P, RETRACTED, with the member-homed
+    // retraction's position beside its own, the active rows `find_links_v`'s
+    // — and the retraction record itself is no row: its FROM covers the
+    // member's own subtree, and the member holds P by reference to E's
+    // chain, so it touches nothing a reader of P images.
+    for d in [e1.as_str(), e2.as_str(), e.as_str()] {
+        let rows = history_rows(port, None, d, 1, P_LEN);
+        let row = rows.iter().find(|(a, _, _)| *a == l1).unwrap_or_else(|| panic!("the retracted link is a row at {d}: {rows:?}"));
+        assert_eq!(*row, (l1.clone(), Some(l1_at), Some(retracted_at)), "at {d}: the link's position and the retraction's");
+        assert!(rows.iter().filter(|(_, _, r)| r.is_none()).map(|(a, _, _)| a.clone()).eq(find_links_v(port, None, d, 1, P_LEN)), "at {d}: the active rows are find_links_v");
+        assert!(rows.iter().all(|(a, _, _)| *a != retraction), "at {d}: the retraction record touches nothing of P");
     }
     assert_eq!(find_links_v(port, Some(&bare), &f, 1, P_LEN), floor_and(&[]), "after: at F");
     let homed = find_links_ftt_home(port, None, &e2);

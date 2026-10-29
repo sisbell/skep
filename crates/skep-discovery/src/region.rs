@@ -8,7 +8,13 @@
 //! (Conflicts #8, a deliberate divergence from ASN-0127/0108's
 //! `findlinks_V`/`Match`, which no addressability filter narrows). Its touch
 //! is M7's overlap with the image's run extents, wider than ASN-0127's
-//! `matches` on the one shape the crate header states.
+//! `matches` on the one shape the crate header states. Beside the five, and
+//! NOT a read-out of `sel`, the retracted-links read
+//! [`find_links_v_history_on`] walks the same homes over the AUDIT slice —
+//! `sel_audit = findlinks_V`, every link ever made whose endsets touch the
+//! region, retracted included — its law its own (the link-sets design §7,
+//! lane 7), each row carrying the link's commit position and its earliest
+//! retraction's.
 //!
 //! The family's composition is homes-first (PUB-7.18, at every slot): the
 //! image's extents are lifted to one query, M7's `homes_touching` names the
@@ -30,14 +36,15 @@
 use std::collections::HashSet;
 
 use skep_address::{Address, Span};
-use skep_kernel::Snapshot;
+use skep_kernel::{Seq, Snapshot};
 use skep_links::{Endset, Link, LinkState, Touch, View};
+use skep_namespace::M3State;
 
 use crate::budget::MAX_ANSWER_SPANS;
 use crate::home::home_admitted;
 use crate::image::image_on;
 use crate::sets::{distinct, extents, probes, window_homes, V1_SLOTS};
-use crate::types::{Cursor, HomeCounts, QueryError, Window};
+use crate::types::{Cursor, HomeCounts, LinkRow, LinkRows, QueryError, Window};
 use crate::DiscoveryWorld;
 
 /// The candidate homes of `query` at every v1 slot, in address order, each
@@ -278,6 +285,135 @@ pub fn count_v_by_home_on<W: DiscoveryWorld>(
     Ok(HomeCounts {
         homes,
         exhausted: sum < n,
+    })
+}
+
+/// One admitted home's share of the AUDIT selection: the disjunction over
+/// its slots, as [`touched`] takes it, over the audit slice — every link
+/// ever made in the home whose slot overlaps a span that named the home,
+/// retracted or not — each link once, in address order.
+fn touched_audit(l: &LinkState, touch: &Touch<'_>) -> Vec<Address> {
+    distinct(l.stab_in_slots(touch, probes(0), View::Audit)).collect()
+}
+
+/// The position of `a`'s EARLIEST retraction: the least `minted_at` over
+/// the `[R]` records that retracted it, across every home that did (the
+/// owner's ruling B (2), 2026-10-28 — "not retracted before that point" is a
+/// fact of the world, whatever home the retraction sits in); `None` where
+/// none retracted it, and `None` where every retraction of it predates the
+/// position map, which M3 answers nothing for.
+///
+/// A point lookup per record M7's retractions hint holds, off the root
+/// alone (the survey's C3): no home is named, no link of one is read and no
+/// predicate is asked, so the one-address home rule stands and PUB-6.47's
+/// bound is met by construction — a retraction homed where the reader may
+/// not read crosses as its position, and its address never leaves here.
+fn retracted_at(l: &LinkState, m3: &M3State, a: &Address) -> Option<Seq> {
+    l.retractions_of(a).filter_map(|record| m3.minted_at(&record)).min()
+}
+
+/// The retracted-links read's row for `a`: its own commit position, and its
+/// earliest retraction's — two point lookups of M3's position map per row
+/// and the hint's lookup between them.
+fn history_row(l: &LinkState, m3: &M3State, a: Address) -> LinkRow {
+    let at = m3.minted_at(&a);
+    let retracted_at = retracted_at(l, m3, &a);
+    LinkRow {
+        a,
+        at,
+        retracted_at,
+    }
+}
+
+/// THE RETRACTED-LINKS READ (the link-sets design §7, lane 7; the owner's
+/// rulings B (1)–(5), 2026-10-28): every link ever made whose endsets touch
+/// `region`, active or RETRACTED, windowed over homes as [`window_v_on`] is,
+/// each row the link with the position of the commit that minted it and,
+/// where it is retracted, the position of its earliest retraction. The "as
+/// published" switch at a version reads it once over the version's whole
+/// extent and keeps, by position alone, the links that stood on its words
+/// while it stood — a link retracted after the version's tenure ended
+/// shows, one retracted before it is off — so the switch's retracted half
+/// is one live read and never a whole-world replay (`/op-at` stays the
+/// forensic replay, never the switch).
+///
+/// THE VIEW is the AUDIT one, and the law is this read's OWN (the survey's
+/// C1): `sel_audit = findlinks_V` over the audit slice — the walk is the
+/// family's `touching` over the image's extents at the three v1 slots, the
+/// reader asked of each candidate home once ahead of its links, and an
+/// admitted home stabbed by M7's `stab_in_slots` under `View::Audit`, so a
+/// nullified link is a row here where every other region read drops it.
+/// Nothing of the five active read-outs moves: their `sel` and their pinned
+/// answers stand, and the active rows of THIS answer — those with no
+/// `retracted_at` — are exactly [`findlinks_v_on`]'s under the same
+/// `readable` (`tests/it/region.rs` holds it), the retracted rows being the
+/// links a `find_links_v` at an earlier position answered and the head's
+/// does not (`skepd`'s history suite cross-checks it against `/op-at`).
+///
+/// THE ROWS carry positions only (B (3)): `at = minted_at(a)`, `None` for a
+/// link a build before the position map minted; `retracted_at` the least
+/// `minted_at` over `a`'s retraction records across every home (B (2)),
+/// `None` where `a` is active and `None` where every retraction predates the
+/// map. A retraction's POSITION is served whatever its home — the position
+/// is class-invariant, as the change feed's straddle already shows it (B
+/// (4)) — and its ADDRESS never: the hint is read off the root, no home is
+/// named and none is asked, so the one-address home rule stands and the
+/// answer names no record the reader may not read (PUB-6.47). The LINK's
+/// home gates the row, as every result is filtered (PUB-6.13, PUB-7.18): a
+/// link homed where the reader may not read is neither a row nor paid for,
+/// retracted or not.
+///
+/// THE WINDOW is [`window_v_on`]'s: `cur` a link address, `n` clamped to 1
+/// (W9), the homes behind the cursor passed unasked, the cursor's home cut
+/// strictly past it, the walk stopping at the home that fills `n`, and
+/// [`LinkRows`] stating what a window and a pass return. A retracted link is
+/// a ROW of the pass, never skipped, so a cursor naming one resumes at the
+/// next row; and since a version's whole extent is the switch's region, the
+/// read is windowed from its first cut (the survey's C6).
+///
+/// REFUSES what [`image_on`] refuses, in its order — `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge` — and nothing else.
+///
+/// WHAT IT COSTS: the region family's — the directory's steps and a
+/// predicate test per candidate home, and per admitted home one
+/// `stab_in_slots` over the spans and the parts that named it — the AUDIT
+/// hits in place of the active ones, a population that only grows, since a
+/// retraction removes nothing from it; plus, per row answered, the hint's
+/// lookup and two `minted_at` lookups, each `O(log n)`. The window bounds it
+/// by `n` rows and the homes it passes, never by the audit population: an
+/// unreadable home costs a step and nothing of its links
+/// (`tests/it/home_rule.rs` holds the heap to it), and the whole passage is
+/// paid only by a pass that drains it (`tests/it/region_cost.rs` measures a
+/// window against `findlinks_v` over a retracted population).
+pub fn find_links_v_history_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+    cur: Cursor,
+    n: usize,
+    readable: &dyn Fn(&Address) -> bool,
+) -> Result<LinkRows, QueryError> {
+    let image = image_on(s, d, region)?; // document gate + region gate inside, on THIS snap
+    let query = extents(&image);
+    let w = s.world();
+    let (l, m3) = (w.links(), w.m3());
+    let Window {
+        batch,
+        next,
+        exhausted,
+    } = window_homes(
+        touching(l, &query),
+        |touch| touch.home(),
+        |touch| touched_audit(l, &touch),
+        readable,
+        cur,
+        n,
+    );
+    let links = batch.into_iter().map(|a| history_row(l, m3, a)).collect();
+    Ok(LinkRows {
+        links,
+        next,
+        exhausted,
     })
 }
 

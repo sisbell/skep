@@ -2180,6 +2180,54 @@
       }
     },
     {
+      "name": "find_links_v_history",
+      "description": "The retracted-links read: every link ever made whose endsets touch the region, active or RETRACTED (the audit view, where find_links_v answers the active one), windowed as window_v is: up to n rows strictly past cursor cur, in ascending address order, filtered at each link's home. Response: links — {\"links\": [{\"a\" (the link), \"at\" (the position of the commit that minted it, null for a link minted before the position map), \"retracted_at\" (the position of its EARLIEST retraction across every home, null where active or where every retraction predates the map)}], \"next\" (the continuation cursor), \"exhausted\" (true = terminal)}. Positions only, no time; a retraction's address is never carried.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "cur": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Cursor: null or absent = start; a link address = resume strictly past it (a retracted link is a row, so resuming past one resumes at the next row). The cursor you hold is the whole continuation."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Window size: up to n rows (0 reads as 1)."
+          }
+        },
+        "required": ["d", "region", "n"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "retrieve_endsets",
       "description": "The endset fragments of active links falling in the region, per slot. Response: endsets — (slot, endset) pairs.",
       "inputSchema": {

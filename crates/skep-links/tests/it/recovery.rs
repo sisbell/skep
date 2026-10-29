@@ -29,7 +29,11 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
         )
         .expect("an unregistered-class deposit, so its slice is rebuilt too");
     let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
-    w.nullify(P1, &doc1(), &x).expect("nullify the claim's old endpoint");
+    let (r1, _) = w.nullify(P1, &doc1(), &x).expect("nullify the claim's old endpoint");
+    // A second home's retraction of the same root: a distinct record, so the
+    // retractions hint holds two addresses under `x`, in two homes.
+    let (r2, _) = w.nullify(P1, &doc2(), &x).expect("nullify it again from doc2");
+    assert_ne!(r1, r2);
 
     // The checkpoint wire format: serialize the world, deserialize (skip
     // fields default), rebuild_derived BEFORE any read/replay.
@@ -45,6 +49,16 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
         assert_eq!(live.readlink(addr), back.readlink(addr));
     }
     assert!(back.is_nullified(&x));
+    // The retractions hint (the link-sets design §7, lane 7): the records
+    // that retracted `x`, both homes' in address order, live and rebuilt
+    // alike — the set form is order-free, so the rebuild's fold order cannot
+    // part them — and nothing under a root never retracted.
+    let retractions = |links: &skep_links::LinkState, root: &Address| -> Vec<Address> {
+        links.retractions_of(root).collect()
+    };
+    assert_eq!(retractions(live, &x), vec![r1.clone(), r2.clone()], "two homes, two records");
+    assert_eq!(retractions(back, &x), retractions(live, &x), "the retractions hint is rebuilt");
+    assert_eq!(retractions(back, &y), vec![], "a root never retracted names no record");
     assert_eq!(back.succs(&sup, &x), vec![y.clone()]); // sup_fwd rebuilt
     assert_eq!(
         live.type_slice(&pred_def_ty(), View::Audit),
@@ -90,41 +104,75 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
 /// position of doc1's content, TO one of a hundred positions, typed one of ten
 /// ways, so every hint has something to fold — rebuilt from the decoded map
 /// once, as the daemon's open rebuilds a checkpoint, with the wall-clock time
-/// printed. A figure for the record, which no clock bound would hold steadily
-/// under the gate's load; the hints' agreement with the live state is the
-/// test above's.
+/// printed; then a TENTH of them retracted, each from its own home, and the
+/// board rebuilt again, so the retractions hint's share of the open is the
+/// second figure against the first (the link-sets design §7, lane 7). Two
+/// figures for the record, which no clock bound would hold steadily under
+/// the gate's load; the hints' agreement with the live state is the test
+/// above's.
 #[test]
 #[ignore = "timing test - gate-full only"]
 fn rebuild_derived_at_a_hundred_thousand_links_reports_its_time() {
     const LINKS: u32 = 100_000;
     const HOMES: u32 = 1_000;
+    const RETRACTED_EVERY: u32 = 10;
     let k = kernel_with_documents(HOMES);
     let built = Instant::now();
+    let mut minted = Vec::with_capacity(LINKS as usize);
     for i in 0..LINKS {
-        deposit_in(
+        minted.push(deposit_in(
             &k,
             &doc(1 + i % HOMES),
             &[ca(1 + i)],
             &[ca(1 + i % 100)],
             &unregistered_ta(1 + i % 10),
-        );
+        ));
     }
     let building = built.elapsed();
-    let snap = k.snapshot();
-    let live = snap.world().links();
-    assert_eq!(live.match_links(&[], View::Audit).len(), LINKS as usize);
-    let decoded: skep_links::LinkState =
-        bincode::deserialize(&bincode::serialize(live).expect("the slice serializes"))
-            .expect("the slice deserializes");
-    let rebuilt_at = Instant::now();
-    let rebuilt = decoded.rebuild_derived();
-    let rebuilding = rebuilt_at.elapsed();
-    assert_eq!(
-        rebuilt.stab(skep_links::FROM, &skep_links::enc(&[ca(7)]), View::Active),
-        live.stab(skep_links::FROM, &skep_links::enc(&[ca(7)]), View::Active),
-        "the rebuilt index answers as the live one"
-    );
+    let rebuild = |k: &skep_kernel::Kernel<World>| -> (skep_links::LinkState, std::time::Duration) {
+        let snap = k.snapshot();
+        let live = snap.world().links();
+        let decoded: skep_links::LinkState =
+            bincode::deserialize(&bincode::serialize(live).expect("the slice serializes"))
+                .expect("the slice deserializes");
+        let rebuilt_at = Instant::now();
+        let rebuilt = decoded.rebuild_derived();
+        let rebuilding = rebuilt_at.elapsed();
+        assert_eq!(
+            rebuilt.stab(skep_links::FROM, &skep_links::enc(&[ca(7)]), View::Active),
+            live.stab(skep_links::FROM, &skep_links::enc(&[ca(7)]), View::Active),
+            "the rebuilt index answers as the live one"
+        );
+        (rebuilt, rebuilding)
+    };
+    {
+        let snap = k.snapshot();
+        assert_eq!(snap.world().links().match_links(&[], View::Audit).len(), LINKS as usize);
+    }
+    let (_, rebuilding) = rebuild(&k);
     eprintln!(
         "rebuild_derived at {LINKS} links in {HOMES} homes: {rebuilding:?} (the board took {building:?} to deposit)"
+    );
+    // A tenth retracted, each from its own home: ten thousand `[R]` records
+    // more, and ten thousand roots in the retractions hint.
+    let retracting = Instant::now();
+    let w = writer(&k);
+    for (i, a) in minted.iter().enumerate() {
+        if i as u32 % RETRACTED_EVERY == 0 {
+            w.nullify(P1, &doc(1 + i as u32 % HOMES), a).expect("retract");
+        }
+    }
+    let retracted = retracting.elapsed();
+    let (rebuilt, rebuilding_with_retractions) = rebuild(&k);
+    assert_eq!(
+        rebuilt.retractions_of(&minted[0]).count(),
+        1,
+        "the rebuilt retractions hint names the first link's one record"
+    );
+    assert_eq!(rebuilt.retractions_of(&minted[1]).count(), 0);
+    eprintln!(
+        "rebuild_derived at {LINKS} links + {} retractions in {HOMES} homes: {rebuilding_with_retractions:?} \
+         (the retractions took {retracted:?} to deposit); the retractions hint's share of the open is the difference",
+        LINKS / RETRACTED_EVERY
     );
 }

@@ -171,6 +171,14 @@ fn count_v_by_home(doc: &str) -> String {
     )
 }
 
+/// The region-keyed retracted-links read over content ordinal 1 of `doc`,
+/// from the start — a region read, keyed by `doc`, whatever its view.
+fn find_links_v_history(doc: &str) -> String {
+    format!(
+        r#"{{"cur":null,"d":"{doc}","n":16,"op":"find_links_v_history","region":[{{"start":"1.1","width":"0.1"}}]}}"#
+    )
+}
+
 /// The region-keyed endset read over content ordinal 1 of `doc`.
 fn retrieve_endsets(doc: &str) -> String {
     format!(
@@ -312,6 +320,7 @@ fn every_class_scan_takes_a_scan_permit() {
         ("count_v", count_v(CLAIMANT_DOC1), Pool::Document),
         ("window_v", window_v(CLAIMANT_DOC1), Pool::Document),
         ("count_v_by_home", count_v_by_home(CLAIMANT_DOC1), Pool::Document),
+        ("find_links_v_history", find_links_v_history(CLAIMANT_DOC1), Pool::Document),
         ("retrieve_endsets", retrieve_endsets(CLAIMANT_DOC1), Pool::Document),
         ("delete_orphans", delete_orphans(CLAIMANT_DOC1), Pool::Document),
         // The lineage pair and the edition claims answer off the index at the

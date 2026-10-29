@@ -11,9 +11,9 @@ use common::*;
 use skep_address::{document_of, Address};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
-    delete_orphans_on, findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on,
-    retrieve_endsets_on, window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM,
-    MAX_ANSWER_SPANS, TO,
+    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, in_claims_on,
+    out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on, FourSet,
+    QueryError, SlotSpec, SupClaim, FROM, MAX_ANSWER_SPANS, TO,
 };
 use skep_kernel::Kernel;
 use skep_links::{enc, LinkWriter, View};
@@ -160,7 +160,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let orphaned = delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &every_home)
         .expect("preview")
         .orphaned;
-    assert_eq!(orphaned, vec![m2, t1]);
+    assert_eq!(orphaned, vec![m2, t1.clone()]);
     assert_eq!(
         delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &cannot_read_doc2)
             .map(|r| r.orphaned),
@@ -183,6 +183,27 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
             "out_claims({new:?})"
         );
     }
+
+    // The retracted-links read, filtered at each LINK's home like the rest
+    // — with doc1's `m1` retracted from doc2, so a RETRACTED link homed
+    // where the reader may read is a row carrying the position of a
+    // retraction homed where it may not (ruling B (4); PUB-6.47), and the
+    // retraction record, homed in doc2, is no row of its own.
+    let (retraction, retracted_at) = store.nullify(SYS, &doc2(), &m1).expect("nullify succeeds");
+    let snap = k.snapshot();
+    let audit = |readable: &dyn Fn(&Address) -> bool| {
+        find_links_v_history_on(&snap, &doc1(), &region, None, 64, readable).expect("find_links_v_history")
+    };
+    let all = audit(&every_home);
+    let all_addresses = rows_window(&all).batch;
+    assert!(all_addresses.contains(&m1) && all_addresses.contains(&t0) && all_addresses.contains(&t1));
+    assert!(!all_addresses.contains(&retraction), "the retraction's FROM covers doc2's content, not doc1's");
+    let seen = audit(&cannot_read_doc2);
+    assert_eq!(rows_window(&seen).batch, homed_outside_doc2(all_addresses), "find_links_v_history");
+    let row = seen.links.iter().find(|row| row.a == m1).expect("m1 is a row");
+    assert_eq!(row.retracted_at, Some(retracted_at), "the doc2-homed retraction's position crosses");
+    assert_eq!(active_rows(&seen), findlinks_v_on(&snap, &doc1(), &region, &cannot_read_doc2).expect("findlinks_v"));
+    assert_eq!(rows_window(&audit(&cannot_read_doc1)).batch, vec![t0, t1], "refused links first");
 }
 
 /// The home rule's contract with its predicate, over every read that takes
@@ -287,6 +308,21 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
             .batch,
         vec![la2(1)]
     );
+    assert_eq!(asked.take(), vec![doc2()]);
+    // The retracted-links read asks what `window_v` asks, home by home: of
+    // the one home that fills a window of one; of the cursor's home and the
+    // homes past it; of none behind the cursor; and never of a link, a slot
+    // or the named document, under a window past the whole.
+    let history = |cur: Option<Address>, n: usize| -> Vec<Address> {
+        rows_window(&find_links_v_history_on(&snap, &doc1(), &region, cur, n, &recorder).expect("find_links_v_history")).batch
+    };
+    assert_eq!(history(None, 5), vec![la(1), la(2), la2(1)]);
+    assert_eq!(asked.take(), homes);
+    assert_eq!(history(None, 1), vec![la(1)]);
+    assert_eq!(asked.take(), vec![doc1()]);
+    assert_eq!(history(Some(la(2)), 1), vec![la2(1)]);
+    assert_eq!(asked.take(), homes);
+    assert_eq!(history(Some(doc2()), 1), vec![la2(1)]);
     assert_eq!(asked.take(), vec![doc2()]);
     // RETRIEVEENDSETS asks of each HOME, ONCE, before any of its links' slots
     // are read: each link reaches the region through FROM and TO, so a rule
@@ -427,10 +463,14 @@ fn the_preview_asks_its_predicate_only_of_the_links_it_orphans() {
 }
 
 /// A world of `flood` links FROM doc1's position 1, homed round-robin in
-/// `homes` documents past doc2, beside two of doc1's own on the same position
-/// and one of doc2's on position 70 alone — another block of the content
-/// axis, so the passage's directory never names doc2 — the fixture the home
-/// rule's cost laws read at two floods and two home counts.
+/// `homes` documents past doc2 — every fourth of them RETRACTED from its own
+/// home, so the audit population of the passage holds the whole flood and
+/// the active one three quarters of it — beside two of doc1's own on the
+/// same position and one of doc2's on position 70 alone — another block of
+/// the content axis, so the passage's directory never names doc2 — the
+/// fixture the home rule's cost laws read at two floods and two home counts.
+/// A retraction's own record, homed where its target is, has its FROM over
+/// that home's content and touches nothing of doc1's passage.
 fn flooded_homes(flood: u32, homes: u32) -> Kernel<World> {
     let k = kernel_with_documents(2 + homes);
     seed_content(&k, &doc1(), 2);
@@ -439,7 +479,11 @@ fn flooded_homes(flood: u32, homes: u32) -> Kernel<World> {
     link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     link(&store, &doc2(), &[ca(70)], &[ca(103)]); // off the passage, in another block
     for i in 0..flood {
-        link(&store, &doc(3 + i % homes), &[ca(1)], &[ca(1_000 + i)]);
+        let home = doc(3 + i % homes);
+        let minted = link(&store, &home, &[ca(1)], &[ca(1_000 + i)]);
+        if i % 4 == 3 {
+            store.nullify(SYS, &home, &minted).expect("nullify succeeds");
+        }
     }
     k
 }
@@ -460,10 +504,13 @@ type Reader<'a> = dyn Fn(&Address) -> bool + 'a;
 /// read over a passage holding a flood of links homed where the reader may
 /// not read asks of those homes once each and reads none of their links. A
 /// thousand flooding links in ten homes cost the reader's `findlinks_v`,
-/// `count_v`, `window_v` and `count_v_by_home` the heap a hundred do — the
-/// homes are the same ten, and the links in them are never visited — and
+/// `count_v`, `window_v`, `count_v_by_home` and `find_links_v_history` the
+/// heap a hundred do — the homes are the same ten, and the links in them
+/// are never visited, retracted or not — and
 /// the same thousand in ONE home cost what a hundred in one do: one home
-/// test. The reader of every home is the control and pays for every hit. A
+/// test. The reader of every home is the control and pays for every hit —
+/// the retracted-links read for every link ever made, a quarter of them
+/// retracted. A
 /// home whose links lie off the passage is never asked, so the homes asked
 /// are the passage's candidates and not the board's. AND AN EXCEPTED HOME
 /// COSTS THE SAME STEP AND NOTHING OF ITS LINKS (the link-sets design's
@@ -473,7 +520,7 @@ type Reader<'a> = dyn Fn(&Address) -> bool + 'a;
 fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_links() {
     let region = [vspan(1, 1, 1)];
     let only_doc1 = |d: &Address| *d == doc1();
-    let reads: [(&str, &Counted<'_>); 4] = [
+    let reads: [(&str, &Counted<'_>); 5] = [
         ("findlinks_v", &|k| {
             findlinks_v_on(&k.snapshot(), &doc1(), &region, &only_doc1).expect("findlinks_v").len()
         }),
@@ -486,6 +533,12 @@ fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_li
                 &count_v_by_home_on(&k.snapshot(), &doc1(), &region, usize::MAX, &[], &only_doc1)
                     .expect("count_v_by_home"),
             )
+        }),
+        ("find_links_v_history", &|k| {
+            let rows = find_links_v_history_on(&k.snapshot(), &doc1(), &region, None, 5, &only_doc1)
+                .expect("find_links_v_history");
+            assert_eq!(rows_window(&rows).batch, vec![la(1), la(2)], "doc1's two, whatever the flood");
+            rows.links.len()
         }),
     ];
     for homes in [1, 10] {
@@ -528,18 +581,31 @@ fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_li
             "count_v_by_home beside {homes} excepted home(s): the flood's links cost nothing"
         );
     }
-    // The control: the reader of every home pays for every hit.
+    // The control: the reader of every home pays for every hit — the active
+    // three quarters of the flood on the active reads, the whole flood on
+    // the retracted-links read.
     let (fewer, more) = (flooded_homes(100, 10), flooded_homes(1_000, 10));
     let everyone = |k: &Kernel<World>| findlinks_v_on(&k.snapshot(), &doc1(), &region, &every_home).expect("findlinks_v").len();
-    assert_eq!(everyone(&more), 1_002);
+    assert_eq!(everyone(&more), 2 + 750);
     assert!(heap_of(&more, everyone) > heap_of(&fewer, everyone), "the control pays for the flood");
     let everyone_by_home = |k: &Kernel<World>| {
         counted(&count_v_by_home_on(&k.snapshot(), &doc1(), &region, usize::MAX, &[], &every_home).expect("count_v_by_home"))
     };
-    assert_eq!(everyone_by_home(&more), 1_002);
+    assert_eq!(everyone_by_home(&more), 2 + 750);
     assert!(
         heap_of(&more, everyone_by_home) > heap_of(&fewer, everyone_by_home),
         "the control: the count by home with nothing excepted pays the flood's keys"
+    );
+    let everyone_ever = |k: &Kernel<World>| {
+        let rows = find_links_v_history_on(&k.snapshot(), &doc1(), &region, None, usize::MAX, &every_home)
+            .expect("find_links_v_history");
+        assert_eq!(rows.links.iter().filter(|row| row.retracted_at.is_some()).count(), rows.links.len().saturating_sub(2) / 4);
+        rows.links.len()
+    };
+    assert_eq!(everyone_ever(&more), 2 + 1_000, "every link ever made on the passage");
+    assert!(
+        heap_of(&more, everyone_ever) > heap_of(&fewer, everyone_ever),
+        "the control: a pass over the whole audit population pays for every link ever made"
     );
 }
 

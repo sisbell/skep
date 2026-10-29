@@ -1,9 +1,10 @@
 //! §1 — content-region discovery: `image_on`'s gates, order, dedup and
 //! budgets — its walk priced on a published address's trunk head, and each
-//! budget refusing before the work it exists to refuse — and the five region
+//! budget refusing before the work it exists to refuse — and the six region
 //! reads that inherit them, with the document gate asked, where it is one
-//! rule, of every read that names a document. Which arrangement the reads
-//! resolve is `head_float`'s.
+//! rule, of every read that names a document; and the retracted-links read's
+//! own law beside the active family's. Which arrangement the reads resolve
+//! is `head_float`'s.
 
 use crate::common;
 use crate::heap::settled_heap_bytes;
@@ -13,8 +14,9 @@ use im::OrdSet;
 use skep_address::{document_of, Address, Span};
 use skep_arrangement::{HasM5, Run, Vstream};
 use skep_discovery::{
-    content_vspan, count_v_by_home_on, count_v_on, findlinks_v_on, image_on, window_v_on,
-    HomeCounts, OrphanError, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE,
+    content_vspan, count_v_by_home_on, count_v_on, find_links_v_history_on, findlinks_v_on,
+    image_on, window_v_on, HomeCounts, LinkRow, LinkRows, OrphanError, OrphanReport, QueryError,
+    FROM, MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_kernel::Snapshot;
 use skep_links::{enc, Endset, HasLinks, LinkWriter, SlotArg, View, MAX_SLOT_SPANS};
@@ -130,18 +132,23 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
         Ok(HomeCounts { homes: vec![], exhausted: true }),
         "no row, and a walk of nothing is exhausted"
     );
+    assert_eq!(
+        reads.find_links_v_history(&doc2(), &[vspan(1, 1, 5)], None, 3),
+        Ok(LinkRows { links: vec![], next: None, exhausted: true }),
+        "the retracted-links read: no row, the cursor unchanged, exhausted"
+    );
 
     // An empty region trivially passes the gate and yields the empty image.
     assert!(reads.image(&doc1(), &[]).expect("empty region is defined").is_empty());
 }
 
-/// One region ENTRY POINT — `image` or one of the five reads that route
+/// One region ENTRY POINT — `image` or one of the six reads that route
 /// through it — reduced to the refusal it answers with, so the gate rule can
-/// be stated once and applied to all six.
+/// be stated once and applied to all seven.
 type RegionRefusal<'a> = Box<dyn Fn(&Address, &[Span]) -> Option<QueryError> + 'a>;
 
 /// The one list every "every region entry point" law reads: `image_on` and
-/// the five reads that inherit its gates and budget, each reduced to its
+/// the six reads that inherit its gates and budget, each reduced to its
 /// refusal through a copy of `reads`. A region read added to the family is
 /// added here, and every such law then covers it.
 fn region_entry_points<'a>(reads: Reads<'a>) -> Vec<(&'static str, RegionRefusal<'a>)> {
@@ -155,14 +162,18 @@ fn region_entry_points<'a>(reads: Reads<'a>) -> Vec<(&'static str, RegionRefusal
             Box::new(move |d, r| reads.count_v_by_home(d, r, 3, &[]).err()),
         ),
         (
+            "find_links_v_history",
+            Box::new(move |d, r| reads.find_links_v_history(d, r, None, 3).err()),
+        ),
+        (
             "retrieve_endsets",
             Box::new(move |d, r| reads.retrieve_endsets(d, r).err()),
         ),
     ]
 }
 
-/// §1 — the gate order `image_on` states is inherited by the five operations
-/// that compose it, so it is checked on all six entry points rather than on
+/// §1 — the gate order `image_on` states is inherited by the six operations
+/// that compose it, so it is checked on all seven entry points rather than on
 /// the one whose doc-comment carries the sentence. An entry point that
 /// swallowed an unregistered `d` into an empty answer, or that read the
 /// region before the registry, would be invisible to a test of `image` alone.
@@ -900,6 +911,97 @@ fn findlinks_v_is_disjunctive_and_addressable_filtered() {
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     assert_eq!(reads.findlinks_v(&doc1(), &[vspan(1, 1, 1)]), Ok(vec![la(2)]));
     assert_eq!(reads.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(1));
+}
+
+/// §1 — THE RETRACTED-LINKS READ'S OWN LAW (the link-sets design §7, lane
+/// 7; the survey's C1): `sel_audit = findlinks_V` over the AUDIT slice, so
+/// its rows are every link ever made whose endsets touch the region — the
+/// nullified one `findlinks_v` drops included — and its ACTIVE rows, those
+/// carrying no retraction position, are exactly `findlinks_v`'s answer under
+/// the same reader. Each row carries the link's own commit position and,
+/// retracted, the position of its EARLIEST retraction across every home
+/// (the owner's ruling B (2)): a second retraction of the same link from
+/// another home — this one homed in doc1 itself, so the retraction record
+/// is a row of its own — moves nothing. The disjunction over slots and the
+/// once-per-link rule hold of the audit answer as of the active one. Under
+/// a reader refusing doc2, the retraction homed there is no row and its
+/// position still crosses on the link's row (ruling B (4); PUB-6.47).
+#[test]
+fn the_retracted_links_read_lists_every_link_ever_made_and_its_active_rows_are_findlinks_v() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let reads = Reads(&k);
+    // e1 reaches position 1 via FROM; m1 reaches 2 via FROM, 3 via TO and 1
+    // via TYPE; t0, homed in doc2, reaches 1 via FROM.
+    let (e1, e1_at) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(9)]), SlotArg::Addrs(vec![rel()]))
+        .expect("makelink succeeds");
+    let (m1, m1_at) = store
+        .makelink(
+            SYS,
+            &doc1(),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+        )
+        .expect("makelink succeeds");
+    let t0 = link(&store, &doc2(), &[ca(1)], &[ca(10)]);
+    let whole = [vspan(1, 1, 3)];
+    let row_of = |rows: &LinkRows, a: &Address| -> LinkRow {
+        rows.links.iter().find(|row| row.a == *a).cloned().unwrap_or_else(|| panic!("{a:?} is a row: {rows:?}"))
+    };
+
+    // Nothing retracted: the audit rows are the active answer, each at its
+    // own position, none with a retraction's.
+    let rows = reads.find_links_v_history(&doc1(), &whole, None, 64).expect("find_links_v_history");
+    assert_eq!(active_rows(&rows), vec![e1.clone(), m1.clone(), t0.clone()]);
+    assert_eq!(active_rows(&rows), reads.findlinks_v(&doc1(), &whole).expect("findlinks_v"));
+    assert_eq!(row_of(&rows, &e1), LinkRow { a: e1.clone(), at: Some(e1_at), retracted_at: None });
+    assert_eq!(row_of(&rows, &m1).at, Some(m1_at));
+    assert!(rows.exhausted);
+    // The disjunction and the once-per-link rule, over the audit answer.
+    assert_eq!(rows_window(&reads.find_links_v_history(&doc1(), &[vspan(1, 2, 1)], None, 64).expect("rows")).batch, vec![m1.clone()]);
+    assert_eq!(rows_window(&reads.find_links_v_history(&doc1(), &[vspan(1, 3, 1)], None, 64).expect("rows")).batch, vec![m1.clone()]);
+
+    // e1 retracted from doc2: off `findlinks_v`, a ROW here with the
+    // retraction's position; the retraction record, homed in doc2 with its
+    // FROM over doc2's content, touches nothing of doc1's region.
+    let (r_doc2, first_at) = store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
+    assert!(first_at > m1_at);
+    let rows = reads.find_links_v_history(&doc1(), &whole, None, 64).expect("find_links_v_history");
+    assert_eq!(rows_window(&rows).batch, vec![e1.clone(), m1.clone(), t0.clone()], "every link ever made on the region");
+    assert_eq!(active_rows(&rows), reads.findlinks_v(&doc1(), &whole).expect("findlinks_v"));
+    assert_eq!(active_rows(&rows), vec![m1.clone(), t0.clone()]);
+    assert_eq!(row_of(&rows, &e1), LinkRow { a: e1.clone(), at: Some(e1_at), retracted_at: Some(first_at) });
+    assert!(rows.links.iter().all(|row| row.a != r_doc2), "the retraction record is no row of doc1's region");
+    // At the one position: e1 and m1 (TYPE) still, e1 retracted.
+    let at_one = reads.find_links_v_history(&doc1(), &[vspan(1, 1, 1)], None, 64).expect("rows");
+    assert_eq!(rows_window(&at_one).batch, vec![e1.clone(), m1.clone(), t0.clone()]);
+    assert_eq!(reads.findlinks_v(&doc1(), &[vspan(1, 1, 1)]), Ok(vec![m1.clone(), t0.clone()]));
+
+    // e1 retracted AGAIN, from doc1: a distinct, later record whose FROM
+    // covers doc1's content — so it is itself a row, active, at its own
+    // position — and e1's `retracted_at` stays the EARLIEST.
+    let (r_doc1, second_at) = store.nullify(SYS, &doc1(), &e1).expect("nullify succeeds");
+    assert!(second_at > first_at);
+    let rows = reads.find_links_v_history(&doc1(), &whole, None, 64).expect("find_links_v_history");
+    assert_eq!(rows_window(&rows).batch, vec![e1.clone(), m1.clone(), r_doc1.clone(), t0.clone()]);
+    assert_eq!(row_of(&rows, &e1).retracted_at, Some(first_at), "the earliest retraction decides, whatever its home");
+    assert_eq!(row_of(&rows, &r_doc1), LinkRow { a: r_doc1.clone(), at: Some(second_at), retracted_at: None });
+    assert_eq!(active_rows(&rows), reads.findlinks_v(&doc1(), &whole).expect("findlinks_v"));
+    assert_eq!(active_rows(&rows), vec![m1.clone(), r_doc1.clone(), t0.clone()]);
+
+    // A reader refusing doc2: its link and its retraction record are no
+    // rows, and e1's row still carries the doc2-homed retraction's position
+    // — the position crosses, never the record.
+    let snap = k.snapshot();
+    let cannot_read_doc2 = |d: &Address| *d != doc2();
+    let theirs = find_links_v_history_on(&snap, &doc1(), &whole, None, 64, &cannot_read_doc2).expect("rows");
+    assert_eq!(rows_window(&theirs).batch, vec![e1.clone(), m1.clone(), r_doc1.clone()]);
+    assert_eq!(row_of(&theirs, &e1).retracted_at, Some(first_at), "a retraction homed where the reader may not read crosses as its position");
+    assert_eq!(active_rows(&theirs), findlinks_v_on(&snap, &doc1(), &whole, &cannot_read_doc2).expect("findlinks_v"));
+    assert!(theirs.links.iter().all(|row| document_of(&row.a) != Some(doc2())), "no address under doc2 leaves the read");
 }
 
 /// §1 — THE HOMES-FIRST COMPOSITION ANSWERS THE UNION OF EACH HOME'S

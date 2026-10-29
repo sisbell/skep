@@ -1,6 +1,7 @@
 //! §Public interface — the plain values the reads take and return: the
 //! windowing pair ([`Cursor`]/[`Window`]), the count by home
-//! ([`HomeCounts`]), the lineage and survival reports
+//! ([`HomeCounts`]), the retracted-links read's rows ([`LinkRow`]/
+//! [`LinkRows`]), the lineage and survival reports
 //! ([`SupClaim`]/[`OrphanReport`]), and the two typed rejections
 //! ([`QueryError`] for the query surface, [`OrphanError`] for the
 //! delete-orphan preview). M8 journals nothing, so none of these serialize.
@@ -11,6 +12,7 @@ use std::error::Error;
 use std::fmt;
 
 use skep_address::Address;
+use skep_kernel::Seq;
 
 /// Windowing cursor (ASN-0108 W2/W3): `None` = ⊥ (start); `Some(a)` = resume
 /// strictly past `a`. The whole continuation is this value, held by the
@@ -77,6 +79,56 @@ pub struct Window {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HomeCounts {
     pub homes: Vec<(Address, usize)>,
+    pub exhausted: bool,
+}
+
+/// One row of the retracted-links read (the link-sets design §7, lane 7):
+/// a link whose endsets touch the region, active or retracted, with the
+/// POSITION of the commit that minted it and, where it is retracted, the
+/// position of its EARLIEST retraction. Positions only, no time (the owner's
+/// ruling B (3), 2026-10-28): the "as published" switch tests a link by
+/// position, and how old it is stays `read_link`'s one time at the act. A
+/// plain record: its fields are public and a caller may build one freely.
+///
+/// A row RETURNED by [`crate::find_links_v_history_on`] satisfies these
+/// relations:
+///
+/// * `a` is a resident link homed where the reader may read, touching the
+///   region at some v1 slot under the AUDIT view;
+/// * `at` is M3's `minted_at(a)` — `None` for a link a build before the
+///   position map minted;
+/// * `retracted_at` is the least `minted_at` over the `[R]` records that
+///   retracted `a`, across every home that retracted it (the owner's ruling
+///   B (2)) — `None` where `a` is active, and `None` where every retraction
+///   of it predates the position map, which the row cannot tell apart; the
+///   RECORD's address is never carried, so a retraction homed where the
+///   reader may not read crosses as its position alone (PUB-6.47's bound).
+///
+/// They are postconditions of the read, not properties of this type.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LinkRow {
+    pub a: Address,
+    pub at: Option<Seq>,
+    pub retracted_at: Option<Seq>,
+}
+
+/// One window of the retracted-links read: the answer of
+/// [`crate::find_links_v_history_on`]. A plain record: its fields are public
+/// and independent, and a caller may build one freely.
+///
+/// A window RETURNED by that read satisfies [`Window`]'s relations over its
+/// rows' addresses — `links` is the first `min(n′, k)` rows, in ascending
+/// address order, of the read's answer strictly past the cursor; `next` the
+/// ≺-max of their addresses, or the cursor unchanged where there are none;
+/// `exhausted` iff `links.len() < n′` — the cursor being a link address as
+/// `window_v`'s is, so a pass drains the audit answer as a pass of
+/// `window_v` drains the active one. A retracted link is a ROW of the pass,
+/// never skipped: resuming past one resumes at the next row. They are
+/// postconditions of the read, not properties of this type.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LinkRows {
+    pub links: Vec<LinkRow>,
+    pub next: Cursor,
     pub exhausted: bool,
 }
 

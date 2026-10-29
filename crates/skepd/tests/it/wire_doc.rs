@@ -15,7 +15,7 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{Run, VPos};
 use skep_content::Val;
-use skep_discovery::{OrphanReport, SupClaim, Window};
+use skep_discovery::{LinkRow, OrphanReport, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, MintTime, OpKind,
     ParseError, RejectCode, Rejection, Response, ShotTerms, TimeSource, UniversalGrant,
@@ -65,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 47] = [
+const OP_NAMES: [&str; 48] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -105,6 +105,7 @@ const OP_NAMES: [&str; 47] = [
     "window_v",
     "window_ftt",
     "count_v_by_home",
+    "find_links_v_history",
     "retrieve_endsets",
     "project",
     "discoverable_from",
@@ -116,7 +117,7 @@ const OP_NAMES: [&str; 47] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 47 ops appear.
+/// value), is tagged with the marker's own op name — and all 48 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -245,6 +246,17 @@ fn fixture(name: &str) -> Response {
         "homes" => Response::Homes {
             homes: vec![(a(&[1, 0, 1, 0, 1]), 2), (a(&[1, 0, 1, 0, 2]), 1)],
             exhausted: true,
+            as_of: Seq(9),
+        },
+        // The retracted-links read: an active row beside a retracted one,
+        // the window of two full, its cursor the second row's address.
+        "links" => Response::Links {
+            links: vec![
+                LinkRow { a: link1(), at: Some(Seq(5)), retracted_at: None },
+                LinkRow { a: a(&[1, 0, 1, 0, 1, 0, 2, 2]), at: Some(Seq(6)), retracted_at: Some(Seq(8)) },
+            ],
+            next: Some(a(&[1, 0, 1, 0, 1, 0, 2, 2])),
+            exhausted: false,
             as_of: Seq(9),
         },
         "endsets" => Response::Endsets {
@@ -402,9 +414,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 26 response shapes every client must decode; each must appear as a
+/// The 27 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 26] = [
+const REQUIRED_SHAPES: [&str; 27] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -418,6 +430,7 @@ const REQUIRED_SHAPES: [&str; 26] = [
     "count",
     "page",
     "homes",
+    "links",
     "endsets",
     "runs",
     "bool",

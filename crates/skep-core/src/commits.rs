@@ -1409,6 +1409,7 @@ impl Commits {
             | Response::Count { .. }
             | Response::Page { .. }
             | Response::Homes { .. }
+            | Response::Links { .. }
             | Response::Endsets { .. }
             | Response::Runs { .. }
             | Response::Bool { .. }
@@ -2413,6 +2414,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         | Op::WindowV { .. }
         | Op::WindowFtt { .. }
         | Op::CountVByHome { .. }
+        | Op::FindLinksVHistory { .. }
         | Op::RetrieveEndsets { .. }
         | Op::Project { .. }
         | Op::DiscoverableFrom { .. }

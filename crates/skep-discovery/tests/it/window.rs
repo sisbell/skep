@@ -7,9 +7,13 @@ use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_arrangement::Vstream;
-use skep_discovery::{findlinks_v_on, window_ftt_on, window_v_on, FourSet, SlotSpec};
+use skep_discovery::{
+    find_links_v_history_on, findlinks_v_on, window_ftt_on, window_v_on, FourSet, LinkRow,
+    SlotSpec,
+};
 use skep_kernel::Kernel;
 use skep_links::{enc, HasLinks, LinkWriter};
+use skep_namespace::HasM3;
 
 /// §2 — the key-cut pages, and its cursor survives its link's departure from
 /// the matched set by either of the two roads the corpus keeps apart
@@ -308,6 +312,92 @@ fn the_count_by_home_is_the_fourth_read_out_of_the_selection_index() {
     let clamp = reads.count_v_by_home(&doc1(), &region, 0, &[]).expect("count_v_by_home");
     assert_eq!(clamp.homes, vec![(doc1(), 2)], "n = 0 is clamped to 1: the first home");
     assert!(!clamp.exhausted);
+}
+
+/// §2 — THE RETRACTED-LINKS READ IS WINDOWED OVER THE AUDIT SELECTION, its
+/// law its own (the link-sets design §7, lane 7; the survey's C1 — never a
+/// read-out of `sel`, so the one-index law below is not extended to it):
+/// over five regions and every batch size from the clamp at 0 through one
+/// past the set, a pass drains `sel_audit` — `findlinks_v`'s answer with
+/// the retracted link beside it, in address order — every page held to what
+/// a window promises; the retracted link is a ROW of the pass, carrying the
+/// retraction's position where `window_v` skips it; and a cursor naming the
+/// retracted link resumes at the row past it, in both reads, by the same
+/// key-cut. `n = 0` is clamped to 1.
+#[test]
+fn the_retracted_links_read_is_windowed_over_the_audit_selection() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let reads = Reads(&k);
+    for (from, to) in [
+        (ca(1), ca(101)),
+        (ca(2), ca(3)),
+        (ca(3), ca(101)),
+        (ca(1), ca(2)),
+    ] {
+        link(&store, &doc1(), &[from], &[to]);
+    }
+    // One link reaching position 2, retracted from doc2 — a row of the audit
+    // answer and nothing of the active one.
+    let retracted = link(&store, &doc1(), &[ca(2)], &[ca(102)]);
+    assert_eq!(retracted, la(5));
+    let (_, retracted_at) = store.nullify(SYS, &doc2(), &retracted).expect("nullify succeeds");
+    let snap = k.snapshot();
+
+    for region in [
+        vec![],
+        vec![vspan(1, 1, 1)],
+        vec![vspan(1, 2, 1)],
+        vec![vspan(1, 1, 3)],
+        vec![vspan(1, 1, 1), vspan(1, 3, 1)],
+    ] {
+        let active = reads.findlinks_v(&doc1(), &region).expect("findlinks_v");
+        let mut audit = active.clone();
+        // The retracted link is on the audit answer exactly where position 2
+        // is in the region.
+        let reaches_two = region.iter().any(|s| *s == vspan(1, 2, 1) || *s == vspan(1, 1, 3));
+        if reaches_two {
+            audit.push(retracted.clone());
+            audit.sort();
+        }
+        let whole = reads.find_links_v_history(&doc1(), &region, None, 64).expect("find_links_v_history");
+        assert_eq!(rows_window(&whole).batch, audit, "sel_audit for {region:?}");
+        assert_eq!(active_rows(&whole), active, "the active rows are findlinks_v's for {region:?}");
+        for row in &whole.links {
+            assert!(row.at.is_some(), "every row carries its position: {row:?}");
+            assert_eq!(
+                row.retracted_at,
+                (row.a == retracted).then_some(retracted_at),
+                "the retracted row carries its retraction's position, the rest none: {row:?}"
+            );
+        }
+        for n in 0..=audit.len() + 1 {
+            let drained = drain_window(n, audit.len() + 1, |cur| {
+                rows_window(&reads.find_links_v_history(&doc1(), &region, cur, n).expect("find_links_v_history"))
+            });
+            assert_eq!(drained, audit, "a pass drains sel_audit for {region:?} at n = {n}");
+        }
+    }
+
+    // The cursor past the retracted link: a ROW here, so a window of one from
+    // the start over positions 1..3 ends on it and the next page is empty and
+    // exhausted; `window_v`, which never lists it, resumes past it all the
+    // same — the same key-cut, two selections.
+    let region = [vspan(1, 1, 3)];
+    let last = find_links_v_history_on(&snap, &doc1(), &region, Some(la(4)), 1, &every_home).expect("rows");
+    assert_eq!(
+        last.links,
+        vec![LinkRow { a: retracted.clone(), at: Some(snap.world().m3().minted_at(&retracted).expect("minted")), retracted_at: Some(retracted_at) }]
+    );
+    assert!(!last.exhausted && last.next == Some(retracted.clone()));
+    let past = find_links_v_history_on(&snap, &doc1(), &region, last.next, 1, &every_home).expect("rows");
+    assert!(past.links.is_empty() && past.exhausted && past.next == Some(retracted.clone()));
+    assert_eq!(reads.window_v(&doc1(), &region, Some(la(4)), 1).expect("window").batch, vec![]);
+    assert_eq!(reads.window_v(&doc1(), &region, Some(la(3)), 1).expect("window").batch, vec![la(4)]);
+    assert_eq!(rows_window(&reads.find_links_v_history(&doc1(), &region, Some(la(3)), 1).expect("rows")).batch, vec![la(4)]);
+    let clamped = reads.find_links_v_history(&doc1(), &region, None, 0).expect("rows");
+    assert_eq!((rows_window(&clamped).batch, clamped.exhausted), (vec![la(1)], false), "n = 0 is clamped to 1");
 }
 
 /// §2 — one selection index, read out three ways: `count_v`, `findlinks_v`

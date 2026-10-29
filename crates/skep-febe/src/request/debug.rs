@@ -167,6 +167,13 @@ impl fmt::Debug for Op {
                 .field("n", n)
                 .field("except", except)
                 .finish(),
+            Op::FindLinksVHistory { d, region, cur, n } => f
+                .debug_struct("FindLinksVHistory")
+                .field("d", d)
+                .field("region", region)
+                .field("cur", cur)
+                .field("n", n)
+                .finish(),
             Op::RetrieveEndsets { d, region } => {
                 f.debug_struct("RetrieveEndsets").field("d", d).field("region", region).finish()
             }

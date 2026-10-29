@@ -257,6 +257,7 @@ pub fn deposits_credential_link(op: &Op) -> bool {
         | Op::WindowV { .. }
         | Op::WindowFtt { .. }
         | Op::CountVByHome { .. }
+        | Op::FindLinksVHistory { .. }
         | Op::RetrieveEndsets { .. }
         | Op::Project { .. }
         | Op::DiscoverableFrom { .. }

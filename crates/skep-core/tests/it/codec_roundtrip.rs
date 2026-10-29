@@ -10,7 +10,7 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
-use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
+use skep_discovery::{FourSet, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, ISpan, MintTime, Op,
     OpKind, ParseError, RejectCode, Rejection, ReqId, Request, Response, ShotTerms, SlotArg,
@@ -445,6 +445,13 @@ fn all_requests() -> Vec<Request> {
             },
         ),
         rq(None, Op::CountVByHome { d: d1(), region: vec![cspan(1, 5)], n: 1, except: vec![] }),
+        // The retracted-links read (the link-sets design §7, lane 7): from
+        // the start, and resumed past a link.
+        rq(None, Op::FindLinksVHistory { d: d1(), region: vec![cspan(1, 5)], cur: None, n: 64 }),
+        rq(
+            None,
+            Op::FindLinksVHistory { d: d1(), region: vec![cspan(1, 5)], cur: Some(link1()), n: 1 },
+        ),
         rq(None, Op::RetrieveEndsets { d: d1(), region: vec![cspan(1, 5)] }),
         rq(None, Op::Project { a: link1(), slot: 2, d: d2() }),
         rq(None, Op::DiscoverableFrom { a: link1(), d: d1() }),
@@ -510,6 +517,7 @@ const OP_NAMES: &[&str] = &[
     "window_v",
     "window_ftt",
     "count_v_by_home",
+    "find_links_v_history",
     "retrieve_endsets",
     "project",
     "discoverable_from",
@@ -566,15 +574,16 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::WindowV => 35,
         OpKind::WindowFtt => 36,
         OpKind::CountVByHome => 37,
-        OpKind::RetrieveEndsets => 38,
-        OpKind::Project => 39,
-        OpKind::DiscoverableFrom => 40,
-        OpKind::DeleteOrphans => 41,
-        OpKind::InClaims => 42,
-        OpKind::OutClaims => 43,
-        OpKind::DocMetadata => 44,
-        OpKind::EditionClaims => 45,
-        OpKind::UniversalGrants => 46,
+        OpKind::FindLinksVHistory => 38,
+        OpKind::RetrieveEndsets => 39,
+        OpKind::Project => 40,
+        OpKind::DiscoverableFrom => 41,
+        OpKind::DeleteOrphans => 42,
+        OpKind::InClaims => 43,
+        OpKind::OutClaims => 44,
+        OpKind::DocMetadata => 45,
+        OpKind::EditionClaims => 46,
+        OpKind::UniversalGrants => 47,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -1242,6 +1251,34 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             Response::Homes { homes: vec![(d1(), 2), (d2(), 1)], exhausted: true, as_of: Seq(9) },
         ),
         ("homes_empty", Response::Homes { homes: Vec::new(), exhausted: true, as_of: Seq(9) }),
+        // The retracted-links read: an active row beside a retracted one,
+        // the window full; a row whose positions predate the map, both
+        // null; and the empty window, exhausted with its cursor unchanged.
+        (
+            "links",
+            Response::Links {
+                links: vec![
+                    LinkRow { a: link1(), at: Some(Seq(5)), retracted_at: None },
+                    LinkRow { a: link2(), at: Some(Seq(6)), retracted_at: Some(Seq(8)) },
+                ],
+                next: Some(link2()),
+                exhausted: false,
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "links_unmapped",
+            Response::Links {
+                links: vec![LinkRow { a: link1(), at: None, retracted_at: None }],
+                next: Some(link1()),
+                exhausted: true,
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "links_empty",
+            Response::Links { links: Vec::new(), next: Some(link2()), exhausted: true, as_of: Seq(9) },
+        ),
         (
             "endsets",
             Response::Endsets {

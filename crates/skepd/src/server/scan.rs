@@ -510,7 +510,13 @@ impl ClassScans {
 /// does not name, the stab's probes and sort with no lift, the walk no
 /// further than the home whose count brings the sum to its `n`, so it costs
 /// the homes ahead of its budget and never a flooded page's whole
-/// population — and `delete_orphans` — the
+/// population — `find_links_v_history` — the same walk over the AUDIT slice,
+/// a predicate test per candidate home and one `stab_in_slots` under the
+/// audit view per admitted home, the home's audit hits, a population that
+/// only grows since a retraction removes nothing from it, the window no
+/// further than the home that fills its `n`, and per row answered one lookup
+/// of M7's retractions hint and two `minted_at` lookups of M3's position
+/// map, no home named for them — and `delete_orphans` — the
 /// same over the deleted and the retained runs, six pairs in one walk and
 /// two `stab_in_slots` per admitted home, one a side, and no owner gate, so
 /// every asker reaches it on any registered document. Each costs
@@ -518,7 +524,8 @@ impl ClassScans {
 /// flooded PUBLIC page still costs its population, which satisfies the
 /// request, so the read is sized by the page the frame names (`d`), and the
 /// bound is keyed by it — the count by home's budget bounds its share of
-/// that population, and its directory walk is still the page's.
+/// that population, the retracted-links read's window bounds its share of
+/// the audit population, and each one's directory walk is still the page's.
 ///
 /// **Every other link read takes no permit**, each absence a fact about the
 /// read rather than a judgement:
@@ -588,7 +595,8 @@ fn names_an_account_or_the_node(start: &Tumbler) -> bool {
 
 /// Returns the document a region read names, the key of the per-document
 /// pool: `d` of `find_links_v`, `count_v`, `window_v`, `count_v_by_home`,
-/// `retrieve_endsets` and `delete_orphans`; `None` for every other op.
+/// `find_links_v_history`, `retrieve_endsets` and `delete_orphans`; `None`
+/// for every other op.
 ///
 /// The region family and the delete preview are the reads whose frame names
 /// the document whose spans they walk ([`is_class_scan`] states what each
@@ -602,6 +610,7 @@ pub(super) fn region_document(op: &Op) -> Option<&Address> {
         | Op::CountV { d, .. }
         | Op::WindowV { d, .. }
         | Op::CountVByHome { d, .. }
+        | Op::FindLinksVHistory { d, .. }
         | Op::RetrieveEndsets { d, .. }
         | Op::DeleteOrphans { d, .. } => Some(d),
         _ => None,

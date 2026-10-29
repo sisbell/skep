@@ -242,9 +242,13 @@ How a masked read answers:
   withheld answer is only ever a registered private document.
 * **A result set is filtered** at your class: `find_links_v`,
   `find_links_ftt`, `count_v`, `count_ftt`, `window_v`, `window_ftt`,
-  `retrieve_endsets`, `find_docs_containing` and `delete_orphans` answer
-  the rows whose home you may read — the census counts the filtered set,
-  the page turns over it.
+  `count_v_by_home`, `find_links_v_history`, `retrieve_endsets`,
+  `find_docs_containing` and `delete_orphans` answer the rows whose home
+  you may read — the census counts the filtered set, the page turns over
+  it, the count by home counts the readable homes, and the retracted-links
+  read lists a retracted link by ITS home while the position of a
+  retraction homed where you may not read still crosses on its row
+  (§Link discovery reads).
 * **A link address you may not read is absent**: `read_link` answers
   `link: null`, `follow_link` answers `{"err": "invalid"}`, `project` and
   `discoverable_from` answer `not_a_link` — exactly as a never-deposited
@@ -1251,6 +1255,25 @@ budget:
 {"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.2","n":1}],"resp":"homes"}
 ```
 
+**`links`** — find_links_v_history: one window of the retracted-links
+read, `links` one row per link in ascending address order strictly past
+the cursor — `a` the link; `at` the POSITION of the commit that minted
+it, as `read_link`'s `at` is, `null` for a link a build before the
+position map minted; `retracted_at` the position of its EARLIEST
+retraction across every home, `null` where the link is active and `null`
+where every retraction of it predates the position map — and `next` and
+`exhausted` as a `page`'s window carries them, the cursor a link address.
+Positions only, no time: how old a link is stays `read_link`'s `time` at
+the act. A retraction's address is never carried, so a link retracted
+from a draft you may not read shows its retraction's position and nothing
+of its home (§Link discovery reads). This example's window of two is
+full: an active link beside one retracted at position 8:
+
+<!-- wire: response links -->
+```json
+{"as_of":9,"exhausted":false,"links":[{"a":"1.0.1.0.1.0.2.1","at":5,"retracted_at":null},{"a":"1.0.1.0.1.0.2.2","at":6,"retracted_at":8}],"next":"1.0.1.0.1.0.2.2","resp":"links"}
+```
+
 **`endsets`** — retrieve_endsets: `(slot, endset)` pairs.
 
 <!-- wire: response endsets -->
@@ -2141,7 +2164,8 @@ latest trunk member — and never the pre-chain arrangement a shot
 superseded: `retrieve_v`, `retrieve_doc_v_span`,
 `retrieve_doc_v_span_set`, `show_origin`, `compare`, the whole region
 family — `image`, `find_links_v`, `count_v`, `window_v`,
-`retrieve_endsets` — and the pointwise pair, `project` and
+`count_v_by_home`, `find_links_v_history`, `retrieve_endsets` — and the
+pointwise pair, `project` and
 `discoverable_from`, which read the link against the arrangement a
 reader of `d` sees, so a projection's V-coordinates are the head's, as
 `image`'s are; `version` of a bare address shares the head's
@@ -4669,12 +4693,14 @@ population. `/op` admits at most
 class, and across every session and the guest — one pool for the board,
 no per-principal quota. THE PER-DOCUMENT POOL bounds the REGION READS —
 `find_links_v`, `count_v`, `window_v`, `count_v_by_home`,
-`retrieve_endsets` and `delete_orphans`, each of whose frames names the
+`find_links_v_history`, `retrieve_endsets` and `delete_orphans`, each of
+whose frames names the
 document `d` whose spans it walks, and each of which costs the homes
 touching that page and their readable links: a flooded PUBLIC page costs
 its population, which satisfies the request, so the read is sized by its
-page (the count by home's budget bounds its share of that population; its
-directory walk is still the page's). It is keyed by
+page (the count by home's budget bounds its share of that population, the
+retracted-links read's window bounds its share of the audit population;
+each one's directory walk is still the page's). It is keyed by
 `d`: at most **`MAX_REGION_READS_PER_DOCUMENT` = 2** region reads of one
 document at once, inside a ceiling of
 **`MAX_CONCURRENT_REGION_READS` = 6** region reads across every document,
@@ -4826,6 +4852,57 @@ is `count_v`'s answer to the same reader.
 <!-- wire: request count_v_by_home -->
 ```json
 {"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}
+```
+
+**`find_links_v_history`** — THE RETRACTED-LINKS READ: every link ever
+made whose endsets touch the region, active or RETRACTED — THE AUDIT VIEW,
+where every other region read answers the active one — windowed over homes
+as `window_v` is, up to `n` rows strictly past the cursor `cur` in
+ascending address order, `n` the request's and `0` read as `1`, the cursor
+a link address and every address a legal cursor. → `links`: one row
+`{a, at, retracted_at}` per link — `at` the position of the commit that
+minted it, `retracted_at` the position of its earliest retraction, `null`
+where it is active — with `next` and `exhausted` as a `page`'s. Its input
+is the "as published" switch's: a reader at version k asks it once over
+the version's whole extent and keeps, by position alone, the links made
+before the version's tenure ended and not retracted before it — a link
+retracted AFTER the tenure shows, one retracted before it is off — so the
+switch's retracted half is one live read of the present board at any age,
+and `/op-at` stays the forensic replay (§Reading history). THE EARLIEST
+RETRACTION DECIDES: a link may be retracted more than once — a second
+home's `nullify` of one target mints a distinct retraction record, and a
+publication's `retract` entry another — and `retracted_at` is the LEAST
+position among every record that retracted it, whatever home each sits
+in, since "not retracted before that point" is a fact of the world and
+not of a home. Positions only, no time: how old a link or its retraction
+is stays `read_link`'s `time` at the act. `null` where a position predates
+the position map — a link, or every retraction of a link, a build before
+the map minted — as `read_link`'s `at` is `null` for such a link; a row
+so served cannot be told from an active one. THE MASK is at each LINK's
+home (§The read predicate): a link homed where you may not read is
+neither a row nor paid for, retracted or not; a retraction homed where you
+may not read — a draft-homed `nullify` of a public link, which the write
+admits — still shows ON THE LINK'S ROW as its position, class-invariant as
+every position is and as the change feed's straddle already shows it
+(§The change feed), and this read serves NO retraction's address at all:
+PUB-6.47's bound restated — what crosses of such a retraction is its
+commit position and never its home, its record or a byte of it, the
+record itself findable by `read_link` only where you may read its home.
+`d` is a document argument (unreadable → `withheld`). It draws on the
+per-document pool as `find_links_v` does, and COSTS the region family's
+walk over the audit slice: the directory's steps and a test per candidate
+home, and per admitted home its stab under the audit view — the home's
+links ever made on the region, A POPULATION THAT ONLY GROWS, since a
+retraction removes nothing from it — the window no further than the home
+that fills its `n`, plus two position lookups per row, the link's and its
+retractions'; so a window is bounded by `n` rows and the homes it passes,
+never by the audit population, and a pass over a crowded passage costs
+every link ever made on it. The active rows of its answer — those with no
+`retracted_at` — are `find_links_v`'s answer to the same reader.
+
+<!-- wire: request find_links_v_history -->
+```json
+{"cur":null,"d":"1.0.1.0.1","n":16,"op":"find_links_v_history","region":[{"start":"1.1","width":"0.5"}]}
 ```
 
 **`retrieve_endsets`** — the endset fragments of active links falling in
@@ -5020,7 +5097,9 @@ is byte-identical to the same frame on `/op`.
 folding the journal forward from the nearest on-disk checkpoint at or
 below it — per request, uncached. This is an observation surface, not a
 serving path: fine for history panes and diff tooling, wrong for a hot
-loop. Reconstruction is bounded: at most
+loop — and never the "as published" switch, whose retracted half is the
+live `find_links_v_history` read of the present board (§Link discovery
+reads), `/op-at` staying the forensic replay of a past state. Reconstruction is bounded: at most
 **`MAX_CONCURRENT_RECONSTRUCTIONS` = 2** run concurrently — the pool's
 width, a daemon constant this document names as it names the class-scan
 pool's (§Link discovery reads) — and a

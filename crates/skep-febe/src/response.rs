@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use skep_address::{Address, Nat, SpanSet};
 use skep_arrangement::{Run, ShotTerms};
 use skep_content::Val;
-use skep_discovery::{OrphanReport, SupClaim, Window};
+use skep_discovery::{Cursor, LinkRow, OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
 use skep_namespace::PrincipalId;
@@ -268,6 +268,15 @@ pub enum Response {
     /// them: the rows' sum is at least the budget where `exhausted` is
     /// false, the whole count where it is true.
     Homes { homes: Vec<(Address, usize)>, exhausted: bool, as_of: Seq },
+    /// find_links_v_history (the link-sets design §7, lane 7): one window
+    /// of the retracted-links read — the links whose endsets touch the
+    /// region under the AUDIT view, active or retracted, homed where the
+    /// caller may read, in ascending address order past the cursor, each
+    /// M8's [`LinkRow`] with the link's commit position and its earliest
+    /// retraction's, positions only; `next` and `exhausted` as a `page`'s,
+    /// the cursor a link address. M8's `LinkRows`, whose relations hold of
+    /// the three as that type states them.
+    Links { links: Vec<LinkRow>, next: Cursor, exhausted: bool, as_of: Seq },
     /// RETRIEVEENDSETS pairs.
     Endsets { pairs: Vec<(usize, Endset)>, as_of: Seq },
     /// V→I image.
@@ -427,10 +436,10 @@ impl Response {
     pub fn as_of(&self) -> Option<Seq> {
         // One catalogue, written here and in `as_of_mut`: the coordinate law
         // (`every_read_reports_the_committed_head_as_its_as_of`) asks both of
-        // nineteen of the twenty-two read shapes — every one but the read by
-        // identity's, the content frontier's and the count by home's — and
-        // counts the shapes it visits, so the two cannot come to classify
-        // one of those nineteen differently.
+        // twenty-one of the twenty-three read shapes — every one but the
+        // read by identity's and the content frontier's — and counts the
+        // shapes it visits, so the two cannot come to classify one of those
+        // twenty-one differently.
         match self {
             Response::Delivery { as_of, .. }
             | Response::IDelivery { as_of, .. }
@@ -442,6 +451,7 @@ impl Response {
             | Response::Count { as_of, .. }
             | Response::Page { as_of, .. }
             | Response::Homes { as_of, .. }
+            | Response::Links { as_of, .. }
             | Response::Endsets { as_of, .. }
             | Response::Runs { as_of, .. }
             | Response::Bool { as_of, .. }
@@ -479,6 +489,7 @@ impl Response {
             | Response::Count { as_of, .. }
             | Response::Page { as_of, .. }
             | Response::Homes { as_of, .. }
+            | Response::Links { as_of, .. }
             | Response::Endsets { as_of, .. }
             | Response::Runs { as_of, .. }
             | Response::Bool { as_of, .. }
@@ -550,6 +561,7 @@ impl Response {
             | Response::Count { .. }
             | Response::Page { .. }
             | Response::Homes { .. }
+            | Response::Links { .. }
             | Response::Endsets { .. }
             | Response::Runs { .. }
             | Response::Bool { .. }

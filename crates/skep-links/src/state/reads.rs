@@ -1,7 +1,9 @@
 //! The pure read surface on [`LinkState`] (§E/§F/§G).
 //!
 //! It holds the raw reads (READLINK / FOLLOWLINK), the typed-relation
-//! observers (Observe + the default predicates + BH1–BH4), ASN-0125
+//! observers (Observe + the default predicates + BH1–BH4) with the tombstone
+//! reads beside them — `is_nullified`, and `retractions_of`, the records
+//! that retracted a root — ASN-0125
 //! currency, and the discovery primitives for M8: `stab` / `match_links` /
 //! `type_slice`, the homes-first pair beneath them — `homes_touching`, the
 //! candidate homes a query could meet, and `stab_in`, one home's hits, with
@@ -400,6 +402,35 @@ impl LinkState {
     /// retired roots — so the two are not interchangeable at a probe.
     pub fn is_nullified(&self, a: &Address) -> bool {
         self.nullified(a.tumbler())
+    }
+
+    /// Returns the addresses of the `[R]` records that retracted `a`, in
+    /// address order — the record beside the tombstone (the link-sets
+    /// design §7, lane 7).
+    ///
+    /// It answers off the retractions hint the fold keeps beside
+    /// `nullified`, so it is a point lookup and never a walk: empty where
+    /// `a` is not a retraction root, one address per distinct retraction of
+    /// it otherwise — a second home's retraction of one target is a second
+    /// address, a retraction of a retraction is none of the target's. Every
+    /// address answered is a key of `links`, a resident `[R]` record,
+    /// lifted at the store's boundary as every §G result is. Which came
+    /// first is M3's to say: a reader after the earliest asks the position
+    /// map of each. Monotone, as the tombstone set is: a retracted
+    /// retraction stays here, and so does its target's root.
+    ///
+    /// **What this costs.** One lookup of the root and one lift per address
+    /// answered; nothing of any home, and no predicate — the root is the
+    /// caller's and the answer names records a caller may yet not read, so a
+    /// reader for a class answers a position off each address and never the
+    /// address itself (M8's audit region read; PUB-6.47). `tests/it/nullify.rs`
+    /// holds the shapes, `tests/it/recovery.rs` the rebuild.
+    pub fn retractions_of(&self, a: &Address) -> impl Iterator<Item = Address> + '_ {
+        self.hints
+            .retractions
+            .get(a.tumbler())
+            .into_iter()
+            .flat_map(|records| records.iter().map(lift))
     }
 
     /// Returns whether the probe falls under BH1's read-filter (§7).

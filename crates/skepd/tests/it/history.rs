@@ -185,6 +185,98 @@ fn find_links(doc: &str) -> String {
     )
 }
 
+/// The retracted-links read over the same region, from the start.
+fn find_links_history(doc: &str) -> String {
+    format!(
+        r#"{{"op":"find_links_v_history","cur":null,"n":16,"d":"{doc}","region":[{{"start":"1.1","width":"0.1"}}]}}"#
+    )
+}
+
+/// A `links` answer's rows as `(a, at, retracted_at)`.
+fn rows_of(v: &Value) -> Vec<(String, Option<u64>, Option<u64>)> {
+    expect_resp(v, "links")["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|r| (r["a"].as_str().expect("a").to_string(), r["at"].as_u64(), r["retracted_at"].as_u64()))
+        .collect()
+}
+
+/// An `addrs` answer's addresses.
+fn addrs_in(v: &Value) -> Vec<String> {
+    expect_resp(v, "addrs")["addrs"]
+        .as_array()
+        .expect("addrs")
+        .iter()
+        .map(|a| a.as_str().expect("an address").to_string())
+        .collect()
+}
+
+/// THE RETRACTED-LINKS READ AGAINST THE REPLAY (the link-sets design §7,
+/// lane 7: `/op-at` stays the forensic replay, never the switch): on the
+/// scenario's board the LIVE `find_links_v_history` at the head answers the
+/// link as a row retracted at the retraction's position and the retraction
+/// as an active row at its own — the active rows exactly the head's
+/// `find_links_v`, on `/op` and on `/op-at` alike, and the retracted rows
+/// exactly the links `/op-at`'s `find_links_v` answered at the position
+/// before the retraction and the head's does not. Replayed itself at each
+/// of the three positions the suite uses, the read answers what stood: no
+/// row before the link, the link active at its mint, and at the retraction
+/// the head's own answer — a rebuilt world's hint agreeing with the live
+/// one. `/op-at` at the head is byte-identical to `/op`.
+#[test]
+fn the_retracted_links_read_at_the_head_agrees_with_the_replay_at_each_position() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let scenario = seed(port);
+    let head = head_of(port);
+    let owner = Some(scenario.token.as_str());
+    let (link, retraction) = (scenario.link.clone(), scenario.retraction.clone());
+
+    // The live read at the head: the link, retracted at the retraction's
+    // position; the retraction, active at its own.
+    let live = op(port, owner, &find_links_history(&scenario.doc1));
+    assert_eq!(
+        rows_of(&live),
+        vec![
+            (link.clone(), Some(scenario.at_link), Some(scenario.at_nullify)),
+            (retraction.clone(), Some(scenario.at_nullify), None),
+        ],
+        "{live}"
+    );
+    assert_eq!(live["exhausted"], Value::Bool(true));
+    assert_eq!(live["next"].as_str(), Some(retraction.as_str()));
+    let active_rows: Vec<String> =
+        rows_of(&live).into_iter().filter(|(_, _, r)| r.is_none()).map(|(a, _, _)| a).collect();
+    let retracted_rows: Vec<String> =
+        rows_of(&live).into_iter().filter(|(_, _, r)| r.is_some()).map(|(a, _, _)| a).collect();
+    // The active rows are the head's `find_links_v`, live and replayed.
+    assert_eq!(active_rows, addrs_in(&op(port, owner, &find_links(&scenario.doc1))));
+    assert_eq!(active_rows, addrs_in(&op_at_ok(port, owner, head, &find_links(&scenario.doc1))));
+    // The retracted rows are what the replay answered before the retraction
+    // and the head does not.
+    let before = addrs_in(&op_at_ok(port, owner, scenario.at_link, &find_links(&scenario.doc1)));
+    let gone: Vec<String> = before.into_iter().filter(|a| !active_rows.contains(a)).collect();
+    assert_eq!(retracted_rows, gone, "the replay before the retraction found exactly the retracted rows");
+
+    // The read replayed at the three positions: nothing, the link active,
+    // the head's answer.
+    let v = op_at_ok(port, owner, scenario.at_i2, &find_links_history(&scenario.doc1));
+    assert_eq!(rows_of(&v), vec![]);
+    assert_eq!(v["as_of"].as_u64(), Some(scenario.at_i2));
+    let v = op_at_ok(port, owner, scenario.at_link, &find_links_history(&scenario.doc1));
+    assert_eq!(rows_of(&v), vec![(link.clone(), Some(scenario.at_link), None)], "not yet retracted at its mint");
+    let v = op_at_ok(port, owner, scenario.at_nullify, &find_links_history(&scenario.doc1));
+    assert_eq!(rows_of(&v), rows_of(&live), "the rebuilt world's hint agrees with the live one");
+    let (st, replayed) = op_at_raw(port, owner, head, &find_links_history(&scenario.doc1));
+    let (st_live, live_bytes) =
+        http(port, "POST", "/op", owner, find_links_history(&scenario.doc1).as_bytes());
+    assert_eq!((st, st_live), (200, 200));
+    assert_eq!(replayed, live_bytes, "/op-at at the head is byte-identical to /op");
+    sd.shutdown();
+}
+
 #[test]
 fn historical_reads_answer_every_earlier_state() {
     let dir = tempfile::tempdir().expect("tempdir");

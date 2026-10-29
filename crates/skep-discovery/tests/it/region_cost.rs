@@ -26,6 +26,15 @@
 //! `count_v` on the same board: the budgeted count is held FLAT in F past
 //! the budget — within 2× of its 10⁴ figure at 10⁵ — while `count_v` grows
 //! with F. Each prints its figures with the machine's load.
+//!
+//! And the retracted-links lane's acceptance (the link-sets design §7, lane
+//! 7): S34's board shape with a RETRACTED population — F active and F
+//! retracted links on the passage in a thousand homes, half the homes
+//! unreadable to the guest — read by `find_links_v_history` windowed at 64
+//! rows, by the reader of every home and by the guest, against
+//! `findlinks_v` on the same board, at F = 10⁴ and 10⁵: the window is held
+//! FLAT in the audit population and in the unreadable homes, while
+//! `findlinks_v` grows with F.
 
 use std::time::{Duration, Instant};
 
@@ -35,8 +44,8 @@ use crate::heap::settled_heap_bytes;
 use common::*;
 use skep_address::Address;
 use skep_discovery::{
-    count_v_by_home_on, count_v_on, findlinks_ftt_on, findlinks_v_on, image_on, FourSet, Run,
-    SlotSpec,
+    count_v_by_home_on, count_v_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on,
+    image_on, FourSet, Run, SlotSpec,
 };
 use skep_kernel::{Kernel, Snapshot};
 use skep_links::{enc, Endset, HasLinks, LinkWriter, View, FROM};
@@ -341,6 +350,165 @@ fn the_budgeted_count_by_home_over_a_flooded_public_passage_is_flat_in_the_flood
         "the control: count_v grows with F: {:.3} ms at 10⁵ against {:.3} ms at 10⁴",
         ms(count_v_p50[1]),
         ms(count_v_p50[0])
+    );
+}
+
+/// A world of `flood` ACTIVE links and `flood` RETRACTED ones on the
+/// passage, homed round-robin in `homes` documents past the passage
+/// document — each home's links spread over the passage as [`world`]'s are,
+/// every second link of a home retracted from that home, so the home holds
+/// its active links, its retracted ones and their retraction records, whose
+/// FROM covers the home's own content and touches nothing of the passage —
+/// beside the passage document's own [`OWN`] links.
+fn retracted_world(homes: u32, flood: u32) -> Kernel<World> {
+    assert!(flood % homes == 0 && (flood / homes) % 2 == 0, "each home holds as many retracted links as active");
+    let k = kernel_with_documents(1 + homes);
+    seed_content(&k, &doc(1), CONTENT);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    for j in 0..OWN {
+        link(&store, &doc(1), &[ca(PASSAGE_START + j)], &[ca(CONTENT + 40 + j)]);
+    }
+    for i in 0..2 * flood {
+        let home = 2 + i % homes;
+        let position = PASSAGE_START + (10 * (i / homes) + i % homes) % PASSAGE;
+        let minted = link(&store, &doc(home), &[ca(position)], &[a(&[1, 0, 1, 0, home, 0, 1, 1])]);
+        if (i / homes) % 2 == 1 {
+            store.nullify(SYS, &doc(home), &minted).expect("nullify succeeds");
+        }
+    }
+    k
+}
+
+/// The retracted-links read's window: the rows of the acceptance.
+const HISTORY_WINDOW: usize = 64;
+
+/// The acceptance's share per home: ten active links and ten retracted, the
+/// population grown by HOMES — a window reads the home that fills it whole
+/// and cuts it (the crate doc's `## Cost`), so a population grown per home
+/// prices that home's share, which is the window's own price, and not the
+/// population past the window, which is what the cell holds flat.
+const PER_HOME: u32 = 10;
+
+/// THE RETRACTED-LINKS LANE'S ACCEPTANCE (the link-sets design §7, lane 7;
+/// the owner's rulings of 2026-10-28): S34's board shape with a retracted
+/// population — F active and F retracted links on the hundred-position
+/// passage, ten of each per home in F/10 homes (a thousand at 10⁴), half
+/// of them unreadable to the guest (the odd-numbered homes) — read by
+/// `find_links_v_history` from the start at a window of sixty-four rows, by
+/// the reader of every home and by the guest, against `findlinks_v` by the
+/// reader of every home, at F = 10⁴ and 10⁵ in release — 10⁴ and 4·10⁴ in
+/// the debug gate, whose seeding of 10⁵ links and their retractions would
+/// run against its per-test cap. The expectation, tested: the window is
+/// BOUNDED BY ITS `n` and not by the audit population — its p50 at the
+/// larger F within 2× of its p50 at 10⁴, or of a tenth of a millisecond
+/// where the 10⁴ figure is under that, the release-scale floor lane A's
+/// acceptance states and for its reason — and FLAT in the unreadable homes
+/// — the guest's p50 within 2× of every home's reader's at each F, or of
+/// the same floor, the guest passing the homes it may not read on one test
+/// apiece and reading none of their links — while `findlinks_v`, which
+/// takes the whole active passage, grows with F. The rows are held to their
+/// law at each F: sixty-four of them, the active ones `findlinks_v`'s
+/// prefix, the retracted ones carrying a retraction's position past their
+/// own. The figures are printed with the load; nothing is corrected.
+/// MEASURED 2026-10-28, release at load 7–15, the population grown PER HOME
+/// instead (a hundred of each per home at 10⁵): the window 0.132 ms p50 at
+/// 10⁴ and 0.291 ms at 10⁵ — the filling home's share, two hundred audit
+/// hits lifted and cut to sixty-four, not the population — which is why
+/// the share is held and the homes grow.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn the_retracted_links_window_over_a_retracted_population_is_flat_in_the_population_and_the_unreadable_homes() {
+    let rounds = setting("SKEP_REGION_COST_ROUNDS", 50);
+    let warmup = setting("SKEP_REGION_COST_WARMUP", 5);
+    let region = [vspan(1, PASSAGE_START, PASSAGE)];
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let floods: [u32; 2] = if cfg!(debug_assertions) { [10_000, 40_000] } else { FLOODS };
+    let own = usize::try_from(OWN).expect("small");
+    let mut everyone_p50 = Vec::new();
+    let mut guest_p50 = Vec::new();
+    let mut findlinks_p50 = Vec::new();
+    for flood in floods {
+        let homes = flood / PER_HOME;
+        // The guest may read the passage document and the even-numbered
+        // homes: half the homes, interleaved with the half it may not.
+        let readable_to_the_guest: std::collections::HashSet<Address> =
+            (1..=1 + homes).filter(|h| *h == 1 || h % 2 == 0).map(doc).collect();
+        let guest = |d: &Address| -> bool { readable_to_the_guest.contains(d) };
+        let seeding = Instant::now();
+        let k = retracted_world(homes, flood);
+        let seeded = seeding.elapsed();
+        let snap = k.snapshot();
+        let history = |readable: &dyn Fn(&Address) -> bool| {
+            find_links_v_history_on(&snap, &doc(1), &region, None, HISTORY_WINDOW, readable)
+                .expect("find_links_v_history over a registered document and a well-formed region")
+        };
+        let whole = || {
+            findlinks_v_on(&snap, &doc(1), &region, &every_home)
+                .expect("findlinks_v over a registered document and a well-formed region")
+        };
+        // The rows' law, at each F and for each reader.
+        let active = whole();
+        assert_eq!(active.len(), own + usize::try_from(flood).expect("small"), "F active links beside the page's own");
+        for (who, reader) in [("every home", &every_home as &dyn Fn(&Address) -> bool), ("the guest", &guest)] {
+            let rows = history(reader);
+            assert_eq!(rows.links.len(), HISTORY_WINDOW, "{who}: a full window");
+            assert!(!rows.exhausted, "{who}: the population is past the window");
+            let active_in_window: Vec<Address> = active_rows(&rows);
+            let readable_active: Vec<Address> = active.iter().filter(|a| reader(&skep_address::document_of(a).expect("a home"))).cloned().collect();
+            assert!(readable_active.starts_with(&active_in_window), "{who}: the active rows are findlinks_v's prefix");
+            assert!(rows.links.iter().all(|row| reader(&skep_address::document_of(&row.a).expect("a home"))), "{who}: every row's home readable");
+            assert!(rows.links.iter().any(|row| row.retracted_at.is_some()), "{who}: a retracted row among the sixty-four");
+            assert!(rows.links.iter().all(|row| row.at.is_some() && row.retracted_at.is_none_or(|r| r > row.at.expect("minted"))), "{who}: a retraction follows its link");
+        }
+        let everyone_window = || history(&every_home).links.len();
+        let guest_window = || history(&guest).links.len();
+        let whole_count = || whole().len();
+        let arms: [(&str, &dyn Fn() -> usize); 3] = [
+            ("find_links_v_history, every home", &everyone_window),
+            ("find_links_v_history, the guest", &guest_window),
+            ("findlinks_v, every home", &whole_count),
+        ];
+        let samples = timed(rounds, warmup, &arms);
+        eprintln!(
+            "RETRACTED-LINKS ACCEPTANCE ({profile}): F = {flood} active + {flood} retracted links in {homes} homes, \
+             half unreadable to the guest; window {HISTORY_WINDOW}; {rounds} rounds after {warmup} warm-up; \
+             seeding {:.1} s; load {}",
+            seeded.as_secs_f64(),
+            loadavg()
+        );
+        for ((name, _), sorted) in arms.iter().zip(&samples) {
+            eprintln!("{name}: p50 {:.3} ms, p99 {:.3} ms", ms(median(sorted)), ms(p99(sorted)));
+        }
+        everyone_p50.push(median(&samples[0]));
+        guest_p50.push(median(&samples[1]));
+        findlinks_p50.push(median(&samples[2]));
+    }
+    let floor = Duration::from_micros(100);
+    for (who, p50) in [("every home's reader", &everyone_p50), ("the guest", &guest_p50)] {
+        assert!(
+            p50[1] <= 2 * p50[0].max(floor),
+            "{who}: the window is bounded by its n, not the audit population: {:.3} ms at F = {} against {:.3} ms at F = {}",
+            ms(p50[1]),
+            floods[1],
+            ms(p50[0]),
+            floods[0]
+        );
+    }
+    for (i, flood) in floods.iter().enumerate() {
+        assert!(
+            guest_p50[i] <= 2 * everyone_p50[i].max(floor),
+            "F = {flood}: flat in the unreadable homes: the guest {:.3} ms against every home's reader {:.3} ms",
+            ms(guest_p50[i]),
+            ms(everyone_p50[i])
+        );
+    }
+    assert!(
+        findlinks_p50[1] > findlinks_p50[0],
+        "the control: findlinks_v grows with F: {:.3} ms at F = {} against {:.3} ms at F = {}",
+        ms(findlinks_p50[1]),
+        floods[1],
+        ms(findlinks_p50[0]),
+        floods[0]
     );
 }
 

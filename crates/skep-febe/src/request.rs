@@ -490,6 +490,18 @@ pub enum Op {
     /// ⟹ `withheld` before dispatch (PUB-6.12); a home in `except` is
     /// never consulted and never answers anything.
     CountVByHome { d: Address, region: Vec<Span>, n: usize, except: Vec<Address> },
+    /// The retracted-links read (the link-sets design §7, lane 7; the
+    /// owner's rulings of 2026-10-28): every link ever made whose endsets
+    /// touch the region, active or RETRACTED — the AUDIT view, where every
+    /// other region read answers the active one — windowed over homes as
+    /// `window_v` is, each row the link with the position of the commit that
+    /// minted it and, where retracted, its earliest retraction's position;
+    /// positions only, no time. `d` is the doc-argument, as `window_v`'s is:
+    /// unreadable ⟹ `withheld` before dispatch (PUB-6.12); the rows are
+    /// filtered at each LINK's home, and a retraction homed where the caller
+    /// may not read crosses as its position alone, never its address
+    /// (PUB-6.47).
+    FindLinksVHistory { d: Address, region: Vec<Span>, cur: Cursor, n: usize },
     /// RETRIEVEENDSETS (ASN-0131).
     RetrieveEndsets { d: Address, region: Vec<Span> },
     /// I→V projection of a link slot into a document (ASN-0098).
@@ -823,6 +835,8 @@ pub enum OpKind {
     WindowFtt,
     /// The kind of [`Op::CountVByHome`].
     CountVByHome,
+    /// The kind of [`Op::FindLinksVHistory`].
+    FindLinksVHistory,
     /// The kind of [`Op::RetrieveEndsets`].
     RetrieveEndsets,
     /// The kind of [`Op::Project`].
@@ -896,6 +910,7 @@ impl Op {
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -973,6 +988,7 @@ impl Op {
             Op::WindowV { .. } => OpKind::WindowV,
             Op::WindowFtt { .. } => OpKind::WindowFtt,
             Op::CountVByHome { .. } => OpKind::CountVByHome,
+            Op::FindLinksVHistory { .. } => OpKind::FindLinksVHistory,
             Op::RetrieveEndsets { .. } => OpKind::RetrieveEndsets,
             Op::Project { .. } => OpKind::Project,
             Op::DiscoverableFrom { .. } => OpKind::DiscoverableFrom,
@@ -1027,6 +1043,7 @@ impl Op {
             | Op::CountV { d, .. }
             | Op::WindowV { d, .. }
             | Op::CountVByHome { d, .. }
+            | Op::FindLinksVHistory { d, .. }
             | Op::RetrieveEndsets { d, .. }
             | Op::DeleteOrphans { d, .. }
             | Op::Project { d, .. }
@@ -1149,6 +1166,7 @@ impl Op {
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -1284,6 +1302,7 @@ impl Op {
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
             | Op::CountVByHome { .. }
+            | Op::FindLinksVHistory { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }

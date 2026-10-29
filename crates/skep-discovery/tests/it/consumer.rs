@@ -13,10 +13,10 @@ use std::collections::HashSet;
 use common::*;
 use skep_address::{Address, Span};
 use skep_discovery::{
-    count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, HomeCounts, OrphanError,
-    OrphanReport, QueryError, SlotSpec, SupClaim, Window,
+    count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, HomeCounts, LinkRow,
+    LinkRows, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
 };
-use skep_kernel::Snapshot;
+use skep_kernel::{Seq, Snapshot};
 use skep_links::{enc, Endset, LinkWriter};
 
 #[test]
@@ -146,6 +146,20 @@ fn the_value_surface_is_hashable_and_keys_by_representation() {
         homes: vec![(doc1(), 2)],
         exhausted: false,
     }));
+    let row = LinkRow {
+        a: la(1),
+        at: Some(Seq(3)),
+        retracted_at: None,
+    };
+    let mut rows: HashSet<LinkRow> = HashSet::new();
+    assert!(rows.insert(row.clone()));
+    assert!(!rows.insert(row.clone()));
+    let mut pages: HashSet<LinkRows> = HashSet::new();
+    assert!(pages.insert(LinkRows {
+        links: vec![row],
+        next: Some(la(1)),
+        exhausted: true,
+    }));
     let mut reports: HashSet<OrphanReport> = HashSet::new();
     assert!(reports.insert(OrphanReport {
         orphaned: vec![la(1)]
@@ -212,7 +226,7 @@ fn m8s_request_and_answer_types_are_reachable_through_this_crate() {
     assert_eq!(pairs, vec![(m8::FROM, m8::enc(&[ca(1)]))]);
     let report: m8::OrphanReport =
         m8::delete_orphans_on(&snap, &doc1(), &at, &n(1), &every_home).expect("preview");
-    assert_eq!(report.orphaned, vec![e1, e2]);
+    assert_eq!(report.orphaned, vec![e1.clone(), e2.clone()]);
     // The count by home's answer, under a budget the request names and an
     // `except` list of homes.
     let counts: m8::HomeCounts =
@@ -225,6 +239,17 @@ fn m8s_request_and_answer_types_are_reachable_through_this_crate() {
             exhausted: true
         }
     );
+    // The retracted-links read's window and its rows, the cursor a link
+    // address as `window_v`'s is: the two links, each at its own position,
+    // neither retracted.
+    let start: m8::Cursor = None;
+    let rows: m8::LinkRows =
+        m8::find_links_v_history_on(&snap, &doc1(), &region, start, 64, &every_home)
+            .expect("find_links_v_history");
+    let addresses: Vec<&Address> = rows.links.iter().map(|row: &m8::LinkRow| &row.a).collect();
+    assert_eq!(addresses, vec![&e1, &e2]);
+    assert!(rows.links.iter().all(|row| row.at.is_some() && row.retracted_at.is_none()));
+    assert_eq!((rows.next, rows.exhausted), (Some(e2), true));
 }
 
 /// Both rejection enums are exhaustively matchable from OUTSIDE the crate —

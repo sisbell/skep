@@ -48,7 +48,7 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The 26 response shapes every client must decode.
+/// The 27 response shapes every client must decode.
 ///
 /// wire.md documents them (§The response envelope + §Rejections); every
 /// `200` answer on `/op` carries one of these in `resp`. `doc_metadata` and
@@ -57,7 +57,7 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
 /// discovery read's (PUB-8.47); `i_delivery` and `frontier` the read by
 /// identity's and the content chain's frontier's (wire.md §Content &
 /// provenance reads); `homes` the count by home's (the link-sets design §7,
-/// W10 (a)).
+/// W10 (a)); `links` the retracted-links read's (the design's lane 7).
 pub const RESP_SHAPES: &[&str] = &[
     "ack",
     "ack_addr",
@@ -72,6 +72,7 @@ pub const RESP_SHAPES: &[&str] = &[
     "count",
     "page",
     "homes",
+    "links",
     "endsets",
     "runs",
     "bool",

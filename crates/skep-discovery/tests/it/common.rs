@@ -23,9 +23,10 @@ use skep_arrangement::{
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
-    delete_orphans_on, findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on,
-    project_on, retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, FourSet, HomeCounts,
-    OrphanError, OrphanReport, QueryError, SupClaim, Window, MAX_IMAGE_RUNS,
+    delete_orphans_on, find_links_v_history_on, findlinks_ftt_on, findlinks_v_on, image_on,
+    in_claims_on, out_claims_on, project_on, retrieve_endsets_on, window_ftt_on, window_v_on,
+    Cursor, FourSet, HomeCounts, LinkRows, OrphanError, OrphanReport, QueryError, SupClaim,
+    Window, MAX_IMAGE_RUNS,
 };
 use skep_kernel::{
     CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot, WorldState,
@@ -618,6 +619,16 @@ impl Reads<'_> {
         count_v_by_home_on(&self.0.snapshot(), d, region, n, except, &every_home)
     }
 
+    pub fn find_links_v_history(
+        &self,
+        d: &Address,
+        region: &[Span],
+        cur: Cursor,
+        n: usize,
+    ) -> Result<LinkRows, QueryError> {
+        find_links_v_history_on(&self.0.snapshot(), d, region, cur, n, &every_home)
+    }
+
     pub fn retrieve_endsets(
         &self,
         d: &Address,
@@ -696,6 +707,28 @@ pub fn by_home(links: &[Address]) -> Vec<(Address, usize)> {
 /// The rows' sum: the number a corner draws off a count by home.
 pub fn counted(counts: &HomeCounts) -> usize {
     counts.homes.iter().map(|(_, n)| n).sum()
+}
+
+/// A retracted-links window as a [`Window`] over its rows' addresses — what
+/// [`drain_window`] holds a page to, the rows' positions being the row law's
+/// and not the window's.
+pub fn rows_window(rows: &LinkRows) -> Window {
+    Window {
+        batch: rows.links.iter().map(|row| row.a.clone()).collect(),
+        next: rows.next.clone(),
+        exhausted: rows.exhausted,
+    }
+}
+
+/// The addresses of a retracted-links answer's ACTIVE rows — those carrying
+/// no retraction position — in the order they came: what `findlinks_v` must
+/// answer off the same selection under the same reader.
+pub fn active_rows(rows: &LinkRows) -> Vec<Address> {
+    rows.links
+        .iter()
+        .filter(|row| row.retracted_at.is_none())
+        .map(|row| row.a.clone())
+        .collect()
 }
 
 // ───────────────────── the window law and a wide endset ─────────────────────

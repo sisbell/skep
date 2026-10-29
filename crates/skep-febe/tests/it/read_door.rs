@@ -511,9 +511,51 @@ fn link_discovery_drops_links_homed_where_the_caller_cannot_read() {
     let w = page(ex(
         &fx.febe,
         other,
-        Op::WindowV { d: readable_doc, region: region(), cur: None, n: 1 },
+        Op::WindowV { d: readable_doc.clone(), region: region(), cur: None, n: 1 },
     ));
-    assert_eq!(w.batch, vec![readable_l]);
+    assert_eq!(w.batch, vec![readable_l.clone()]);
+
+    // The retracted-links read (the link-sets design §7, lane 7) filters at
+    // the LINK's home like the rest: a link homed where the caller cannot
+    // read is neither a row nor paid for, retracted or not — the owner's
+    // rows are both links, the stranger's the readable one, each at its own
+    // position and none retracted.
+    let history = |session, cur: Option<Address>, n: usize| match ex(
+        &fx.febe,
+        session,
+        Op::FindLinksVHistory { d: readable_doc.clone(), region: region(), cur, n },
+    ) {
+        Response::Links { links, next, exhausted, .. } => (links, next, exhausted),
+        other => panic!("expected Links, got {other:?}"),
+    };
+    let (rows, _, exhausted) = history(fx.user, None, 64);
+    assert_eq!(rows.iter().map(|r| r.a.clone()).collect::<Vec<_>>(), vec![unreadable_l.clone(), readable_l.clone()]);
+    assert!(rows.iter().all(|r| r.at.is_some() && r.retracted_at.is_none()) && exhausted);
+    let (rows, next, _) = history(other, None, 1);
+    assert_eq!(rows.iter().map(|r| r.a.clone()).collect::<Vec<_>>(), vec![readable_l.clone()], "the rule before the slice");
+    assert_eq!(next, Some(readable_l.clone()));
+
+    // THE RETRACTION HOMED WHERE THE CALLER CANNOT READ (the owner's ruling
+    // B (4), 2026-10-28; PUB-6.47): the owner retracts the readable link
+    // FROM the unreadable draft. The stranger's row for the link still
+    // carries the retraction's POSITION — class-invariant, as the feed's
+    // straddle shows it — and no address under the unreadable draft leaves
+    // the read; `find_links_v` drops the link, retracted, where this read
+    // keeps it as a row.
+    let (retraction, retracted_at) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Nullify { home: unreadable_doc.clone(), target: readable_l.clone() },
+    ));
+    assert_eq!(skep_address::document_of(&retraction), Some(unreadable_doc.clone()), "homed in the draft");
+    let (rows, _, _) = history(other, None, 64);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].a, readable_l);
+    assert_eq!(rows[0].retracted_at, Some(retracted_at), "the position crosses to a reader who may not read its home");
+    assert!(rows.iter().all(|r| skep_address::document_of(&r.a) != Some(unreadable_doc.clone())), "no address of the draft");
+    assert!(!addrs(ex(&fx.febe, other, Op::FindLinksV { d: readable_doc.clone(), region: region() })).contains(&readable_l));
+    let (rows, _, _) = history(fx.user, None, 64);
+    assert_eq!(rows.iter().map(|r| (r.a.clone(), r.retracted_at)).collect::<Vec<_>>(), vec![(unreadable_l, None), (readable_l, Some(retracted_at))]);
 }
 
 /// PUB-6.13 on RETRIEVEENDSETS: its answer withholds link identity and

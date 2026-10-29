@@ -4,7 +4,8 @@
 //! a content region it answers *which links touch here*; given a four-set
 //! descriptor it answers *which links match*; and it counts — by home too,
 //! to a budget, lifting no link — paginates, projects, retrieves endsets,
-//! previews delete-orphaning, and traces supersession lineage — all by
+//! answers a region's links retracted since with their positions, previews
+//! delete-orphaning, and traces supersession lineage — all by
 //! composing M7's homes-first spanfilade reads, home-range and typed reads
 //! (`homes_touching`/`stab_in_slots`/`count_in_slots`/
 //! `match_links_in`, `homes_under`/`homed_in`/`homes`, `stab_typed_in`), M5's
@@ -29,8 +30,8 @@
 //! diverging from ASN-0117/0098 by conjoining `is_active` onto LP12
 //! discoverability.
 //!
-//! Two reads depart from that, and a caller building a live-links view needs
-//! both:
+//! Three reads depart from that, and a caller building a live-links view
+//! needs the first two:
 //!
 //! * [`project_on`] is NOT ADDRESSABLE-FILTERED — coverage reaches it
 //!   through M7's `followlink`, which takes no `View` and reports what is
@@ -47,6 +48,15 @@
 //!   are the addresses it NAMES, read out as recorded — the view filters
 //!   claims, never their endpoints, so a live claim can name a nullified
 //!   link.
+//! * the retracted-links read ([`find_links_v_history_on`]) reads the AUDIT
+//!   view by design (the link-sets design §7, lane 7): every link ever made
+//!   whose endsets touch the region, retracted included, each row with the
+//!   link's commit position and its earliest retraction's. Its law is its
+//!   own — `sel_audit = findlinks_V` over the audit slice, walked home by
+//!   home as the region family walks `sel` — and no read of `sel` moves for
+//!   it: the active rows of its answer are [`findlinks_v_on`]'s. It is the
+//!   one read beside `read_link` that answers a retracted link at all, and
+//!   the one that finds it from the words it stood on.
 //!
 //! ONE SHAPE IS TOUCHED MORE WIDELY THAN THE CORPUS TOUCHES IT — a gap, not
 //! a decision. The region family, the delete preview and
@@ -108,15 +118,20 @@
 //! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization
 //! — and to the count by home's `except` list, which passes the homes the
 //! page already reads and never admits one. It is applied in the two shapes
-//! PUB names, by the thirteen reads that take the predicate as their last
+//! PUB names, by the fourteen reads that take the predicate as their last
 //! argument:
 //!
-//! * the RESULT-SET FILTER (PUB-6.13), on the eleven RESULT-SET reads —
+//! * the RESULT-SET FILTER (PUB-6.13), on the twelve RESULT-SET reads —
 //!   `findlinks`, `count` and `window` in both families, the region
-//!   family's [`count_v_by_home_on`], [`retrieve_endsets_on`],
-//!   [`delete_orphans_on`] and the lineage pair — which admit no link the
-//!   rule refuses, and count and page the survivors: all eleven ask it of
-//!   each candidate home once, ahead of that home's links (PUB-7.18);
+//!   family's [`count_v_by_home_on`], [`find_links_v_history_on`],
+//!   [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage pair —
+//!   which admit no link the rule refuses, and count and page the
+//!   survivors: all twelve ask it of each candidate home once, ahead of that
+//!   home's links (PUB-7.18). The retracted-links read filters at the LINK's
+//!   home alone: a retraction's position crosses to a reader who may not
+//!   read the retraction's home, read off a hint by the link's address and
+//!   never by naming the home, and the retraction's address never does
+//!   (PUB-6.47);
 //! * the ABSENCE RULE (PUB-6.6), on the POINTWISE pair's `a` ARGUMENT, since
 //!   neither answer names a link: an `a` the rule refuses is ABSENT, which
 //!   both [`project_on`] and [`addressably_discoverable_from_on`] answer
@@ -273,6 +288,21 @@
 //!   steps and a test apiece for the candidate homes ahead of that home,
 //!   whatever the passage holds past it — where [`count_v_on`] pays for
 //!   every readable hit of the passage; none when the image is empty.
+//! * the retracted-links read ([`find_links_v_history_on`]) — the region
+//!   family's walk over the AUDIT slice: one `homes_touching` over the
+//!   image's extents at the three v1 slots, then, per candidate home, one
+//!   test of the reader's predicate and, for each home it admits, one
+//!   `stab_in_slots` under the audit view over the spans and the parts
+//!   that named it — the home's audit hits, a population that only grows,
+//!   since a retraction removes nothing from it — the window walking the
+//!   homes from its cursor's own home to the one that fills its `n`, no
+//!   further; and per row answered, one lookup of M7's retractions hint by
+//!   the link's address and two `minted_at` lookups of M3's position map,
+//!   the link's and the least over its retraction records, no home named
+//!   and none asked for them. So a window is bounded by `n` rows and the
+//!   homes it passes, never by the audit population, and an unreadable
+//!   home costs a step and nothing of its links; none when the image is
+//!   empty.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — with the home slot constrained: one `homes_under`,
 //!   a seek per home holding links under the slot's spans, then one test of
@@ -409,7 +439,9 @@ mod sets;
 // matcher.
 mod image;
 // The region family: `findlinks_v`, `count_v`, `window_v`, the count by
-// home and RETRIEVEENDSETS, read out of one selection index home by home.
+// home and RETRIEVEENDSETS, read out of one selection index home by home —
+// and the retracted-links read beside them, the same walk over the audit
+// slice, its rows carrying positions.
 mod region;
 // The descriptor family: the four-set request, its candidates and `sat`, and
 // its three read-outs.
@@ -429,10 +461,13 @@ pub use image::{content_vspan, image_on};
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
-    count_v_by_home_on, count_v_on, findlinks_v_on, retrieve_endsets_on, window_v_on,
+    count_v_by_home_on, count_v_on, find_links_v_history_on, findlinks_v_on,
+    retrieve_endsets_on, window_v_on,
 };
 pub use survival::delete_orphans_on;
-pub use types::{Cursor, HomeCounts, OrphanError, OrphanReport, QueryError, SupClaim, Window};
+pub use types::{
+    Cursor, HomeCounts, LinkRow, LinkRows, OrphanError, OrphanReport, QueryError, SupClaim, Window,
+};
 // The 1-based standard slot numerals every query here indexes by, and the two
 // M7 types M8's own surface is written in: a descriptor slot's `Endset` (with
 // `enc`, M7's canonical address-set encoding, which builds one) and the
@@ -478,6 +513,8 @@ const _: fn() = || {
     owed::<SlotSpec>();
     owed::<Window>();
     owed::<HomeCounts>();
+    owed::<LinkRow>();
+    owed::<LinkRows>();
     owed::<SupClaim>();
     owed::<OrphanReport>();
     // Both rejections too: a caller that boxes one meets

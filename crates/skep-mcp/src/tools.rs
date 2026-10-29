@@ -78,6 +78,7 @@ const DISPATCH_OPS: &[&str] = &[
     "window_v",
     "window_ftt",
     "count_v_by_home",
+    "find_links_v_history",
     "retrieve_endsets",
     "project",
     "discoverable_from",

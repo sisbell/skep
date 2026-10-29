@@ -1408,6 +1408,7 @@ impl Commits {
             | Response::EffectiveOwner { .. }
             | Response::Count { .. }
             | Response::Page { .. }
+            | Response::Homes { .. }
             | Response::Endsets { .. }
             | Response::Runs { .. }
             | Response::Bool { .. }
@@ -2411,6 +2412,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         | Op::CountFtt { .. }
         | Op::WindowV { .. }
         | Op::WindowFtt { .. }
+        | Op::CountVByHome { .. }
         | Op::RetrieveEndsets { .. }
         | Op::Project { .. }
         | Op::DiscoverableFrom { .. }

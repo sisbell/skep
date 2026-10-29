@@ -13,8 +13,10 @@
 //! de-duplication, and the discovery primitives for M8: the spanfilade's
 //! `stab` and `match_links`, the homes-first pair beneath them —
 //! `homes_touching`, the candidate homes a query could meet, and `stab_in`,
-//! one home's hits — and the home ranges `homes_under` and `homed_in`, which
-//! answer a home's links off the map's own key order.
+//! one home's hits, with `stab_in_slots` and `count_in_slots`, one home's
+//! hits at several slots lifted or counted — and the home ranges
+//! `homes_under` and `homed_in`, which answer a home's links off the map's
+//! own key order.
 //!
 //! The Lampson spine (§Core data model): the journal (via M2) is truth; the
 //! authoritative state is one append-only map; everything else is a

@@ -13,8 +13,8 @@ use std::collections::HashSet;
 use common::*;
 use skep_address::{Address, Span};
 use skep_discovery::{
-    count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, OrphanError, OrphanReport,
-    QueryError, SlotSpec, SupClaim, Window,
+    count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, HomeCounts, OrphanError,
+    OrphanReport, QueryError, SlotSpec, SupClaim, Window,
 };
 use skep_kernel::Snapshot;
 use skep_links::{enc, Endset, LinkWriter};
@@ -141,6 +141,11 @@ fn the_value_surface_is_hashable_and_keys_by_representation() {
         next: Some(la(1)),
         exhausted: true,
     }));
+    let mut counts: HashSet<HomeCounts> = HashSet::new();
+    assert!(counts.insert(HomeCounts {
+        homes: vec![(doc1(), 2)],
+        exhausted: false,
+    }));
     let mut reports: HashSet<OrphanReport> = HashSet::new();
     assert!(reports.insert(OrphanReport {
         orphaned: vec![la(1)]
@@ -208,6 +213,18 @@ fn m8s_request_and_answer_types_are_reachable_through_this_crate() {
     let report: m8::OrphanReport =
         m8::delete_orphans_on(&snap, &doc1(), &at, &n(1), &every_home).expect("preview");
     assert_eq!(report.orphaned, vec![e1, e2]);
+    // The count by home's answer, under a budget the request names and an
+    // `except` list of homes.
+    let counts: m8::HomeCounts =
+        m8::count_v_by_home_on(&snap, &doc1(), &region, 64, &[doc2()], &every_home)
+            .expect("count_v_by_home");
+    assert_eq!(
+        counts,
+        m8::HomeCounts {
+            homes: vec![(doc1(), 2)],
+            exhausted: true
+        }
+    );
 }
 
 /// Both rejection enums are exhaustively matchable from OUTSIDE the crate —

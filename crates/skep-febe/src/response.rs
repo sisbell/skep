@@ -261,6 +261,13 @@ pub enum Response {
     Count { n: usize, as_of: Seq },
     /// window_v / window_ftt.
     Page { window: Window, as_of: Seq },
+    /// count_v_by_home (the link-sets design §7, W10 (a)): the readable
+    /// homes holding a link on the region, in ascending address order, each
+    /// with the number of its distinct links there — M8's `HomeCounts`,
+    /// whose relations hold of `homes` and `exhausted` as that type states
+    /// them: the rows' sum is at least the budget where `exhausted` is
+    /// false, the whole count where it is true.
+    Homes { homes: Vec<(Address, usize)>, exhausted: bool, as_of: Seq },
     /// RETRIEVEENDSETS pairs.
     Endsets { pairs: Vec<(usize, Endset)>, as_of: Seq },
     /// V→I image.
@@ -420,10 +427,10 @@ impl Response {
     pub fn as_of(&self) -> Option<Seq> {
         // One catalogue, written here and in `as_of_mut`: the coordinate law
         // (`every_read_reports_the_committed_head_as_its_as_of`) asks both of
-        // nineteen of the twenty-one read shapes — every one but the read by
-        // identity's and the content frontier's — and counts the shapes it
-        // visits, so the two cannot come to classify one of those nineteen
-        // differently.
+        // nineteen of the twenty-two read shapes — every one but the read by
+        // identity's, the content frontier's and the count by home's — and
+        // counts the shapes it visits, so the two cannot come to classify
+        // one of those nineteen differently.
         match self {
             Response::Delivery { as_of, .. }
             | Response::IDelivery { as_of, .. }
@@ -434,6 +441,7 @@ impl Response {
             | Response::EffectiveOwner { as_of, .. }
             | Response::Count { as_of, .. }
             | Response::Page { as_of, .. }
+            | Response::Homes { as_of, .. }
             | Response::Endsets { as_of, .. }
             | Response::Runs { as_of, .. }
             | Response::Bool { as_of, .. }
@@ -470,6 +478,7 @@ impl Response {
             | Response::EffectiveOwner { as_of, .. }
             | Response::Count { as_of, .. }
             | Response::Page { as_of, .. }
+            | Response::Homes { as_of, .. }
             | Response::Endsets { as_of, .. }
             | Response::Runs { as_of, .. }
             | Response::Bool { as_of, .. }
@@ -540,6 +549,7 @@ impl Response {
             | Response::EffectiveOwner { .. }
             | Response::Count { .. }
             | Response::Page { .. }
+            | Response::Homes { .. }
             | Response::Endsets { .. }
             | Response::Runs { .. }
             | Response::Bool { .. }

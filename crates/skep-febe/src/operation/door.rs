@@ -410,6 +410,7 @@ impl Op {
             | Op::CountFtt { .. }
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
+            | Op::CountVByHome { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -484,6 +485,7 @@ impl Op {
             | Op::CountFtt { .. }
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
+            | Op::CountVByHome { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -561,6 +563,7 @@ impl Op {
             | Op::CountFtt { .. }
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
+            | Op::CountVByHome { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }

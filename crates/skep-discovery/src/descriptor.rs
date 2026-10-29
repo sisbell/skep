@@ -14,7 +14,8 @@
 //! Every shape of the descriptor is read home by home: the candidate homes
 //! are enumerated in address order, the reader asked of each once ahead of
 //! its links, and an admitted home's satisfying links read from the store's
-//! key range or the coverage index within that home alone.
+//! key range — the home slot alone, or nothing constrained — or the coverage
+//! index within that home alone, wherever a link slot is constrained.
 
 use std::rc::Rc;
 
@@ -162,12 +163,19 @@ impl Default for FourSet {
 /// ASN-0121's CANDIDATE set as the read-outs walk it, home by home in
 /// address order, the home rule not yet asked.
 enum Candidate<'q> {
-    /// A home the home slot covers that holds links, or a home of the whole
-    /// store under the unit descriptor: its links are its key range, each
-    /// tested against the link-slot constraints.
-    Chain {
+    /// A home the home slot covers that holds links, under no link-slot
+    /// constraint, or a home of the whole store under the unit descriptor:
+    /// its links are its whole key range.
+    Chain { home: Address },
+    /// A home the home slot covers that holds links, with a link slot
+    /// constrained beside the home: its links are the stab within the home
+    /// on the driving constraint, over the whole of that constraint's spans,
+    /// narrowed by the other constraints.
+    Within {
         home: Address,
-        constraints: Rc<[(usize, &'q Endset)]>,
+        slot: usize,
+        query: &'q Endset,
+        rest: Rc<[(usize, &'q Endset)]>,
     },
     /// A home the driving link slot's directory walk named, with the spans
     /// that named it: its links are the per-home stab of the driver over
@@ -183,7 +191,7 @@ impl Candidate<'_> {
     /// The candidate home.
     fn home(&self) -> &Address {
         match self {
-            Candidate::Chain { home, .. } => home,
+            Candidate::Chain { home } | Candidate::Within { home, .. } => home,
             Candidate::Driven { touch, .. } => touch.home(),
         }
     }
@@ -193,7 +201,10 @@ impl Candidate<'_> {
     /// having been decided by the enumeration that named the home.
     fn satisfying(self, l: &LinkState) -> OrdSet<Address> {
         match self {
-            Candidate::Chain { home, constraints } => l.homed_in(&home, &constraints, View::Active),
+            Candidate::Chain { home } => l.homed_in(&home, &[], View::Active),
+            Candidate::Within { home, slot, query, rest } => {
+                l.match_links_in(&home, (slot, query.spans()), &rest, View::Active)
+            }
             Candidate::Driven { touch, slot, rest } => {
                 l.match_links_in(touch.home(), (slot, touch.spans(0)), &rest, View::Active)
             }
@@ -215,26 +226,36 @@ impl Candidate<'_> {
 /// is its home's with three components after it, so M7 keeps a home's links
 /// together in its key order: `homes_under` names each home the slot's
 /// coverage contains that holds links, found by one seek apiece, and each is
-/// a candidate whose links are read by `homed_in`, its own key range, each
-/// tested against the link-slot constraints. So a home-constrained
-/// descriptor costs the homes it names and the admitted ones' links: a
-/// document's or a member's at one seek, an account's or the node's at one
-/// seek per home under it, never the links of a home it does not name. The
-/// home slot's clause of `sat` — `h` covers `home(a)` — is what
-/// `homes_under` decides, of the home rather than of each link, so no link
-/// here is tested for it again.
+/// a candidate whose links are read within that home alone — by `homed_in`,
+/// its own key range, where no link slot is constrained beside the home;
+/// and by `match_links_in`, THE STAB WITHIN THE HOME on the driving link
+/// slot over the whole of its spans, the other constraints tested per
+/// survivor, where one is (the link-sets design's W10 (a) lane measured
+/// the chain walk at a set of ten thousand links, sixty-four on the view:
+/// 2.8 ms a read against 0.04 ms the stab, release, past the one sixteenth
+/// of a frame the owner's ruling of 2026-10-28 set, and the stab is the
+/// form since). So a home-constrained descriptor costs the homes it names
+/// and the admitted ones' links: a document's or a member's at one seek,
+/// an account's or the node's at one seek per home under it, never the
+/// links of a home it does not name — and with a link slot beside, that
+/// home's HITS on the slot and never its whole chain. The home slot's
+/// clause of `sat` — `h` covers `home(a)` — is what `homes_under` decides,
+/// of the home rather than of each link, so no link here is tested for it
+/// again; the driving slot's clause the stab decides by the index's
+/// overlap, which `tests/it/spanfilade.rs` holds to the per-link test
+/// `homed_in` makes.
 ///
-/// WHERE THE HOME SLOT IS `Any` AND A LINK SLOT IS CONSTRAINED, the
-/// constraint with the fewest candidate homes drives — M7's `fewest_homes`,
-/// the rule its own `match_links` chooses by, a bounded walk of directory
-/// entries and a cost decision, not a semantic one: its candidate homes come
-/// off M7's `homes_touching` — the coverage index's directory for `from` and
-/// `to`, the typed slices for `ty` — each a candidate whose links are read
-/// by `match_links_in`, the driver's per-home stab over the spans that named
-/// the home, narrowed by the other constraints. WITH NO CONSTRAINT AT ALL
-/// (`(∗,∗,∗)`), every home holding links is a candidate, its whole chain the
-/// answer — the store's homes, one seek apiece, where the unfiltered walk of
-/// the whole slice was.
+/// WHICH LINK SLOT DRIVES, wherever one is constrained, is the constraint
+/// with the fewest candidate homes — M7's `fewest_homes`, the rule its own
+/// `match_links` chooses by, a bounded walk of directory entries and a cost
+/// decision, not a semantic one. WHERE THE HOME SLOT IS `Any` its candidate
+/// homes come off M7's `homes_touching` — the coverage index's directory
+/// for `from` and `to`, the typed slices for `ty` — each a candidate whose
+/// links are read by `match_links_in`, the driver's per-home stab over the
+/// spans that named the home, narrowed by the other constraints. WITH NO
+/// CONSTRAINT AT ALL (`(∗,∗,∗)`), every home holding links is a candidate,
+/// its whole chain the answer — the store's homes, one seek apiece, where
+/// the unfiltered walk of the whole slice was.
 ///
 /// In every shape the reader is asked of a home ONCE, ahead of its links,
 /// by the read-outs that walk this: an unreadable home's whole candidate list
@@ -243,19 +264,15 @@ fn candidates<'q>(l: &'q LinkState, q: &'q FourSet) -> Box<dyn Iterator<Item = C
     let Some(constraints) = q.link_constraints() else {
         return Box::new(std::iter::empty()); // FL-EMP: some slot is the zero
     };
-    if let SlotSpec::Spans(h) = &q.home {
-        let constraints: Rc<[(usize, &'q Endset)]> = constraints.into();
-        return Box::new(l.homes_under(h).into_iter().map(move |home| Candidate::Chain {
-            home,
-            constraints: Rc::clone(&constraints),
-        }));
-    }
     if constraints.is_empty() {
-        let none: Rc<[(usize, &'q Endset)]> = Rc::from([]);
-        return Box::new(l.homes().into_iter().map(move |home| Candidate::Chain {
-            home,
-            constraints: Rc::clone(&none),
-        }));
+        // The home slot alone, or nothing at all: the whole chain of each
+        // home the slot covers, or of every home of the store.
+        let homes = match &q.home {
+            SlotSpec::Spans(h) => l.homes_under(h),
+            SlotSpec::Any => l.homes(),
+            SlotSpec::Empty => unreachable!("the zero was answered by `link_constraints`"),
+        };
+        return Box::new(homes.into_iter().map(|home| Candidate::Chain { home }));
     }
     let driver = l.fewest_homes(&constraints);
     let (slot, query) = constraints[driver];
@@ -265,6 +282,16 @@ fn candidates<'q>(l: &'q LinkState, q: &'q FourSet) -> Box<dyn Iterator<Item = C
         .filter(|(i, _)| *i != driver)
         .map(|(_, c)| *c)
         .collect();
+    if let SlotSpec::Spans(h) = &q.home {
+        // The home slot drives, the driving link slot stabbed within each
+        // home over the whole of its spans.
+        return Box::new(l.homes_under(h).into_iter().map(move |home| Candidate::Within {
+            home,
+            slot,
+            query,
+            rest: Rc::clone(&rest),
+        }));
+    }
     Box::new(l.homes_touching([(slot, query)]).map(move |touch| Candidate::Driven {
         touch,
         slot,

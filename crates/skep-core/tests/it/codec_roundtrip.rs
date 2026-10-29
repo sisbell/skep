@@ -432,6 +432,19 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::CountFtt { q: q_all() }),
         rq(None, Op::WindowV { d: d1(), region: vec![cspan(1, 5)], cur: None, n: 16 }),
         rq(None, Op::WindowFtt { q: q_all(), cur: Some(link1()), n: 16 }),
+        // The count by home (the link-sets design §7, W10 (a)): with homes
+        // excepted, and with none — the canonical form carries the empty
+        // list.
+        rq(
+            None,
+            Op::CountVByHome {
+                d: d1(),
+                region: vec![cspan(1, 5)],
+                n: 64,
+                except: vec![d1(), d2()],
+            },
+        ),
+        rq(None, Op::CountVByHome { d: d1(), region: vec![cspan(1, 5)], n: 1, except: vec![] }),
         rq(None, Op::RetrieveEndsets { d: d1(), region: vec![cspan(1, 5)] }),
         rq(None, Op::Project { a: link1(), slot: 2, d: d2() }),
         rq(None, Op::DiscoverableFrom { a: link1(), d: d1() }),
@@ -496,6 +509,7 @@ const OP_NAMES: &[&str] = &[
     "count_ftt",
     "window_v",
     "window_ftt",
+    "count_v_by_home",
     "retrieve_endsets",
     "project",
     "discoverable_from",
@@ -551,15 +565,16 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::CountFtt => 34,
         OpKind::WindowV => 35,
         OpKind::WindowFtt => 36,
-        OpKind::RetrieveEndsets => 37,
-        OpKind::Project => 38,
-        OpKind::DiscoverableFrom => 39,
-        OpKind::DeleteOrphans => 40,
-        OpKind::InClaims => 41,
-        OpKind::OutClaims => 42,
-        OpKind::DocMetadata => 43,
-        OpKind::EditionClaims => 44,
-        OpKind::UniversalGrants => 45,
+        OpKind::CountVByHome => 37,
+        OpKind::RetrieveEndsets => 38,
+        OpKind::Project => 39,
+        OpKind::DiscoverableFrom => 40,
+        OpKind::DeleteOrphans => 41,
+        OpKind::InClaims => 42,
+        OpKind::OutClaims => 43,
+        OpKind::DocMetadata => 44,
+        OpKind::EditionClaims => 45,
+        OpKind::UniversalGrants => 46,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -1220,6 +1235,13 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 as_of: Seq(9),
             },
         ),
+        // The count by home: rows in address order, the walk ended under
+        // its budget; and the empty answer, exhausted at once.
+        (
+            "homes",
+            Response::Homes { homes: vec![(d1(), 2), (d2(), 1)], exhausted: true, as_of: Seq(9) },
+        ),
+        ("homes_empty", Response::Homes { homes: Vec::new(), exhausted: true, as_of: Seq(9) }),
         (
             "endsets",
             Response::Endsets {
@@ -1799,6 +1821,47 @@ fn lenient_forms_parse_and_re_emit_canonically() {
         codec.marshal_request(&parse_ok(&codec, with_null)),
         "an absent cursor is the same request as an explicit null one"
     );
+    // The count by home's `except` the same way: absent, `null` and the
+    // empty list are one request, whose canonical form carries `[]`.
+    let bare = br#"{"op":"count_v_by_home","d":"1.0.1.0.1","region":[{"start":"1.1","width":"0.5"}],"n":64}"#;
+    let with_null = br#"{"op":"count_v_by_home","d":"1.0.1.0.1","except":null,"region":[{"start":"1.1","width":"0.5"}],"n":64}"#;
+    let with_empty = br#"{"op":"count_v_by_home","d":"1.0.1.0.1","except":[],"region":[{"start":"1.1","width":"0.5"}],"n":64}"#;
+    let canonical = codec.marshal_request(&parse_ok(&codec, bare));
+    assert_eq!(canonical, codec.marshal_request(&parse_ok(&codec, with_null)));
+    assert_eq!(canonical, codec.marshal_request(&parse_ok(&codec, with_empty)));
+    let canon: Value = serde_json::from_slice(&canonical).expect("json");
+    assert_eq!(canon["except"], Value::Array(vec![]), "the canonical form carries the empty list");
+}
+
+/// The count by home's `except` is one wire list (wire.md §Link discovery
+/// reads): a list at the cap parses, one past it is refused at the parse
+/// with the cap named — `malformed` under `unparseable`, as every over-long
+/// list is — and an entry that is no address is refused by its index.
+#[test]
+fn an_except_list_is_bounded_by_the_wire_list_cap() {
+    let codec = JsonCodec;
+    let frame = |homes: usize| {
+        let list = vec![r#""1.0.1.0.2""#; homes].join(",");
+        format!(
+            r#"{{"op":"count_v_by_home","d":"1.0.1.0.1","except":[{list}],"region":[{{"start":"1.1","width":"0.5"}}],"n":64}}"#
+        )
+    };
+    let at_cap = parse_ok(&codec, frame(MAX_SLOT_SPANS).as_bytes());
+    match at_cap.op {
+        Op::CountVByHome { except, .. } => assert_eq!(except.len(), MAX_SLOT_SPANS),
+        other => panic!("parsed to another op: {other:?}"),
+    }
+    let over = codec.parse(frame(MAX_SLOT_SPANS + 1).as_bytes()).expect_err("one past the cap");
+    let detail = over.detail.expect("the refusal names the cap");
+    assert!(detail.contains("except") && detail.contains("wire cap"), "{detail}");
+    let marshaled: Value =
+        serde_json::from_slice(&codec.marshal(&JsonCodec.unparseable(ParseError { detail: Some(detail), site: None })))
+            .expect("json");
+    assert_eq!(marshaled["code"].as_str(), Some("malformed"));
+    assert_eq!(marshaled["op"].as_str(), Some("unparseable"));
+    let bad = br#"{"op":"count_v_by_home","d":"1.0.1.0.1","except":["1.0.1.0.2","x"],"region":[{"start":"1.1","width":"0.5"}],"n":64}"#;
+    let e = codec.parse(bad).expect_err("an entry that is no address");
+    assert!(e.detail.is_some_and(|d| d.contains("[1]")), "refused by its index");
 }
 
 /// Wire v2 write forms: `"str"`/`{"hex"}` mint one single-byte value per

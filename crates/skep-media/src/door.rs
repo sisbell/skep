@@ -344,6 +344,7 @@ pub fn media_door<W: FebeWorld>(
         | Op::CountFtt { .. }
         | Op::WindowV { .. }
         | Op::WindowFtt { .. }
+        | Op::CountVByHome { .. }
         | Op::RetrieveEndsets { .. }
         | Op::Project { .. }
         | Op::DiscoverableFrom { .. }

@@ -160,6 +160,13 @@ impl fmt::Debug for Op {
             Op::WindowFtt { q, cur, n } => {
                 f.debug_struct("WindowFtt").field("q", q).field("cur", cur).field("n", n).finish()
             }
+            Op::CountVByHome { d, region, n, except } => f
+                .debug_struct("CountVByHome")
+                .field("d", d)
+                .field("region", region)
+                .field("n", n)
+                .field("except", except)
+                .finish(),
             Op::RetrieveEndsets { d, region } => {
                 f.debug_struct("RetrieveEndsets").field("d", d).field("region", region).finish()
             }

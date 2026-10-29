@@ -36,7 +36,7 @@ const REGION: &str = r#"[{"start":"1.1","width":"0.1"}]"#;
 /// Every row is parsed through the codec rather than built by hand, so
 /// the test reads the frames a client sends. The three lists are
 /// disjoint; the class list is held to the three FTT ops and the region
-/// list to its five, restated, so an op moved between the arms fails its
+/// list to its six, restated, so an op moved between the arms fails its
 /// row where a list names it and a new op's row added without restating
 /// the count fails the last assertions.
 #[test]
@@ -44,7 +44,7 @@ fn a_class_scan_is_a_shape_and_a_region_read_names_its_document() {
     /// The ops that have a class-scan shape, and the ops the per-document
     /// pool bounds, restated.
     const CLASS_OPS: usize = 3;
-    const REGION_OPS: usize = 5;
+    const REGION_OPS: usize = 6;
 
     let class = [
         // `ty` alone: the class, at each of the three ops, `cur` and `n`
@@ -69,6 +69,11 @@ fn a_class_scan_is_a_shape_and_a_region_read_names_its_document() {
         format!(r#"{{"d":"1.0.1.0.1","op":"find_links_v","region":{REGION}}}"#),
         format!(r#"{{"d":"1.0.1.0.1","op":"count_v","region":{REGION}}}"#),
         format!(r#"{{"cur":null,"d":"1.0.1.0.1","n":16,"op":"window_v","region":{REGION}}}"#),
+        // The count by home, `except` naming a home or none: keyed by `d`.
+        format!(
+            r#"{{"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":{REGION}}}"#
+        ),
+        format!(r#"{{"d":"1.0.1.0.1","n":64,"op":"count_v_by_home","region":{REGION}}}"#),
         format!(r#"{{"d":"1.0.1.0.1","op":"retrieve_endsets","region":{REGION}}}"#),
         r#"{"d":"1.0.1.0.1","op":"delete_orphans","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#
             .to_string(),

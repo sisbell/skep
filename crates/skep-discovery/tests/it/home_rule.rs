@@ -10,10 +10,10 @@ use crate::heap::settled_heap_bytes;
 use common::*;
 use skep_address::{document_of, Address};
 use skep_discovery::{
-    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
-    findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
-    window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM, MAX_ANSWER_SPANS,
-    TO,
+    addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
+    delete_orphans_on, findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM,
+    MAX_ANSWER_SPANS, TO,
 };
 use skep_kernel::Kernel;
 use skep_links::{enc, LinkWriter, View};
@@ -96,6 +96,12 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
         seen,
         "window_v"
     );
+    // The count by home: no row for the refused home, and the rows the
+    // survivors grouped by theirs.
+    let counts = count_v_by_home_on(&snap, &doc1(), &region, usize::MAX, &[], &cannot_read_doc2)
+        .expect("count_v_by_home");
+    assert_eq!(counts.homes, by_home(&seen), "count_v_by_home");
+    assert_eq!(counted(&counts), seen.len());
 
     // The second reader refuses doc1, whose links sort FIRST, so both windows
     // open on pages the rule empties. (It reads doc1's region though it may
@@ -124,6 +130,12 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
         seen,
         "window_v, refused links first"
     );
+    // A budget of one with the refused home first: the refused home is
+    // passed before the budget is spent, so the one row is doc2's, whole.
+    let counts = count_v_by_home_on(&snap, &doc1(), &region, 1, &[], &cannot_read_doc1)
+        .expect("count_v_by_home");
+    assert_eq!(counts.homes, vec![(doc2(), 2)], "count_v_by_home, refused links first");
+    assert!(!counts.exhausted);
 
     // RETRIEVEENDSETS withholds identity, so what it drops is PAIRS: t0's own
     // pair goes, and the one t1 shares with m2 stays, since m2 still carries
@@ -218,6 +230,22 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     assert_eq!(asked.take(), homes);
     assert_eq!(count_ftt_on(&snap, &FourSet::any(), &recorder), 3);
     assert_eq!(asked.take(), homes);
+    // The count by home too, with no budget and nothing excepted …
+    let counts = count_v_by_home_on(&snap, &doc1(), &region, usize::MAX, &[], &recorder)
+        .expect("count_v_by_home");
+    assert_eq!(counts.homes, vec![(doc1(), 2), (doc2(), 1)]);
+    assert_eq!(asked.take(), homes);
+    // … a budget of one asks of the one home that fills it, and stops …
+    let counts =
+        count_v_by_home_on(&snap, &doc1(), &region, 1, &[], &recorder).expect("count_v_by_home");
+    assert_eq!(counts.homes, vec![(doc1(), 2)]);
+    assert_eq!(asked.take(), vec![doc1()]);
+    // … and an excepted home is passed AHEAD of the rule: never asked, never
+    // counted, the budget spent on the homes past it.
+    let counts = count_v_by_home_on(&snap, &doc1(), &region, 1, &[doc1()], &recorder)
+        .expect("count_v_by_home");
+    assert_eq!(counts.homes, vec![(doc2(), 1)]);
+    assert_eq!(asked.take(), vec![doc2()]);
     // A window of one asks of the one home that fills it, and stops.
     assert_eq!(
         window_ftt_on(&snap, &FourSet::any(), None, 1, &recorder).batch,
@@ -432,23 +460,32 @@ type Reader<'a> = dyn Fn(&Address) -> bool + 'a;
 /// read over a passage holding a flood of links homed where the reader may
 /// not read asks of those homes once each and reads none of their links. A
 /// thousand flooding links in ten homes cost the reader's `findlinks_v`,
-/// `count_v` and `window_v` the heap a hundred do — the homes are the same
-/// ten, and the links in them are never visited — and the same thousand in
-/// ONE home cost what a hundred in one do: one home test. The reader of every
-/// home is the control and pays for every hit. A home whose links lie off
-/// the passage is never asked, so the homes asked are the passage's
-/// candidates and not the board's.
+/// `count_v`, `window_v` and `count_v_by_home` the heap a hundred do — the
+/// homes are the same ten, and the links in them are never visited — and
+/// the same thousand in ONE home cost what a hundred in one do: one home
+/// test. The reader of every home is the control and pays for every hit. A
+/// home whose links lie off the passage is never asked, so the homes asked
+/// are the passage's candidates and not the board's. AND AN EXCEPTED HOME
+/// COSTS THE SAME STEP AND NOTHING OF ITS LINKS (the link-sets design's
+/// C4): the reader of every home, with the flood's homes named in
+/// `except`, pays the heap it pays beside a tenth of the flood.
 #[test]
 fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_links() {
     let region = [vspan(1, 1, 1)];
     let only_doc1 = |d: &Address| *d == doc1();
-    let reads: [(&str, &Counted<'_>); 3] = [
+    let reads: [(&str, &Counted<'_>); 4] = [
         ("findlinks_v", &|k| {
             findlinks_v_on(&k.snapshot(), &doc1(), &region, &only_doc1).expect("findlinks_v").len()
         }),
         ("count_v", &|k| count_v_on(&k.snapshot(), &doc1(), &region, &only_doc1).expect("count_v")),
         ("window_v", &|k| {
             window_v_on(&k.snapshot(), &doc1(), &region, None, 5, &only_doc1).expect("window_v").batch.len()
+        }),
+        ("count_v_by_home", &|k| {
+            counted(
+                &count_v_by_home_on(&k.snapshot(), &doc1(), &region, usize::MAX, &[], &only_doc1)
+                    .expect("count_v_by_home"),
+            )
         }),
     ];
     for homes in [1, 10] {
@@ -475,12 +512,35 @@ fn a_region_read_pays_for_the_homes_the_reader_may_not_read_and_none_of_their_li
                 "{what} beside {homes} unreadable home(s): the flood's links cost nothing"
             );
         }
+        // The excepted homes, read by the reader of every home: passed
+        // ahead of the rule, never stabbed.
+        let excepted: Vec<Address> = (0..homes).map(|i| doc(3 + i)).collect();
+        let passing = |k: &Kernel<World>| {
+            let counts =
+                count_v_by_home_on(&k.snapshot(), &doc1(), &region, usize::MAX, &excepted, &every_home)
+                    .expect("count_v_by_home");
+            assert_eq!(counts.homes, vec![(doc1(), 2)], "doc1's two, the flood's homes excepted");
+            counts.exhausted
+        };
+        assert_eq!(
+            heap_of(&more, passing),
+            heap_of(&fewer, passing),
+            "count_v_by_home beside {homes} excepted home(s): the flood's links cost nothing"
+        );
     }
     // The control: the reader of every home pays for every hit.
     let (fewer, more) = (flooded_homes(100, 10), flooded_homes(1_000, 10));
     let everyone = |k: &Kernel<World>| findlinks_v_on(&k.snapshot(), &doc1(), &region, &every_home).expect("findlinks_v").len();
     assert_eq!(everyone(&more), 1_002);
     assert!(heap_of(&more, everyone) > heap_of(&fewer, everyone), "the control pays for the flood");
+    let everyone_by_home = |k: &Kernel<World>| {
+        counted(&count_v_by_home_on(&k.snapshot(), &doc1(), &region, usize::MAX, &[], &every_home).expect("count_v_by_home"))
+    };
+    assert_eq!(everyone_by_home(&more), 1_002);
+    assert!(
+        heap_of(&more, everyone_by_home) > heap_of(&fewer, everyone_by_home),
+        "the control: the count by home with nothing excepted pays the flood's keys"
+    );
 }
 
 /// A world of doc1's two links `e1` and `e2`, `la(1)` and `la(2)`, and its

@@ -1,9 +1,10 @@
 //! §1/§2/§4 — the content-region discovery family (V-anchored, present-tense,
-//! doc-gated, disjunctive over slots) — `findlinks_v`, `count_v`, `window_v`
-//! and RETRIEVEENDSETS — each ASN-0127's two-phase query: [`image_on`], the
-//! region resolver that lives in `image`, chained into M7's matcher, home by
-//! home. Every result is ASN-0131's selection index `sel = findlinks_V ∩
-//! addressable`, read out four ways — nullified links never surface
+//! doc-gated, disjunctive over slots) — `findlinks_v`, `count_v`, `window_v`,
+//! `count_v_by_home` and RETRIEVEENDSETS — each ASN-0127's two-phase query:
+//! [`image_on`], the region resolver that lives in `image`, chained into
+//! M7's matcher, home by home. Every result is ASN-0131's selection index
+//! `sel = findlinks_V ∩ addressable`, read out five ways — nullified links
+//! never surface
 //! (Conflicts #8, a deliberate divergence from ASN-0127/0108's
 //! `findlinks_V`/`Match`, which no addressability filter narrows). Its touch
 //! is M7's overlap with the image's run extents, wider than ASN-0127's
@@ -17,9 +18,11 @@
 //! each and at the parts of the stab whose ranges named it — M7's
 //! `stab_in_slots`, which answers the home's `(link, slot)` pairs in address
 //! order and builds no set per slot, so a home holding no hit on the query
-//! costs those parts and nothing else. The per-home answers concatenated in
-//! home order are the selection index in address order, so nothing is
-//! merged and a window resumes in its cursor's home. The pieces
+//! costs those parts and nothing else; or, for the count by home, M7's
+//! `count_in_slots`, the same probes counted and never lifted. The per-home
+//! answers concatenated in home order are the selection index in address
+//! order, so nothing is merged, a window resumes in its cursor's home and a
+//! count by home stops at the home that fills its budget. The pieces
 //! the composition shares with the descriptor family and the delete preview
 //! — the slot list, the extents' lift, the probes, the disjunction over
 //! slots, the window over homes — are `sets`'.
@@ -34,7 +37,7 @@ use crate::budget::MAX_ANSWER_SPANS;
 use crate::home::home_admitted;
 use crate::image::image_on;
 use crate::sets::{distinct, extents, probes, window_homes, V1_SLOTS};
-use crate::types::{Cursor, QueryError, Window};
+use crate::types::{Cursor, HomeCounts, QueryError, Window};
 use crate::DiscoveryWorld;
 
 /// The candidate homes of `query` at every v1 slot, in address order, each
@@ -187,6 +190,95 @@ pub fn window_v_on<W: DiscoveryWorld>(
         cur,
         n,
     ))
+}
+
+/// The count by home that lifts no link (the link-sets design §7, W10 (a)):
+/// per candidate home of the image at any slot, in address order, the
+/// number of that home's distinct links touching `region` at some v1 slot
+/// — the fifth read-out of the one selection index, counted per home and
+/// stopped at a budget. The reader's default view asks it for everyone
+/// else's links on the words in view as a NUMBER — the corner's "+⟨n⟩" is
+/// the rows' sum, exact where `exhausted`, and the card's per-set counts
+/// are the rows — while the applied sets are read by home through the
+/// descriptor family and named here in `except`.
+///
+/// THE WALK is [`findlinks_v_on`]'s: M7's `homes_touching` over the image's
+/// extents at the three v1 slots, and per candidate home, in address order,
+/// first `except` — a home it names is PASSED, unasked, unstabbed and
+/// uncounted, one `contains` per candidate, as a window passes the homes
+/// behind its cursor — then the home rule, asked once ahead of the home's
+/// links (PUB-6.13, PUB-7.18), and for a home it admits M7's
+/// `count_in_slots` over the spans and the parts that named it: the same
+/// probes [`count_v_on`]'s per-home stab makes, its hits sorted and held
+/// once per link and never lifted. A home holding no hit contributes no
+/// row. The walk STOPS at the home whose count brings the sum to `n`,
+/// counting that home whole — the sum may pass `n` by one home's share
+/// and never by more — and answers `exhausted = false`; a walk that ends
+/// under `n` answers every readable, unexcepted home's count and
+/// `exhausted = true`. `n = 0` is clamped to 1 (the API is total, W9, as
+/// [`window_v_on`]'s is), so a request always counts at least the first
+/// home holding a hit.
+///
+/// THE LAWS, under one `readable` held fixed (the crate header states the
+/// predicate's contract): with no budget and nothing excepted the rows'
+/// counts sum to [`count_v_on`]'s answer, each row being the number of
+/// [`findlinks_v_on`]'s links homed there, since the count per home is the
+/// distinct keys of the stab that read enumerates; with `except` naming
+/// homes, the sum is that count less the links homed in those homes; and
+/// `exhausted = false` implies the sum is at least `max(n, 1)`.
+/// `tests/it/window.rs` holds the three.
+///
+/// REFUSES what [`image_on`] refuses, in its order — `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge` — and nothing else; `except` is never
+/// checked, a home it names that the image never touches costing nothing.
+///
+/// WHAT IT COSTS, counted against the enumeration it replaces: the
+/// directory's steps, one `contains` over `except` and one predicate test
+/// per candidate home, and per admitted, unexcepted home its stab and sort
+/// — bounded above by the budget's hits plus one home's share and the
+/// homes passed, never by the passage's population, so a flooded PUBLIC
+/// passage costs a budgeted reader the homes ahead of its budget and not
+/// the flood (`tests/it/region_cost.rs` measures it against `count_v`). An
+/// excepted or an unreadable home costs a step and nothing of its links
+/// (`tests/it/home_rule.rs` holds the heap to it).
+pub fn count_v_by_home_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+    n: usize,
+    except: &[Address],
+    readable: &dyn Fn(&Address) -> bool,
+) -> Result<HomeCounts, QueryError> {
+    let image = image_on(s, d, region)?; // document gate + region gate inside, on THIS snap
+    let query = extents(&image);
+    let l = s.world().links();
+    let n = n.max(1);
+    let mut homes: Vec<(Address, usize)> = Vec::new();
+    let mut sum = 0;
+    for touch in touching(l, &query) {
+        // The applied sets' homes (the design §4): passed ahead of the home
+        // rule, so the budget is never spent on a set the page already
+        // reads and an excepted home is never stabbed.
+        if except.contains(touch.home()) {
+            continue;
+        }
+        if !home_admitted(readable, touch.home()) {
+            continue;
+        }
+        let count = l.count_in_slots(&touch, probes(0), View::Active);
+        if count == 0 {
+            continue; // the directory named the home at block grain; no hit
+        }
+        sum += count;
+        homes.push((touch.into_home(), count));
+        if sum >= n {
+            break; // the home that fills the budget is counted whole
+        }
+    }
+    Ok(HomeCounts {
+        homes,
+        exhausted: sum < n,
+    })
 }
 
 /// RETRIEVEENDSETS (ASN-0131): the `(slot, endset)` pairs touching `region`,

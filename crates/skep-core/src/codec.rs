@@ -727,6 +727,16 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
             cur: fields.cursor("cur")?,
             n: fields.usize("n")?,
         },
+        // The count by home (wire.md §Link discovery reads): `d` and `region`
+        // as `count_v`'s, the budget `n` as `window_v`'s, and `except` one
+        // wire list of home addresses under the list cap, absent and `null`
+        // alike the empty list.
+        "count_v_by_home" => Op::CountVByHome {
+            d: fields.addr("d")?,
+            region: fields.spans("region")?,
+            n: fields.usize("n")?,
+            except: fields.addrs_opt("except")?,
+        },
         "retrieve_endsets" => {
             Op::RetrieveEndsets { d: fields.addr("d")?, region: fields.spans("region")? }
         }
@@ -905,6 +915,21 @@ impl Fields {
 
     fn addrs(&mut self, k: &'static str) -> PResult<Vec<Address>> {
         self.field(k, |v| p_list(v, p_addr))
+    }
+
+    /// Takes an optional list of addresses: absent and explicit `null`
+    /// alike are the empty list (`take_opt`'s rule), and a present one is a
+    /// wire list under [`MAX_WIRE_LIST`] — `count_v_by_home`'s `except`.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where a present value is no array, is past the cap, or
+    /// holds an element that is no address ([`p_list`], [`p_addr`]).
+    fn addrs_opt(&mut self, k: &'static str) -> PResult<Vec<Address>> {
+        match self.take_opt(k) {
+            None => Ok(Vec::new()),
+            Some(v) => p_list(&v, p_addr).map_err(|e| PErr(format!("field '{k}': {e}"))),
+        }
     }
 
     fn span(&mut self, k: &'static str) -> PResult<Span> {

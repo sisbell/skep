@@ -154,6 +154,7 @@ pub fn deposits_registry_link(op: &Op) -> bool {
         | Op::CountFtt { .. }
         | Op::WindowV { .. }
         | Op::WindowFtt { .. }
+        | Op::CountVByHome { .. }
         | Op::RetrieveEndsets { .. }
         | Op::Project { .. }
         | Op::DiscoverableFrom { .. }

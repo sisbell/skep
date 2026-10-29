@@ -1,6 +1,6 @@
 //! §1 — content-region discovery: `image_on`'s gates, order, dedup and
 //! budgets — its walk priced on a published address's trunk head, and each
-//! budget refusing before the work it exists to refuse — and the four region
+//! budget refusing before the work it exists to refuse — and the five region
 //! reads that inherit them, with the document gate asked, where it is one
 //! rule, of every read that names a document. Which arrangement the reads
 //! resolve is `head_float`'s.
@@ -13,8 +13,8 @@ use im::OrdSet;
 use skep_address::{document_of, Address, Span};
 use skep_arrangement::{HasM5, Run, Vstream};
 use skep_discovery::{
-    content_vspan, count_v_on, findlinks_v_on, image_on, window_v_on, OrphanError, OrphanReport,
-    QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE,
+    content_vspan, count_v_by_home_on, count_v_on, findlinks_v_on, image_on, window_v_on,
+    HomeCounts, OrphanError, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_kernel::Snapshot;
 use skep_links::{enc, Endset, HasLinks, LinkWriter, SlotArg, View, MAX_SLOT_SPANS};
@@ -125,18 +125,23 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     assert_eq!(w.next, None);
     assert!(w.exhausted);
     assert_eq!(reads.retrieve_endsets(&doc2(), &[vspan(1, 1, 5)]), Ok(vec![]));
+    assert_eq!(
+        reads.count_v_by_home(&doc2(), &[vspan(1, 1, 5)], 3, &[]),
+        Ok(HomeCounts { homes: vec![], exhausted: true }),
+        "no row, and a walk of nothing is exhausted"
+    );
 
     // An empty region trivially passes the gate and yields the empty image.
     assert!(reads.image(&doc1(), &[]).expect("empty region is defined").is_empty());
 }
 
-/// One region ENTRY POINT — `image` or one of the four reads that route
+/// One region ENTRY POINT — `image` or one of the five reads that route
 /// through it — reduced to the refusal it answers with, so the gate rule can
-/// be stated once and applied to all five.
+/// be stated once and applied to all six.
 type RegionRefusal<'a> = Box<dyn Fn(&Address, &[Span]) -> Option<QueryError> + 'a>;
 
 /// The one list every "every region entry point" law reads: `image_on` and
-/// the four reads that inherit its gates and budget, each reduced to its
+/// the five reads that inherit its gates and budget, each reduced to its
 /// refusal through a copy of `reads`. A region read added to the family is
 /// added here, and every such law then covers it.
 fn region_entry_points<'a>(reads: Reads<'a>) -> Vec<(&'static str, RegionRefusal<'a>)> {
@@ -146,14 +151,18 @@ fn region_entry_points<'a>(reads: Reads<'a>) -> Vec<(&'static str, RegionRefusal
         ("count_v", Box::new(move |d, r| reads.count_v(d, r).err())),
         ("window_v", Box::new(move |d, r| reads.window_v(d, r, None, 3).err())),
         (
+            "count_v_by_home",
+            Box::new(move |d, r| reads.count_v_by_home(d, r, 3, &[]).err()),
+        ),
+        (
             "retrieve_endsets",
             Box::new(move |d, r| reads.retrieve_endsets(d, r).err()),
         ),
     ]
 }
 
-/// §1 — the gate order `image_on` states is inherited by the four operations
-/// that compose it, so it is checked on all five entry points rather than on
+/// §1 — the gate order `image_on` states is inherited by the five operations
+/// that compose it, so it is checked on all six entry points rather than on
 /// the one whose doc-comment carries the sentence. An entry point that
 /// swallowed an unregistered `d` into an empty answer, or that read the
 /// region before the registry, would be invisible to a test of `image` alone.
@@ -977,6 +986,13 @@ fn the_region_read_answers_the_union_of_each_homes_per_slot_stabs_and_an_empty_h
             count_v_on(&snap, &doc1(), &region, reader),
             Ok(answer.len()),
             "{who}: count_v is their cardinality"
+        );
+        assert_eq!(
+            count_v_by_home_on(&snap, &doc1(), &region, usize::MAX, &[], reader)
+                .expect("count_v_by_home")
+                .homes,
+            by_home(&answer),
+            "{who}: the count by home is the per-home unions' sizes, in home order"
         );
         for n in [1, 3, 100] {
             assert_eq!(

@@ -22,10 +22,10 @@ use skep_arrangement::{
 };
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_discovery::{
-    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
-    findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
-    retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, FourSet, OrphanError, OrphanReport,
-    QueryError, SupClaim, Window, MAX_IMAGE_RUNS,
+    addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
+    delete_orphans_on, findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on,
+    project_on, retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, FourSet, HomeCounts,
+    OrphanError, OrphanReport, QueryError, SupClaim, Window, MAX_IMAGE_RUNS,
 };
 use skep_kernel::{
     CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot, WorldState,
@@ -608,6 +608,16 @@ impl Reads<'_> {
         window_v_on(&self.0.snapshot(), d, region, cur, n, &every_home)
     }
 
+    pub fn count_v_by_home(
+        &self,
+        d: &Address,
+        region: &[Span],
+        n: usize,
+        except: &[Address],
+    ) -> Result<HomeCounts, QueryError> {
+        count_v_by_home_on(&self.0.snapshot(), d, region, n, except, &every_home)
+    }
+
     pub fn retrieve_endsets(
         &self,
         d: &Address,
@@ -664,6 +674,28 @@ impl Reads<'_> {
 /// than being cloned.
 pub fn claims_of(found: Vec<SupClaim>) -> Vec<Address> {
     found.into_iter().map(|c| c.claim).collect()
+}
+
+/// The count by home a reader's enumeration implies: `links` grouped by home
+/// in the order they come, each home once with its links' number — what a
+/// `count_v_by_home` with no budget and nothing excepted must answer off the
+/// same selection, since an enumeration is in home order and a home's links
+/// are adjacent in it.
+pub fn by_home(links: &[Address]) -> Vec<(Address, usize)> {
+    let mut rows: Vec<(Address, usize)> = Vec::new();
+    for a in links {
+        let home = skep_address::document_of(a).expect("a link has a home");
+        match rows.last_mut() {
+            Some((at, count)) if *at == home => *count += 1,
+            _ => rows.push((home, 1)),
+        }
+    }
+    rows
+}
+
+/// The rows' sum: the number a corner draws off a count by home.
+pub fn counted(counts: &HomeCounts) -> usize {
+    counts.homes.iter().map(|(_, n)| n).sum()
 }
 
 // ───────────────────── the window law and a wide endset ─────────────────────

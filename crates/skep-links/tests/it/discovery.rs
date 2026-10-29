@@ -774,6 +774,139 @@ fn stab_in_slots_answers_the_per_slot_stabs_of_one_home_as_pairs_in_address_orde
     assert_eq!(bytes, 0, "no probe asks the heap for nothing");
 }
 
+/// §G — `count_in_slots` IS THE DISTINCT LINKS OF `stab_in_slots`' PAIRS,
+/// COUNTED (the link-sets design §7, W10 (a)): over every candidate home of
+/// every query in the pool `stab_in_slots`' own law reads, in both views,
+/// the count is the number of distinct addresses among the pairs — a link
+/// touching at two slots counted once, a nullified one not at all under the
+/// active view — and the probe-by-probe rules hold of it as of the pairs: a
+/// pair the walk named the home for by no span adds nothing, a slot no link
+/// has adds nothing, and no probe counts nothing, asking the heap for
+/// nothing. AND IT LIFTS NO ADDRESS, counted in bytes: over a home of many
+/// hits the count's heap is the hits' keys as references and nothing of an
+/// address — the stab's heap is at least the count's plus one address
+/// allocation per distinct link it lifts — so a count that lifted would show
+/// as that many allocations more.
+#[test]
+fn count_in_slots_counts_the_distinct_links_of_the_pairs_and_lifts_none() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let w = writer(&k);
+    let t = unregistered_ta(1);
+    open_deposit(&w, &[ca(1)], &[ca(5)], std::slice::from_ref(&t));
+    let twice = open_deposit(&w, &[ca(2)], &[ca(1)], std::slice::from_ref(&t));
+    let gone = open_deposit(&w, &[ca(1)], &[ca(6)], std::slice::from_ref(&t));
+    w.nullify(P1, &doc1(), &gone).expect("retract one");
+    deposit_in(&k, &doc2(), &[ca(7)], &[ca(1)], &t);
+    deposit_in(&k, &doc2(), &[ca(8)], &[], &ca(1));
+    deposit_in(&k, &sib_doc(), &[ca(1), ca(3)], &[], &t);
+    let (member, _) = Vstream::new(&k)
+        .version(PrincipalId(2), &sib_doc(), None)
+        .expect("the owner versions its published document");
+    deposit_in(&k, &member, &[ca(1)], &[ca(2)], &t);
+    deposit_in(&k, &member, &[ca(70)], &[], &t);
+    let snap = k.snapshot();
+    let links = snap.world().links();
+
+    let pool = [
+        enc(&[ca(1)]),
+        enc(&[ca(2)]),
+        enc(&[ca(70)]),
+        enc(&[doc1()]),
+        Endset::from_spans([iext(1, 3)]),
+        Endset::from_spans([iext(2, 100)]),
+        enc(&[ca(1), ca(70)]),
+        Endset::empty(),
+    ];
+    let (mut counted, mut collapsed, mut views_part) = (0, 0, false);
+    for q in &pool {
+        let queries = [(FROM, q), (TO, q), (TYPE, q)];
+        for view in [View::Audit, View::Active] {
+            for touch in links.homes_touching(queries) {
+                let probes = || queries.iter().enumerate().map(|(i, &(slot, _))| (slot, i));
+                let pairs = links.stab_in_slots(&touch, probes(), view);
+                let mut distinct: Vec<&Address> = pairs.iter().map(|(a, _)| a).collect();
+                distinct.dedup();
+                let count = links.count_in_slots(&touch, probes(), view);
+                assert_eq!(count, distinct.len(), "{view:?}, {q:?}, home {:?}", touch.home());
+                counted += count;
+                collapsed += pairs.len() - distinct.len();
+                views_part |= view == View::Audit
+                    && count > links.count_in_slots(&touch, probes(), View::Active);
+            }
+        }
+    }
+    assert!(counted > 0, "some home holds a hit");
+    assert!(collapsed > 0, "some link touches at two slots and is counted once");
+    assert!(views_part, "the retracted link is counted under the audit view alone");
+
+    // The probe-by-probe rules, as the pairs' law states them.
+    let (one, five, seventy) = (enc(&[ca(1)]), enc(&[ca(5)]), enc(&[ca(70)]));
+    let touch = touch_at(links, [(FROM, &one), (TO, &five)], &doc1());
+    let from_alone = links.stab_in(touch.home(), FROM, touch.spans(0), View::Audit).len();
+    assert!(from_alone > 0, "the premise: doc1 holds a FROM hit of ca(1)");
+    assert_eq!(
+        links.count_in_slots(&touch, [(FROM, 0), (TO, 1)], View::Audit),
+        from_alone,
+        "`twice` is no hit of a TO probe whose pair asked ca(5): each probe asks its own spans"
+    );
+    let touch = touch_at(links, [(FROM, &one), (TO, &seventy)], &doc1());
+    assert_eq!(
+        links.count_in_slots(&touch, [(FROM, 0), (TO, 1)], View::Audit),
+        from_alone,
+        "a pair that named the home by no span adds nothing"
+    );
+    let touch = touch_at(links, [(FROM, &one), (4, &one)], &doc1());
+    assert_eq!(
+        links.count_in_slots(&touch, [(FROM, 0), (4, 1)], View::Audit),
+        from_alone,
+        "past the arity, a slot no link has adds nothing"
+    );
+    let (answer, bytes) =
+        settled_heap_bytes(|| links.count_in_slots(&touch, std::iter::empty(), View::Active));
+    assert_eq!((answer, bytes), (0, 0), "no probe counts nothing and asks the heap for nothing");
+    // Over the extent, doc1's live links at FROM or TO: the first, `twice`
+    // at both slots, and the retraction record, whose FROM names the home
+    // whole — three distinct, `twice` once.
+    let extent = Endset::from_spans([iext(1, 3)]);
+    let touch = touch_at(links, [(FROM, &extent), (TO, &extent)], &doc1());
+    let pairs = links.stab_in_slots(&touch, [(FROM, 0), (TO, 1)], View::Active);
+    assert_eq!(pairs.iter().filter(|(a, _)| *a == twice).count(), 2, "the premise: two pairs");
+    assert_eq!(pairs.len(), 4, "{pairs:?}");
+    assert_eq!(
+        links.count_in_slots(&touch, [(FROM, 0), (TO, 1)], View::Active),
+        3,
+        "three live links on the extent, `twice` once: {pairs:?}"
+    );
+
+    // THE BYTES: a home of a thousand hits at FROM, the count against the
+    // stab. The address allocation the stab pays per distinct link is
+    // measured as one address's clone, and the count's heap plus a thousand
+    // of them is at most the stab's.
+    const HITS: u32 = 1_000;
+    let flooded = kernel();
+    let fw = writer(&flooded);
+    for i in 1..=HITS {
+        open_deposit(&fw, &[ca(1)], &[ca(100 + i)], &[unregistered_ta(1)]);
+    }
+    let snap = flooded.snapshot();
+    let links = snap.world().links();
+    let touch = touch_at(links, [(FROM, &one), (TO, &one)], &doc1());
+    let probes = [(FROM, 0), (TO, 1)];
+    let (count, count_bytes) =
+        settled_heap_bytes(|| links.count_in_slots(&touch, probes, View::Active));
+    assert_eq!(count, HITS as usize);
+    let (pairs, stab_bytes) =
+        settled_heap_bytes(|| links.stab_in_slots(&touch, probes, View::Active));
+    assert_eq!(pairs.len(), HITS as usize);
+    let address_bytes = settled_heap_bytes(|| pairs[0].0.clone()).1;
+    assert!(address_bytes > 0, "an address lifted is an allocation");
+    assert!(
+        count_bytes + u64::from(HITS) * address_bytes <= stab_bytes,
+        "the count lifts no address: count {count_bytes} B + {HITS} × {address_bytes} B ≤ stab {stab_bytes} B"
+    );
+}
+
 /// §G — THE COMPOSED STAB PAYS NOTHING FOR THE LINKS HOMED WHERE THE READER
 /// MAY NOT READ, counted: twenty links in doc1 beside a flood on the same
 /// position homed in doc2, which the reader may not read. The read a caller

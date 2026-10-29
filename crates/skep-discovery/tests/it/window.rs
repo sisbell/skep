@@ -229,6 +229,87 @@ fn a_window_pays_for_its_page_and_the_homes_it_passes() {
     assert!(heap_of(&more, &whole) > heap_of(&fewer, &whole), "the control: the whole passage pays for every home");
 }
 
+/// §2 — THE COUNT BY HOME IS THE FOURTH READ-OUT OF THE ONE SELECTION INDEX
+/// (the link-sets design §7, W10 (a)), stated over a passage whose links lie
+/// in four homes — one touching at two slots, one retracted, one home named
+/// by the passage's block with no hit — under every budget from the clamp
+/// at 0 through one past the set: with no budget and nothing excepted the
+/// rows are `findlinks_v`'s answer grouped by home, so `Σ = count_v`; with
+/// `except` naming homes the rows lose exactly those homes and the sum
+/// drops by exactly the links homed there, an excepted home with no hit
+/// changing nothing; and under a budget `n` the rows are a prefix of the
+/// full rows, `exhausted` false iff the sum reached `max(n, 1)`, the home
+/// that filled it counted whole and nothing past it, `n = 0` clamped to 1.
+#[test]
+fn the_count_by_home_is_the_fourth_read_out_of_the_selection_index() {
+    let k = kernel_with_documents(5);
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    // doc1: two links on position 1.
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    // doc2: three links — one touching at FROM and TO both, counted once.
+    link(&store, &doc2(), &[ca(2)], &[ca(3)]);
+    link(&store, &doc2(), &[ca(103)], &[ca(1)]);
+    link(&store, &doc2(), &[ca(3)], &[ca(104)]);
+    // doc3: one link; doc4: a link in the passage's block, off the passage;
+    // doc5: two links, one retracted.
+    link(&store, &doc(3), &[ca(2)], &[ca(105)]);
+    link(&store, &doc(4), &[ca(50)], &[ca(106)]);
+    link(&store, &doc(5), &[ca(1)], &[ca(107)]);
+    let gone = link(&store, &doc(5), &[ca(3)], &[ca(108)]);
+    store.nullify(SYS, &doc(5), &gone).expect("nullify succeeds");
+    let reads = Reads(&k);
+    let region = [vspan(1, 1, 3)];
+
+    let all = reads.findlinks_v(&doc1(), &region).expect("findlinks_v");
+    assert_eq!(all.len(), 7, "the seven live links on the passage: {all:?}");
+    let full = by_home(&all);
+    assert_eq!(full, vec![(doc1(), 2), (doc2(), 3), (doc(3), 1), (doc(5), 1)]);
+
+    // No budget, nothing excepted: the enumeration grouped by home.
+    let counts = reads.count_v_by_home(&doc1(), &region, usize::MAX, &[]).expect("count_v_by_home");
+    assert_eq!(counts.homes, full);
+    assert!(counts.exhausted);
+    assert_eq!(counted(&counts), reads.count_v(&doc1(), &region).expect("count_v"));
+
+    // Excepted homes: their rows go, the sum drops by their links, and a
+    // home with no hit on the passage is passed to no effect.
+    let without_doc2 = reads.count_v_by_home(&doc1(), &region, usize::MAX, &[doc2()]).expect("count_v_by_home");
+    assert_eq!(without_doc2.homes, vec![(doc1(), 2), (doc(3), 1), (doc(5), 1)]);
+    assert_eq!(counted(&without_doc2), all.len() - 3);
+    assert!(without_doc2.exhausted);
+    let excepted = [doc(4), doc2(), doc(5)];
+    let fewer = reads.count_v_by_home(&doc1(), &region, usize::MAX, &excepted).expect("count_v_by_home");
+    assert_eq!(fewer.homes, vec![(doc1(), 2), (doc(3), 1)]);
+    assert_eq!(counted(&fewer), all.len() - 4, "the links homed in the excepted homes");
+    let every = [doc1(), doc2(), doc(3), doc(5)];
+    let none = reads.count_v_by_home(&doc1(), &region, 1, &every).expect("count_v_by_home");
+    assert_eq!(none.homes, vec![], "every home excepted: no row");
+    assert!(none.exhausted, "…and the walk ended under its budget");
+
+    // Every budget from the clamp through one past the set.
+    for n in 0..=all.len() + 1 {
+        let budgeted = reads.count_v_by_home(&doc1(), &region, n, &[]).expect("count_v_by_home");
+        let clamped = n.max(1);
+        let sum = counted(&budgeted);
+        assert!(
+            full.starts_with(&budgeted.homes),
+            "n = {n}: the rows are a prefix of the full rows: {budgeted:?}"
+        );
+        assert_eq!(budgeted.exhausted, sum < clamped, "n = {n}: exhausted iff the sum is under the budget");
+        if budgeted.exhausted {
+            assert_eq!(budgeted.homes, full, "n = {n}: under the budget, every home");
+        } else {
+            let last = budgeted.homes.last().map_or(0, |(_, c)| *c);
+            assert!(sum - last < clamped, "n = {n}: the home that fills the budget is the last, counted whole");
+        }
+    }
+    let clamp = reads.count_v_by_home(&doc1(), &region, 0, &[]).expect("count_v_by_home");
+    assert_eq!(clamp.homes, vec![(doc1(), 2)], "n = 0 is clamped to 1: the first home");
+    assert!(!clamp.exhausted);
+}
+
 /// §2 — one selection index, read out three ways: `count_v`, `findlinks_v`
 /// and `window_v` at EVERY batch size answer off the same
 /// `findlinks_V ∩ addressable`, so they cannot disagree about which links
@@ -282,6 +363,13 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
             Ok(enumerated.len()),
             "count = |enum| for {region:?}"
         );
+        // The fourth read-out: with no budget and nothing excepted, the
+        // count by home is the enumeration grouped by home, and its rows sum
+        // to the count.
+        let counts = reads.count_v_by_home(&doc1(), &region, usize::MAX, &[]).expect("count_v_by_home");
+        assert_eq!(counts.homes, by_home(&enumerated), "Σ count_v_by_home = count_v for {region:?}");
+        assert_eq!(counted(&counts), enumerated.len());
+        assert!(counts.exhausted, "no budget: every home reached");
 
         // n = 0 is the clamp (W9); n = |enumerated| is the equal case, where
         // the batch exactly drains the set and one further call is owed to

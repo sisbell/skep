@@ -406,6 +406,17 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::WindowFtt),
             vec![("q", j_fourset(q)), ("cur", j_cursor(cur)), ("n", j_usize(*n))],
         ),
+        // The canonical form carries `except` always, the empty list where
+        // the request named none, as a window's carries `cur: null`.
+        Op::CountVByHome { d, region, n, except } => (
+            op_name(OpKind::CountVByHome),
+            vec![
+                ("d", j_addr(d)),
+                ("region", j_spans(region)),
+                ("n", j_usize(*n)),
+                ("except", j_addrs(except)),
+            ],
+        ),
         Op::RetrieveEndsets { d, region } => {
             (op_name(OpKind::RetrieveEndsets), vec![("d", j_addr(d)), ("region", j_spans(region))])
         }
@@ -495,6 +506,17 @@ pub(super) fn j_response(r: &Response) -> Value {
         Response::Page { window, as_of } => {
             ("page", vec![("window", j_window(window)), ("as_of", j_seq(*as_of))])
         }
+        // The count by home (wire.md §Link discovery reads): one row per
+        // home counted, `{home, n}`, in the read's address order, and the
+        // budget's terminal signal beside them.
+        Response::Homes { homes, exhausted, as_of } => (
+            "homes",
+            vec![
+                ("homes", j_home_counts(homes)),
+                ("exhausted", Value::Bool(*exhausted)),
+                ("as_of", j_seq(*as_of)),
+            ],
+        ),
         Response::Endsets { pairs: ps, as_of } => {
             ("endsets", vec![("pairs", j_endset_pairs(ps)), ("as_of", j_seq(*as_of))])
         }
@@ -1003,6 +1025,17 @@ fn j_window(w: &Window) -> Value {
     ])
 }
 
+/// Renders the count by home's rows: `[{"home": <address>, "n": <count>}]`,
+/// in the order the read answered them.
+fn j_home_counts(homes: &[(Address, usize)]) -> Value {
+    Value::Array(
+        homes
+            .iter()
+            .map(|(home, n)| obj(vec![("home", j_addr(home)), ("n", j_usize(*n))]))
+            .collect(),
+    )
+}
+
 /// Renders a delivery's items.
 ///
 /// They follow [`ValueItems`]' rule with the `{"content"}` run form, plus
@@ -1250,6 +1283,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::CountFtt => "count_ftt",
         OpKind::WindowV => "window_v",
         OpKind::WindowFtt => "window_ftt",
+        OpKind::CountVByHome => "count_v_by_home",
         OpKind::RetrieveEndsets => "retrieve_endsets",
         OpKind::Project => "project",
         OpKind::DiscoverableFrom => "discoverable_from",

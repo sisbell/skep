@@ -2,10 +2,11 @@
 //!
 //! The **read-only query/presentation layer over the link subsystem**: given
 //! a content region it answers *which links touch here*; given a four-set
-//! descriptor it answers *which links match*; and it counts, paginates,
-//! projects, retrieves endsets, previews delete-orphaning, and traces
-//! supersession lineage — all by composing M7's homes-first spanfilade
-//! reads, home-range and typed reads (`homes_touching`/`stab_in_slots`/
+//! descriptor it answers *which links match*; and it counts — by home too,
+//! to a budget, lifting no link — paginates, projects, retrieves endsets,
+//! previews delete-orphaning, and traces supersession lineage — all by
+//! composing M7's homes-first spanfilade reads, home-range and typed reads
+//! (`homes_touching`/`stab_in_slots`/`count_in_slots`/
 //! `match_links_in`, `homes_under`/`homed_in`/`homes`, `stab_typed_in`), M5's
 //! arrangement, and M3's registry over ONE M2 snapshot per operation. One
 //! thing well: **turn upstream
@@ -104,16 +105,18 @@
 //! predicate answers true and the rule admits every link.
 //!
 //! It is orthogonal to `View::Active`, and to the descriptor's own `home`
-//! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization.
-//! It is applied in the two shapes PUB names, by the twelve reads that take
-//! the predicate as their last argument:
+//! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization
+//! — and to the count by home's `except` list, which passes the homes the
+//! page already reads and never admits one. It is applied in the two shapes
+//! PUB names, by the thirteen reads that take the predicate as their last
+//! argument:
 //!
-//! * the RESULT-SET FILTER (PUB-6.13), on the ten RESULT-SET reads —
-//!   `findlinks`, `count` and `window` in both families,
-//!   [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage pair —
-//!   which admit no link the rule refuses, and count and page the survivors:
-//!   all ten ask it of each candidate home once, ahead of that home's links
-//!   (PUB-7.18);
+//! * the RESULT-SET FILTER (PUB-6.13), on the eleven RESULT-SET reads —
+//!   `findlinks`, `count` and `window` in both families, the region
+//!   family's [`count_v_by_home_on`], [`retrieve_endsets_on`],
+//!   [`delete_orphans_on`] and the lineage pair — which admit no link the
+//!   rule refuses, and count and page the survivors: all eleven ask it of
+//!   each candidate home once, ahead of that home's links (PUB-7.18);
 //! * the ABSENCE RULE (PUB-6.6), on the POINTWISE pair's `a` ARGUMENT, since
 //!   neither answer names a link: an `a` the rule refuses is ABSENT, which
 //!   both [`project_on`] and [`addressably_discoverable_from_on`] answer
@@ -258,22 +261,39 @@
 //!   homes from its cursor's own home to the one that fills its `n`, no
 //!   further. [`retrieve_endsets_on`] adds one `readlink` per link of an
 //!   admitted home.
+//! * the count by home ([`count_v_by_home_on`]) — the same `homes_touching`
+//!   over the image's extents at the three v1 slots, then, per candidate
+//!   home, one `contains` over the request's `except` list and, for a home
+//!   it does not name, one test of the reader's predicate and, for each
+//!   home it admits, one `count_in_slots` over the spans and the parts that
+//!   named it at each of the three slots — the stab's probes and its sort,
+//!   no lift and no set of addresses — the walk stopping at the home whose
+//!   count brings the sum to its `n`, no further. So it is bounded above by
+//!   `n` hits plus one home's share and the homes passed — the directory's
+//!   steps and a test apiece for the candidate homes ahead of that home,
+//!   whatever the passage holds past it — where [`count_v_on`] pays for
+//!   every readable hit of the passage; none when the image is empty.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — with the home slot constrained: one `homes_under`,
 //!   a seek per home holding links under the slot's spans, then one test of
 //!   the reader's predicate per such home and, for each home it admits, one
-//!   `homed_in` — that home's own key range, each link in it tested against
-//!   the link-slot constraints — so a home slot naming a document or a member
-//!   reads that home's links alone, and one naming an account or the node
-//!   reads every home's under it, one range apiece, never the links of a
-//!   home it does not name. With the home slot `any` and a link slot
-//!   constrained: `fewest_homes` over the constraints, then one
-//!   `homes_touching` on the one with the fewest candidate homes, and per
-//!   candidate one predicate test and, admitted, one `match_links_in`. With
-//!   nothing constrained: `homes`, a seek per home the store holds, one test
-//!   apiece and the admitted homes' chains — the class scans, grouped by
-//!   home. The window walks the homes from its cursor's own home to the one
-//!   that fills its `n`. None when the descriptor is unsatisfiable.
+//!   `homed_in` — that home's own key range — where no link slot is
+//!   constrained beside the home, and where one is, `fewest_homes` over the
+//!   constraints once and then one `match_links_in` per admitted home — the
+//!   stab within the home on the constraint with the fewest candidate homes,
+//!   over the whole of its spans, each survivor tested against the rest —
+//!   so a home slot naming a document or a member reads that home's links
+//!   alone, its hits on the slot where one is constrained, and one naming an
+//!   account or the node reads every home's under it, one range or one stab
+//!   apiece, never the links of a home it does not name. With the home slot
+//!   `any` and a link slot constrained: `fewest_homes` over the constraints,
+//!   then one `homes_touching` on the one with the fewest candidate homes,
+//!   and per candidate one predicate test and, admitted, one
+//!   `match_links_in`. With nothing constrained: `homes`, a seek per home
+//!   the store holds, one test apiece and the admitted homes' chains — the
+//!   class scans, grouped by home. The window walks the homes from its
+//!   cursor's own home to the one that fills its `n`. None when the
+//!   descriptor is unsatisfiable.
 //! * [`delete_orphans_on`] — one `homes_touching` over the deleted and the
 //!   retained runs at the three v1 slots, six pairs in one walk, then, per
 //!   home the deleted side names, one test of the reader's predicate and,
@@ -375,8 +395,9 @@ mod budget;
 // computed and the caller's predicate asked about it — the reader that
 // answers once per home, and the cursor's home a window resumes in.
 mod home;
-// The plain values the reads take and return — the window pair, the lineage
-// claim, the orphan report — and the two typed rejections.
+// The plain values the reads take and return — the window pair, the count
+// by home, the lineage claim, the orphan report — and the two typed
+// rejections.
 mod types;
 // M7's link sets as the reads build and walk them: the v1 slot list, the
 // extents' lift, a home's probes and the disjunction over its slots, the
@@ -387,8 +408,8 @@ mod sets;
 // resolution: the region resolver every region-family read chains into M7's
 // matcher.
 mod image;
-// The region family: `findlinks_v`, `count_v`, `window_v` and
-// RETRIEVEENDSETS, read out of one selection index home by home.
+// The region family: `findlinks_v`, `count_v`, `window_v`, the count by
+// home and RETRIEVEENDSETS, read out of one selection index home by home.
 mod region;
 // The descriptor family: the four-set request, its candidates and `sat`, and
 // its three read-outs.
@@ -407,9 +428,11 @@ pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, Slo
 pub use image::{content_vspan, image_on};
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
-pub use region::{count_v_on, findlinks_v_on, retrieve_endsets_on, window_v_on};
+pub use region::{
+    count_v_by_home_on, count_v_on, findlinks_v_on, retrieve_endsets_on, window_v_on,
+};
 pub use survival::delete_orphans_on;
-pub use types::{Cursor, OrphanError, OrphanReport, QueryError, SupClaim, Window};
+pub use types::{Cursor, HomeCounts, OrphanError, OrphanReport, QueryError, SupClaim, Window};
 // The 1-based standard slot numerals every query here indexes by, and the two
 // M7 types M8's own surface is written in: a descriptor slot's `Endset` (with
 // `enc`, M7's canonical address-set encoding, which builds one) and the
@@ -454,6 +477,7 @@ const _: fn() = || {
     owed::<FourSet>();
     owed::<SlotSpec>();
     owed::<Window>();
+    owed::<HomeCounts>();
     owed::<SupClaim>();
     owed::<OrphanReport>();
     // Both rejections too: a caller that boxes one meets

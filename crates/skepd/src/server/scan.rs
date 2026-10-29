@@ -486,12 +486,12 @@ impl ClassScans {
 ///   board, that shape's superset;
 /// * a `home` slot some span of which names an ACCOUNT or the NODE — M8's
 ///   `homes_under`, a seek per home under the span and one test apiece,
-///   each admitted home's chain read as one key range and tested against
-///   the link slots. The home slot drives wherever it is constrained, so
+///   each admitted home's chain read as one key range, or stabbed within
+///   the home on the cheapest link slot where one is constrained beside.
+///   The home slot drives wherever it is constrained, so
 ///   this shape walks every home under the account or the board whatever
-///   its other slots hold: a `ty` or a `from` beside it narrows the
-///   survivors of each chain, never the homes walked, and costs a test per
-///   link beside the walk the `home`-only form pays. The one place a slot's
+///   its other slots hold: a `ty` or a `from` beside it narrows each home's
+///   read to its hits on that slot, never the homes walked. The one place a slot's
 ///   VALUE is read at admission: the span's start, projected by M1's
 ///   `document_of` — `None` for an account or the node, which lie under no
 ///   document — the projection M8's own home rule uses, so the bound and the
@@ -504,21 +504,30 @@ impl ClassScans {
 /// three v1 slots, at up to [`skep_discovery::MAX_IMAGE_RUNS`] query spans,
 /// a predicate test per candidate home and one `stab_in_slots` per admitted
 /// home, over the spans and the parts of the stab that named it, the window
-/// no further than the home that fills its `n` — and `delete_orphans` — the
+/// no further than the home that fills its `n` — `count_v_by_home` — the
+/// same walk, a `contains` over the frame's `except` list and a predicate
+/// test per candidate home and one `count_in_slots` per admitted home it
+/// does not name, the stab's probes and sort with no lift, the walk no
+/// further than the home whose count brings the sum to its `n`, so it costs
+/// the homes ahead of its budget and never a flooded page's whole
+/// population — and `delete_orphans` — the
 /// same over the deleted and the retained runs, six pairs in one walk and
 /// two `stab_in_slots` per admitted home, one a side, and no owner gate, so
 /// every asker reaches it on any registered document. Each costs
 /// the homes touching one document's spans and their readable links: a
 /// flooded PUBLIC page still costs its population, which satisfies the
 /// request, so the read is sized by the page the frame names (`d`), and the
-/// bound is keyed by it.
+/// bound is keyed by it — the count by home's budget bounds its share of
+/// that population, and its directory walk is still the page's.
 ///
 /// **Every other link read takes no permit**, each absence a fact about the
 /// read rather than a judgement:
 ///
 /// * the FTT family's other shapes — a `home` naming a document or a version
-///   member, whatever else is constrained, reads that home's chain alone
-///   (`homes_under` at one seek, `homed_in` over one key range); a `from` or
+///   member, whatever else is constrained, reads that home's links alone
+///   (`homes_under` at one seek, then `homed_in` over one key range, or
+///   `match_links_in`, the stab within the home on the cheapest link slot,
+///   where one is constrained beside); a `from` or
 ///   a `to` constrained, with or without `ty`, drives from the directory of
 ///   homes with a filing in the span's blocks, the constraint with the
 ///   fewest candidate homes driving (`fewest_homes`, a bounded walk of
@@ -578,8 +587,8 @@ fn names_an_account_or_the_node(start: &Tumbler) -> bool {
 }
 
 /// Returns the document a region read names, the key of the per-document
-/// pool: `d` of `find_links_v`, `count_v`, `window_v`, `retrieve_endsets`
-/// and `delete_orphans`; `None` for every other op.
+/// pool: `d` of `find_links_v`, `count_v`, `window_v`, `count_v_by_home`,
+/// `retrieve_endsets` and `delete_orphans`; `None` for every other op.
 ///
 /// The region family and the delete preview are the reads whose frame names
 /// the document whose spans they walk ([`is_class_scan`] states what each
@@ -592,6 +601,7 @@ pub(super) fn region_document(op: &Op) -> Option<&Address> {
         Op::FindLinksV { d, .. }
         | Op::CountV { d, .. }
         | Op::WindowV { d, .. }
+        | Op::CountVByHome { d, .. }
         | Op::RetrieveEndsets { d, .. }
         | Op::DeleteOrphans { d, .. } => Some(d),
         _ => None,

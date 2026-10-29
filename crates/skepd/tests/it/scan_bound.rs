@@ -163,6 +163,14 @@ fn window_v(doc: &str) -> String {
     )
 }
 
+/// The region-keyed count by home over content ordinal 1 of `doc`, a budget
+/// of sixty-four and no home excepted — a region read, keyed by `doc`.
+fn count_v_by_home(doc: &str) -> String {
+    format!(
+        r#"{{"d":"{doc}","except":[],"n":64,"op":"count_v_by_home","region":[{{"start":"1.1","width":"0.1"}}]}}"#
+    )
+}
+
 /// The region-keyed endset read over content ordinal 1 of `doc`.
 fn retrieve_endsets(doc: &str) -> String {
     format!(
@@ -303,6 +311,7 @@ fn every_class_scan_takes_a_scan_permit() {
         ("find_links_v", find_links_v(CLAIMANT_DOC1), Pool::Document),
         ("count_v", count_v(CLAIMANT_DOC1), Pool::Document),
         ("window_v", window_v(CLAIMANT_DOC1), Pool::Document),
+        ("count_v_by_home", count_v_by_home(CLAIMANT_DOC1), Pool::Document),
         ("retrieve_endsets", retrieve_endsets(CLAIMANT_DOC1), Pool::Document),
         ("delete_orphans", delete_orphans(CLAIMANT_DOC1), Pool::Document),
         // The lineage pair and the edition claims answer off the index at the
@@ -471,7 +480,7 @@ fn a_third_class_scan_is_refused_and_the_two_pools_are_disjoint() {
 
 /// §2 THE PER-DOCUMENT POOL (D3, D4; skep #651): doc 1's two region permits
 /// held → every region read of doc 1 — `find_links_v`, `count_v`,
-/// `window_v`, `retrieve_endsets`, `delete_orphans` — answers `503
+/// `window_v`, `count_v_by_home`, `retrieve_endsets`, `delete_orphans` — answers `503
 /// scan_busy` with the op named and the width's sentence in `detail`, while
 /// a region read of the claimant's DRAFT is admitted and answers (one page's
 /// readers contend among themselves) and the grant directory is admitted
@@ -508,6 +517,7 @@ fn a_documents_region_reads_contend_only_among_themselves() {
         ("find_links_v", find_links_v(CLAIMANT_DOC1)),
         ("count_v", count_v(CLAIMANT_DOC1)),
         ("window_v", window_v(CLAIMANT_DOC1)),
+        ("count_v_by_home", count_v_by_home(CLAIMANT_DOC1)),
         ("retrieve_endsets", retrieve_endsets(CLAIMANT_DOC1)),
         ("delete_orphans", delete_orphans(CLAIMANT_DOC1)),
     ] {

@@ -5,7 +5,9 @@
 //! currency, and the discovery primitives for M8: `stab` / `match_links` /
 //! `type_slice`, the homes-first pair beneath them — `homes_touching`, the
 //! candidate homes a query could meet, and `stab_in`, one home's hits, with
-//! `match_links_in` the AND over one home — the home ranges `homes_under` /
+//! `match_links_in` the AND over one home and `stab_in_slots` beside
+//! `count_in_slots`, one home's hits at several slots lifted or counted —
+//! the home ranges `homes_under` /
 //! `homed_in` / `homed_under` and the store's `homes`, and the typed stab
 //! `stab_typed` with `stab_typed_in`, one home's share of it. The stabs
 //! answer from the spanfilade beside this file, home by home; the home
@@ -1168,26 +1170,7 @@ impl LinkState {
         view: View,
     ) -> Vec<(Address, usize)> {
         let active = default_to_active(view) == View::Active;
-        let mut hits: Vec<(&Tumbler, usize)> = Vec::new();
-        for (slot, query) in probes {
-            let Some(index) = self.hints.spanfilade.slot(slot) else {
-                continue;
-            };
-            for (q, parts) in touch.named_at(query) {
-                index.stab_in_parts(touch.held(), q, parts, &mut |link| hits.push((link, slot)));
-            }
-        }
-        // A link reached by two spans, or by both halves, of one slot is
-        // handed over twice; sorted, the repeats are adjacent. The home's
-        // links are `home · 0 · s_L · n` ([`LinkState::next_link_address`]),
-        // one length under one prefix, so their address order is their
-        // ordinals' and the sort compares one component, not the prefix they
-        // share.
-        hits.sort_unstable_by(|(t, i), (u, j)| {
-            debug_assert_eq!(t.len(), u.len(), "one home's links have one length");
-            ordinal(t).cmp(ordinal(u)).then(i.cmp(j))
-        });
-        hits.dedup();
+        let hits = self.keys_in_slots(touch, probes);
         let mut out: Vec<(Address, usize)> = Vec::with_capacity(hits.len());
         for (t, slot) in hits {
             if active && self.nullified(t) {
@@ -1202,6 +1185,47 @@ impl LinkState {
             out.push((address, slot));
         }
         out
+    }
+
+    /// Returns how many links homed in a touch's home have a slot
+    /// overlapping a span the walk named the home for at that slot — the
+    /// distinct links of [`stab_in_slots`](LinkState::stab_in_slots)' pairs,
+    /// counted and never lifted.
+    ///
+    /// It is the count by home that lifts no link (the link-sets design
+    /// §7, W10 (a)): `touch` and `probes` are what `stab_in_slots` takes,
+    /// the same spans probed at the same parts, the hits sorted and held
+    /// once per `(link, slot)` pair, then once per LINK — a link touching at
+    /// two slots counts once, ASN-0127's disjunction over slots — and a
+    /// nullified link dropped under `View::Active`. So for every touch,
+    /// under either view, this is the number of distinct addresses among
+    /// `stab_in_slots`' pairs, which `tests/it/discovery.rs` holds; and the
+    /// pairs' precondition is this count's.
+    ///
+    /// **What this costs.** `stab_in_slots`' probes and sort and nothing
+    /// after them: no `Address` is made and no vector of them grows, so a
+    /// home's count costs its hits' keys as references and the one vector
+    /// that holds them, which a home of ten thousand hits pays as its stab
+    /// pays it less ten thousand lifts (PUB-7.18: the readable homes' links,
+    /// never a price per link beyond the index's own step). A caller that
+    /// wants a number per home and no link — the region family's count by
+    /// home — composes this over
+    /// [`homes_touching`](LinkState::homes_touching), asking its predicate
+    /// of each candidate home between them, and stops at a budget of its
+    /// own, so an unreadable or a passed home costs the walk's step and
+    /// nothing of its links.
+    pub fn count_in_slots(
+        &self,
+        touch: &Touch<'_>,
+        probes: impl IntoIterator<Item = (usize, usize)>,
+        view: View,
+    ) -> usize {
+        let active = default_to_active(view) == View::Active;
+        let mut hits = self.keys_in_slots(touch, probes);
+        // The pairs of one link are adjacent, so the second slot of a link
+        // follows its first: kept once per key.
+        hits.dedup_by(|later, earlier| later.0 == earlier.0);
+        hits.into_iter().filter(|(t, _)| !(active && self.nullified(t))).count()
     }
 
     /// Returns the links homed in `home` that satisfy every per-slot overlap
@@ -1349,6 +1373,49 @@ impl LinkState {
             }
         }
         keys
+    }
+
+    /// Returns the `(key, slot)` pairs a stab of one home finds at several
+    /// slots, ascending, in every view.
+    ///
+    /// They are the raw hits of [`LinkState::stab_in_slots`]' probes —
+    /// `touch` and `probes` as that read takes them, each named `(slot,
+    /// span)` probed at the parts that named the home — sorted in M1's
+    /// address order and then slot order and held once per pair: the one
+    /// walk of a home's share of the index at several slots, which
+    /// `stab_in_slots` lifts under its view and
+    /// [`LinkState::count_in_slots`] counts by key, neither lifting here. A
+    /// link reached by two spans, or by both halves, of one slot is handed
+    /// over twice; sorted, the repeats are adjacent. The home's links are
+    /// `home · 0 · s_L · n` (`LinkState::next_link_address`), one length
+    /// under one prefix, so their address order is their ordinals' and the
+    /// sort compares one component, not the prefix they share. No probe asks
+    /// the heap for nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build where two links of the home differ in length,
+    /// which no mint produces.
+    fn keys_in_slots<'a>(
+        &'a self,
+        touch: &Touch<'_>,
+        probes: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Vec<(&'a Tumbler, usize)> {
+        let mut hits: Vec<(&Tumbler, usize)> = Vec::new();
+        for (slot, query) in probes {
+            let Some(index) = self.hints.spanfilade.slot(slot) else {
+                continue;
+            };
+            for (q, parts) in touch.named_at(query) {
+                index.stab_in_parts(touch.held(), q, parts, &mut |link| hits.push((link, slot)));
+            }
+        }
+        hits.sort_unstable_by(|(t, i), (u, j)| {
+            debug_assert_eq!(t.len(), u.len(), "one home's links have one length");
+            ordinal(t).cmp(ordinal(u)).then(i.cmp(j))
+        });
+        hits.dedup();
+        hits
     }
 
     /// Returns the tuples of `slice` homed in `home` that a typed stab finds.

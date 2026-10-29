@@ -2128,6 +2128,58 @@
       }
     },
     {
+      "name": "count_v_by_home",
+      "description": "The count by home that lifts no link: per readable home holding an active link that touches the region, in address order, how many distinct links it has there, counted without lifting one; the walk stops at the home whose count brings the sum to the budget n. except names homes passed uncounted (the sets a page already reads by home). Response: homes — {\"homes\": [{\"home\", \"n\"}], \"exhausted\" (true = every readable home not excepted was counted; false = the sum reached n, more may follow)}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The budget: the walk stops at the home whose count brings the sum of the rows to n (0 reads as 1)."
+          },
+          "except": {
+            "type": "array",
+            "description": "Home addresses passed unasked, unstabbed and uncounted — the applied sets'. Absent or null = none. One wire list, at most 4096 entries.",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+              "description": "A home: a document or a version member."
+            }
+          }
+        },
+        "required": ["d", "region", "n"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "retrieve_endsets",
       "description": "The endset fragments of active links falling in the region, per slot. Response: endsets — (slot, endset) pairs.",
       "inputSchema": {

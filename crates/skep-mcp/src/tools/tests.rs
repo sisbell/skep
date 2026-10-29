@@ -156,8 +156,9 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
     assert_eq!(frame("insert", json!({"from_": "1.1", "op": "delete"})), json!({"op": "insert", "from_": "1.1"}));
 }
 
-/// The dispatch's two kinds: forty-seven wire ops — every op of wire.md
-/// §Operations, the seven the first catalog lacked among them — and ten
+/// The dispatch's two kinds: forty-eight wire ops — every op of wire.md
+/// §Operations, the seven the first catalog lacked among them and the
+/// count by home — and ten
 /// adapter tools, no name twice across the two, each wire op a `Tool::Op`
 /// of its own name with no members list, each adapter tool its row's
 /// members, and a ceremony, `upload`, `restore` or `op` no tool at all.
@@ -166,9 +167,9 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let names: Vec<&str> = Tool::names().collect();
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
-    assert_eq!(DISPATCH_OPS.len(), 47);
-    assert_eq!(names.len(), 57);
-    for added in ["publish", "effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants"] {
+    assert_eq!(DISPATCH_OPS.len(), 48);
+    assert_eq!(names.len(), 58);
+    for added in ["publish", "effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home"] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }
     assert_eq!(Tool::named("insert").and_then(Tool::members), None, "a wire op's arguments pass through unread");

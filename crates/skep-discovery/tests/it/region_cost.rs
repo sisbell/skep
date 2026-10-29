@@ -12,6 +12,20 @@
 //! and the per-public-link and per-home figures. Run by name with
 //! `--release --ignored --nocapture`; `SKEP_REGION_COST_ROUNDS` and
 //! `SKEP_REGION_COST_WARMUP` set the rounds.
+//!
+//! Beside it, the two measurements the count-by-home lane owes (the
+//! link-sets design §7, W10 (a); the owner's rulings of 2026-10-28): the
+//! PER-SET HOME READ over a set of ten thousand links, sixty-four of them on
+//! a sixty-four-position passage — the descriptor family's `find_links_ftt
+//! {home: S, from: the passage}` as built, the home's whole chain walked,
+//! timed against the stab within the home M7 answers — the one-line change
+//! to the descriptor's candidates ruled "only if the measurement says so",
+//! against one sixteenth of a frame, 1 ms p50; and THE ACCEPTANCE, the
+//! budgeted count by home over S43's flooded public passage at F = 10⁴ and
+//! 10⁵, `except` the author's own home and `n` the view's links, against
+//! `count_v` on the same board: the budgeted count is held FLAT in F past
+//! the budget — within 2× of its 10⁴ figure at 10⁵ — while `count_v` grows
+//! with F. Each prints its figures with the machine's load.
 
 use std::time::{Duration, Instant};
 
@@ -20,9 +34,12 @@ use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::Address;
-use skep_discovery::{count_v_on, findlinks_v_on};
+use skep_discovery::{
+    count_v_by_home_on, count_v_on, findlinks_ftt_on, findlinks_v_on, image_on, FourSet, Run,
+    SlotSpec,
+};
 use skep_kernel::{Kernel, Snapshot};
-use skep_links::LinkWriter;
+use skep_links::{enc, Endset, HasLinks, LinkWriter, View, FROM};
 
 /// S34's flood: ten thousand foreign links on the passage…
 const FLOOD: u32 = 10_000;
@@ -104,6 +121,227 @@ fn ms(d: Duration) -> f64 {
 
 fn us(d: f64) -> f64 {
     d * 1e3
+}
+
+/// The 1-, 5- and 15-minute load averages, off `sysctl -n vm.loadavg` — the
+/// load every figure here is reported with, as the spikes report theirs.
+fn loadavg() -> String {
+    match std::process::Command::new("sysctl").args(["-n", "vm.loadavg"]).output() {
+        Ok(o) => String::from_utf8_lossy(&o.stdout)
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}')
+            .trim()
+            .to_string(),
+        Err(e) => format!("? ({e})"),
+    }
+}
+
+/// Times `arms` over `rounds` interleaved rounds after `warmup` discarded
+/// ones, the order rotated by round, each arm's answer held to its first;
+/// the samples per arm, sorted.
+fn timed<T: PartialEq + std::fmt::Debug>(
+    rounds: usize,
+    warmup: usize,
+    arms: &[(&str, &dyn Fn() -> T)],
+) -> Vec<Vec<Duration>> {
+    let first: Vec<T> = arms.iter().map(|(_, run)| run()).collect();
+    let mut samples: Vec<Vec<Duration>> = vec![Vec::with_capacity(rounds); arms.len()];
+    for round in 0..warmup + rounds {
+        for k in 0..arms.len() {
+            let i = (round + k) % arms.len();
+            let start = Instant::now();
+            let answer = (arms[i].1)();
+            let took = start.elapsed();
+            assert_eq!(answer, first[i], "{}: round {round}", arms[i].0);
+            if round >= warmup {
+                samples[i].push(took);
+            }
+        }
+    }
+    for s in &mut samples {
+        s.sort();
+    }
+    samples
+}
+
+/// The passage's I-spans, as the view images them: the endset a per-set home
+/// read's `from` slot carries.
+fn passage_spans(snap: &Snapshot<World>, d: &Address, region: &[skep_address::Span]) -> Endset {
+    let image = image_on(snap, d, region).expect("the passage images");
+    Endset::from_spans(image.iter().map(Run::iextent))
+}
+
+/// The set under the per-set measurement: ten thousand links in one home.
+const SET_LINKS: u32 = 10_000;
+/// Of them, the ones on the view: one per position of a sixty-four-position
+/// passage, the view's own width.
+const VIEW: u32 = 64;
+
+/// THE PER-SET HOME READ AT A SET OF 10⁴ (the owner's ruling A (4),
+/// 2026-10-28): one home S holding ten thousand links, sixty-four of them on
+/// a sixty-four-position passage of the page and the rest on positions past
+/// its content, read as the default view reads an applied set —
+/// `find_links_ftt {home: S, from: the passage's I-spans}` — timed as the
+/// descriptor family answers it, beside the stab within the home M7
+/// answers for the same question (`stab_in` over the spans the directory
+/// named S for). The threshold the ruling names is one sixteenth of a
+/// frame, 1 ms p50, in a release build. MEASURED 2026-10-28 as first built
+/// — S's WHOLE chain walked and each link's slot tested (`homed_in`) —
+/// 2.844 ms p50 (2.899 p99) in release at load 15, 40.3 ms in debug, past
+/// the threshold, against 0.035 ms the stab within the home; so the
+/// descriptor's `candidates` reads a home-constrained query with a link
+/// slot beside by the stab within the home since, and the first arm here
+/// is that form, timed against the bare stab. The cell asserts the answers
+/// and prints the figures with the load.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn the_per_set_home_read_over_a_large_set_reports_its_cost() {
+    let rounds = setting("SKEP_REGION_COST_ROUNDS", 50);
+    let warmup = setting("SKEP_REGION_COST_WARMUP", 5);
+    let region = [vspan(1, PASSAGE_START, VIEW)];
+    let seeding = Instant::now();
+    let k = kernel_with_documents(2);
+    seed_content(&k, &doc(1), CONTENT);
+    let set = doc(2);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    for i in 0..SET_LINKS {
+        // The first VIEW links one per passage position; the rest at
+        // positions past the page's content, in blocks the passage never
+        // names.
+        let position = if i < VIEW { PASSAGE_START + i } else { 1_000 + i };
+        link(&store, &set, &[ca(position)], &[a(&[1, 0, 1, 0, 2, 0, 1, 1])]);
+    }
+    let seeded = seeding.elapsed();
+    let snap = k.snapshot();
+    let from = passage_spans(&snap, &doc(1), &region);
+    let q = FourSet {
+        home: SlotSpec::Spans(enc([&set])),
+        from: SlotSpec::Spans(from.clone()),
+        ..FourSet::any()
+    };
+    let view = usize::try_from(VIEW).expect("small");
+    let as_built = || findlinks_ftt_on(&snap, &q, &every_home).len();
+    let within = || {
+        let links = snap.world().links();
+        let touch = links
+            .homes_touching([(FROM, &from)])
+            .find(|touch| *touch.home() == set)
+            .expect("the directory names the set for the passage");
+        links.stab_in(touch.home(), FROM, touch.spans(0), View::Active).len()
+    };
+    assert_eq!(as_built(), view, "the set's links on the passage");
+    assert_eq!(within(), view, "the stab within the home finds the same");
+    let arms: [(&str, &dyn Fn() -> usize); 2] = [("as built", &as_built), ("stab within", &within)];
+    let samples = timed(rounds, warmup, &arms);
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    eprintln!(
+        "PER-SET-READ ({profile}): {rounds} rounds after {warmup} warm-up; seeding {:.1} s; \
+         load {}; set of {SET_LINKS} links, {VIEW} on a {VIEW}-position passage",
+        seeded.as_secs_f64(),
+        loadavg()
+    );
+    let names = [
+        "find_links_ftt {home: S, from: P} (the descriptor's candidates: the stab within the home)",
+        "stab within the home (M7 stab_in over the named spans, bare)",
+    ];
+    for (name, sorted) in names.iter().zip(&samples) {
+        eprintln!("{name}: p50 {:.3} ms, p99 {:.3} ms", ms(median(sorted)), ms(p99(sorted)));
+    }
+    eprintln!(
+        "threshold: 1 ms p50 (one sixteenth of a 16.7 ms frame); the descriptor's read {}",
+        if ms(median(&samples[0])) > 1.0 { "EXCEEDS it" } else { "is under it" }
+    );
+}
+
+/// The floods of the acceptance: S34's 10⁴, and the design's 10⁵.
+const FLOODS: [u32; 2] = [10_000, 100_000];
+
+/// THE ACCEPTANCE (the link-sets design §7: "the open at a flooded PUBLIC
+/// passage added to the lane's acceptance past 10⁴"): S43's board shape —
+/// one page, a thousand readable homes, F public links on the passage
+/// homed round-robin, the author's own twenty among them in the page's own
+/// home — read by the count by home with `except` the author's home and
+/// `n` the view's links, against `count_v` on the same board, at F = 10⁴
+/// and 10⁵. The expectation, tested: the budgeted count's cost is FLAT in F
+/// past the budget — its p50 at 10⁵ within 2× of its p50 at 10⁴, or of a
+/// tenth of a millisecond where the 10⁴ figure is under that: at the
+/// microsecond scale a release build answers in, the index's depth, which
+/// grows as the logarithm of the flood, and the cache's state move a figure
+/// by tens of microseconds, which is not growth with the flood and is a
+/// hundredth of the frame — while `count_v`'s grows with F. The figures are
+/// printed with the load; nothing is corrected. MEASURED 2026-10-28,
+/// release at load 15–19: the budgeted count 0.029 ms p50 at 10⁴ and
+/// 0.060 ms at 10⁵; `count_v` 3.27 ms and 33.5 ms.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn the_budgeted_count_by_home_over_a_flooded_public_passage_is_flat_in_the_flood() {
+    let rounds = setting("SKEP_REGION_COST_ROUNDS", 50);
+    let warmup = setting("SKEP_REGION_COST_WARMUP", 5);
+    let region = [vspan(1, PASSAGE_START, PASSAGE)];
+    let view = usize::try_from(VIEW).expect("small");
+    let own = usize::try_from(OWN).expect("small");
+    let author = [doc(1)];
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let mut by_home_p50 = Vec::new();
+    let mut count_v_p50 = Vec::new();
+    for flood in FLOODS {
+        let seeding = Instant::now();
+        let k = world(HOMES, flood, false);
+        let seeded = seeding.elapsed();
+        let snap = k.snapshot();
+        let per_home = usize::try_from(flood / HOMES).expect("small");
+        let budgeted = || {
+            count_v_by_home_on(&snap, &doc(1), &region, view, &author, &every_home)
+                .expect("count_v_by_home over a registered document and a well-formed region")
+        };
+        let whole = || {
+            count_v_on(&snap, &doc(1), &region, &every_home)
+                .expect("count_v over a registered document and a well-formed region")
+        };
+        let counts = budgeted();
+        assert!(!counts.exhausted, "the flood is past the budget");
+        assert!(counts.homes.iter().all(|(home, n)| *home != doc(1) && *n == per_home), "{counts:?}");
+        let sum: usize = counts.homes.iter().map(|(_, n)| n).sum();
+        assert!(sum >= view && sum - per_home < view, "the home that fills the budget, whole: {counts:?}");
+        assert_eq!(whole(), own + usize::try_from(flood).expect("small"));
+        let budgeted_sum = || counted(&budgeted());
+        let arms: [(&str, &dyn Fn() -> usize); 2] =
+            [("count_v_by_home", &budgeted_sum), ("count_v", &whole)];
+        let samples = timed(rounds, warmup, &arms);
+        let (by_home, count_v) = (&samples[0], &samples[1]);
+        eprintln!(
+            "ACCEPTANCE ({profile}): F = {flood} public links in {HOMES} homes; {rounds} rounds \
+             after {warmup} warm-up; seeding {:.1} s; load {}",
+            seeded.as_secs_f64(),
+            loadavg()
+        );
+        eprintln!(
+            "count_v_by_home {{except: [the author's home], n: {VIEW}}}: p50 {:.3} ms, p99 {:.3} ms \
+             ({} homes counted, {sum} links); count_v: p50 {:.3} ms, p99 {:.3} ms ({} links)",
+            ms(median(by_home)),
+            ms(p99(by_home)),
+            counts.homes.len(),
+            ms(median(count_v)),
+            ms(p99(count_v)),
+            whole()
+        );
+        by_home_p50.push(median(by_home));
+        count_v_p50.push(median(count_v));
+    }
+    let floor = Duration::from_micros(100);
+    assert!(
+        by_home_p50[1] <= 2 * by_home_p50[0].max(floor),
+        "the budgeted count is flat in F past the budget: {:.3} ms at 10⁵ against {:.3} ms at 10⁴",
+        ms(by_home_p50[1]),
+        ms(by_home_p50[0])
+    );
+    assert!(
+        count_v_p50[1] > count_v_p50[0],
+        "the control: count_v grows with F: {:.3} ms at 10⁵ against {:.3} ms at 10⁴",
+        ms(count_v_p50[1]),
+        ms(count_v_p50[0])
+    );
 }
 
 #[test]

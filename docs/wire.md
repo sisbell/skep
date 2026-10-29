@@ -1237,6 +1237,20 @@ it (the row states the test).
 {"as_of":9,"resp":"page","window":{"batch":["1.0.1.0.1.0.2.1"],"exhausted":true,"next":"1.0.1.0.1.0.2.1"}}
 ```
 
+**`homes`** — count_v_by_home: one row per home counted, `home` the home
+and `n` how many of its distinct active links touch the region, in
+ascending address order, a row only for a home holding one; `exhausted`
+`true` where the walk ended under the budget — the rows are every readable
+home the request did not except — and `false` where their sum reached it,
+the home that filled it counted whole and more homes possibly past it
+(§Link discovery reads). This example counts two homes and ends under its
+budget:
+
+<!-- wire: response homes -->
+```json
+{"as_of":9,"exhausted":true,"homes":[{"home":"1.0.1.0.1","n":2},{"home":"1.0.1.0.2","n":1}],"resp":"homes"}
+```
+
 **`endsets`** — retrieve_endsets: `(slot, endset)` pairs.
 
 <!-- wire: response endsets -->
@@ -4619,13 +4633,14 @@ directory for a `from` or `to` constraint and a region's spans, off the
 typed slices for `ty`, off the store's own key order for a `home` slot
 and for the all-`"any"` query; the read predicate is asked of each ONCE,
 ahead of its links; and an admitted home's links alone are read — stabbed
-within the home for a link slot or a region, read as one key range and
-tested against the link-slot constraints for a `home` slot. Where two
-link slots are constrained, the one naming fewer homes drives, found by
-a bounded walk of the directory. So a read's cost is its candidate homes
+within the home for a link slot or a region, a `home` slot beside a link
+slot included, and read as one key range for a `home` slot alone. Where
+two link slots are constrained, the one naming fewer homes drives, found
+by a bounded walk of the directory. So a read's cost is its candidate homes
 and the readable homes' links, and an unreadable home's links are never
 read, whatever the board or the class holds: a `home` slot naming a
-document or a version member reads that home's links alone, one naming
+document or a version member reads that home's links alone — its hits on
+a link slot constrained beside, never its whole chain — one naming
 an account or the node still walks every home under it, one test apiece,
 and a `ty`-only or all-`"any"` four-set still walks every home of the
 class or the board, one test apiece. A window pays for the links it
@@ -4653,11 +4668,13 @@ population. `/op` admits at most
 `find_links_ftt`, `count_ftt` and `window_ftt` alike, across every type
 class, and across every session and the guest — one pool for the board,
 no per-principal quota. THE PER-DOCUMENT POOL bounds the REGION READS —
-`find_links_v`, `count_v`, `window_v`, `retrieve_endsets` and
-`delete_orphans`, each of whose frames names the document `d` whose
-spans it walks, and each of which costs the homes touching that page and
-their readable links: a flooded PUBLIC page costs its population, which
-satisfies the request, so the read is sized by its page. It is keyed by
+`find_links_v`, `count_v`, `window_v`, `count_v_by_home`,
+`retrieve_endsets` and `delete_orphans`, each of whose frames names the
+document `d` whose spans it walks, and each of which costs the homes
+touching that page and their readable links: a flooded PUBLIC page costs
+its population, which satisfies the request, so the read is sized by its
+page (the count by home's budget bounds its share of that population; its
+directory walk is still the page's). It is keyed by
 `d`: at most **`MAX_REGION_READS_PER_DOCUMENT` = 2** region reads of one
 document at once, inside a ceiling of
 **`MAX_CONCURRENT_REGION_READS` = 6** region reads across every document,
@@ -4779,6 +4796,36 @@ does.
 <!-- wire: request window_ftt -->
 ```json
 {"cur":"1.0.1.0.1.0.2.1","n":16,"op":"window_ftt","q":{"from":"any","home":"any","to":"any","ty":"any"}}
+```
+
+**`count_v_by_home`** — THE COUNT BY HOME THAT LIFTS NO LINK: per readable
+home holding an active link that touches the region, in ascending address
+order, how many DISTINCT links it has there — a link touching at two slots
+counted once — counted without lifting one; the homes `except` names are
+passed unasked, unstabbed and uncounted, the sets a page already reads by
+home; and the walk stops at the home whose count brings the rows' sum to
+the budget `n`, counting that home whole. → `homes`: one row `{home, n}`
+per home counted, and `exhausted` — `true` where the walk ended under `n`,
+so the rows are every readable home not excepted and their sum is the
+exact count of the links in sets not applied; `false` where the sum
+reached `n`, so more may follow (a corner draws "+⟨sum⟩⁺"). `n` is the
+request's, as `window_v`'s is, `0` read as `1`; `except` is one wire list
+of home addresses, absent or `null` read as none, held to the codec's
+wire-list cap — as many entries as a slot may hold spans, the
+`MAX_SLOT_SPANS` that `slot_too_large` names (§Rejection codes) — and
+refused past it at the parse as every over-long list is, `malformed`
+under the op `unparseable`, the cap named in `detail`. `d` is a document argument (unreadable → `withheld`); a home in
+`except` is never consulted and never answers anything. It draws on the
+per-document pool as `find_links_v` does, and COSTS the homes ahead of its
+budget: the directory's steps and a test per candidate home, and for each
+admitted, unexcepted home its stab and sort — bounded by `n` hits plus one
+home's share, never by a flooded page's whole population, which `count_v`
+pays in full. With no budget to spare and nothing excepted, the rows' sum
+is `count_v`'s answer to the same reader.
+
+<!-- wire: request count_v_by_home -->
+```json
+{"d":"1.0.1.0.1","except":["1.0.1.0.2"],"n":64,"op":"count_v_by_home","region":[{"start":"1.1","width":"0.5"}]}
 ```
 
 **`retrieve_endsets`** — the endset fragments of active links falling in

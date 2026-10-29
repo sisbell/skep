@@ -468,7 +468,7 @@ fn a_link_homed_in_an_unreadable_document_reads_as_absent() {
 #[test]
 fn link_discovery_drops_links_homed_where_the_caller_cannot_read() {
     let (fx, unreadable) = setup_with_unreadable();
-    let LinkPair { readable_doc, unreadable_l, readable_l, .. } =
+    let LinkPair { readable_doc, unreadable_doc, unreadable_l, readable_l } =
         two_links_over_one_document(&fx, &unreadable);
     let other = fx.febe.open_session(OTHER);
     let region = || vec![vspan(1, 1, 3)];
@@ -482,6 +482,29 @@ fn link_discovery_drops_links_homed_where_the_caller_cannot_read() {
     // The census counts what the caller may see, by the same rule.
     assert_eq!(count(ex(&fx.febe, fx.user, Op::CountV { d: readable_doc.clone(), region: region() })), 2);
     assert_eq!(count(ex(&fx.febe, other, Op::CountV { d: readable_doc.clone(), region: region() })), 1);
+
+    // The count by home: a row per home the caller may read, in address
+    // order, and none for the home it may not — a link homed there is
+    // neither counted nor paid for, the home passed on one test (the heap
+    // law is the discovery suite's). The owner's budget of one is filled by
+    // the first home; the stranger's first home is passed ahead of its
+    // budget, so its one row is the readable home's.
+    let by_home = |session, n: usize| match ex(
+        &fx.febe,
+        session,
+        Op::CountVByHome { d: readable_doc.clone(), region: region(), n, except: vec![] },
+    ) {
+        Response::Homes { homes, exhausted, .. } => (homes, exhausted),
+        other => panic!("expected Homes, got {other:?}"),
+    };
+    assert_eq!(
+        by_home(fx.user, 64),
+        (vec![(unreadable_doc.clone(), 1), (readable_doc.clone(), 1)], true),
+        "the owner's two homes, one link each"
+    );
+    assert_eq!(by_home(other, 64), (vec![(readable_doc.clone(), 1)], true), "the stranger's one");
+    assert_eq!(by_home(fx.user, 1), (vec![(unreadable_doc.clone(), 1)], false));
+    assert_eq!(by_home(other, 1), (vec![(readable_doc.clone(), 1)], false));
 
     // The window applies the rule BEFORE its slice (PUB-6.14), so a window of
     // one returns the link this caller may see rather than an empty batch.

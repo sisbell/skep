@@ -18,6 +18,7 @@ mod checkpoint_settings;
 mod client;
 mod common;
 mod cors;
+mod count_by_home;
 mod dedup_class;
 mod deposit_class;
 mod doc_one;

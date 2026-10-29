@@ -65,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 46] = [
+const OP_NAMES: [&str; 47] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -104,6 +104,7 @@ const OP_NAMES: [&str; 46] = [
     "count_ftt",
     "window_v",
     "window_ftt",
+    "count_v_by_home",
     "retrieve_endsets",
     "project",
     "discoverable_from",
@@ -115,7 +116,7 @@ const OP_NAMES: [&str; 46] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 46 ops appear.
+/// value), is tagged with the marker's own op name — and all 47 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -237,6 +238,13 @@ fn fixture(name: &str) -> Response {
         "count" => Response::Count { n: 2, as_of: Seq(9) },
         "page" => Response::Page {
             window: Window { batch: vec![link1()], next: Some(link1()), exhausted: true },
+            as_of: Seq(9),
+        },
+        // The count by home: two homes' rows in address order, the walk
+        // ended under its budget.
+        "homes" => Response::Homes {
+            homes: vec![(a(&[1, 0, 1, 0, 1]), 2), (a(&[1, 0, 1, 0, 2]), 1)],
+            exhausted: true,
             as_of: Seq(9),
         },
         "endsets" => Response::Endsets {
@@ -394,9 +402,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 25 response shapes every client must decode; each must appear as a
+/// The 26 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 25] = [
+const REQUIRED_SHAPES: [&str; 26] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -409,6 +417,7 @@ const REQUIRED_SHAPES: [&str; 25] = [
     "effective_owner",
     "count",
     "page",
+    "homes",
     "endsets",
     "runs",
     "bool",

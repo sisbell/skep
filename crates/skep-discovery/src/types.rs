@@ -1,5 +1,6 @@
 //! §Public interface — the plain values the reads take and return: the
-//! windowing pair ([`Cursor`]/[`Window`]), the lineage and survival reports
+//! windowing pair ([`Cursor`]/[`Window`]), the count by home
+//! ([`HomeCounts`]), the lineage and survival reports
 //! ([`SupClaim`]/[`OrphanReport`]), and the two typed rejections
 //! ([`QueryError`] for the query surface, [`OrphanError`] for the
 //! delete-orphan preview). M8 journals nothing, so none of these serialize.
@@ -51,6 +52,31 @@ pub type Cursor = Option<Address>;
 pub struct Window {
     pub batch: Vec<Address>,
     pub next: Cursor,
+    pub exhausted: bool,
+}
+
+/// One count by home (the link-sets design §7, W10 (a)): the answer of
+/// [`crate::count_v_by_home_on`]. A plain record: its fields are public and
+/// independent, and a caller may build one freely.
+///
+/// A count RETURNED by that read satisfies these relations, where `n′ =
+/// max(n, 1)` is what the `n` asked for is clamped to (W9, as a window's):
+///
+/// * `homes` is one row per home the walk reached and counted, in ascending
+///   address order, each the home with the number of its DISTINCT links
+///   touching the region at some v1 slot — a home holding none is absent,
+///   and so is every home the request's `except` names, whatever it holds;
+/// * the rows' counts sum to at least `n′` where `exhausted` is false, and
+///   to the whole count under `n′` where it is true: the walk stops at the
+///   home that fills its budget, counting that home whole, so the sum may
+///   pass `n′` by one home's share and never by more;
+/// * `exhausted` holds iff the sum is under `n′` — every readable,
+///   unexcepted home was reached — the terminal signal.
+///
+/// They are postconditions of the read, not properties of this type.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct HomeCounts {
+    pub homes: Vec<(Address, usize)>,
     pub exhausted: bool,
 }
 

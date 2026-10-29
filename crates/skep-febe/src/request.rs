@@ -480,6 +480,16 @@ pub enum Op {
     WindowV { d: Address, region: Vec<Span>, cur: Cursor, n: usize },
     /// Windowed descriptor enumeration (ASN-0108, FTT reading).
     WindowFtt { q: FourSet, cur: Cursor, n: usize },
+    /// The count by home that lifts no link (the link-sets design §7,
+    /// W10 (a)): per readable home holding a link that touches the region,
+    /// in address order, the number of its distinct links there, counted
+    /// and never lifted, stopping at the budget `n` with `exhausted`
+    /// answering whether the walk ended under it; `except` names the homes
+    /// passed unstabbed and uncounted — the applied sets', which the page
+    /// reads by home. `d` is the doc-argument, as `count_v`'s is: unreadable
+    /// ⟹ `withheld` before dispatch (PUB-6.12); a home in `except` is
+    /// never consulted and never answers anything.
+    CountVByHome { d: Address, region: Vec<Span>, n: usize, except: Vec<Address> },
     /// RETRIEVEENDSETS (ASN-0131).
     RetrieveEndsets { d: Address, region: Vec<Span> },
     /// I→V projection of a link slot into a document (ASN-0098).
@@ -811,6 +821,8 @@ pub enum OpKind {
     WindowV,
     /// The kind of [`Op::WindowFtt`].
     WindowFtt,
+    /// The kind of [`Op::CountVByHome`].
+    CountVByHome,
     /// The kind of [`Op::RetrieveEndsets`].
     RetrieveEndsets,
     /// The kind of [`Op::Project`].
@@ -883,6 +895,7 @@ impl Op {
             | Op::CountFtt { .. }
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
+            | Op::CountVByHome { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -959,6 +972,7 @@ impl Op {
             Op::CountFtt { .. } => OpKind::CountFtt,
             Op::WindowV { .. } => OpKind::WindowV,
             Op::WindowFtt { .. } => OpKind::WindowFtt,
+            Op::CountVByHome { .. } => OpKind::CountVByHome,
             Op::RetrieveEndsets { .. } => OpKind::RetrieveEndsets,
             Op::Project { .. } => OpKind::Project,
             Op::DiscoverableFrom { .. } => OpKind::DiscoverableFrom,
@@ -1012,6 +1026,7 @@ impl Op {
             | Op::FindLinksV { d, .. }
             | Op::CountV { d, .. }
             | Op::WindowV { d, .. }
+            | Op::CountVByHome { d, .. }
             | Op::RetrieveEndsets { d, .. }
             | Op::DeleteOrphans { d, .. }
             | Op::Project { d, .. }
@@ -1133,6 +1148,7 @@ impl Op {
             | Op::CountFtt { .. }
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
+            | Op::CountVByHome { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }
@@ -1267,6 +1283,7 @@ impl Op {
             | Op::CountFtt { .. }
             | Op::WindowV { .. }
             | Op::WindowFtt { .. }
+            | Op::CountVByHome { .. }
             | Op::RetrieveEndsets { .. }
             | Op::Project { .. }
             | Op::DiscoverableFrom { .. }

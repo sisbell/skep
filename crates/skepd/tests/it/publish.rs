@@ -1214,11 +1214,15 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
 /// its owner, holds the same text and images E's identity at the place,
 /// its own words nowhere; the member holds the run by reference, twice;
 /// no new record (the draft's second link address is empty); the feed row
-/// one commit with its `attest` kept and the member alone in its `docs` —
-/// the row names the draft where a record was minted in it, and a
-/// stray-only shot mints none; and the signature the suite's signer made
-/// over the frame WITHOUT `places` verifies the frame with them. Then identity of
-/// E minted from another draft's words, re-composed from this draft with a
+/// one commit with its `attest` kept and the member FIRST with the draft
+/// beside it in its `docs` to the owner — the row names the draft where
+/// the commit wrote it, a record minted in it or a kept place re-windowing
+/// it (F4's owed line; wire.md §The change feed), and a stray-only shot
+/// re-windows it though it mints none — the member alone to a guest, the
+/// `attest` kept on the reduced row; the owner's page under the draft
+/// carries the commit; and the signature the suite's signer made over the
+/// frame WITHOUT `places` verifies the frame with them. Then identity of E
+/// minted from another draft's words, re-composed from this draft with a
 /// place, is refused `stray_place_unrecorded`, permanent, `site.index` the
 /// entry and nothing else, nothing committed.
 #[test]
@@ -1272,14 +1276,30 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire
     assert_eq!(record["slots"][0][0]["start"].as_str(), Some(b.as_str()), "the S1 record stands: {record}");
     let none = read_link(port, Some(&bare), &format!("{d}.0.2.2"));
     assert!(none["link"].is_null(), "no new record: {none}");
-    // The row: ONE commit, its `attest` kept — and the member alone in its
-    // `docs`: the feed names the staging draft "where the shot minted a
-    // correspondence record in it" (§The change feed), and a stray-only
-    // shot mints none, though it re-windows the draft's content.
+    // The row: ONE commit, its `attest` kept — the member first and the
+    // draft beside it to the owner: the feed names the staging draft where
+    // the commit wrote it — "minted a correspondence record in it or
+    // re-windowed it at a kept place" (§The change feed) — and a stray-only
+    // shot mints none yet re-windows the draft's content, so the owner's
+    // pages of the draft carry the commit that moved it. The guest's row is
+    // reduced to the member, its `attest` kept (the exemption: the first
+    // document is the member, which the reduction keeps).
     let owners = changes_since_as(port, Some(&signed), before);
     assert_eq!(owners.len(), 1, "one commit: {owners:?}");
-    assert_eq!(owners[0]["docs"], serde_json::json!([second]), "the member, no record minted in the draft: {}", owners[0]);
+    assert_eq!(owners[0]["docs"], serde_json::json!([second, d]), "the member first, the re-windowed draft beside it: {}", owners[0]);
     assert!(owners[0]["attest"].is_object(), "{}", owners[0]);
+    let guests = changes_since(port, before);
+    assert_eq!(guests.len(), 1, "one commit: {guests:?}");
+    assert_eq!(guests[0]["docs"], serde_json::json!([second]), "reduced to the member for a guest: {}", guests[0]);
+    assert_eq!(guests[0]["attest"], owners[0]["attest"], "the reduced row keeps its attest");
+    let (st, body) = http(port, "GET", &format!("/changes?since={before}&under={d}"), Some(&signed), b"");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let under = json(&body)["changes"].as_array().expect("changes").clone();
+    assert_eq!(under.len(), 1, "the owner's page under the draft carries the re-window: {under:?}");
+    assert_eq!(under[0]["at"], owners[0]["at"]);
+    let (st, body) = http(port, "GET", &format!("/changes?since={before}&under={d}"), None, b"");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(json(&body)["changes"].as_array().expect("changes").is_empty(), "a guest's page under the draft is empty");
     // Unrecorded: `x y` minted into E from a second draft — recorded there,
     // not in `d` — re-composed from `d` with a place.
     let d2 = draft_with(port, &bare, "xy");

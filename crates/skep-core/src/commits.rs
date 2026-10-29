@@ -2102,18 +2102,22 @@ enum AffectedDocs {
     Minted,
     /// A publication's documents: the member the shot mints, known only
     /// from its ack, FIRST; then the edition it was minted under, where the
-    /// commit minted one; then the staging draft where the commit homed a
-    /// correspondence record in it; then every other home the deposits
+    /// commit minted one; then the staging draft where the commit wrote it
+    /// — homed a correspondence record in it, or re-windowed it at a kept
+    /// place; then every other home the deposits
     /// touched, in address order, each once (the link-sets design §5.7's
     /// feed row — "`docs` the UNION of every home the commit touched,
     /// `[member, D, …]`", the member first, a pinned order the mirror reads
     /// the member by).
     ///
     /// `draft` is the document the shot's `draft` projects to, `Some` where
-    /// a draft is named and a draft-native run re-inserted — the one case
-    /// the commit mints a record, since the shot mints each draft identity
-    /// it meets the first time it meets it, and the twin fence refuses one
-    /// a record already names; `None` otherwise. `mints` is the request's
+    /// a draft is named and the commit writes it: a draft-native run
+    /// re-inserted — the case the commit mints a record, since the shot
+    /// mints each draft identity it meets the first time it meets it, and
+    /// the twin fence refuses one a record already names — or a kept place
+    /// sent beside a run, a stray run's among them, where the commit
+    /// re-windows the draft and mints nothing (the design's F4); `None`
+    /// otherwise. `mints` is the request's
     /// mint form, the edition then the member's own trunk. `homes` are the
     /// homes the request's `links` entries name by address, and the private
     /// homes of the originals they name, each of which the commit writes
@@ -2307,11 +2311,16 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // the document it advances is the member's own trunk — and
         // re-inserts the draft's values as fresh identity under it, minting
         // one correspondence record in the draft per piece of draft identity
-        // it re-inserts (the link-sets design §5.7): the row names the draft
-        // beside the member exactly when a draft is named and a run is
-        // re-inserted, the count being request arithmetic.
-        Op::Publish { target, shot, deposits, .. } => {
+        // it re-inserts (the link-sets design §5.7), and re-windows the
+        // draft at every kept place the request sends beside its runs (the
+        // design's F4): the row names the draft beside the member exactly
+        // when a draft is named and the commit writes it — a run
+        // re-inserted, or a kept place sent, a stray-only re-window's among
+        // them — both being request arithmetic, so the row agrees with the
+        // journal's own witness of the draft's write.
+        Op::Publish { target, shot, places, deposits } => {
             let reinserted = shot.reinserted_values();
+            let rewindowed = places.iter().any(Option::is_some);
             // The homes the deposits name by address (the link-sets design
             // §5.7): a `links` entry's home, and the private home of the
             // original it names, whose claim the commit writes there.
@@ -2329,7 +2338,9 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             meta(
                 OpKind::Publish,
                 AffectedDocs::Published {
-                    draft: shot.draft_document().filter(|_| reinserted > Nat::from(0u32)),
+                    draft: shot
+                        .draft_document()
+                        .filter(|_| reinserted > Nat::from(0u32) || rewindowed),
                     mints: target.mints(),
                     homes: homes.into_iter().collect(),
                     retract: deposits.retract.clone(),

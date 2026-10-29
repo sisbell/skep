@@ -5156,7 +5156,9 @@ Each entry:
   and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
   trunk is the document it advances) FIRST, then, at the mint form, the
   EDITION it was minted under, then the staging draft where
-  the shot minted a correspondence record in it — `[member, D]`, the
+  the shot minted a correspondence record in it or re-windowed it at a
+  kept place the request sent — a stray-only re-window names it too,
+  though it mints none — `[member, D]`, the
   member first by rule, the order a mirror reads the member by (§The
   publish shot and head-float) — then every other home the commit's
   deposits touched, in address order, each once: a links entry's home

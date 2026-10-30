@@ -620,7 +620,11 @@ impl<'b> Feeder<'b> {
     /// cursor the board's retention floor passed, as a long-open session's
     /// with no drafts row of its own is, resumed at the floor. The death
     /// signal ends the session (`Sessions::end`, which answers a session the
-    /// page already closed with that arm and does nothing more).
+    /// page already closed with that arm and does nothing more), the cursor
+    /// first set where the read's finished pages reached (`client.md` §4e.3):
+    /// a session of the principal that reads on — another tab, or the
+    /// restart's re-open — sends none of their rows again, and the narrow the
+    /// end makes where no session of the principal stands still drops it.
     fn read_drafts(&mut self, session: &SessionEntry) {
         let principal = session.facts.principal;
         let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
@@ -628,7 +632,13 @@ impl<'b> Feeder<'b> {
             ReadTo::At(at) => {
                 self.drafts_since.insert(principal, at);
             }
-            ReadTo::Died => self.end(session),
+            ReadTo::Died { at } => {
+                // The cursor is set before the end: the narrow the end makes
+                // where no session of the principal stands then drops it, and
+                // a session that reads on starts past the rows already sent.
+                self.drafts_since.insert(principal, at);
+                self.end(session);
+            }
         }
     }
 
@@ -761,7 +771,13 @@ enum ReadTo {
     /// on an answer it cannot read past.
     At(u64),
     /// The death signal on the token the read presented.
-    Died,
+    Died {
+        /// The position the read had reached when the signal answered.
+        ///
+        /// It is past every page the read finished — the read's start where
+        /// the signal answered its first ask.
+        at: u64,
+    },
 }
 
 /// A `feed` update's class (the module doc).
@@ -966,7 +982,10 @@ fn history_reclaimed(floor: Option<u64>) -> Refusal {
 /// default again. Every answer moves the cursor on or shrinks the page
 /// (`Board::changes`'s own guarantee), so the read ends. Any other answer —
 /// a refusal, no answer — stops it where it stands, for the next tick to
-/// read again.
+/// read again. The death signal on a session's token stops it too, answered
+/// with the position its finished pages reached ([`ReadTo::Died`]); a
+/// published read, token-free, never meets it (`Board::changes` halts
+/// there).
 fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: impl FnMut(&Value)) -> ReadTo {
     let (token, drafts) = match class {
         UpdateClass::Published => (None, false),
@@ -985,7 +1004,7 @@ fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: imp
             }
             Ok(ChangesAnswer::HistoryReclaimed { floor: Some(floor) }) if floor > since => since = floor,
             Ok(ChangesAnswer::TooLarge { fits }) => limit = Some(fits),
-            Ok(ChangesAnswer::Closed) => return ReadTo::Died,
+            Ok(ChangesAnswer::Closed) => return ReadTo::Died { at: since },
             Ok(_) | Err(_) => return ReadTo::At(since),
         }
     }

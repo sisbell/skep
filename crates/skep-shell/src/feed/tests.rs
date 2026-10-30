@@ -1,17 +1,22 @@
-//! THE FEED's FENCE: the index state's ten arms and the search words as
-//! the bridge spells them — every arm, standing and mark a declared word,
-//! and the search answer and the listing's built as their declarations say;
-//! THE FEED THREAD's START, one `/health` read, and a search or a listing
-//! where no index stands dialing nothing; THE OUTAGE's THREE STATES, said
-//! once and announced where no deliberate stop stands; and THE COMMIT
-//! STREAM COALESCED — the waiting tick's mark, and a board committing far
-//! faster than the feed thread reads costing it a read per turn, never a
-//! read per commit, with a search queued behind them answered after one
-//! read at most. ONE READ TO THE HEAD meeting every answer as its paging
-//! rule says; A DRAFTS CURSOR THE RETENTION FLOOR PASSED resumed at the
-//! floor, its rows still fed; A DRAFTS ROW NAMED UNDER EVERY SESSION OF ITS
-//! PRINCIPAL, a closing session's last read among them; and A PRINCIPAL's
-//! DRAFTS READ ON THROUGH THE RESTART's RE-OPEN, one cursor per principal.
+//! The feed thread over fake boards, and the words it spells for the bridge.
+//!
+//! The suite checks the index state's ten arms and the search words as the
+//! bridge spells them — every arm, standing and mark a declared word, and
+//! the search answer and the listing's built as their declarations say; the
+//! feed thread's start, one `/health` read, and a search or a listing where
+//! no index stands dialing nothing; the outage's three states, said once and
+//! announced where no deliberate stop stands; and the commit stream
+//! coalesced — the waiting tick's mark, and a board committing far faster
+//! than the feed thread reads costing it a read per turn, never a read per
+//! commit, with a search queued behind them answered after one read at most.
+//! It checks one read to the head meeting every answer as its paging rule
+//! says, a death answered with the position its finished pages reached; a
+//! drafts cursor the retention floor passed resumed at the floor, its rows
+//! still fed; a drafts row named under every session of its principal, a
+//! closing session's last read among them; a principal's drafts read on
+//! through the restart's re-open, one cursor per principal; and a read that
+//! dies between two pages sending none of their rows again, while a
+//! principal's last session dying mid-read leaves no cursor behind.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -562,6 +567,11 @@ fn refused(status: u16, body: Value) -> Response {
     Response { status, headers: Headers::default(), body: body.to_string().into_bytes() }
 }
 
+/// Returns the death signal: an answer whose `Skepd-Session` says `closed`.
+fn closed() -> Response {
+    Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() }
+}
+
 impl Dialer for Paging {
     fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
         let (since, limit) = (since_of(&req.path), limit_of(&req.path));
@@ -574,13 +584,15 @@ impl Dialer for Paging {
     }
 }
 
-/// What one read to the head over a board scripted by `script` made of its
-/// feed from `since` — the published feed's, or a session's drafts under
-/// its token where `drafts`: the rows it handed on, where it left the
-/// cursor (`None` for the death signal), and the queries it asked. Run on a
+/// Returns what one read to the head made of a scripted board's feed.
+///
+/// The board answers each `/changes` ask as `script` says, and the read runs
+/// from `since` over the published feed, or over a session's drafts under
+/// its token where `drafts`. The answer is the rows the read handed on,
+/// where it left the feed, and the queries it asked. The read runs on a
 /// thread of its own, so a read that never ends fails at the deadline
 /// rather than hanging the suite.
-fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'static, since: u64, drafts: bool) -> (Vec<u64>, Option<u64>, Vec<(u64, Option<u64>)>) {
+fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'static, since: u64, drafts: bool) -> (Vec<u64>, ReadTo, Vec<(u64, Option<u64>)>) {
     let fake = Arc::new(Paging { script: Box::new(script), asked: Mutex::new(Vec::new()) });
     let entry = entry_over(Arc::clone(&fake));
     let session = drafts.then(|| {
@@ -594,46 +606,51 @@ fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'stat
         let class = session.as_deref().map_or(UpdateClass::Published, UpdateClass::Drafts);
         let mut rows = Vec::new();
         let to = read_to_head(&board, class, since, |row| rows.push(row["at"].as_u64().unwrap_or(0)));
-        let _ = tx.send((rows, match to { ReadTo::At(at) => Some(at), ReadTo::Died => None }));
+        let _ = tx.send((rows, to));
     });
     let (rows, to) = rx.recv_timeout(Duration::from_secs(5)).expect("the read to the head ends");
     let asked = fake.asked.lock().unwrap().clone();
     (rows, to, asked)
 }
 
-/// ONE READ TO THE HEAD meets every answer as its paging rule says (wire.md
-/// §The change feed, Paging), cell by cell: a page whose `more` stands read
-/// on from its `last`; a page past the budget re-asked at the `fits` it
-/// names, the next page at the route's default again; a reclaim resumed at a
-/// floor past the cursor, while one at the cursor, or naming no floor, stops
-/// where it stands — never spinning; a refusal stopping where it stands; and
-/// the death signal on a session's token answered as the death (the mutants
+/// Checks that a read to the head meets each answer as its paging rule says.
+///
+/// It is wire.md §The change feed, Paging, cell by cell: a page whose `more`
+/// stands read on from its `last`; a page past the budget re-asked at the
+/// `fits` it names, the next page at the route's default again; a reclaim
+/// resumed at a floor past the cursor, while one at the cursor, or naming no
+/// floor, stops where it stands — never spinning; a refusal stopping where
+/// it stands; and the death signal on a session's token answered as the
+/// death, with the position the read's finished pages reached. The mutants
 /// that ignore `more`, stop at a page too large or never reset its limit,
-/// stop at a reclaim, drop the floor's guard, or read the death as a stop —
-/// the first feeding a closing session nothing past its first page, the
-/// guard's spinning the board's feed thread for good).
+/// stop at a reclaim, drop the floor's guard, read the death as a stop, or
+/// answer it without the position its pages reached each fail a cell — the
+/// first feeding a closing session nothing past its first page, the guard's
+/// spinning the board's feed thread for good, and the last sending a
+/// principal's rows again under every session that reads on.
 #[test]
 fn a_read_to_the_head_meets_every_answer_as_its_paging_rule_says() {
     let (rows, to, _) = read_over(|since, _| if since == 10 { page(&[11], 11, true) } else { page(&[12], 12, false) }, 10, false);
-    assert_eq!((rows, to), (vec![11, 12], Some(12)), "a page whose `more` stands is read on");
+    assert_eq!((rows, to), (vec![11, 12], ReadTo::At(12)), "a page whose `more` stands is read on");
     let too_large = |since: u64, limit: Option<u64>| match limit {
         Some(1) => page(&[since + 1], since + 1, since == 10),
         _ => refused(400, json!({"error": "malformed_changes", "fits": 1})),
     };
     let (rows, to, asked) = read_over(too_large, 10, false);
-    assert_eq!((rows, to), (vec![11, 12], Some(12)), "a page too large is re-asked");
+    assert_eq!((rows, to), (vec![11, 12], ReadTo::At(12)), "a page too large is re-asked");
     assert_eq!(asked, [(10, None), (10, Some(1)), (11, None), (11, Some(1))], "at `fits`, the next page at the default again");
     let (rows, to, _) = read_over(|since, _| if since < 5 { refused(410, json!({"error": "history_reclaimed", "floor": 5})) } else { page(&[6], 6, false) }, 3, false);
-    assert_eq!((rows, to), (vec![6], Some(6)), "a floor past the cursor is resumed at");
+    assert_eq!((rows, to), (vec![6], ReadTo::At(6)), "a floor past the cursor is resumed at");
     let (rows, to, _) = read_over(|_, _| refused(410, json!({"error": "history_reclaimed", "floor": 5})), 5, false);
-    assert_eq!((rows, to), (vec![], Some(5)), "a floor at the cursor stops the read where it stands");
+    assert_eq!((rows, to), (vec![], ReadTo::At(5)), "a floor at the cursor stops the read where it stands");
     let (rows, to, _) = read_over(|_, _| refused(410, json!({"error": "history_reclaimed"})), 5, false);
-    assert_eq!((rows, to), (vec![], Some(5)), "a reclaim naming no floor stops it too");
+    assert_eq!((rows, to), (vec![], ReadTo::At(5)), "a reclaim naming no floor stops it too");
     let (rows, to, _) = read_over(|_, _| refused(503, json!({"error": "feed_rebuilding"})), 10, false);
-    assert_eq!((rows, to), (vec![], Some(10)), "a refusal stops it where it stands");
-    let closed = |_: u64, _: Option<u64>| Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() };
-    let (rows, to, _) = read_over(closed, 10, true);
-    assert_eq!((rows, to), (vec![], None), "the death signal on a session's token is the death");
+    assert_eq!((rows, to), (vec![], ReadTo::At(10)), "a refusal stops it where it stands");
+    let (rows, to, _) = read_over(|_, _| closed(), 10, true);
+    assert_eq!((rows, to), (vec![], ReadTo::Died { at: 10 }), "the death signal on a session's token is the death");
+    let (rows, to, _) = read_over(|since, _| if since == 10 { page(&[11], 11, true) } else { closed() }, 10, true);
+    assert_eq!((rows, to), (vec![11], ReadTo::Died { at: 11 }), "a death after a page answers where the page reached");
 }
 
 /// A bare session of `principal` registered at `entry` in `sessions`, its
@@ -745,4 +762,96 @@ fn a_principals_drafts_read_on_through_the_restarts_reopen() {
     Supplements::widen(&mut feeder, &reopened);
     feeder.read_drafts(&reopened);
     assert_eq!(drafts_named(&rx), [(6, dying.reference.clone()), (8, reopened.reference.clone())]);
+}
+
+/// A board whose drafts feed holds rows at 6 and 8, and ends one token at 6.
+///
+/// A drafts read from below 6 answers the row at 6 with `more` standing.
+/// From 6 on, the token `dying` meets the death signal, and any other token
+/// the row at 8, then the empty page from 8 on. A published read answers
+/// the empty page, and every other read an empty delivery, as a board with
+/// no `H.1` answers the read of its head.
+struct DiesMidRead {
+    dying: String,
+}
+
+impl Dialer for DiesMidRead {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if !(req.method == Method::Get && req.path.starts_with("/changes")) {
+            return Ok(ok(json!({"resp": "delivery", "items": []})));
+        }
+        let since = since_of(&req.path);
+        if !req.path.contains("drafts=true") {
+            return Ok(page(&[], since, false));
+        }
+        let token = req.headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("Skepd-Session")).map(|(_, token)| token.as_str());
+        Ok(if since >= 6 && token == Some(self.dying.as_str()) {
+            closed()
+        } else if since < 6 {
+            page(&[6], 6, true)
+        } else if since < 8 {
+            page(&[8], 8, false)
+        } else {
+            page(&[], since, false)
+        })
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// Checks that a read dying between two pages keeps the position they reached.
+///
+/// Two tabs of one principal stand, and the board ends one tab's token
+/// between the first and the second page of its drafts read — the tab still
+/// in the table, as a death the board alone makes leaves it, or closed
+/// already, as the shell's stop leaves a tab whose read is under way. The
+/// tab still standing then reads on from where the dead read's pages
+/// reached (`client.md` §4e.3: one supplement per principal, one cursor), so
+/// each row reaches each tab once. The mutant that answers the death
+/// without its position starts the tab still standing where the dead read
+/// began, and that tab hears the row at 6 a second time.
+#[test]
+fn a_read_that_dies_between_two_pages_sends_no_row_again() {
+    let entry = entry_over(DiesMidRead { dying: "9f".repeat(16) });
+    for left_the_table in [false, true] {
+        let store = TempDir::new().unwrap();
+        let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+        let rx = bus.subscribe();
+        let dying = session_of(&sessions, &entry, 1, "9f", 0);
+        let standing = session_of(&sessions, &entry, 1, "8e", 0);
+        let mut feeder = Feeder::new(&entry, shared_over(&entry, &sessions, &bus, &store));
+        if left_the_table {
+            assert!(sessions.close(&dying.reference).is_some(), "the dying session leaves the table first");
+        }
+        feeder.read_drafts(&dying);
+        feeder.read_drafts(&standing);
+        let mut owed = vec![(6, dying.reference.clone()), (6, standing.reference.clone()), (8, standing.reference.clone())];
+        owed.sort();
+        assert_eq!(drafts_named(&rx), owed, "left the table {left_the_table}");
+    }
+}
+
+/// Checks that a principal's last session dying mid-read leaves no cursor.
+///
+/// The read's position is set before the session's end, so the narrow the
+/// end makes where no session of the principal stands drops it, and a
+/// session the principal opens later is fed from its own open (the module
+/// doc of `feed`). The mutant that sets the position after the end makes a
+/// cursor the narrow had dropped, and the session opened later, at 8, is
+/// sent the row at 8 — a row its own read from its open never meets.
+#[test]
+fn a_principals_last_session_dying_mid_read_keeps_no_cursor() {
+    let entry = entry_over(DiesMidRead { dying: "9f".repeat(16) });
+    let store = TempDir::new().unwrap();
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let mut feeder = Feeder::new(&entry, shared_over(&entry, &sessions, &bus, &store));
+    let dying = session_of(&sessions, &entry, 1, "9f", 0);
+    feeder.read_drafts(&dying);
+    let later = session_of(&sessions, &entry, 1, "8e", 8);
+    Supplements::widen(&mut feeder, &later);
+    feeder.read_drafts(&later);
+    assert_eq!(drafts_named(&rx), [(6, dying.reference.clone())]);
 }

@@ -27,13 +27,20 @@
 //! and answered by nothing. A death signal a call meets ends the session by
 //! the one sequence the board's feed thread runs too (`Sessions::end`), and
 //! the call answers `session_died` with the reason that sequence derived.
+//! The four `publication` rows — the panel, the four numbers, the one
+//! request composed, signed and sent, the cancel — are the child module
+//! `publication`'s, `pub(super)` to the door, with the panels they stand on.
 //!
 //! **What the shell refuses without asking.** A write frame in the guest
 //! form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so no
 //! dial is made); a write frame under a bare session, and its
 //! `resolve(send)` — the keyless session reads alone (foundations §3.3
 //! state 3), so no `bare` write of this shell's is ever committed
-//! (`write_in_bare_session`, `SessionEntry::may_write`); and a call's
+//! (`write_in_bare_session`, `SessionEntry::may_write`); a `publish` frame
+//! under a session (`publish_is_a_call`: a publication crosses as
+//! `publication.confirm`, the shell composing the one request from the
+//! panel it holds, since the page composes no write — §4b.1's `op` row,
+//! decision 1 (b)); and a call's
 //! arguments not of its row's form (`shapes`' declarations): a required
 //! member absent or of another form (`accept`'s `address`, absent, answers
 //! `no_address`), and an optional member present in another form, refused
@@ -44,7 +51,10 @@
 //! `content_session` beneath the shell. Every other `/op` under a session,
 //! `/op-at`'s aside, goes by the hold's one path (`Holds::send`): what a
 //! burst is refused at the act for (`Burst::admit`), what is held and what
-//! is reissued within the call are the hold's to say, and what a signed
+//! is reissued within the call are the hold's to say — and the six
+//! non-burst writes §3c.4 names, meeting a hold that stands at the board,
+//! are refused at once with its cause (`stopped`, `poisoned`, `halted`),
+//! never held and never dialed — and what a signed
 //! session's attest signs is `SessionEntry::attest`'s. Where the library
 //! does not reach a row at this pin — `upload` and `restore`, whose media
 //! walk is not in `skep-client` — the call answers `not_reached` naming
@@ -84,6 +94,9 @@ use crate::wire::{bounded_address, json_len};
 use crate::Talk;
 
 mod ceremony;
+mod publication;
+
+use publication::Publications;
 
 /// The session mode a run names, both arms selectable per run.
 ///
@@ -241,11 +254,11 @@ pub const WRITE_KINDS: [&str; 16] = [
 
 /// One call of the bridge, as [`Shell::call`] dispatches it.
 ///
-/// It is a call of §4b.1, the document index's listing `places` (A-255), or
-/// the change feed's page `changes`: one arm per call, which the compiler
-/// holds exhaustive, and the list a transport admits a call by, [`CALLS`],
-/// spelled from `Call::ALL` — so no call is listed that the dispatch does
-/// not answer.
+/// It is a call of §4b.1 — the `publication` family's four among them —
+/// the document index's listing `places` (A-255), or the change feed's
+/// page `changes`: one arm per call, which the compiler holds exhaustive,
+/// and the list a transport admits a call by, [`CALLS`], spelled from
+/// `Call::ALL` — so no call is listed that the dispatch does not answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Call {
     Boards,
@@ -264,6 +277,10 @@ enum Call {
     Health,
     Probe,
     Op,
+    PublicationOpen,
+    PublicationCount,
+    PublicationConfirm,
+    PublicationCancel,
     Upload,
     Fetch,
     Restore,
@@ -277,8 +294,10 @@ enum Call {
 impl Call {
     /// Every call, in §4b.1's order.
     ///
-    /// `places` stands beside `search`, and the change feed's `changes` last.
-    const ALL: [Call; 24] = [
+    /// The `publication` family stands after `op`, whose publish arm it
+    /// carries; `places` stands beside `search`, and the change feed's
+    /// `changes` last.
+    const ALL: [Call; 28] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -295,6 +314,10 @@ impl Call {
         Call::Health,
         Call::Probe,
         Call::Op,
+        Call::PublicationOpen,
+        Call::PublicationCount,
+        Call::PublicationConfirm,
+        Call::PublicationCancel,
         Call::Upload,
         Call::Fetch,
         Call::Restore,
@@ -324,6 +347,10 @@ impl Call {
             Call::Health => "health",
             Call::Probe => "probe",
             Call::Op => "op",
+            Call::PublicationOpen => "publication.open",
+            Call::PublicationCount => "publication.count",
+            Call::PublicationConfirm => "publication.confirm",
+            Call::PublicationCancel => "publication.cancel",
             Call::Upload => "upload",
             Call::Fetch => "fetch",
             Call::Restore => "restore",
@@ -341,11 +368,12 @@ impl Call {
     }
 }
 
-/// The bridge's twenty-four calls, as it spells them, in its order.
+/// The bridge's twenty-eight calls, as it spells them, in its order.
 ///
-/// They are §4b.1's twenty-two, the document index's listing, `places`
-/// (A-255), and the change feed's page, `changes`: the list a transport
-/// admits a call by, every name of it one [`Shell::call`] answers.
+/// They are §4b.1's twenty-six — the `publication` family's four among them
+/// — the document index's listing, `places` (A-255), and the change feed's
+/// page, `changes`: the list a transport admits a call by, every name of it
+/// one [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -440,6 +468,13 @@ pub struct Shell {
     /// session, the queue `held` and `resolve` read and act on, the own
     /// node's stopped state, and the resend the boards' feed threads drive.
     holds: Arc<Holds>,
+    /// The publication panels (§4b.1's `publication` family).
+    ///
+    /// One family per (board, principal), the standing panel and the held
+    /// ones behind it, each dying with the session it stands under — dropped
+    /// by the bus's watcher at `session-died`, whichever thread met the
+    /// death.
+    publications: Arc<Publications>,
     session_mode: SessionMode,
     talk: Talk,
     /// The own node's board reference, where the shell runs one.
@@ -600,8 +635,8 @@ impl Shell {
     /// Panics where the caller's precondition is broken, naming the one
     /// broken, before anything starts: `opts.boards` are distinct — one board
     /// twice would be two feeds and two held stores over one chain, the
-    /// second another window's — and `opts.own_node`, where set, is one of
-    /// them.
+    /// second finding the first's lock held — and `opts.own_node`, where set,
+    /// is one of them.
     pub fn open(opts: ShellOptions) -> Shell {
         assert!(opts.boards.iter().enumerate().all(|(i, origin)| !opts.boards[..i].contains(origin)), "ShellOptions' precondition: the boards are distinct");
         assert!(opts.own_node.as_ref().is_none_or(|own| opts.boards.contains(own)), "ShellOptions' precondition: own_node, where set, is one of the boards");
@@ -636,6 +671,19 @@ impl Shell {
             boards.push(entry);
         }
         let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), boards.iter().cloned());
+        // The publication panels die with their session (§4b.1's one session
+        // rule): the bus's watcher drops a dead session's at its
+        // `session-died`, whichever thread — a call's, or a board's feed
+        // thread's — met the death, and says `ended` for each.
+        let publications = Arc::new(Publications::default());
+        let watched = Arc::clone(&publications);
+        bus.watch(move |bus, event| {
+            if event.name == EventName::SessionDied {
+                if let Some(session) = event.data["session"].as_str() {
+                    watched.ended(bus, session);
+                }
+            }
+        });
         let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
         let threads: Vec<FeedThreads> = boards.iter().map(|entry| FeedThreads::spawn(Arc::clone(entry), shared.clone())).collect();
         let feeds = boards.iter().zip(&threads).map(|(entry, board_threads)| (entry.reference.clone(), board_threads.feed())).collect();
@@ -651,6 +699,7 @@ impl Shell {
             dialer,
             store,
             holds,
+            publications,
             session_mode: opts.session_mode,
             talk: opts.talk,
             own_node_reference,
@@ -815,6 +864,10 @@ impl Shell {
             Some(Call::Health) => self.health(args),
             Some(Call::Probe) => Ok(self.probe()),
             Some(Call::Op) => self.op(args),
+            Some(Call::PublicationOpen) => self.publication_open(args),
+            Some(Call::PublicationCount) => self.publication_count(args),
+            Some(Call::PublicationConfirm) => self.publication_confirm(args),
+            Some(Call::PublicationCancel) => self.publication_cancel(args),
             Some(Call::Upload) => self.upload(args),
             Some(Call::Fetch) => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),
             Some(Call::Restore) => self.restore(args),
@@ -1032,10 +1085,15 @@ impl Shell {
     /// refused without a dial (`write_in_guest_form`), then the board's
     /// verdict or `unreachable`. In the session form, `malformed_args` naming
     /// `session`, then `session_ended`; a write under a bare session refused
-    /// `write_in_bare_session`; then the hold's answer ([`Holds::send`]), or
-    /// for an `/op-at` frame the board's verdict or `unreachable`; and
-    /// `session_died` where a death signal met at the dial or at a read the
-    /// attest needed ends the session.
+    /// `write_in_bare_session`; a `publish` frame refused
+    /// `publish_is_a_call` without a dial — a publication crosses as
+    /// `publication.confirm`, composed by the shell from the panel it holds,
+    /// never as a frame the page composed (§4b.1's `op` row, decision 1
+    /// (b)); then the hold's answer ([`Holds::send`]) — an unholdable write
+    /// under a standing hold refused `stopped`, `poisoned` or `halted`
+    /// (§3c.4) — or for an `/op-at` frame the board's verdict or
+    /// `unreachable`; and `session_died` where a death signal met at the
+    /// dial or at a read the attest needed ends the session.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");
@@ -1055,6 +1113,9 @@ impl Shell {
         let session = self.session(&args["session"])?;
         if WRITE_KINDS.contains(&op) && !session.may_write() {
             return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"op": op})));
+        }
+        if op == "publish" {
+            return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
         }
         let Some(at) = at else {
             return match self.holds.send(&session, frame) {

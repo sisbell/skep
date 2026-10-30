@@ -172,14 +172,14 @@ fn shot(
     let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), shot_base);
     let base_text = base.map(|(m, e)| (m.to_string(), e));
     let draft_text = draft.as_ref().map(ToString::to_string);
-    let mut frame = frames::publish(
-        &doc.to_string(),
-        base_text.as_ref().map(|(m, e)| (m.as_str(), *e)),
-        draft_text.as_deref(),
-        &runs,
-        None,
-        None,
-    );
+    let doc_text = doc.to_string();
+    let mut frame = frames::publication(&frames::PublishFrame {
+        doc: Some(&doc_text),
+        base: base_text.as_ref().map(|(m, e)| (m.as_str(), *e)),
+        draft: draft_text.as_deref(),
+        runs: &runs,
+        ..frames::PublishFrame::default()
+    });
     frame["attest"] = attest(board, signer, &account, doc, &body);
     addr(acked_addr(&acked(session.op(&frame))).expect("the member's address"))
 }

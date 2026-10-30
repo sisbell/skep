@@ -93,8 +93,9 @@ fn the_builders_spell_the_wires_own_examples() {
         frame,
         json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]})
     );
-    // The bare shot is the grown builder with no member — byte for byte.
-    assert_eq!(frames::publish("1.0.1.0.1", Some(("1.0.1.0.1.2", 3)), Some("1.0.1.0.7"), &runs, None, Some("k")), json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","id":"k","op":"publish","runs":runs}));
+    // A frame carrying no optional member is the bare shot — byte for byte.
+    let bare = frames::publication(&frames::PublishFrame { doc: Some("1.0.1.0.1"), base: Some(("1.0.1.0.1.2", 3)), draft: Some("1.0.1.0.7"), runs: &runs, id: Some("k"), ..frames::PublishFrame::default() });
+    assert_eq!(bare, json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","id":"k","op":"publish","runs":runs}));
     // The mint form: `account` with `mint` and `claim`, no `doc`; a list of
     // nulls is no `places` member.
     let mint = frames::publication(&frames::PublishFrame { account: Some("1.0.1"), mint: true, claim: true, draft: Some("1.0.1.0.7"), runs: &runs[1..], places: &[Value::Null], ..frames::PublishFrame::default() });

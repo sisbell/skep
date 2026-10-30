@@ -21,8 +21,10 @@ use crate::sessions;
 /// emits for it — the refusals through `Refusal::to_value`, the search
 /// answer through `feed::answer_without_index`, the listing through
 /// `feed::places_without_index`, the index state through `feed::state_json`,
-/// the death through `sessions`, the rest in the shape `shell`'s `json!`
-/// spells.
+/// the death through `sessions`, the rest in the shape `shell`'s and
+/// `shell::publication`'s `json!` spell (the publication family's answers
+/// are held to their declarations against the real board by the shell's
+/// own suite, `shell/tests/publication.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -68,8 +70,34 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Cancel", json!({"id": "m-0"})),
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable"})),
         ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "insert"}, "cause": "unreachable", "sent": false, "time": 1})),
-        ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "holding", "cause": "unreachable"})),
+        ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}]})),
+        ("Hand", json!({"key": "other", "fingerprint": "ab", "label": "phone"})),
         ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
+        ("Run", json!({"origin": "1.0.1.0.5", "i_start": 1, "width": 10})),
+        (
+            "PublicationPanel",
+            json!({"rows": [], "formatting": {"marks": [], "cut": 0, "removals": []}, "read_with": {"1.0.1.0.3": true}, "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}, "price": {"lists": [0, 0, 0, 0, 0], "body": 0, "values": 0, "reads": 0, "bytes": 0, "over": []}, "windows": [], "hold": {"since": 1}}),
+        ),
+        ("PublicationRow", json!({"home": "1.0.1.0.5", "kind": {"public": {"read_with": false}}, "label": "notes here", "links": ["1.0.1.0.5.0.2.1"], "types": [], "line": {"p": 0, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 0})),
+        ("TypeFold", json!({"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.8"]})),
+        ("RowLine", json!({"p": 1, "d": 0, "c": 0, "t": 0, "u": 0})),
+        ("Formatting", json!({"marks": ["1.0.1.0.5.0.2.1"], "cut": 1, "removals": []})),
+        ("Removal", json!({"record": "1.0.1.0.5.0.2.9", "mark": "1.0.1.0.2.1.0.2.1", "mark_value": {"from": [], "to": [], "ty": [], "at": 7}, "on_selection": true, "spent": false, "remake": null})),
+        ("LinkValue", json!({"from": [{"start": "1.0.1.0.2.0.1.5", "width": "0.0.0.0.0.0.0.5"}], "to": [], "ty": [{"start": "1.1.0.1.0.1.0.3.13", "width": "0.0.0.0.0.0.0.0.1"}], "at": 7})),
+        ("LinkSpan", json!({"start": "1.0.1.0.2.0.1.5", "width": "0.0.0.0.0.0.0.5"})),
+        ("Count", json!({"l": 3, "n": 2, "r": 1, "e": 0, "claim": false, "read_with": ["1.0.1.0.4"]})),
+        ("Price", json!({"lists": [3, 1, 4, 1, 1], "body": 120, "values": 10, "reads": 20, "bytes": 5000, "over": [{"term": "lists", "by": 1}]})),
+        ("PriceOver", json!({"term": "links", "by": 4})),
+        ("Window", json!({"run": 2, "origin": "1.0.1.0.7", "owner": "1.0.1", "i_start": 1, "width": 5, "counterpart": {"run": 2, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1", "from": {"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4}, "to": {"chain": "1.0.1.0.2.0.1", "first": 16, "width": 4}}})),
+        ("Counterpart", json!({"run": 2, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1", "from": {"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4}, "to": {"chain": "1.0.1.0.2.0.1", "first": 16, "width": 4}})),
+        ("ISpan", json!({"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4})),
+        ("Hold", json!({"since": 1_761_696_000_000u64})),
+        ("Switches", json!({"on": ["1.0.1.0.6"], "destinations": {"1.0.1.0.6": {"set": "1.0.1.0.4"}}})),
+        ("Acknowledged", json!({"outcome": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "claim": false, "at": 412, "via": "answer"})),
+        ("Restated", json!({"outcome": "restated", "left": [], "superseded": [], "came": ["1.0.1.0.6.0.2.3"], "removals_undone": [], "removals_came": [], "selection": [{"run": 1, "placement": {"split": [[1, 2, 1], [3, 3, 1]]}}], "race": {"at": 999, "key": "bare", "signed": false}})),
+        ("RaceKey", json!({"at": 999, "key": "bare", "signed": false})),
+        ("PublicationRefused", json!({"outcome": "refused", "arm": "claim_refused", "edition": "1.0.1.0.2"})),
+        ("PublicationEvent", json!({"board": "b-0", "session": "s-0", "draft": "1.0.1.0.5", "state": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "at": 412})),
     ]
 }
 
@@ -113,31 +141,42 @@ fn the_file_names_every_shape_call_and_event() {
         assert!(text.contains(&format!("export interface {} {{", shape.name)), "{}", shape.name);
     }
     for row in CALL_ROWS {
-        assert!(text.contains(&format!("  {}(args: ", row.name)), "{}", row.name);
+        assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 24, "the twenty-four calls: §4b.1's, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 28, "the twenty-eight calls: §4b.1's with the publication family's four, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
         "  op(args: { session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
+        "  'publication.open'(args: { session: string; draft: string; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
+        "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price }>>;\n",
+        "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
+        "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",
         "  places(args: { session: string; board?: string; opts?: PlacesOpts } | { guest: true; board?: string; origin?: string; opts?: PlacesOpts }): Promise<Outcome<PlacesAnswer>>;\n",
         "  changes(args: { session: string; since: number; limit?: number }): Promise<Outcome<ChangesAnswer>>;\n",
         "export interface PlacesOpts { under?: string }\n",
+        "export type OriginAnswer = 'publish_first' | 'drop' | 'keep_private' | 'counterpart';\n",
+        "export type RowKind = 'own' | 'notes' | 'private' | { public: { read_with: boolean } };\n",
         "  writes: boolean;\n",
         "  entries: FeedUpdate[];\n",
+        "  hands?: Hand[];\n",
+        "  site: { addr?: string; index?: number };\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }
+    for alias in ALIASES {
+        assert!(text.contains(&format!("{alias}\n")), "the alias renders ahead of the shapes: {alias}");
+    }
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
     assert!(
-        text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held';\n\n"),
-        "the seven event names render from the enum, in the contract's order"
+        text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held' | 'publication';\n\n"),
+        "the eight event names render from the enum, in the contract's order"
     );
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");
     assert!(text.contains("  position: number;"), "a required field renders bare");
     let open = SHAPES.iter().filter(|s| s.open).count();
-    assert_eq!(open, 3, "the shell refusal, the death's reason and the index state carry their own members");
+    assert_eq!(open, 5, "the shell refusal, the death's reason, the index state, the publication's refusal and its event carry their own members");
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
 }

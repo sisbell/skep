@@ -13,7 +13,9 @@
 //! for its hand; `boards` each board's own node, wait and stop beside
 //! another's; `held` the held-burst store against the real daemon;
 //! `changes` the catch-up call, against the daemon and over a scripted
-//! board.
+//! board; `publication` the publication family — the rules the shell alone
+//! keeps, and the panel, the count, the confirm and the cancel against the
+//! daemon.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -39,6 +41,7 @@ mod changes;
 mod door;
 mod held;
 mod modes;
+mod publication;
 
 /// The daemon over `dir` at an ephemeral port.
 fn spawn(dir: &Path, local_trust: bool) -> Skepd {
@@ -161,12 +164,18 @@ fn assert_events_declared(seen: &[Event]) {
             EventName::Index => "IndexEvent",
             EventName::Moment => "MomentEvent",
             EventName::Held => "HeldEvent",
+            EventName::Publication => "PublicationEvent",
         };
         crate::shapes::assert_declared(shape, &event.data);
         match event.name {
             EventName::Feed => crate::shapes::assert_declared("FeedUpdate", &event.data["update"]),
             EventName::SessionDied => crate::shapes::assert_declared("DeathReason", &event.data["reason"]),
             EventName::Index => crate::shapes::assert_declared("IndexState", &event.data["state"]),
+            EventName::Held => {
+                for hand in event.data["hands"].as_array().into_iter().flatten() {
+                    crate::shapes::assert_declared("Hand", hand);
+                }
+            }
             _ => {}
         }
     }

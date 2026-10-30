@@ -70,7 +70,7 @@ pub enum AckVia {
 }
 
 /// The acknowledgment: the member, its position, the edition where the
-/// request minted one.
+/// request minted one, and whether the claim rode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ack {
     /// The member minted — `E.1` of the edition at the mint form.
@@ -81,6 +81,9 @@ pub struct Ack {
     pub edition: Option<Address>,
     /// How it was reached.
     pub via: AckVia,
+    /// Whether the edition claim rode in the write — the request's own
+    /// `claim`, echoed (skep #692).
+    pub claim: bool,
 }
 
 /// The race's key at `kept_place_moved`: the feed's newest row under the
@@ -271,7 +274,7 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
             let member = parse_address(addr).ok_or_else(|| super::shape(&frame, &v))?;
             let edition = request.mint.as_ref().and_then(|_| trunk_of(addr)).and_then(|t| parse_address(&t));
-            return Ok(Sent::Acknowledged(Ack { member, at, edition, via: AckVia::Answer }));
+            return Ok(Sent::Acknowledged(Ack { member, at, edition, via: AckVia::Answer, claim: request.claim }));
         }
         let Some(r) = Rejection::of(&v) else { return Err(super::shape(&frame, &v)) };
         let site = r.site().clone();

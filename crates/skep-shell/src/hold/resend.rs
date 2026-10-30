@@ -30,20 +30,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::Value;
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, line_state, BoardSlot, Dialed, HeldState, Holds};
+use super::{awaits_act, cause, line_state, BoardSlot, Dialed, Hand, HeldState, Holds};
 use crate::wire::{delivered_values, values_of};
 use crate::held::{Done, HeldLine, Reason};
 use crate::sessions::{SessionEntry, SessionKind};
 
 /// The outcome of the resend's one read per document (§3c.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ReadOutcome {
     /// No row since `base` — send from the head.
     SendFromHead,
     /// The in-flight burst landed — the head is `done kept` with this `at`.
     Landed { at: Option<u64> },
-    /// The site moved — no line sent, the lines faced `moved`.
-    Moved,
+    /// The site moved — no line sent, the lines faced `moved`, the hands
+    /// whose rows the read holds named (§3c.5), each once.
+    Moved(Vec<Hand>),
     /// The board answered no page: nothing is decided.
     ///
     /// It answered a refusal (`feed_rebuilding`), the death signal, or no
@@ -176,26 +177,26 @@ impl Holds {
         }
         match self.read_outcome(session, doc, &head) {
             ReadOutcome::Unread => false,
-            ReadOutcome::Moved => {
+            ReadOutcome::Moved(hands) => {
                 self.mark_moved(board_reference, principal, doc);
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, &hands);
                 false
             }
             ReadOutcome::Landed { at } => {
                 self.done(board_reference, principal, head.k, Done::Kept { at });
                 match self.count(board_reference, principal, doc) {
                     0 => {
-                        self.emit_held(session, doc, 0, HeldState::Kept, None);
+                        self.emit_held(session, doc, 0, HeldState::Kept, None, &[]);
                         false
                     }
                     rest => {
-                        self.emit_held(session, doc, rest, HeldState::Sending, None);
+                        self.emit_held(session, doc, rest, HeldState::Sending, None, &[]);
                         true
                     }
                 }
             }
             ReadOutcome::SendFromHead => {
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, &[]);
                 true
             }
         }
@@ -211,29 +212,33 @@ impl Holds {
     /// not contradicting it, or where the board lost its testimony
     /// ([`testimony_lost`]: the `poisoned` burst a restart replays, a burst
     /// whose write panicked past its commit) and the site confirms it; any
-    /// other row is (iii).
+    /// other row is (iii), the hands of the rows the page holds named with
+    /// it (`Holds::hands_of`) — the page the read already holds and no
+    /// further read, as §3c.5 has it.
     fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: Some(2) };
         let page = match session.board.changes(Some(&session.token), &query) {
             Ok(ChangesAnswer::Page(page)) => page,
             // `base` aged below the floor: the arrangement alone decides.
             Ok(ChangesAnswer::HistoryReclaimed { .. }) => return self.reclaimed_outcome(session, doc, head),
-            // A page of two rows too large to serve holds two rows or more.
-            Ok(ChangesAnswer::TooLarge { .. }) => return ReadOutcome::Moved,
+            // A page of two rows too large to serve holds two rows or more,
+            // none of them read: no hand to name.
+            Ok(ChangesAnswer::TooLarge { .. }) => return ReadOutcome::Moved(Vec::new()),
             Ok(_) | Err(_) => return ReadOutcome::Unread,
         };
+        let moved = || ReadOutcome::Moved(self.hands_of(session, &page.changes));
         let [row] = page.changes.as_slice() else {
-            return if page.changes.is_empty() { ReadOutcome::SendFromHead } else { ReadOutcome::Moved };
+            return if page.changes.is_empty() { ReadOutcome::SendFromHead } else { moved() };
         };
         if !head.reason.sent || page.more {
-            return ReadOutcome::Moved;
+            return moved();
         }
         let landed = ReadOutcome::Landed { at: row["at"].as_u64() };
         if own_row(session, row) && row["op"].as_str() == head.frame["op"].as_str() {
             // A kind the site read cannot confirm trusts the op-and-hand match.
             return match self.site(session, doc, head) {
                 Site::Equal | Site::Unconfirmable => landed,
-                Site::Differs => ReadOutcome::Moved,
+                Site::Differs => moved(),
                 Site::Unread => ReadOutcome::Unread,
             };
         }
@@ -250,25 +255,25 @@ impl Holds {
         if testimony_lost(row) {
             return match self.site(session, doc, head) {
                 Site::Equal => landed,
-                Site::Differs | Site::Unconfirmable => ReadOutcome::Moved,
+                Site::Differs | Site::Unconfirmable => moved(),
                 Site::Unread => ReadOutcome::Unread,
             };
         }
-        ReadOutcome::Moved
+        moved()
     }
 
     /// Returns the outcome of a `history_reclaimed` on the read (§3c.5).
     ///
     /// The arrangement alone decides — a `sent` head's values read back equal
     /// at its site is (ii); any difference, a kind no read confirms, or a
-    /// head never sent is (iii).
+    /// head never sent is (iii), no row read and so no hand to name.
     fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         if !head.reason.sent {
-            return ReadOutcome::Moved;
+            return ReadOutcome::Moved(Vec::new());
         }
         match self.site(session, doc, head) {
             Site::Equal => ReadOutcome::Landed { at: None },
-            Site::Differs | Site::Unconfirmable => ReadOutcome::Moved,
+            Site::Differs | Site::Unconfirmable => ReadOutcome::Moved(Vec::new()),
             Site::Unread => ReadOutcome::Unread,
         }
     }
@@ -339,14 +344,14 @@ impl Holds {
                 self.note_ack(session, &line.frame, &ack);
                 self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
                 let rest = self.count(board_reference, principal, &line.doc);
-                self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
+                self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
                 ControlFlow::Continue(())
             }
             Dialed::Held { reason, .. } => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
-                self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
+                self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
                 ControlFlow::Break(())
             }
             Dialed::Reissue { kind, refusal } => {
@@ -370,11 +375,12 @@ impl Holds {
     /// re-found and the delta placed after it — stays named as open (§3c.5,
     /// the record §5 Q3): it needs an anchor the page's frame does not carry
     /// today, and a silent inexact rebase could put words where the person
-    /// did not. The page's half — what the burst machine does at a `held`
-    /// answer, how it re-projects the held frames at a launch, the moved
-    /// document's face — is the frontend's and in neither repository at this
-    /// pin (unverified here, the record §7 item 4; stated from
-    /// assisted-frontend §7b).
+    /// did not. The hands whose rows moved it ride the `held` event's
+    /// `moved` state (§3c.5; §4b.2), the data of the face's three forms. The
+    /// page's half — what the burst machine does at a `held` answer, how it
+    /// re-projects the held frames at a launch, the moved document's face —
+    /// is the frontend's and in neither repository at this pin (unverified
+    /// here, the record §7 item 4; stated from assisted-frontend §7b).
     fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str) {
         self.with_principal(board_reference, principal, |ph| {
             let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| l.k).collect();

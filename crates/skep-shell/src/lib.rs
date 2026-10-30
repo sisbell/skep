@@ -29,7 +29,8 @@
 //!   the one dialer every board dials through, which dials nothing once the
 //!   shell's stop stands.
 //! * `events` — the event stream: every §4b.2 event as a value, named by an
-//!   [`EventName`] of the seven, fanned out to every subscriber.
+//!   [`EventName`] of the eight, fanned out to every subscriber, and the
+//!   watchers run after the fan-out on the emitting thread.
 //! * `refusal` — [`Refusal`], the one refusal shape the page renders: the
 //!   board's own verdict verbatim, a halt's face, the block, the
 //!   unreachable board, and the shell's own armed refusals, each named by
@@ -82,11 +83,13 @@
 //!   answer read through the classification table, the one owner of every
 //!   reissue's bound, and each ack noted for the base — and among it a
 //!   burst's door, admitted where some send of it the board can take and
-//!   held where the board cannot take it; the per-(board, principal) queue
-//!   over `held`'s file, each board's under its own lock; its child `resend`
-//!   holds the walk the feed thread's probe drains: one read per document,
-//!   with §3c.5's three outcomes, the lines then sent in `k` order across
-//!   the documents.
+//!   held where the board cannot take it, and the six non-burst writes a
+//!   standing hold refuses at once with its cause; the per-(board,
+//!   principal) queue over `held`'s file, each board's under its own lock,
+//!   one shell per data directory; its child `resend` holds the walk the
+//!   feed thread's probe drains: one read per document, with §3c.5's three
+//!   outcomes — a moved document's hands named — the lines then sent in `k`
+//!   order across the documents.
 //! * `feed` — the feed thread per board, its state the feeder:
 //!   `search::Consumer` polled on the `/events` commits, coalesced into one
 //!   waiting read, the published feed read from the head the board first
@@ -105,10 +108,12 @@
 //!   which, `writes`), and one private method per §4b.1 row, per `places`
 //!   and per `changes`, behind [`Shell::call`], whose dispatch the compiler
 //!   holds to one arm per call — the ten ceremonial rows in its child
-//!   `ceremony` — each row taking and answering values shaped exactly as the
-//!   row's columns — an argument of another form refused, never read as
-//!   absent; [`Shell::fetch`] is public beside it because it streams, and
-//!   logs its own call. Dropping a shell stops it: no feed thread, open
+//!   `ceremony`, the four `publication` rows and the panels they stand on in
+//!   its child `publication` — each row taking and answering values shaped
+//!   exactly as the row's columns — an argument of another form refused,
+//!   never read as absent; [`Shell::fetch`] is public beside it because it
+//!   streams, and logs its own call. Dropping a shell stops it: no feed
+//!   thread, open
 //!   session or `held/<chain>/` lock of it outlives it, and each board's
 //!   `/events` reader, asked to stop, ends at its next read.
 //! * [`shapes`] — the declarations: [`shapes::declarations`], a TypeScript

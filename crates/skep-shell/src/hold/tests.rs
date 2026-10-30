@@ -209,6 +209,9 @@ struct Fake {
     over_deliver: AtomicBool,
     sends: Mutex<Vec<Value>>,
     op_closed: AtomicBool,
+    /// Every `/op` dial fails at the connect: the board is not answering,
+    /// and no request leaves.
+    op_unreachable: AtomicBool,
     op_rejected: Armed<Value>,
     op_refused: Armed<(u16, Value)>,
     next_at: AtomicU64,
@@ -238,6 +241,7 @@ impl Fake {
             over_deliver: AtomicBool::new(false),
             sends: Mutex::new(Vec::new()),
             op_closed: AtomicBool::new(false),
+            op_unreachable: AtomicBool::new(false),
             op_rejected: Armed::none(),
             op_refused: Armed::none(),
             next_at: AtomicU64::new(50),
@@ -358,6 +362,9 @@ impl Dialer for Fake {
                     Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}]})),
                     _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
                 });
+            }
+            if self.op_unreachable.load(Ordering::SeqCst) {
+                return Err(DialError::Connect("the board is not answering".into()));
             }
             self.sends.lock().unwrap().push(body.clone());
             if self.op_closed.load(Ordering::SeqCst) {

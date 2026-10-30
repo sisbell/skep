@@ -338,32 +338,92 @@ fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// Checks that a second window's burst is held in memory and resent (§3c.3).
+/// Checks that another process's lock leaves the directory not yet this
+/// shell's (§3c.3: one shell per data directory).
 ///
-/// With the board's `held/<chain>/lock` held by another shell, a burst is
-/// held in this shell's memory alone — answered `other_window`, nothing
-/// written under the directory — and resent like any line once the board
-/// answers (the mutant that skips another window's queue holds every later
-/// burst `behind` it for the uptime); after it is kept, the next burst is
-/// dialed.
+/// With the board's `held/<chain>/lock` held by another process, a burst is
+/// held under its own cause — never a second shell's — its answer
+/// `unwritable` saying another process holds the store, nothing written
+/// under the directory, the line standing in memory and resent like any
+/// line once the board answers; and once that process lets the lock go, the
+/// next probe takes the directory, so the next line is copied to the
+/// board's file (the mutants that keep a second shell's custody with a cause
+/// of its own, that write under a lock another process holds, or that never
+/// try the lock again).
 #[test]
-fn a_second_windows_burst_is_held_in_memory_and_resent() {
+fn another_processs_lock_leaves_the_directory_not_yet_this_shells() {
     let store = TempDir::new().unwrap();
     let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
     dir.ensure().unwrap();
-    let _first_window = dir.try_lock().unwrap().expect("the first window holds the lock");
+    let other_process = dir.try_lock().unwrap().expect("the other process holds the lock");
     let held_dir = store.path().join("held").join("ab".repeat(32));
     let facts = writer_facts(&store);
     let g = ground_in(store, facts, 0);
     let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
-    assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("other_window")), "{answer}");
-    assert!(!held_dir.join("principal-1.held").exists(), "a second window writes nothing");
+    assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("unreachable")), "the hold's own cause, no second shell's: {answer}");
+    let why = answer["unwritable"].as_str().unwrap_or_else(|| panic!("the answer says why: {answer}"));
+    assert!(why.contains("another process holds this board's held store") && why.contains("one shell per data directory"), "{why}");
+    assert!(!held_dir.join("principal-1.held").exists(), "nothing is written under a lock another process holds");
     assert_eq!(g.lines().len(), 1, "the line stands in memory");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
-    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
-    assert_eq!(next["resp"], "ack", "no line stands, so the next burst is dialed: {next}");
+    // The other process lets go: the lock is tried again at the next probe,
+    // the directory taken, and the next line copied to the board's file.
+    drop(other_process);
+    let still = g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+    assert!(still["unwritable"].is_string(), "until a probe or a session's open tries the lock again: {still}");
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty(), "resent and kept");
+    let next = g.hold(&insert(DOC, json!(["c"])), "unreachable", false);
+    assert!(next.get("unwritable").is_none(), "the directory is this shell's now: {next}");
+    assert!(std::fs::read_to_string(held_dir.join("principal-1.held")).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
+}
+
+/// Returns the hands a moved document's `held` event names, over `rows` —
+/// built from this store's own fingerprint and a second, labelled key's.
+fn moved_hands(rows: impl Fn(&str, &str) -> Vec<Value>) -> Vec<Value> {
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let KeyId(other) = FileStore::open(store.path().join("store")).generate(Some(skep_client::sheet::Label::new("phone").unwrap())).unwrap();
+    let g = ground_in(store, facts, 0);
+    *g.fake.rows.lock().unwrap() = rows(&g.own_key(), &other.to_hex());
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.holds.probe("b-1");
+    let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document moved");
+    assert_held_event_declared(&moved);
+    let hands = moved["hands"].as_array().cloned().unwrap_or_default();
+    for hand in &hands {
+        crate::shapes::assert_declared("Hand", hand);
+    }
+    hands
+}
+
+/// Checks that a moved document names its hands, each once (§3c.5; §4b.2).
+///
+/// The rows since `base` the read holds — its page of two — give the hands
+/// the `held` event's `moved` state carries: this store's own key by its
+/// fingerprint, another key the shell's key store holds with its label,
+/// another key it does not hold by its fingerprint alone, `bare`, a row
+/// whose testimony the board lost, and a signed row — the own hand, as the
+/// read reads it; a hand twice on the page is named once (the mutants that
+/// name no hand, one per row, or a label for a key the store does not
+/// hold).
+#[test]
+fn a_moved_documents_hands_are_named_each_once() {
+    let row = |at: u64, key: Value| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
+    let hands = moved_hands(|own, other| vec![row(77, json!(own)), row(78, json!(other))]);
+    assert_eq!(hands.len(), 2, "{hands:?}");
+    assert_eq!((hands[0]["key"].as_str(), hands[0]["fingerprint"].is_string(), hands[0].get("label")), (Some("own"), true, None), "{hands:?}");
+    assert_eq!((hands[1]["key"].as_str(), hands[1]["fingerprint"].is_string(), hands[1]["label"].as_str()), (Some("other"), true, Some("phone")), "the label the store holds: {hands:?}");
+    let hands = moved_hands(|_, _| vec![row(77, json!("bare")), lost_row()]);
+    assert_eq!(hands, [json!({"key": "bare"}), json!({"key": "lost"})], "{hands:?}");
+    let hands = moved_hands(|_, _| vec![row(77, json!("ff".repeat(32))), row(78, json!("bare"))]);
+    assert_eq!(hands, [json!({"key": "other", "fingerprint": "ff".repeat(32)}), json!({"key": "bare"})], "a key the store does not hold carries no label: {hands:?}");
+    let hands = moved_hands(|_, _| vec![row(77, json!("bare")), row(78, json!("bare"))]);
+    assert_eq!(hands, [json!({"key": "bare"})], "each hand once: {hands:?}");
+    let hands = moved_hands(|_, _| vec![json!({"at": 77, "op": "insert", "docs": [DOC], "attest": {"alg": "x", "sig": "y"}}), row(78, json!("bare"))]);
+    assert_eq!((hands.len(), hands[0]["key"].as_str(), hands[1]["key"].as_str()), (2, Some("own"), Some("bare")), "a signed row is the own hand, as the read reads it: {hands:?}");
 }
 
 /// Checks that a drain that unwinds leaves the board free to drain (§3c.4).

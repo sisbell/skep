@@ -2697,10 +2697,10 @@ mod scripted {
             "{err}"
         );
         // The publication family's arms: `not_owner` naming the DRAFT side is
-        // the board's refusal verbatim with the draft in its site — never the
-        // library's own fault — while naming `doc` is the own fault; the twin
-        // fence's member and the budget's detail ride verbatim too; a place's
-        // token, which this frame never carries, the library's own fault.
+        // the unowned draft, named — never the library's own fault — while
+        // naming `doc` is the own fault; the twin fence's member and the
+        // budget's detail ride verbatim; a place's token, which this frame
+        // never carries, the library's own fault.
         let drafted = || Landing::Shot { merger: merger(&session, &signer), draft: Some(a(S)), journal: None };
         let verbatim = |err: Refusal, code: &str| -> crate::halt::Refused {
             match err {
@@ -2709,8 +2709,7 @@ mod scripted {
             }
         };
         refuse("not_owner", Some(S));
-        let unowned = verbatim(land(&board, &merged, drafted()).unwrap_err(), "not_owner");
-        assert_eq!(unowned.body["site"]["addr"].as_str(), Some(S), "the draft side named");
+        assert_eq!(land(&board, &merged, drafted()).unwrap_err(), Refusal::UnownedDraft { draft: a(S) }, "the draft side named");
         refuse("not_owner", Some(D));
         let err = land(&board, &merged, drafted()).expect_err("own fault");
         assert!(matches!(&err, Refusal::Halt(Halt::Halt(_))), "{err}");

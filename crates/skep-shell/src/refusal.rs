@@ -88,6 +88,55 @@ impl Name {
     /// session for reading alone (foundations §3.3 state 3: "the shell
     /// refuses every write in it"); the detail names the `op`, or the `act`.
     pub const WRITE_IN_BARE_SESSION: Name = Name("write_in_bare_session");
+    /// A `publish` frame through `op` under a session, refused without a dial.
+    ///
+    /// A publication crosses as `publication.confirm` (`client.md` §4b.1's
+    /// `op` row, decision 1 (b)): the shell composes the one request from
+    /// the panel it holds, and the page composes no write (S-35 (a)); the
+    /// detail names the `op`.
+    pub const PUBLISH_IS_A_CALL: Name = Name("publish_is_a_call");
+    /// A non-burst write while the own node stands stopped (§3c.4).
+    ///
+    /// One of the six — `fork`, `version`, `make_link`, `nullify`,
+    /// `edit_link`, `publish` — and `publication.confirm`'s send, refused at
+    /// once with the hold's cause as its token, never held and never dialed;
+    /// the detail names the `op`.
+    pub const STOPPED: Name = Name("stopped");
+    /// A non-burst write while the board's write path stands poisoned (§3c.4).
+    ///
+    /// The hold noted a `poisoned` answer and no `/health` read has said
+    /// writes go since; the same six and the detail as [`Name::STOPPED`]'s.
+    pub const POISONED: Name = Name("poisoned");
+    /// A non-burst write while the board's writes stand halted (§3c.4).
+    ///
+    /// The feed's last `/health` read answered `writes.halted` true; the same
+    /// six and the detail as [`Name::STOPPED`]'s.
+    pub const HALTED: Name = Name("halted");
+    /// A `publication.count` or `publication.confirm` with no panel standing.
+    ///
+    /// None was opened under the session's board and principal, or it was
+    /// cancelled, or it went with its session: the act is `publication.open`
+    /// (§4b.1's `count` row); the detail names the `session`.
+    pub const NO_PANEL: Name = Name("no_panel");
+    /// A publication read met `withheld` on a document it needs.
+    ///
+    /// Brief 1's `Fault::Unreadable`; the detail names the `doc`.
+    pub const UNREADABLE: Name = Name("unreadable");
+    /// A publication read met `doc_not_registered` on a document it needs.
+    ///
+    /// Brief 1's `Fault::NoSuchDocument`; the detail names the `doc`.
+    pub const NO_SUCH_DOCUMENT: Name = Name("no_such_document");
+    /// A held run of the selection the draft no longer arranges whole.
+    ///
+    /// Brief 1's `Fault::SelectionNotArranged`, at the first enumeration —
+    /// before any re-read can re-state it; the detail names the run's
+    /// `index` in the selection.
+    pub const SELECTION_NOT_ARRANGED: Name = Name("selection_not_arranged");
+    /// A board answer the publication's reader cannot read.
+    ///
+    /// Brief 1's `Fault::Shape`; the detail names the frame's `op` and the
+    /// answer's `body`, clipped.
+    pub const SHAPE: Name = Name("shape");
     /// A guest form's origin is not a canonical origin.
     pub const NOT_CANONICAL: Name = Name("not_canonical");
     /// A query past the bridge's bound.
@@ -185,7 +234,10 @@ impl Name {
     pub const RETIRED: Name = Name("retired");
     /// The key stands in neither list.
     pub const NOT_ENROLLED: Name = Name("not_enrolled");
-    /// The handshake halted after a pre-check that passed.
+    /// The handshake halted after a pre-check that passed; or a publication
+    /// read met `scan_busy` or `history_busy` past the library's bounded
+    /// reissues (brief 1's `Fault::Busy`, the shell's own refusal, its detail
+    /// the `call`).
     pub const BUSY: Name = Name("busy");
     /// `accept` at an address that already holds a key set.
     pub const ALREADY_SEEDED: Name = Name("already_seeded");
@@ -272,18 +324,33 @@ impl Refusal {
     }
 
     /// Returns the value the page renders.
+    ///
+    /// A board's verdict carries its `site` beside the body — `addr` and
+    /// `index` where the code names them (wire.md §Rejections), each absent
+    /// where it does not — so the page reads a refusal's site off the value
+    /// and never off the body.
     pub fn to_value(&self) -> Value {
         let name = self.name();
         match self {
-            Refusal::Board(r) => json!({
-                "kind": "refused",
-                "name": name,
-                "status": r.status,
-                "code": r.code,
-                "detail": r.detail,
-                "op": r.op,
-                "body": r.body,
-            }),
+            Refusal::Board(r) => {
+                let mut site = Map::new();
+                if let Some(addr) = r.body["site"]["addr"].as_str() {
+                    site.insert("addr".into(), Value::from(addr));
+                }
+                if let Some(index) = r.body["site"]["index"].as_u64() {
+                    site.insert("index".into(), Value::from(index));
+                }
+                json!({
+                    "kind": "refused",
+                    "name": name,
+                    "status": r.status,
+                    "code": r.code,
+                    "detail": r.detail,
+                    "op": r.op,
+                    "site": Value::Object(site),
+                    "body": r.body,
+                })
+            }
             Refusal::Halt { face, .. } => json!({
                 "kind": "halt",
                 "name": name,
@@ -398,9 +465,28 @@ mod tests {
         let r = Refusal::board(400, json!({"error": "beyond_head", "head": 12}));
         let v = r.to_value();
         assert_eq!((r.name(), v["kind"].as_str(), v["status"].as_u64(), v["body"]["head"].as_u64()), ("beyond_head", Some("refused"), Some(400), Some(12)));
+        assert_eq!(v["site"], json!({}), "a code that names no site carries an empty one");
         let named = Refusal::board(200, json!({"error": "credential_refused", "detail": "retired", "op": "publish"}));
         assert_eq!((named.name(), named.to_value()["op"].as_str()), ("retired", Some("publish")));
         assert_eq!(Refusal::board(502, Value::Null).name(), "http_error");
+    }
+
+    /// Checks that a verdict's site rides the value beside its body.
+    ///
+    /// `site.addr` and `site.index` are read off the `rejected` document
+    /// where the code names them (`already_published`'s member,
+    /// `kept_place_moved`'s entry) and left out where it does not, so the
+    /// page reads the site off the refusal and never off its body.
+    #[test]
+    fn a_verdicts_site_rides_the_value_beside_its_body() {
+        let body = json!({"resp": "rejected", "code": "kept_place_moved", "disposition": "permanent", "op": "publish", "site": {"index": 1}});
+        let r = skep_client::board::Rejection::of(&body).expect("a rejected document");
+        let v = Refusal::from(r.refused(&body)).to_value();
+        assert_eq!(v["site"], json!({"index": 1}), "{v}");
+        let body = json!({"resp": "rejected", "code": "already_published", "disposition": "permanent", "op": "publish", "site": {"addr": "1.0.1.0.2.3"}});
+        let r = skep_client::board::Rejection::of(&body).expect("a rejected document");
+        let v = Refusal::from(r.refused(&body)).to_value();
+        assert_eq!((v["site"]["addr"].as_str(), v["site"].get("index")), (Some("1.0.1.0.2.3"), None), "{v}");
     }
 
     /// Checks that a verdict's name is the token its rejection dispatches on.

@@ -210,9 +210,10 @@ impl<'a> Landing<'a> {
 /// - the reads' refusals, for a member or a draft already holding M;
 /// - the shot's: the value reads' refusals, [`Refusal::WindowWithheld`],
 ///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
-///   board's `not_owner` naming the draft side, `already_published` and
-///   `publication_over_budget` verbatim as [`Refusal::Halt`] (never the
-///   library's fault), and a lost acknowledgment as the dialer's halt after
+///   board's `not_owner` naming the draft side as [`Refusal::UnownedDraft`],
+///   `already_published` and `publication_over_budget` verbatim as
+///   [`Refusal::Halt`] (never the library's fault), and a lost
+///   acknowledgment as the dialer's halt after
 ///   one re-ask, for [`resume`] to complete — or the draft landing's edits':
 ///   [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`], and a
 ///   lost acknowledgment as the dialer's halt, with no re-ask;
@@ -443,9 +444,9 @@ impl Writer<'_> {
     ///
     /// [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`] and
     /// [`Refusal::NoSuchDocument`] as the board answers them; `not_owner`
-    /// naming the draft side, `already_published` and
-    /// `publication_over_budget` as the board's refusal verbatim, never this
-    /// library's fault; the value reads' refusals; the attest's halts; a
+    /// naming the draft side as [`Refusal::UnownedDraft`], `already_published`
+    /// and `publication_over_budget` as the board's refusal verbatim, never
+    /// this library's fault; the value reads' refusals; the attest's halts; a
     /// body past [`SHOT_BODY_BUDGET`], a run with no address, a window of
     /// width 0, and the board's refusal of the frame's substance — the
     /// shot's own table, a place's or a deposit's token, which this frame
@@ -536,9 +537,13 @@ impl Writer<'_> {
             "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| doc.clone())),
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument(doc.clone()),
-            // The publication's own refusals of the shot, verbatim: the unowned
-            // draft side, the twin fence's member, the budget's detail.
-            "not_owner" if site.is_some() && site == draft => Refusal::Halt(r.refused(&v)),
+            // The publication's own refusals of the shot: the unowned draft
+            // side named, the twin fence's member and the budget's detail
+            // verbatim.
+            "not_owner" if site.is_some() && site == draft => match site.clone() {
+                Some(draft) => Refusal::UnownedDraft { draft },
+                None => own_fault("the shot", &r),
+            },
             "already_published" | "publication_over_budget" => Refusal::Halt(r.refused(&v)),
             "base_superseded"
             | "base_not_in_chain"

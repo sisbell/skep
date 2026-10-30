@@ -4,10 +4,12 @@
 //! on the Rust side and declared for the page from that definition".
 //! [`declarations`] renders one TypeScript declaration file — every call's
 //! input and output, every event, the refusal, the `feed` update's shape (a
-//! `changes` entry's too) and the index state's ten arms — from the table
-//! below, which is written by hand beside the code that builds each value
-//! (`shell`, `feed`, `sessions`, `refusal`, `person`, `hold`) and pinned by
-//! this module's suite: a sample of each type, built as the code builds it,
+//! `changes` entry's too), the index state's ten arms and the publication
+//! family's panel, inputs and outcomes — from the table below, which is
+//! written by hand beside the code that builds each value (`shell`,
+//! `shell::publication`, `feed`, `sessions`, `refusal`, `person`, `hold`)
+//! and pinned by this module's suite: a sample of each type, built as the
+//! code builds it,
 //! is round-tripped through `serde_json` and its field names held equal to
 //! the table's. No generator crate: the table is the one source, and a field
 //! renamed in the table alone, or in the code alone, fails the pin. The
@@ -117,7 +119,12 @@ const SHAPES: &[Shape] = &[
         doc: "`changes(session, since, limit?)` — what changed since the position `since` at the session's class: the entries in the `feed` update's shape, oldest first, each `published` or `drafts` by the read that answered it (two reads, the published feed as a guest and the session's drafts supplement under its token, merged by position); `next` the position to ask from next time, past every entry answered and never past one withheld; `head` the board's latest position, read before the page",
         fields: &[req("entries", "FeedUpdate[]"), req("next", "number"), req("head", "number")],
     },
-    Shape { name: "RefusedByBoard", open: false, doc: "a refusal: the board's own verdict, verbatim", fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("body", "unknown")] },
+    Shape {
+        name: "RefusedByBoard",
+        open: false,
+        doc: "a refusal: the board's own verdict, verbatim; `site` the address and the entry the code names (`already_published`'s member, `kept_place_moved`'s `runs` entry, a deposit's entry in its own list), each absent where the code carries none",
+        fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("site", "{ addr?: string; index?: number }"), req("body", "unknown")],
+    },
     Shape { name: "HaltFace", open: false, doc: "a refusal: a halt's face under the armed name", fields: &[req("kind", "'halt'"), req("name", "string"), req("state", "string"), req("cause", "string"), req("act", "string")] },
     Shape { name: "BlockedFace", open: false, doc: "a refusal: the block", fields: &[req("kind", "'blocked'"), req("name", "'blocked'"), req("record", "string"), req("named_by", "string"), req("ground", "string | null")] },
     Shape { name: "Unreachable", open: false, doc: "a refusal: the board is not answering", fields: &[req("kind", "'unreachable'"), req("name", "'unreachable'"), req("text", "string")] },
@@ -136,7 +143,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldAnswer",
         open: false,
-        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `cause` `other_window` where another window holds the board's held text and the burst is held in this one's memory alone, and `unwritable` — why — where the device refused the line or the held file is out of reach, the burst held in memory alone",
+        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `cause` the hold's token, and `unwritable` — why — where the device refused the line or the held file is out of reach (another process's lock on the board's held store among the causes: one shell per data directory, §3c.3), the burst held in memory alone",
         fields: &[req("resp", "'held'"), req("held", "number"), req("cause", "string"), opt("unwritable", "string")],
     },
     Shape {
@@ -148,10 +155,113 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldEvent",
         open: false,
-        doc: "`held(board, session, {doc, held, state, cause?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`; emitted at a hold's start, at each line's resolution or drop, and at each state the resend moves the document through — never when a principal's file is read at its session's open, whose lines `held(session)` lists",
-        fields: &[req("board", "string"), req("session", "string"), req("doc", "string"), req("held", "number"), req("state", "'holding' | 'sending' | 'kept' | 'refused' | 'moved'"), opt("cause", "string")],
+        doc: "`held(board, session, {doc, held, state, cause?, hands?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`; `hands` with the `moved` state, EACH HAND ONCE, read off the `under=` rows since `base` the read already holds (§3c.5); emitted at a hold's start, at each line's resolution or drop, and at each state the resend moves the document through — never when a principal's file is read at its session's open, whose lines `held(session)` lists",
+        fields: &[req("board", "string"), req("session", "string"), req("doc", "string"), req("held", "number"), req("state", "'holding' | 'sending' | 'kept' | 'refused' | 'moved'"), opt("cause", "string"), opt("hands", "Hand[]")],
+    },
+    Shape {
+        name: "Hand",
+        open: false,
+        doc: "one hand whose row moved a held document (§3c.5): `own` this store's own key with its fingerprint, `other` another key with its fingerprint and the label the shell's key store holds for it (rendered inert), `bare` an unsigned hand under local trust, `lost` a row whose testimony the board lost — the data of the three forms the moved face draws, the strings `ux/copy.md`'s",
+        fields: &[req("key", "HandKey"), opt("fingerprint", "string"), opt("label", "string")],
     },
     Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
+    Shape { name: "Run", open: false, doc: "one run of a selection, I-runs in V-order (P51): `width` positions of the document `origin`'s content I-space from the ordinal `i_start`", fields: &[req("origin", "string"), req("i_start", "number"), req("width", "number")] },
+    Shape {
+        name: "PublicationPanel",
+        open: false,
+        doc: "`publication.open(session, {draft, doc?, mint?, claim?, selection?, notes?, readable_drafts?, published?})` — THE PANEL: the composition's first steps run by the shell (`enumerate` → `panel` → the price), every member DATA with a code or a kind and never a string a person reads; `rows` the sets in the RULED order — own, notes, private, public by address; `read_with` per published document of the person's whether the edition is read with it now; `count` at the switches' DEFAULT — every private row OFF; `price` the five terms against their caps, as the request would stand with every window kept private; `windows` the own-origin windows the three answers are asked for; `hold` where a HELD publication of this draft stood and is re-opened as it stands, with the switches and answers the page last sent it (item 1 (a))",
+        fields: &[req("rows", "PublicationRow[]"), req("formatting", "Formatting"), req("read_with", "Record<string, boolean>"), req("count", "Count"), req("price", "Price"), req("windows", "Window[]"), opt("hold", "Hold")],
+    },
+    Shape {
+        name: "PublicationRow",
+        open: false,
+        doc: "one set of the panel: `home` the set, `kind` own, notes, private or public with whether the edition is read with it, `label` the home's first line (rendered INERT, AUTH-5.2), `links` the row's offered links BY ADDRESS, `types` the fold by type with each type's count and its far documents, `line` the five counts P3's lines are drawn from, `read_through` the private move's share where the row stays OFF",
+        fields: &[req("home", "string"), req("kind", "RowKind"), req("label", "string"), req("links", "string[]"), req("types", "TypeFold[]"), req("line", "RowLine"), req("read_through", "number")],
+    },
+    Shape { name: "TypeFold", open: false, doc: "the links of one type in a row: the type's address, how many of the row's links carry it, each far document they point into in address order", fields: &[req("ty", "string"), req("n", "number"), req("far", "string[]")] },
+    Shape {
+        name: "RowLine",
+        open: false,
+        doc: "the five counts of a row's line: ⟨p⟩ links with an end into a private document, ⟨d⟩ links with an end wholly on words of the draft the selection leaves out, ⟨c⟩ links with an end running past the selection's cut, ⟨t⟩ links typed by a private document, ⟨u⟩ revisions of links already published, not offered",
+        fields: &[req("p", "number"), req("d", "number"), req("c", "number"), req("t", "number"), req("u", "number")],
+    },
+    Shape {
+        name: "Formatting",
+        open: false,
+        doc: "the formatting line: `marks` the line's marks by address, `cut` how many run past the selection's cut, `removals` the held removals' job list — the spent and the off-selection dropped, the ⟨r⟩/⟨e⟩ split by `remake`",
+        fields: &[req("marks", "string[]"), req("cut", "number"), req("removals", "Removal[]")],
+    },
+    Shape {
+        name: "Removal",
+        open: false,
+        doc: "one held removal on the job list: `record` the `3.24` record in the draft, `mark` the published mark it names, `mark_value` the mark's value as stored, `on_selection` whether the mark is on the selection's words, `spent` whether a retraction of it already stands, `remake` the formatting-line mark that re-makes it, where one does",
+        fields: &[req("record", "string"), req("mark", "string"), req("mark_value", "LinkValue"), req("on_selection", "boolean"), req("spent", "boolean"), req("remake", "string | null")],
+    },
+    Shape { name: "LinkValue", open: false, doc: "a link's value as stored: the three slots as spans, and the position of the commit that minted it — null where the board serves none", fields: &[req("from", "LinkSpan[]"), req("to", "LinkSpan[]"), req("ty", "LinkSpan[]"), req("at", "number | null")] },
+    Shape { name: "LinkSpan", open: false, doc: "one span of a stored slot: its start and its width in their dotted spelling (wire.md §Value encodings)", fields: &[req("start", "string"), req("width", "string")] },
+    Shape {
+        name: "Count",
+        open: false,
+        doc: "`publication.count(session, {switches, answers})` — THE COUNT: PUB-3.8's four numbers as DATA (DECISION 5) — ⟨l⟩ the switched-on sets' `links` entries plus the `read_with` entries, ⟨n⟩ the formatting line's marks that re-make nothing, ⟨r⟩ the `retract` entries no re-make covers, ⟨e⟩ the re-makes — `claim` whether the one write carries the edition claim, `read_with` the entries the switches need: each switched-on row's destination other than the member, once, where the edition is not already read with it",
+        fields: &[req("l", "number"), req("n", "number"), req("r", "number"), req("e", "number"), req("claim", "boolean"), req("read_with", "string[]")],
+    },
+    Shape {
+        name: "Price",
+        open: false,
+        doc: "THE PRICE: the five terms against their caps — `lists` the five lists (`runs`, `places`, `links`, `retract`, `read_with`; 4,096 each), `body` the signed body (8 MiB), `values` the distinct draft-native positions (131,072), `reads` the in-lock reads (65,536), `bytes` the staged bytes (64 MiB) — and `over`, each term past its cap with how far: a non-empty `over` is refused `over_cap` at `confirm` BEFORE ANY FRAME (P13); `count` re-runs it over the rows as switched, so the caps are decided at P3 as a set flips",
+        fields: &[req("lists", "number[]"), req("body", "number"), req("values", "number"), req("reads", "number"), req("bytes", "number"), req("over", "PriceOver[]")],
+    },
+    Shape { name: "PriceOver", open: false, doc: "one term of the price past its cap, and by how much", fields: &[req("term", "Term"), req("by", "number")] },
+    Shape {
+        name: "Window",
+        open: false,
+        doc: "one own-origin window P2 (i) asks the three answers for: a run of the selection that windows an unpublished draft of the person's own — `run` the run's index in the selection (the key `answers` take), `origin` and `width` the run's own, `owner` the origin's account, `i_start` WHERE IN ⟨origin⟩ THE PASSAGE WAS WRITTEN (the run's first ordinal in ⟨origin⟩'s I-space), `counterpart` where a record of a draft the person reads names the run's words as published, offered FIRST and re-read at every open; NO ANSWER PRE-SELECTED (P50)",
+        fields: &[req("run", "number"), req("origin", "string"), req("owner", "string"), req("i_start", "number"), req("width", "number"), opt("counterpart", "Counterpart")],
+    },
+    Shape {
+        name: "Counterpart",
+        open: false,
+        doc: "the counterpart offered first at a window: `record` the record of `draft`, a draft the person reads, that names the run's words as published — `from` the part of the run it covers, on the run's own chain, `to` the published span that part became",
+        fields: &[req("run", "number"), req("draft", "string"), req("record", "string"), req("from", "ISpan"), req("to", "ISpan")],
+    },
+    Shape { name: "ISpan", open: false, doc: "a content I-span: `chain` the content chain (`document.0.1`), `first` its first ordinal, `width` its positions", fields: &[req("chain", "string"), req("first", "number"), req("width", "number")] },
+    Shape { name: "Hold", open: false, doc: "a HELD publication re-opened (item 1 (a)): `since` when the panel was put behind another, in unix milliseconds", fields: &[req("since", "number")] },
+    Shape {
+        name: "Switches",
+        open: false,
+        doc: "`publication.count` and `publication.confirm` — the rows' switches: `on` the private rows switched ON by home, `destinations` per switched-on row its `Destination` — the member the shot mints, or another published document of the person's one pick away — the member where unnamed; a home no private row holds, or a set that is no published document of the person's, is refused `malformed_args`",
+        fields: &[req("on", "string[]"), opt("destinations", "Record<string, Destination>")],
+    },
+    Shape {
+        name: "Acknowledged",
+        open: false,
+        doc: "`publication.confirm` — THE ACKNOWLEDGMENT: `member` the member minted (`E.1` of the edition at the mint form), `edition` the edition minted at the mint form, `claim` whether the edition claim rode in the write (the request's own, echoed), `at` the commit's position, `via` how it was reached — `answer` the frame's own ack or the memo of the one re-ask, `twin` `already_published` READ AS THE ACKNOWLEDGMENT (the landed test passed at the member the refusal named), `records`, `walk` and `edition_claim` a lost answer's landed test; the page lands at P5",
+        fields: &[req("outcome", "'acknowledged'"), req("member", "string"), req("edition", "string | null"), req("claim", "boolean"), req("at", "number"), req("via", "AckVia")],
+    },
+    Shape {
+        name: "Restated",
+        open: false,
+        doc: "`publication.confirm` — THE RE-STATEMENT: P4's RE-READ found the draft moved since the panel — `left` links gone or retracted, `superseded` links a claim of the person's superseded since, `came` links arrived, `removals_undone` and `removals_came` the held removals' job list moved, `selection` held runs whose placement changed with where each stands now — NOTHING SENT (PUB-3.108): the page re-renders P2 from it and confirms again; `race` where the re-statement follows the board's `kept_place_moved`, the newest row under the draft since the request's reads and its key",
+        fields: &[req("outcome", "'restated'"), req("left", "string[]"), req("superseded", "string[]"), req("came", "string[]"), req("removals_undone", "string[]"), req("removals_came", "string[]"), req("selection", "{ run: number; placement: Placement }[]"), opt("race", "RaceKey")],
+    },
+    Shape {
+        name: "RaceKey",
+        open: false,
+        doc: "the race's key at a kept place moved: the feed's newest row under the draft since the request's reads — `at` its position, `key` whose write it was (a fingerprint, `bare`; null where lost or a signed entry), `signed` whether the row carries its own attest",
+        fields: &[req("at", "number"), req("key", "string | null"), req("signed", "boolean")],
+    },
+    Shape {
+        name: "PublicationRefused",
+        open: true,
+        doc: "`publication.confirm` — THE REFUSAL: a typed arm with its face's DATA beside `arm` and never a string — the library's `twin {member, missing}`, `kept_place_moved {index, race}` (where the re-read found no difference to re-state), `unowned_draft {draft}`, `not_owner {addr}`, `claim_refused {edition}` (crossing as the board answered it, nothing re-sent), `window_withheld {origin}`, `needs_signed_session`, `no_such_document`, `older_board {detail}`, `head_unreadable` (nothing sent), `session_ended {reason}`, `budget_race {detail}`, `may_already_stand`, `own_fault {fault}`, `other {refusal}` — and the shell's own two BEFORE ANY FRAME: `over_cap {over}` and `inert {inert}`",
+        fields: &[req("outcome", "'refused'"), req("arm", "string")],
+    },
+    Shape {
+        name: "PublicationEvent",
+        open: true,
+        doc: "`publication(board, session, {draft, state, …})` (§4b.2) — THE STATE OF THE ONE REQUEST as it moves: `sent` (the frame left the shell), `acknowledged {member, edition, at}` (the commit stands), `restated` (the re-read found a difference; nothing sent), `refused {arm}` (the arm by name, its data in `confirm`'s answer), `cancelled` (the standing panel dropped by `cancel`), `ended` (the session died with the panel standing or held — gone with it); fired at `confirm`'s send and at its outcome, at `cancel`, and at the session's death",
+        fields: &[req("board", "string"), req("session", "string"), req("draft", "string"), req("state", "'sent' | 'acknowledged' | 'restated' | 'refused' | 'cancelled' | 'ended'")],
+    },
 ];
 
 /// One call of the bridge as the file declares it.
@@ -200,6 +310,24 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         forms: &[&[req("session", "string"), req("frame", "unknown")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("frame", "unknown")]],
         result: "unknown",
     },
+    CallRow {
+        name: "publication.open",
+        forms: &[&[
+            req("session", "string"),
+            req("draft", "string"),
+            opt("doc", "string"),
+            opt("mint", "string"),
+            opt("claim", "boolean"),
+            opt("selection", "Run[]"),
+            opt("notes", "string[]"),
+            opt("readable_drafts", "string[]"),
+            opt("published", "string[]"),
+        ]],
+        result: "PublicationPanel",
+    },
+    CallRow { name: "publication.count", forms: &[&[req("session", "string"), opt("switches", "Switches"), opt("answers", "Record<string, OriginAnswer>")]], result: "{ count: Count; price: Price }" },
+    CallRow { name: "publication.confirm", forms: &[&[req("session", "string"), opt("switches", "Switches"), opt("answers", "Record<string, OriginAnswer>")]], result: "Acknowledged | Restated | PublicationRefused" },
+    CallRow { name: "publication.cancel", forms: &[&[req("session", "string")]], result: "Empty" },
     CallRow { name: "upload", forms: &[&[req("session", "string"), req("target", "string"), req("path", "string")]], result: "never" },
     CallRow {
         name: "fetch",
@@ -224,6 +352,31 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
     CallRow { name: "changes", forms: &[&[req("session", "string"), req("since", "number"), opt("limit", "number")]], result: "ChangesAnswer" },
 ];
+
+/// The publication family's closed unions, each a type alias the file
+/// declares ahead of the shapes (the crate's enums, spelled as the values
+/// the shell answers spell them).
+pub const ALIASES: &[&str] = &[
+    "export type RowKind = 'own' | 'notes' | 'private' | { public: { read_with: boolean } };",
+    "export type Destination = 'member' | { set: string };",
+    "export type OriginAnswer = 'publish_first' | 'drop' | 'keep_private' | 'counterpart';",
+    "export type Placement = { whole: { ordinal: number } } | { split: [number, number, number][] } | 'absent';",
+    "export type Term = 'runs' | 'places' | 'links' | 'retract' | 'read_with' | 'body' | 'values' | 'reads' | 'bytes';",
+    "export type AckVia = 'answer' | 'twin' | 'records' | 'walk' | 'edition_claim';",
+    "export type Inert = 'unchanged' | { unanswered: number[] } | { publish_first: number[] };",
+    "export type Missing = { copy: number } | { retraction: number };",
+    "export type HandKey = 'own' | 'other' | 'bare' | 'lost';",
+];
+
+/// Returns a call's name as a method of the `Bridge` interface: quoted where
+/// it carries a `.`, as the `publication` family's do.
+fn method_name(name: &str) -> String {
+    if name.contains('.') {
+        format!("'{name}'")
+    } else {
+        name.to_string()
+    }
+}
 
 /// Returns one form of a call's argument object as the file spells it.
 ///
@@ -252,6 +405,10 @@ pub fn declarations() -> String {
     out.push_str("export type Standing = 'public' | 'yours_to_read' | { held: { kind: 'named' | 'any_principal'; rung: 'document' | 'account'; issuer: string } };\n");
     out.push_str("export interface SearchOpts { limit?: number; offset?: number; reindex?: boolean }\n");
     out.push_str("export interface PlacesOpts { under?: string }\n");
+    for alias in ALIASES {
+        out.push_str(alias);
+        out.push('\n');
+    }
     out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | ShellRefusal;\n");
     out.push_str("export type Outcome<T> = { result: T } | { refused: Refusal };\n");
     let event_names: Vec<String> = EventName::ALL.iter().map(|name| format!("'{name}'")).collect();
@@ -267,11 +424,11 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four among them — the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();
-        let _ = writeln!(out, "  {}(args: {}): Promise<Outcome<{}>>;", row.name, forms.join(" | "), row.result);
+        let _ = writeln!(out, "  {}(args: {}): Promise<Outcome<{}>>;", method_name(row.name), forms.join(" | "), row.result);
     }
     out.push_str("  answer(args: Answer): Promise<Outcome<Empty>>;\n");
     out.push_str("  cancel(args: Cancel): Promise<Outcome<Empty>>;\n");

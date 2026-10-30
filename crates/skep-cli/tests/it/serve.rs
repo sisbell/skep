@@ -21,8 +21,12 @@
 //! and counted to the stop, the secret on no line, the preflight for the
 //! one origin and never `*`, the listener on 127.0.0.1 alone; F5 the signed
 //! mode — a content-scoped session, a publish-class write acked under the
-//! attest the provider composed, the same write refused under bare before
-//! any dial; F6 the fault doors under `dev-hooks` with `--own` in the
+//! attest the provider composed, the shot through the `publication` family
+//! and never as an `op` frame, the same write refused under bare before
+//! any dial; F5b the publication family over the bridge — the panel, the
+//! count, the confirm with its events and the feed row, the inert second
+//! confirm, the cancel, the mint form and `claim_refused`; F6 the fault
+//! doors under `dev-hooks` with `--own` in the
 //! signed mode, and `not_built_in` without; F7 the isolation, `cargo tree`
 //! naming no `skepd` without the
 //! feature and one with it; F8 the declarations served equal to the
@@ -922,11 +926,15 @@ fn f5_the_signed_mode_acks_a_publish_class_write() {
     // A content-scoped session: a credential deposit refuses `content_session`.
     let draft = signed.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}))["addr"].as_str().unwrap().to_string();
     signed.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}}));
-    let image = signed.result("op", json!({"session": session, "frame": skep_client::board::frames::image(&draft, 1, 3)}));
-    let run = &image["runs"][0];
-    let shot = signed.result("op", json!({"session": session, "frame": {"op": "publish", "doc": edition["addr"], "draft": draft, "runs": [{"origin": draft, "i_start": run["i_start"], "width": run["width"]}]}}));
-    assert_eq!(shot["resp"], "ack_addr", "the shot, attested: {shot}");
-    let read = signed.result("op", json!({"guest": true, "board": board, "frame": skep_client::board::frames::retrieve_v(shot["addr"].as_str().unwrap(), 1, 3)}));
+    // The shot crosses as `publication.confirm`, composed and attested by
+    // the provider's shell; a `publish` frame through `op` is refused as a
+    // call (client.md §4b.1, decision 1 (b)).
+    let through_op = signed.refused("op", json!({"session": session, "frame": {"op": "publish", "doc": edition["addr"], "draft": draft, "runs": []}}));
+    assert_eq!((through_op["name"].as_str(), through_op["op"].as_str()), (Some("publish_is_a_call"), Some("publish")), "{through_op}");
+    signed.result("publication.open", json!({"session": session, "draft": draft, "doc": edition["addr"], "readable_drafts": [draft], "published": [edition["addr"]]}));
+    let shot = signed.result("publication.confirm", json!({"session": session}));
+    assert_eq!((shot["outcome"].as_str(), shot["via"].as_str()), (Some("acknowledged"), Some("answer")), "the shot, attested: {shot}");
+    let read = signed.result("op", json!({"guest": true, "board": board, "frame": skep_client::board::frames::retrieve_v(shot["member"].as_str().unwrap(), 1, 3)}));
     assert_eq!(read["items"][0]["content"], "abc");
     signed.result("close", json!({"session": session}));
     assert_eq!(signed.stop(), 0);
@@ -951,6 +959,116 @@ fn f5_the_signed_mode_acks_a_publish_class_write() {
     assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stderr).contains("no_key"), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(out.stdout.is_empty(), "no secret printed before serving");
+    sd.shutdown();
+}
+
+/// F5b: the publication family over the bridge, against the real daemon.
+///
+/// A draft with text, a citation of the person's in a notes draft on those
+/// words, a published set the edition is read with: `publication.open`
+/// answers the panel — the notes row OFF with its one link, the counts at
+/// the default, `windows` empty, the price under its caps — and
+/// `publication.count` with the row ON counts ⟨l⟩ one up with no dial;
+/// `publication.confirm` is acknowledged `{member, at, via: answer}` with
+/// the `publication` event's `sent` then `acknowledged`, and the feed row's
+/// `docs` name the member, the draft and the notes; a second `open` finds no
+/// window and its `confirm` is `inert: unchanged`; a `confirm` with no panel
+/// is `no_panel`; `cancel` twice answers `{}` twice; a `publish` frame
+/// through `op` is `publish_is_a_call`; the mint form with `claim` mints the
+/// edition's first member with `claim: true`; a second claim into it is
+/// `claim_refused` naming the edition, the board's position unmoved —
+/// crossing as answered, nothing re-sent. The stopped node's refusal needs
+/// the node the shell owns, which this provider dials and does not own: it
+/// is the shell's own suite's cell.
+#[test]
+fn f5b_the_publication_family_over_the_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let store = dir.path().join("claimant");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    let signed = Provider::start(&["--board", &board_origin, "--session", "signed", "--principal", "1", "--dir", s(&store)]);
+    let rx = signed.events();
+    let board = signed.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
+    let session = signed.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
+    let op = |frame: Value| signed.result("op", json!({"session": session, "frame": frame}));
+    let addr = |frame: Value| op(frame)["addr"].as_str().unwrap().to_string();
+    let draft_of = |text: &str| {
+        let d = addr(json!({"op": "create_new_document", "account": "1.0.1"}));
+        op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text]}));
+        d
+    };
+    let position = || signed.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
+    let edition = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = draft_of("the quick brown fox");
+    let notes = draft_of("notes here");
+    let set = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let citation = "1.1.0.1.0.1.0.3.13";
+    let link = addr(json!({"op": "make_link", "home": notes, "from": [{"source": draft, "span": {"start": "1.5", "width": "0.5"}}], "to": {"addrs": []}, "ty": {"addrs": [citation]}}));
+    addr(json!({"op": "make_link", "home": set, "from": {"addrs": [edition]}, "to": {"addrs": [set]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.71"]}}));
+    // THE PANEL.
+    let inputs = json!({"session": session, "draft": draft, "doc": edition, "notes": [notes], "readable_drafts": [draft, notes], "published": [edition, set]});
+    let panel = signed.result("publication.open", inputs.clone());
+    let rows = panel["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{panel}");
+    assert_eq!((rows[0]["home"].as_str(), rows[0]["kind"].as_str(), rows[0]["links"].clone()), (Some(notes.as_str()), Some("notes"), json!([link])), "{panel}");
+    assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "{panel}");
+    assert_eq!((panel["windows"].clone(), panel["read_with"].clone(), panel["price"]["over"].clone()), (json!([]), json!({set.clone(): true}), json!([])), "{panel}");
+    // THE COUNT with the row ON: ⟨l⟩ one up, no dial.
+    let log_before = signed.get("/bridge/log").2.len();
+    let counted = signed.result("publication.count", json!({"session": session, "switches": {"on": [notes]}}));
+    assert_eq!(counted["count"]["l"], 1, "{counted}");
+    let (_, _, log) = signed.get("/bridge/log");
+    let log: Value = serde_json::from_slice(&log).unwrap();
+    let dials_after_count = log.as_array().unwrap().iter().rev().take_while(|e| e["call"] != "publication.open").filter(|e| e["kind"] == "dial").count();
+    assert_eq!(dials_after_count, 0, "the count is pure local: {} bytes of log before, no dial after the open", log_before);
+    // THE CONFIRM: acknowledged, the two events, the feed row.
+    let before = position();
+    let acked = signed.result("publication.confirm", json!({"session": session, "switches": {"on": [notes]}}));
+    let member = format!("{edition}.1");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str(), acked["claim"].as_bool()), (Some("acknowledged"), Some(member.as_str()), Some("answer"), Some(false)), "{acked}");
+    let at = acked["at"].as_u64().unwrap();
+    assert!(at > before);
+    let sent = next_event(&rx, "publication", |v| v["state"] == "sent");
+    assert_eq!((sent["draft"].as_str(), sent["session"].as_str(), sent["board"].as_str()), (Some(draft.as_str()), Some(session.as_str()), Some(board.as_str())), "{sent}");
+    let acknowledged = next_event(&rx, "publication", |v| v["state"] == "acknowledged");
+    assert_eq!((acknowledged["member"].as_str(), acknowledged["at"].as_u64()), (Some(member.as_str()), Some(at)), "{acknowledged}");
+    let page = signed.result("changes", json!({"session": session, "since": at - 1, "limit": 1}));
+    let row = &page["entries"][0];
+    let docs: Vec<&str> = row["docs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(row["op"] == "publish" && docs[0] == member && docs.contains(&draft.as_str()) && docs.contains(&notes.as_str()), "the feed row names the member, the draft and the notes: {row}");
+    let read = signed.result("op", json!({"guest": true, "board": board, "frame": skep_client::board::frames::retrieve_v(&member, 1, 19)}));
+    assert_eq!(read["items"][0]["content"], "the quick brown fox");
+    // The second open: no window, nothing to publish.
+    let again = signed.result("publication.open", inputs);
+    assert_eq!(again["windows"], json!([]), "{again}");
+    let inert = signed.result("publication.confirm", json!({"session": session}));
+    assert_eq!(inert, json!({"outcome": "refused", "arm": "inert", "inert": "unchanged"}));
+    // The cancel, twice; then no panel.
+    assert_eq!(signed.result("publication.cancel", json!({"session": session})), json!({}));
+    assert_eq!(signed.result("publication.cancel", json!({"session": session})), json!({}));
+    assert_eq!(signed.refused("publication.confirm", json!({"session": session}))["name"], "no_panel");
+    assert_eq!(signed.refused("publication.count", json!({"session": session}))["name"], "no_panel");
+    // A publish frame through op.
+    let through_op = signed.refused("op", json!({"session": session, "frame": {"op": "publish", "doc": edition, "draft": draft, "runs": []}}));
+    assert_eq!(through_op["name"], "publish_is_a_call", "{through_op}");
+    // THE MINT FORM with the claim.
+    let free = draft_of("a free-standing draft");
+    signed.result("publication.open", json!({"session": session, "draft": free, "mint": "1.0.1", "claim": true, "readable_drafts": [free], "published": [edition, set]}));
+    let minted = signed.result("publication.confirm", json!({"session": session}));
+    let new_edition = minted["edition"].as_str().expect("the edition minted").to_string();
+    assert_eq!((minted["outcome"].as_str(), minted["member"].as_str(), minted["claim"].as_bool()), (Some("acknowledged"), Some(format!("{new_edition}.1").as_str()), Some(true)), "{minted}");
+    // A second claim into that edition: refused by the board, nothing
+    // re-sent, the board unmoved.
+    let another = draft_of("another draft");
+    signed.result("publication.open", json!({"session": session, "draft": another, "doc": new_edition, "claim": true, "readable_drafts": [another], "published": [edition, set, new_edition]}));
+    let before = position();
+    let refused = signed.result("publication.confirm", json!({"session": session}));
+    assert_eq!(refused, json!({"outcome": "refused", "arm": "claim_refused", "edition": new_edition}), "{refused}");
+    assert_eq!(position(), before, "the refusal commits nothing, and nothing is re-sent");
+    next_event(&rx, "publication", |v| v["state"] == "refused" && v["arm"] == "claim_refused");
+    signed.result("close", json!({"session": session}));
+    assert_eq!(signed.stop(), 0);
     sd.shutdown();
 }
 

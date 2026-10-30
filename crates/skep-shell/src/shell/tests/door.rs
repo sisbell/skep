@@ -63,8 +63,9 @@ fn every_call_is_named_by_its_own_spelling() {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[23]), (24, "boards", "changes"));
-    assert_eq!((CALLS[19], CALLS[20]), ("search", "places"));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[27]), (28, "boards", "changes"));
+    assert_eq!((CALLS[23], CALLS[24]), ("search", "places"));
+    assert_eq!(&CALLS[16..20], ["publication.open", "publication.count", "publication.confirm", "publication.cancel"], "the publication family stands after `op`, whose publish arm it carries");
     assert_eq!(Call::named("verify"), None);
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
     let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));
@@ -113,7 +114,7 @@ fn a_board_listed_twice_is_the_callers_bug() {
 }
 
 /// Returns an origin nothing answers at: a port bound and let go.
-fn nowhere() -> String {
+pub(super) fn nowhere() -> String {
     let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
     format!("http://127.0.0.1:{port}")
 }
@@ -187,6 +188,8 @@ fn every_declared_optional_argument_is_read_in_its_form() {
     let in_no_form = |field: &Field| match field.ty {
         "string" => json!(7),
         "string[]" => json!([7]),
+        // An object-typed member in no form: a string where an object or a
+        // list of objects is declared.
         _ => json!("x"),
     };
     let mut asked = 0;
@@ -204,7 +207,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 22, "the optional members of the eleven rows of one form that declare any");
+    assert_eq!(asked, 33, "the optional members of the fourteen rows of one form that declare any: the publication family's eleven among them");
 }
 
 /// Checks that a guest search reads the board its reference or origin names.
@@ -468,7 +471,7 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
 /// the blank line, its body as long as its `Content-Length` says — keeps the
 /// body's JSON, and drops the connection: a board that answers nothing and
 /// says what frames reached it.
-fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
+pub(super) fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let frames = Arc::new(Mutex::new(Vec::new()));

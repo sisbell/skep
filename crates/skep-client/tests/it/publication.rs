@@ -160,7 +160,7 @@ fn first_shot(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_
     let runs = [frames::shot_run(&d, &im[0].0, im[0].1)];
     let pieces: Vec<[u8; 1]> = text.bytes().map(|b| [b]).collect();
     let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), None);
-    let mut frame = frames::publish(doc, None, Some(&d), &runs, None, None);
+    let mut frame = frames::publication(&frames::PublishFrame { doc: Some(doc), draft: Some(&d), runs: &runs, ..frames::PublishFrame::default() });
     frame["attest"] = attest(board, signer, &addr(doc), &body);
     acked_addr(&acked(session.op(&frame))).expect("the member").to_string()
 }
@@ -420,6 +420,10 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     let jobs: Vec<String> = pn.formatting.job_list().iter().map(|r| r.mark.to_string()).collect();
     assert_eq!(jobs, vec![seeded.mpub.clone()]);
     assert_eq!(pn.read_with, BTreeMap::from([(addr(s), true), (addr(s2), false)]));
+    // The one window: the run onto `O`, the person's own unpublished origin,
+    // with no counterpart (no record of a draft the person reads names it).
+    assert_eq!(pn.windows.len(), 1, "{:?}", pn.windows);
+    assert_eq!((pn.windows[0].run, pn.windows[0].origin.to_string(), pn.windows[0].owner.as_str(), pn.windows[0].i_start, pn.windows[0].width, pn.windows[0].counterpart.is_none()), (2, o.clone(), ACCOUNT, 1, 5, true));
     let c = count(&pn, &confirmed(&seeded).switches, &inputs);
     assert_eq!((c.l, c.n, c.r, c.e, c.claim, c.read_with.clone()), (3, 2, 1, 0, false, vec![addr(s2)]));
 

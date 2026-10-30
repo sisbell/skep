@@ -20,11 +20,15 @@
 //!   "re-inserted as fresh identity under `doc`'s own I-space" and a guest
 //!   reads them (the search suite's `published()` form — never the budgets
 //!   harness's `publish_windows`, whose runs stay windows a guest meets as
-//!   `withheld`); attested over `entry_body_publish`: one value per byte for
-//!   every run the commit copies in — the document's own I-space placed by
-//!   reference and the draft's re-inserted — a window for a run onto any
-//!   other document, signed by where it quotes from, and the base group
-//!   where `base` and `base_extent` are named ("either both or neither");
+//!   `withheld`); its frame through skep-client's one request builder
+//!   (`frames::publication`, no deposit) and its body through the one body
+//!   builder (`entry_body_publication` over `entry_body_publish`'s shot,
+//!   which a request carrying no deposit spells byte for byte): one value
+//!   per byte for every run the commit copies in — the document's own
+//!   I-space placed by reference and the draft's re-inserted — a window for
+//!   a run onto any other document, signed by where it quotes from, and the
+//!   base group where `base` and `base_extent` are named ("either both or
+//!   neither");
 //! * the attested `make_link` — the from-end a V-spec the tool resolves
 //!   through `image` "against the base the transaction will take" into the
 //!   I-extent spans the daemon stores (the daemon suite's `extent_span`:
@@ -70,8 +74,9 @@ use skep_client::dial::DialError;
 use skep_client::sign::{sig_hex, Signer};
 use skep_client::Halt;
 use skep_identity::{
-    entry_body_empty, entry_body_make_link, entry_body_publish, entry_frame, unit_span, BoardTerm,
-    ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots, ShotBase, ShotSegmentPiece,
+    entry_body_empty, entry_body_make_link, entry_body_publication, entry_body_publish, entry_frame,
+    unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots, ShotBase,
+    ShotSegmentPiece,
 };
 
 use crate::shared::clipped;
@@ -663,13 +668,19 @@ impl<'b> Writer<'b> {
         let member = base.map(|(m, _)| address(m)).transpose()?;
         let shot_base =
             base.zip(member.as_ref()).map(|((_, extent), member)| ShotBase { member, extent });
-        let body = entry_body_publish(pieces, shot_base);
-        let runs: Vec<Value> = placed.iter().map(|p| json!({"origin": p.run.origin, "i_start": p.run.i_start, "width": p.run.width.to_string()})).collect();
-        let mut frame = json!({"op": "publish", "doc": doc, "draft": draft, "runs": runs});
-        if let Some((member, extent)) = base {
-            frame["base"] = Value::String(member.to_string());
-            frame["base_extent"] = Value::String(extent.to_string());
-        }
+        // The one body builder and the one frame builder every shot goes
+        // through — the shell's and the merge landing's: a request carrying
+        // no deposit spells today's body and frame byte for byte.
+        let body = entry_body_publication(entry_body_publish(pieces, shot_base), &[]);
+        let runs: Vec<Value> =
+            placed.iter().map(|p| frames::shot_run(&p.run.origin, &p.run.i_start, p.run.width)).collect();
+        let mut frame = frames::publication(&frames::PublishFrame {
+            doc: Some(doc),
+            draft: Some(draft),
+            base,
+            runs: &runs,
+            ..frames::PublishFrame::default()
+        });
         frame["attest"] = self.attest(doc, &body)?;
         let v = self.write(frame, id)?;
         minted(&v)

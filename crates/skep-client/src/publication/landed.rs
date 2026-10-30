@@ -370,7 +370,7 @@ fn test_member(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &Add
             return Ok(Verdict::Anothers { member: member.clone(), missing: Missing::Retraction(index) });
         }
     }
-    Ok(Verdict::Passed(Ack { member: member.clone(), at, edition, via }))
+    Ok(Verdict::Passed(Ack { member: member.clone(), at, edition, via, claim: request.claim }))
 }
 
 /// Returns whether `image` holds `runs` over the member's placed positions:

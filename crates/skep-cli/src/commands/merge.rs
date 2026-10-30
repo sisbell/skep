@@ -330,7 +330,8 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// refusal is named for, its detail the refusal's own words — the side
 /// whose base cannot be read, the second draft, a fork's bare source and a
 /// base named for a fork, which the library refuses before any image, among
-/// them, under their own names.
+/// them, under their own names; the unowned draft side under `not_owner`,
+/// its detail naming the draft.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -344,6 +345,7 @@ fn refused(r: Refusal) -> Stop {
         Refusal::HistoryBusy => "history_busy",
         Refusal::OverCap { .. } => "too_many_runs",
         Refusal::NeedsSignedSession => "signed_session_required",
+        Refusal::UnownedDraft { .. } => "not_owner",
     };
     match r {
         Refusal::Halt(h) => Stop::Halt(h),

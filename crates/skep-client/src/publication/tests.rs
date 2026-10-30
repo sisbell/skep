@@ -155,6 +155,8 @@ struct World {
     drop_acks: usize,
     /// The next N `find_links_v` answer `503 scan_busy`.
     busy: usize,
+    /// The next N `doc_metadata` answer `503 history_busy`.
+    history_busy: usize,
     /// `image` refuses `image_too_large` past this many runs.
     image_cap: usize,
     /// `/health` names a claimant.
@@ -362,6 +364,10 @@ impl World {
                 Ok(reply(200, json!({"resp": "key_set", "as_of": position, "retired": [], "enrolled": [{"alg": key.alg(), "key": key.to_hex(), "fingerprint": skep_identity::Fingerprint::of(&key).to_hex(), "anchor": false}]})))
             }
             "doc_metadata" => {
+                if self.history_busy > 0 {
+                    self.history_busy -= 1;
+                    return Ok(reply(503, json!({"error": "history_busy", "detail": "the reconstruction pool is full; retry shortly", "op": "doc_metadata"})));
+                }
                 let doc = frame["doc"].as_str().unwrap();
                 let Some(d) = self.docs.get(doc).cloned() else { return Ok(rejected("doc_not_registered", json!({}))) };
                 if !self.readable(doc) {
@@ -1030,7 +1036,9 @@ fn the_filter_drops_only_on_both_keys_of_the_persons_own_claim() {
 }
 
 /// A `scan_busy` on the region read is reissued under a short backoff and
-/// answered; past the bound the step halts `Busy`, nothing written.
+/// answered; past the bound the step halts `Busy`, nothing written. A
+/// `history_busy` on a read is reissued at the same door under the same
+/// bound — the panel's metadata read here — and halts `Busy` past it.
 #[test]
 fn a_busy_region_read_is_reissued_and_halts_past_the_bound() {
     let (world, _) = World::base();
@@ -1042,6 +1050,18 @@ fn a_busy_region_read_is_reissued_and_halts_past_the_bound() {
     assert_eq!(e.frames[1], ("find_links_v", 3), "two refusals and the answer");
     dialer.world().busy = SCAN_BUSY_REISSUES as usize + 1;
     assert_eq!(enumerate(&p, &inputs()).unwrap_err(), Fault::Busy);
+    // `history_busy` at the same door: the panel's first metadata read
+    // refused twice, then answered; past the bound, `Busy`.
+    dialer.world().busy = 0;
+    let e = enumerate(&p, &inputs()).expect("enumerated");
+    dialer.world().history_busy = 2;
+    dialer.clear();
+    let pn = panel(&p, &inputs(), &e).expect("the panel, its busy read reissued");
+    assert!(!pn.rows.is_empty());
+    let metadata_frames = dialer.frames("doc_metadata");
+    assert!(metadata_frames.len() >= 3 && metadata_frames[0]["doc"] == metadata_frames[1]["doc"] && metadata_frames[1]["doc"] == metadata_frames[2]["doc"], "the one read reissued twice: {metadata_frames:?}");
+    dialer.world().history_busy = SCAN_BUSY_REISSUES as usize + 1;
+    assert_eq!(panel(&p, &inputs(), &e).unwrap_err(), Fault::Busy, "past the bound, as scan_busy");
 }
 
 /// A held run the draft no longer arranges whole is the first
@@ -1096,7 +1116,7 @@ fn the_panel_orders_the_rows_and_counts_each_line() {
     assert_eq!(panel.formatting.job_list().len(), 2);
     assert_eq!(panel.read_with, BTreeMap::from([(a(S), true), (a(S2), false)]));
     let steps: Vec<&str> = panel.frames.iter().map(|(s, _)| *s).collect();
-    assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with"], "the formatting line's test sends no frame");
+    assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with", "windows"], "the formatting line's test sends no frame; the windows read last");
 }
 
 /// THE COUNT (PUB-3.8): ⟨l⟩ the switched-on sets' entries plus the read-with
@@ -1182,7 +1202,7 @@ fn the_document_form_sends_the_claim_homed_in_the_trunk_and_maps_its_refusal() {
     let panel2 = super::panel::panel(&p2, &birth, &e2).unwrap();
     let Built::Request(mut request2) = build(&p2, &birth, &e2, &panel2, &switched(None)).unwrap() else { panic!() };
     let Sent::Acknowledged(ack) = send(&p2, &birth, &mut request2).unwrap() else { panic!() };
-    assert_eq!(ack.member.to_string(), format!("{E}.1"));
+    assert_eq!((ack.member.to_string(), ack.claim), (format!("{E}.1"), true), "the acknowledgment echoes the request's claim");
     assert!(dialer2.world().links.iter().any(|l| l.home == E && l.ty[0].0 == T_EDITION && l.to[0].0 == D), "the claim homed in the edition named, to the draft");
 }
 
@@ -1377,6 +1397,12 @@ fn the_three_answers_and_the_counterpart_first() {
     let inputs = inputs();
     let e = enumerate(&p, &inputs).unwrap();
     let panel = panel(&p, &inputs, &e).unwrap();
+    // THE WINDOWS are the panel's: the one run onto `O`, the person's own
+    // unpublished origin, its owner and where in `O` it was written, no
+    // counterpart (no record of a draft the person reads names its words).
+    assert_eq!(panel.windows.len(), 1, "{:?}", panel.windows);
+    assert_eq!((panel.windows[0].run, panel.windows[0].origin.to_string(), panel.windows[0].owner.as_str(), panel.windows[0].i_start, panel.windows[0].width), (2, O.to_string(), ACCOUNT, 1, 5));
+    assert_eq!(panel.windows[0].counterpart, None);
     let mut confirmed = switched(None);
     confirmed.answers.clear();
     assert_eq!(build(&p, &inputs, &e, &panel, &confirmed).unwrap(), Built::Inert(Inert::Unanswered(vec![2])));
@@ -1390,16 +1416,27 @@ fn the_three_answers_and_the_counterpart_first() {
     assert_eq!((kept.runs.len(), kept.places[2]), (3, None));
     assert!(matches!(kept.pieces[2], Piece::Window { .. }));
     // The counterpart: O published before as E's words 16..19 (a record in O).
+    // It is read at the PANEL — the windows step, one four-set over the record
+    // class homed in O — and the request takes it as given: no read of O at
+    // the build.
     let (mut world, _) = World::base();
     let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 16, 4)], T_CORRESPONDENCE);
-    let (_, board, signer) = open(world);
+    let (dialer, board, signer) = open(world);
     let p = publisher(&board, &tok, &signer);
     let mut with_o = inputs.clone();
     with_o.readable_drafts.push(a(O));
     let e = enumerate(&p, &with_o).unwrap();
     let panel = super::panel::panel(&p, &with_o, &e).unwrap();
+    let counterpart = panel.windows[0].counterpart.as_ref().expect("the counterpart offered at the panel");
+    assert_eq!((counterpart.run, counterpart.record.to_string(), counterpart.to.first, counterpart.to.width), (2, record.clone(), 16, 4));
+    assert!(panel.frames.iter().any(|(step, _)| *step == "windows"), "the windows are a step of the panel: {:?}", panel.frames);
+    let reads_o = |frames: &[Value]| frames.iter().filter(|f| f["q"]["home"][0]["start"].as_str() == Some(O)).count();
+    assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 1, "one four-set homed in O at the panel");
+    dialer.clear();
     confirmed.answers.insert(2, OriginAnswer::KeepPrivate);
     let Built::Request(offered) = build(&p, &with_o, &e, &panel, &confirmed).unwrap() else { panic!() };
+    assert_eq!(reads_o(&dialer.frames("find_links_ftt")), 0, "the build reads no counterpart of its own: {:?}", dialer.ops());
+    assert!(dialer.frames("doc_metadata").iter().all(|f| f["doc"].as_str() != Some(O)), "nor O's state: {:?}", dialer.ops());
     assert_eq!(offered.counterparts.len(), 1);
     assert_eq!((offered.counterparts[0].run, offered.counterparts[0].record.to_string(), offered.counterparts[0].to.first, offered.counterparts[0].to.width), (2, record.clone(), 16, 4));
     confirmed.answers.insert(2, OriginAnswer::Counterpart);
@@ -1464,7 +1501,7 @@ fn the_send_is_acknowledged_and_the_commit_holds_every_deposit() {
     dialer.clear();
     let sent = send(&p, &inputs(), &mut request).expect("sent");
     let Sent::Acknowledged(ack) = &sent else { panic!("{sent:?}") };
-    assert_eq!((ack.member.to_string(), ack.via, ack.edition.clone()), (format!("{E}.2"), AckVia::Answer, None));
+    assert_eq!((ack.member.to_string(), ack.via, ack.edition.clone(), ack.claim), (format!("{E}.2"), AckVia::Answer, None, false));
     let frames = dialer.frames("publish");
     assert_eq!(frames.len(), 1);
     assert!(frames[0]["attest"].is_object() && frames[0]["id"] == request.id);
@@ -1663,7 +1700,7 @@ fn the_landed_test_passes_or_names_what_the_member_lacks() {
     let p = publisher(&board, &tok, &signer);
     let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!() };
     let member = ack.member.clone();
-    assert_eq!(landed(&p, &inputs(), &request, Base::Member(member.clone())).unwrap(), Verdict::Passed(Ack { member: member.clone(), at: ack.at, edition: None, via: AckVia::Twin }));
+    assert_eq!(landed(&p, &inputs(), &request, Base::Member(member.clone())).unwrap(), Verdict::Passed(Ack { member: member.clone(), at: ack.at, edition: None, via: AckVia::Twin, claim: false }));
     assert!(matches!(landed(&p, &inputs(), &request, Base::Walk).unwrap(), Verdict::Passed(Ack { via: AckVia::Walk, .. })), "the walk from the base finds the trunk's next member");
     // The twin: a re-send meets the fence and reads the refusal as the ack.
     dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "already_published", "disposition": "permanent", "op": "publish", "site": {"addr": member.to_string()}}));
@@ -1717,7 +1754,7 @@ fn the_mint_form_mints_the_edition_and_its_lost_answer_is_read_through_the_claim
     dialer.clear();
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!() };
     let edition = ack.edition.clone().expect("the edition minted");
-    assert_eq!(ack.member.to_string(), format!("{edition}.1"));
+    assert_eq!((ack.member.to_string(), ack.claim), (format!("{edition}.1"), true), "the member, and the claim echoed");
     assert!(dialer.world().links.iter().any(|l| l.home == edition.to_string() && l.ty[0].0 == T_EDITION && l.to[0].0 == D), "the claim homed in the edition, to the draft");
     // Lost at a records-less minting request — every run a window, no
     // entry — the claim read from D names the edition.

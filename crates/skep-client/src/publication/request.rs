@@ -51,14 +51,14 @@ use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind,
 
 use crate::address::parse_address;
 use crate::board::answers::LinkSpan;
-use crate::board::frames::{self, PublishFrame, Slot, T_CORRESPONDENCE, T_EDITION, T_READ_WITH};
+use crate::board::frames::{self, PublishFrame, T_EDITION, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
 use super::enumerate::{enumerate_with, Enumeration, Placement, Record};
-use super::landed::{read_record, twin_precheck_with};
-use super::panel::{count, panel_with, Count, Destination, Panel, RowKind};
+use super::landed::twin_precheck_with;
+use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, RowKind};
 use super::price::{self, EndShape, EntryShape, Price, Shape};
-use super::{canonical_member_spans, fresh_id, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
+use super::{canonical_member_spans, fresh_id, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// The caller's answer at a window onto their own unpublished origin, or
 /// onto words a counterpart record names.
@@ -73,22 +73,6 @@ pub enum Answer {
     /// Take the counterpart: the run re-composed by reference to the
     /// record's published words.
     Counterpart,
-}
-
-/// The counterpart offered first at a window onto a draft the person reads:
-/// a record of that draft names the run's words as published.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Counterpart {
-    /// The run's index in the selection.
-    pub run: usize,
-    /// The draft the record is homed in.
-    pub draft: Address,
-    /// The record.
-    pub record: Address,
-    /// The part of the run the record covers, on the run's own chain.
-    pub from: ISpan,
-    /// The published span that part became.
-    pub to: ISpan,
 }
 
 /// What the caller confirmed.
@@ -569,10 +553,12 @@ pub enum Built {
 
 /// Builds the request from the confirmed rows over the re-read's answer.
 ///
+/// The windows and their counterparts are the panel's, taken as given
+/// (`panel::windows`): nothing is read of an origin here.
+///
 /// # Errors
 ///
-/// The reads' faults: the origins' metadata, the counterpart reads, the twin
-/// pre-check, the values, the base's image.
+/// The reads' faults: the twin pre-check, the values, the base's image.
 pub fn build(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
     let door = Door::new(p.board, p.token);
     build_with(&door, p, inputs, e, panel, confirmed)
@@ -580,7 +566,6 @@ pub fn build(p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel,
 
 /// Builds the request through `door`.
 pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e: &Enumeration, panel: &Panel, confirmed: &Confirmed) -> Result<Built, Fault> {
-    door.step("origins");
     let trunk = inputs.doc.clone();
     // The runs as placed, each with its kept place and its place in the draft.
     let mut runs: Vec<Run> = Vec::new();
@@ -589,8 +574,6 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     let mut unanswered = Vec::new();
     let mut publish_first = Vec::new();
     let mut counterparts: Vec<Counterpart> = Vec::new();
-    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
-    let subtype = unit(T_CORRESPONDENCE);
     for (i, run) in inputs.selection.iter().enumerate() {
         let pieces: Vec<(Run, u64)> = match e.placed.get(i) {
             Some(Placement::Whole { ordinal }) => vec![(run.clone(), *ordinal)],
@@ -607,22 +590,12 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             }
             continue;
         }
-        // A window. Onto the person's own unpublished origin: an answer owed.
-        let origin = run.origin.to_string();
-        let own_unpublished = owned_by(&origin, p.account) && !door.metadata(&origin)?.published;
-        // The counterpart first, at a window onto a draft the person reads.
-        let mut counterpart: Option<Counterpart> = None;
-        if inputs.readable_drafts.contains(&run.origin) {
-            let span = [frames::i_span(&run.i_start_text(), run.width)];
-            for hit in door.addrs(&origin, &frames::find_links_four(Slot::Spans(&unit(&origin)), Slot::Spans(&span), Slot::Any, Slot::Spans(&subtype)))? {
-                if let Some(record) = read_record(door, p, &hit)? {
-                    if let (Some((lo, hi)), Some(to)) = (record.from.overlap(&run.chain(), run.i_start, run.reach()), record.map(&run.chain(), run.i_start, run.reach())) {
-                        counterpart = Some(Counterpart { run: i, draft: run.origin.clone(), record: record.link.clone(), from: ISpan { chain: run.chain(), first: lo, width: hi - lo }, to });
-                        break;
-                    }
-                }
-            }
-        }
+        // A window. Onto the person's own unpublished origin — one the panel's
+        // windows name — an answer is owed; the counterpart is the window's,
+        // offered first where the panel read one.
+        let window = panel.windows.iter().find(|w| w.run == i);
+        let own_unpublished = window.is_some();
+        let counterpart: Option<Counterpart> = window.and_then(|w| w.counterpart.clone());
         let answer = confirmed.answers.get(&i).copied();
         if let Some(c) = &counterpart {
             counterparts.push(c.clone());

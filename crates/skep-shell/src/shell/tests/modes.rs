@@ -283,16 +283,19 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
         panic!("a page of the guest feed")
     };
     assert_eq!(page.changes.first(), Some(&row), "the update is the guest feed's row, verbatim: {update}");
-    // A draft, filled, then the shot into the edition: the body read back.
+    // A draft, filled, then the shot into the edition through the
+    // publication family — a `publish` frame through `op` is refused as a
+    // call (§4b.1) — the body read back.
     let draft = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
     signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}})).unwrap();
-    let image = signed.call("op", &json!({"session": session, "frame": skep_client::board::frames::image(&draft, 1, 3)})).unwrap();
-    let run = &image["runs"][0];
-    let shot = signed
-        .call("op", &json!({"session": session, "frame": {"op": "publish", "doc": doc, "draft": draft, "runs": [{"origin": draft, "i_start": run["i_start"], "width": run["width"]}]}}))
+    let through_op = signed.call("op", &json!({"session": session, "frame": {"op": "publish", "doc": doc, "draft": draft, "runs": []}})).unwrap_err();
+    assert_eq!(through_op.name(), "publish_is_a_call", "{through_op}");
+    signed
+        .call("publication.open", &json!({"session": session, "draft": draft, "doc": doc, "readable_drafts": [draft], "published": [doc]}))
         .unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
-    assert_eq!(shot["resp"], "ack_addr", "{shot}");
-    let member = shot["addr"].as_str().unwrap();
+    let shot = signed.call("publication.confirm", &json!({"session": session})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(shot["outcome"], "acknowledged", "{shot}");
+    let member = shot["member"].as_str().unwrap();
     let read = signed.call("op", &json!({"guest": true, "board": board, "frame": skep_client::board::frames::retrieve_v(member, 1, 3)})).unwrap();
     assert_eq!(read["items"][0]["content"], "abc");
     // A link homed in the edition, the from-end a V-spec: attested too.
@@ -364,6 +367,18 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     let write = |frame: Value| -> Value { signed.call("op", &json!({"session": signed_session, "frame": frame})).unwrap_or_else(|r| panic!("{r}\n{}", talk())) };
     let addr = |v: Value| v["addr"].as_str().unwrap_or_else(|| panic!("no addr: {v}")).to_string();
     let first_run = |doc: &str, width: u64| write(skep_client::board::frames::image(doc, 1, width))["runs"][0].clone();
+    // A shot crosses the shell as `publication.confirm`, never as an `op`
+    // frame (§4b.1): the composer's publish arm is reached here through the
+    // session's own attest and the hold's one path, so its body is still
+    // the daemon's to judge.
+    let entry = signed.sessions.get(&signed_session).unwrap();
+    let shot = |frame: Value| -> Value {
+        let attested = entry.attest(&signed.store, &frame).unwrap_or_else(|e| panic!("{e}\n{}", talk())).into_owned();
+        match signed.holds.send(&entry, attested) {
+            crate::hold::OpAnswer::Answered(Ok(v)) => v,
+            other => panic!("the shot: {other:?}\n{}", talk()),
+        }
+    };
     // An edition born of a draft of `text` by its shot: (the edition, the
     // draft, the member).
     let edition = |text: &str| -> (String, String, String) {
@@ -371,7 +386,7 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         let draft = addr(write(json!({"op": "create_new_document", "account": "1.0.1"})));
         write(json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [text]}));
         let run = first_run(&draft, text.len() as u64);
-        let member = addr(write(json!({"op": "publish", "doc": doc, "draft": draft, "runs": [{"origin": draft, "i_start": run["i_start"], "width": run["width"]}]})));
+        let member = addr(shot(json!({"op": "publish", "doc": doc, "draft": draft, "runs": [{"origin": draft, "i_start": run["i_start"], "width": run["width"]}]})));
         (doc, draft, member)
     };
     let (doc, draft, member) = edition("abc");
@@ -381,11 +396,15 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     let link_to = |to: &String| addr(write(json!({"op": "make_link", "home": doc, "from": {"addrs": [member]}, "to": {"addrs": [to]}, "ty": {"addrs": [citation]}})));
     let [edited, retracted, old, new, resolved] = [&draft, &doc, &other, &other_member, &member].map(link_to);
     let vspec = |start: &str| json!({"source": member, "span": {"start": start, "width": "0.1"}});
+    // The shot with a base group and a window segment: judged under the bare
+    // session as every kind is, and acked through the composer's publish
+    // arm — `op` refuses the frame as a call before any dial.
+    let with_base = json!({"op": "publish", "doc": doc, "base": member, "base_extent": "3", "runs": [{"origin": doc, "i_start": member_run["i_start"], "width": "3"}, {"origin": other_member, "i_start": other_run["i_start"], "width": "2"}]});
+    bare_write("a shot with a base and a window", &with_base);
+    assert_eq!(signed.call("op", &json!({"session": signed_session, "frame": with_base})).unwrap_err().name(), "publish_is_a_call");
+    let acked = shot(with_base);
+    assert_eq!(acked["resp"], "ack_addr", "a shot with a base and a window: {acked}");
     let cells = [
-        (
-            "a shot with a base and a window",
-            json!({"op": "publish", "doc": doc, "base": member, "base_extent": "3", "runs": [{"origin": doc, "i_start": member_run["i_start"], "width": "3"}, {"origin": other_member, "i_start": other_run["i_start"], "width": "2"}]}),
-        ),
         ("fork", json!({"op": "fork", "published": true})),
         ("version", json!({"op": "version", "d_src": doc})),
         ("nullify", json!({"op": "nullify", "home": doc, "target": retracted})),

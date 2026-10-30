@@ -719,13 +719,15 @@ each ceremony:
   COMPOSITION, a draft's one `publish` request as one composition family
   (P28): `publication.rs` the module, the reading door and the shared
   types; `publication/enumerate.rs` the enumeration; `publication/panel.rs`
-  the panel's data and the count; `publication/price.rs` the price against
-  the caps; `publication/request.rs` the re-read and the request;
-  `publication/send.rs` the send and the refusal family;
+  the panel's data, the count and the own-origin windows with their
+  counterparts; `publication/price.rs` the price against the caps;
+  `publication/request.rs` the re-read and the request, the windows taken
+  as given; `publication/send.rs` the send and the refusal family;
   `publication/landed.rs` the twin pre-check and the landed test — its unit
   suite in `publication/tests.rs` over a scripted board, its daemon suite in
-  `tests/it/publication.rs`. The merge landing builds its bare shot through
-  the request builder.
+  `tests/it/publication.rs`. Every shot goes through the one request frame
+  builder, `board/frames.rs`'s `publication`: the shell's, the merge
+  landing's bare shot and the dev board's.
 
 Rules that hold across its files:
 
@@ -770,8 +772,9 @@ SP-17, SP-18, SP-20, SP-24, SP-28.
 ## The shell's core, `skep-shell`
 
 `skep-shell` is the bridge of `client.md` §4b as a library — one method
-per call of §4b.1, of the document index's listing `places` (A-255) and of
-the change feed's page `changes`, every event of §4b.2 on one stream — and
+per call of §4b.1 (the `publication` family's four among them), of the
+document index's listing `places` (A-255) and of the change feed's page
+`changes`, every event of §4b.2 on one stream — and
 the three things `skep-client` does not hold and every shell needs,
 written once so the dev provider (`skep-dev serve`) and the desktop shell
 share them and rewrite the transport alone. A transport reaches it
@@ -788,8 +791,9 @@ re-exports counted as the module it is brought from (held by
   the reference minted for it.
 - `log.rs` `Log`, the call and dial log the page's gate reads, and
   `ShellDialer`, the one `PlainHttp` every board dials through.
-- `events.rs` `EventBus`: the seven events as values, each named by an
-  `EventName`, fanned out to every subscriber in order.
+- `events.rs` `EventBus`: the eight events as values, each named by an
+  `EventName`, fanned out to every subscriber in order, and the watchers
+  run on the emitting thread after the fan-out.
 - `refusal.rs` `Refusal`, the one shape the page renders, each refusal
   with ONE name from `Name`, the closed list of every name the shell spells.
 - `wire.rs` the wire's shared facts: the frame cap (`MAX_FRAME_BYTES`) and
@@ -813,8 +817,11 @@ re-exports counted as the module it is brought from (held by
   the release of its drafts supplement (`Sessions::release`).
 - `hold.rs` `Holds`: the one path of every `/op` the shell sends under a
   session (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold
-  among it — and the per-(board, principal) queue over `held.rs`'s file.
-- `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND.
+  among it, and the six unholdable writes refused under a standing hold
+  (`Holds::unholdable_refusal`) — and the per-(board, principal) queue over
+  `held.rs`'s file, one shell per data directory.
+- `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND, a moved
+  document's hands named.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder`; and `changes_since`, the read
   behind the `changes` call, on the caller's thread.
@@ -823,19 +830,26 @@ re-exports counted as the module it is brought from (held by
   `answer`, `cancel`, `shutdown`; `ShellOptions` and `set_node_state`.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
+- `shell/publication.rs` the four `publication` rows — `open`, `count`,
+  `confirm`, `cancel` over `skep_client::publication` — `pub(super)` to
+  `call`, and `Publications`, the panels they stand on: one family per
+  (board, principal), the standing panel and the held ones, each dying with
+  its session through the bus's watcher.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
-  suite.
+  suite — the board's verdict with its `site`, the publication family's
+  panel, inputs, outcomes and event among them.
 
 Rules that hold across its files:
 
 - **One door per call.** Every call reaches its row through `Shell::call`,
   which logs it; the row methods are `shell`'s alone — private, or
-  `pub(super)` in `shell/ceremony.rs` — so a transport cannot serve a call
-  the log never saw. `Shell::fetch` is the one public row, because it
-  streams, and logs its own call. `tests/it/tidy.rs` pins `Shell`'s public
-  methods across every `impl Shell` block of `shell.rs` and its non-test
-  children, and `CALLS`, the list a transport admits a call by, is spelled
-  from the same enum as `call`'s dispatch.
+  `pub(super)` in `shell/ceremony.rs` and `shell/publication.rs` — so a
+  transport cannot serve a call the log never saw. `Shell::fetch` is the
+  one public row, because it streams, and logs its own call.
+  `tests/it/tidy.rs` pins `Shell`'s public methods across every
+  `impl Shell` block of `shell.rs` and its non-test children, and `CALLS`,
+  the list a transport admits a call by, is spelled from the same enum as
+  `call`'s dispatch.
 - **One path for every session write.** Every `/op` the shell sends under
   a session, `/op-at`'s aside, goes through `Holds::send`, and its first
   dial and every resend read the answer through `hold.rs`'s one reader;
@@ -848,8 +862,8 @@ Rules that hold across its files:
 
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
-it; `modes`, `ceremonies`, `boards` and `held` against a daemon spawned
-in-process over a temp data dir. `hold/tests.rs` and its children `write`
+it; `modes`, `ceremonies`, `boards`, `held` and `publication` against a
+daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`
 and `resend` drive the hold over a fake board; the other modules test
 themselves over fakes and temp dirs; and `tests/it/tidy.rs` holds the
 arrangement — the declaration order, every file under `src/` declared by
@@ -908,7 +922,8 @@ second `[[bin]]`, `skep-dev`. It declares `args`, `terminal` and `shared`
 by `#[path]` from the files above — the same modules, compiled into both
 targets — and then its own, in dependency order: `manifest.rs`, the
 manifest beside the key store (`<store>-seed/<chain>.jsonl`); `board.rs`,
-the frames over the claimant's ONE content-scoped signed session;
+the frames over the claimant's ONE content-scoped signed session, its shot
+through `skep-client`'s one request frame builder and one body builder;
 `seed.rs`, the run; and `serve.rs`, THE DEV PROVIDER — `skep-dev serve` —
 with its modules beneath it: `serve/http.rs`, the provider's own HTTP over
 the plain subset `skep-http` serves; `serve/admission.rs`, the check every

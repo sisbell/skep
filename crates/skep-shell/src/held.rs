@@ -39,9 +39,10 @@
 //! [`HeldQueue`] is its held lines in `k` order, and every line enters it
 //! under a fresh ordinal whatever the disk did. Where the file is on disk
 //! each line is copied to it as it enters; where the store keeps the queue
-//! in memory alone ([`HeldQueue::in_memory`]: another window's lock, a
-//! directory out of reach, §3c.3) no copy is made, and a close loses the
-//! lines. An append the device refuses is answered beside the line, which
+//! in memory alone ([`HeldQueue::in_memory`]: a directory out of reach —
+//! another process's lock on it among the causes, §3c.3) no copy is made,
+//! and a close loses the lines. An append the device refuses is answered
+//! beside the line, which
 //! stands in the queue all the same, its bytes cut back off the file. A
 //! re-mark that changes nothing is no line at all.
 //!
@@ -83,8 +84,11 @@
 //!
 //! **The lock** `held/<chain>/lock` (the key store's `flock` idiom, copied
 //! from `search::directory::BoardDir::try_lock` — the index directory's type
-//! is the index's) is held for the shell's life; a second shell finding it
-//! held holds nothing on disk.
+//! is the index's) is held for the shell's life: ONE SHELL PER DATA
+//! DIRECTORY (§3c.3), the lock the holder's guard for the instant a second
+//! launch's hand-off has not yet closed — a process finding it held holds
+//! nothing on disk and keeps nothing as a second shell's, and tries again at
+//! its next session's open and probe.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

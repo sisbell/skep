@@ -29,8 +29,9 @@
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, the formatting line by its test,
 //!    the held removals as its job list with the re-makes split out, the
-//!    public row's read-with state; and THE COUNT's four numbers from the
-//!    rows as switched (PUB-3.8).
+//!    public row's read-with state, and the own-origin WINDOWS with the
+//!    counterpart each is offered first (§5.7), read at every panel; and
+//!    THE COUNT's four numbers from the rows as switched (PUB-3.8).
 //! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body, the staged bytes,
 //!    the in-lock reads, each against its cap, from the worst-case table the
 //!    daemon prices by, pinned equal to it.
@@ -87,9 +88,9 @@ mod tests;
 
 pub use enumerate::{enumerate, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
-pub use panel::{count, panel, Count, Destination, Formatting, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold};
+pub use panel::{count, panel, windows, Count, Counterpart, Destination, Formatting, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
 pub use price::{price, Price, Term};
-pub use request::{build, reread, Answer as OriginAnswer, Built, Confirmed, Counterpart, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
+pub use request::{build, reread, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent};
 
 /// One run of permanent content I-addresses — the selection's unit, and a
@@ -326,7 +327,8 @@ pub enum Fault {
     NoSuchDocument(Address),
     /// The death signal under the session: the session ended.
     SessionEnded,
-    /// `scan_busy` past the bounded reissues on a read; nothing written.
+    /// `scan_busy` or `history_busy` past the bounded reissues on a read;
+    /// nothing written.
     Busy,
     /// A held run the draft no longer arranges whole at one place, at the
     /// FIRST enumeration — before any re-read can re-state it.
@@ -358,7 +360,7 @@ impl fmt::Display for Fault {
             Fault::Unreadable(d) => write!(f, "{d} is not readable to this reader (withheld); nothing was published"),
             Fault::NoSuchDocument(d) => write!(f, "{d} is not registered at this board"),
             Fault::SessionEnded => f.write_str("the session ended (Skepd-Session: closed); nothing further was read or written"),
-            Fault::Busy => f.write_str("the board was busy (scan_busy) past the bounded reissues; nothing was published"),
+            Fault::Busy => f.write_str("the board was busy (scan_busy or history_busy) past the bounded reissues; nothing was published"),
             Fault::SelectionNotArranged { index } => write!(f, "the draft no longer arranges the selection's run {index} whole at one place"),
             Fault::Shape { op, body } => write!(f, "`{op}` answered a document this client cannot read: {body}"),
             Fault::Halt(h) => h.fmt(f),
@@ -368,11 +370,19 @@ impl fmt::Display for Fault {
 
 impl std::error::Error for Fault {}
 
-/// How many times a `scan_busy` on a read is reissued, under a short
-/// backoff, before the step halts [`Fault::Busy`] (the link-sets design
-/// §5.7: "REISSUED in B1-S4's form a bounded number of times under a short
-/// backoff, nothing written between").
+/// How many times a `scan_busy` or a `history_busy` on a read is reissued,
+/// under a short backoff, before the step halts [`Fault::Busy`] (the
+/// link-sets design §5.7: "REISSUED in B1-S4's form a bounded number of
+/// times under a short backoff, nothing written between") — one bound for
+/// the two busy doors a read can meet.
 pub const SCAN_BUSY_REISSUES: u32 = 6;
+
+/// Returns whether a refusal's code is one of the two busy doors a read is
+/// reissued at: the class scan's `scan_busy`, the history read's
+/// `history_busy`.
+fn is_busy(code: &str) -> bool {
+    code == "scan_busy" || code == "history_busy"
+}
 
 /// The door of every read this module makes: the board under the caller's
 /// token, the frames counted per step, each link's value cached.
@@ -417,8 +427,8 @@ impl<'a> Door<'a> {
     }
 
     /// Sends one frame under the token and answers its document, a rejection
-    /// included; `scan_busy` is reissued under a short backoff up to
-    /// [`SCAN_BUSY_REISSUES`] times.
+    /// included; `scan_busy` and `history_busy` are each reissued under a
+    /// short backoff up to [`SCAN_BUSY_REISSUES`] times.
     pub(crate) fn read(&self, frame: &Value) -> Result<Value, Fault> {
         for attempt in 0..=SCAN_BUSY_REISSUES {
             self.count();
@@ -430,10 +440,10 @@ impl<'a> Door<'a> {
                     }
                     return Ok(v);
                 }
-                Err(Halt::Refused(r)) if r.code == "scan_busy" && attempt < SCAN_BUSY_REISSUES => {
+                Err(Halt::Refused(r)) if is_busy(&r.code) && attempt < SCAN_BUSY_REISSUES => {
                     thread::sleep(Duration::from_millis(20 * u64::from(attempt + 1)));
                 }
-                Err(Halt::Refused(r)) if r.code == "scan_busy" => return Err(Fault::Busy),
+                Err(Halt::Refused(r)) if is_busy(&r.code) => return Err(Fault::Busy),
                 Err(h) => return Err(Fault::Halt(h)),
             }
         }

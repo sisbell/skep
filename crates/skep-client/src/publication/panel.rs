@@ -30,19 +30,26 @@
 //! the person's, the possible destinations, so the count knows which
 //! read-with a destination still needs. Every row's SWITCH is the caller's
 //! input ([`Switches`]: a private row OFF by default, the formatting line no
-//! switch, a public row its state).
+//! switch, a public row its state). THE WINDOWS (§5.7; B3-S11 P2 (i)) are
+//! the panel's too: each run of the selection onto an unpublished draft of
+//! the person's own — the origin's state one `doc_metadata` read — with the
+//! COUNTERPART offered first where a record of a draft the person reads
+//! names the run's words as published (one four-set read per such run,
+//! made at every panel and never from a cache); the request takes them as
+//! given ([`windows`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::Address;
 
-use crate::address::{document_of, parse_address};
+use crate::address::{account_of, document_of, parse_address};
 use crate::board::answers::LinkValue;
-use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_HELD_REMOVAL, T_READ_WITH};
+use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
 use super::enumerate::{touches, Candidate, Enumeration};
-use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher};
+use super::landed::read_record;
+use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// The formatting types' subtrees (the link-sets design §5.2; the registry's
 /// vocabulary): heading `3.20`, the paragraph family `3.21`, the inline
@@ -166,6 +173,43 @@ impl Formatting {
     }
 }
 
+/// The counterpart offered first at a window onto a draft the person reads:
+/// a record of that draft names the run's words as published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Counterpart {
+    /// The run's index in the selection.
+    pub run: usize,
+    /// The draft the record is homed in.
+    pub draft: Address,
+    /// The record.
+    pub record: Address,
+    /// The part of the run the record covers, on the run's own chain.
+    pub from: ISpan,
+    /// The published span that part became.
+    pub to: ISpan,
+}
+
+/// One own-origin window of the selection (the link-sets design §5.7;
+/// B3-S11 P2 (i)): a run onto an unpublished draft of the person's own,
+/// which the three answers are asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Window {
+    /// The run's index in the selection — the key an answer takes.
+    pub run: usize,
+    /// The origin: the person's unpublished draft.
+    pub origin: Address,
+    /// The origin's owner account, off its address.
+    pub owner: String,
+    /// Where in the origin's I-space the passage was written: the run's
+    /// first ordinal.
+    pub i_start: u64,
+    /// The run's width.
+    pub width: u64,
+    /// The counterpart, where a record of a draft the person reads names
+    /// the run's words as published.
+    pub counterpart: Option<Counterpart>,
+}
+
 /// The panel's data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Panel {
@@ -176,6 +220,9 @@ pub struct Panel {
     /// Per published document of the person's, whether `E` is read with it
     /// now — the destinations' states.
     pub read_with: BTreeMap<Address, bool>,
+    /// The own-origin windows, in the selection's order, each with its
+    /// counterpart where one is offered.
+    pub windows: Vec<Window>,
     /// The frames sent, per step.
     pub frames: Vec<(&'static str, usize)>,
 }
@@ -430,7 +477,63 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         }
     }
 
-    Ok(Panel { rows, formatting: Formatting { marks, cut, removals }, read_with, frames: door.counts() })
+    let windows = windows_with(door, p, inputs)?;
+    Ok(Panel { rows, formatting: Formatting { marks, cut, removals }, read_with, windows, frames: door.counts() })
+}
+
+/// Reads the own-origin windows of the selection, each with its counterpart.
+///
+/// It is the panel's windows step run on its own — the shell re-reads them
+/// at a held panel's re-open, never from the read's cache (B3-S11 P2 (i)).
+///
+/// # Errors
+///
+/// The reads' faults, as `enumerate`'s.
+pub fn windows(p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault> {
+    let door = Door::new(p.board, p.token);
+    windows_with(&door, p, inputs)
+}
+
+/// Reads the windows through `door`.
+///
+/// A run is a window where its origin is neither the draft nor the trunk
+/// and is an unpublished document owned by the person exactly (one
+/// `doc_metadata` read per origin, kept); its counterpart is read where the
+/// origin is a draft the person reads — one four-set read over the record
+/// class homed in the origin, `from` the run — the first record covering
+/// the run offered.
+pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault> {
+    door.step("windows");
+    let trunk = inputs.doc.as_ref();
+    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
+    let subtype = unit(T_CORRESPONDENCE);
+    let mut out = Vec::new();
+    for (i, run) in inputs.selection.iter().enumerate() {
+        if run.origin == inputs.draft || trunk == Some(&run.origin) {
+            continue;
+        }
+        let origin = run.origin.to_string();
+        if !owned_by(&origin, p.account) || door.metadata(&origin)?.published {
+            continue;
+        }
+        let counterpart = if inputs.readable_drafts.contains(&run.origin) { counterpart_of(door, p, i, run, &unit(&origin), &subtype)? } else { None };
+        out.push(Window { run: i, origin: run.origin.clone(), owner: account_of(&origin).unwrap_or_default(), i_start: run.i_start, width: run.width, counterpart });
+    }
+    Ok(out)
+}
+
+/// Reads the counterpart of `run`, the `i`-th of the selection: the first
+/// record homed in its origin whose `from` covers part of it.
+fn counterpart_of(door: &Door<'_>, p: &Publisher<'_>, i: usize, run: &Run, origin_unit: &[serde_json::Value], subtype: &[serde_json::Value]) -> Result<Option<Counterpart>, Fault> {
+    let span = [frames::i_span(&run.i_start_text(), run.width)];
+    for hit in door.addrs(&run.origin.to_string(), &frames::find_links_four(Slot::Spans(origin_unit), Slot::Spans(&span), Slot::Any, Slot::Spans(subtype)))? {
+        if let Some(record) = read_record(door, p, &hit)? {
+            if let (Some((lo, hi)), Some(to)) = (record.from.overlap(&run.chain(), run.i_start, run.reach()), record.map(&run.chain(), run.i_start, run.reach())) {
+                return Ok(Some(Counterpart { run: i, draft: run.origin.clone(), record: record.link.clone(), from: ISpan { chain: run.chain(), first: lo, width: hi - lo }, to }));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn on_selection_of(value: &LinkValue, selection: &[super::Run]) -> Vec<(String, u64, u64)> {

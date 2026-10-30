@@ -361,28 +361,6 @@ pub fn shot_run(origin: &str, i_start: &str, width: u64) -> Value {
     json!({"origin": origin, "i_start": i_start, "width": width.to_string()})
 }
 
-/// Builds the BARE shot — `{"op":"publish","doc":…,"runs":[…]}`.
-///
-/// It carries `base` and `base_extent` together where the shot is staged
-/// from a member (neither is the birth version), `draft` the staging draft
-/// whose runs are re-inserted where one is named, `runs` the whole
-/// arrangement in V-order as [`shot_run`] spells each, `attest` where the
-/// caller composed one (signed ops: the entry frame over the trunk with the
-/// `publish` body) and `id` the per-session idempotency key (wire.md
-/// §Arrangement, `publish`; §The publish shot and head-float). It is
-/// [`publication`] with no optional member — the shot as before the
-/// publication's members, which the daemon admits unchanged.
-pub fn publish(
-    doc: &str,
-    base: Option<(&str, u64)>,
-    draft: Option<&str>,
-    runs: &[Value],
-    attest: Option<Value>,
-    id: Option<&str>,
-) -> Value {
-    publication(&PublishFrame { doc: Some(doc), base, draft, runs, attest, id, ..PublishFrame::default() })
-}
-
 /// Every member of a `publish` request (wire.md §Arrangement, `publish`;
 /// §The publish shot and head-float; `crates/skep-mcp/tools.json`'s
 /// `publish` entry — the twelve members as the catalog spells them: `doc`,
@@ -397,7 +375,12 @@ pub fn publish(
 /// the document form, homed in `doc` where that edition holds no member yet
 /// (the board refuses `claim_refused` where one stands). A member left at
 /// its default is not spelled, so a frame carrying none of the optional
-/// members is the bare shot byte for byte.
+/// members is the bare shot byte for byte — `{"op":"publish","doc":…,
+/// "runs":[…]}` with `base` and `base_extent` together where the shot is
+/// staged from a member, `draft` where one is named, `attest` where the
+/// caller composed one and `id` the per-session idempotency key — and
+/// [`publication`] is the one builder every shot goes through, the merge
+/// landing's and the dev board's included.
 #[derive(Debug, Clone, Default)]
 pub struct PublishFrame<'a> {
     /// The published document, the trunk — the document form.

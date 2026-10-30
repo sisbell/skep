@@ -365,6 +365,77 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     assert_eq!(line["base"], ack["at"], "the ack is noted for the base of the next hold on its home: {line}");
 }
 
+/// Checks that the six unholdable writes are refused under a standing hold.
+///
+/// §3c.4: `fork`, `version`, `make_link`, `nullify`, `edit_link` and
+/// `publish` arriving while the own node is stopped, the write path poisoned
+/// or the writes halted are refused at once under the hold's own name —
+/// `stopped`, `poisoned`, `halted` — naming the op, held never and dialed
+/// never; a write outside the six dials as it dials under the same hold; the
+/// poisoned state is the dial's own `poisoned` answer, standing until a
+/// `/health` read says writes go; and a board that does not answer is no
+/// hold of the kind — the write meets the dial's own `unreachable` (the
+/// mutants that dial the six under a stop, hold them as bursts, never clear
+/// the poison, or read an unreachable board as a standing hold).
+#[test]
+fn the_six_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewhere() {
+    let citation = "1.1.0.1.0.1.0.3.13";
+    let six = || {
+        vec![
+            json!({"op": "fork", "published": true}),
+            json!({"op": "version", "d_src": DOC}),
+            json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}),
+            json!({"op": "nullify", "home": OTHER, "target": format!("{OTHER}.0.2.1")}),
+            json!({"op": "edit_link", "original": format!("{OTHER}.0.2.1"), "d_s": OTHER, "d_a": DOC, "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}}),
+            json!({"op": "publish", "doc": OTHER, "draft": DOC, "runs": []}),
+        ]
+    };
+    let poisoned = || json!({"resp": "rejected", "code": "poisoned", "disposition": "retry", "op": "insert"});
+    assert_eq!(UNHOLDABLE_WRITES.len(), 6);
+    for cause in ["stopped", "poisoned", "halted"] {
+        let g = ground();
+        match cause {
+            "stopped" => g.holds.set_node_stopped("b-1", true),
+            "halted" => {
+                g.fake.writes_halted.store(true, Ordering::SeqCst);
+                g.holds.note_health("b-1", &g.session.board.health().unwrap());
+            }
+            _ => {
+                g.fake.op_rejected.next(1, poisoned());
+                let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))) else { panic!("the poisoning burst is held") };
+                assert_eq!(held["cause"], "poisoned", "{held}");
+            }
+        }
+        let sends = g.fake.sends();
+        let lines = g.lines().len();
+        for frame in six() {
+            let op = frame["op"].as_str().unwrap();
+            assert!(UNHOLDABLE_WRITES.contains(&op), "{op} is of the six");
+            let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, frame.clone()) else { panic!("{cause}: {op} is refused") };
+            let v = refused.to_value();
+            assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), (cause, Some("shell"), Some(op)), "{cause}: {v}");
+            assert_eq!(g.holds.unholdable_refusal("b-1", op).map(|r| r.name().to_string()), Some(cause.to_string()), "{cause}: the door the confirm asks");
+        }
+        assert_eq!((g.fake.sends(), g.lines().len()), (sends, lines), "{cause}: none of the six is dialed or held");
+        let OpAnswer::Answered(Ok(acked)) = g.holds.send(&g.session, json!({"op": "create_new_document", "account": "1.0.1"})) else { panic!("{cause}: a write outside the six dials") };
+        assert_eq!((acked["resp"].as_str(), g.fake.sends()), (Some("ack"), sends + 1), "{cause}: a write outside the six dials as it dials");
+    }
+    // The poison ends at the read that says writes go.
+    let g = ground();
+    g.fake.op_rejected.next(1, poisoned());
+    let OpAnswer::Answered(Ok(_)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))) else { panic!("held poisoned") };
+    assert!(g.holds.unholdable_refusal("b-1", "make_link").is_some(), "poisoned from the answer on");
+    g.holds.note_health("b-1", &g.session.board.health().unwrap());
+    assert!(g.holds.unholdable_refusal("b-1", "make_link").is_none(), "the read that says writes go ends the poison");
+    // A board that does not answer is no hold of the kind.
+    let g = ground();
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    assert!(g.holds.unholdable_refusal("b-1", "make_link").is_none());
+    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, six()[2].clone()) else { panic!("the dial fails as it fails") };
+    assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")), "{refused}");
+    assert!(g.lines().is_empty(), "a write the hold never holds is held never");
+}
+
 /// Checks that a death signal at a write's dial holds nothing.
 ///
 /// The death is neither held nor faced (§3c.4): a burst and a write the

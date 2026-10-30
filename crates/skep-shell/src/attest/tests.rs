@@ -512,6 +512,48 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
     assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the claim first in doc's group, by address; the read-with from the edition's unit span");
 }
 
+/// THE CANONICAL MEMBER-POSITION END (the client lane's C2): a `links`
+/// entry's end in the member-position form is asserted canonical before the
+/// signing — the lowest positions holding each value, consecutive positions
+/// merged (`tools.json`, `publish`) — and refused naming the entry where it
+/// is not: a span from ordinal 0, one of no width, two adjacent (one span
+/// merged), two overlapping, two out of order; a canonical end composes the
+/// body as the signer's own builder spells it, byte for byte, so the
+/// assertion changes no body (the mutant that signs a row of another
+/// spelling signs a body the board never composes, and the deposit is
+/// refused `attestation_invalid:signature` after the send).
+#[test]
+fn a_member_position_end_is_asserted_canonical_before_the_signing() {
+    let g = Ground::over(Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abcdef"));
+    let c = g.composer();
+    let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
+    let frame = |member: Value| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 6)], "links": [{"home": "member", "from": {"member": member}, "to": {"addrs": []}, "ty": ty}]});
+    let span = |ordinal: &str, width: &str| json!({"ordinal": ordinal, "width": width});
+    for (member, why) in [
+        (json!([span("0", "2")]), "starts before the member's first position"),
+        (json!([span("1", "0")]), "holds no position"),
+        (json!([span("1", "3"), span("4", "2")]), "adjacent"),
+        (json!([span("1", "3"), span("2", "1")]), "overlaps or precedes"),
+        (json!([span("4", "1"), span("1", "2")]), "overlaps or precedes"),
+    ] {
+        let err = c.doc_term_and_body(CheckedKind::Publish, &frame(member.clone())).err().unwrap_or_else(|| panic!("{member}: composed"));
+        let text = err.to_string();
+        assert!(text.contains("not canonical") && text.contains("links[].from") && text.contains(why), "{member}: {text}");
+    }
+    assert_eq!(g.fake.dialed().iter().filter(|op| *op == "find_links_ftt").count(), 0, "refused at the row, before the deposit reads");
+    let (_, body) = c.doc_term_and_body(CheckedKind::Publish, &frame(json!([span("1", "3"), span("5", "2")]))).unwrap();
+    let ty_unit = unit_span(&parse_address("1.1.0.1.0.1.0.3.13").unwrap());
+    let rows = [DepositRow {
+        home: DepositHome::Member,
+        kind: DepositKind::Copy,
+        ty: DepositSlot::Stored(vec![SlotElement::Span(&ty_unit)]),
+        from: DepositSlot::MemberPositions(vec![MemberPositions { ordinal: 1, width: 3 }, MemberPositions { ordinal: 5, width: 2 }]),
+        to: DepositSlot::Stored(vec![]),
+    }];
+    let shot = entry_body_publish(b"abcdef".iter().map(|b| ShotSegmentPiece::Value(std::slice::from_ref(b))), None);
+    assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "a canonical end composes as the builder spells it: no byte changes");
+}
+
 /// THE DEATH SIGNAL at a read the composer makes is the session's end and
 /// no refusal of its own: a V-spec slot's `image` and a copied run's
 /// read-back each answer [`Unattested::Died`], stopped at that first read

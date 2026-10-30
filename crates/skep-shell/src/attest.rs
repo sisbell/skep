@@ -1280,9 +1280,54 @@ fn deposit_end(end: &Value, what: &str) -> Result<OwnedSlot, Halt> {
                 Ok(MemberPositions { ordinal: number("ordinal")?, width: number("width")? })
             })
             .collect::<Result<Vec<_>, Halt>>()?;
+        assert_canonical_member_end(&rows, what)?;
         return Ok(OwnedSlot::Member(rows));
     }
     Err(fault(format!("the frame's `{what}` end is of no form"), "an end is `{\"addrs\": […]}`, `{\"spans\": […]}` or `{\"member\": […]}` (wire.md §Arrangement, `publish`)"))
+}
+
+/// Asserts that a member-position end is CANONICAL before it is signed.
+///
+/// The form names "the lowest positions holding each value, consecutive
+/// positions merged" (`tools.json`, `publish`; the link-sets design §5.7):
+/// every span from a position of at least one, of a width of at least one,
+/// each after the one before it and not adjacent to it — two spans that
+/// touch would be one span merged. A row another spelling of the same
+/// positions carries is not the row the board composes for the copy it
+/// deposits, so the signature would not verify; the entry is refused here,
+/// before the signing, naming it. The check reads the row and changes no
+/// byte of any body.
+///
+/// # Errors
+///
+/// Returns a halt naming the entry (`what`) and the span that breaks the
+/// form.
+fn assert_canonical_member_end(rows: &[MemberPositions], what: &str) -> Result<(), Halt> {
+    let mut reach: Option<u64> = None;
+    for span in rows {
+        let broken = |why: &str| {
+            fault(
+                format!("the frame's `{what}` member-position end is not canonical: the span at ordinal {} of width {} {why}", span.ordinal, span.width),
+                "a member-position end names the lowest member positions holding each value, consecutive positions merged (tools.json, `publish`), so the signer's row is the board's",
+            )
+        };
+        if span.ordinal == 0 {
+            return Err(broken("starts before the member's first position"));
+        }
+        if span.width == 0 {
+            return Err(broken("holds no position"));
+        }
+        if let Some(reach) = reach {
+            if span.ordinal < reach {
+                return Err(broken("overlaps or precedes the span before it"));
+            }
+            if span.ordinal == reach {
+                return Err(broken("is adjacent to the span before it, and would be one span merged"));
+            }
+        }
+        reach = Some(span.ordinal.checked_add(span.width).ok_or_else(|| broken("reaches past every member position"))?);
+    }
+    Ok(())
 }
 
 /// Returns the document a link address is homed in: the text before its

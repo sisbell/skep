@@ -337,19 +337,24 @@ pub enum Refusal {
     },
     /// `signed_session_required`: the landing's session is bare.
     NeedsSignedSession,
+    /// `not_owner` naming the DRAFT side: the draft the merge stages its fresh
+    /// words in is another account's — a sub-account's or an agent's proposal
+    /// draft (wire.md §The publish shot and head-float, the unowned-draft
+    /// edge) — and a publication keeps its records in the draft it was
+    /// staged in, so the shot is refused; nothing was published.
+    UnownedDraft {
+        /// The draft named, `site.addr`.
+        draft: Address,
+    },
     /// The library's own fault named (A-288's own-bug class).
     ///
     /// The fault is a frame the board refused as malformed in substance, a
     /// shape it does not know; the board's other refusals ride here verbatim,
-    /// and every transport halt. The publication's own refusals of the shot
-    /// ride here VERBATIM too, never as the library's fault — `not_owner`
-    /// naming the DRAFT side (a sub-account's or an agent's proposal draft,
-    /// wire.md §The publish shot and head-float, the unowned-draft edge),
+    /// and every transport halt. Two of the publication's own refusals of the
+    /// shot ride here VERBATIM too, never as the library's fault —
     /// `already_published` naming the member the draft's words were published
     /// into, `publication_over_budget` with the daemon's detail — each a
-    /// `Halt::Refused` whose `body` carries the `site`; a variant of their
-    /// own is owed with the `skep merge` command's face, whose exhaustive
-    /// match over this enum stands outside the client lane's first brief.
+    /// `Halt::Refused` whose `body` carries the `site`.
     Halt(Halt),
 }
 
@@ -373,6 +378,7 @@ impl fmt::Display for Refusal {
             Refusal::WindowWithheld(origin) => write!(f, "{origin} is not shared with you — the shot windows it; nothing was published"),
             Refusal::OverCap { runs, cap } => write!(f, "the merged list is in more pieces than one publication can carry — {runs}, where {cap} is the most; publishing this merge is not offered"),
             Refusal::NeedsSignedSession => f.write_str("a signed session is needed to land a merge on a claimed board (signed_session_required)"),
+            Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),
             Refusal::Halt(h) => h.fmt(f),
         }
     }

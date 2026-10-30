@@ -11,13 +11,20 @@
 //! a moment. `GET /bridge/events` is the event stream, held open until the
 //! page closes it or the provider stops. `GET /bridge/log` is the call and
 //! dial log. `GET /bridge/shapes` is the declarations.
-//! `POST /bridge/script` is the script seam (`client.md` §4b.5):
-//! `{call, refusal}` arms the next answer of that call as the named
-//! refusal, `{event, data}` fires an event by hand — a dev seam, said as
-//! such on talk when used. `POST /bridge/fault/<door>` reaches the
-//! in-process daemon's doors under `dev-hooks` with `--own`, and answers
-//! `not_built_in` otherwise. `POST /bridge/fetch` streams the blob's bytes
-//! as the response body.
+//! `POST /bridge/script` is the script seam (`client.md` §4b.5), a dev seam
+//! said as such on talk when used: `{call, answer}` arms that call's next
+//! answer as its result, served exactly as armed, and `{call, refusal}` as
+//! the named refusal; a call holds one armed answer, a later arm replacing
+//! it, served once and logged `canned`. A canned answer changes nothing in
+//! the shell: a call that relies on what the real answer would have left —
+//! a `publication.count` after a canned `publication.open`, an `op` under a
+//! session a canned `session` named — gets the shell's own answer unless it
+//! is armed too, and an event the real call would fire is fired by hand,
+//! `{event, data}`. `fetch`, whose answer is a stream of bytes, takes an
+//! armed refusal alone, served on its own route. `POST /bridge/fault/<door>`
+//! reaches the in-process daemon's doors under `dev-hooks` with `--own`,
+//! and answers `not_built_in` otherwise. `POST /bridge/fetch` streams the
+//! blob's bytes as the response body.
 
 use std::io::{self, Write};
 use std::net::TcpStream;
@@ -29,7 +36,7 @@ use skep_http::{read_request, write_head, write_response, Limits, Refused, Reque
 use skep_shell::{CallOutcome, EventName};
 
 use super::http::{cors_headers, write_sse_event, write_sse_head, write_sse_keepalive, KEEPALIVE, MAX_BODY, MAX_HEAD, READ_TIMEOUT, WRITE_TIMEOUT};
-use super::{node, Provider};
+use super::{node, Canned, Provider};
 use crate::shared::clipped;
 use crate::terminal::talk;
 
@@ -116,8 +123,8 @@ fn args_of(req: &Request) -> Result<Value, String> {
 ///
 /// # Panics
 ///
-/// Panics if the doors' lock is poisoned: a fault door that panicked held
-/// it.
+/// Panics if the doors' lock is poisoned — a fault door that panicked held
+/// it — or the script seam's armed answers' lock is.
 fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     let shell = &provider.shell;
     match (req.method.as_str(), req.path.as_str()) {
@@ -162,6 +169,11 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
                 Ok(a) => a,
                 Err(detail) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_body", "detail": detail}})),
             };
+            // A refusal the script seam armed for `fetch` answers here, on
+            // the call's own route.
+            if let Some(canned) = provider.take_canned("fetch") {
+                return canned_answer(provider, "fetch", &args, canned, stream, cors);
+            }
             // The shell logs the call: a refusal at once, the stream as its
             // body is dropped, whether the copy ends or the page hangs up.
             match shell.fetch(&args) {
@@ -199,10 +211,8 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
                 Ok(a) => a,
                 Err(detail) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_body", "detail": detail}})),
             };
-            if let Some(canned) = provider.canned.lock().expect("the canned lock").remove(call) {
-                talk(format!("script: `{call}` answers the canned refusal {}", canned["name"]));
-                shell.log().call(call, args.to_string().len(), canned.to_string().len(), Duration::ZERO, CallOutcome::Canned);
-                return json(stream, 200, cors, &json!({"refused": canned}));
+            if let Some(canned) = provider.take_canned(call) {
+                return canned_answer(provider, call, &args, canned, stream, cors);
             }
             match shell.call(call, &args) {
                 Ok(v) => json(stream, 200, cors, &json!({"result": v})),
@@ -213,32 +223,67 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
     }
 }
 
-/// Serves the script seam: `{call, refusal}` arms the next answer.
+/// Serves the script seam: a call's next answer armed, or an event fired.
 ///
-/// `{event, data}` fires an event by hand.
+/// `{call, answer}` arms that call's next answer as its result, served
+/// exactly as armed; `{call, refusal}` arms it as a refusal — a name, or an
+/// object carrying one, `shell` its kind where it names none — marked
+/// `canned`. Either replaces the answer armed before it, which the talk
+/// line says. `{event, data}` fires the event by hand.
 ///
 /// # Errors
 ///
-/// Returns the I/O error the answer's write meets.
+/// Returns the I/O error the answer's write meets. The page's refusals are
+/// each a 400, the first met answering:
+///
+/// 1. a call the bridge does not spell: `unknown_call`;
+/// 2. an answer beside a refusal: `malformed_args`;
+/// 3. an answer for `fetch`, whose answer is a stream of bytes:
+///    `streamed_call`;
+/// 4. an answer that is neither an object nor an array, or a refusal that
+///    is neither a name nor an object: `malformed_args`;
+/// 5. a call armed with neither: `malformed_args`;
+/// 6. an event the contract does not name: `unknown_event`;
+/// 7. neither a call nor an event: `malformed_args`.
+///
+/// # Panics
+///
+/// Panics if the armed answers' lock is poisoned: a thread that panicked
+/// held it.
 fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
-    if let Some(call) = args["call"].as_str() {
-        if !skep_shell::CALLS.contains(&call) {
-            return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": call}}));
-        }
-        let refusal = match &args["refusal"] {
-            Value::String(name) => json!({"kind": "shell", "name": name, "canned": true}),
-            Value::Object(m) => {
+    if let Some(named) = args["call"].as_str() {
+        let Some(&call) = skep_shell::CALLS.iter().find(|c| **c == named) else {
+            return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": named}}));
+        };
+        let canned = match (args.get("answer"), args.get("refusal")) {
+            (Some(_), Some(_)) => {
+                let both = json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "answer or refusal", "detail": "one of the two, never both"}});
+                return json(stream, 400, cors, &both);
+            }
+            (Some(_), None) if call == "fetch" => {
+                let detail = "fetch answers a stream of bytes, which the seam does not can: arm a refusal";
+                return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "streamed_call", "call": "fetch", "detail": detail}}));
+            }
+            (Some(answer @ (Value::Object(_) | Value::Array(_))), None) => Canned::Answer(answer.clone()),
+            (Some(_), None) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "answer"}})),
+            (None, Some(Value::String(name))) => Canned::Refusal(json!({"kind": "shell", "name": name, "canned": true})),
+            (None, Some(Value::Object(m))) => {
                 let mut v = Value::Object(m.clone());
                 v["canned"] = Value::from(true);
                 if v.get("kind").is_none() {
                     v["kind"] = Value::from("shell");
                 }
-                v
+                Canned::Refusal(v)
             }
-            _ => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "refusal"}})),
+            (None, Some(_)) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "refusal"}})),
+            (None, None) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "answer or refusal"}})),
         };
-        talk(format!("script: the next `{call}` is armed to answer {}", refusal["name"]));
-        provider.canned.lock().expect("the canned lock").insert(call.to_string(), refusal);
+        let what = match &canned {
+            Canned::Answer(_) => "a canned result".to_string(),
+            Canned::Refusal(v) => format!("the canned refusal {}", clipped(&v["name"].to_string())),
+        };
+        let dropped = if provider.arm(call, canned).is_some() { " — the answer armed before it is dropped" } else { "" };
+        talk(format!("script: the next `{call}` is armed to answer {what}{dropped}"));
         return json(stream, 200, cors, &json!({"result": {"armed": call}}));
     }
     if let Some(event) = args["event"].as_str() {
@@ -250,6 +295,32 @@ fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &
         return json(stream, 200, cors, &json!({"result": {"fired": name.as_str()}}));
     }
     json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "call or event"}}))
+}
+
+/// Answers `call` with the answer the script seam armed for it.
+///
+/// A canned result is served as `{"result": …}` exactly as armed, a canned
+/// refusal as `{"refused": …}`; either is logged `canned`, measured as the
+/// shell measures an answer of its own, and said on talk.
+///
+/// # Errors
+///
+/// Returns the I/O error the answer's write meets.
+fn canned_answer(provider: &Provider<'_>, call: &'static str, args: &Value, canned: Canned, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
+    let (body, bytes_out) = match canned {
+        Canned::Answer(v) => {
+            talk(format!("script: `{call}` answers its canned result"));
+            let bytes_out = v.to_string().len();
+            (json!({"result": v}), bytes_out)
+        }
+        Canned::Refusal(v) => {
+            talk(format!("script: `{call}` answers the canned refusal {}", clipped(&v["name"].to_string())));
+            let bytes_out = v.to_string().len();
+            (json!({"refused": v}), bytes_out)
+        }
+    };
+    provider.shell.log().call(call, args.to_string().len(), bytes_out, Duration::ZERO, CallOutcome::Canned);
+    json(stream, 200, cors, &body)
 }
 
 /// Serves the event stream: every event as `event:` and `data:` lines.

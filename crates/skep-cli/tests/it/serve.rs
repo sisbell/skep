@@ -25,8 +25,12 @@
 //! and never as an `op` frame, the same write refused under bare before
 //! any dial; F5b the publication family over the bridge — the panel, the
 //! count, the confirm with its events and the feed row, the inert second
-//! confirm, the cancel, the mint form and `claim_refused`; F6 the fault
-//! doors under `dev-hooks` with `--own` in the
+//! confirm, the cancel, the mint form and `claim_refused`; F5c the script
+//! seam — a call's next answer armed as its result or its refusal, served
+//! once and logged `canned`, the later arm replacing the earlier, the
+//! seam's own refusals in their order, `fetch`'s armed refusal on its own
+//! route, a refusal's name clipped on talk, an event fired by hand; F6 the
+//! fault doors under `dev-hooks` with `--own` in the
 //! signed mode, and `not_built_in` without; F7 the isolation, `cargo tree`
 //! naming no `skepd` without the
 //! feature and one with it; F8 the declarations served equal to the
@@ -1069,6 +1073,119 @@ fn f5b_the_publication_family_over_the_bridge() {
     next_event(&rx, "publication", |v| v["state"] == "refused" && v["arm"] == "claim_refused");
     signed.result("close", json!({"session": session}));
     assert_eq!(signed.stop(), 0);
+    sd.shutdown();
+}
+
+// ── F5c ────────────────────────────────────────────────────────────────────
+
+/// F5c: the script seam (`client.md` §4b.5), the dev provider's mock.
+///
+/// `{call, answer}` arms a call's next answer as its result — served once,
+/// exactly as armed, logged `canned`, said on talk — beside `{call,
+/// refusal}`; a call holds one armed answer, the later arm replacing the
+/// earlier; the seam refuses an answer that is no object or array, an
+/// answer beside a refusal, a call armed with neither and an answer for
+/// `fetch`, the first fault answering, while `fetch`'s own route serves an
+/// armed refusal; a refusal's name is clipped on talk; `{event, data}`
+/// fires an event by hand.
+#[test]
+fn f5c_the_script_seam_arms_a_calls_next_answer_as_its_result_or_its_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (sd, provider) = bare_provider(dir.path());
+    let rx = provider.events();
+    let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
+    // A panel no board state built: its private row, its read-with need,
+    // its window with a counterpart, its hold.
+    let panel = json!({
+        "rows": [{"home": "1.0.1.0.9", "kind": "private", "label": "notes", "links": ["1.0.1.0.9.0.2.1"],
+                  "types": [{"ty": "1.1.0.1.0.1.0.3.13", "n": 1, "far": ["1.0.1.0.4"]}],
+                  "line": {"p": 1, "d": 0, "c": 0, "t": 0, "u": 0}, "read_through": 1}],
+        "formatting": {"marks": [], "cut": 0, "removals": []},
+        "read_with": {"1.0.1.0.3": false},
+        "count": {"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": ["1.0.1.0.3"]},
+        "price": {"lists": [2, 2, 0, 0, 0], "body": 4096, "values": 19, "reads": 12, "bytes": 65536, "over": []},
+        "windows": [{"run": 1, "origin": "1.0.1.0.8", "owner": "1.0.1", "i_start": 1, "width": 5,
+                     "counterpart": {"run": 1, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1",
+                                     "from": {"chain": "1.0.1.0.8.0.1", "first": 1, "width": 5},
+                                     "to": {"chain": "1.0.1.0.3.1.0.1", "first": 1, "width": 5}}}],
+        "hold": {"since": 1_793_330_000_000_u64}
+    });
+    let args = json!({"session": "s-000000000000000000000000", "draft": "1.0.1.0.2"});
+    assert_eq!(provider.result("script", json!({"call": "publication.open", "answer": panel})), json!({"armed": "publication.open"}));
+    assert_eq!(provider.result("publication.open", args.clone()), panel, "served exactly as armed");
+    assert_ne!(provider.call("publication.open", args.clone()).get("result"), Some(&panel), "served once");
+    // One armed answer per call: a result armed over a refusal replaces it,
+    // and no refusal is left armed behind it.
+    let count = json!({"count": panel["count"], "price": panel["price"]});
+    provider.result("script", json!({"call": "publication.count", "refusal": "no_panel"}));
+    provider.result("script", json!({"call": "publication.count", "answer": count}));
+    assert_eq!(provider.result("publication.count", args.clone()), count, "the later arm replaces the earlier");
+    let after = provider.refused("publication.count", args);
+    assert!(after.get("canned").is_none(), "the shell's own answer after it: {after}");
+    // The refusal arm: marked, served once, the call after it the shell's.
+    provider.result("script", json!({"call": "health", "refusal": "busy"}));
+    assert_eq!(provider.refused("health", json!({"board": board})), json!({"kind": "shell", "name": "busy", "canned": true}));
+    assert_eq!(provider.result("health", json!({"board": board}))["mode"], "CLAIMED-PERMISSIVE");
+    // The seam's own refusals, each a 400, the first fault answering: a
+    // two-fault line per adjacent pair of its checks.
+    let refused = |body: Value| {
+        let (status, _, answer) = provider.request("POST", "/bridge/script", &provider.headers(), body.to_string().as_bytes());
+        assert_eq!(status, 400, "{body}");
+        serde_json::from_slice::<Value>(&answer).unwrap()["refused"].clone()
+    };
+    let both = json!({"kind": "shell", "name": "malformed_args", "what": "answer or refusal", "detail": "one of the two, never both"});
+    assert_eq!(refused(json!({"call": "nope", "answer": {}, "refusal": "busy"}))["name"], "unknown_call");
+    assert_eq!(refused(json!({"call": "health", "answer": {}, "refusal": "busy"})), both);
+    assert_eq!(refused(json!({"call": "fetch", "answer": {}, "refusal": "busy"})), both);
+    assert_eq!(refused(json!({"call": "fetch", "answer": "bytes"}))["name"], "streamed_call");
+    assert_eq!(refused(json!({"call": "publication.open", "answer": "panel"}))["what"], "answer");
+    assert_eq!(refused(json!({"call": "health", "refusal": 7}))["what"], "refusal");
+    assert_eq!(refused(json!({"call": "health"}))["what"], "answer or refusal");
+    assert_eq!(provider.result("health", json!({"board": board}))["mode"], "CLAIMED-PERMISSIVE", "nothing armed by a refused arm");
+    // `fetch`'s armed refusal, served once, on its own route.
+    provider.result("script", json!({"call": "fetch", "refusal": "not_reached"}));
+    let fetch = || {
+        let (status, _, body) = provider.request("POST", "/bridge/fetch", &provider.headers(), json!({"guest": true, "board": board, "i": "1.0.1.0.1.0.1.1"}).to_string().as_bytes());
+        assert_eq!(status, 200);
+        serde_json::from_slice::<Value>(&body).unwrap()["refused"].clone()
+    };
+    assert_eq!(fetch(), json!({"kind": "shell", "name": "not_reached", "canned": true}));
+    assert_eq!(fetch()["kind"], "refused", "the shell's own answer after it: the daemon's refusal of a cell that is none");
+    // A refusal's name, the page's own bytes, is served back whole and
+    // clipped on talk.
+    let long = "x".repeat(1_000);
+    provider.result("script", json!({"call": "probe", "refusal": long}));
+    assert_eq!(provider.refused("probe", json!({}))["name"], long.as_str());
+    // Each canned answer logged `canned`, and the call after it not.
+    let (_, _, body) = provider.get("/bridge/log");
+    let log: Value = serde_json::from_slice(&body).unwrap();
+    let outcomes = |call: &str| -> Vec<String> { log.as_array().unwrap().iter().filter(|e| e["kind"] == "call" && e["call"] == call).map(|e| e["outcome"].as_str().unwrap().to_string()).collect() };
+    for call in ["publication.open", "publication.count", "fetch"] {
+        assert_eq!(outcomes(call), ["canned", "refused"], "{call}");
+    }
+    let clipped = format!("\"{}…", "x".repeat(119));
+    let said = talk_holding(
+        &provider,
+        &[
+            "script: the next `publication.open` is armed to answer a canned result",
+            "script: `publication.open` answers its canned result",
+            "script: the next `publication.count` is armed to answer a canned result — the answer armed before it is dropped",
+            "script: `health` answers the canned refusal \"busy\"",
+            "script: `fetch` answers the canned refusal \"not_reached\"",
+            &format!("script: the next `probe` is armed to answer the canned refusal {clipped}"),
+            &format!("script: `probe` answers the canned refusal {clipped}"),
+        ],
+    );
+    assert_eq!(said.matches("script: `publication.open` answers its canned result").count(), 1, "{said}");
+    assert!(!said.contains(&"x".repeat(120)), "a refusal's name is clipped on talk");
+    // The event arm.
+    assert_eq!(
+        provider.result("script", json!({"event": "publication", "data": {"board": board, "session": "s-000000000000000000000000", "draft": "1.0.1.0.2", "state": "sent"}})),
+        json!({"fired": "publication"})
+    );
+    assert_eq!(next_event(&rx, "publication", |v| v["state"] == "sent")["draft"], "1.0.1.0.2");
+    drop(rx);
+    assert_eq!(provider.stop(), 0);
     sd.shutdown();
 }
 

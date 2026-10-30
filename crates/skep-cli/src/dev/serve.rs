@@ -74,10 +74,12 @@ pub struct Provider<'d> {
     pub admission: Admission,
     /// The stop, once asked: why — stdin closed, or unreadable.
     stop: OnceLock<String>,
-    /// The script seam's canned refusals, by call.
+    /// The script seam's armed answers, by call.
     ///
-    /// Each is the next answer of that call.
-    pub canned: Mutex<HashMap<String, Value>>,
+    /// Each is that call's next answer, a canned result or a canned refusal
+    /// (`Canned`), served once; a call is keyed by the bridge's own spelling
+    /// (`CALLS`), so no byte of a page's request is a key.
+    canned: Mutex<HashMap<&'static str, Canned>>,
     /// The in-process node, where the verb runs one.
     pub node: Option<&'d node::Node>,
     /// The permits the fault route holds.
@@ -130,6 +132,39 @@ impl Provider<'_> {
             )
         })
     }
+
+    /// Arms `call`'s next answer as `canned`, one armed answer per call.
+    ///
+    /// It answers the answer armed before it, which `canned` replaces.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the armed answers' lock is poisoned: a thread that panicked
+    /// held it.
+    fn arm(&self, call: &'static str, canned: Canned) -> Option<Canned> {
+        self.canned.lock().expect("the armed answers' lock").insert(call, canned)
+    }
+
+    /// Takes `call`'s armed answer, where one is armed: it is served once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the armed answers' lock is poisoned: a thread that panicked
+    /// held it.
+    fn take_canned(&self, call: &str) -> Option<Canned> {
+        self.canned.lock().expect("the armed answers' lock").remove(call)
+    }
+}
+
+/// One answer the script seam armed for a call's next request.
+///
+/// It is a canned answer of `client.md` §4b.5's mock, served once, by the
+/// provider and never the shell, and it changes nothing in the shell.
+enum Canned {
+    /// The call's result, served exactly as armed.
+    Answer(Value),
+    /// A refusal, marked `canned`.
+    Refusal(Value),
 }
 
 /// The throwaway store a bare run makes where it names no `--dir`.

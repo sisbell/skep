@@ -75,19 +75,20 @@ recorded.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the twenty-four calls of `skep-shell`'s `CALLS`,
-`client.md` §4b.1's twenty-two, `places`, the document index's listing,
-and `changes`, the change feed's page
-(`{result}` or `{refused}` back, HTTP 200 either way; a 4xx is the
-provider's own refusal), `GET /bridge/events` for the seven events of
-§4b.2 (`event:` and `data:` lines, a `:ka` comment every fifteen seconds),
-`POST /bridge/answer` and `/bridge/cancel` for a moment's two answers,
-`GET /bridge/log` (every call the page made and every dial the provider
-made), `GET /bridge/shapes` (the TypeScript declarations), `POST
-/bridge/script` (the next answer of a call armed as a named refusal, an
-event fired by hand), and `POST /bridge/fetch`, which streams a blob's
-bytes. ONE page origin is admitted (`--page-origin`, required): every
-request's `Origin` must equal it, `Host` must name the listen address
+`POST /bridge/<call>` for the twenty-eight calls of `skep-shell`'s
+`CALLS`, `client.md` §4b.1's twenty-six — the publication family's four
+among them — `places`, the document index's listing, and `changes`, the
+change feed's page (`{result}` or `{refused}` back, HTTP 200 either way;
+a 4xx is the provider's own refusal), `GET /bridge/events` for the eight
+events of §4b.2 (`event:` and `data:` lines, a `:ka` comment every fifteen
+seconds), `POST /bridge/answer` and `/bridge/cancel` for a moment's two
+answers, `GET /bridge/log` (every call the page made and every dial the
+provider made), `GET /bridge/shapes` (the TypeScript declarations), `POST
+/bridge/script` (the next answer of a call armed as a canned result or a
+named refusal, served once — `fetch`'s as a refusal alone; an event fired
+by hand), and `POST /bridge/fetch`, which streams a blob's bytes. ONE
+page origin is admitted (`--page-origin`, required): every request's
+`Origin` must equal it, `Host` must name the listen address
 (`--listen`), the peer must be loopback, and the per-run secret must ride
 the `Skep-Provider` header, or the event stream's URL as
 `?provider=<secret>`, since an `EventSource` sends no custom header

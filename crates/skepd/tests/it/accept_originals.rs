@@ -45,9 +45,12 @@
 //! passage P; shot 1 → `E.1` and shot 2 → `E.2`, each re-supplying P by
 //! reference, so P's bytes are ONE identity at `E`, `E.1` and `E.2`. `N` is
 //! a private notes document holding the note Z; `L`, homed in `N`, cites P on
-//! `E.2` FROM and Z TO. `D` is a private draft with its own new words W and a
-//! one-sided link `M` on them; `F` a private draft that transcludes P from
-//! `E` by `copy`. THE ACCEPT of an original into a member: S's `make_link`
+//! `E.2` FROM and Z TO; `W`, homed in `N` beside it, is a WHOLE-WORK link —
+//! the address form FROM the bare `E`, one unit subtree span at `E`'s
+//! address, TO Z — the corner's, which the region read answers at every
+//! passage of `E`'s identity and no publication offers. `D` is a private
+//! draft with its own new words W and a one-sided link `M` on them; `F` a
+//! private draft that transcludes P from `E` by `copy`. THE ACCEPT of an original into a member: S's `make_link`
 //! homed in the member, its ends V-specs the member and the far document
 //! resolve, attested → the copy; `read_link` of the copy; S's `assert_sup`
 //! homed where the original is → the claim. No `nullify`.
@@ -56,7 +59,11 @@
 //! selection; each address read for its home and kept where the home is a
 //! private document of the claimant's (a published home is no row: the
 //! destination's own chain, and the claimant's doc 1, whose two ceremony
-//! records `find_links_v` answers ahead of every region's own); one
+//! records `find_links_v` answers ahead of every region's own); each kept
+//! link read once and kept as a candidate only where a stored end touches
+//! the selection through a content span — THE STORED-ENDSET TEST (§5.1): a
+//! link the region read answers through a whole-work end alone, `W` on
+//! `E`'s words, is no candidate; one
 //! `in_claims {y, view: "active"}` per candidate; each claim read for its
 //! `new`, whose liveness is read at the draft (`discoverable_from {new, D}`);
 //! the candidate dropped where some claim's `new` meets all three keys.
@@ -157,9 +164,21 @@ fn chain(port: u16, signed: &str) -> Chain {
     Chain { e, e1, e2 }
 }
 
-/// The notes document `N` holding Z, and the original `L` homed in it: FROM
-/// P's V-spec on `E.2`, TO Z's V-spec on `N`. Answers `(N, L)`.
-fn notes_and_original(port: u16, bare: &str, c: &Chain) -> (String, String) {
+/// The notes document `N`, the original `L` homed in it and the whole-work
+/// link `W` beside it.
+struct Notes {
+    n: String,
+    l: String,
+    w: String,
+}
+
+/// The notes document `N` holding Z; the original `L` homed in it, FROM P's
+/// V-spec on `E.2`, TO Z's V-spec on `N`; and the whole-work link `W` beside
+/// it: the address form FROM the bare document `E` — one unit subtree span
+/// at `E`'s address, the stored form the region read over any of E's words
+/// answers — TO Z's V-spec on `N`, the citation type: the corner's link,
+/// which the stored-endset test keeps off every publication's list.
+fn notes_and_original(port: u16, bare: &str, c: &Chain) -> Notes {
     let n = draft_with(port, bare, Z);
     assert_eq!(n, "1.0.1.0.3", "the notes, the claimant's third document");
     let l = acked_addr(&op(port, Some(bare), &citation(&n, &vspec(&c.e2, 1, P_LEN), &vspec(&n, 1, Z_LEN))));
@@ -169,7 +188,14 @@ fn notes_and_original(port: u16, bare: &str, c: &Chain) -> (String, String) {
         json!([i_slot(&p_run(&c.e).0, P_LEN), i_slot(&format!("{n}.0.1.1"), Z_LEN), i_slot(T_CITATION, 1)]),
         "the original's slots as stored: P's and Z's I-spans, the type"
     );
-    (n, l)
+    let w = acked_addr(&op(port, Some(bare), &citation(&n, &addrs_slot(&[&c.e]), &vspec(&n, 1, Z_LEN))));
+    assert_eq!(w, format!("{n}.0.2.2"), "the whole-work link, N's second");
+    assert_eq!(
+        read_link(port, Some(bare), &w)["slots"],
+        json!([i_slot(&c.e, 1), i_slot(&format!("{n}.0.1.1"), Z_LEN), i_slot(T_CITATION, 1)]),
+        "the whole-work link's slots as stored: E's unit subtree span, Z's I-span, the type"
+    );
+    Notes { n, l, w }
 }
 
 /// A shot staged off `E.1` once `E.2` exists: `E.1`'s daughter `E.1.1`, in
@@ -312,6 +338,20 @@ fn candidates(port: u16, token: Option<&str>, doc: &str, from: u64, width: u64) 
         let mut ends = addresses(&slot_runs(&slots[0]));
         ends.extend(addresses(&slot_runs(&slots[1])));
         let on_selection: BTreeSet<String> = ends.intersection(&selection).cloned().collect();
+        // THE STORED-ENDSET TEST (the link-sets design §5.1): a candidate
+        // only where a stored end touches the selection through a span
+        // below a document's address — a content span, or a unit span at a
+        // content position. `expand_runs` expands a stored span from its
+        // start's last component, so a content span's addresses are content
+        // positions, and a whole-work end's — a unit subtree span at a
+        // document's address or an ancestor's — is that address alone,
+        // never a position the selection holds: a link the region read
+        // answers through a whole-work end alone has nothing on the
+        // selection and is no candidate, the corner's. One comparison, off
+        // the slots already read.
+        if on_selection.is_empty() {
+            continue;
+        }
         let successors = claim_rows(port, token, &link, "active")
             .iter()
             .map(|row| {
@@ -372,9 +412,10 @@ fn changes_since(port: u16, token: Option<&str>, since: u64) -> Vec<Value> {
 
 /// R1 — the original stands beside its copy (PUB-6.22; the ruling): after
 /// the accept, `read_link L` answers verbatim and `L` is still discoverable
-/// from `E`; `find_links_v` over P at `E.2` answers `L` and `L′` for S and
-/// `L′` alone for the guest, the census the floor's two plus each; at `N`
-/// over Z both end there; `in_claims {y: L}` answers `C` and `out_claims {x:
+/// from `E`; `find_links_v` over P at `E.2` answers `L` and `L′` for S — and
+/// `W`, the fixture's whole-work link, through `E`'s unit span — and `L′`
+/// alone for the guest, the census the floor's two plus each; at `N` over Z
+/// all three end there; `in_claims {y: L}` answers `C` and `out_claims {x:
 /// L′}` answers `C` for S, and the guest no row (the claim's home
 /// unreadable, PUB-6.13).
 #[test]
@@ -385,15 +426,15 @@ fn the_accepted_original_stands_beside_its_copy_superseded_and_unretracted() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &signed);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
     let Chain { e, e2, .. } = &c;
     let before = read_link(port, Some(&signed), &l);
-    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&l]), "before: the owner at E.2");
+    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&l, &w]), "before: the owner at E.2 — L on P, W through E's unit span");
     assert_eq!(find_links_v(port, None, e2, 1, P_LEN), floor_and(&[]), "before: the guest sees no private link");
 
     let a = accept(port, &signed, e2, &n, &l, &vspec(e2, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     assert_eq!(a.copy, format!("{e2}.0.2.1"), "the copy, the member's first link");
-    assert_eq!(a.claim, format!("{n}.0.2.2"), "the claim, N's next link");
+    assert_eq!(a.claim, format!("{n}.0.2.3"), "the claim, N's next link past W");
     assert_eq!(
         a.copy_link["slots"],
         json!([i_slot(&p_run(e).0, P_LEN), i_slot(&format!("{n}.0.1.1"), Z_LEN), i_slot(T_CITATION, 1)]),
@@ -404,11 +445,11 @@ fn the_accepted_original_stands_beside_its_copy_superseded_and_unretracted() {
     assert!(read_link(port, None, &l).is_null(), "the guest: the original is absent by address");
     assert!(discoverable_from(port, Some(&signed), &l, e), "the original is active and reachable from E");
     assert!(discoverable_from(port, Some(&signed), &a.copy, e), "and so is its copy");
-    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&a.copy, &l]), "the owner at E.2: both");
+    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&a.copy, &l, &w]), "the owner at E.2: both, and W");
     assert_eq!(find_links_v(port, None, e2, 1, P_LEN), floor_and(&[&a.copy]), "the guest at E.2: the copy alone");
-    assert_eq!(count_v(port, Some(&signed), e2, 1, P_LEN), 4, "the owner's census: the floor's two and the pair");
+    assert_eq!(count_v(port, Some(&signed), e2, 1, P_LEN), 5, "the owner's census: the floor's two, the pair and W");
     assert_eq!(count_v(port, None, e2, 1, P_LEN), 3, "the guest's census: the floor's two and the copy");
-    assert_eq!(find_links_v(port, Some(&signed), &n, 1, Z_LEN), floor_and(&[&a.copy, &l]), "at N over Z: both end there");
+    assert_eq!(find_links_v(port, Some(&signed), &n, 1, Z_LEN), floor_and(&[&a.copy, &l, &w]), "at N over Z: all three end there");
     assert_eq!(
         claim_rows(port, Some(&signed), &l, "active"),
         vec![claim_row(&a.claim, &n, &l, &a.copy)],
@@ -421,11 +462,12 @@ fn the_accepted_original_stands_beside_its_copy_superseded_and_unretracted() {
 }
 
 /// R2 — the filter drops it (the ruling's first rider): before the accept
-/// `offered` over P at `E.2` answers `L`; after it the one candidate's one
-/// successor meets all three keys and `offered` answers nothing; a second
-/// private link `L2` in `N` on P with no claim IS offered; and `L′` is never
-/// a candidate — its home is the member, which projects to the published
-/// `E` ("`E` no row").
+/// `offered` over P at `E.2` answers `L` — never `W`, the whole-work link
+/// the region read answers beside it (the stored-endset test); after it the
+/// one candidate's one successor meets all three keys and `offered` answers
+/// nothing; a second private link `L2` in `N` on P with no claim IS offered;
+/// and `L′` is never a candidate — its home is the member, which projects to
+/// the published `E` ("`E` no row").
 #[test]
 fn the_filter_drops_the_accepted_original_on_all_three_keys_and_offers_an_unclaimed_one() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -434,7 +476,7 @@ fn the_filter_drops_the_accepted_original_on_all_three_keys_and_offers_an_unclai
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &signed);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
     let Chain { e, e2, .. } = &c;
     assert_eq!(offered(port, Some(&signed), e2, 1, P_LEN), vec![l.clone()], "before the accept: offered");
 
@@ -462,8 +504,8 @@ fn the_filter_drops_the_accepted_original_on_all_three_keys_and_offers_an_unclai
     );
 
     let l2 = acked_addr(&op(port, Some(&bare), &citation(&n, &vspec(e2, 1, P_LEN), &vspec(&n, 1, Z_LEN))));
-    assert_eq!(l2, format!("{n}.0.2.3"), "N's third link, past the claim");
-    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&a.copy, &l, &l2]), "the owner at E.2");
+    assert_eq!(l2, format!("{n}.0.2.4"), "N's fourth link, past W and the claim");
+    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&a.copy, &l, &w, &l2]), "the owner at E.2");
     assert_eq!(
         candidates(port, Some(&signed), e2, 1, P_LEN)
             .iter()
@@ -481,9 +523,9 @@ fn the_filter_drops_the_accepted_original_on_all_three_keys_and_offers_an_unclai
 /// `lineage.rs`: resident, not active): S's `nullify {home: E.2, target: L′}`
 /// is acked with the member's next address; `in_claims {y: L}` STILL answers
 /// `C`, active; `discoverable_from {a: L′, d: E}` is false; `find_links_v`
-/// over P at `E.2` answers `L` alone for S and nothing for the guest; the
-/// filter offers `L` again, key (ii) failing — where the contrast keyed on
-/// (i) alone would drop it for good.
+/// over P at `E.2` answers `L` (and `W`, the whole-work link, offered never)
+/// for S and nothing for the guest; the filter offers `L` again, key (ii)
+/// failing — where the contrast keyed on (i) alone would drop it for good.
 #[test]
 fn retracting_the_copy_leaves_its_claim_active_and_offers_the_original_again() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -492,7 +534,7 @@ fn retracting_the_copy_leaves_its_claim_active_and_offers_the_original_again() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &signed);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
     let Chain { e, e2, .. } = &c;
     let a = accept(port, &signed, e2, &n, &l, &vspec(e2, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     assert_eq!(offered(port, Some(&signed), e2, 1, P_LEN), Vec::<String>::new(), "accepted: not offered");
@@ -510,7 +552,7 @@ fn retracting_the_copy_leaves_its_claim_active_and_offers_the_original_again() {
     assert!(!discoverable_from(port, Some(&signed), &a.copy, e), "the copy is retracted: not discoverable from E");
     assert!(discoverable_from(port, Some(&signed), &l, e), "the original stands");
     assert_eq!(read_link(port, None, &a.copy)["slots"].as_array().map(Vec::len), Some(3), "the copy's value stands, retracted");
-    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&l]), "the owner at E.2: the original alone");
+    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&l, &w]), "the owner at E.2: the original, and W");
     assert_eq!(find_links_v(port, None, e2, 1, P_LEN), floor_and(&[]), "the guest at E.2: nothing");
     assert_eq!(
         candidates(port, Some(&signed), e2, 1, P_LEN),
@@ -704,21 +746,23 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
 /// R5 — the accept reaches no other arrangement (investigation §3.4; M8's
 /// contrast): `F` transcludes P from `E`; `find_links_v` at `F` over P
 /// answers `L` for S before the accept and `L` and `L′` after it, both on
-/// P's identity. On a SECOND board the ruled retraction is driven instead —
-/// `nullify {home: N, target: L}` after the claim — and `F` answers `L′`
-/// alone: the loss the accept without a retraction avoids, shown beside it.
+/// P's identity — and `W`, the whole-work link on `E`, which follows `E`'s
+/// identity into the transcluding draft. On a SECOND board the ruled
+/// retraction is driven instead — `nullify {home: N, target: L}` after the
+/// claim — and `F` answers `L′` (and `W`) alone: the loss the accept
+/// without a retraction avoids, shown beside it.
 #[test]
 fn the_accept_reaches_no_other_arrangement_of_the_words_where_the_retraction_reaches_every_one() {
     // The transcluding draft F, and the owner's links on P there.
-    let with_f = |port: u16, signed: &str, bare: &str| -> (Chain, String, String, String) {
+    let with_f = |port: u16, signed: &str, bare: &str| -> (Chain, Notes, String) {
         let c = chain(port, signed);
-        let (n, l) = notes_and_original(port, bare, &c);
+        let notes = notes_and_original(port, bare, &c);
         let f = owner_draft(port, bare);
         assert_eq!(f, "1.0.1.0.4", "the transcluding draft, the claimant's fourth document");
         expect_resp(&copy_span(port, bare, &f, 1, &c.e, 1, P_LEN), "ack");
         assert_eq!(image_runs(port, Some(bare), &f, 1, P_LEN), vec![p_run(&c.e)], "F holds P's identity");
-        assert_eq!(find_links_v(port, Some(signed), &f, 1, P_LEN), floor_and(&[&l]), "before the accept: L at F");
-        (c, n, l, f)
+        assert_eq!(find_links_v(port, Some(signed), &f, 1, P_LEN), floor_and(&[&notes.l, &notes.w]), "before the accept: L at F, and W on E's identity");
+        (c, notes, f)
     };
 
     // Board 1: the accept, nothing retracted.
@@ -727,14 +771,14 @@ fn the_accept_reaches_no_other_arrangement_of_the_words_where_the_retraction_rea
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    let (c, n, l, f) = with_f(port, &signed, &bare);
+    let (c, Notes { n, l, w }, f) = with_f(port, &signed, &bare);
     let a = accept(port, &signed, &c.e2, &n, &l, &vspec(&c.e2, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     assert_eq!(
         find_links_v(port, Some(&signed), &f, 1, P_LEN),
-        floor_and(&[&a.copy, &l]),
-        "after the accept: both at F, on P's identity"
+        floor_and(&[&a.copy, &l, &w]),
+        "after the accept: both at F, on P's identity, and W"
     );
-    assert_eq!(count_v(port, Some(&signed), &f, 1, P_LEN), 4);
+    assert_eq!(count_v(port, Some(&signed), &f, 1, P_LEN), 5);
     sd.shutdown();
 
     // Board 2: the ruled retraction instead.
@@ -743,17 +787,17 @@ fn the_accept_reaches_no_other_arrangement_of_the_words_where_the_retraction_rea
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    let (c, n, l, f) = with_f(port, &signed, &bare);
+    let (c, Notes { n, l, w }, f) = with_f(port, &signed, &bare);
     let a = accept(port, &signed, &c.e2, &n, &l, &vspec(&c.e2, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     let v = op(port, Some(&signed), &nullify_frame(&n, &l));
     assert_eq!(verdict(&v), "ok", "the ruled retraction: {v}");
-    assert_eq!(acked_addr(&v), format!("{n}.0.2.3"), "the retraction, N's next link");
+    assert_eq!(acked_addr(&v), format!("{n}.0.2.4"), "the retraction, N's next link");
     assert_eq!(
         find_links_v(port, Some(&signed), &f, 1, P_LEN),
-        floor_and(&[&a.copy]),
-        "the retraction reaches the transcluding draft: the original is gone there too"
+        floor_and(&[&a.copy, &w]),
+        "the retraction reaches the transcluding draft: the original is gone there too; W stands"
     );
-    assert_eq!(count_v(port, Some(&signed), &f, 1, P_LEN), 3);
+    assert_eq!(count_v(port, Some(&signed), &f, 1, P_LEN), 4);
     assert!(!discoverable_from(port, Some(&signed), &l, &c.e), "retracted: not discoverable");
     assert_eq!(read_link(port, Some(&signed), &l)["slots"].as_array().map(Vec::len), Some(3), "the value stands");
     sd.shutdown();
@@ -774,16 +818,16 @@ fn a_second_publication_reading_after_the_first_claim_offers_the_original_no_mor
     assert_ne!(s1, s2, "two sessions under one key");
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &s1);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
     let Chain { e2, .. } = &c;
     assert_eq!(offered(port, Some(&s2), e2, 1, P_LEN), vec![l.clone()], "before: S2 is offered L");
 
     let a = accept(port, &s1, e2, &n, &l, &vspec(e2, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     assert_eq!(a.copy, format!("{e2}.0.2.1"));
-    assert_eq!(a.claim, format!("{n}.0.2.2"));
+    assert_eq!(a.claim, format!("{n}.0.2.3"));
     assert_eq!(offered(port, Some(&s2), e2, 1, P_LEN), Vec::<String>::new(), "S2, reading after S1's claim: not offered");
     assert_eq!(claim_rows(port, Some(&s2), &l, "active"), vec![claim_row(&a.claim, &n, &l, &a.copy)], "one claim");
-    assert_eq!(find_links_v(port, Some(&s2), e2, 1, P_LEN), floor_and(&[&a.copy, &l]), "one successor beside the original");
+    assert_eq!(find_links_v(port, Some(&s2), e2, 1, P_LEN), floor_and(&[&a.copy, &l, &w]), "one successor beside the original, and W");
     sd.shutdown();
 }
 
@@ -802,7 +846,7 @@ fn two_publications_that_both_read_first_mint_two_copies_and_two_claims() {
     let s2 = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &s1);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
     let Chain { e, e2, .. } = &c;
     assert_eq!(offered(port, Some(&s1), e2, 1, P_LEN), vec![l.clone()], "S1 reads first: offered");
     assert_eq!(offered(port, Some(&s2), e2, 1, P_LEN), vec![l.clone()], "S2 reads first: offered");
@@ -811,9 +855,9 @@ fn two_publications_that_both_read_first_mint_two_copies_and_two_claims() {
     let a1 = accept(port, &s1, e2, &n, &l, &vspec(e2, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     let a2 = accept(port, &s2, &e11, &n, &l, &vspec(&e11, 1, P_LEN), &vspec(&n, 1, Z_LEN));
     assert_eq!(a1.copy, format!("{e2}.0.2.1"), "S1's copy, E.2's first link");
-    assert_eq!(a1.claim, format!("{n}.0.2.2"), "S1's claim");
+    assert_eq!(a1.claim, format!("{n}.0.2.3"), "S1's claim, past W");
     assert_eq!(a2.copy, format!("{e11}.0.2.1"), "S2's copy, the daughter's first link");
-    assert_eq!(a2.claim, format!("{n}.0.2.3"), "S2's claim: a second claim on one original, admitted");
+    assert_eq!(a2.claim, format!("{n}.0.2.4"), "S2's claim: a second claim on one original, admitted");
     assert_eq!(
         claim_rows(port, Some(&s1), &l, "active"),
         vec![claim_row(&a1.claim, &n, &l, &a1.copy), claim_row(&a2.claim, &n, &l, &a2.copy)],
@@ -821,8 +865,8 @@ fn two_publications_that_both_read_first_mint_two_copies_and_two_claims() {
     );
     assert_eq!(
         find_links_v(port, Some(&s1), e, 1, P_LEN),
-        floor_and(&[&a2.copy, &a1.copy, &l]),
-        "the owner at E: two copies and the original"
+        floor_and(&[&a2.copy, &a1.copy, &l, &w]),
+        "the owner at E: two copies, the original and W"
     );
     assert_eq!(find_links_v(port, None, e, 1, P_LEN), floor_and(&[&a2.copy, &a1.copy]), "the guest at E: two copies");
     assert_eq!(count_v(port, None, e, 1, P_LEN), 4, "two public marks for every reader");
@@ -849,7 +893,7 @@ fn the_feed_shows_two_commits_per_accepted_link_and_no_retraction() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &signed);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, .. } = notes_and_original(port, &bare, &c);
     let Chain { e2, .. } = &c;
 
     let before = head_position(port);
@@ -968,7 +1012,7 @@ fn a_daughters_accepted_originals_are_not_offered_again_on_its_line() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &signed);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
     let d = draft_with(port, &bare, W);
     let w_native = (format!("{d}.0.1.1"), W_LEN);
     let m = acked_addr(&op(port, Some(&bare), &citation(&d, &vspec(&d, 1, W_LEN), NONE)));
@@ -1013,8 +1057,8 @@ fn a_daughters_accepted_originals_are_not_offered_again_on_its_line() {
     let record = format!("{d}.0.2.2");
     assert_eq!(
         find_links_v(port, Some(&signed), &d, 1, P_LEN + W_LEN),
-        floor_and(&[&al.copy, &am.copy, &l, &record]),
-        "the two copies by identity, L on P and the shot's record on the fresh W; M stands on no position of the re-windowed text"
+        floor_and(&[&al.copy, &am.copy, &l, &w, &record]),
+        "the two copies by identity, L on P, the whole-work link on E's identity and the shot's record on the fresh W; M stands on no position of the re-windowed text"
     );
     assert_eq!(
         candidates(port, Some(&signed), &d, 1, P_LEN + W_LEN),
@@ -1087,7 +1131,7 @@ fn the_publication_s_links_entry_lands_the_copy_and_the_claim_in_one_commit() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = chain(port, &signed);
-    let (n, l) = notes_and_original(port, &bare, &c);
+    let Notes { n, l, .. } = notes_and_original(port, &bare, &c);
     let Chain { e, e2, .. } = &c;
     let before_link = read_link(port, Some(&signed), &l);
     assert_eq!(offered(port, Some(&signed), e2, 1, P_LEN), vec![l.clone()], "before: offered");
@@ -1105,7 +1149,7 @@ fn the_publication_s_links_entry_lands_the_copy_and_the_claim_in_one_commit() {
     let e3 = acked_addr(&v);
     assert_eq!(e3, format!("{e}.3"), "the next trunk member");
     let copy = format!("{e3}.0.2.1");
-    let claim = format!("{n}.0.2.2");
+    let claim = format!("{n}.0.2.3");
     assert_eq!(
         read_link(port, Some(&signed), &copy)["slots"],
         json!([i_slot(&p_run(e).0, P_LEN), i_slot(&format!("{n}.0.1.1"), Z_LEN), i_slot(T_CITATION, 1)]),
@@ -1119,5 +1163,83 @@ fn the_publication_s_links_entry_lands_the_copy_and_the_claim_in_one_commit() {
     assert_eq!(rows.len(), 1, "one commit for the member, the copy and the claim: {rows:?}");
     assert_eq!(rows[0]["docs"], json!([e3, n]), "the member first, the claim's home beside it: {}", rows[0]);
     assert_eq!(changes_since(port, None, head)[0]["docs"], json!([e3]), "the guest: the member alone");
+    sd.shutdown();
+}
+
+/// R13 — THE REGION READ AT A WHOLE-WORK END (the link-sets design §3's
+/// UNVERIFIED-HERE 4, measured here): `find_links_v` over P at `E.2`, at the
+/// bare `E`, and at a draft `F` that windows P from `E` answers `W` for S —
+/// the unit subtree span at `E`'s address is a prefix of every position of
+/// P's identity under `E`'s chain, "whose endsets touch the region" (wire.md
+/// §Link discovery reads) — and the guest, who cannot read `N`, is answered
+/// neither `W` nor `L`; `count_v` counts it. THE STORED-ENDSET TEST then:
+/// `offered` over P leaves `W` out at `E.2` and at `F`, where the filter
+/// without the test would offer it; at `N` over Z, where `W`'s content end
+/// stands on the selection, it IS offered — the test is keyed to the
+/// selection, never to a whole-work end's presence.
+#[test]
+fn the_region_read_answers_a_whole_work_link_at_every_passage_and_the_filter_offers_it_never() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let c = chain(port, &signed);
+    let Notes { n, l, w } = notes_and_original(port, &bare, &c);
+    let Chain { e, e2, .. } = &c;
+    assert_eq!(find_links_v(port, Some(&signed), e2, 1, P_LEN), floor_and(&[&l, &w]), "the owner at E.2: L on P, and W through E's unit span");
+    assert_eq!(find_links_v(port, Some(&signed), e, 1, P_LEN), floor_and(&[&l, &w]), "at the bare E, which floats to E.2: the same");
+    assert_eq!(find_links_v(port, None, e2, 1, P_LEN), floor_and(&[]), "the guest: N unreadable, neither");
+    assert_eq!(count_v(port, Some(&signed), e2, 1, P_LEN), 4, "the owner's census: the floor's two, L and W");
+    let f = owner_draft(port, &bare);
+    expect_resp(&copy_span(port, &bare, &f, 1, e, 1, P_LEN), "ack");
+    assert_eq!(image_runs(port, Some(&bare), &f, 1, P_LEN), vec![p_run(e)], "F windows P's identity");
+    assert_eq!(find_links_v(port, Some(&signed), &f, 1, P_LEN), floor_and(&[&l, &w]), "at F: E's whole-work link follows E's identity into the window");
+    assert_eq!(find_links_v(port, Some(&signed), &n, 1, Z_LEN), floor_and(&[&l, &w]), "at N over Z: both end there, W through its content end");
+    assert_eq!(offered(port, Some(&signed), e2, 1, P_LEN), vec![l.clone()], "offered at E.2: L alone — W dropped by the stored-endset test");
+    assert_eq!(offered(port, Some(&signed), &f, 1, P_LEN), vec![l.clone()], "and at F");
+    assert_eq!(offered(port, Some(&signed), &n, 1, Z_LEN), vec![l.clone(), w.clone()], "at N over Z, W is a candidate: its content end stands on the selection");
+    sd.shutdown();
+}
+
+/// R14 — THE DOOR AT A WHOLE-WORK ORIGINAL (the owner's ruling, 2026-10-29:
+/// refuse; the link-sets design §5.1's test at the door): a `publish` of `E`
+/// off `E.2` carrying a `links` entry whose `old` is `W` — the copy's `from`
+/// P by the member-position form, its `to` Z's I-span, the citation type —
+/// is refused `old_refused` with `detail` `whole_work`, permanent,
+/// `site.index` the entry, nothing committed: no member `E.3`, no copy, no
+/// claim on `W`, the head unchanged. An entry the ceremony never sends — the
+/// composition drops `W` by the stored-endset test — decided at the door
+/// all the same; the same shot with `old` the passage link `L` lands (R12).
+#[test]
+fn the_door_refuses_an_accept_whose_original_is_a_whole_work_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let c = chain(port, &signed);
+    let Notes { n, w, .. } = notes_and_original(port, &bare, &c);
+    let Chain { e, e2, .. } = &c;
+    let head = head_position(port);
+    let mut frame: Value = serde_json::from_str(&publish_frame(e, Some((e2, P_LEN)), None, &shot_runs(port, None, e2, 1, P_LEN))).expect("a frame");
+    frame["links"] = json!([{
+        "home": "member",
+        "from": {"member": [{"ordinal": "1", "width": P_LEN.to_string()}]},
+        "to": {"spans": [{"start": format!("{n}.0.1.1"), "width": Z_LEN.to_string()}]},
+        "ty": {"addrs": [T_CITATION]},
+        "old": w,
+    }]);
+    let v = op(port, Some(&signed), &frame.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some("old_refused"), "{v}");
+    assert_eq!(rej["detail"].as_str(), Some("whole_work"), "the cause: {v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(rej["site"], json!({"index": 0}), "the entry, and nothing else: {v}");
+    assert_eq!(head_position(port), head, "nothing committed");
+    assert_ne!(doc_metadata(port, Some(&signed), &format!("{e}.3"))["resp"].as_str(), Some("doc_metadata"), "no third member");
+    assert!(read_link(port, Some(&signed), &format!("{e}.3.0.2.1")).is_null(), "no copy");
+    assert_eq!(claim_rows(port, Some(&signed), &w, "active"), Vec::<Value>::new(), "no claim on W");
+    assert_eq!(read_link(port, Some(&signed), &w)["slots"][0], i_slot(e, 1), "W stands as it was");
     sd.shutdown();
 }

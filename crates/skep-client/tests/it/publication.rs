@@ -5,13 +5,17 @@
 //! its own and a window onto `O`, the person's own unpublished origin; links
 //! in THREE homes of the person's on the selection's words (the draft's own
 //! set, the notes `N`, the public set `S`), one in a second public set `S2`,
-//! one of a sub-account's on the same words, a held removal of a published
-//! mark, a read-with standing between `E` and `S`.
+//! one of a sub-account's on the same words, a whole-work link in `N` on
+//! the draft `D` itself — the address form FROM `D`, one unit subtree span
+//! at its address, TO a span of `Z` — a held removal of a published mark, a
+//! read-with standing between `E` and `S`.
 //!
 //! THE FIRST GATE: the composition's enumeration over the whole draft EQUALS
 //! the daemon's own filter — skepd's `accept_originals.rs` `offered`, ported
-//! here over raw frames — the same addresses in the same grouping by home;
-//! a red here is a library red. Then the panel's rows and the count, the
+//! here over raw frames — the same addresses in the same grouping by home,
+//! the whole-work link on `D` in neither side's list (the stored-endset
+//! test, the design's §5.1, applied by both); a red here is a library red.
+//! Then the panel's rows and the count, the
 //! price, the re-read, THE ONE REQUEST's bytes against the daemon's
 //! acceptance — the acknowledgment with the member, the copies present in
 //! each home, the claim in the original's home, the read-with written, the
@@ -181,6 +185,7 @@ struct Seeded {
     heading_d: String,
     cite_d: String,
     l1_n: String,
+    whole_n: String,
     k_s: String,
     k2_s2: String,
     mpub: String,
@@ -212,8 +217,12 @@ fn seed(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token:
     let mark_d = make_link(board, session, bare_token, signer, &d, false, End::Addrs(vec![]), spec(&d, 21, 3, &d, 2), T_STRONG);
     let heading_d = make_link(board, session, bare_token, signer, &d, false, End::Addrs(vec![]), spec(&d, 20, 10, &d, 1), T_HEADING);
     let cite_d = make_link(board, session, bare_token, signer, &d, false, spec(&d, 25, 5, &d, 6), spec(&z, 1, 3, &z, 1), T_CITATION);
-    // The notes: a citation from E's kept words to the note.
+    // The notes: a citation from E's kept words to the note, and THE
+    // WHOLE-WORK LINK on the draft itself — the address form FROM `D`, one
+    // unit subtree span at its address, TO a span of Z — the corner's link
+    // (the link-sets design §5.1), which no publication offers.
     let l1_n = make_link(board, session, bare_token, signer, &n, false, spec(&e1, 5, 5, &e, 5), spec(&n, 1, 5, &n, 1), T_CITATION);
+    let whole_n = make_link(board, session, bare_token, signer, &n, false, End::Addrs(vec![&d]), spec(&z, 1, 3, &z, 1), T_CITATION);
     // The public sets: a citation in S, a highlight in S2, and E read with S.
     let k_s = make_link(board, session, bare_token, signer, &s, true, spec(&e1, 1, 3, &e, 1), End::Addrs(vec![]), T_CITATION);
     let k2_s2 = make_link(board, session, bare_token, signer, &s2, true, spec(&e1, 1, 3, &e, 1), End::Addrs(vec![]), T_MARK);
@@ -231,12 +240,18 @@ fn seed(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_token:
     let sub_frame = json!({"op": "make_link", "home": sub_draft, "from": spec(&e1, 1, 3, &e, 1).wire(), "to": {"addrs": []}, "ty": {"addrs": [T_CITATION]}});
     let sub_link = acked_addr(&acked(board.op(Some(&sub), &sub_frame))).unwrap().to_string();
     let _ = anchors;
-    Seeded { e, e1, s, s2, d, n, o, z, mark_d, heading_d, cite_d, l1_n, k_s, k2_s2, mpub, held, sub_link }
+    Seeded { e, e1, s, s2, d, n, o, z, mark_d, heading_d, cite_d, l1_n, whole_n, k_s, k2_s2, mpub, held, sub_link }
 }
 
 /// THE ORACLE, ported from skepd's `accept_originals.rs`: `find_links_v` over
 /// the selection; each address read for its home and kept where the home is
-/// a private document of the claimant's; one `in_claims {y, view: active}`
+/// a private document of the claimant's; each kept link read once and kept
+/// as a candidate only where a stored end touches the selection through a
+/// content span — THE STORED-ENDSET TEST (the design's §5.1), in the
+/// daemon's suite's words: a whole-work end, a unit subtree span at a
+/// document's address, expands to that address alone, never a position the
+/// selection holds, so a link reaching the selection through one alone has
+/// nothing on it and is no candidate; one `in_claims {y, view: active}`
 /// per candidate; each claim's `new` read for its home and its FROM; the
 /// candidate dropped where some successor is homed in a published document
 /// of the claimant's AND covers the candidate's positions on the selection —
@@ -278,6 +293,11 @@ fn offered_oracle(board: &Board, token: &Token, doc: &str, from: u64, width: u64
         let mut ends = slot_addresses(&slots[0]);
         ends.extend(slot_addresses(&slots[1]));
         let on_selection: BTreeSet<String> = ends.intersection(&selection).cloned().collect();
+        // THE STORED-ENDSET TEST: nothing on the selection through a content
+        // span, no candidate.
+        if on_selection.is_empty() {
+            continue;
+        }
         let claims = read(board, token, &frames::in_claims(link));
         let dropped = claims["claims"].as_array().unwrap().iter().any(|row| {
             let new = row["new"].as_str().unwrap();
@@ -368,12 +388,20 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     let oracle = offered_oracle(&board, &token, d, 1, 34);
     let by_home = |groups: Vec<(String, Vec<String>)>| -> BTreeMap<String, Vec<String>> { groups.into_iter().collect() };
     let private: Vec<(String, Vec<String>)> = en.offered_by_home().into_iter().filter(|(h, _)| h.to_string() != *s && h.to_string() != *s2).map(|(h, links)| (h.to_string(), links.iter().map(ToString::to_string).collect())).collect();
+    // THE STORED-ENDSET TEST, met on the wire: the region read answers the
+    // whole-work link on `D` through `D`'s unit span, and NEITHER side offers
+    // it — the composition by its test, the oracle by its own.
+    let region = read(&board, &token, &frames::find_links_v(d, &[(1, 34)]));
+    assert!(region["addrs"].as_array().unwrap().iter().any(|a| a.as_str() == Some(seeded.whole_n.as_str())), "the region read answers the whole-work link on D: {region}");
+    let listed = |groups: &[(String, Vec<String>)]| -> Vec<String> { groups.iter().flat_map(|(_, links)| links.iter().cloned()).collect() };
+    assert!(!listed(&private).contains(&seeded.whole_n), "the composition offers no whole-work link: {private:?}");
+    assert!(!listed(&oracle).contains(&seeded.whole_n), "and neither does the daemon's own filter: {oracle:?}");
     assert_eq!(by_home(private), by_home(oracle.clone()), "the composition's private homes, as the daemon's own filter offers them");
     assert_eq!(by_home(oracle), BTreeMap::from([(d.clone(), vec![seeded.mark_d.clone(), seeded.heading_d.clone(), seeded.cite_d.clone()]), (n.clone(), vec![seeded.l1_n.clone()])]));
     let public: Vec<(String, Vec<String>)> = en.offered_by_home().into_iter().filter(|(h, _)| h.to_string() == *s || h.to_string() == *s2).map(|(h, links)| (h.to_string(), links.iter().map(ToString::to_string).collect())).collect();
     assert_eq!(public, vec![(s.clone(), vec![seeded.k_s.clone()]), (s2.clone(), vec![seeded.k2_s2.clone()])]);
     let all: Vec<String> = en.candidates.iter().map(|c| c.link.to_string()).collect();
-    assert!(!all.contains(&seeded.sub_link) && !all.contains(&seeded.held) && !all.contains(&seeded.mpub), "{all:?}");
+    assert!(!all.contains(&seeded.sub_link) && !all.contains(&seeded.held) && !all.contains(&seeded.mpub) && !all.contains(&seeded.whole_n), "{all:?}");
     assert_eq!(en.placed.len(), 3);
     assert_eq!(en.region, vec![(1, 34)]);
     assert_eq!(board.health().unwrap().log_position(), before, "the enumeration writes nothing");

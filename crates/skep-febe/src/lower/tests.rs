@@ -57,6 +57,7 @@ fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
         (PlanFault::DuplicateOriginal { index: 4 }, RejectCode::DuplicateOriginal, None),
         (PlanFault::ReadWithInLinks { index: 4 }, RejectCode::ReadWithInLinks, None),
         (PlanFault::Old { index: 4, cause: OldCause::Superseded }, RejectCode::OldRefused, Some("superseded")),
+        (PlanFault::Old { index: 4, cause: OldCause::WholeWork }, RejectCode::OldRefused, Some("whole_work")),
         (PlanFault::SlotTooLarge { index: 4 }, RejectCode::SlotTooLarge, None),
         (PlanFault::EmptyType { index: 4 }, RejectCode::EmptyTypeResolution, None),
         (PlanFault::RetractionClass { index: 4 }, RejectCode::RetractionClass, None),

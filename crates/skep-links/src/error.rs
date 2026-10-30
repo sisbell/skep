@@ -327,6 +327,11 @@ pub enum OldCause {
     Retracted,
     /// `old` is not the caller's own.
     NotOwner,
+    /// `old` reaches the words the shot publishes through a whole-work end
+    /// alone — a unit span at a document's address or an ancestor's — and
+    /// through no content span: the corner's link, which no panel offers
+    /// (the link-sets design §5.1's stored-endset test).
+    WholeWork,
     /// `old` — or, where `old` is a successor, its own original — is
     /// superseded by an active claim of the caller's naming a public copy.
     Superseded,
@@ -340,6 +345,7 @@ impl OldCause {
             OldCause::Public => "public",
             OldCause::Retracted => "retracted",
             OldCause::NotOwner => "not_owner",
+            OldCause::WholeWork => "whole_work",
             OldCause::Superseded => "superseded",
         }
     }

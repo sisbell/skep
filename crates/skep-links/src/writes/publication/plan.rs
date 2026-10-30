@@ -46,7 +46,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use skep_address::{document_of, is_prefix, subtree_of, validate, Address, Nat, Span, Tumbler};
+use skep_address::{
+    content_subspace, document_of, is_prefix, subtree_of, validate, Address, Nat, Span, Tumbler,
+};
 use skep_arrangement::{trunk_of, Caller, HasM5, Pairing, Run, Shot};
 use skep_namespace::M3State;
 use std::sync::LazyLock;
@@ -377,13 +379,17 @@ impl DepositPlan {
 ///    the tag `member` or a published trunk document; the slot forms — the
 ///    I-span form's content clause by slot, the budget, an empty type —
 ///    and the class fences on `ty`; a type naming the read-with refused;
-///    then `old` where present — resident, private, active and owned, not
-///    superseded by an active claim of the caller's naming a public
-///    successor homed in a published document of the caller's whose ends
-///    cover every published content span of this entry (a span on the
-///    shot's own new words is covered by nothing, so such an entry is never
-///    superseded), nor, where `old` is itself a successor, its original so
-///    superseded; a second entry naming one `old` refused at the second;
+///    then `old` where present — resident, private, active and owned;
+///    standing on the words the shot publishes through a content span (an
+///    original reaching them through a whole-work end alone — a unit span
+///    at a document's address or an ancestor's — is the corner's link, no
+///    panel's, and is refused); not superseded by an active claim of the
+///    caller's naming a public successor homed in a published document of
+///    the caller's whose ends cover every published content span of this
+///    entry (a span on the shot's own new words is covered by nothing, so
+///    such an entry is never superseded), nor, where `old` is itself a
+///    successor, its original so superseded; a second entry naming one
+///    `old` refused at the second;
 /// 4. each `retract` entry: the target resident, the caller's own, homed in
 ///    a published document of the caller's; already retracted → SKIPPED;
 /// 5. each `read_with` entry: `S` a registered trunk document, the
@@ -454,7 +460,7 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
                     return Err(PlanFault::DuplicateOriginal { index });
                 }
                 let spans = published_spans(&from, &to, &image, shot.draft_document().as_ref());
-                let home = check_old(world, caller, old, &spans)
+                let home = check_old(world, caller, old, &image, &spans)
                     .map_err(|cause| PlanFault::Old { index, cause })?;
                 Some(PlannedClaim { old: old.clone(), home })
             }
@@ -632,18 +638,21 @@ fn is_unit_depth(s: &Span) -> bool {
 /// Checks a `links` entry's `old` (THE VALIDATION's (3)): the panel filter's
 /// rule, read at the commit's position.
 ///
-/// Answers `old`'s home, the claim's. `spans` are the entry's published
-/// content spans ([`published_spans`]).
+/// Answers `old`'s home, the claim's. `image` is the shot's runs as the
+/// request states them ([`request_image`]), the words the publication
+/// publishes; `spans` are the entry's published content spans
+/// ([`published_spans`]).
 fn check_old<W: LinkWorld + HasM5>(
     world: &W,
     caller: Caller,
     old: &Address,
+    image: &[Run],
     spans: &[Span],
 ) -> Result<Address, OldCause> {
     let (m3, links) = (world.m3(), world.links());
-    if links.readlink(old).is_none() {
+    let Some(link) = links.readlink(old) else {
         return Err(OldCause::Absent);
-    }
+    };
     let home = document_of(old).ok_or(OldCause::Absent)?;
     if !caller.is_owner(m3, old) {
         return Err(OldCause::NotOwner);
@@ -653,6 +662,9 @@ fn check_old<W: LinkWorld + HasM5>(
     }
     if !links.is_active(old) {
         return Err(OldCause::Retracted);
+    }
+    if reaches_by_whole_work_end_alone(link, image) {
+        return Err(OldCause::WholeWork);
     }
     let own_homes = own_homes(m3, links, caller);
     if superseded_by_own_claim(m3, links, caller, &own_homes, old, spans) {
@@ -666,6 +678,40 @@ fn check_old<W: LinkWorld + HasM5>(
         }
     }
     Ok(home)
+}
+
+/// Returns whether `link`'s stored endset reaches the published words
+/// through a whole-work end alone — THE STORED-ENDSET TEST at the door (the
+/// link-sets design §5.1): some end is a unit-depth span at a document's
+/// address or an ancestor's, no content position, whose start is a prefix
+/// of a run of `image`, and no content span of either end shares a position
+/// with a run. Such a link is the corner's, which no panel offers. A link
+/// whose ends reach the words through nothing at all is not this test's.
+fn reaches_by_whole_work_end_alone(link: &Link, image: &[Run]) -> bool {
+    let ends: Vec<&Span> = link.from_slot().spans().chain(link.to_slot().spans()).collect();
+    let runs: Vec<Span> = image.iter().map(Run::iextent).collect();
+    let by_content = ends
+        .iter()
+        .filter(|e| is_content_span(e))
+        .any(|e| runs.iter().any(|r| share_a_position(e, r)));
+    if by_content {
+        return false;
+    }
+    ends.iter()
+        .filter(|e| !is_content_span(e) && is_unit_depth(e))
+        .any(|e| runs.iter().any(|r| is_prefix(e.start(), r.start())))
+}
+
+/// Returns whether `s` starts at a content position: an address in the
+/// content subspace, whatever the width.
+fn is_content_span(s: &Span) -> bool {
+    validate(s.start().clone()).is_ok_and(|a| a.subspace() == Some(&content_subspace()))
+}
+
+/// Returns whether two content spans of one chain share a position: the
+/// same depth, and the half-open ranges intersecting.
+fn share_a_position(a: &Span, b: &Span) -> bool {
+    a.start().len() == b.start().len() && *a.start() < b.reach() && *b.start() < a.reach()
 }
 
 /// Returns the homes under the caller's account holding links, the caller's

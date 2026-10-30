@@ -1224,6 +1224,57 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
     publish(&k, &the_shot, &links_only(vec![on_new_words])).expect("an entry on fresh words is covered by nothing");
 }
 
+/// THE WHOLE-WORK ORIGINAL (the link-sets design §5.1's stored-endset test at
+/// the door; the owner's ruling, 2026-10-29): a `links` entry whose `old`
+/// reaches the words the shot publishes through a whole-work end alone — `W`
+/// in the notes, FROM the edition `E` whole (one unit subtree span at `E`'s
+/// address, a prefix of every published position) TO the draft's own words,
+/// a content span the shot does not publish — is refused `Old` with
+/// `WholeWork` at its entry, second entry or first, nothing committed. The
+/// same shape with a content end ON the published words beside the
+/// whole-work end — FROM `E` whole TO the member's first word — is admitted
+/// and lands as its copy with its claim: the test is the end the original
+/// reaches the words by, never a whole-work end's presence.
+#[test]
+fn an_original_reaching_the_published_words_through_a_whole_work_end_alone_is_refused() {
+    let k = kernel_over(deposits_world());
+    board(&k);
+    let w = writer(&k);
+    let whole = w
+        .makelink(P1, &doc2(), SlotArg::Addrs(vec![pdoc()]), SlotArg::Spans(vec![run(&ca(1), 3).iextent()]), SlotArg::Addrs(vec![citation()]))
+        .expect("the whole-work link in the notes")
+        .0;
+    assert_eq!(whole, link_of(&doc2(), 2));
+    let the_shot = shot_off_head(&k, vec![]);
+    let copy = |old: &Address| entry(NamedAddress::Member, member_spans(1, 3), addrs(&[&doc2()]), addrs(&[&citation()]), Some(old.clone()));
+    let links_only = |links: Vec<LinkEntry>| PublishDeposits { claim: false, links, retract: vec![], read_with: vec![] };
+    assert_eq!(
+        refused_plan(&k, &the_shot, links_only(vec![copy(&whole)])),
+        PlanFault::Old { index: 0, cause: OldCause::WholeWork },
+        "the corner's link: the published words reached through E's unit span alone"
+    );
+    let plain = entry(NamedAddress::Member, member_spans(1, 1), addrs(&[]), addrs(&[&citation()]), None);
+    assert_eq!(
+        refused_plan(&k, &the_shot, links_only(vec![plain, copy(&whole)])),
+        PlanFault::Old { index: 1, cause: OldCause::WholeWork },
+        "at its entry"
+    );
+    // A whole-work end beside a content end on the published words: the
+    // original reaches the words through the content end, and is admitted.
+    let on_words = w
+        .makelink(P1, &doc2(), SlotArg::Addrs(vec![pdoc()]), SlotArg::Spans(vec![run(&pca(1), 1).iextent()]), SlotArg::Addrs(vec![citation()]))
+        .expect("a link reaching the words by a content end too")
+        .0;
+    assert_eq!(on_words, link_of(&doc2(), 3));
+    let (member, _) = publish(&k, &the_shot, &links_only(vec![copy(&on_words)])).expect("admitted: the words reached through a content span");
+    assert_eq!(member, pmember(2));
+    let s = k.snapshot();
+    let links = s.world().links();
+    assert_eq!(links.readlink(&link_of(&doc2(), 4)), Some(&supersession_claim(&on_words, &link_of(&member, 1))), "its claim in the notes");
+    assert!(links.is_active(&whole), "the whole-work link stands, untouched");
+    assert_eq!(links.readlink(&link_of(&doc2(), 5)), None, "and no claim on it");
+}
+
 /// THE SKIPS: a `retract` target already retracted and a `read_with` set a
 /// read-with of the maker's already stands in, in a PUBLISHED home, each
 /// commit nothing for their entry while the rest lands; a read-with standing

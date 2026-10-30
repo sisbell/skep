@@ -1698,10 +1698,14 @@ links entry's home is neither the tag member nor a published document of
 yours — a private document, a member address, an unregistered address,
 or the tag edition with no mint; a home of another's answers
 `not_owner` naming it instead), `old_refused` (a links entry's original,
-with `detail` naming which: absent, public, retracted, not_owner, or
-superseded by an active claim of yours naming a public successor that
-covers the entry's published spans), `duplicate_original` (a second
-links entry naming one original; the second's index), `read_with_in_links`
+with `detail` naming which: absent, public, retracted, not_owner,
+whole_work — the original reaches the words the shot publishes through a
+whole-work end alone, a unit span at a document's address or an
+account's, and through no content span: the corner's link, which no
+panel offers — or superseded by an active claim of yours naming a public
+successor that covers the entry's published spans), `duplicate_original`
+(a second links entry naming one original; the second's index),
+`read_with_in_links`
 (a links entry whose stored type names the read-with type, which the
 read-with list alone deposits), `retract_refused` (a retract entry, with
 `detail` naming which: absent, not_owner, not_published — the target not
@@ -2056,12 +2060,16 @@ classes (`not_content_subspace`, `slot_too_large`,
 commons fences answering `credential_refused` with their own tokens
 ahead of the store, as a `make_link`'s do), each with `site.index` the
 entry; a type naming the read-with is `read_with_in_links`; its `old`,
-where named, must be resident, private, active and yours, not
-superseded by an active claim of yours naming a public successor homed
-in a published document of yours whose ends cover every published
-content span of the entry (an end on the shot's own new words is
-covered by nothing), nor, where `old` is itself a successor, its own
-original so superseded (`old_refused`, `detail` the cause); a second
+where named, must be resident, private, active and yours, standing on
+the words the shot publishes through a content span — an original
+reaching them through a whole-work end alone, a unit span at a
+document's address or an account's, is refused with `whole_work`: the
+corner's link, which no panel offers — and not superseded by an active
+claim of yours naming a public successor homed in a published document
+of yours whose ends cover every published content span of the entry (an
+end on the shot's own new words is covered by nothing), nor, where
+`old` is itself a successor, its own original so superseded
+(`old_refused`, `detail` the cause); a second
 entry naming one `old` is `duplicate_original` at the second. (4) each
 `retract` entry names a resident link of yours homed in a published
 document of yours (`retract_refused`: absent, not_owner,
@@ -2286,8 +2294,10 @@ document named and ⟨O⟩ the origin withheld:
   minting a separate edition."
 * `old_refused` with `superseded` — "this link was already accepted
   into an earlier version — reload and offer only what is new" (the
-  deposits, above; the DRAFT face); the other deposit codes are the
-  client's own arithmetic, with no user-facing act to offer.
+  deposits, above; the DRAFT face); `old_refused` with `whole_work` is
+  the client's own arithmetic — the composition offers no whole-work
+  link, so no request it sends names one as an original — and so are the
+  other deposit codes, with no user-facing act to offer.
 
 ### Credential refusals
 

@@ -534,7 +534,8 @@ pub enum PublicationError {
     /// entry, the first fault in list order.
     Plan(PlanFault),
     /// A draft-native run of the request overlaps a span a correspondence
-    /// record homed in the draft already names as its `from`: those words
+    /// record homed in the named draft whose identity the run is — the
+    /// rendering draft, or one `also` names — already names as its `from`: those words
     /// are published already, in the member `site` names — the record's
     /// `to`'s member. Permanent: the record stands for good.
     AlreadyPublished {
@@ -545,7 +546,7 @@ pub enum PublicationError {
     /// registered document.
     HomeNotRegistered,
     /// The caller is not the effective owner (ω, exact account match) of
-    /// the draft, or of a home a deposit lands in.
+    /// a named draft, or of a home a deposit lands in.
     NotOwner(Address),
     /// A mint was refused: a record's or a deposit's link mint, or the
     /// edition's own at the mint form.

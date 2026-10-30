@@ -436,10 +436,13 @@ pub(super) fn compose(
             )
         }
         // The kept places the request carries beside the shot (the
-        // link-sets design §5.7) are outside the preimage, as `draft` is:
-        // the shot alone is read here, and a shot with places signs as the
-        // same shot without them. The deposits beside it are IN the
-        // preimage, behind the shot's rows (`publication_body`).
+        // link-sets design §5.7) are outside the preimage, as `draft` and
+        // `also` are: the shot alone is read here — the body spells every
+        // re-minted run by its values and names no draft, so a shot naming
+        // the family's other drafts signs as the same shot naming none — and
+        // a shot with places signs as the same shot without them. The
+        // deposits beside it are IN the preimage, behind the shot's rows
+        // (`publication_body`).
         Op::Publish { target, shot, deposits, .. } => {
             // The frame's `doc`: the trunk at the document form, the parent
             // account at the mint form — the term M5's classing takes too

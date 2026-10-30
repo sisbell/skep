@@ -659,14 +659,14 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         // its deposits beside it (the link-sets design §5.7): the places
         // parallel to the runs the shot just took, so they are read against
         // them; the deposits' member positions read against the same runs.
-        // The claim rides either form (skep #692) and names the staging
+        // The claim rides either form (skep #692) and names the rendering
         // draft, so `draft` is required beside it at both.
         "publish" => {
             let target = fields.publish_target()?;
             let claim = fields.flag("claim")?;
             let shot = fields.shot()?;
             if claim && shot.draft.is_none() {
-                return Err(PErr("field 'claim': the edition claim names the staging draft, so 'draft' is required beside it".into()).into());
+                return Err(PErr("field 'claim': the edition claim names the rendering draft, so 'draft' is required beside it".into()).into());
             }
             let places = fields.places(&shot, &target)?;
             let deposits = fields.deposits(&shot, &target, claim)?;
@@ -1099,21 +1099,32 @@ impl Fields {
         }
     }
 
-    /// Takes the publish shot's own fields (wire v7.3, PUB-8.1).
+    /// Takes the publish shot's own fields (wire v7.3, PUB-8.1; the link-sets
+    /// design §5.7, THE REQUEST).
     ///
     /// `base` and `base_extent` travel together — a base without the extent
     /// its copy took is a base the composite cannot compose against
     /// (PUB-2.42), and an extent without a base measures nothing — so either
     /// both are present or neither is (the birth version, PUB-2.34); `draft`
-    /// is optional; `runs` is the client-rendered arrangement, each run its
+    /// is optional, the rendering draft; `also` is optional, the family's
+    /// other drafts whose identity the shot re-mints beside it (the Nelson
+    /// way, B3-S10) — a wire list of addresses under [`MAX_WIRE_LIST`],
+    /// distinct, none the `draft` itself, and carried only beside a `draft`,
+    /// since a shot naming no rendering draft re-mints nothing; absent and
+    /// the empty list alike are the one-draft shot, the form the marshal
+    /// writes back; `runs` is the client-rendered arrangement, each run its
     /// origin, its start and its width.
     ///
     /// # Errors
     ///
-    /// A [`PErr`] where `base`, `base_extent` or `draft` is present and
-    /// refused, where one of `base` and `base_extent` comes without the
-    /// other, or where `runs` is missing or refused.
-    fn shot(&mut self) -> PResult<Shot> {
+    /// A [`Refusal`] where `base`, `base_extent`, `draft` or `also` is
+    /// present and refused, where one of `base` and `base_extent` comes
+    /// without the other, where `also` is carried without `draft`, or where
+    /// `runs` is missing or refused; the two shapes of `also` judged entry by
+    /// entry — an entry that is the `draft` itself, an entry repeating an
+    /// earlier one — name the entry at fault in the `malformed` rejection's
+    /// `site.index`, as [`Fields::places`] names its.
+    fn shot(&mut self) -> Result<Shot, Refusal> {
         let member = self.opt_addr("base")?;
         let extent = match self.take_opt("base_extent") {
             None => None,
@@ -1123,15 +1134,57 @@ impl Fields {
             (Some(member), Some(extent)) => Some(Base { member, extent }),
             (None, None) => None,
             (Some(_), None) => {
-                return Err(PErr("field 'base_extent': required beside 'base'".into()))
+                return Err(PErr("field 'base_extent': required beside 'base'".into()).into())
             }
             (None, Some(_)) => {
-                return Err(PErr("field 'base_extent': carried without 'base'".into()))
+                return Err(PErr("field 'base_extent': carried without 'base'".into()).into())
             }
         };
         let draft = self.opt_addr("draft")?;
+        // The family's other drafts, entry by entry, so an entry that is no
+        // address names itself in `site.index` as the two shapes below do.
+        let also: Vec<Address> = match self.take_opt("also") {
+            None => Vec::new(),
+            Some(v) => {
+                let arr = v.as_array().ok_or_else(|| PErr("field 'also': expected a JSON array".into()))?;
+                if arr.len() > MAX_WIRE_LIST {
+                    return Err(PErr(format!(
+                        "field 'also': array has {} elements, past the {MAX_WIRE_LIST}-element wire cap",
+                        arr.len()
+                    ))
+                    .into());
+                }
+                arr.iter()
+                    .enumerate()
+                    .map(|(index, entry)| {
+                        p_addr(entry).map_err(|e| Refusal(format!("field 'also': [{index}]: {e}"), Some(index)))
+                    })
+                    .collect::<Result<Vec<Address>, Refusal>>()?
+            }
+        };
+        if !also.is_empty() && draft.is_none() {
+            return Err(PErr(
+                "field 'also': the family's other drafts are named beside the rendering draft, so 'draft' is required beside it"
+                    .into(),
+            )
+            .into());
+        }
+        for (index, entry) in also.iter().enumerate() {
+            if draft.as_ref() == Some(entry) {
+                return Err(Refusal(
+                    format!("field 'also': [{index}]: names the 'draft' itself; 'also' names the family's OTHER drafts"),
+                    Some(index),
+                ));
+            }
+            if also[..index].contains(entry) {
+                return Err(Refusal(
+                    format!("field 'also': [{index}]: repeats an earlier entry; each draft is named once"),
+                    Some(index),
+                ));
+            }
+        }
         let runs = self.field("runs", |v| p_list(v, p_shot_run))?;
-        Ok(Shot { base, draft, runs })
+        Ok(Shot { base, draft, also, runs })
     }
 
     /// Takes the publish shot's kept places (the link-sets design §5.7).
@@ -1147,14 +1200,16 @@ impl Fields {
     /// shot alone, and this is read after it, against the runs it took.
     ///
     /// A place stands beside a run of either kind the re-window has words
-    /// for: a DRAFT-NATIVE run, whose stated `origin` projects to the
-    /// request's `draft`, and a STRAY run, one of the document's own
-    /// identity — its `origin` projecting to the trunk of `doc` — which the
-    /// client re-composed by reference to a correspondence record's
-    /// published words where the draft still arranges the record's draft
-    /// words (the design's "AND THE STRAY PLACES WITH THEM"); a window onto
-    /// any other document is never re-windowed, and at the mint form the
-    /// edition has no identity before the commit, so no run is its own.
+    /// for: a run of THE RENDERING DRAFT's own identity, whose stated
+    /// `origin` projects to the request's `draft`, and a STRAY run, one of
+    /// the document's own identity — its `origin` projecting to the trunk of
+    /// `doc` — which the client re-composed by reference to a correspondence
+    /// record's published words where the draft still arranges the record's
+    /// draft words (the design's "AND THE STRAY PLACES WITH THEM"); a run of
+    /// a draft `also` names takes no place — those drafts are left as they
+    /// stand, the rendering draft alone re-windowed (B3-S11 P5) — a window
+    /// onto any other document is never re-windowed, and at the mint form
+    /// the edition has no identity before the commit, so no run is its own.
     ///
     /// # Errors
     ///
@@ -1164,7 +1219,8 @@ impl Fields {
     /// non-null entry is no V-position, lies outside the content subspace
     /// (a kept place is a content position), or sits beside a run whose
     /// stated `origin` projects to neither the request's `draft` nor the
-    /// trunk of its `doc`: a place belongs to a draft-native run or a stray
+    /// trunk of its `doc` — a run of a draft `also` names among them: a
+    /// place belongs to a run of the rendering draft's identity or a stray
     /// run of the document's own identity, and a request naming no draft
     /// has none.
     fn places(&mut self, shot: &Shot, target: &PublishTarget) -> Result<Vec<Option<VPos>>, Refusal> {
@@ -1198,7 +1254,7 @@ impl Fields {
             if draft.is_none() || (draft.as_ref() != Some(&origin) && origin != own) {
                 return Err(at(
                     index,
-                    "a kept place belongs to a draft-native run, whose origin is the request's draft, or to a stray run of the document's own identity; a window onto another document is never re-windowed",
+                    "a kept place belongs to a run of the rendering draft's own identity, whose origin is the request's 'draft', or to a stray run of the document's own identity; a run of a draft 'also' names takes no place, and a window onto another document is never re-windowed",
                 ));
             }
             out.push(Some(place));

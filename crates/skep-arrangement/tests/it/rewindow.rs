@@ -144,7 +144,7 @@ fn rewindow(
 /// A shot of `D`'s one run `[start, start + width)` into the edition, the
 /// birth shape, from the draft `D`.
 fn shot_of(draft: &Address, start: &Address, width: u32) -> Shot {
-    Shot { base: None, draft: Some(draft.clone()), runs: vec![shot_run(draft, start, width)] }
+    Shot { base: None, draft: Some(draft.clone()), also: vec![], runs: vec![shot_run(draft, start, width)] }
 }
 
 /// SAME COMMIT, CHECKED BY IDENTITY. The invariant, §5.7's: the member minted

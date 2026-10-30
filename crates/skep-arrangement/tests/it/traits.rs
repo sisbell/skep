@@ -39,8 +39,8 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
     one_and_another(shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(1), 2));
     one_and_another(base(&pdoc(), 1), base(&pdoc(), 2));
     one_and_another(
-        Shot { base: None, draft: None, runs: vec![] },
-        Shot { base: Some(base(&pdoc(), 0)), draft: None, runs: vec![] },
+        Shot { base: None, draft: None, also: vec![], runs: vec![] },
+        Shot { base: Some(base(&pdoc(), 0)), draft: None, also: vec![], runs: vec![] },
     );
     // The birth bit is part of the terms: a base extent of zero and no base
     // at all are two terms, and they key two entries.

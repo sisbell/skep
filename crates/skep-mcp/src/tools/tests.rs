@@ -182,7 +182,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     assert_eq!(Tool::named("search").and_then(Tool::members), Some(&["query", "opts"][..]));
     assert_eq!(Tool::named("session_info").and_then(Tool::members), Some(&[][..]));
     assert_eq!(Tool::named("fetch"), Some(Tool::Fetch));
-    assert_eq!(Tool::named("publication_open").and_then(Tool::members), Some(&["draft", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"][..]));
+    assert_eq!(Tool::named("publication_open").and_then(Tool::members), Some(&["draft", "also", "base", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"][..]));
     assert_eq!(Tool::named("publication_cancel").and_then(Tool::members), Some(&[][..]));
     for not_a_tool in ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "frobnicate"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool");

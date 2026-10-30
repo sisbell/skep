@@ -363,9 +363,9 @@ pub fn shot_run(origin: &str, i_start: &str, width: u64) -> Value {
 
 /// Every member of a `publish` request (wire.md §Arrangement, `publish`;
 /// §The publish shot and head-float; `crates/skep-mcp/tools.json`'s
-/// `publish` entry — the twelve members as the catalog spells them: `doc`,
-/// `draft`, `runs`, `places`, `base`, `base_extent`, `account`, `mint`,
-/// `claim`, `links`, `retract`, `read_with`).
+/// `publish` entry — the thirteen members as the catalog spells them: `doc`,
+/// `draft`, `also`, `runs`, `places`, `base`, `base_extent`, `account`,
+/// `mint`, `claim`, `links`, `retract`, `read_with`).
 ///
 /// The two forms the link-sets design §5.7 draws: the DOCUMENT form, `doc`
 /// present and `account` absent; THE MINT FORM, `account` present with
@@ -377,8 +377,9 @@ pub fn shot_run(origin: &str, i_start: &str, width: u64) -> Value {
 /// its default is not spelled, so a frame carrying none of the optional
 /// members is the bare shot byte for byte — `{"op":"publish","doc":…,
 /// "runs":[…]}` with `base` and `base_extent` together where the shot is
-/// staged from a member, `draft` where one is named, `attest` where the
-/// caller composed one and `id` the per-session idempotency key — and
+/// staged from a member, `draft` where one is named, `also` where the
+/// family's other drafts are named beside it, `attest` where the caller
+/// composed one and `id` the per-session idempotency key — and
 /// [`publication`] is the one builder every shot goes through, the merge
 /// landing's and the dev board's included.
 #[derive(Debug, Clone, Default)]
@@ -394,8 +395,12 @@ pub struct PublishFrame<'a> {
     pub claim: bool,
     /// The base member and `base_extent`, together or neither.
     pub base: Option<(&'a str, u64)>,
-    /// The staging draft.
+    /// The rendering draft.
     pub draft: Option<&'a str>,
+    /// The family's other drafts whose identity the shot re-mints beside
+    /// the rendering draft's (the Nelson way, B3-S10), in the request's
+    /// order; sent only where non-empty.
+    pub also: &'a [&'a str],
     /// The runs in V-order, each as [`shot_run`] spells it.
     pub runs: &'a [Value],
     /// The kept places, parallel to `runs` — each a [`place`] or `null`;
@@ -417,9 +422,9 @@ pub struct PublishFrame<'a> {
 ///
 /// The members are spelled as `tools.json`'s `publish` entry and wire.md
 /// §Arrangement spell them; `places` is sent only where an entry is a place
-/// (a list of `null`s is the shot as before, so it is left out), `links`,
-/// `retract` and `read_with` only where non-empty, `mint` and `claim` only
-/// where true.
+/// (a list of `null`s is the shot as before, so it is left out), `also`,
+/// `links`, `retract` and `read_with` only where non-empty, `mint` and
+/// `claim` only where true.
 pub fn publication(p: &PublishFrame<'_>) -> Value {
     let mut frame = with_id(json!({"op": "publish", "runs": p.runs}), p.id);
     if let Some(doc) = p.doc {
@@ -440,6 +445,9 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     }
     if let Some(draft) = p.draft {
         frame["draft"] = Value::String(draft.to_string());
+    }
+    if !p.also.is_empty() {
+        frame["also"] = json!(p.also);
     }
     if p.places.iter().any(|place| !place.is_null()) {
         frame["places"] = Value::Array(p.places.to_vec());

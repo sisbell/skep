@@ -129,6 +129,20 @@ fn publish(doc: &str, base: Option<(&str, u64)>, draft: Option<&str>, runs: &[St
     format!(r#"{{"op":"publish","doc":"{doc}"{base}{draft},"runs":[{}]}}"#, runs.join(","))
 }
 
+/// A family shot (the Nelson way, B3-S10): the rendering `draft`, the
+/// family's other drafts `also` names, the base and the runs.
+fn publish_family(doc: &str, base: Option<(&str, u64)>, draft: &str, also: &[&str], runs: &[String]) -> String {
+    let base = base
+        .map(|(m, extent)| format!(r#","base":"{m}","base_extent":"{extent}""#))
+        .unwrap_or_default();
+    let also: Vec<String> = also.iter().map(|d| format!(r#""{d}""#)).collect();
+    format!(
+        r#"{{"op":"publish","doc":"{doc}"{base},"draft":"{draft}","also":[{}],"runs":[{}]}}"#,
+        also.join(","),
+        runs.join(",")
+    )
+}
+
 /// A later mint into the claimant's account — flagless, hence PRIVATE.
 fn draft(port: u16, session: &str) -> String {
     acked_addr(&op(
@@ -784,6 +798,117 @@ fn a_drafted_shots_row_names_the_draft_beside_the_member_for_its_owner_and_keeps
     let owners = changes_since_as(port, Some(&signed), before);
     assert_eq!(owners[0]["docs"], serde_json::json!([m2]), "nothing re-inserted: no draft on the row: {}", owners[0]);
     assert!(read_link(port, Some(&bare), &format!("{d}.0.2.2")).is_null(), "no second record");
+    sd.shutdown();
+}
+
+/// THE FAMILY ON THE WIRE (the Nelson way, B3-S10; the link-sets design
+/// §5.7; wire.md §Arrangement `publish`, §The publish shot and head-float,
+/// §The change feed): D stages E.1 and is re-windowed onto it, then goes on
+/// with `xy` of its own; A, an alternative of D's, holds D's whole
+/// arrangement BY IDENTITY — E's words and D's unpublished `xy` — and `pq`
+/// of its own. A's shot naming D among `also` lands E.2 with fresh identity
+/// for every re-minted run, one correspondence record homed in A for its
+/// own words and one in D for D's, the row's `docs` `[E.2, A, D]` to the
+/// owner — the member, the rendering draft, then the draft `also` named —
+/// and `[E.2]` to a guest; D is NOT re-windowed, still arranging its own
+/// `xy`. THE TWIN FENCE reaches across the family: D's re-shot of the words
+/// A published from it is `already_published`, `site.addr` E.2, and so is
+/// a family shot of D's naming A among `also` with A's words; `also` naming
+/// a draft the caller does not own is `not_owner`, `site.addr` that draft;
+/// each commits nothing. And the shape is the codec's: `also` without
+/// `draft`, and a place beside a run of a draft `also` names, are
+/// `malformed`.
+#[test]
+fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_and_names_every_draft_on_the_row() {
+    const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    // D stages E.1 from `abc`, re-windowed onto it at its place, then goes
+    // on with `xy` of its own.
+    let d = draft_with(port, &bare, "abc");
+    let mut first: Value = serde_json::from_str(&publish(&e, None, Some(&d), &[run(&d, &format!("{d}.0.1.1"), 3)])).expect("a frame");
+    first["places"] = serde_json::json!([{"subspace": "1", "ordinal": "1"}]);
+    let e1 = acked_addr(&op(port, Some(&signed), &first.to_string()));
+    assert_eq!(e1, format!("{e}.1"));
+    expect_resp(&op(port, Some(&bare), &insert(&d, 4, "xy", false)), "ack_addr");
+    let d_xy = format!("{d}.0.1.4");
+    // A, an alternative of D's: D's whole arrangement by identity, and `pq`.
+    let a_draft = draft(port, &bare);
+    expect_resp(&op(port, Some(&bare), &copy(&a_draft, 1, &d, 1, 5)), "ack");
+    expect_resp(&op(port, Some(&bare), &insert(&a_draft, 6, "pq", false)), "ack_addr");
+    let a_pq = format!("{a_draft}.0.1.1");
+    assert_eq!(
+        image_as(port, Some(&bare), &a_draft, 1, 7),
+        vec![(format!("{e}.0.1.1"), "3".to_string()), (d_xy.clone(), "2".to_string()), (a_pq.clone(), "2".to_string())],
+        "the premise: A holds E's identity, D's own words by identity, and its own"
+    );
+    // A's shot naming D among `also`.
+    let before = head(port);
+    let family = publish_family(&e, Some((&e1, 3)), &a_draft, &[&d], &[run(&e, &format!("{e}.0.1.1"), 3), run(&d, &d_xy, 2), run(&a_draft, &a_pq, 2)]);
+    let e2 = acked_addr(&op(port, Some(&signed), &family));
+    assert_eq!(e2, format!("{e}.2"));
+    assert_eq!(text(port, &e2, 1, 7), "abcxypq");
+    assert_eq!(image(port, &e2, 1, 7), vec![(format!("{e}.0.1.1"), "7".to_string())], "fresh identity for every re-minted run, I-adjacent to E's own");
+    // The records: D's second link names D's words, A's first names A's,
+    // each `to` the member's fresh identity; no other record in either.
+    let record_in_d = read_link(port, Some(&bare), &format!("{d}.0.2.2"));
+    assert_eq!(record_in_d["slots"][0][0]["start"].as_str(), Some(d_xy.as_str()), "D's record names D's own words: {record_in_d}");
+    assert_eq!(record_in_d["slots"][1][0]["start"].as_str(), Some(format!("{e}.0.1.4").as_str()), "`to` the member's fresh identity: {record_in_d}");
+    assert_eq!(record_in_d["slots"][2][0]["start"].as_str(), Some(T_CORRESPONDENCE), "{record_in_d}");
+    let record_in_a = read_link(port, Some(&bare), &format!("{a_draft}.0.2.1"));
+    assert_eq!(record_in_a["slots"][0][0]["start"].as_str(), Some(a_pq.as_str()), "A's record names A's own words: {record_in_a}");
+    assert_eq!(record_in_a["slots"][1][0]["start"].as_str(), Some(format!("{e}.0.1.6").as_str()), "{record_in_a}");
+    assert_eq!(record_in_a["slots"][2][0]["start"].as_str(), Some(T_CORRESPONDENCE), "{record_in_a}");
+    assert!(read_link(port, Some(&bare), &format!("{a_draft}.0.2.2")).is_null(), "one record in A");
+    assert!(read_link(port, Some(&bare), &format!("{d}.0.2.3")).is_null(), "one new record in D");
+    // The row.
+    let owners = changes_since_as(port, Some(&signed), before);
+    assert_eq!(owners.len(), 1, "one commit: {owners:?}");
+    assert_eq!(owners[0]["docs"], serde_json::json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {}", owners[0]);
+    assert!(owners[0]["attest"].is_object(), "{}", owners[0]);
+    let guests = changes_since(port, before);
+    assert_eq!(guests[0]["docs"], serde_json::json!([e2]), "reduced to the member for a guest: {}", guests[0]);
+    // D is not re-windowed.
+    assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(d_xy.clone(), "2".to_string())], "D still arranges its own words: a counterpart through its record, healed at its own next shot");
+    // THE TWIN FENCE across the family.
+    let before = head(port);
+    let v = op(port, Some(&signed), &publish(&e, Some((&e2, 7)), Some(&d), &[run(&d, &d_xy, 2)]));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(
+        (rej["code"].as_str(), rej["disposition"].as_str(), rej["site"]["addr"].as_str()),
+        (Some("already_published"), Some("permanent"), Some(e2.as_str())),
+        "D's re-shot of the words A published from it: {v}"
+    );
+    let v = op(port, Some(&signed), &publish_family(&e, Some((&e2, 7)), &d, &[&a_draft], &[run(&a_draft, &a_pq, 1)]));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["site"]["addr"].as_str()), (Some("already_published"), Some(e2.as_str())), "A's words from a family shot of D's: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    // `also` naming a draft the caller does not own.
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let account = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("a delegable prefix").to_string();
+    expect_resp(&op(port, Some(&boot), &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":902}}"#)), "ack_addr");
+    let stranger = open_session(port, 902);
+    let s_draft = acked_addr(&op(port, Some(&stranger), &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#)));
+    let before = head(port);
+    let v = op(port, Some(&signed), &publish_family(&e, Some((&e2, 7)), &d, &[&s_draft], &[run(&e, &format!("{e}.0.1.1"), 7)]));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["site"]["addr"].as_str()), (Some("not_owner"), Some(s_draft.as_str())), "{v}");
+    assert_eq!(head(port), before, "nothing committed");
+    // The shape, at the codec, ahead of every store.
+    let v = op_as_written(port, Some(&signed), &format!(r#"{{"op":"publish","doc":"{e}","also":["{d}"],"runs":[]}}"#));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "`also` without `draft`: {v}");
+    let mut placed: Value = serde_json::from_str(&publish_family(&e, Some((&e2, 7)), &a_draft, &[&d], &[run(&d, &d_xy, 2)])).expect("a frame");
+    placed["places"] = serde_json::json!([{"subspace": "1", "ordinal": "4"}]);
+    let v = op_as_written(port, Some(&signed), &placed.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["site"].clone()), (Some("malformed"), serde_json::json!({"index": 0})), "a place beside a run of a draft `also` names: {v}");
+    assert_eq!(head(port), before, "nothing committed");
     sd.shutdown();
 }
 

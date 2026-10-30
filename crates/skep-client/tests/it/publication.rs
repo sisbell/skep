@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_client::address::{document_of, parse_address};
 use skep_client::board::frames::{self, T_HELD_REMOVAL, T_READ_WITH};
-use skep_client::board::{acked_addr, Answer, Board, Scope, Token, T_RETRACTION};
+use skep_client::board::{acked_addr, Answer, Board, ChangesAnswer, ChangesQuery, Scope, Token, T_RETRACTION};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::publication::{self, build, count, enumerate, landed, panel, reread, send, AckVia, Base, Built, Confirmed, Destination, Inputs, OriginAnswer, Publisher, Refusal, RowKind, Run, Sent, Switches, Verdict};
 use skep_client::sign::{sig_hex, Signer};
@@ -323,6 +323,7 @@ fn inputs(seeded: &Seeded) -> Inputs {
         claim: false,
         base: Some((addr(&seeded.e1), 19)),
         draft: addr(&seeded.d),
+        also: vec![],
         selection: vec![run(&seeded.e, 1, 19), run(&seeded.d, 1, 10), run(&seeded.o, 1, 5)],
         notes: vec![addr(&seeded.n)],
         readable_drafts: vec![addr(&seeded.d), addr(&seeded.n)],
@@ -518,7 +519,7 @@ fn a_moved_place_is_refused_with_its_entry_and_the_reread_restates_the_selection
     insert_text(&board, &bare_token, &d, 1, "xyz");
     let y = format!("{d}.0.1.2");
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 19)), draft: addr(&d), selection: vec![run(&d, 2, 2)], notes: vec![], readable_drafts: vec![addr(&d)], published: vec![addr(&e)] };
+    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 19)), draft: addr(&d), also: vec![], selection: vec![run(&d, 2, 2)], notes: vec![], readable_drafts: vec![addr(&d)], published: vec![addr(&e)] };
     let en = enumerate(&p, &inputs).unwrap();
     assert_eq!(en.placed, vec![publication::Placement::Whole { ordinal: 2 }]);
     let pn = panel(&p, &inputs, &en).unwrap();
@@ -585,7 +586,7 @@ fn cost_of_the_enumeration_and_the_panel_over_many_links() {
         make_link(&board, &session, &bare_token, &device, &s, true, spec(&e1, at, 2, &e, at), End::Addrs(vec![]), T_CITATION);
     }
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 1000)), draft: addr(&d), selection: vec![run(&e, 1, 1000), run(&d, 1, 4)], notes: vec![addr(&n)], readable_drafts: vec![addr(&d), addr(&n)], published: vec![addr(&e), addr(&s)] };
+    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 1000)), draft: addr(&d), also: vec![], selection: vec![run(&e, 1, 1000), run(&d, 1, 4)], notes: vec![addr(&n)], readable_drafts: vec![addr(&d), addr(&n)], published: vec![addr(&e), addr(&s)] };
     let mut enumerate_ms = Vec::new();
     let mut panel_ms = Vec::new();
     let mut reread_ms = Vec::new();
@@ -609,4 +610,78 @@ fn cost_of_the_enumeration_and_the_panel_over_many_links() {
     };
     println!("COST links={n_links} enumerate p50 {:.1} ms ({} frames) panel p50 {:.1} ms ({} frames) reread p50 {:.1} ms", p50(&mut enumerate_ms), frames.0, p50(&mut panel_ms), frames.1, p50(&mut reread_ms));
     session.close().unwrap();
+}
+
+/// THE FAMILY against the daemon (the Nelson way, B3-S10): `A`, an
+/// alternative of `D`'s holding `E`'s words and `D`'s own ten by identity
+/// (two copies) and six words of its own, publishes with `also: [D]` — the
+/// panel lists no window for `D`'s words and counts its one inherited
+/// passage; the request carries `also`; the acknowledgment names `E.2`,
+/// whose text is `A`'s whole; and the records are read back in BOTH drafts,
+/// `D`'s for its ten words and `A`'s for its six, each `to` the member's
+/// fresh identity; the feed row names the member, `A` and `D`.
+#[test]
+fn a_family_publication_re_mints_two_drafts_words_and_homes_a_record_in_each() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, e1, d, n, .. } = &seeded;
+    // A: E's words and D's own ten by identity, then six of its own.
+    let a_draft = mint(&board, &bare_token, ACCOUNT, false);
+    copy(&board, &bare_token, &a_draft, 1, e1, 1, 19);
+    copy(&board, &bare_token, &a_draft, 20, d, 20, 10);
+    insert_text(&board, &bare_token, &a_draft, 30, " extra");
+    assert_eq!(image(&board, &bare_token, &a_draft, 1, 35), vec![(format!("{e}.0.1.1"), 19), (format!("{d}.0.1.1"), 10), (format!("{a_draft}.0.1.1"), 6)], "the premise: A holds E's identity, D's by identity, and its own");
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let inputs = Inputs {
+        draft: addr(&a_draft),
+        also: vec![addr(d)],
+        selection: vec![run(e, 1, 19), run(d, 1, 10), run(&a_draft, 1, 6)],
+        readable_drafts: vec![addr(&a_draft), addr(d), addr(n)],
+        ..inputs(&seeded)
+    };
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    let pn = panel(&p, &inputs, &en).expect("the panel");
+    assert_eq!(pn.windows, vec![], "D's run is re-minted, not windowed");
+    assert_eq!(pn.inherited, vec![publication::Inherited { draft: addr(d), passages: 1 }]);
+    let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
+    assert_eq!(request.also, vec![addr(d)]);
+    assert_eq!(request.places, vec![None, None, Some(30)], "a kept place for the rendering draft's run alone");
+    assert!(request.price.admits(), "{:?}", request.price);
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).expect("sent") else { panic!("refused") };
+    let e2 = format!("{e}.2");
+    assert_eq!((ack.member.to_string(), ack.via), (e2.clone(), AckVia::Answer));
+    let text = read(&board, &token, &frames::retrieve_v(&e2, 1, 35));
+    assert_eq!(text["items"][0]["content"], format!("{P}{W} extra"), "A's whole text as E's own words");
+    assert_eq!(image(&board, &token, &e2, 1, 35), vec![(format!("{e}.0.1.1"), 35)], "fresh identity for every re-minted run, I-adjacent to E's own");
+    // The records, one in each draft.
+    let unit = |a: &str| frames::unit_span(a).as_array().cloned().unwrap_or_default();
+    let records = |home: &str| -> Vec<Vec<(String, String)>> {
+        let hits = read(&board, &token, &frames::find_links_four(frames::Slot::Spans(&unit(home)), frames::Slot::Any, frames::Slot::Any, frames::Slot::Spans(&unit(frames::T_CORRESPONDENCE))));
+        hits["addrs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                let link = read(&board, &token, &frames::read_link(a.as_str().unwrap()));
+                let slot = |k: usize| (link["link"]["slots"][k][0]["start"].as_str().unwrap().to_string(), link["link"]["slots"][k][0]["width"].as_str().unwrap().to_string());
+                vec![slot(0), slot(1)]
+            })
+            .collect()
+    };
+    assert_eq!(records(d), vec![vec![(format!("{d}.0.1.1"), "0.0.0.0.0.0.0.10".to_string()), (format!("{e}.0.1.20"), "0.0.0.0.0.0.0.10".to_string())]], "D's record, homed in D, `to` the member's fresh identity");
+    assert_eq!(records(&a_draft), vec![vec![(format!("{a_draft}.0.1.1"), "0.0.0.0.0.0.0.6".to_string()), (format!("{e}.0.1.30"), "0.0.0.0.0.0.0.6".to_string())]], "A's record, homed in A");
+    let page = board.changes(Some(&token), &ChangesQuery { since: ack.at - 1, under: Some(e), drafts: false, limit: Some(1) }).expect("the feed");
+    let ChangesAnswer::Page(page) = page else { panic!("a page") };
+    assert_eq!(page.changes[0]["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {:?}", page.changes);
+    assert_eq!(image(&board, &bare_token, d, 20, 10), vec![(format!("{d}.0.1.1"), 10)], "D is not re-windowed: its words stay its own, a counterpart through its record");
+    sd.shutdown();
 }

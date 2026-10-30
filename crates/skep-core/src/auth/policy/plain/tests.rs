@@ -83,6 +83,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     let shot = |draft: Option<Address>, runs: usize| Shot {
         base: None,
         draft,
+        also: vec![],
         runs: vec![ShotRun { origin: home.clone(), run: Run::new(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(1u32)).expect("a run") }; runs],
     };
     let publish = |shot: Shot, read_with: usize| Op::Publish {

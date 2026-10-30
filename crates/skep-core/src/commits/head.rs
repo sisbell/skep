@@ -914,6 +914,7 @@ impl HeadWriter {
         let shot = Shot {
             base: Some(Base { member: base_member, extent }),
             draft: Some(draft.clone()),
+            also: Vec::new(),
             runs: vec![ShotRun { origin: draft, run }],
         };
         self.commit_publish(wp, serial, h, shot, &refused).is_some()

@@ -208,7 +208,7 @@ fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
         .expect("a range and its stretch commit");
     assert_eq!(first_of_values, first_of_stretch, "B2: one chain, one first address");
     let run = Run::new(first_of_stretch, Nat::from(3u32)).expect("a three-position run");
-    let shot = Shot { base: None, draft: None, runs: Vec::new() };
+    let shot = Shot { base: None, draft: None, also: vec![], runs: Vec::new() };
     let body_of = |engine: &skep_engine::Engine| {
         let snap = engine.kernel().snapshot();
         publish_body(snap.world(), &shot, &[SegmentRun::Value(run.clone())])

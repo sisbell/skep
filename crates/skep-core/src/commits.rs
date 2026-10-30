@@ -168,7 +168,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
-use skep_address::{document_of, Address, Nat};
+use skep_address::{document_of, Address};
 use skep_arrangement::{trunk_of, HasM5};
 use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{MintTime, Op, OpKind, RejectCode, Rejection, Response, Stores, TimeSource};
@@ -1456,18 +1456,21 @@ impl Commits {
                 minted.cloned().map(|a| vec![a]).unwrap_or_default()
             }
             // The publication's row: the member first, then the edition
-            // where the commit minted one, then the draft its records are
-            // homed in — the order the mirror reads the member by; the draft
-            // is reduced away for a reader who cannot read it, and the row
-            // keeps its `attest` all the same (`feed::Inner::visible`) —
-            // then every other home the deposits touched, in address order
-            // (the link-sets design §5.7): the homes the request named by
-            // address, and, of the two lists the plan may skip an entry of,
-            // each home whose deposit LANDED, read off the commit's two
-            // worlds — a `retract` target active before and retracted after,
-            // a `read_with` set holding the read-with after and not before
-            // — so a skipped entry's home is not named.
-            AffectedDocs::Published { draft, mints, homes, retract, read_with } => {
+            // where the commit minted one, then the drafts the shot wrote —
+            // the rendering draft first, then each other named draft, in
+            // the request's order (B3-S10: "the drafts the shot named, the
+            // rendering draft first among them") — the order the mirror
+            // reads the member by; a draft is reduced away for a reader who
+            // cannot read it, and the row keeps its `attest` all the same
+            // (`feed::Inner::visible`) — then every other home the deposits
+            // touched, in address order (the link-sets design §5.7): the
+            // homes the request named by address, and, of the two lists the
+            // plan may skip an entry of, each home whose deposit LANDED,
+            // read off the commit's two worlds — a `retract` target active
+            // before and retracted after, a `read_with` set holding the
+            // read-with after and not before — so a skipped entry's home is
+            // not named.
+            AffectedDocs::Published { drafts, mints, homes, retract, read_with } => {
                 debug_assert!(
                     minted.is_some(),
                     "a publish answers AckAddr, the ack carrying the member it minted"
@@ -1479,7 +1482,7 @@ impl Commits {
                     if mints {
                         docs.push(edition.clone());
                     }
-                    docs.extend(draft);
+                    docs.extend(drafts);
                     let mut others: BTreeSet<Address> = homes.into_iter().collect();
                     let (before, after) = (pre.links(), post.world().links());
                     for target in &retract {
@@ -2104,22 +2107,26 @@ enum AffectedDocs {
     Minted,
     /// A publication's documents: the member the shot mints, known only
     /// from its ack, FIRST; then the edition it was minted under, where the
-    /// commit minted one; then the staging draft where the commit wrote it
-    /// — homed a correspondence record in it, or re-windowed it at a kept
-    /// place; then every other home the deposits
+    /// commit minted one; then the drafts the commit wrote — the rendering
+    /// draft where it homed a correspondence record in it or re-windowed it
+    /// at a kept place, then each other named draft where it homed a record
+    /// in it, in the request's order; then every other home the deposits
     /// touched, in address order, each once (the link-sets design §5.7's
     /// feed row — "`docs` the UNION of every home the commit touched,
     /// `[member, D, …]`", the member first, a pinned order the mirror reads
-    /// the member by).
+    /// the member by; B3-S10: "the drafts the shot named, the rendering draft
+    /// first among them", `[member, D, A, …]`).
     ///
-    /// `draft` is the document the shot's `draft` projects to, `Some` where
-    /// a draft is named and the commit writes it: a draft-native run
-    /// re-inserted — the case the commit mints a record, since the shot
-    /// mints each draft identity it meets the first time it meets it, and
-    /// the twin fence refuses one a record already names — or a kept place
-    /// sent beside a run, a stray run's among them, where the commit
-    /// re-windows the draft and mints nothing (the design's F4); `None`
-    /// otherwise. `mints` is the request's
+    /// `drafts` are the named drafts the commit writes, each the document
+    /// the request's address projects to, in the request's order: the
+    /// rendering draft where a run of its identity is re-inserted — the case
+    /// the commit mints a record there, since the shot mints each draft
+    /// identity it meets the first time it meets it, and the twin fence
+    /// refuses one a record already names — or a kept place is sent beside
+    /// a run, a stray run's among them, where the commit re-windows it and
+    /// mints nothing (the design's F4); each `also` draft where a run of its
+    /// identity is re-inserted, the one write the commit makes in it (it is
+    /// never re-windowed); empty where no draft is written. `mints` is the request's
     /// mint form, the edition then the member's own trunk. `homes` are the
     /// homes the request's `links` entries name by address, and the private
     /// homes of the originals they name, each of which the commit writes
@@ -2130,7 +2137,7 @@ enum AffectedDocs {
     /// worlds ([`Commits::record`]), and a home nothing touched is not
     /// named. The same `AckAddr` obligation as `Minted`'s.
     Published {
-        draft: Option<Address>,
+        drafts: Vec<Address>,
         mints: bool,
         homes: Vec<Address>,
         retract: Vec<Address>,
@@ -2311,18 +2318,29 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
         // The shot mints the chain's next member, known only from its ack —
         // the document it advances is the member's own trunk — and
-        // re-inserts the draft's values as fresh identity under it, minting
-        // one correspondence record in the draft per piece of draft identity
-        // it re-inserts (the link-sets design §5.7), and re-windows the
-        // draft at every kept place the request sends beside its runs (the
-        // design's F4): the row names the draft beside the member exactly
-        // when a draft is named and the commit writes it — a run
-        // re-inserted, or a kept place sent, a stray-only re-window's among
-        // them — both being request arithmetic, so the row agrees with the
-        // journal's own witness of the draft's write.
+        // re-inserts the named drafts' values as fresh identity under it,
+        // minting one correspondence record per piece of draft identity it
+        // re-inserts, homed in the draft whose identity the piece was (the
+        // link-sets design §5.7), and re-windows the rendering draft at
+        // every kept place the request sends beside its runs (the design's
+        // F4): the row names each draft beside the member exactly when the
+        // commit writes it — the rendering draft where a run of its identity
+        // is re-inserted or a kept place sent, a stray-only re-window's among
+        // them; each `also` draft where a run of its identity is re-inserted
+        // — in the request's order, all of it request arithmetic
+        // (`Shot::named_drafts`, `Shot::reinserted_runs_of`), so the row
+        // agrees with the journal's own witness of each draft's write.
         Op::Publish { target, shot, places, deposits } => {
             let reinserted = shot.reinserted_values();
             let rewindowed = places.iter().any(Option::is_some);
+            let drafts: Vec<Address> = shot
+                .named_drafts()
+                .enumerate()
+                .filter(|(k, draft)| {
+                    shot.reinserted_runs_of(draft).next().is_some() || (*k == 0 && rewindowed)
+                })
+                .map(|(_, draft)| draft)
+                .collect();
             // The homes the deposits name by address (the link-sets design
             // §5.7): a `links` entry's home, and the private home of the
             // original it names, whose claim the commit writes there; and,
@@ -2346,9 +2364,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
             meta(
                 OpKind::Publish,
                 AffectedDocs::Published {
-                    draft: shot
-                        .draft_document()
-                        .filter(|_| reinserted > Nat::from(0u32) || rewindowed),
+                    drafts,
                     mints: target.mints(),
                     homes: homes.into_iter().collect(),
                     retract: deposits.retract.clone(),

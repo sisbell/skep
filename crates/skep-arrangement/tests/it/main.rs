@@ -8,7 +8,7 @@
 //! transclusion-by-reference, NonDestruction, the fork share, the reads the
 //! level-class discipline governs, the version-chain model's three
 //! write-path refusals with the declared-deposit exemption (PUB round 2,
-//! lane 3.1), the publish shot, and that the journaled slice survives serde
+//! lane 3.1), the publish shot and its family of drafts, and that the journaled slice survives serde
 //! plus M2's real checkpoint-and-replay recovery. `common` is the minimal
 //! engine assembly the composition contract prescribes and the helpers every
 //! suite shares; `tidy` checks the module tree — every file declared, every
@@ -28,6 +28,7 @@ mod common;
 mod attested;
 mod copy;
 mod delete;
+mod family;
 mod head_float;
 mod insert;
 mod ownership;

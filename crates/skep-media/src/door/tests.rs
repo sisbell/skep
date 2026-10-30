@@ -150,6 +150,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
         shot: Shot {
             base: None,
             draft: draft.clone(),
+            also: vec![],
             runs: vec![ShotRun {
                 origin: draft.clone().unwrap_or_else(|| h.clone()),
                 run: Run::new(cell_at.clone(), Nat::from(1u32)).expect("one position"),
@@ -208,6 +209,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
         shot: Shot {
             base: None,
             draft: Some(draft2.clone()),
+            also: vec![],
             runs: vec![ShotRun {
                 origin: draft2.clone(),
                 run: Run::new(real_at.clone(), Nat::from(1u32)).expect("one position"),

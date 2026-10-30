@@ -459,7 +459,7 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
                 if !originals.insert(old) {
                     return Err(PlanFault::DuplicateOriginal { index });
                 }
-                let spans = published_spans(&from, &to, &image, shot.draft_document().as_ref());
+                let spans = published_spans(&from, &to, &image, shot);
                 let home = check_old(world, caller, old, &image, &spans)
                     .map_err(|cause| PlanFault::Old { index, cause })?;
                 Some(PlannedClaim { old: old.clone(), home })
@@ -601,17 +601,22 @@ fn planned_end(end: &EndArg, image: &[Run], index: usize, slot: usize) -> Result
 /// Returns the content spans of an entry's two ends that lie on published
 /// identity — the spans a standing successor could cover.
 ///
-/// An I-span end's spans as given, a draft's own left out; a
-/// member-position end's spans at positions the shot places by reference,
-/// resolved through the request's image, where a span at a draft-native
-/// position — the shot's own new words, fresh at the commit — is left out,
-/// nothing standing before the commit could cover it (the request's image
-/// maps such a position to the draft's own address, which names the draft).
-/// An address-form end names no content span.
-fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], draft: Option<&Address>) -> Vec<Span> {
+/// An I-span end's spans as given, any NAMED draft's own left out — the
+/// rendering draft's or an `also` draft's alike (`Shot::is_draft_native`),
+/// the shot re-minting every one of them, its member-position form the
+/// entry's spelling; a member-position end's spans at positions the shot
+/// places by reference, resolved through the request's image, where a span
+/// at a draft-native position — the shot's own new words, fresh at the
+/// commit — is left out, nothing standing before the commit could cover it
+/// (the request's image maps such a position to the draft's own address,
+/// which names a named draft). An address-form end names no content span.
+fn published_spans(from: &PlannedEnd, to: &PlannedEnd, image: &[Run], shot: &Shot) -> Vec<Span> {
     let of_draft = |s: &Span| -> bool {
-        draft.is_some()
-            && validate(s.start().clone()).ok().and_then(|a| document_of(&a)).map(|d| trunk_of(&d)).as_ref() == draft
+        validate(s.start().clone())
+            .ok()
+            .and_then(|a| document_of(&a))
+            .map(|d| trunk_of(&d))
+            .is_some_and(|d| shot.is_draft_native(&d))
     };
     let mut out = Vec::new();
     for end in [from, to] {
@@ -900,11 +905,13 @@ pub fn request_image(shot: &Shot) -> Vec<Run> {
 /// [`stage_publish`](skep_arrangement::stage_publish) has minted the member;
 /// a verifier holding the member reads the same off `image(member, [1..placed])`.
 pub fn member_image(shot: &Shot, pairing: &Pairing) -> Vec<Run> {
-    let draft = shot.draft_document();
     let mut out = Vec::with_capacity(shot.runs.len());
     for (index, stated) in shot.runs.iter().enumerate() {
-        let native = draft.is_some()
-            && document_of(stated.run.i_start()).map(|d| trunk_of(&d)) == draft;
+        // A named draft's run — the rendering draft's or an `also` draft's —
+        // is replaced by the fresh runs the pairing placed for it.
+        let native = document_of(stated.run.i_start())
+            .map(|d| trunk_of(&d))
+            .is_some_and(|d| shot.is_draft_native(&d));
         if native {
             out.extend(pairing.iter().filter(|p| p.index == index).map(|p| p.to.clone()));
         } else {

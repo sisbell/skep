@@ -395,9 +395,9 @@ fn insert_arm<W: FebeWorld>(
 /// Answers the `publish` arms, 3 to 6.
 ///
 /// They are read only where M5's own admission of the shot passes it
-/// through the source gate — the draft's registration and ownership among
-/// its slots, so the draft here is the caller's own — the staging draft is
-/// readable to the caller, and
+/// through the source gate — each named draft's registration and ownership
+/// among its slots, so every draft here is the caller's own — the rendering
+/// draft is readable to the caller, and
 /// the re-insert is within M5's budget — so every refusal the store gives
 /// ahead of its existence walk stands ahead of this door, in the store's own
 /// words, and the door reads no value the caller may not read. The
@@ -433,9 +433,10 @@ fn publish_arm<W: FebeWorld>(
     if admitted.is_err() {
         return None;
     }
-    // The staging draft, judged as the document it projects to (PUB-2.15) —
-    // M5's own projection; with none, no run is draft-native and the shot
-    // re-inserts nothing.
+    // The rendering draft, judged as the document it projects to (PUB-2.15)
+    // — M5's own projection; with none, no run is draft-native and the shot
+    // re-inserts nothing (`also` rides only beside it). The family's other
+    // drafts are the caller's own by the admission's ω, hence readable.
     let draft = shot.draft_document()?;
     // P31: nothing of a draft the caller may not read is read on its behalf.
     // (The admission passes a run the base carries without consulting its
@@ -453,9 +454,10 @@ fn publish_arm<W: FebeWorld>(
         return None;
     }
     // Every draft-native value naming the kind is judged (M-I1 (a)): each
-    // value in placement order, the first refusal answering. The owner test
-    // the shot once took here is the admission's above — ω of the draft,
-    // asked of every drafted shot, cell or none.
+    // value in placement order over every named draft, the first refusal
+    // answering. The owner test the shot once took here is the admission's
+    // above — ω of each named draft, asked of every drafted shot, cell or
+    // none.
     let content = world.content();
     // The runs the commit re-mints, in its order — M5's own family rule
     // (PUB-2.40): a run of the trunk's own I-space is placed by reference

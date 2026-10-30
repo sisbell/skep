@@ -36,7 +36,14 @@
 //! COUNTERPART offered first where a record of a draft the person reads
 //! names the run's words as published (one four-set read per such run,
 //! made at every panel and never from a cache); the request takes them as
-//! given ([`windows`]).
+//! given ([`windows`]). The drafts `also` names are EXCLUDED from the
+//! windows — their runs are re-minted as the document's own words, not
+//! windowed (the Nelson way, B3-S10) — and the panel answers for each
+//! instead THE STATEMENT's count ([`inherited`]): the passages first written
+//! in it, the data of P2 (i)'s statement before the act ("⟨n⟩ passages first
+//! written in ⟨D⟩ publish as ⟨E⟩'s own words; ⟨D⟩ keeps a record of where
+//! they went"), consecutive runs of one origin in the selection's V-order
+//! counted once; the rendering draft's own words are counted nowhere.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -191,7 +198,8 @@ pub struct Counterpart {
 
 /// One own-origin window of the selection (the link-sets design §5.7;
 /// B3-S11 P2 (i)): a run onto an unpublished draft of the person's own,
-/// which the three answers are asked for.
+/// which the three answers are asked for — never a run of a named draft,
+/// the rendering draft's or one `also` names, whose words are re-minted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Window {
     /// The run's index in the selection — the key an answer takes.
@@ -210,6 +218,21 @@ pub struct Window {
     pub counterpart: Option<Counterpart>,
 }
 
+/// THE STATEMENT's count for one draft `also` names (B3-S11 P2 (i)'s
+/// statement before the act, the Nelson way): the draft, and how many
+/// PASSAGES of the selection were first written in it — the selection's runs
+/// of that origin, consecutive runs of one origin in the selection's V-order
+/// counted once. The ⟨n⟩ of "⟨n⟩ passages first written in ⟨D⟩ publish as
+/// ⟨E⟩'s own words; ⟨D⟩ keeps a record of where they went", as DATA; the
+/// statement itself is the page's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inherited {
+    /// The draft `also` names.
+    pub draft: Address,
+    /// The passages of the selection first written in it.
+    pub passages: usize,
+}
+
 /// The panel's data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Panel {
@@ -221,10 +244,38 @@ pub struct Panel {
     /// now — the destinations' states.
     pub read_with: BTreeMap<Address, bool>,
     /// The own-origin windows, in the selection's order, each with its
-    /// counterpart where one is offered.
+    /// counterpart where one is offered; the drafts `also` names excluded.
     pub windows: Vec<Window>,
+    /// The statement's count per draft `also` names, in the request's
+    /// order ([`inherited`]).
+    pub inherited: Vec<Inherited>,
     /// The frames sent, per step.
     pub frames: Vec<(&'static str, usize)>,
+}
+
+/// Returns THE STATEMENT's count per draft `also` names, in the request's
+/// order: for each, the passages of the selection first written in it —
+/// the selection's runs of that origin, consecutive runs of one origin in
+/// the selection's V-order counted once. Request arithmetic over the
+/// selection, reading nothing; the rendering draft's own words are not
+/// counted (they are the draft's, said nowhere).
+pub fn inherited(inputs: &Inputs) -> Vec<Inherited> {
+    inputs
+        .also
+        .iter()
+        .map(|draft| {
+            let mut passages = 0usize;
+            let mut within = false;
+            for run in &inputs.selection {
+                let of_draft = run.origin == *draft;
+                if of_draft && !within {
+                    passages += 1;
+                }
+                within = of_draft;
+            }
+            Inherited { draft: draft.clone(), passages }
+        })
+        .collect()
 }
 
 /// Where a switched-on private row's links are published into.
@@ -478,7 +529,7 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     }
 
     let windows = windows_with(door, p, inputs)?;
-    Ok(Panel { rows, formatting: Formatting { marks, cut, removals }, read_with, windows, frames: door.counts() })
+    Ok(Panel { rows, formatting: Formatting { marks, cut, removals }, read_with, windows, inherited: inherited(inputs), frames: door.counts() })
 }
 
 /// Reads the own-origin windows of the selection, each with its counterpart.
@@ -496,8 +547,9 @@ pub fn windows(p: &Publisher<'_>, inputs: &Inputs) -> Result<Vec<Window>, Fault>
 
 /// Reads the windows through `door`.
 ///
-/// A run is a window where its origin is neither the draft nor the trunk
-/// and is an unpublished document owned by the person exactly (one
+/// A run is a window where its origin is neither a named draft — the
+/// rendering draft, or one `also` names, whose words are re-minted — nor the
+/// trunk and is an unpublished document owned by the person exactly (one
 /// `doc_metadata` read per origin, kept); its counterpart is read where the
 /// origin is a draft the person reads — one four-set read over the record
 /// class homed in the origin, `from` the run — the first record covering
@@ -509,7 +561,7 @@ pub(crate) fn windows_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs) 
     let subtype = unit(T_CORRESPONDENCE);
     let mut out = Vec::new();
     for (i, run) in inputs.selection.iter().enumerate() {
-        if run.origin == inputs.draft || trunk == Some(&run.origin) {
+        if inputs.is_named_draft(&run.origin) || trunk == Some(&run.origin) {
             continue;
         }
         let origin = run.origin.to_string();

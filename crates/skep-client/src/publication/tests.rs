@@ -509,6 +509,9 @@ impl World {
         let refused = |code: &str, site: Value| json!({"resp": "rejected", "code": code, "disposition": "permanent", "op": "publish", "site": site});
         let mint = frame["mint"].as_bool().unwrap_or(false);
         let draft = frame["draft"].as_str().map(str::to_string);
+        // The family: the rendering draft, then the drafts `also` names.
+        let also: Vec<String> = frame["also"].as_array().map(|l| l.iter().map(|x| x.as_str().unwrap().to_string()).collect()).unwrap_or_default();
+        let named: Vec<String> = draft.iter().cloned().chain(also.iter().cloned()).collect();
         let runs: Vec<Run> = frame["runs"].as_array().unwrap().iter().map(|r| Run::new(a(r["origin"].as_str().unwrap()), r["i_start"].as_str().unwrap().rsplit('.').next().unwrap().parse().unwrap(), r["width"].as_str().unwrap().parse().unwrap())).collect();
         let places: Vec<Option<u64>> = frame["places"].as_array().map(|p| p.iter().map(|x| x["ordinal"].as_str().and_then(|o| o.parse().ok())).collect()).unwrap_or_else(|| vec![None; runs.len()]);
         let (trunk, edition) = if mint {
@@ -524,8 +527,14 @@ impl World {
         let records_in = |w: &World, d: &str| -> Vec<(LinkRow, String)> {
             w.links.iter().filter(|l| l.home == d && l.ty.first().is_some_and(|t| t.0 == T_CORRESPONDENCE)).map(|l| (l.clone(), w.rows.iter().find(|r| r.at == l.at && r.op == "publish").map(|r| r.docs[0].clone()).unwrap_or_default())).collect()
         };
-        // The twin fence.
-        if let Some(d) = &draft {
+        // ω per named draft, in the request's order; then the twin fence per
+        // named draft: each draft's own records for the runs of its identity.
+        for d in &named {
+            if self.docs.get(d).is_some_and(|doc| doc.owner != ACCOUNT) {
+                return refused("not_owner", json!({"addr": d}));
+            }
+        }
+        for d in &named {
             for run in runs.iter().filter(|r| r.origin.to_string() == *d) {
                 for (rec, member) in records_in(self, d) {
                     let from = addresses(&rec.from[0]);
@@ -598,27 +607,32 @@ impl World {
         // The mint: one fresh identity per draft identity, in runs' order.
         self.position += 1;
         let at = self.position;
-        let mut fresh_of: BTreeMap<u64, u64> = BTreeMap::new();
+        // Keyed by the draft and the position: the drafts' chains are
+        // distinct, so one draft's ordinal is no other's.
+        let mut fresh_of: BTreeMap<(String, u64), u64> = BTreeMap::new();
         let mut positions: Vec<(Address, u64)> = Vec::new();
         let mut fresh_runs: Vec<Run> = Vec::new();
-        let mut records: Vec<(u64, u64, u64)> = Vec::new();
+        // Each record: the draft it is homed in, its draft start, its fresh
+        // start, its width.
+        let mut records: Vec<(String, u64, u64, u64)> = Vec::new();
         for run in &runs {
-            if draft.as_deref() == Some(run.origin.to_string().as_str()) {
+            let origin = run.origin.to_string();
+            if named.contains(&origin) {
                 let mut minted_start: Option<(u64, u64)> = None;
                 let mut piece_start = 0u64;
                 for n in run.i_start..run.reach() {
-                    let f = match fresh_of.get(&n) {
+                    let f = match fresh_of.get(&(origin.clone(), n)) {
                         Some(f) => {
                             if let Some((ds, fs)) = minted_start.take() {
-                                records.push((ds, fs, n - ds));
+                                records.push((origin.clone(), ds, fs, n - ds));
                             }
                             *f
                         }
                         None => {
                             let f = self.fresh(&trunk);
-                            let value = self.values[&(run.origin.to_string(), n)];
+                            let value = self.values[&(origin.clone(), n)];
                             self.values.insert((trunk.clone(), f), value);
-                            fresh_of.insert(n, f);
+                            fresh_of.insert((origin.clone(), n), f);
                             if minted_start.is_none() {
                                 minted_start = Some((n, f));
                             }
@@ -629,9 +643,9 @@ impl World {
                     piece_start = n;
                 }
                 if let Some((ds, fs)) = minted_start.take() {
-                    records.push((ds, fs, piece_start + 1 - ds));
+                    records.push((origin.clone(), ds, fs, piece_start + 1 - ds));
                 }
-                fresh_runs.push(Run::new(a(&trunk), fresh_of[&run.i_start], run.width));
+                fresh_runs.push(Run::new(a(&trunk), fresh_of[&(origin.clone(), run.i_start)], run.width));
             } else {
                 positions.extend((run.i_start..run.reach()).map(|n| (run.origin.clone(), n)));
                 fresh_runs.push(run.clone());
@@ -656,13 +670,21 @@ impl World {
             w.links.push(LinkRow { addr: addr.clone(), home: home.to_string(), from, to, ty, at, retracted: false });
             addr
         };
-        // The records.
+        // The records, each homed in the draft whose identity the piece was;
+        // the row names the rendering draft where the commit wrote it, then
+        // each `also` draft where a record landed in it, in the request's
+        // order.
+        for (home, ds, fs, w) in &records {
+            push_link(self, home, vec![ispan(home, *ds, *w)], vec![ispan(&trunk, *fs, *w)], vec![unit(T_CORRESPONDENCE)]);
+        }
         if let Some(d) = &draft {
-            for (ds, fs, w) in &records {
-                push_link(self, d, vec![ispan(d, *ds, *w)], vec![ispan(&trunk, *fs, *w)], vec![unit(T_CORRESPONDENCE)]);
-            }
-            if !records.is_empty() || places.iter().any(Option::is_some) {
+            if records.iter().any(|(home, ..)| home == d) || places.iter().any(Option::is_some) {
                 homes.push(d.clone());
+            }
+        }
+        for other in &also {
+            if records.iter().any(|(home, ..)| home == other) {
+                homes.push(other.clone());
             }
         }
         // The edition claim: homed in the edition minted, or in the trunk
@@ -748,7 +770,7 @@ impl World {
             for (k, (run, place)) in runs.iter().zip(&places).enumerate() {
                 let Some(place) = place else { continue };
                 let replacement: Vec<(Address, u64)> = if draft.as_deref() == Some(run.origin.to_string().as_str()) {
-                    (run.i_start..run.reach()).map(|n| (a(&trunk), fresh_of[&n])).collect()
+                    (run.i_start..run.reach()).map(|n| (a(&trunk), fresh_of[&(d.clone(), n)])).collect()
                 } else {
                     let _ = stray_froms.iter().find(|(i, _)| *i == k);
                     (run.i_start..run.reach()).map(|n| (run.origin.clone(), n)).collect()
@@ -895,6 +917,7 @@ fn inputs() -> Inputs {
         claim: false,
         base: Some((a(&format!("{E}.1")), 19)),
         draft: a(D),
+        also: vec![],
         selection: vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5)],
         notes: vec![a(N)],
         readable_drafts: vec![a(D), a(N)],
@@ -1247,27 +1270,27 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     let draft = a(D);
     let term = a(E);
     let one = vec![run(D, 1, 1)];
-    let within = price::price(&price::Shape { runs: &one, draft: &draft, term: &term, mint: false, claim: false, places: &[Some(1)], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 });
+    let within = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[Some(1)], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 });
     assert!(within.admits(), "{within:?}");
     assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0], 1, 2));
     assert_eq!(within.bytes, price::SHOT_BYTES + price::PLACED_RUN_BYTES + price::CORRESPONDENCE_RECORD_BYTES + price::KEPT_PLACE_BYTES + price::REINSERTED_VALUE_BYTES);
     let over = |shape: &price::Shape<'_>| price::price(shape).over.iter().map(|(t, _)| *t).collect::<Vec<_>>();
     let many: Vec<Run> = (0..4097).map(|k| run(E, 1 + k, 1)).collect();
-    assert_eq!(over(&price::Shape { runs: &many, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
-    assert_eq!(over(&price::Shape { runs: &one, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
-    assert_eq!(over(&price::Shape { runs: &one, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
+    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
     let wide = vec![run(D, 1, price::MAX_REINSERTED_VALUES + 1)];
-    let values = price::price(&price::Shape { runs: &wide, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
+    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
     assert!(values.over.iter().any(|(t, by)| *t == price::Term::Values && *by == 1), "{values:?}");
-    let reads = price::price(&price::Shape { runs: &one, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
+    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
     assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 - price::MAX_PUBLICATION_READS) as u64)]);
     let entry = price::EntryShape { from: price::EndShape::Member(vec![(1, 4096)]), to: price::EndShape::Addrs(vec![]), ty: price::EndShape::Addrs(vec![T_CITATION.into()]), old: false };
     let runs4096: Vec<Run> = (0..4096).map(|k| run(D, 1 + k, 1)).collect();
     let entries = vec![entry; 100];
-    let bytes = price::price(&price::Shape { runs: &runs4096, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
+    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
     assert_eq!(bytes.over.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [price::Term::Bytes], "a hundred member-position slots over 4096 runs stage past the budget: {bytes:?}");
     let entries = vec![entries[0].clone()];
-    assert!(price::price(&price::Shape { runs: &runs4096, draft: &draft, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
+    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
 }
 
 // ── THE RE-READ ──────────────────────────────────────────────────────────
@@ -1776,4 +1799,160 @@ fn the_mint_form_mints_the_edition_and_its_lost_answer_is_read_through_the_claim
     records_less.id = fresh_id();
     dialer.world().drop_acks = 2;
     assert_eq!(send(&p, &inputs, &mut records_less).unwrap(), Sent::Refused(Refusal::MayAlreadyStand));
+}
+
+// ── THE FAMILY (the Nelson way) ──────────────────────────────────────────
+
+/// `A`, an alternative of `D`'s: a private draft of the person's holding
+/// five words of its own, which `D` arranges by identity beside its own.
+const A: &str = "1.0.1.0.9";
+const A_TEXT: &str = " also";
+
+/// The base fixture with `A` beside `D`: `D` arranges `E`'s words, its own
+/// ten, `A`'s five by identity and the window onto `O`.
+fn family_world() -> (World, Named) {
+    let (mut w, named) = World::base();
+    w.text(A, 1, A_TEXT);
+    w.doc(A, false, ACCOUNT, vec![run(A, 1, 5)]);
+    w.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10), run(A, 1, 5), run(O, 1, 5)];
+    (w, named)
+}
+
+/// The family's inputs: `D` the rendering draft, `A` named `also`, the whole
+/// of `D` the selection.
+fn family_inputs() -> Inputs {
+    Inputs { also: vec![a(A)], selection: vec![run(E, 1, 19), run(D, 1, 10), run(A, 1, 5), run(O, 1, 5)], readable_drafts: vec![a(D), a(N), a(A)], ..inputs() }
+}
+
+/// The family's confirmation: every row OFF, the window onto `O` (the fourth
+/// run) kept private.
+fn family_confirmed() -> Confirmed {
+    let mut confirmed = Confirmed::default();
+    confirmed.answers.insert(3, OriginAnswer::KeepPrivate);
+    confirmed
+}
+
+/// THE FAMILY PUBLICATION: the panel excludes `A`'s run from the windows and
+/// counts its passages as `inherited`; the request carries `also`, a kept
+/// place for the rendering draft's run alone, `A`'s run signed by value, and
+/// the price counts both drafts' positions; the twin pre-check reads `A`'s
+/// records too; the acknowledgment names `E.2`, the records are homed each
+/// in its draft — `D`'s for its ten words, `A`'s for its five — and the
+/// feed row names the member, `D`, then `A`.
+#[test]
+fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_homes_its_record_in_it() {
+    let (world, _) = family_world();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    assert_eq!(panel.windows.iter().map(|w| w.run).collect::<Vec<_>>(), vec![3], "O alone is a window: A's run is re-minted, not windowed");
+    assert_eq!(panel.inherited, vec![Inherited { draft: a(A), passages: 1 }]);
+    let scattered = Inputs { selection: vec![run(A, 1, 2), run(A, 3, 3), run(D, 1, 10), run(A, 1, 5)], ..inputs.clone() };
+    assert_eq!(inherited(&scattered), vec![Inherited { draft: a(A), passages: 2 }], "consecutive runs of one origin count once");
+    assert!(inherited(&self::inputs()).is_empty(), "no `also`, no count");
+    dialer.clear();
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &family_confirmed()).unwrap() else { panic!("inert") };
+    assert!(
+        dialer.frames("find_links_ftt").iter().any(|f| f["q"]["home"][0]["start"].as_str() == Some(A) && !f["q"]["from"].is_null()),
+        "the twin pre-check reads A's records for the run of its identity: {:?}",
+        dialer.ops()
+    );
+    assert_eq!(request.also, vec![a(A)]);
+    assert_eq!(request.runs, vec![run(E, 1, 19), run(D, 1, 10), run(A, 1, 5), run(O, 1, 5)]);
+    assert_eq!(request.places, vec![None, Some(20), None, None], "a kept place for the rendering draft's run alone");
+    assert!(matches!(&request.pieces[2], Piece::Values(v) if v.len() == 5), "A's run signed by value: {:?}", request.pieces[2]);
+    assert_eq!(request.frame(None)["also"], json!([A]), "the frame carries `also`");
+    assert_eq!(request.price.values, 15, "both drafts' distinct positions");
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
+    assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Answer));
+    let w = dialer.world();
+    let records = |home: &str| w.links.iter().filter(|l| l.home == home && l.ty[0].0 == T_CORRESPONDENCE).map(|l| (l.from[0].clone(), l.to[0].clone())).collect::<Vec<_>>();
+    assert_eq!(records(D).len(), 2, "D's earlier record, and the one this shot homed in D for its ten words");
+    assert!(records(D).contains(&(ispan(D, 1, 10), ispan(E, 20, 10))), "{:?}", records(D));
+    assert_eq!(records(A), vec![(ispan(A, 1, 5), ispan(E, 30, 5))], "A's record homed in A, `to` the member's fresh identity");
+    let row = w.rows.iter().find(|r| r.at == ack.at).expect("the publish row");
+    assert_eq!(row.docs[..3], [format!("{E}.2"), D.to_string(), A.to_string()], "the member, the rendering draft, then the also draft");
+    assert_eq!(w.docs[A].runs, vec![run(A, 1, 5)], "A is not re-windowed: its words stay its own, a counterpart through its record");
+}
+
+/// THE TWIN PRE-CHECK over the family: a run of `A`'s identity that a record
+/// of `A` already names is re-composed by reference to the record's `to`, in
+/// pieces where the record covers it in part, with no kept place for any
+/// piece of it — only the rendering draft's runs carry places — and the
+/// records are read per draft, `D`'s then `A`'s.
+#[test]
+fn the_twin_precheck_re_composes_an_also_drafts_recorded_words_by_reference() {
+    let (mut world, _) = family_world();
+    world.typed(A, vec![ispan(A, 2, 2)], vec![ispan(E, 40, 2)], T_CORRESPONDENCE);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let re = twin_precheck(&p, &family_inputs(), &[run(D, 1, 10), run(A, 1, 5)], &[Some(20), None], &[Some(20), Some(30)]).unwrap();
+    assert_eq!(re.runs, vec![run(D, 1, 10), run(A, 1, 1), run(E, 40, 2), run(A, 4, 2)]);
+    assert_eq!(re.places, vec![Some(20), None, None, None], "no place for an also draft's pieces");
+    assert_eq!(re.draft_places, vec![Some(20), Some(30), Some(31), Some(33)]);
+    assert_eq!(re.stray_records, vec![0, 0, 1, 0]);
+    let homes: Vec<String> = dialer.frames("find_links_ftt").iter().filter_map(|f| f["q"]["home"][0]["start"].as_str().map(str::to_string)).collect();
+    assert_eq!(homes, vec![D.to_string(), A.to_string()], "D's records read first, then A's");
+    assert_eq!(re.frames, vec![("twin_precheck", 3)], "the two records reads and the one record's read_link");
+}
+
+/// A LOST ACKNOWLEDGMENT of a family publication is read back through the
+/// records: the rendering draft's first where it re-inserted a run, each
+/// `also` draft's for the runs of its own identity after it — and `A`'s
+/// alone where the rendering draft re-inserted nothing.
+#[test]
+fn a_lost_family_acknowledgment_is_read_back_through_the_rendering_drafts_records_then_the_also_drafts() {
+    let (world, _) = family_world();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &family_confirmed()).unwrap() else { panic!("inert") };
+    dialer.world().drop_acks = 2;
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("not landed") };
+    assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Records));
+    let homes: Vec<String> = dialer.frames("find_links_ftt").iter().filter_map(|f| f["q"]["home"][0]["start"].as_str().map(str::to_string)).collect();
+    assert_eq!(homes.first().map(String::as_str), Some(D), "the rendering draft's records first: {homes:?}");
+    // `A`'s run alone: the rendering draft re-inserts nothing, so its records
+    // are not read and `A`'s name the member.
+    let (world, _) = family_world();
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let only_a = Inputs { selection: vec![run(E, 1, 19), run(A, 1, 5)], ..family_inputs() };
+    let e = enumerate(&p, &only_a).unwrap();
+    let pn = self::panel(&p, &only_a, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &only_a, &e, &pn, &Confirmed::default()).unwrap() else { panic!("inert") };
+    assert_eq!(request.runs, vec![run(E, 1, 19), run(A, 1, 5)]);
+    dialer.world().drop_acks = 2;
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &only_a, &mut request).unwrap() else { panic!("not landed") };
+    assert_eq!(ack.via, AckVia::Records);
+    let homes: Vec<String> = dialer.frames("find_links_ftt").iter().filter_map(|f| f["q"]["home"][0]["start"].as_str().map(str::to_string)).collect();
+    assert_eq!(homes, vec![A.to_string()], "A's records alone: {homes:?}");
+}
+
+/// `not_owner` naming a draft `also` names is the unowned-draft arm, as it
+/// is for the rendering draft — the board's own ω per home.
+#[test]
+fn an_unowned_also_draft_is_the_unowned_draft_arm() {
+    let (mut world, _) = family_world();
+    world.docs.get_mut(A).unwrap().owner = "1.0.2".to_string();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &family_confirmed()).unwrap() else { panic!("inert") };
+    let before = dialer.world().position;
+    assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::UnownedDraft { draft: a(A) }));
+    assert_eq!(dialer.world().position, before, "nothing committed");
 }

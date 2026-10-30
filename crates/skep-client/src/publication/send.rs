@@ -153,10 +153,11 @@ pub enum Refusal {
         /// Whose write moved them, where the feed tells.
         race: Option<RaceKey>,
     },
-    /// `not_owner` naming the draft: a publication keeps its records in the
-    /// draft it was staged in.
+    /// `not_owner` naming a draft the request names — the rendering draft,
+    /// or one `also` names: a publication keeps its records in the drafts
+    /// whose words it re-mints, each of which must be the person's own.
     UnownedDraft {
-        /// The draft.
+        /// The draft at fault.
         draft: Address,
     },
     /// `not_owner` naming `doc` or the account.
@@ -299,8 +300,8 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
             }
             "not_owner" => {
                 let addr = site.addr.as_deref().and_then(parse_address);
-                match (&addr, &request.draft) {
-                    (Some(a), Some(draft)) if a == draft => Refusal::UnownedDraft { draft: draft.clone() },
+                match &addr {
+                    Some(a) if request.draft.as_ref() == Some(a) || request.also.contains(a) => Refusal::UnownedDraft { draft: a.clone() },
                     _ => Refusal::NotOwner { addr },
                 }
             }
@@ -337,9 +338,10 @@ fn carries_members(request: &Request) -> bool {
 }
 
 /// A lost answer: the board read first, through the landed test from the
-/// base the request's shape names.
+/// base the request's shape names — the records where any run is a named
+/// draft's, the rendering draft's or an `also` draft's.
 fn lost(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, request: &Request) -> Result<Sent, Fault> {
-    let base = if request.runs.iter().any(|r| Some(&r.origin) == request.draft.as_ref()) {
+    let base = if request.runs.iter().any(|r| Some(&r.origin) == request.draft.as_ref() || request.also.contains(&r.origin)) {
         Base::Records
     } else if request.mint.is_some() {
         Base::EditionClaims

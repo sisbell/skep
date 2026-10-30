@@ -55,6 +55,7 @@ fn shot(base: Option<(&Address, u32)>, runs: Vec<ShotRun>) -> Shot {
     Shot {
         base: base.map(|(member, extent)| skep_arrangement::Base { member: member.clone(), extent: n(extent) }),
         draft: Some(doc1()),
+        also: vec![],
         runs,
     }
 }
@@ -234,7 +235,7 @@ fn a_draft_the_caller_does_not_own_is_refused_ahead_of_the_fence() {
     let w = writer(&k);
     w.publication(P1, &PublishTarget::Document(pdoc()), &shot(None, vec![shot_run(&doc1(), &ca(1), 3)]), &[], &PublishDeposits::default()).expect("P1 publishes a b c");
     let before = k.snapshot();
-    let theirs = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 1)] };
+    let theirs = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(2), 1)] };
     assert_eq!(
         refused(w.publication(P2, &PublishTarget::Document(sib_doc()), &theirs, &[], &PublishDeposits::default())),
         PublicationError::Publish(PublishError::NotOwner(doc1())),
@@ -260,6 +261,7 @@ fn a_shot_that_re_inserts_nothing_stages_no_record_and_commits_as_the_shot_alone
     let own = |base: Option<(&Address, u32)>, draft: Option<Address>| Shot {
         base: base.map(|(m, e)| skep_arrangement::Base { member: m.clone(), extent: n(e) }),
         draft,
+        also: vec![],
         runs: vec![],
     };
     let seq0 = k.current_seq();
@@ -413,7 +415,7 @@ fn a_shots_fresh_run_replaces_the_drafts_run_at_its_kept_place_in_the_one_commit
         // The client's P4 reading: where doc1 arranges the named run.
         assert_eq!(footprint(&k, &doc1(), &named), spans(&[(place, width_of(&named))]), "{what}");
 
-        let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![ShotRun { origin: doc1(), run: named.clone() }] };
+        let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![ShotRun { origin: doc1(), run: named.clone() }] };
         let (member, seq) = writer(&k)
             .publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, place)]), &PublishDeposits::default())
             .expect("the one commit stands whole");
@@ -509,6 +511,7 @@ fn a_run_moved_split_or_deleted_since_its_place_was_read_refuses_with_its_entry_
         let the_shot = Shot {
             base: None,
             draft: Some(doc1()),
+            also: vec![],
             runs: vec![ShotRun { origin: doc1(), run: a.clone() }, ShotRun { origin: doc1(), run: bc.clone() }],
         };
         let refusal = refused(writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(2, &[(0, 1), (1, 2)]), &PublishDeposits::default()));
@@ -549,7 +552,7 @@ fn a_run_the_draft_arranges_twice_is_re_windowed_at_the_named_place_and_left_sta
         assert_eq!(bytes_of(&k, &doc1()), "abcb");
         assert_eq!(footprint(&k, &doc1(), &b), spans(&[(2, 1), (4, 1)]), "the premise: the identity at two places");
 
-        let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![ShotRun { origin: doc1(), run: b.clone() }] };
+        let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![ShotRun { origin: doc1(), run: b.clone() }] };
         let (member, _) = writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, named)]), &PublishDeposits::default()).expect("the named place holds");
         let fresh = run(&pca(1), 1);
         assert_eq!(bytes_of(&k, &doc1()), "abcb", "at {named}: the draft reads the same");
@@ -576,6 +579,7 @@ fn a_run_named_twice_with_a_place_on_each_re_windows_the_second_to_the_firsts_fr
     let the_shot = Shot {
         base: None,
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![ShotRun { origin: doc1(), run: b.clone() }, ShotRun { origin: doc1(), run: b.clone() }],
     };
     let (member, _) = writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(2, &[(0, 2), (1, 4)]), &PublishDeposits::default()).expect("both places hold");
@@ -605,7 +609,7 @@ fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands
         .insert(P1, &published_draft, vp(1, 1), vec![Val::new([b'q'])], Deposit::Declared(skep_arrangement::deposit_class_types()[0].clone()))
         .expect("a declared deposit at the published document's fresh position");
     let q = Run::new(a(&[1, 0, 1, 0, 4, 0, 1, 1]), n(1)).expect("a run");
-    let the_shot = Shot { base: None, draft: Some(published_draft.clone()), runs: vec![ShotRun { origin: published_draft.clone(), run: q }] };
+    let the_shot = Shot { base: None, draft: Some(published_draft.clone()), also: vec![], runs: vec![ShotRun { origin: published_draft.clone(), run: q }] };
     let before = k.current_seq();
     assert_eq!(
         refused(writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, 1)]), &PublishDeposits::default())),
@@ -633,7 +637,7 @@ fn ca2(k: u32) -> Address {
 /// again, at 4. Answers `E.1`.
 fn stray_board(k: &Kernel<World>) -> Address {
     draft_holding(k, "abc");
-    let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 2)] };
+    let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(2), 2)] };
     let (member, _) = writer(k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, 2)]), &PublishDeposits::default()).expect("E.1");
     Vstream::new(k).reinstate(P1, &doc1(), vp(1, 4), &[ShotRun { origin: doc1(), run: run(&ca(2), 2) }]).expect("the stray act");
     assert_eq!(bytes_of(k, &doc1()), "abcbc");
@@ -688,12 +692,13 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_at_its_kept
 fn a_draft_left_arranging_published_words_is_re_windowed_by_the_next_shot_that_sends_their_place() {
     let k = kernel_over(edition_world());
     draft_holding(&k, "abc");
-    let first = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 2)] };
+    let first = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(2), 2)] };
     writer(&k).publication(P1, &PublishTarget::Document(pdoc()), &first, &[], &PublishDeposits::default()).expect("today's shot");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 3)], "the draft left as it stands");
     let the_shot = Shot {
         base: Some(skep_arrangement::Base { member: pmember(1), extent: n(2) }),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&pdoc(), &pca(1), 2)],
     };
     let (member, _) = writer(&k)
@@ -723,7 +728,7 @@ fn a_stray_run_that_is_a_piece_of_a_record_or_spans_two_records_is_re_windowed_p
     draft_holding(&k, "abcde");
     let none = PublishDeposits::default();
     let into_e = PublishTarget::Document(pdoc());
-    let first = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 2)] };
+    let first = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(2), 2)] };
     writer(&k).publication(P1, &into_e, &first, &places(1, &[(0, 2)]), &none).expect("E.1");
     let second = shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 2)]);
     writer(&k).publication(P1, &into_e, &second, &places(2, &[(1, 4)]), &none).expect("E.2");
@@ -794,6 +799,7 @@ fn a_stray_run_no_record_of_the_draft_covers_whole_is_refused_with_its_entry_and
     let from_doc2 = Shot {
         base: Some(skep_arrangement::Base { member: pmember(1), extent: n(2) }),
         draft: Some(doc2()),
+        also: vec![],
         runs: vec![shot_run(&pdoc(), &pca(1), 2), shot_run(&doc2(), &ca2(1), 2)],
     };
     writer(&k).publication(P1, &into_e, &from_doc2, &[], &none).expect("E.2, x y minted from doc2");
@@ -883,7 +889,7 @@ fn shot_off_head(k: &Kernel<World>, fresh: Vec<ShotRun>) -> Shot {
     let extent = m5.content_count(&head);
     let mut runs: Vec<ShotRun> = m5.content_runs(&head).map(|r| ShotRun { origin: pdoc(), run: r.clone() }).collect();
     runs.extend(fresh);
-    Shot { base: Some(skep_arrangement::Base { member: head, extent }), draft: Some(doc1()), runs }
+    Shot { base: Some(skep_arrangement::Base { member: head, extent }), draft: Some(doc1()), also: vec![], runs }
 }
 
 /// Publishes `shot` with `deposits` into the edition, as the owner.
@@ -1030,7 +1036,7 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     draft_holding(&k, "abc");
     let account = a(&[1, 0, 1]);
     let before = k.snapshot();
-    let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(1), 3)] };
+    let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(1), 3)] };
     let target = PublishTarget::Mint { account: account.clone() };
     let deposits = PublishDeposits { claim: true, links: vec![], retract: vec![], read_with: vec![set_s()] };
     let (member, seq) = writer(&k).publication(P1, &target, &the_shot, &[], &deposits).expect("the mint");
@@ -1060,12 +1066,12 @@ fn a_minting_publication_mints_the_edition_and_homes_the_claim_in_it() {
     let theirs = PublishTarget::Mint { account: a(&[1, 0, 2]) };
     let before = k.current_seq();
     assert_eq!(
-        refused(writer(&k).publication(P1, &theirs, &Shot { base: None, draft: None, runs: vec![] }, &[], &PublishDeposits::default())),
+        refused(writer(&k).publication(P1, &theirs, &Shot { base: None, draft: None, also: vec![], runs: vec![] }, &[], &PublishDeposits::default())),
         PublicationError::Publish(PublishError::NotOwner(a(&[1, 0, 2])))
     );
     assert_eq!(k.current_seq(), before);
     // A base at the mint form: no chain for it to lie in.
-    let based = Shot { base: Some(skep_arrangement::Base { member: pmember(1), extent: n(0) }), draft: None, runs: vec![] };
+    let based = Shot { base: Some(skep_arrangement::Base { member: pmember(1), extent: n(0) }), draft: None, also: vec![], runs: vec![] };
     assert_eq!(
         refused(writer(&k).publication(P1, &target, &based, &[], &PublishDeposits::default())),
         PublicationError::Publish(PublishError::BaseNotInChain)
@@ -1091,7 +1097,7 @@ fn a_first_version_into_an_empty_edition_carries_its_claim_homed_in_it() {
     let k = journaled_over(deposits_world());
     draft_holding(&k, "abc");
     let before = k.snapshot();
-    let the_shot = Shot { base: None, draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(1), 3)] };
+    let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(1), 3)] };
     let claimed = PublishDeposits { claim: true, ..PublishDeposits::default() };
     let target = PublishTarget::Document(pdoc());
     // The plan homes the claim by the edition's address, first of that home.
@@ -1123,7 +1129,7 @@ fn a_first_version_into_an_empty_edition_carries_its_claim_homed_in_it() {
     // edition, off the member so the shot's own table passes — the plan
     // planning the row all the same, the composite refusing it.
     let before = k.current_seq();
-    let second = Shot { base: Some(skep_arrangement::Base { member: member.clone(), extent: n(3) }), draft: Some(doc1()), runs: vec![] };
+    let second = Shot { base: Some(skep_arrangement::Base { member: member.clone(), extent: n(3) }), draft: Some(doc1()), also: vec![], runs: vec![] };
     let snap = k.snapshot();
     let plan = plan_deposits(snap.world(), P1, &target, &second, &claimed).expect("the plan plans the row; the composite refuses it");
     assert_eq!(plan.homes[0].home, NamedAddress::Address(pdoc()));
@@ -1471,7 +1477,7 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     let world = s.world();
     let target = PublishTarget::Document(pdoc());
     let none = PublishDeposits::default();
-    let birth = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(doc1()), runs };
+    let birth = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(doc1()), also: vec![], runs };
     // Draft-native: `a b c` whole and `b` inside it — the first cut at `b`'s
     // two endpoints into three pieces, the second one piece; both placed.
     let nested = birth(vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
@@ -1566,7 +1572,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
         let head = trunk_head(s.world().m3(), &pdoc()).expect("a head");
         let extent = s.world().m5().content_count(&head);
         let draft = (!fresh.is_empty()).then(doc1);
-        Shot { base: Some(skep_arrangement::Base { member: head, extent }), draft, runs: fresh }
+        Shot { base: Some(skep_arrangement::Base { member: head, extent }), draft, also: vec![], runs: fresh }
     };
     let measure = |f: &dyn Fn()| {
         let before = k.journal_bytes();
@@ -1632,12 +1638,12 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     assert_eq!(bytes_of(&k, &doc1()), "abcxyde", "doc1 reads as it did, its last byte re-windowed");
     // The mint form: the edition's mint over a birth shot into `S`, the
     // claim over the mint form without one.
-    let birth = Shot { base: None, draft: None, runs: vec![] };
+    let birth = Shot { base: None, draft: None, also: vec![], runs: vec![] };
     let birth_s = measure(&|| commit(&PublishTarget::Document(set_s()), &birth, &[], &none));
     let account = a(&[1, 0, 1]);
     let minted = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &birth, &[], &none));
     let edition_mint = minted - birth_s;
-    let drafted = Shot { base: None, draft: Some(doc1()), runs: vec![] };
+    let drafted = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![] };
     let claimed_deposits = PublishDeposits { claim: true, ..PublishDeposits::default() };
     let claimed = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &drafted, &[], &claimed_deposits));
     let edition_claim = claimed - minted;
@@ -1723,4 +1729,146 @@ fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
     // between — the plan the composite reads is this one.
     let again = plan_deposits(k.snapshot().world(), P1, &target, &the_shot, &deposits).expect("a plan");
     assert_eq!(again, once);
+}
+
+// ───────────────────────── the family (the Nelson way) ─────────────────────────
+
+/// doc2 — P1's second private draft, the family's other draft — holding
+/// `text`, one byte a position from `ca2(1)`, as P1's insert.
+fn other_draft_holding(k: &Kernel<World>, text: &str) {
+    let vals: Vec<Val> = text.bytes().map(|b| Val::new([b])).collect();
+    Vstream::new(k)
+        .insert(P1, &doc2(), vp(1, 1), vals, Deposit::Undeclared)
+        .expect("doc2's insert commits");
+}
+
+/// The correspondence records homed in doc2, in address order, each as its
+/// link — every link of the draft typed the class, exactly.
+fn records_in_doc2(k: &Kernel<World>) -> Vec<Link> {
+    let s = k.snapshot();
+    let links = s.world().links();
+    (1u32..)
+        .map_while(|ordinal| links.readlink(&la2(ordinal)).cloned())
+        .filter(|link| is_correspondence_class(link.type_slot()))
+        .collect()
+}
+
+/// A family shot: doc1 the rendering draft, doc2 named `also`, off `base`.
+fn family(base: Option<(&Address, u32)>, runs: Vec<ShotRun>) -> Shot {
+    Shot { also: vec![doc2()], ..shot(base, runs) }
+}
+
+/// THE FAMILY's ONE COMMIT (B3-S11 P4; A-328): a shot from doc1 naming doc2
+/// `also`, rendering doc1's `a b c`, doc2's `x y` and doc1's `b` again,
+/// commits the member and ONE record per minted piece, each homed in the
+/// draft whose identity the piece was — doc1's in doc1, doc2's in doc2, the
+/// `b` named again placed by reference and recorded once — in ONE
+/// transaction: one boundary above the position before it, every record
+/// and the member minted at the one commit's coordinate, each record seated
+/// in its own draft's link subspace; the member reads every placed byte and
+/// both drafts read as they did.
+#[test]
+fn a_family_publication_homes_each_record_in_the_draft_whose_identity_it_was_in_one_commit() {
+    let k = journaled_over(edition_world());
+    draft_holding(&k, "abc");
+    other_draft_holding(&k, "xy");
+    let before = k.snapshot();
+    let the_shot = family(None, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2), shot_run(&doc1(), &ca(2), 1)]);
+    let (member, seq) = writer(&k)
+        .publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &[], &PublishDeposits::default())
+        .expect("the family shot commits");
+    assert_eq!(member, pmember(1));
+    assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "ONE commit: the member and two homes' records");
+    assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(1), 3), &run(&pca(1), 3))], "doc1's record for its own identity; `b` named again is placed by reference and recorded once");
+    assert_eq!(records_in_doc2(&k), vec![record(&run(&ca2(1), 2), &run(&pca(4), 2))], "doc2's record homed in doc2");
+    let s = k.snapshot();
+    let (m3, m5) = (s.world().m3(), s.world().m5());
+    assert_eq!((m3.minted_at(&la(1)), m3.minted_at(&la2(1)), m3.minted_at(&member)), (Some(seq), Some(seq), Some(seq)), "the one commit's coordinate");
+    assert_eq!(m5.link_runs(&doc1()).cloned().collect::<Vec<_>>(), vec![run(&la(1), 1)]);
+    assert_eq!(m5.link_runs(&doc2()).cloned().collect::<Vec<_>>(), vec![run(&la2(1), 1)], "seated in doc2's own link subspace");
+    assert_eq!(bytes_of(&k, &member), "abcxyb", "every occurrence the client placed");
+    assert_eq!((bytes_of(&k, &doc1()), bytes_of(&k, &doc2())), ("abc".to_string(), "xy".to_string()), "both drafts untouched");
+}
+
+/// THE TWIN FENCE PER NAMED DRAFT: once `a b c` and `x y` are published by
+/// the family shot, doc1's later shot of `b` is refused at doc1's record,
+/// doc2's own later shot of `x` — doc2 the rendering draft now — at doc2's,
+/// and a family shot of doc1's naming doc2 among `also` with doc2's `y` at
+/// doc2's record, read for the run of its identity: each `AlreadyPublished`
+/// naming the member, nothing staged.
+#[test]
+fn the_twin_fence_reads_each_named_drafts_own_records() {
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abc");
+    other_draft_holding(&k, "xy");
+    let w = writer(&k);
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let (m1, _) = w.publication(P1, &into, &family(None, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2)]), &[], &none).expect("E.1");
+    let before = k.snapshot();
+    assert_eq!(
+        refused(w.publication(P1, &into, &shot(Some((&m1, 5)), vec![shot_run(&doc1(), &ca(2), 1)]), &[], &none)),
+        PublicationError::AlreadyPublished { site: pmember(1) },
+        "doc1's own later shot of `b`: doc1's record"
+    );
+    let doc2_shot = Shot { base: Some(skep_arrangement::Base { member: m1.clone(), extent: n(5) }), draft: Some(doc2()), also: vec![], runs: vec![shot_run(&doc2(), &ca2(1), 1)] };
+    assert_eq!(refused(w.publication(P1, &into, &doc2_shot, &[], &none)), PublicationError::AlreadyPublished { site: pmember(1) }, "doc2's own later shot of `x`: doc2's record");
+    assert_eq!(
+        refused(w.publication(P1, &into, &family(Some((&m1, 5)), vec![shot_run(&doc2(), &ca2(2), 1)]), &[], &none)),
+        PublicationError::AlreadyPublished { site: pmember(1) },
+        "doc2's `y` from a family shot of doc1's: doc2's record, read for the run of its identity"
+    );
+    assert_eq!(k.snapshot().seq(), before.seq(), "nothing committed");
+    assert!(!k.snapshot().world().m3().is_registered_document(&pmember(2)), "no member minted");
+    assert_eq!((records_in_doc1(&k).len(), records_in_doc2(&k).len()), (1, 1), "no record minted");
+}
+
+/// THE RENDERING DRAFT ALONE (B3-S11 P5): the family shot with a place
+/// beside doc1's run re-windows doc1 and leaves doc2 as it stands, its
+/// words a counterpart through the record homed in it; doc2's OWN next
+/// shot — its words re-composed by reference to its record's `to`, their
+/// place beside — heals it by the stray path: the same bytes, E's identity
+/// at the place, no new record, no identity minted.
+#[test]
+fn the_re_window_touches_the_rendering_draft_alone_and_the_other_drafts_own_shot_heals_it_by_the_stray_path() {
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abc");
+    other_draft_holding(&k, "xy");
+    let w = writer(&k);
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let (m1, _) = w
+        .publication(P1, &into, &family(None, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2)]), &places(2, &[(0, 1)]), &none)
+        .expect("E.1");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 3)], "the rendering draft re-windowed at its place");
+    assert_eq!(runs_of(&k, &doc2()), vec![run(&ca2(1), 2)], "the other draft left as it stands");
+    assert_eq!(records_in_doc2(&k), vec![record(&run(&ca2(1), 2), &run(&pca(4), 2))]);
+    let healing = Shot { base: Some(skep_arrangement::Base { member: m1.clone(), extent: n(5) }), draft: Some(doc2()), also: vec![], runs: vec![shot_run(&pdoc(), &pca(4), 2)] };
+    let (m2, _) = w.publication(P1, &into, &healing, &places(1, &[(0, 1)]), &none).expect("the stray path heals doc2 at its own shot");
+    assert_eq!(m2, pmember(2));
+    assert_eq!(bytes_of(&k, &doc2()), "xy", "the same bytes");
+    assert_eq!(runs_of(&k, &doc2()), vec![run(&pca(4), 2)], "E's identity at the place");
+    assert_eq!(records_in_doc2(&k).len(), 1, "no new record");
+    assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(6)), "no identity minted");
+    assert_eq!(bytes_of(&k, &m2), "xy");
+}
+
+/// THE PRICE of a family publication: the draft term is the rendering
+/// draft's alone — `also` adds nothing to it — and the fence's one stab per
+/// run counts the request's runs, of whichever named draft.
+#[test]
+fn the_price_of_a_family_publication_is_the_one_draft_shots_but_for_the_runs() {
+    use skep_links::price_publication_reads;
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "abc");
+    other_draft_holding(&k, "xy");
+    let s = k.snapshot();
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let one = shot(None, vec![shot_run(&doc1(), &ca(1), 3)]);
+    let with = family(None, vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2)]);
+    let (p1, p2) = (price_publication_reads(s.world(), P1, &into, &one, &[], &none), price_publication_reads(s.world(), P1, &into, &with, &[], &none));
+    assert_eq!((p1.homes, p1.entries, p1.draft_runs), (p2.homes, p2.entries, p2.draft_runs), "the draft term is the rendering draft's alone");
+    assert_eq!(p2.runs, p1.runs + 1, "one stab per run of the request");
+    assert!(p2.staged_bytes > p1.staged_bytes, "the other draft's run and its record are priced as any draft-native run's");
 }

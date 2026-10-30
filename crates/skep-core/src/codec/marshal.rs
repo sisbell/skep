@@ -297,6 +297,12 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if let Some(draft) = &shot.draft {
                 pairs.push(("draft", j_addr(draft)));
             }
+            // The family's other drafts ride only where named: the empty
+            // list is the one-draft shot and marshals to no member, so
+            // `parse ∘ marshal` is a fixpoint.
+            if !shot.also.is_empty() {
+                pairs.push(("also", j_addrs(&shot.also)));
+            }
             if places.iter().any(Option::is_some) {
                 let places = places.iter().map(|p| p.as_ref().map_or(Value::Null, j_vpos));
                 pairs.push(("places", Value::Array(places.collect())));

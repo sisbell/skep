@@ -147,7 +147,7 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
     let h = head_document();
     let into_h = |base: Option<Base>| Op::Publish {
         target: PublishTarget::Document(h.clone()),
-        shot: Shot { base, draft: None, runs: Vec::new() },
+        shot: Shot { base, draft: None, also: vec![], runs: Vec::new() },
         places: Vec::new(),
         deposits: PublishDeposits::default(),
     };

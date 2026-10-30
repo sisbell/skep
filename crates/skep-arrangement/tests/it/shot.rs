@@ -71,6 +71,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
     };
     let before = k.current_seq();
@@ -143,6 +144,7 @@ fn a_shot_places_the_runs_the_client_rendered_not_what_the_draft_holds_at_commit
             &Shot {
                 base: Some(base(&pdoc(), 3)),
                 draft: Some(doc1()),
+                also: vec![],
                 runs: vec![shot_run(&doc1(), &ca(1), 3)],
             },
             &readable_by(PrincipalId(1)),
@@ -173,7 +175,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
             &readable,
         )
         .expect("the first member");
@@ -184,6 +186,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     let staged = |member: &Address| Shot {
         base: Some(base(member, 3)),
         draft: None,
+        also: vec![],
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1)],
     };
     // Shot A off the head member1 → the trunk's next member.
@@ -232,7 +235,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
             &readable,
         )
         .expect("the head");
@@ -255,6 +258,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
             &Shot {
                 base: Some(base(&member1, 3)),
                 draft: None,
+                also: vec![],
                 runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1)],
             },
             &readable,
@@ -269,6 +273,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
     let daughter_shot = Shot {
         base: Some(base(&member1, 4)),
         draft: None,
+        also: vec![],
         runs: vec![shot_run(&pdoc(), &pca(1), 4)],
     };
     let (daughter, _) = vs.publish(P1, &pdoc(), &daughter_shot, &readable).expect("a daughter");
@@ -278,7 +283,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&member1, 5)), draft: None, runs: vec![] },
+            &Shot { base: Some(base(&member1, 5)), draft: None, also: vec![], runs: vec![] },
             &readable
         )),
         PublishError::BaseExtentTooLarge
@@ -304,7 +309,7 @@ fn the_birth_shape_carries_no_tail_and_a_memberless_base_carries_its_deposits() 
             .publish(
                 P1,
                 &pdoc(),
-                &Shot { base: base_named, draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+                &Shot { base: base_named, draft: None, also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
                 &readable_by(PrincipalId(1)),
             )
             .expect("the birth shot commits");
@@ -344,6 +349,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
             &Shot {
                 base: Some(base(&pdoc(), 3)),
                 draft: Some(doc1()),
+                also: vec![],
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 1)],
             },
             &readable_by(PrincipalId(1)),
@@ -398,7 +404,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: None, draft: None, runs: vec![] },
+            &Shot { base: None, draft: None, also: vec![], runs: vec![] },
             &readable_by(PrincipalId(1)),
         )
         .expect("an empty birth version, in the birth shape");
@@ -448,6 +454,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     let shot = Shot {
         base: Some(base(&pdoc(), 2)),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![
             shot_run(&doc2(), &doc2_ca(1), 1),
             shot_run(&doc2(), &doc2_ca(2), 1),
@@ -535,6 +542,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![
             shot_run(&pdoc(), &pca(1), 1),
             shot_run(&pdoc(), &pca(2), 1),
@@ -599,6 +607,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![
             shot_run(&pdoc(), &pca(1), 3),
             shot_run(&doc1(), &ca(2), 2),
@@ -713,6 +722,7 @@ fn a_run_overlapping_an_earlier_one_in_part_is_split_into_a_referenced_piece_and
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![
             shot_run(&pdoc(), &pca(1), 3),
             shot_run(&doc1(), &ca(2), 2),
@@ -730,9 +740,9 @@ fn a_run_overlapping_an_earlier_one_in_part_is_split_into_a_referenced_piece_and
     assert_eq!(
         pairing,
         vec![
-            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2), index: 1, minted: true },
-            MintedRun { from: run(&ca(1), 1), to: run(&pca(6), 1), index: 2, minted: true },
-            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2), index: 2, minted: false },
+            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2), home: doc1(), index: 1, minted: true },
+            MintedRun { from: run(&ca(1), 1), to: run(&pca(6), 1), home: doc1(), index: 2, minted: true },
+            MintedRun { from: run(&ca(2), 2), to: run(&pca(4), 2), home: doc1(), index: 2, minted: false },
         ],
         "every placed piece in placement order under its entry: the two minted pieces beside \
          the fresh runs they became, and the referenced piece beside the first's fresh run"
@@ -772,6 +782,7 @@ fn a_shot_reinserts_a_draft_run_whose_extent_holds_a_key_off_its_chain() {
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
+        also: vec![],
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
     };
     let stored = k.snapshot().world().content().len();
@@ -813,6 +824,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     let head_shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: None,
+        also: vec![],
         runs: vec![shot_run(&pdoc(), &pca(1), 3)],
     };
     let (head, _) = vs
@@ -829,6 +841,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     let shot = Shot {
         base: Some(base(&head, 4)),
         draft: Some(a(&[1, 0, 1, 0, 1, 1])), // a member address of doc1
+        also: vec![],
         runs: vec![
             shot_run(&pdoc(), &pca(1), 2),
             shot_run(&head, &z, 1),
@@ -929,6 +942,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
             &Shot {
                 base: Some(base(&pdoc(), 3)),
                 draft: None,
+                also: vec![],
                 runs: vec![
                     shot_run(&pdoc(), &pca(1), 3),
                     shot_run(&doc2(), &doc2_ca(2), 1),
@@ -991,6 +1005,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
             let shot = Shot {
                 base: Some(base(&base_member, extent)),
                 draft: Some(doc1()),
+                also: vec![],
                 runs: sequence.iter().map(|&i| menu[i].1.clone()).collect(),
             };
             let placed: u32 = sequence.iter().map(|&i| menu[i].2).sum();

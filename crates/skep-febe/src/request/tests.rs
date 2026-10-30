@@ -75,7 +75,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         (
             Op::Publish {
                 target: PublishTarget::Document(doc()),
-                shot: Shot { base: None, draft: None, runs: vec![] },
+                shot: Shot { base: None, draft: None, also: vec![], runs: vec![] },
                 places: vec![],
                 deposits: PublishDeposits::default(),
             },

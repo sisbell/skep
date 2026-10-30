@@ -11,7 +11,7 @@
 //! prices the request as it would stand with every private row OFF and
 //! every window kept private — the widest request the default switches
 //! make — and answers the panel `{rows, formatting, read_with, count,
-//! price, windows, hold?}`; `count` answers the four numbers and the price
+//! price, windows, inherited, hold?}`; `count` answers the four numbers and the price
 //! over the rows as switched, off the held panel, PURE LOCAL — no frame
 //! sent, the price the open's request re-priced with the entries the
 //! switches add, each end spelled by its stored slot's shape (an address
@@ -47,10 +47,39 @@
 //! budget, a switch by a row the panel holds, an answer by a window it
 //! names, each refused `malformed_args` naming the member.
 //!
-//! **The base** is the shell's own read, never the page's: the trunk's
-//! head member — the last registered `E.k`, walked from `E.1` where
-//! `doc_metadata(E)` names a birth — and its content extent; an edition
-//! with no member yet, or the mint form, is the birth shape.
+//! **The family** (the Nelson way, B3-S10; `client.md` §4b.1 item 60):
+//! `draft` is the RENDERING draft — the draft whose arrangement the
+//! selection renders, the home of the kept places and of the records for
+//! its own identity — and `also`, optional, names the OTHER private drafts
+//! of the person's own whose words the publication re-mints as the
+//! document's own, each keeping its own records: the staging draft and the
+//! alternatives made from it, never the notes document (Q1 (a)). The shell
+//! reads `also` as it reads every member — addresses by §1.6's grammar, a
+//! repeat or the `draft` among them `malformed_args` naming `also` — and
+//! hands the list to the library, which treats a run of any named draft as
+//! the document's own words: no window, no kept place for it, the
+//! statement's count answered as `inherited` in its place. The panel is
+//! keyed by the rendering draft alone (one standing panel per draft); a
+//! draft named `also` may hold a panel of its own in the family, standing
+//! or held, which this open leaves untouched.
+//!
+//! **The base** is the shell's own read for the rendering draft that stages
+//! the head — the trunk's head member, the last registered `E.k` walked
+//! from `E.1` where `doc_metadata(E)` names a birth, and its content extent;
+//! an edition with no member yet, or the mint form, is the birth shape —
+//! and THE PAGE's for a draft BEHIND the head, a former staging draft after
+//! an alternative of it was promoted (Q2 (a)): `base` at `open`, optional,
+//! the member the draft was staged from or last re-windowed to, which the
+//! client index keeps per draft and the shell never saw made (the staging
+//! act is the page's own writes through `op`, and no feed row names the
+//! member a draft was copied from). The shell takes it as UNTRUSTED input —
+//! an address by §1.6's grammar, a member of `doc`'s chain by address
+//! arithmetic and registered at the board, else `malformed_args` naming
+//! `base`; refused at the mint form, which has no chain — reads that
+//! member's content extent itself, as it reads the head's, and composes the
+//! request with it, so the shot lands a DAUGHTER under its own base
+//! (PUB-2.44) and never a trunk member that drops the promotion's words;
+//! absent, the head as before.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -348,6 +377,40 @@ impl Shell {
         Ok(Some((head, extent)))
     }
 
+    /// Returns the page's base and its content extent: `member`, the member
+    /// of `trunk`'s chain a draft behind the head was staged from or last
+    /// re-windowed to (the module doc, **The base**), read as UNTRUSTED
+    /// input.
+    ///
+    /// `member` is already a member of `trunk`'s chain by address arithmetic
+    /// (the caller's check, before the session); here it must be REGISTERED
+    /// at the board — `doc_metadata(member)` answering — and its `span_set`
+    /// extent is read as the head's is.
+    ///
+    /// # Errors
+    ///
+    /// Returns `malformed_args` naming `base` where the member is not
+    /// registered, `unreadable` where it is withheld, the board's other
+    /// refusals verbatim, `unreachable`, `session_died`, and `shape` for an
+    /// answer the shell cannot read.
+    fn member_base(&self, session: &SessionEntry, member: &Address) -> Result<(Address, u64), Refusal> {
+        let text = member.to_string();
+        let meta = self.family_read(session, &frames::doc_metadata(&text))?;
+        if let Some(r) = Rejection::of(&meta) {
+            return Err(match r.key() {
+                "doc_not_registered" => Refusal::malformed("base"),
+                "withheld" => Refusal::shell(Name::UNREADABLE, json!({"doc": text})),
+                _ => Refusal::from(r.refused(&meta)),
+            });
+        }
+        let set = self.family_read(session, &frames::span_set(&text))?;
+        if let Some(r) = Rejection::of(&set) {
+            return Err(Refusal::from(r.refused(&set)));
+        }
+        let extent = extent_of(&set).ok_or_else(|| Refusal::shell(Name::SHAPE, json!({"op": "retrieve_doc_v_span_set", "body": clipped(&set.to_string(), 200)})))?;
+        Ok((member.clone(), extent))
+    }
+
     /// Returns the draft's whole arrangement as I-runs: the selection where
     /// the page passes none (P1's select-all).
     ///
@@ -440,25 +503,33 @@ impl Shell {
         self.bus.emit(EventName::Publication, data);
     }
 
-    /// Answers `publication.open(session, {draft, doc?, mint?, claim?,
-    /// selection?, notes?, readable_drafts?, published?})` with the panel.
+    /// Answers `publication.open(session, {draft, also?, base?, doc?, mint?,
+    /// claim?, selection?, notes?, readable_drafts?, published?})` with the
+    /// panel.
     ///
     /// The panel is `{rows, formatting, read_with, count, price, windows,
-    /// hold?}` (the module doc): a held or standing panel of the draft
-    /// re-opened as it stands where the selection is none or the same, its
-    /// windows re-read; else the composition's first steps run afresh over
-    /// the session's board, the base the shell's own read, the shell's own
-    /// lists where the page passes none.
+    /// inherited, hold?}` (the module doc): a held or standing panel of the
+    /// draft re-opened as it stands where the selection is none or the same,
+    /// its windows re-read (`also` and `base` as it held them); else the
+    /// composition's first steps run afresh over the session's board, the
+    /// base the shell's own read of the head or the page's member behind it
+    /// (the module doc, **The base**), the shell's own lists where the page
+    /// passes none, the family's other drafts `also` names re-minted beside
+    /// the rendering draft (**The family**).
     ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `session`, then
     /// `session_ended`; `malformed_args` naming `draft`, then each optional
-    /// member present in another form, then `doc or mint` where neither is
-    /// given and `mint` where both are; `write_in_bare_session` naming the
-    /// call; `store_unreadable`, `no_account`; `feed_stopped` where the
-    /// shell's own lists are owed and the board's feed thread has stopped;
-    /// then the reads': `unreadable`, `no_such_document`, `busy`,
+    /// member present in another form — `also` for a list that is no list
+    /// of addresses, a repeated entry or the `draft` among them; `base` for
+    /// no address, one that is no member of `doc`'s chain, or one at the
+    /// mint form — then `doc or mint` where neither is given and `mint`
+    /// where both are; `write_in_bare_session` naming the call;
+    /// `store_unreadable`, `no_account`; `feed_stopped` where the shell's
+    /// own lists are owed and the board's feed thread has stopped; then the
+    /// reads': `malformed_args` naming `base` where the board holds no such
+    /// member, `unreadable`, `no_such_document`, `busy`,
     /// `selection_not_arranged`, `shape`, the board's own verdicts verbatim,
     /// `unreachable`, and `session_died` where a read met the death signal.
     pub(super) fn publication_open(&self, args: &Value) -> Result<Value, Refusal> {
@@ -471,11 +542,27 @@ impl Shell {
         let notes = optional(args, "notes", addresses_arg)?;
         let readable_drafts = optional(args, "readable_drafts", addresses_arg)?;
         let published = optional(args, "published", addresses_arg)?;
+        let also = optional(args, "also", addresses_arg)?.unwrap_or_default();
+        let page_base = optional(args, "base", address_arg)?;
         let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
+        // The family's other drafts: each named once, none the rendering
+        // draft itself.
+        if also.iter().enumerate().any(|(k, a)| *a == draft || also[..k].contains(a)) {
+            return Err(Refusal::malformed("also"));
+        }
         match (&doc, &mint) {
             (None, None) => return Err(Refusal::malformed("doc or mint")),
             (Some(_), Some(_)) => return Err(Refusal::malformed("mint")),
             _ => {}
+        }
+        // The page's base: a member of `doc`'s chain by address arithmetic,
+        // never the document itself and never at the mint form, which has
+        // no chain; whether the board holds it is read below.
+        if let Some(member) = &page_base {
+            let in_chain = doc.as_ref().is_some_and(|trunk| *member != *trunk && skep_client::address::document_of(&member.to_string()).as_deref() == Some(trunk.to_string().as_str()));
+            if !in_chain {
+                return Err(Refusal::malformed("base"));
+            }
         }
         let session = self.session(&args["session"])?;
         let signed = self.signed(&session, "publication.open")?;
@@ -501,15 +588,19 @@ impl Shell {
             Some(s) => s,
             None => self.whole_draft(&session, &draft)?,
         };
-        let base = match &doc {
-            Some(trunk) => self.trunk_head(&session, trunk)?,
-            None => None,
+        // The base: the page's member behind the head where it names one,
+        // else the shell's own read of the trunk's head; the birth shape at
+        // the mint form.
+        let base = match (&doc, &page_base) {
+            (Some(_), Some(member)) => Some(self.member_base(&session, member)?),
+            (Some(trunk), None) => self.trunk_head(&session, trunk)?,
+            (None, _) => None,
         };
         let mut readable_drafts = readable_drafts.unwrap_or(own_drafts);
         if !readable_drafts.contains(&draft) {
             readable_drafts.push(draft.clone());
         }
-        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), selection, notes: notes.unwrap_or_default(), readable_drafts, published: published.unwrap_or(own_published) };
+        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts, published: published.unwrap_or(own_published) };
         let p = signed.publisher(&session);
         let fault = |f: Fault| self.fault(&session, "publication.open", f);
         let enumeration = lib::enumerate(&p, &inputs).map_err(fault)?;
@@ -773,7 +864,10 @@ impl Shell {
                     current = next;
                     signed = self.signed(&current, "publication.confirm")?;
                     let p = signed.publisher(&current);
-                    let base = if request.runs.iter().any(|r| r.origin == inputs.draft) {
+                    // The records base where any run is a named draft's —
+                    // the rendering draft's or an `also` draft's — the
+                    // library reading each draft's records in turn.
+                    let base = if request.runs.iter().any(|r| inputs.is_named_draft(&r.origin)) {
                         Base::Records
                     } else if request.mint.is_some() {
                         Base::EditionClaims
@@ -964,6 +1058,12 @@ fn window_json(w: &lib::Window) -> Value {
     v
 }
 
+/// Returns the statement's count for one draft `also` names, as the panel
+/// answers it: `{draft, passages}`.
+fn inherited_json(i: &lib::Inherited) -> Value {
+    json!({"draft": i.draft.to_string(), "passages": i.passages})
+}
+
 /// Returns the panel as `publication.open` answers it.
 fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
     let e = &state.enumeration;
@@ -977,6 +1077,7 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "count": count_json(&count),
         "price": price_json(&local_price(state)),
         "windows": panel.windows.iter().map(window_json).collect::<Vec<_>>(),
+        "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),
     });
     if let Some(hold) = hold {
         v["hold"] = hold;

@@ -333,3 +333,119 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     g.shell.shutdown();
     sd.shutdown();
 }
+
+/// Checks the family's members are read in their form before the session
+/// (the Nelson way, `client.md` §4b.1 item 60): `also` a list of addresses,
+/// a repeat or the `draft` among them `malformed_args` naming `also`; `base`
+/// an address that is a member of `doc`'s chain, else `malformed_args`
+/// naming `base` — no address, the document itself, another document's
+/// member, or any `base` at the mint form, which has no chain; in their form
+/// the two pass to the session, which is gone.
+#[test]
+fn the_familys_members_are_read_in_their_form_before_the_session() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let what = |args: Value| {
+        let refused = shell.call("publication.open", &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!(refused.name(), "malformed_args", "{args}: {v}");
+        v["what"].as_str().unwrap().to_string()
+    };
+    let base_args = json!({"session": "s-gone", "draft": "1.0.2.0.2", "doc": "1.0.2.0.1"});
+    let with = |member: &str, value: Value| {
+        let mut args = base_args.clone();
+        args[member] = value;
+        args
+    };
+    assert_eq!(what(with("also", json!("1.0.2.0.3"))), "also", "no list");
+    assert_eq!(what(with("also", json!(["1.0.2.0.3", 7]))), "also", "no address");
+    assert_eq!(what(with("also", json!(["1.0.2.0.3", "1.0.2.0.3"]))), "also", "a repeat");
+    assert_eq!(what(with("also", json!(["1.0.2.0.2"]))), "also", "the draft itself");
+    assert_eq!(what(with("base", json!(7))), "base", "no address");
+    assert_eq!(what(with("base", json!("1.0.2.0.1"))), "base", "the document itself is no member");
+    assert_eq!(what(with("base", json!("1.0.2.0.9.1"))), "base", "another document's member");
+    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.2", "mint": "1.0.2", "base": "1.0.2.0.1.1"})), "base", "the mint form has no chain");
+    for in_form in [with("also", json!(["1.0.2.0.3", "1.0.2.0.4"])), with("base", json!("1.0.2.0.1.1")), with("base", json!("1.0.2.0.1.1.1"))] {
+        assert_eq!(shell.call("publication.open", &in_form).unwrap_err().name(), "session_ended", "{in_form}: in its form, the member passes to the session");
+    }
+}
+
+/// Checks the family end to end against the daemon (the Nelson way, B3-S10;
+/// `client.md` §4b.1 item 60).
+///
+/// D stages E.1 and is re-windowed onto it; D goes on with six words of its
+/// own; A, an alternative of D's, holds D's whole arrangement by identity
+/// and five words of its own. A's `publication.open` naming D among `also`
+/// answers no window for D's words and `inherited` counting D's one
+/// passage, every member declared; its `confirm` is acknowledged E.2 —
+/// the member reads A's whole text as E's own words — with one record homed
+/// in D for its six words and one in A for its five, each `to` the member's
+/// fresh identity, and the feed row's `docs` `[E.2, A, D]`. Then D, a draft
+/// BEHIND the head, opens with the page's `base` E.1 — its words published
+/// through A re-composed by reference, their stray place beside — and its
+/// `confirm` lands the DAUGHTER E.1.1 under its own base, never a trunk
+/// member that drops A's words; a `base` the board holds no member for is
+/// `malformed_args` naming `base`.
+#[test]
+fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_behind_the_head_lands_a_daughter() {
+    use skep_client::board::frames::{find_links_four, read_link, retrieve_v, unit_span, Slot, T_CORRESPONDENCE};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    // D stages E.1.
+    let d = g.draft("the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!(first["member"].as_str(), Some(e1.as_str()), "{first}");
+    // D goes on; A inherits D's whole arrangement by identity and adds its own.
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"]}));
+    let a_draft = g.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
+    g.op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}]}));
+    g.op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"]}));
+    // A's panel naming D among `also`.
+    let panel = g
+        .call("publication.open", json!({"session": g.session, "draft": a_draft, "doc": edition, "also": [d], "readable_drafts": [a_draft, d], "published": [edition]}))
+        .unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    assert_eq!(panel["windows"], json!([]), "D's words are re-minted, not windowed: {panel}");
+    assert_eq!(panel["inherited"], json!([{"draft": d, "passages": 1}]), "{panel}");
+    crate::shapes::assert_declared("Inherited", &panel["inherited"][0]);
+    assert_eq!(panel["price"]["over"], json!([]), "{}", panel["price"]);
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e2 = format!("{edition}.2");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str()), (Some("acknowledged"), Some(e2.as_str()), Some("answer")), "{acked}");
+    let at = acked["at"].as_u64().unwrap();
+    let read = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&e2, 1, 30)})).unwrap();
+    assert_eq!(read["items"][0]["content"], "the quick brown fox again more", "A's whole text, as E's own words");
+    // The records, one in each draft.
+    let unit = |addr: &str| unit_span(addr).as_array().cloned().unwrap_or_default();
+    let records = |home: &str| -> Vec<Value> {
+        let hits = g.op(find_links_four(Slot::Spans(&unit(home)), Slot::Any, Slot::Any, Slot::Spans(&unit(T_CORRESPONDENCE))));
+        hits["addrs"].as_array().unwrap().iter().map(|a| g.op(read_link(a.as_str().unwrap()))["link"]["slots"].clone()).collect()
+    };
+    let in_d = records(&d);
+    assert_eq!(in_d.len(), 2, "D's record from E.1, and the one A's shot homed in D: {in_d:?}");
+    assert!(in_d.iter().any(|slots| slots[0][0]["start"] == format!("{d}.0.1.20") && slots[0][0]["width"] == "0.0.0.0.0.0.0.6" && slots[1][0]["start"] == format!("{edition}.0.1.20")), "D's six words `to` the member's fresh identity: {in_d:?}");
+    let in_a = records(&a_draft);
+    assert_eq!(in_a.len(), 1, "{in_a:?}");
+    assert!(in_a[0][0][0]["start"] == format!("{a_draft}.0.1.1") && in_a[0][0][0]["width"] == "0.0.0.0.0.0.0.5" && in_a[0][1][0]["start"] == format!("{edition}.0.1.26"), "A's five words `to` the member's fresh identity: {in_a:?}");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
+    let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
+    assert_eq!(row["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {row}");
+    // D behind the head: the page's base, the daughter landing.
+    let bogus = g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": format!("{edition}.7"), "readable_drafts": [d], "published": [edition]})).unwrap_err();
+    assert_eq!((bogus.name(), bogus.to_value()["what"].as_str()), ("malformed_args", Some("base")), "a member the board holds none of: {bogus}");
+    let behind = g
+        .call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": e1, "readable_drafts": [d], "published": [edition]}))
+        .unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((behind["windows"].clone(), behind["inherited"].clone()), (json!([]), json!([])), "{behind}");
+    let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()), (Some("acknowledged"), Some(format!("{edition}.1.1").as_str()), Some("answer")), "the daughter under D's own base: {daughter}");
+    let read = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&format!("{edition}.1.1"), 1, 25)})).unwrap();
+    assert_eq!(read["items"][0]["content"], "the quick brown fox again");
+    g.shell.shutdown();
+    sd.shutdown();
+}

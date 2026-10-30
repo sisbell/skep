@@ -29,9 +29,12 @@
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, the formatting line by its test,
 //!    the held removals as its job list with the re-makes split out, the
-//!    public row's read-with state, and the own-origin WINDOWS with the
-//!    counterpart each is offered first (§5.7), read at every panel; and
-//!    THE COUNT's four numbers from the rows as switched (PUB-3.8).
+//!    public row's read-with state, the own-origin WINDOWS with the
+//!    counterpart each is offered first (§5.7), read at every panel — the
+//!    drafts `also` names excluded, their runs re-minted and not windowed —
+//!    and THE STATEMENT's count per `also` draft, the passages first written
+//!    in it (B3-S11 P2 (i)); and THE COUNT's four numbers from the rows as
+//!    switched (PUB-3.8).
 //! 3. [`price`](mod@price) — THE PRICE (§5.6): the lists, the body, the staged bytes,
 //!    the in-lock reads, each against its cap, from the worst-case table the
 //!    daemon prices by, pinned equal to it.
@@ -88,7 +91,7 @@ mod tests;
 
 pub use enumerate::{enumerate, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
-pub use panel::{count, panel, windows, Count, Counterpart, Destination, Formatting, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
+pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
 pub use price::{price, Price, Term};
 pub use request::{build, reread, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent};
@@ -271,10 +274,27 @@ pub struct Inputs {
     /// library, judges the edition's members — `claim_refused` where one
     /// stands (`send`'s arm).
     pub claim: bool,
-    /// The base member and `base_extent` — `None` the birth shape.
+    /// The base member and `base_extent` — `None` the birth shape: the
+    /// trunk's head member and its extent for the draft that stages the
+    /// head, the member a draft behind the head was staged from or last
+    /// re-windowed to (the client index's per-draft base, Q2 (a)), so the
+    /// shot lands a daughter under its own base.
     pub base: Option<(Address, u64)>,
-    /// `D`, the staging draft the records are homed in.
+    /// `D`, the RENDERING draft — the draft whose arrangement the selection
+    /// renders, the home of the kept places and of the records for its own
+    /// identity.
     pub draft: Address,
+    /// The OTHER private drafts of the person's own whose identity this shot
+    /// re-mints as the document's own beside the rendering draft's — the
+    /// family the client index names (the Nelson way, B3-S10; Q1 (a): the
+    /// staging draft and the alternatives made from it, never the notes
+    /// document or capture's container), in the request's order, each
+    /// keeping its own correspondence records. The board judges each by
+    /// registration and ω alone; the library treats a run of any of them as
+    /// the document's own words — re-minted, not windowed — and sends no
+    /// kept place for it (the rendering draft alone is re-windowed). Empty
+    /// is the one-draft publication.
+    pub also: Vec<Address>,
     /// THE SELECTION, held as I-runs in V-order (P51): the runs the client
     /// composes the shot from.
     pub selection: Vec<Run>,
@@ -299,6 +319,22 @@ impl Inputs {
     /// account at the mint form.
     pub fn term(&self) -> Option<&Address> {
         self.doc.as_ref().or(self.mint.as_ref())
+    }
+
+    /// Returns THE NAMED DRAFTS: the rendering draft first, then each draft
+    /// `also` names, in the request's order — the family whose identity the
+    /// shot re-mints, as M5's `Shot::named_drafts` yields them.
+    pub fn named_drafts(&self) -> impl Iterator<Item = &Address> + '_ {
+        std::iter::once(&self.draft).chain(&self.also)
+    }
+
+    /// Returns whether `origin` is a named draft — the rendering draft or
+    /// one `also` names — so a run of it is the document's own words,
+    /// re-minted as fresh identity: no window, no row of P2 (i), its values
+    /// signed by value, and a kept place for it only where it is the
+    /// rendering draft's.
+    pub fn is_named_draft(&self, origin: &Address) -> bool {
+        self.draft == *origin || self.also.contains(origin)
     }
 
     /// Returns whether `addr` lies in a published document of the person's,

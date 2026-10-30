@@ -81,29 +81,39 @@ impl<W> PublishWorld for W where
 }
 
 /// One piece of a draft-native run the shot placed, beside the fresh run it
-/// was placed as, and the `runs` entry it came from.
+/// was placed as, the draft whose identity it was, and the `runs` entry it
+/// came from.
 ///
 /// `from` is a piece of a draft-native run — a whole run, or the part of one
 /// — at the draft's own addresses, and `to` the run of fresh identity it
 /// stands as in the member, under the content chain of the document the shot
 /// names: the two of one width, so a position of either maps onto the other
 /// by its offset (the link-sets design §5.5's "`from` and `to` of one
-/// width"). `minted` says how the piece was placed: `true` where this entry
-/// re-inserted it, minting `to` for it — the piece the shot met for the first
-/// time, which the correspondence record homed in the draft names as its two
-/// spans — and `false` where an earlier run of the shot had minted the
-/// identity and this entry placed the piece by reference to it, `to` then the
-/// same piece of that earlier fresh run (the design's "a later occurrence of a
-/// minted identity with the first's fresh run"), which no record names again.
-/// `index` is the `runs` entry the piece is a part of, so a re-window of the
-/// draft at that entry's kept place finds every piece it places there, the
-/// referenced ones with the minted.
+/// width"). `home` is the named draft the piece's identity was — the document
+/// `from`'s own start settles (`run_origin_document`, the classifier), one of
+/// [`Shot::named_drafts`] — the home of the correspondence record a composite
+/// mints for the piece (A-328: each record homed in the draft whose identity
+/// the piece was), settled once here beside the run, since a caller outside
+/// this crate cannot ask the classifier. `minted` says how the piece was
+/// placed: `true` where this entry re-inserted it, minting `to` for it — the
+/// piece the shot met for the first time, which the correspondence record
+/// homed in `home` names as its two spans — and `false` where an earlier run
+/// of the shot had minted the identity and this entry placed the piece by
+/// reference to it, `to` then the same piece of that earlier fresh run (the
+/// design's "a later occurrence of a minted identity with the first's fresh
+/// run"), which no record names again. `index` is the `runs` entry the piece
+/// is a part of, so a re-window of the rendering draft at that entry's kept
+/// place finds every piece it places there, the referenced ones with the
+/// minted.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MintedRun {
     /// The draft-native piece, at the draft's own addresses.
     pub from: Run,
     /// The fresh run it stands as in the member, at the edition's addresses.
     pub to: Run,
+    /// The named draft whose identity the piece was — `from`'s origin
+    /// document — the home of the piece's correspondence record.
+    pub home: Address,
     /// The position in the shot's `runs` of the entry the piece is a part of.
     pub index: usize,
     /// Whether this entry minted `to` for the piece, or placed the piece by
@@ -213,11 +223,11 @@ impl MintedIdentity {
         portions
     }
 
-    /// Notes that `piece`, a draft-native run no earlier run had minted, was
-    /// re-inserted as `fresh` — the runs its re-insert allocated, in order,
-    /// of the piece's width together — for the `runs` entry at `index`, and
-    /// appends the pairing of each.
-    fn note(&mut self, piece: &Run, fresh: &[Run], index: usize, pairing: &mut Pairing) {
+    /// Notes that `piece`, a draft-native run of `home`'s identity no earlier
+    /// run had minted, was re-inserted as `fresh` — the runs its re-insert
+    /// allocated, in order, of the piece's width together — for the `runs`
+    /// entry at `index`, and appends the pairing of each.
+    fn note(&mut self, piece: &Run, fresh: &[Run], home: &Address, index: usize, pairing: &mut Pairing) {
         let (chain, first) = chain_and_ordinal(piece.i_start());
         let pieces = self.chains.entry(chain).or_default();
         let mut offset = Nat::zero();
@@ -226,7 +236,7 @@ impl MintedIdentity {
                 .expect("a piece of a draft-native run is a run");
             pieces.insert(&first + &offset, (to.width().clone(), to.i_start().clone()));
             offset = &offset + to.width();
-            pairing.push(MintedRun { from, to: to.clone(), index, minted: true });
+            pairing.push(MintedRun { from, to: to.clone(), home: home.clone(), index, minted: true });
         }
         debug_assert_eq!(&offset, piece.width(), "the fresh runs are the piece's width together");
     }
@@ -271,17 +281,19 @@ where
     /// document that minted its addresses, which the run's own start settles
     /// (`document_of` then `trunk_of`) and the client's stated `origin` must
     /// project to. The document's own I-space (its own content chain or any
-    /// member's) is placed by reference; the staging draft's is re-inserted as
-    /// fresh identity under the document's own I-space, each maximal run of
-    /// single-byte values as one stretch and each atom as its own value
-    /// through INSERT's own allocation steps (`allocate_stretch_for_placement`,
+    /// member's) is placed by reference; a NAMED draft's — the rendering
+    /// `draft`'s or an `also` draft's, the family rule
+    /// [`Shot::is_draft_native`] states — is re-inserted as fresh identity
+    /// under the document's own I-space, each maximal run of single-byte
+    /// values as one stretch and each atom as its own value through INSERT's
+    /// own allocation steps (`allocate_stretch_for_placement`,
     /// `allocate_for_placement`), the bytes read at the draft's addresses by
     /// M4's run read — a byte read, never an arrangement read — so the
-    /// committed member references no address of the draft; any other
+    /// committed member references no address of any named draft; any other
     /// document's stays a window, answering its origin. The three families are
-    /// disjoint under [`Shot`]'s precondition on `draft`; a draft inside
-    /// `doc`'s chain moves the document's own runs into the draft's family, as
-    /// `Shot` states. The runs are placed in the order given, then the base's
+    /// disjoint under [`Shot`]'s precondition on the named drafts; a named
+    /// draft inside `doc`'s chain moves the document's own runs into the
+    /// drafts' family, as `Shot` states. The runs are placed in the order given, then the base's
     /// post-render deposits after them: a published member changes only by
     /// exempt deposits appended at fresh positions (PUB-2.43 — the
     /// append-only edition these operations keep, as [`Vstream`] states), so
@@ -313,17 +325,17 @@ where
     /// the ack does not tell reads it back. The values
     /// [`Shot::reinserted_runs`](crate::Shot::reinserted_runs) names —
     /// [`Shot::reinserted_values`](crate::Shot::reinserted_values) of them,
-    /// EACH DRAFT IDENTITY ONCE PER SHOT (the link-sets design §5.7): in
-    /// `runs`' order the shot mints a draft-native position the first time it
-    /// meets it and places every later occurrence of it, whole or in part, by
-    /// reference to the fresh identity it minted, a run overlapping an
-    /// earlier one in part splitting into a referenced piece and a minted
-    /// piece — are minted in that order, one after another, under the
-    /// content chain of the document `doc` projects to (the member's own
-    /// trunk), and the commit mints nothing else under that content chain:
-    /// the member itself is minted on a version chain, and the
+    /// EACH DRAFT IDENTITY ONCE PER SHOT (the link-sets design §5.7), across
+    /// every named draft: in `runs`' order the shot mints a draft-native
+    /// position the first time it meets it and places every later occurrence
+    /// of it, whole or in part, by reference to the fresh identity it minted,
+    /// a run overlapping an earlier one in part splitting into a referenced
+    /// piece and a minted piece — are minted in that order, one after
+    /// another, under the content chain of the document `doc` projects to
+    /// (the member's own trunk), and the commit mints nothing else under that
+    /// content chain: the member itself is minted on a version chain, and the
     /// correspondence records a composite stages beside the shot are link
-    /// mints in the draft. Each content mint takes the content chain's next
+    /// mints in the named drafts. Each content mint takes the content chain's next
     /// ordinal (`M3State::mint_content`, `M3State::mint_content_range`), the
     /// fact INSERT's one run rests on too, so in the world the commit leaves
     /// they are that content chain's last `reinserted_values()` addresses,
@@ -427,15 +439,16 @@ where
     /// Each refusal comes as `TxnError::Rejected`, in this order (which error
     /// wins), PUB-6.36's slots: `DocNotRegistered` → `NotOwner` (slot 1, ω on
     /// the address named — a question [`Caller::System`] passes) →
-    /// registration (slot 3): `SourceNotRegistered` for the base, then the
-    /// document the draft projects to (PUB-2.15) — and, right after the
-    /// draft's registration, THE UNOWNED-DRAFT EDGE (the link-sets design
-    /// §5.7): whenever `draft` is named the caller must own the document it
-    /// projects to, else `NotOwner` carrying that document, ahead of every
-    /// readability question, so ω speaks and readability never does — a
-    /// readable draft of a sub-account's or a grantor's is refused here too,
-    /// the shot's records being homed in the draft — then each run's origin
-    /// document in run order,
+    /// registration (slot 3): `SourceNotRegistered` for the base, then EACH
+    /// NAMED DRAFT in the request's order — the document `draft` projects to
+    /// (PUB-2.15), then each draft `also` names — and, right after each one's
+    /// registration, THE UNOWNED-DRAFT EDGE (the link-sets design §5.7;
+    /// A-341, `not_owner` PER HOME): the caller must own the document it
+    /// projects to, else `NotOwner` carrying that document, ahead of the next
+    /// named draft and of every readability question, so ω speaks and
+    /// readability never does — a readable draft of a sub-account's or a
+    /// grantor's is refused here too, the shot's records being homed in the
+    /// named drafts — then each run's origin document in run order,
     /// each run's shape (`BadRun`) settled as its origin document is derived →
     /// `PrivateSourceVersionless` (slot 5: a private document has no chain,
     /// PUB-2.9's `true` face) → the base's shape: `BaseNotInChain` →
@@ -501,10 +514,11 @@ where
 /// every refusal and every record pushed `publish`'s own. Returns the
 /// member's address and THE PAIRING ([`Pairing`]): every piece of every
 /// draft-native run the shot placed, in placement order, beside the fresh
-/// run it stands as in the member, with its `runs` entry and whether that
-/// entry minted it — the minted pieces, each the correspondence a composite
-/// records in the draft, one record per minted piece (the link-sets design
-/// §5.5, §5.7), and the pieces placed by reference to an identity an earlier
+/// run it stands as in the member, with the named draft its identity was
+/// ([`MintedRun::home`]), its `runs` entry and whether that entry minted it —
+/// the minted pieces, each the correspondence a composite records in the
+/// draft whose identity the piece was, one record per minted piece (the
+/// link-sets design §5.5, §5.7; A-328), and the pieces placed by reference to an identity an earlier
 /// entry minted, paired with the same piece of that fresh run and recorded
 /// by no second record; both what a re-window of the draft at a run's kept
 /// place places there, piece by piece at each piece's offset. A list,
@@ -566,16 +580,15 @@ pub fn stage_publish<W: PublishWorld>(
     // of the composite needs of it is the anchor the member is minted under
     // and the runs settled beside their origin documents.
     let Admission { anchor, supplied } = admit(stg.working(), caller, doc, shot, readable)?;
-    // Which runs are the staging draft's, re-inserted as fresh
-    // identity rather than placed by reference (PUB-2.40) — the
-    // family rule `Shot` states, by which `Shot::reinserted_runs`
-    // names the runs this placement re-inserts: both compare the
-    // run's origin document with `Shot::draft_document`, and
+    // Which runs are a named draft's — the rendering draft's or an `also`
+    // draft's — re-inserted as fresh identity rather than placed by
+    // reference (PUB-2.40): the family rule `Shot` states, its one
+    // spelling `Shot::is_draft_native`, by which `Shot::reinserted_runs`
+    // names the runs this placement re-inserts too, so
     // `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
     // holds them to one answer, value for value and in the order they
-    // land.
-    let draft_doc = shot.draft_document();
-    let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
+    // land, over every named draft.
+    let draft_native = |origin_doc: &Address| shot.is_draft_native(origin_doc);
     // The re-insert's size, refused before any address is probed:
     // every address of every draft-native run is re-inserted below,
     // two staged records per maximal byte-run or atom — two per value
@@ -630,16 +643,18 @@ pub fn stage_publish<W: PublishWorld>(
             // this entry's index, as a piece the entry did not mint — and
             // each unminted piece re-inserted, then noted with the fresh
             // runs it became — one pairing entry per fresh run, which is one
-            // per piece on the frontier allocator M3 has.
+            // per piece on the frontier allocator M3 has. Each pairing
+            // entry carries the named draft the run's identity is — its
+            // settled origin document — the home its record takes.
             for portion in minted.portions_of(run) {
                 match portion {
                     Portion::Referenced { from, to } => {
                         extend_or_push_run(&mut placement, to.clone());
-                        pairing.push(MintedRun { from, to, index, minted: false });
+                        pairing.push(MintedRun { from, to, home: origin_doc.clone(), index, minted: false });
                     }
                     Portion::Unminted(piece) => {
                         let fresh = reinsert(stg, &trunk, &piece)?;
-                        minted.note(&piece, &fresh, index, &mut pairing);
+                        minted.note(&piece, &fresh, &origin_doc, index, &mut pairing);
                         for run in fresh {
                             extend_or_push_run(&mut placement, run);
                         }
@@ -838,9 +853,9 @@ fn admit<'s, W: HasM3 + HasM5>(
         PublishError::NotOwner,
     )?;
     let (m3, m5) = (world.m3(), world.m5());
-    // Slot 3: registration — the base, the document the draft projects to,
-    // every origin document — and the unowned-draft edge, then each run
-    // settled beside its origin document.
+    // Slot 3: registration — the base, each named draft in the request's
+    // order, every origin document — and the unowned-draft edge per named
+    // draft, then each run settled beside its origin document.
     let supplied = settle_runs(m3, caller, shot)?;
     // Slot 5: the model's refusal — a private document has no chain to
     // append to (PUB-2.9).
@@ -896,8 +911,9 @@ fn admit<'s, W: HasM3 + HasM5>(
 /// not own it; `BaseNotInChain` where the shot names a base, the minted
 /// edition having no chain for one to lie in (the birth shape alone mints
 /// an edition); then slot 3 and the unowned-draft edge as `publish` asks
-/// them (`settle_runs`) — the draft's registration and ω, every run's
-/// shape and origin — and slot 6, the source gate over every origin: the
+/// them (`settle_runs`) — each named draft's registration and ω in the
+/// request's order, every run's shape and origin — and slot 6, the source
+/// gate over every origin: the
 /// edition minted in the commit has no I-space of its own a run could be,
 /// so no run is exempt. Slot 5 has nothing to ask: the edition is born
 /// published. Asked of `world` and nothing else, with [`shot_admission`]'s
@@ -911,7 +927,8 @@ fn admit<'s, W: HasM3 + HasM5>(
 ///
 /// `DocNotRegistered`, `NotOwner` (the account), `BaseNotInChain`, then
 /// `settle_runs`'s and the source gate's: `SourceNotRegistered`,
-/// `NotOwner` (the draft), `BadRun`, `Withheld` — the first in that order.
+/// `NotOwner` (a named draft), `BadRun`, `Withheld` — the first in that
+/// order.
 pub fn mint_admission<W: HasM3 + HasM5>(
     world: &W,
     caller: Caller,
@@ -936,23 +953,25 @@ pub fn mint_admission<W: HasM3 + HasM5>(
 /// Runs slot 3 and the unowned-draft edge, and settles each run beside its
 /// origin document.
 ///
-/// Registration — the base, the document the draft projects to, every
-/// origin document (PUB-6.37: an unregistered argument answers registration
-/// and nothing later) — with THE UNOWNED-DRAFT EDGE (the link-sets design
-/// §5.7) right after the draft's registration: whenever a draft is named
-/// the caller owns it — ω exact, the predicate slot 1 asks of `doc` — ahead
-/// of every readability question, so ω speaks and readability never does; a
-/// draft-native run present or not, the shot's records being homed in the
-/// draft (`System` passes, as it passes slot 1). Then each run settled
-/// ([`SettledRun`]): its origin document derived from the run's own start,
-/// required to be the document the client's stated `origin` projects to,
-/// then registered — the first defective run in order deciding.
+/// Registration — the base, then EACH NAMED DRAFT in the request's order
+/// ([`Shot::named_drafts`]: the document `draft` projects to, then each
+/// draft `also` names), every origin document (PUB-6.37: an unregistered
+/// argument answers registration and nothing later) — with THE UNOWNED-DRAFT
+/// EDGE (the link-sets design §5.7; A-341, `not_owner` PER HOME) right after
+/// each named draft's registration: the caller owns it — ω exact, the
+/// predicate slot 1 asks of `doc` — before the next named draft is judged
+/// and ahead of every readability question, so ω speaks and readability
+/// never does; a draft-native run present or not, the shot's records being
+/// homed in the named drafts (`System` passes, as it passes slot 1). Then
+/// each run settled ([`SettledRun`]): its origin document derived from the
+/// run's own start, required to be the document the client's stated `origin`
+/// projects to, then registered — the first defective run in order deciding.
 ///
 /// # Errors
 ///
-/// `SourceNotRegistered` for the base, then the draft's document; `NotOwner`
-/// carrying the draft; then per run in order `BadRun` and
-/// `SourceNotRegistered`.
+/// `SourceNotRegistered` for the base, then per named draft in the request's
+/// order `SourceNotRegistered` and `NotOwner` carrying that draft; then per
+/// run in order `BadRun` and `SourceNotRegistered`.
 fn settle_runs<'s>(
     m3: &M3State,
     caller: Caller,
@@ -963,7 +982,7 @@ fn settle_runs<'s>(
             return Err(PublishError::SourceNotRegistered);
         }
     }
-    if let Some(draft_doc) = shot.draft_document() {
+    for draft_doc in shot.named_drafts() {
         if !m3.is_registered_document(&draft_doc) {
             return Err(PublishError::SourceNotRegistered);
         }

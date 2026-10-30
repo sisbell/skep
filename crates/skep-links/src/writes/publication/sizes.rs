@@ -57,8 +57,10 @@ use crate::LinkWorld;
 
 /// The bytes one correspondence record stages: the link's mint, its deposit
 /// — `from` one I-span, `to` one I-span, the correspondence type's unit span
-/// — and its seat in the draft's link subspace. One per piece of draft
-/// identity the shot mints.
+/// — and its seat in the link subspace of the named draft whose identity
+/// the piece was. One per piece of draft identity the shot mints; a record's
+/// bytes do not depend on its home, so the rendering draft's and an `also`
+/// draft's cost alike.
 pub const CORRESPONDENCE_RECORD_BYTES: u64 = 1_057;
 
 /// The bytes one `links` entry's copy stages at the worst case: the link's
@@ -264,14 +266,15 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 
 /// Prices the bytes a publication would stage, from the table: an UPPER
 /// bound on what the kernel charges the transaction, read off the request
-/// and one stab of the draft's records per stray place.
+/// and one stab of the rendering draft's records per stray place.
 ///
 /// The terms, each at the table's figure:
 ///
 /// * the shot's fixed records ([`SHOT_BYTES`]), the edition's mint at the
 ///   mint form, and the edition claim where the deposits claim, at either
 ///   form;
-/// * per draft-native run, its PIECES × ([`PLACED_RUN_BYTES`] +
+/// * per draft-native run — of any named draft, the rendering `draft`'s or
+///   an `also` draft's, a record costing the same in either home — its PIECES × ([`PLACED_RUN_BYTES`] +
 ///   [`CORRESPONDENCE_RECORD_BYTES`]), and × [`KEPT_PLACE_BYTES`] beside
 ///   where the entry carries a place — the pieces bounded off the request
 ///   as one more than the endpoints of other draft-native runs lying

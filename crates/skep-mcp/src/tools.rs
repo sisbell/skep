@@ -161,7 +161,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("places", Tool::Places, &["opts"]),
     ("held", Tool::Held, &[]),
     ("resolve", Tool::Resolve, &["held", "act"]),
-    ("publication_open", Tool::PublicationOpen, &["draft", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"]),
+    ("publication_open", Tool::PublicationOpen, &["draft", "also", "base", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"]),
     ("publication_count", Tool::PublicationCount, &["switches", "answers"]),
     ("publication_confirm", Tool::PublicationConfirm, &["switches", "answers"]),
     ("publication_cancel", Tool::PublicationCancel, &[]),

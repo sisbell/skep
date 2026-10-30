@@ -129,8 +129,10 @@ pub struct EntryShape {
 pub struct Shape<'a> {
     /// The runs, in order.
     pub runs: &'a [Run],
-    /// The staging draft.
-    pub draft: &'a Address,
+    /// The named drafts — the rendering draft, then each draft `also` names
+    /// — whose runs the shot re-inserts, priced as values and records; empty
+    /// at a bare shot naming none.
+    pub drafts: &'a [Address],
     /// The term the request's addresses are minted under — the trunk at the
     /// document form, the account at the mint form.
     pub term: &'a Address,
@@ -157,7 +159,8 @@ pub struct Shape<'a> {
     /// them; the design names no read for the daemon's exact count, so this
     /// is the caller's figure.
     pub homes: usize,
-    /// The draft's content run count — its image's runs.
+    /// The rendering draft's content run count — its image's runs; the
+    /// `also` drafts, never re-windowed, add none.
     pub draft_runs: usize,
 }
 
@@ -261,17 +264,21 @@ fn tag_span_bytes(term: &Address, mint: bool) -> u64 {
 }
 
 /// Returns the distinct positions the draft-native runs name — the store's
-/// re-insert count, a position two runs name counted once.
-pub fn distinct_draft_positions(runs: &[Run], draft: &Address) -> u64 {
-    let mut ranges: Vec<(u64, u64)> = runs.iter().filter(|r| r.origin == *draft).map(|r| (r.i_start, r.reach())).collect();
-    ranges.sort_unstable();
+/// re-insert count, a position two runs name counted once — over every
+/// named draft: the positions of two drafts are distinct addresses, so each
+/// draft's are counted on its own chain and summed.
+pub fn distinct_draft_positions(runs: &[Run], drafts: &[Address]) -> u64 {
     let mut total = 0u64;
-    let mut cursor = 0u64;
-    for (lo, hi) in ranges {
-        let lo = lo.max(cursor);
-        if hi > lo {
-            total += hi - lo;
-            cursor = hi;
+    for draft in drafts {
+        let mut ranges: Vec<(u64, u64)> = runs.iter().filter(|r| r.origin == *draft).map(|r| (r.i_start, r.reach())).collect();
+        ranges.sort_unstable();
+        let mut cursor = 0u64;
+        for (lo, hi) in ranges {
+            let lo = lo.max(cursor);
+            if hi > lo {
+                total += hi - lo;
+                cursor = hi;
+            }
         }
     }
     total
@@ -279,9 +286,10 @@ pub fn distinct_draft_positions(runs: &[Run], draft: &Address) -> u64 {
 
 /// Prices the request's shape against every cap.
 pub fn price(shape: &Shape<'_>) -> Price {
-    let draft = shape.draft;
+    let drafts = shape.drafts;
+    let is_draft = |run: &Run| drafts.contains(&run.origin);
     let lists = [shape.runs.len(), shape.places.iter().filter(|p| p.is_some()).count(), shape.entries.len(), shape.retract, shape.read_with];
-    let values = distinct_draft_positions(shape.runs, draft);
+    let values = distinct_draft_positions(shape.runs, drafts);
     let reads = shape.homes.saturating_mul(shape.entries.len() + shape.read_with).saturating_add(shape.draft_runs.saturating_mul(shape.runs.len()));
 
     // The staged bytes, the daemon's `price_staged_bytes` term by term.
@@ -292,16 +300,26 @@ pub fn price(shape: &Shape<'_>) -> Price {
     if shape.claim {
         bytes += EDITION_CLAIM_BYTES;
     }
-    let mut ends: Vec<u64> = shape.runs.iter().filter(|r| r.origin == *draft).flat_map(|r| [r.i_start, r.reach()]).collect();
-    ends.sort_unstable();
+    // The pieces bound, per named draft: the endpoints of that draft's runs,
+    // sorted, since a run is cut only where another run of the same chain
+    // begins or ends.
+    let ends: Vec<(Address, Vec<u64>)> = drafts
+        .iter()
+        .map(|draft| {
+            let mut ends: Vec<u64> = shape.runs.iter().filter(|r| r.origin == *draft).flat_map(|r| [r.i_start, r.reach()]).collect();
+            ends.sort_unstable();
+            (draft.clone(), ends)
+        })
+        .collect();
     let pieces_bound = |run: &Run| -> u64 {
+        let ends = ends.iter().find(|(draft, _)| *draft == run.origin).map(|(_, ends)| ends.as_slice()).unwrap_or(&[]);
         let first = ends.partition_point(|e| *e <= run.i_start);
         let past = ends.partition_point(|e| *e < run.reach());
         1 + past.saturating_sub(first) as u64
     };
     for (index, run) in shape.runs.iter().enumerate() {
         let placed = shape.places.get(index).is_some_and(Option::is_some);
-        if run.origin == *draft {
+        if is_draft(run) {
             let pieces = pieces_bound(run);
             bytes = bytes.saturating_add(pieces.saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
             if placed {

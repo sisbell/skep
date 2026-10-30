@@ -1,12 +1,15 @@
 //! §The publish shot's values (PUB-2.33, PUB-8.1).
 //!
 //! They are its request — the client-supplied I-address runs with the origin
-//! each windows, the base the staged draft was taken from, and the whole
-//! shot, the composite's arrangement input, taken from the client and never
-//! read off any draft's arrangement at commit — the runs it re-inserts and
-//! their count ([`Shot::reinserted_runs`], [`Shot::reinserted_values`]), and
-//! its address form on both sides of the commit: [`Shot::address_form`] for
-//! the request, [`M5State::address_form_of`] for the member it minted, and
+//! each windows, the base the staged draft was taken from, the drafts whose
+//! identity the shot re-mints (the rendering `draft` and the family's other
+//! drafts `also` names — THE NAMED DRAFTS, [`Shot::named_drafts`], the family
+//! rule's one spelling with [`Shot::is_draft_native`]), and the whole shot,
+//! the composite's arrangement input, taken from the client and never read
+//! off any draft's arrangement at commit — the runs it re-inserts and their
+//! count ([`Shot::reinserted_runs`], [`Shot::reinserted_values`]), and its
+//! address form on both sides of the commit: [`Shot::address_form`] for the
+//! request, [`M5State::address_form_of`] for the member it minted, and
 //! [`run_origin_document`], the classifier each of them asks. The two sides
 //! of the address form must agree as the signed body spells them — window for
 //! window, and value for value between — so they are stated in one file.
@@ -52,10 +55,11 @@ pub(crate) fn run_origin_document(run: &Run) -> Option<Address> {
 /// were minted under, as the client states it. Its projection to the trunk
 /// (PUB-2.15), the run's origin document, is what the source gate is asked
 /// about (PUB-6.23) and what decides the run's family in the member
-/// (PUB-2.40): the shot document's own I-space stays by reference, the
-/// staging draft's is re-inserted as fresh identity, any other document's
-/// stays a window — three families, disjoint under [`Shot`]'s precondition
-/// on `draft`. The composite checks the statement against the run's start —
+/// (PUB-2.40): the shot document's own I-space stays by reference, a NAMED
+/// draft's — the rendering `draft`'s, or one `also` names — is re-inserted
+/// as fresh identity, any other document's stays a window — three families,
+/// disjoint under [`Shot`]'s precondition on the named drafts. The composite
+/// checks the statement against the run's start —
 /// a run whose stated origin does not project to the origin document its
 /// start settles is refused `BadRun` (`PublishError`) — so the field is the
 /// client's statement of intent, and a mistaken one is told rather than
@@ -120,19 +124,29 @@ pub struct Base {
 /// amended); the composite appends the base's post-render deposits after it
 /// (PUB-2.42, PUB-2.45) — with a base; absent, nothing is appended.
 ///
-/// `draft` names the staging draft whose native runs are re-inserted as
-/// fresh identity under the document's own I-space (PUB-2.40, PUB-2.41);
-/// absent, no run is draft-native. It is judged as the document it projects
-/// to (PUB-2.15): that document must be registered
-/// ([`SourceNotRegistered`](crate::PublishError::SourceNotRegistered)), and a
-/// run is draft-native exactly when its origin document is that document.
+/// `draft` names the RENDERING draft — the draft whose arrangement the runs
+/// render, the home of the kept places and of the records for its own
+/// identity — and `also` THE FAMILY's OTHER DRAFTS (the Nelson way, B3-S10;
+/// the link-sets design §5.7, THE REQUEST): the other private drafts of the
+/// caller's own whose identity this shot re-mints beside the rendering
+/// draft's, in the request's order. Together they are THE NAMED DRAFTS
+/// ([`Shot::named_drafts`]), each judged as the document it projects to
+/// (PUB-2.15): every one must be registered
+/// ([`SourceNotRegistered`](crate::PublishError::SourceNotRegistered)) and
+/// the caller's own ([`NotOwner`](crate::PublishError::NotOwner) carrying the
+/// draft at fault, in the request's order), and a run is draft-native —
+/// re-inserted as fresh identity under the document's own I-space (PUB-2.40,
+/// PUB-2.41) — exactly when its origin document is one of them
+/// ([`Shot::is_draft_native`]). `draft` absent, no run is draft-native and
+/// `also` is empty (the codec refuses `also` without `draft`); `also` empty
+/// is the one-draft shot.
 ///
-/// **Precondition.** The draft lies outside the chain of the document the
-/// shot appends to ([`Vstream::publish`](crate::Vstream::publish)'s `doc`):
-/// it is the document the change was staged in, never that document, the
-/// base, or any other member of its chain. The composite does not check this.
-/// It takes the statement at its word, and the statement decides each run's
-/// family. A `draft` inside the chain makes the document's own runs
+/// **Precondition.** Every named draft lies outside the chain of the document
+/// the shot appends to ([`Vstream::publish`](crate::Vstream::publish)'s
+/// `doc`): each is a document the change was staged in, never that document,
+/// the base, or any other member of its chain. The composite does not check
+/// this. It takes the statement at its word, and the statement decides each
+/// run's family. A named draft inside the chain makes the document's own runs
 /// draft-native: they are re-inserted as fresh identity and counted against
 /// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES), where they would
 /// otherwise be placed by reference. The member then holds, at those
@@ -144,11 +158,19 @@ pub struct Shot {
     ///
     /// It is absent in the birth shape.
     pub base: Option<Base>,
-    /// The staging draft, whose native runs are re-inserted as fresh identity.
+    /// The rendering draft, whose native runs are re-inserted as fresh
+    /// identity and whose kept places the request may carry.
     ///
     /// It is a document outside the shot's own chain, as the type's
     /// precondition states.
     pub draft: Option<Address>,
+    /// The family's other drafts whose identity this shot re-mints beside
+    /// the rendering draft's (the wire's `also`), in the request's order.
+    ///
+    /// Each is a document outside the shot's own chain, as the type's
+    /// precondition states; each keeps its own correspondence records, and
+    /// none is re-windowed by this shot. Empty is the one-draft shot.
+    pub also: Vec<Address>,
     /// The client-rendered arrangement, in order.
     pub runs: Vec<ShotRun>,
 }
@@ -163,11 +185,12 @@ impl Shot {
     /// by the family the commit gives it — a run the commit copies in (the
     /// corpus's verb) is a [`Value`](SegmentRun::Value) run, signed by value:
     /// the shot document's own I-space (its origin document, that
-    /// projection), placed by reference, and the staging draft's text (its
-    /// origin document the draft's trunk), re-inserted as fresh identity
-    /// under the document's own I-space — at the member, both are the trunk's
-    /// own; every other run is a [`Window`](SegmentRun::Window), a reference
-    /// the commit keeps to another document's I-space, signed by address.
+    /// projection), placed by reference, and a named draft's text (its
+    /// origin document one of [`named_drafts`](Shot::named_drafts)),
+    /// re-inserted as fresh identity under the document's own I-space — at
+    /// the member, both are the trunk's own; every other run is a
+    /// [`Window`](SegmentRun::Window), a reference the commit keeps to
+    /// another document's I-space, signed by address.
     /// Consecutive windows that are I-adjacent become one, through the
     /// placement's own accumulator, exactly as the member's run-list will hold
     /// them; the value runs keep their boundaries, which the body never spells
@@ -192,16 +215,14 @@ impl Shot {
     /// read; the store's refusal answers it. Reads no world.
     pub fn address_form(&self, doc: &Address) -> Vec<SegmentRun> {
         let trunk = trunk_of(doc);
-        let draft_doc = self.draft_document();
         let mut out: Vec<SegmentRun> = Vec::new();
         // The consecutive windows in hand, accumulated through the one run
         // accumulator (`extend_or_push_run`), so the merge condition is the
         // placement's own; a value run closes the group.
         let mut windows: Vec<Run> = Vec::new();
         for ShotRun { run, .. } in &self.runs {
-            let by_value = run_origin_document(run).is_some_and(|origin_doc| {
-                origin_doc == trunk || draft_doc.as_ref() == Some(&origin_doc)
-            });
+            let by_value = run_origin_document(run)
+                .is_some_and(|origin_doc| origin_doc == trunk || self.is_draft_native(&origin_doc));
             if by_value {
                 out.extend(windows.drain(..).map(SegmentRun::Window));
                 out.push(SegmentRun::Value(run.clone()));
@@ -217,22 +238,41 @@ impl Shot {
     ///
     /// They come in the order given: those whose origin document — derived
     /// from the run's own start, as [`address_form`](Shot::address_form)
-    /// derives it, and never from the stated `origin` — is
-    /// [`draft_document`](Shot::draft_document); none with no draft, and a run
-    /// named twice yielded twice. Their values are the ones the commit
-    /// re-inserts as fresh identity under the document's own I-space, in this
-    /// order ([`Vstream::publish`](crate::Vstream::publish) states where that
+    /// derives it, and never from the stated `origin` — is one of the
+    /// [`named_drafts`](Shot::named_drafts), the rendering draft's or an
+    /// `also` draft's alike ([`is_draft_native`](Shot::is_draft_native));
+    /// none with no draft, and a run named twice yielded twice. Their values
+    /// are the ones the commit re-inserts as fresh identity under the
+    /// document's own I-space, in this order
+    /// ([`Vstream::publish`](crate::Vstream::publish) states where that
     /// identity lands); the address form spells them by value beside the
     /// document's own runs and does not tell the two apart. Request arithmetic
-    /// over the runs and the draft as the client stated them, reading nothing
+    /// over the runs and the drafts as the client stated them, reading nothing
     /// — so a caller judging the values a shot re-inserts asks this rather
-    /// than re-deriving each run's family.
+    /// than re-deriving each run's family; one judging them per draft asks
+    /// [`reinserted_runs_of`](Shot::reinserted_runs_of).
     pub fn reinserted_runs(&self) -> impl Iterator<Item = &Run> + '_ {
-        let draft_doc = self.draft_document();
         self.runs
             .iter()
             .map(|stated| &stated.run)
-            .filter(move |run| draft_doc.is_some() && run_origin_document(run) == draft_doc)
+            .filter(move |run| run_origin_document(run).is_some_and(|d| self.is_draft_native(&d)))
+    }
+
+    /// Returns the runs this shot re-inserts whose identity is `draft_doc`'s.
+    ///
+    /// They are [`reinserted_runs`](Shot::reinserted_runs) narrowed to one
+    /// named draft — `draft_doc` as [`named_drafts`](Shot::named_drafts)
+    /// yields it, the document the draft projects to — in the order given;
+    /// none for a document that is no named draft, since the shot re-inserts
+    /// no run of it. The per-home spelling the twin fence reads each named
+    /// draft's own records by, the lock set takes each named draft's link key
+    /// by, and the feed row names each named draft by: request arithmetic,
+    /// reading nothing.
+    pub fn reinserted_runs_of<'s>(&'s self, draft_doc: &'s Address) -> impl Iterator<Item = &'s Run> + 's {
+        self.runs
+            .iter()
+            .map(|stated| &stated.run)
+            .filter(move |run| self.is_draft_native(draft_doc) && run_origin_document(run).as_ref() == Some(draft_doc))
     }
 
     /// Returns how many values this shot re-inserts.
@@ -246,7 +286,8 @@ impl Shot {
     /// [`Vstream::publish`](crate::Vstream::publish) states where the fresh
     /// identity lands) — two staged records apiece where
     /// every value is an atom, and two for a whole run of single-byte
-    /// values; zero with no draft. It is the count
+    /// values; zero with no draft. Over every named draft: the positions of
+    /// two drafts are distinct addresses, so each counts. It is the count
     /// [`Vstream::publish`](crate::Vstream::publish) holds to
     /// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES)
     /// (`TooManyValues`), and its one spelling: request arithmetic, reading
@@ -257,19 +298,53 @@ impl Shot {
         RunUnion::of(self.reinserted_runs()).runs().map(|run| run.width().clone()).sum()
     }
 
-    /// Returns the document `draft` projects to (PUB-2.15), if one is named.
+    /// Returns the document `draft` projects to (PUB-2.15), if one is named:
+    /// THE RENDERING DRAFT.
     ///
-    /// It is the one a run's origin document must be for the run to be
-    /// draft-native, re-inserted as fresh identity (PUB-2.40) — the document
-    /// whose registration the shot checks, and whose owner and readability a
-    /// door judging the re-inserted values asks about. The draft half of the
-    /// family rule [`Shot`] states, spelled once and asked by
-    /// [`address_form`](Shot::address_form),
-    /// [`reinserted_runs`](Shot::reinserted_runs) and `publish`'s
-    /// registration check and placement alike; the run half, its origin
-    /// document, is derived from each run's own start, as [`ShotRun`] states.
+    /// It is the home of the kept places the request may carry — the one
+    /// draft the shot's one commit re-windows (the link-sets design §5.7;
+    /// B3-S11 P5: "THE RENDERING DRAFT ALONE") — and the origin the edition
+    /// claim names. The family rule [`Shot`] states is wider than it:
+    /// [`named_drafts`](Shot::named_drafts) yields it first and the `also`
+    /// drafts after it, and [`is_draft_native`](Shot::is_draft_native) is the
+    /// test [`address_form`](Shot::address_form),
+    /// [`reinserted_runs`](Shot::reinserted_runs) and `publish`'s placement
+    /// ask; a caller that means the rendering draft — the re-window, the
+    /// claim's origin, the kept-place test — asks this.
     pub fn draft_document(&self) -> Option<Address> {
         self.draft.as_ref().map(trunk_of)
+    }
+
+    /// Returns THE NAMED DRAFTS, each as the document it projects to
+    /// (PUB-2.15): the rendering draft first, then each draft `also` names,
+    /// in the request's order.
+    ///
+    /// The family rule [`Shot`] states, spelled once: the documents whose
+    /// registration and ownership the shot checks in this order
+    /// (`SourceNotRegistered`, then `NotOwner` carrying the draft at fault,
+    /// each ahead of the runs), whose identity the shot re-mints
+    /// ([`is_draft_native`](Shot::is_draft_native)), in which it homes its
+    /// correspondence records (each piece's in the draft its identity was),
+    /// and which the feed row names after the member where the commit wrote
+    /// them. Empty with no `draft` — `also` rides only beside one. Request
+    /// arithmetic, reading nothing.
+    pub fn named_drafts(&self) -> impl Iterator<Item = Address> + '_ {
+        self.draft.iter().chain(&self.also).map(trunk_of)
+    }
+
+    /// Returns whether `origin_doc`, a run's origin document, is a named
+    /// draft's: whether a run of that identity is DRAFT-NATIVE, re-inserted
+    /// as fresh identity (PUB-2.40) rather than placed by reference or kept
+    /// as a window.
+    ///
+    /// The one test the family rule [`Shot`] states is decided by, asked by
+    /// [`address_form`](Shot::address_form),
+    /// [`reinserted_runs`](Shot::reinserted_runs) and `publish`'s placement
+    /// alike, so the values a shot says it re-inserts are the values its
+    /// commit writes over every named draft. `origin_doc` is a document
+    /// (`run_origin_document`'s projection); `O(k)` in the named drafts.
+    pub fn is_draft_native(&self, origin_doc: &Address) -> bool {
+        self.named_drafts().any(|draft| draft == *origin_doc)
     }
 }
 
@@ -289,7 +364,7 @@ impl Shot {
 pub enum SegmentRun {
     /// A run of a value stretch: one the commit copies in (the corpus's verb).
     ///
-    /// It is the shot document's own I-space by reference, or the staging
+    /// It is the shot document's own I-space by reference, or a named
     /// draft's text re-inserted as fresh identity under it — signed by value,
     /// each position's value in V-order. The verb is not COPY's act: a value
     /// run may carry fresh identity, which COPY never mints, and a run the
@@ -327,7 +402,7 @@ impl M5State {
     /// [`SegmentRun`]s in V-order, each run classed by its origin document as
     /// the commit left it: a run of the member's own trunk is a
     /// [`Value`](SegmentRun::Value) run — the shot document's own I-space
-    /// placed by reference, and the staging draft's text the commit
+    /// placed by reference, and the named drafts' text the commit
     /// re-inserted under that trunk, told apart by nothing here and signed
     /// alike, by value — and a run of any other document is a
     /// [`Window`](SegmentRun::Window), signed by address. The runs are the

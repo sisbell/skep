@@ -266,14 +266,16 @@ pub enum VersionError {
 ///
 /// * `DocNotRegistered` / `NotOwner(doc)` — the registration and ω of the
 ///   address named; the payload is that address. `NotOwner` carries the
-///   DRAFT's document instead where `draft` is named and the caller does not
-///   own the document it projects to — the link-sets design §5.7's
-///   unowned-draft edge, asked right after the draft's registration and
-///   ahead of every readability question; the records a publication keeps
-///   are homed in the draft, so the shot refuses a draft the caller does not
-///   own, readable or not.
-/// * `SourceNotRegistered` — the base, the document the draft projects to
-///   (PUB-2.15), or a run's origin document is not a registered document.
+///   NAMED DRAFT's document instead where `draft`, or a draft `also` names,
+///   is one the caller does not own — the link-sets design §5.7's
+///   unowned-draft edge, asked of each named draft in the request's order
+///   right after its registration and ahead of every readability question;
+///   the records a publication keeps are homed in the named drafts, so the
+///   shot refuses a draft the caller does not own, readable or not, carrying
+///   the draft at fault.
+/// * `SourceNotRegistered` — the base, the document a named draft projects
+///   to (PUB-2.15; `draft` first, then each of `also` in order), or a run's
+///   origin document is not a registered document.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
 ///   its start is not a content element, or its origin document — the trunk
 ///   (PUB-2.15) of the document that minted it — is not the document the
@@ -331,10 +333,12 @@ pub enum VersionError {
 pub enum PublishError {
     /// `doc`, the address the shot names, is not a registered document.
     DocNotRegistered,
-    /// The caller is not the effective owner (ω) of `doc`, or of the draft
-    /// the shot names; carries the document that failed.
+    /// The caller is not the effective owner (ω) of `doc`, or of a draft
+    /// the shot names — `draft`, or one of `also`; carries the document that
+    /// failed.
     NotOwner(Address),
-    /// The base, the draft's document or a run's origin is not registered.
+    /// The base, a named draft's document or a run's origin is not
+    /// registered.
     SourceNotRegistered,
     /// A supplied run is not a content run of its stated origin.
     BadRun,

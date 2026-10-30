@@ -169,8 +169,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "PublicationPanel",
         open: false,
-        doc: "`publication.open(session, {draft, doc?, mint?, claim?, selection?, notes?, readable_drafts?, published?})` — THE PANEL: the composition's first steps run by the shell (`enumerate` → `panel` → the price), every member DATA with a code or a kind and never a string a person reads; `rows` the sets in the RULED order — own, notes, private, public by address; `read_with` per published document of the person's whether the edition is read with it now; `count` at the switches' DEFAULT — every private row OFF; `price` the five terms against their caps, as the request would stand with every window kept private; `windows` the own-origin windows the three answers are asked for; `hold` where a HELD publication of this draft stood and is re-opened as it stands, with the switches and answers the page last sent it (item 1 (a))",
-        fields: &[req("rows", "PublicationRow[]"), req("formatting", "Formatting"), req("read_with", "Record<string, boolean>"), req("count", "Count"), req("price", "Price"), req("windows", "Window[]"), opt("hold", "Hold")],
+        doc: "`publication.open(session, {draft, also?, base?, doc?, mint?, claim?, selection?, notes?, readable_drafts?, published?})` — THE PANEL: the composition's first steps run by the shell (`enumerate` → `panel` → the price), every member DATA with a code or a kind and never a string a person reads; `draft` the RENDERING draft, `also` the OTHER private drafts of the person's own whose words this publication re-mints as the document's own beside it (the Nelson way — the family: the staging draft and the alternatives made from it, never the notes), each keeping its own records; `base`, for a draft BEHIND the head, the member it was staged from or last re-windowed to, the page's own (the shell reads the head where it is absent) — so the shot lands a daughter under its own base; `rows` the sets in the RULED order — own, notes, private, public by address; `read_with` per published document of the person's whether the edition is read with it now; `count` at the switches' DEFAULT — every private row OFF; `price` the five terms against their caps, as the request would stand with every window kept private; `windows` the own-origin windows the three answers are asked for, the drafts `also` names EXCLUDED; `inherited` per draft `also` names, in its order, THE STATEMENT's count — the passages first written in it (B3-S11 P2 (i)); `hold` where a HELD publication of this draft stood and is re-opened as it stands, with the switches and answers the page last sent it (item 1 (a))",
+        fields: &[req("rows", "PublicationRow[]"), req("formatting", "Formatting"), req("read_with", "Record<string, boolean>"), req("count", "Count"), req("price", "Price"), req("windows", "Window[]"), req("inherited", "Inherited[]"), opt("hold", "Hold")],
     },
     Shape {
         name: "PublicationRow",
@@ -215,8 +215,14 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Window",
         open: false,
-        doc: "one own-origin window P2 (i) asks the three answers for: a run of the selection that windows an unpublished draft of the person's own — `run` the run's index in the selection (the key `answers` take), `origin` and `width` the run's own, `owner` the origin's account, `i_start` WHERE IN ⟨origin⟩ THE PASSAGE WAS WRITTEN (the run's first ordinal in ⟨origin⟩'s I-space), `counterpart` where a record of a draft the person reads names the run's words as published, offered FIRST and re-read at every open; NO ANSWER PRE-SELECTED (P50)",
+        doc: "one own-origin window P2 (i) asks the three answers for: a run of the selection that windows an unpublished draft of the person's own — the drafts `also` names EXCLUDED, their runs re-minted as the document's own words and not windowed (their count is `inherited`) — `run` the run's index in the selection (the key `answers` take), `origin` and `width` the run's own, `owner` the origin's account, `i_start` WHERE IN ⟨origin⟩ THE PASSAGE WAS WRITTEN (the run's first ordinal in ⟨origin⟩'s I-space), `counterpart` where a record of a draft the person reads names the run's words as published, offered FIRST and re-read at every open; NO ANSWER PRE-SELECTED (P50)",
         fields: &[req("run", "number"), req("origin", "string"), req("owner", "string"), req("i_start", "number"), req("width", "number"), opt("counterpart", "Counterpart")],
+    },
+    Shape {
+        name: "Inherited",
+        open: false,
+        doc: "THE STATEMENT's count for one draft `also` names (B3-S11 P2 (i)'s statement before the act — \"⟨n⟩ passages first written in ⟨D⟩ publish as ⟨E⟩'s own words; ⟨D⟩ keeps a record of where they went\" — the statement itself the page's): `draft` the draft, `passages` ⟨n⟩ — the selection's runs of that origin, consecutive runs of one origin in the selection's V-order counted once; the rendering draft's own words are counted nowhere",
+        fields: &[req("draft", "string"), req("passages", "number")],
     },
     Shape {
         name: "Counterpart",
@@ -315,6 +321,8 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         forms: &[&[
             req("session", "string"),
             req("draft", "string"),
+            opt("also", "string[]"),
+            opt("base", "string"),
             opt("doc", "string"),
             opt("mint", "string"),
             opt("claim", "boolean"),

@@ -369,7 +369,14 @@ pub fn publish_segments(
     // at the mint form, which no run's origin is, so every run of another
     // document is a window there, as the commit keeps it.
     let trunk = publish_term(frame)?;
+    // The named drafts: the rendering `draft` and each draft `also` names —
+    // a run of any of them is copied in, as M5's family rule places it.
     let draft = frame.get("draft").and_then(Value::as_str).map(trunk_of_str);
+    let also: Vec<String> = frame
+        .get("also")
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(Value::as_str).map(trunk_of_str).collect())
+        .unwrap_or_default();
     let mut per_origin: HashMap<String, HashMap<String, Vec<u8>>> = HashMap::new();
     let mut supplied = supplied.map(|values| values.iter());
     let mut out: Vec<SignerSegment> = Vec::new();
@@ -381,7 +388,7 @@ pub fn publish_segments(
         }
         let origin = origin_of(i_start);
         let origin_doc = trunk_of_str(&origin);
-        let copied = origin_doc == trunk || draft.as_deref() == Some(origin_doc.as_str());
+        let copied = origin_doc == trunk || draft.as_deref() == Some(origin_doc.as_str()) || also.contains(&origin_doc);
         if copied {
             let addrs = expand_runs(&[(i_start.to_string(), width)]);
             match supplied.as_mut() {

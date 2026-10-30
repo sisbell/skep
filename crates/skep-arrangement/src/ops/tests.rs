@@ -356,6 +356,7 @@ fn the_shots_admission_needs_only_the_registry_and_the_arrangement() {
     let plain = |runs: Vec<ShotRun>| Shot {
         base: None,
         draft: None,
+        also: vec![],
         runs,
     };
     let window = ShotRun {

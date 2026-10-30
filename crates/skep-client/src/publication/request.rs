@@ -14,7 +14,9 @@
 //!
 //! **The request.** From the confirmed rows: the runs from the held
 //! selection as the re-read placed them — a split run as its pieces in the
-//! draft's order, each with its own kept place — every window onto the
+//! draft's order, the rendering draft's each with its own kept place, a
+//! named `also` draft's re-minted with no place (the rendering draft alone
+//! is re-windowed; the Nelson way, B3-S10) — every window onto the
 //! person's own unpublished origin answered first (THE THREE ANSWERS:
 //! publish-first is NOT this request, which stays inert; DROP leaves the
 //! run out; KEEP PRIVATE sends it as a window with no place beside it) and
@@ -267,8 +269,12 @@ pub struct Request {
     pub claim: bool,
     /// The base member and extent.
     pub base: Option<(Address, u64)>,
-    /// The staging draft; `None` at a bare shot naming none (the merge's).
+    /// The rendering draft; `None` at a bare shot naming none (the merge's).
     pub draft: Option<Address>,
+    /// The family's other drafts whose identity the shot re-mints beside
+    /// the rendering draft's (the wire's `also`), in the request's order;
+    /// empty at the one-draft shot and at a bare shot.
+    pub also: Vec<Address>,
     /// The runs, in V-order.
     pub runs: Vec<Run>,
     /// The kept places, parallel to the runs.
@@ -341,6 +347,7 @@ impl Request {
         let retract: Vec<String> = self.retract.iter().map(ToString::to_string).collect();
         let read_with: Vec<String> = self.read_with.iter().map(ToString::to_string).collect();
         let (doc, account, base, draft) = (self.doc.as_ref().map(ToString::to_string), self.mint.as_ref().map(ToString::to_string), self.base.as_ref().map(|(m, e)| (m.to_string(), *e)), self.draft.as_ref().map(ToString::to_string));
+        let also: Vec<String> = self.also.iter().map(ToString::to_string).collect();
         frames::publication(&PublishFrame {
             doc: doc.as_deref(),
             account: account.as_deref(),
@@ -348,6 +355,7 @@ impl Request {
             claim: self.claim,
             base: base.as_ref().map(|(m, e)| (m.as_str(), *e)),
             draft: draft.as_deref(),
+            also: &also.iter().map(String::as_str).collect::<Vec<_>>(),
             runs: &runs,
             places: &places,
             links: &links,
@@ -408,14 +416,16 @@ impl Request {
     }
 
     /// Prices the request as it stands, with the caller's home count and the
-    /// draft's run count.
+    /// rendering draft's run count.
     pub fn priced(&self, homes: usize, draft_runs: usize) -> Price {
         let entries = self.entry_shapes();
         let term = self.term().clone();
-        let draft = self.draft.clone().unwrap_or_else(|| term.clone());
+        // The named drafts — the rendering draft, then each of `also` — whose
+        // runs are re-inserted and priced as values; none at a bare shot.
+        let drafts: Vec<Address> = self.draft.iter().chain(&self.also).cloned().collect();
         price::price(&Shape {
             runs: &self.runs,
-            draft: &draft,
+            drafts: &drafts,
             term: &term,
             mint: self.mint.is_some(),
             claim: self.claim,
@@ -580,12 +590,16 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             Some(Placement::Split(parts)) => parts.iter().map(|(o, first, width)| (Run::new(run.origin.clone(), *first, *width), *o)).collect(),
             Some(Placement::Absent) | None => Vec::new(),
         };
-        let native = run.origin == inputs.draft;
+        // A named draft's run — the rendering draft's or an `also` draft's —
+        // is the document's own words, re-minted; a kept place is sent for
+        // the rendering draft's alone, the one draft the commit re-windows.
+        let native = inputs.is_named_draft(&run.origin);
         let own = trunk.as_ref() == Some(&run.origin);
         if native || own {
+            let rendering = run.origin == inputs.draft;
             for (piece, ordinal) in pieces {
                 runs.push(piece);
-                places.push(native.then_some(ordinal));
+                places.push(rendering.then_some(ordinal));
                 draft_places.push(Some(ordinal));
             }
             continue;
@@ -655,7 +669,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     door.step("entries");
     let mut entries: Vec<Entry> = Vec::new();
     let mut unspellable: Vec<(Address, Unspellable)> = Vec::new();
-    let ctx = SpellContext { draft_chain: format!("{}.0.1", inputs.draft), runs: &runs, records: &records };
+    let ctx = SpellContext { native_chains: inputs.named_drafts().map(|d| format!("{d}.0.1")).collect(), runs: &runs, records: &records };
     let mut add = |candidate: usize, home: EntryHome| {
         let c = &e.candidates[candidate];
         let ends = (spell_end(&c.value.from, &ctx), spell_end(&c.value.to, &ctx), spell_type(&c.value.ty));
@@ -685,7 +699,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
 
     // Inert where nothing changes against the base.
     door.step("base");
-    let fresh = runs.iter().any(|r| r.origin == inputs.draft);
+    let fresh = runs.iter().any(|r| inputs.is_named_draft(&r.origin));
     if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && inputs.mint.is_none() && places.iter().all(Option::is_none) {
         if let Some((base, extent)) = &inputs.base {
             let image = door.image(&base.to_string(), 1, *extent)?;
@@ -696,13 +710,14 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         }
     }
 
-    // The body's pieces: the values of every copied run read through the
-    // draft, which arranges them at their places; a window by address.
+    // The body's pieces: the values of every copied run — a named draft's,
+    // the trunk's own — read through the rendering draft, which arranges
+    // them at their places; a window by address.
     door.step("values");
     let draft = inputs.draft.to_string();
     let mut pieces = Vec::with_capacity(runs.len());
     for (k, run) in runs.iter().enumerate() {
-        let copied = run.origin == inputs.draft || trunk.as_ref() == Some(&run.origin);
+        let copied = inputs.is_named_draft(&run.origin) || trunk.as_ref() == Some(&run.origin);
         match (copied, draft_places[k]) {
             (true, Some(place)) => pieces.push(Piece::Values(door.values(&draft, place, run.width)?)),
             (true, None) => pieces.push(Piece::Values(door.values(&run.origin.to_string(), run.i_start, run.width)?)),
@@ -716,6 +731,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         claim: inputs.claim,
         base: inputs.base.clone(),
         draft: Some(inputs.draft.clone()),
+        also: inputs.also.clone(),
         runs,
         places,
         stray_records,
@@ -737,14 +753,23 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
 
 /// What spelling an end needs.
 struct SpellContext<'a> {
-    draft_chain: String,
+    /// The content chains of the named drafts — the rendering draft's and
+    /// each `also` draft's — whose words this shot re-mints.
+    native_chains: Vec<String>,
     runs: &'a [Run],
     records: &'a [Record],
 }
 
+impl SpellContext<'_> {
+    /// Returns whether `chain` is a named draft's content chain.
+    fn is_native_chain(&self, chain: &str) -> bool {
+        self.native_chains.iter().any(|c| c == chain)
+    }
+}
+
 /// Spells one end from its stored slot: the address form where every span
 /// is a unit span at a non-content address; else the I-span form over
-/// permanent spans — a span on the draft's own words mapped through the
+/// permanent spans — a span on a named draft's own words mapped through the
 /// records onto the published words where an earlier shot minted them, a
 /// left-out span cut — or the member-position form where any span lies on
 /// this shot's new words, every span of the end then one the member holds.
@@ -760,12 +785,14 @@ fn spell_end(slot: &[LinkSpan], ctx: &SpellContext<'_>) -> Result<End, Unspellab
         return Err(Unspellable::MixedAddress);
     }
     let spans: Vec<ISpan> = spans.into_iter().flatten().collect();
-    let native_runs: Vec<&Run> = ctx.runs.iter().filter(|r| r.chain() == ctx.draft_chain).collect();
     let mut kept: Vec<ISpan> = Vec::new();
     let mut member_pieces: Vec<ISpan> = Vec::new();
     let mut any_native = false;
     for s in &spans {
-        if s.chain == ctx.draft_chain {
+        if ctx.is_native_chain(&s.chain) {
+            // The shot's runs of this span's own chain: the new words of the
+            // named draft the span lies in.
+            let native_runs: Vec<&Run> = ctx.runs.iter().filter(|r| r.chain() == s.chain).collect();
             // Through the records first, then this shot's new words, the rest cut.
             let mut cursor = s.first;
             while cursor < s.reach() {

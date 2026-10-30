@@ -789,6 +789,7 @@ pub fn commit_every_write(
     let shot = Shot {
         base: Some(Base { member, extent: nat(3) }),
         draft: None,
+        also: vec![],
         runs: vec![ShotRun {
             origin: edition.clone(),
             run: Run::new(edition_start, nat(3)).expect("a content run"),

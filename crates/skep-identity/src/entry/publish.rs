@@ -88,8 +88,9 @@ const SEGMENT_VALUE_STRETCH: u8 = 0x02;
 /// never an owner of it.
 ///
 /// The classing is the minted member's: a run whose origin is that member's
-/// own trunk — the shot document's own I-space placed by reference, or the
-/// staging draft's text re-inserted as fresh identity under that trunk — is
+/// own trunk — the shot document's own I-space placed by reference, or a
+/// named draft's text (the rendering `draft`'s, or one `also` names)
+/// re-inserted as fresh identity under that trunk — is
 /// read out as [`ShotSegmentPiece::Value`]s, one per position; a run whose
 /// origin is any other document is one [`ShotSegmentPiece::Window`]. Which of
 /// a shot's runs is which, and where two I-adjacent windows become one, is

@@ -68,6 +68,62 @@ fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
     assert!(write_meta(&read).is_none());
 }
 
+/// THE PUBLISH ROW's DRAFTS (the Nelson way, B3-S10; wire.md §The change
+/// feed): the named drafts the commit writes, in the request's order — the
+/// rendering draft where a run of its identity is re-inserted or a kept
+/// place is sent (a stray re-window's among them), each `also` draft where
+/// a run of its identity is re-inserted — and none where no draft is
+/// written; request arithmetic off the shot.
+#[test]
+fn a_publish_rows_drafts_are_the_named_drafts_the_commit_writes_in_the_requests_order() {
+    use skep_address::Nat;
+    use skep_febe::{PublishDeposits, PublishTarget, Run, Shot, ShotRun, VPos};
+
+    let addr = |text: &str| crate::codec::wire_address(text).expect("a test address");
+    let (edition, d, a1, b) = (addr("1.0.1.0.1"), addr("1.0.1.0.5"), addr("1.0.1.0.6"), addr("1.0.1.0.7"));
+    let run_of = |doc: &str, k: u32| ShotRun {
+        origin: addr(doc),
+        run: Run::new(addr(&format!("{doc}.0.1.{k}")), Nat::from(1u32)).expect("a run"),
+    };
+    let drafts_of = |shot: Shot, places: Vec<Option<VPos>>| {
+        let op = Op::Publish {
+            target: PublishTarget::Document(edition.clone()),
+            shot,
+            places,
+            deposits: PublishDeposits::default(),
+        };
+        match write_meta(&op).expect("a write").docs {
+            AffectedDocs::Published { drafts, .. } => drafts,
+            _ => panic!("a publication's row"),
+        }
+    };
+    // D's and A's runs re-inserted: both named, in the request's order; B,
+    // with no run of its identity, not.
+    assert_eq!(
+        drafts_of(
+            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], runs: vec![run_of("1.0.1.0.5", 1), run_of("1.0.1.0.6", 1)] },
+            vec![]
+        ),
+        vec![d.clone(), a1.clone()]
+    );
+    // A's run alone: A named, the rendering draft not — nothing is written in it.
+    assert_eq!(
+        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.6", 1)] }, vec![]),
+        vec![a1.clone()]
+    );
+    // A kept place beside a trunk run — a stray re-window — names the
+    // rendering draft, and never an `also` draft.
+    assert_eq!(
+        drafts_of(
+            Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.1", 1)] },
+            vec![Some(VPos::content(Nat::from(1u32)))]
+        ),
+        vec![d.clone()]
+    );
+    // No draft named: none.
+    assert!(drafts_of(Shot { base: None, draft: None, also: vec![], runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]).is_empty());
+}
+
 /// The index's entry hint, decided off the frame in each arm: an insert
 /// names the indices of its values that pass the prefix test and nothing
 /// of the rest; a publish carries the shot's re-inserted count; a copy and
@@ -115,7 +171,7 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     }
     let publish = Op::Publish {
         target: PublishTarget::Document(doc),
-        shot: Shot { base: None, draft: None, runs: Vec::new() },
+        shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },
         places: Vec::new(),
         deposits: PublishDeposits::default(),
     };
@@ -193,7 +249,7 @@ fn each_write_states_the_terms_its_row_carries() {
     assert!(matches!(terms(make_link), RowTerms::MakeLink));
     let publish = Op::Publish {
         target: PublishTarget::Document(doc.clone()),
-        shot: Shot { base: None, draft: None, runs: Vec::new() },
+        shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },
         places: Vec::new(),
         deposits: PublishDeposits::default(),
     };

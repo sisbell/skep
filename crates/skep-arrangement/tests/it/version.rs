@@ -235,7 +235,7 @@ fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named(
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: None, draft: None, runs: vec![] },
+            &Shot { base: None, draft: None, also: vec![], runs: vec![] },
             &readable_by(PrincipalId(1)),
         )
         .expect("an empty birth version");

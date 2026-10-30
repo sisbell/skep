@@ -525,6 +525,7 @@ pub fn fragmented_head_world(run_count: usize) -> Kernel<World> {
     let birth = Shot {
         base: None,
         draft: None,
+        also: vec![],
         runs: vec![
             ShotRun {
                 origin: pdoc(),

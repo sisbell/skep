@@ -497,6 +497,7 @@ impl Writer<'_> {
             claim: false,
             base: Some((head.clone(), merged.head_extent)),
             draft: draft.clone(),
+            also: Vec::new(),
             runs,
             places: vec![None; n],
             stray_records: vec![0; n],

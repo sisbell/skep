@@ -122,18 +122,20 @@
 //! the base's daughter when it is not (PUB-2.37, PUB-2.39, decided at
 //! commit) — born published, in one commit, from client-supplied I-address
 //! runs ([`Shot`], PUB-8.1) and never from any draft's arrangement. The
-//! document's own runs stay by reference, the staging draft's are re-inserted
-//! as fresh identity under the document's own I-space (the draft lying
-//! outside the chain, as [`Shot`] requires; the caller owning it, the shot's
-//! own door asks), each draft identity once per shot, and any other
+//! document's own runs stay by reference, the named drafts' — the rendering
+//! `draft`'s and the family's other drafts' `also` names — are re-inserted
+//! as fresh identity under the document's own I-space (each draft lying
+//! outside the chain, as [`Shot`] requires; the caller owning each, the
+//! shot's own door asks in the request's order), each draft identity once per shot, and any other
 //! document's stay windows behind the source gate (PUB-2.40, PUB-6.23); the
 //! base's post-render deposits are carried after them (PUB-2.42, PUB-2.45).
 //! The shot's body is a staging function, [`stage_publish`], under the one
 //! bound [`PublishWorld`], returning the member and the pairing of each
-//! placed draft piece with the fresh run it stands as, under its `runs`
-//! entry ([`Pairing`]) — so a composite in the link store stages the shot,
-//! its correspondence records and the draft's re-window at its kept places
-//! under one transaction. The
+//! placed draft piece with the fresh run it stands as, the named draft its
+//! identity was and its `runs` entry ([`Pairing`]) — so a composite in the
+//! link store stages the shot, its correspondence records in each named
+//! draft and the rendering draft's re-window at its kept places under one
+//! transaction. The
 //! birth version is minted by the same composite in either of two shapes:
 //! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the
 //! memberless document named as its own base, carrying the deposits it took

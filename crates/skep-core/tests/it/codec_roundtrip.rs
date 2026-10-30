@@ -181,6 +181,7 @@ fn all_requests() -> Vec<Request> {
                 shot: Shot {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: Some(d3()),
+                    also: vec![],
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
                         shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
@@ -198,6 +199,7 @@ fn all_requests() -> Vec<Request> {
                 shot: Shot {
                     base: None,
                     draft: None,
+                    also: vec![],
                     runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 5)],
                 },
                 places: vec![],
@@ -216,6 +218,7 @@ fn all_requests() -> Vec<Request> {
                 shot: Shot {
                     base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
                     draft: Some(d3()),
+                    also: vec![],
                     runs: vec![
                         shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
                         shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
@@ -254,6 +257,7 @@ fn all_requests() -> Vec<Request> {
                 shot: Shot {
                     base: None,
                     draft: Some(d3()),
+                    also: vec![],
                     runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 4)],
                 },
                 places: vec![],
@@ -275,7 +279,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Mint { account: a(&[1, 0, 1]) },
-                shot: Shot { base: None, draft: None, runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
+                shot: Shot { base: None, draft: None, also: vec![], runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1)] },
                 places: vec![],
                 deposits: PublishDeposits::default(),
             },
@@ -286,7 +290,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Publish {
                 target: PublishTarget::Document(d1()),
-                shot: Shot { base: None, draft: Some(d3()), runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2)] },
+                shot: Shot { base: None, draft: Some(d3()), also: vec![], runs: vec![shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2)] },
                 places: vec![],
                 deposits: PublishDeposits { claim: true, ..PublishDeposits::default() },
             },
@@ -773,6 +777,68 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"1","ordinal":"4","extra":1}]"#)), Some(1), "a member of its own");
     assert_eq!(index_of(&drafted(r#","places":{}"#)), None, "no array: refused with no site");
     assert!(codec.parse(&drafted(r#","places":[null,{"subspace":"1","ordinal":"4"}],"extra":1"#)).is_err());
+}
+
+/// THE FAMILY's OTHER DRAFTS (the Nelson way, B3-S10; wire.md §Arrangement,
+/// `publish`): `also`, a list of addresses beside `draft`, parsed into the
+/// shot in the request's order and written back where non-empty — the empty
+/// list and the absent member alike the one-draft shot, no member in the
+/// canonical form, the round trip a fixpoint; and its shapes refused at the
+/// door as `malformed`: `also` without `draft` (no entry at fault), an
+/// entry that is the `draft` itself, a repeated entry and an entry that is
+/// no address each naming the entry in `site.index`, a member that is no
+/// array naming none; and a `places` entry beside a run of a draft `also`
+/// names is refused with the entry, while the rendering draft's run and the
+/// trunk's own keep their places.
+#[test]
+fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
+    let codec = JsonCodec;
+    // Three runs: the edition's own, the rendering draft's, the other draft's.
+    const RUNS: &str = r#"[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"},{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"},{"origin":"1.0.1.0.8","i_start":"1.0.1.0.8.0.1.1","width":"1"}]"#;
+    let frame = |head: &str, tail: &str| format!(r#"{{"op":"publish","doc":"1.0.1.0.1"{head},"runs":{RUNS}{tail}}}"#).into_bytes();
+    let also_of = |req: &Request| match &req.op {
+        Op::Publish { shot, .. } => shot.also.clone(),
+        other => panic!("a publish, not {other:?}"),
+    };
+    let canonical = |req: &Request| String::from_utf8(codec.marshal_request(req)).expect("utf-8");
+    let req = parse_ok(&codec, &frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.9"]"#, ""));
+    assert_eq!(also_of(&req), vec![a(&[1, 0, 1, 0, 8]), a(&[1, 0, 1, 0, 9])], "the request's order");
+    let text = canonical(&req);
+    assert!(text.contains(r#""also":["1.0.1.0.8","1.0.1.0.9"]"#), "{text}");
+    assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form parses to the same request");
+    for one_draft in [r#","draft":"1.0.1.0.7""#, r#","draft":"1.0.1.0.7","also":[]"#] {
+        let req = parse_ok(&codec, &frame(one_draft, ""));
+        assert!(also_of(&req).is_empty(), "{one_draft}: the one-draft shot");
+        assert!(!canonical(&req).contains("also"), "{one_draft}: no member in the canonical form");
+    }
+    let refused = |frame: &[u8]| -> (String, Option<usize>) {
+        let e = codec.parse(frame).expect_err("refused");
+        let (site, detail) = (e.site.clone(), e.detail.clone().unwrap_or_default());
+        let rej = Rejection::unparseable(e);
+        assert_eq!((rej.op, rej.code), (OpKind::Unparseable, RejectCode::Malformed));
+        assert_eq!(rej.site, site);
+        (detail, site.and_then(|s| s.index))
+    };
+    let (detail, index) = refused(&frame(r#","also":["1.0.1.0.8"]"#, ""));
+    assert!(detail.contains("'also'") && detail.contains("'draft'") && index.is_none(), "also without draft: {detail}");
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.7"]"#, ""));
+    assert!(detail.contains("'also'") && index == Some(1), "the draft itself: {detail}");
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","1.0.1.0.9","1.0.1.0.8"]"#, ""));
+    assert!(detail.contains("repeats") && index == Some(2), "a repeat: {detail}");
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8","x"]"#, ""));
+    assert!(detail.contains("'also'") && index == Some(1), "no address: {detail}");
+    let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":"1.0.1.0.8""#, ""));
+    assert!(detail.contains("'also'") && index.is_none(), "no array: {detail}");
+    // A place beside the other draft's run is refused with the entry; the
+    // trunk's own run and the rendering draft's keep theirs.
+    let family = |places: &str| frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8"]"#, places);
+    let (detail, index) = refused(&family(r#","places":[null,null,{"subspace":"1","ordinal":"6"}]"#));
+    assert!(detail.contains("places") && detail.contains("'also'") && index == Some(2), "{detail}");
+    let req = parse_ok(&codec, &family(r#","places":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"4"},null]"#));
+    match &req.op {
+        Op::Publish { places, .. } => assert_eq!(places, &vec![Some(vp(1, 1)), Some(vp(1, 4)), None]),
+        other => panic!("a publish, not {other:?}"),
+    }
 }
 
 /// The publication's members (the link-sets design §5.7; lane S3), at the

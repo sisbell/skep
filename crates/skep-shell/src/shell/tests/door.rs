@@ -207,7 +207,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 33, "the optional members of the fourteen rows of one form that declare any: the publication family's eleven among them");
+    assert_eq!(asked, 35, "the optional members of the fourteen rows of one form that declare any: the publication family's thirteen among them, `publication.open`'s `also` and `base` included");
 }
 
 /// Checks that a guest search reads the board its reference or origin names.

@@ -1,22 +1,27 @@
 //! THE TWIN PRE-CHECK and THE LANDED TEST (the link-sets design §5.5, §5.7).
 //!
-//! **The pre-check, before the act.** `D`'s records constrained by the
-//! request's draft-native spans — one four-set read `{home: [D], ty: [the
-//! subtype], from: [the spans]}`, the twin fence's own read — each hit read
-//! once and kept by the exact type; a draft-native run a record's `from`
-//! overlaps is RE-COMPOSED by reference to the record's `to` at the run's
-//! offset into the `from`, in pieces where a record covers it in part, each
-//! piece with its kept place beside it as a draft-native run's — the stray
-//! places the commit re-windows — so the request never meets
-//! `already_published` for words this draft already published.
+//! **The pre-check, before the act.** Each named draft's records — the
+//! rendering draft `D`'s, then each draft `also` names — constrained by the
+//! request's runs of THAT draft's identity: one four-set read `{home: [the
+//! draft], ty: [the subtype], from: [its spans]}` per named draft, the twin
+//! fence's own read — each hit read once and kept by the exact type; a
+//! draft-native run a record's `from` overlaps is RE-COMPOSED by reference
+//! to the record's `to` at the run's offset into the `from`, in pieces where
+//! a record covers it in part, each piece of the rendering draft's with its
+//! kept place beside it as a draft-native run's — the stray places the
+//! commit re-windows — and a piece of an `also` draft's with none, so the
+//! request never meets `already_published` for words any draft of the
+//! family already published.
 //!
 //! **The landed test, after a lost answer or `already_published`.** ONE
 //! composition answering whether THIS request's effect committed and in
 //! which member, from a BASE each site states: the member `already_published`
-//! names (`site.addr`); the draft's records where the request re-inserted
-//! runs — one records read over `D` naming a draft-native run, a record
-//! found naming the member its commit minted (the publish row at the
-//! record's position); the walk from the request's own `base` for a
+//! names (`site.addr`); the named drafts' records where the request
+//! re-inserted runs — one records read over `D` naming a draft-native run
+//! of its own identity, then, where the request names other drafts of the
+//! family, one over each of theirs for the runs of its own identity (B3-S11
+//! L176), the first record found naming the member its commit minted (the
+//! publish row at the record's position); the walk from the request's own `base` for a
 //! records-less shot — the trunk's next member, then the base's daughters
 //! in order until the first absent, the merge landing's `standing_member`
 //! generalised to the base it holds; and `edition_claims(D)` for a minting
@@ -73,9 +78,10 @@ pub struct Recomposed {
     pub frames: Vec<(&'static str, usize)>,
 }
 
-/// Reads the draft's records constrained by the draft-native spans of
-/// `runs`, each with its kept place in `places` and its place in the draft
-/// in `draft_places`, and re-composes what they cover by reference.
+/// Reads each named draft's records constrained by the spans of `runs` of
+/// its identity, each run with its kept place in `places` and its place in
+/// the draft in `draft_places`, and re-composes what they cover by
+/// reference.
 ///
 /// # Errors
 ///
@@ -85,15 +91,23 @@ pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &
     twin_precheck_with(&door, p, inputs, runs, places, draft_places)
 }
 
-/// Reads the draft's records through `door` and re-composes.
+/// Reads the named drafts' records through `door` and re-composes.
+///
+/// One four-set read per named draft — the rendering draft first, then
+/// each `also` draft, in the request's order — over that draft's records
+/// for the runs of its own identity; a named draft with no run of its
+/// identity in `runs` is not read.
 pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>]) -> Result<Recomposed, Fault> {
     door.step("twin_precheck");
-    let draft = inputs.draft.to_string();
-    let native: Vec<Value> = runs.iter().filter(|r| r.origin == inputs.draft).map(|r| frames::i_span(&r.i_start_text(), r.width)).collect();
+    let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
     let mut records: Vec<Record> = Vec::new();
-    if !native.is_empty() {
+    for draft in inputs.named_drafts() {
+        let native: Vec<Value> = runs.iter().filter(|r| r.origin == *draft).map(|r| frames::i_span(&r.i_start_text(), r.width)).collect();
+        if native.is_empty() {
+            continue;
+        }
+        let draft = draft.to_string();
         let unit = frames::unit_span(&draft).as_array().cloned().unwrap_or_default();
-        let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
         for chunk in native.chunks(super::enumerate::MAX_WIRE_LIST) {
             for hit in door.addrs(&draft, &frames::find_links_four(Slot::Spans(&unit), Slot::Spans(chunk), Slot::Any, Slot::Spans(&subtype)))? {
                 if records.iter().any(|r| r.link.to_string() == hit) {
@@ -109,7 +123,7 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
     for (k, run) in runs.iter().enumerate() {
         let place = places.get(k).copied().flatten();
         let in_draft = draft_places.get(k).copied().flatten();
-        if run.origin != inputs.draft {
+        if !inputs.is_named_draft(&run.origin) {
             out.push(run.clone(), place, in_draft, 0);
             continue;
         }
@@ -220,32 +234,46 @@ pub fn landed(p: &Publisher<'_>, inputs: &Inputs, request: &Request, base: Base)
 }
 
 /// Runs the landed test through `door`.
+///
+/// At [`Base::Records`] the named drafts are read in the request's order —
+/// the rendering draft's records for a run of its identity first, then each
+/// `also` draft's for a run of its own (B3-S11 L176) — and the first record
+/// found names the member; a request re-inserting no run of any named draft
+/// falls to the walk.
 pub(crate) fn landed_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, request: &Request, base: Base) -> Result<Verdict, Fault> {
     door.step("landed");
     let draft = inputs.draft.to_string();
-    let native = request.runs.iter().find(|r| r.origin == inputs.draft);
     match base {
         Base::Member(member) => test_member(door, inputs, request, &member, AckVia::Twin),
         Base::Records => {
-            let Some(run) = native else { return landed_with(door, p, inputs, request, Base::Walk) };
-            let unit = frames::unit_span(&draft).as_array().cloned().unwrap_or_default();
             let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
-            let span = [frames::i_span(&run.i_start_text(), run.width)];
-            let hits = door.addrs(&draft, &frames::find_links_four(Slot::Spans(&unit), Slot::Spans(&span), Slot::Any, Slot::Spans(&subtype)))?;
-            let mut record = None;
-            for hit in hits {
-                if let Some(r) = read_record(door, p, &hit)? {
-                    record = Some(r);
-                    break;
+            let mut any_native = false;
+            for named in inputs.named_drafts() {
+                let Some(run) = request.runs.iter().find(|r| r.origin == *named) else { continue };
+                any_native = true;
+                let home = named.to_string();
+                let unit = frames::unit_span(&home).as_array().cloned().unwrap_or_default();
+                let span = [frames::i_span(&run.i_start_text(), run.width)];
+                let hits = door.addrs(&home, &frames::find_links_four(Slot::Spans(&unit), Slot::Spans(&span), Slot::Any, Slot::Spans(&subtype)))?;
+                let mut record = None;
+                for hit in hits {
+                    if let Some(r) = read_record(door, p, &hit)? {
+                        record = Some(r);
+                        break;
+                    }
                 }
+                let Some(record) = record else { continue };
+                let Some(at) = record.at else { return landed_with(door, p, inputs, request, Base::Walk) };
+                let Some(trunk) = record.to.document() else { return Ok(Verdict::NotFound) };
+                return match member_at(door, p, &trunk, at)? {
+                    Some(member) => test_member(door, inputs, request, &member, AckVia::Records),
+                    None => landed_with(door, p, inputs, request, Base::Walk),
+                };
             }
-            let Some(record) = record else { return Ok(Verdict::NotFound) };
-            let Some(at) = record.at else { return landed_with(door, p, inputs, request, Base::Walk) };
-            let Some(trunk) = record.to.document() else { return Ok(Verdict::NotFound) };
-            match member_at(door, p, &trunk, at)? {
-                Some(member) => test_member(door, inputs, request, &member, AckVia::Records),
-                None => landed_with(door, p, inputs, request, Base::Walk),
+            if !any_native {
+                return landed_with(door, p, inputs, request, Base::Walk);
             }
+            Ok(Verdict::NotFound)
         }
         Base::Walk => {
             let Some((base_member, _)) = &inputs.base else {
@@ -344,7 +372,7 @@ fn test_member(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &Add
     let image = door.image(&member_text, 1, placed)?;
     let trunk = trunk_of(&member_text).and_then(|t| parse_address(&t));
     let Some(trunk) = trunk else { return Ok(Verdict::NotFound) };
-    if !holds_runs(&image, &request.runs, &inputs.draft, &trunk) {
+    if !holds_runs(&image, &request.runs, inputs, &trunk) {
         return Ok(Verdict::NotFound);
     }
     let at = meta.at.unwrap_or(0);
@@ -374,15 +402,16 @@ fn test_member(door: &Door<'_>, inputs: &Inputs, request: &Request, member: &Add
 }
 
 /// Returns whether `image` holds `runs` over the member's placed positions:
-/// a draft-native run matches any stretch of the trunk's identity of its
+/// a draft-native run — of any named draft, the rendering draft's or an
+/// `also` draft's — matches any stretch of the trunk's identity of its
 /// width in its place, every other run by its origin and start.
-pub(crate) fn holds_runs(image: &[IRun], runs: &[Run], draft: &Address, trunk: &Address) -> bool {
+pub(crate) fn holds_runs(image: &[IRun], runs: &[Run], inputs: &Inputs, trunk: &Address) -> bool {
     let trunk_chain = format!("{trunk}.0.1");
     let (mut i, mut j, mut off_i, mut off_j) = (0usize, 0usize, 0u64, 0u64);
     while i < runs.len() && j < image.len() {
         let (e, a) = (&runs[i], &image[j]);
         let stretch = (e.width - off_i).min(a.width - off_j);
-        let native = e.origin == *draft;
+        let native = inputs.is_named_draft(&e.origin);
         let same_chain = if native { a.prefix == trunk_chain } else { a.prefix == e.chain() };
         let same_start = native || e.i_start + off_i == a.first + off_j;
         if !(same_chain && same_start) {

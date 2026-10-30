@@ -1,14 +1,16 @@
-//! THE SESSION TABLE's FENCE: a session registered under a fresh reference,
-//! beside the board it stands at; its END run once whichever caller meets
-//! the death — a second caller answering the first's reason, two callers at
-//! once one derivation, a caller that panics mid-end leaving the end to the
-//! next — and a signed session's death read off its set and its account,
-//! the retirement ahead of the genesis, its hand this store's own only where
-//! that can be said; a principal's supplement following its standing
-//! sessions, a key's diagnosis named by the list it stands in, a session's
-//! key attesting the ten kinds with an entry frame alone and a write going
-//! out under a signed session alone, and a frame no attest is owed for
-//! borrowed as it stands, never copied.
+//! The session table, a session's end and the reason its end carries.
+//!
+//! The suite checks a session registered under a fresh reference, beside the
+//! board it stands at; its end run once whichever caller meets the death — a
+//! second caller answering the first's reason, two callers at once one
+//! derivation, a caller that panics mid-end leaving the end to the next — and a
+//! signed session's death read off its set and its account, the retirement
+//! ahead of the genesis, its hand this store's own only where that can be said,
+//! and a retirement read naming the position it read whatever its hand; a
+//! principal's supplement following its standing sessions, a key's diagnosis
+//! named by the list it stands in, a session's key attesting the ten kinds with
+//! an entry frame alone and a write going out under a signed session alone, and
+//! a frame no attest is owed for borrowed as it stands, never copied.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -18,8 +20,10 @@ use std::sync::Condvar;
 use std::thread;
 use std::time::Duration;
 
+use skep_client::derive::records::{Kind, Record};
 use skep_client::dial::{DialError, Dialer, Headers, PlainHttp, Request, RequestHead, Response, StreamedResponse};
 use skep_client::Origin;
+use skep_identity::Enrollment;
 
 use super::*;
 
@@ -234,22 +238,25 @@ fn key_set_answer(as_of: u64, enrolled: &[&skep_identity::PublicKey], retired: &
     json!({"resp": "key_set", "as_of": as_of, "enrolled": enrolled, "retired": retired})
 }
 
-/// A SIGNED SESSION's DEATH IS READ OFF ITS SET AND ITS ACCOUNT (§4b.2's
-/// arms; `derive_death`): its key standing in the retired list of the set
-/// it authenticated against is the RETIREMENT, in AUTH-5.77's no-hand form
-/// where the board withholds the records that would name the hand; a
-/// session by reference whose acted-as account now holds a set of its own
-/// is the GENESIS, the `seeded` arm naming the set's first key; that account
-/// keyless still, the restart; and where both stand the retirement is read
-/// first (the mutants that drop either arm, read the enrolled list for the
-/// retired one, take the session's set for its account's, or read the
-/// genesis first — each faces the page a restart, or the wrong death).
+/// Checks that a signed session's death is read off its set and its account.
+///
+/// It is §4b.2's arms, in `derive_death`'s order: its key standing in the
+/// retired list of the set it authenticated against is the retirement, in
+/// AUTH-5.77's no-hand form where the board withholds the records that would
+/// name the hand, `own` null and the fork unsaid (AUTH-5.27); a session by
+/// reference whose acted-as account now holds a set of its own is the genesis,
+/// the `seeded` arm naming the set's first key; that account keyless still, the
+/// restart; and where both stand the retirement is read first. The mutants that
+/// drop either arm, read the enrolled list for the retired one, take the
+/// session's set for its account's, read the genesis first, or answer a death
+/// whose record was not read `own` false each face the page a restart, the
+/// wrong death, or another hand's.
 #[test]
 fn a_signed_sessions_death_is_read_off_its_set_and_its_account() {
     let key = skep_client::sign::signer_from_seed(&[7; 32]).public_key().clone();
     let session_key = Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
     let (retired, empty, seeded) = (key_set_answer(4, &[], &[session_key]), key_set_answer(4, &[], &[]), key_set_answer(9, &[&key], &[]));
-    let no_hand = json!({"arm": "retired", "fingerprint": "5a".repeat(32), "own": false, "hand": null, "position": null, "label": null});
+    let no_hand = json!({"arm": "retired", "fingerprint": "5a".repeat(32), "own": null, "hand": null, "position": null, "label": null});
     let genesis = json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": Fingerprint::of(&key).to_hex()});
     let cells = [
         ("its key retired", signed_open(1, "1.0.1", "1.0.1"), vec![("1.0.1", retired.clone())], no_hand.clone()),
@@ -266,19 +273,21 @@ fn a_signed_sessions_death_is_read_off_its_set_and_its_account() {
     }
 }
 
-/// A retirement's hand is this store's own only where that can be said.
+/// Checks that the fork on a retirement's hand is taken only where it can be.
 ///
-/// It is the fork of AUTH-5.28 and AUTH-5.77, cell by cell: the session's
-/// own key is this store's whether or not the store could be listed, or
-/// listed without that key's file (AUTH-5.28: "the token's own key as its
-/// hand"); another key is this store's where the listing holds it and not
-/// where it does not; a bare row and the board's daemon are no key's either
-/// way; and another key, or a hand the read could not name, beside a store
-/// that could not be listed is unsaid — never `false`, a store holding no
-/// keys (SP-14; the mutants that read a failed listing as an empty one,
-/// drop the session's own key, never consult the listing, or read every
-/// hand beside a failed listing as this store's own each answer a cell
-/// otherwise).
+/// It is the fork of AUTH-5.28 and AUTH-5.77, cell by cell: the session's own
+/// key is this store's whether or not the store could be listed, or listed
+/// without that key's file (AUTH-5.28: "the token's own key as its hand");
+/// another key is this store's where the listing holds it and not where it does
+/// not; a bare row and the board's daemon are no key's either way, and a `sig`
+/// no key verifies is none of this store's keys where they were tried; another
+/// key, or a `sig` no key verifies, beside a store that could not be listed is
+/// unsaid, never `false`, a store holding no keys (SP-14); and no record read,
+/// or a hand not read, is unsaid whatever the store answers (AUTH-5.27;
+/// AUTH-5.77's no-hand form). The mutants that read a failed listing as an
+/// empty one, drop the session's own key, never consult the listing, read every
+/// hand beside a failed listing as this store's own, or answer an unread hand
+/// `false` each answer a cell otherwise.
 #[test]
 fn a_retirements_hand_is_this_stores_own_only_where_that_can_be_said() {
     let session = Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
@@ -295,11 +304,78 @@ fn a_retirements_hand_is_this_stores_own_only_where_that_can_be_said() {
         ("another key, the store unlisted", Some(Hand::Key(other)), None, None),
         ("a bare row, the store unlisted", Some(Hand::Bare), None, Some(false)),
         ("the daemon's own, the store unlisted", Some(Hand::System), None, Some(false)),
-        ("no record read, the store listed", None, Some(empty), Some(false)),
+        ("a sig no key verifies, the store listed", Some(Hand::NoKeyVerifies), Some(empty), Some(false)),
+        ("a sig no key verifies, the store unlisted", Some(Hand::NoKeyVerifies), None, None),
+        ("no record read, the store listed", None, Some(empty), None),
+        ("a hand not read, the store listed", Some(unread.clone()), Some(empty), None),
         ("a hand not read, the store unlisted", Some(unread), None, None),
     ];
     for (cell, hand, own_keys, own) in cells {
         assert_eq!(hand_is_own(hand.as_ref(), &session, own_keys), own, "{cell}");
+    }
+}
+
+/// Returns a credential record of `kind`, read at `position` under `hand`.
+///
+/// It enrolls `enrolled` or retires `retired`; its link, home and atom are
+/// placeholders, and it carries no bytes and no signature, which no reason
+/// reads.
+fn record(kind: Kind, enrolled: Vec<Enrollment>, retired: Vec<Fingerprint>, position: Option<u64>, hand: Hand) -> Record {
+    Record {
+        kind,
+        link: "1.0.1.0.1.0.2.1".into(),
+        home: "1.0.1.0.1".into(),
+        home_account: "1.0.1".into(),
+        subject: "1.0.1".into(),
+        atom: "1.0.1.0.1.0.1.1".into(),
+        bytes: Vec::new(),
+        sigless: String::new(),
+        sig: None,
+        enrolled,
+        retired,
+        position,
+        base: None,
+        hand,
+        anchor_grade: false,
+    }
+}
+
+/// Checks that a retirement record read names its position whatever its hand.
+///
+/// A record read keeps the position it was read at: where its hand could not be
+/// named, a row whose testimony was lost, the reason names that position and no
+/// hand, `own` null (AUTH-5.77's no-hand form; AUTH-5.27); a key's hand is
+/// named with its label, a bare row's as `bare`, and the board's daemon and a
+/// `sig` no key verifies by no hand, each at its position and none of this
+/// store's keys; and below the floor, where no record names the key, or where
+/// no records were read, the reason names no position and leaves the fork
+/// unsaid. The mutants that drop the position of a hand not named, or answer an
+/// unread hand or a missing record `own` false, each answer a cell otherwise.
+#[test]
+fn a_retirement_read_names_its_position_whatever_its_hand() {
+    let key = skep_client::sign::signer_from_seed(&[7; 32]).public_key().clone();
+    let fp = Fingerprint::of(&key);
+    let listed: &[(Fingerprint, PublicKey)] = &[];
+    let enrollment = record(Kind::Enroll, vec![Enrollment::new(key, false, Some("notebook".into())).unwrap()], Vec::new(), Some(3), Hand::Bare);
+    let read = |records: Vec<Record>| Records { account: "1.0.1".into(), records, head: 10, floor: None, claim_entry: None, claimed: true };
+    let retired_by = |hand: Hand, position: Option<u64>| read(vec![enrollment.clone(), record(Kind::Retire, Vec::new(), vec![fp], position, hand)]);
+    let reason = |own: Option<bool>, hand: Option<&str>, position: Option<u64>, label: Option<&str>| -> Value {
+        json!({"arm": "retired", "fingerprint": fp.to_string(), "own": own, "hand": hand, "position": position, "label": label})
+    };
+    let lost = Hand::Unreadable("the row's testimony was lost (`key: null`)".into());
+    let floor = Hand::Unreadable("below the retention floor: the position does not answer, and the hand with it".into());
+    let cells = [
+        ("a lost testimony at 7", Some(retired_by(lost, Some(7))), reason(None, None, Some(7), None)),
+        ("below the floor", Some(retired_by(floor, None)), reason(None, None, None, None)),
+        ("the session's own key at 7", Some(retired_by(Hand::Key(fp), Some(7))), reason(Some(true), Some(fp.to_string().as_str()), Some(7), Some("notebook"))),
+        ("a bare row at 7", Some(retired_by(Hand::Bare, Some(7))), reason(Some(false), Some("bare"), Some(7), None)),
+        ("a sig no key verifies at 7", Some(retired_by(Hand::NoKeyVerifies, Some(7))), reason(Some(false), None, Some(7), None)),
+        ("the board's daemon at 7", Some(retired_by(Hand::System, Some(7))), reason(Some(false), None, Some(7), None)),
+        ("no retirement record names the key", Some(read(vec![enrollment.clone()])), reason(None, None, None, None)),
+        ("no records read", None, reason(None, None, None, None)),
+    ];
+    for (cell, records, expected) in cells {
+        assert_eq!(retired_reason(&fp, records.as_ref(), Some(listed)), expected, "{cell}");
     }
 }
 

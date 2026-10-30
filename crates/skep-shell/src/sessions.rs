@@ -51,12 +51,15 @@
 //! store's where the store's listing holds it. A store that cannot be listed
 //! leaves the fork on another key unsaid, `own` null — the face that asserts
 //! neither arm (AUTH-5.77) — its failure said on `Talk` with its file and
-//! never read as a store holding no keys (SP-14, SP-12). A session opened by
-//! reference whose acted-as account now holds a set of its own died at a
-//! genesis (the `seeded` arm); else the shell re-opens where it holds a key —
-//! `403 prefix_blocked` is the block's arm, a session that opens is the
-//! `restart` arm re-opened silently, and a board that does not answer is said
-//! so. The page's own `close` is its own arm.
+//! never read as a store holding no keys (SP-14, SP-12). A retirement whose
+//! record was not read, or whose hand was not — below the floor, a row whose
+//! testimony was lost — leaves the fork unsaid too, `own` null, naming the
+//! position it read, where it read one, and no hand (AUTH-5.77's no-hand form;
+//! AUTH-5.27). A session opened by reference whose acted-as account now holds a
+//! set of its own died at a genesis (the `seeded` arm); else the shell re-opens
+//! where it holds a key — `403 prefix_blocked` is the block's arm, a session
+//! that opens is the `restart` arm re-opened silently, and a board that does
+//! not answer is said so. The page's own `close` is its own arm.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -67,7 +70,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde_json::{json, Value};
 use skep_client::board::{KeySetAnswer, Opened, Scope, SessionBody, Token};
 use skep_client::ceremony::handshake::{handshake_prechecked, key_face, Site};
-use skep_client::derive::records::{credential_records, Hand};
+use skep_client::derive::records::{credential_records, Hand, Records};
 use skep_client::derive::{origin_arm, precheck, KeyDiagnosis, Mode, Walk};
 use skep_client::search::SessionRef;
 use skep_client::sheet::render_inert;
@@ -569,24 +572,7 @@ fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) ->
                 }
             };
             let records = credential_records(board, set_account, own_keys.as_deref().unwrap_or_default()).ok();
-            let retirement = records.as_ref().and_then(|r| r.retirement_of(fp));
-            let own = hand_is_own(retirement.map(|rec| &rec.hand), fp, own_keys.as_deref());
-            let (hand, position, label) = match retirement.map(|rec| (&rec.hand, rec.position)) {
-                Some((Hand::Key(hand), position)) => {
-                    let label = records.as_ref().and_then(|r| r.label_of(hand)).map(|l| render_inert(&l));
-                    (Some(hand.to_string()), position, label)
-                }
-                Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None),
-                _ => (None, None, None),
-            };
-            return not_reopened(json!({
-                "arm": "retired",
-                "fingerprint": fp.to_string(),
-                "own": own,
-                "hand": hand,
-                "position": position,
-                "label": label,
-            }));
+            return not_reopened(retired_reason(fp, records.as_ref(), own_keys.as_deref()));
         }
     }
     // The seeded arm: a session by reference whose acted-as account now
@@ -610,6 +596,36 @@ fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) ->
     }
 }
 
+/// Returns the reason of a session whose key `fp` stands retired.
+///
+/// It is the `retired` arm (`client.md` §4b.2, §9 item 30): the key, the
+/// hand the retirement record names, the position it was read at and the
+/// retiring key's label, with `own` the fork [`hand_is_own`] takes. A record
+/// read keeps its position whatever its hand: where the hand could not be
+/// named it names the position it read and no hand (AUTH-5.77's no-hand
+/// form), and where no record was read, no position.
+fn retired_reason(fp: &Fingerprint, records: Option<&Records>, own_keys: Option<&[(Fingerprint, PublicKey)]>) -> Value {
+    let retirement = records.and_then(|r| r.retirement_of(fp));
+    let own = hand_is_own(retirement.map(|rec| &rec.hand), fp, own_keys);
+    let (hand, position, label) = match retirement.map(|rec| (&rec.hand, rec.position)) {
+        Some((Hand::Key(hand), position)) => {
+            let label = records.and_then(|r| r.label_of(hand)).map(|l| render_inert(&l));
+            (Some(hand.to_string()), position, label)
+        }
+        Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None),
+        Some((Hand::System | Hand::NoKeyVerifies | Hand::Unreadable(_), position)) => (None, position, None),
+        None => (None, None, None),
+    };
+    json!({
+        "arm": "retired",
+        "fingerprint": fp.to_string(),
+        "own": own,
+        "hand": hand,
+        "position": position,
+        "label": label,
+    })
+}
+
 /// Returns whether a retirement's hand is this store's own key.
 ///
 /// It is the fork of AUTH-5.28 and AUTH-5.77 the reason's `own` carries
@@ -617,18 +633,21 @@ fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) ->
 /// session's own `key` is this store's whatever the store answers
 /// (AUTH-5.28: "the token's own key as its hand"); a bare row and the
 /// board's own daemon are no key's; another key is this store's where
-/// `own_keys` holds it. Where the store could not list its keys, `own_keys`
-/// none, whether another hand is its own cannot be said: the answer is none,
-/// the face that asserts neither arm (AUTH-5.77), never the answer a store
-/// holding no keys would give (SP-14). A hand the read could not name
-/// answers `false` beside a listed store and none beside an unlisted one.
+/// `own_keys` holds it, and a `sig` no key verifies is none of its keys where
+/// they were tried. Where the store could not list its keys, `own_keys` none,
+/// either is unsaid: the answer is none, the face that asserts neither arm
+/// (AUTH-5.77), never the answer a store holding no keys would give (SP-14).
+/// Where no record was read, or its hand was not, the fork cannot be taken
+/// whatever the store answers: none again (AUTH-5.77's no-hand form;
+/// AUTH-5.27: no death chrome without a record that shows a death).
 fn hand_is_own(hand: Option<&Hand>, key: &Fingerprint, own_keys: Option<&[(Fingerprint, PublicKey)]>) -> Option<bool> {
     match (hand, own_keys) {
+        (None | Some(Hand::Unreadable(_)), _) => None,
         (Some(Hand::Key(hand)), _) if hand == key => Some(true),
         (Some(Hand::Bare | Hand::System), _) => Some(false),
         (Some(Hand::Key(hand)), Some(keys)) => Some(keys.iter().any(|(f, _)| f == hand)),
-        (_, Some(_)) => Some(false),
-        (_, None) => None,
+        (Some(Hand::NoKeyVerifies), Some(_)) => Some(false),
+        (Some(Hand::Key(_) | Hand::NoKeyVerifies), None) => None,
     }
 }
 

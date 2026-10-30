@@ -44,7 +44,11 @@
 //! and a close loses the lines. An append the device refuses is answered
 //! beside the line, which
 //! stands in the queue all the same, its bytes cut back off the file. A
-//! re-mark that changes nothing is no line at all.
+//! re-mark that changes nothing is no line at all. A line kept at a position
+//! raises to it the `base` of every line held after it on its document
+//! ([`HeldQueue::done`]), in the queue as the `done` is written and again at
+//! a reopen from that `done` line, so no line is rewritten to carry it
+//! (§3c.2).
 //!
 //! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
 //! header member, or a middle line that is not a whole line of the two
@@ -225,8 +229,12 @@ pub struct HeldLine {
     pub id: Option<String>,
     /// The `since` of the resend's read (§3c.5).
     ///
-    /// It is the `at` of the last acked write on `doc` under this session,
-    /// or the session's open position.
+    /// It is the position of its principal's last write on `doc` that the
+    /// shell knows when the line is held — its ack's, or the landing the
+    /// resend's read found — or else the open position of the session it is
+    /// held under (§3c.2). A line held before it on `doc` and kept at a later
+    /// position raises it to that position ([`HeldQueue::done`]), so its read
+    /// never takes the person's own write for a move.
     pub base: u64,
     /// The page's wire frame as composed, with no `attest` (§3c.2).
     pub frame: Value,
@@ -360,6 +368,18 @@ fn is_done_line(m: &Map<String, Value>) -> bool {
     resolved && m.get("time").is_some_and(Value::is_u64)
 }
 
+/// Raises to `at` the `base` of each line of `behind` on `doc` (§3c.2).
+///
+/// `behind` are the lines held after a line on `doc` kept at `at` — its ack's
+/// position, or the landing the resend's read found: the person's own write,
+/// which no read of a line behind it may take for a move. A base already past
+/// `at` stands.
+fn raise_bases<'a>(behind: impl Iterator<Item = &'a mut HeldLine>, doc: &str, at: u64) {
+    for line in behind.filter(|line| line.doc == doc) {
+        line.base = line.base.max(at);
+    }
+}
+
 impl HeldDir {
     /// Returns the directory `<data_dir>/held/<chain>/`.
     ///
@@ -431,9 +451,11 @@ impl HeldDir {
     /// read as fresh: no `held` was ever answered over it, and the next
     /// line written cuts its bytes and heads it. Only the standing lines
     /// are held as the file is read, each re-mark in its line's place and
-    /// each `done` taking its line out, and the re-mark lines' bytes counted
-    /// against [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's
-    /// budget where its writer left it. The whole lines' bytes are counted
+    /// each `done` taking its line out — a `kept` one at a position raising
+    /// the lines behind it on its document, as [`HeldQueue::done`] raised
+    /// them — and the re-mark lines' bytes counted against
+    /// [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's budget
+    /// where its writer left it. The whole lines' bytes are counted
     /// too, so the next line is written where the last of them ends, a torn
     /// tail cut off first; the open itself writes nothing, a tail it meets
     /// left for that cut and answered ([`HeldQueue::torn`]) for the shell
@@ -521,7 +543,13 @@ impl HeldDir {
             } else if let Some(done) = m.get("done") {
                 let Some(k) = ordinal(done).filter(|_| is_done_line(&m)) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
-                standing.remove(&k);
+                // A `kept` line at a position raises the lines behind it on
+                // its document, as `HeldQueue::done` raised them; `k` is
+                // within MAX_ORDINAL, so its successor is a `u64`.
+                let settled = standing.remove(&k);
+                if let (Some(settled), Some(at)) = (settled, m.get("at").and_then(Value::as_u64)) {
+                    raise_bases(standing.range_mut(k + 1..).map(|(_, line)| line), &settled.doc, at);
+                }
             } else {
                 return halted(HaltWhy::Damaged);
             }
@@ -773,6 +801,14 @@ impl HeldQueue {
     /// queue whatever the disk did, and what the disk did is answered
     /// ([`Settled`]) for the caller to say.
     ///
+    /// **The base behind a kept line.** A line kept at a position raises to
+    /// it the `base` of every line held after it on its document, a base
+    /// already past it standing (§3c.2): that position is the person's own
+    /// write — its ack's, or the landing the resend's read found — and a line
+    /// behind it is never dialed while it stands (§3c.4's `behind`), so no
+    /// landing of its own lies below it. A reopen raises them again from the
+    /// `done` line ([`HeldDir::open_file`]).
+    ///
     /// **Compaction.** Once the queue holds no line, its file is removed
     /// (§3c.3) and the ordinals start again. A removal the volume refuses
     /// leaves the file standing, every line in it `done`, and the store
@@ -788,6 +824,10 @@ impl HeldQueue {
         let Some(index) = self.lines.iter().position(|l| l.k == k) else { return Err(DoneError::NoSuchLine) };
         let line = self.lines.remove(index);
         self.held_bytes = self.held_bytes.saturating_sub(json_len(&line.frame));
+        // The lines from `index` on are those held after it, in `k` order.
+        if let Done::Kept { at: Some(at) } = done {
+            raise_bases(self.lines[index..].iter_mut(), &line.doc, at);
+        }
         // A file never created holds no line to resolve.
         let unwritten = match self.disk.as_mut() {
             Some(d) if d.created => d.append(&done_line_bytes(k, done)).err(),

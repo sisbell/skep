@@ -657,10 +657,11 @@ impl Custody {
 
 /// One principal's hold at one board.
 ///
-/// It holds where its lines are kept, the queue, the `at` of its last acked
-/// write per document — the `base` a hold on that document takes (§3c.2) —
-/// and the reissues each line's resend has been given, counted across its
-/// probes.
+/// It holds where its lines are kept, the queue, the position of its last
+/// write per document whose position the shell knows — its ack's, or the
+/// landing the resend's read found: the `base` a hold on that document takes
+/// (§3c.2) — and the reissues each line's resend has been given, counted
+/// across its probes.
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
@@ -1093,12 +1094,13 @@ impl Holds {
     ///
     /// `board_hold` is that board's hold. The line is the burst as stored,
     /// its frame carrying no attest, copied to its file where it has one,
-    /// its `base` the `at` of the last acked write on the document or else
-    /// the session's open position (§3c.2); the `held` event is emitted, and
-    /// the answer is `{resp: held, held: <k>, cause}`, and `unwritable`
-    /// beside it — why — where the device refused its copy or the file is
-    /// out of reach, another process's lock on the board's directory among
-    /// the causes (§3c.3).
+    /// its `base` the position of the principal's last write on the document
+    /// that the shell knows — its ack's, or the landing the resend's read
+    /// found — or else the session's open position (§3c.2); the `held` event
+    /// is emitted, and the answer is `{resp: held, held: <k>, cause}`, and
+    /// `unwritable` beside it — why — where the device refused its copy or
+    /// the file is out of reach, another process's lock on the board's
+    /// directory among the causes (§3c.3).
     ///
     /// # Errors
     ///

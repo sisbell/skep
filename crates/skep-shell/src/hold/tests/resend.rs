@@ -17,9 +17,11 @@
 //! principal's that may write stands, and a probe with no line standing
 //! dialing nothing; one drain per board at a time, and a drain that unwinds
 //! leaving the board free to drain again; a move facing its own document
-//! alone; and the own node stopped, `writes.halted` and a third
-//! `durability` holding a burst over time, a reused ordinal's reissues
-//! counted afresh.
+//! alone; the own node stopped, `writes.halted` and a third `durability`
+//! holding a burst over time, a reused ordinal's reissues counted afresh;
+//! and every line's read starting past the person's own write — a line held
+//! behind a landing or an ack read from its position, and a line held after
+//! a landing the read found reading past it.
 
 use super::*;
 
@@ -777,4 +779,87 @@ fn a_probe_with_no_line_standing_dials_nothing() {
     assert!(g.lines().is_empty(), "and kept");
     g.holds.probe("b-1");
     assert_eq!(reads(), 1, "the queue empty again, the probe reads nothing more");
+}
+
+/// Checks that a line held behind a landing reads past it at its next resend.
+///
+/// Two lines on one document, the first `sent: true` and found landed on a
+/// lost row at 77, the second held behind it before the landing: the probe
+/// keeps the first and the board does not take the second, held again
+/// `sent: false`; the next probe reads it from 77, sends it and keeps it (the
+/// mutant that leaves a line behind a kept one at its hold-time base faces
+/// the person's own landing as a move).
+#[test]
+fn a_line_held_behind_a_landing_reads_past_it() {
+    let g = ground();
+    *g.fake.rows.lock().unwrap() = vec![lost_row()];
+    *g.fake.text.lock().unwrap() = "hello".into();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["!"])), "behind", false);
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((lines.len(), lines[0]["cause"].as_str(), lines[0]["base"].as_u64()), (1, Some("unreachable"), Some(77)), "{lines:?}");
+    g.fake.op_unreachable.store(false, Ordering::SeqCst);
+    g.fake.next_at.store(78, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let states = g.states();
+    assert_eq!(g.fake.sends(), 1, "the second line is sent once");
+    assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// Checks that a line behind an acked line reads past its ack.
+///
+/// Two lines on one document, both resent by one probe: the first acked at
+/// 60, the second's answer lost — held again, `sent: true` — the board then
+/// serving the first's row and, where the second landed, its row at 61. Over
+/// an `insert`, whose site the read confirms, and a `delete`, whose site no
+/// read confirms, the next probe reads the second from 60: resent and kept
+/// where it did not land, kept and not resent where it did, never moved (the
+/// mutant that keeps the hold-time base faces the person's own text as a
+/// move, and keeps an unlanded `delete` unsent on the first line's row).
+#[test]
+fn a_line_behind_an_acked_line_reads_past_its_ack() {
+    for (kind, landed) in [("insert", false), ("insert", true), ("delete", false), ("delete", true)] {
+        let g = ground();
+        g.fake.next_at.store(60, Ordering::SeqCst);
+        g.fake.op_lost_at.store(2, Ordering::SeqCst);
+        let frame = |value: &str| if kind == "insert" { insert(DOC, json!([value])) } else { delete(DOC) };
+        g.hold(&frame("a"), "unreachable", false);
+        g.hold(&frame("b"), "behind", false);
+        g.holds.probe("b-1");
+        let lines = g.lines();
+        assert_eq!((g.fake.sends(), lines.len(), lines[0]["sent"].as_bool(), lines[0]["base"].as_u64()), (2, 1, Some(true), Some(60)), "{kind}, landed {landed}: {lines:?}");
+        let own = |at: u64| json!({"at": at, "op": kind, "key": g.own_key(), "docs": [DOC]});
+        *g.fake.rows.lock().unwrap() = if landed { vec![own(60), own(61)] } else { vec![own(60)] };
+        *g.fake.text.lock().unwrap() = if landed { "ba" } else { "a" }.into();
+        g.holds.probe("b-1");
+        let states = g.states();
+        assert_eq!(g.fake.sends(), if landed { 2 } else { 3 }, "{kind}, landed {landed}: sent again only where it did not land");
+        assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{kind}, landed {landed}: {states:?}");
+    }
+}
+
+/// Checks that a line held after a landing the read found reads past it.
+///
+/// A line `sent: true` is found landed on a lost row at 77 and kept; a line
+/// held on the document afterwards, `sent: false`, while the board still
+/// serves that row, takes 77 as its base, and the next probe sends it and
+/// keeps it (the mutant that leaves a found landing out of the document's
+/// base faces the person's own landing as a move).
+#[test]
+fn a_line_held_after_a_landing_the_read_found_reads_past_it() {
+    let g = ground();
+    *g.fake.rows.lock().unwrap() = vec![lost_row()];
+    *g.fake.text.lock().unwrap() = "hello".into();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty(), "the landed line is kept");
+    g.hold(&insert(DOC, json!(["!"])), "unreachable", false);
+    assert_eq!(g.lines()[0]["base"], 77, "the landing is the document's base");
+    g.fake.next_at.store(78, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let states = g.states();
+    assert_eq!(g.fake.sends(), 1, "the line is sent");
+    assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
 }

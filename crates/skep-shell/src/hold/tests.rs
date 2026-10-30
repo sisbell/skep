@@ -191,9 +191,10 @@ impl<T: Clone> Armed<T> {
 /// armed in the page's place; the draft's text, of which a `retrieve_v`
 /// answers the positions it names — or no answer, the death signal, or one
 /// position more than it names, where the site is armed so; the frames
-/// POSTed to `/op` recorded, and the death signal, a scripted rejection or a
-/// non-200 answered where one is armed — to every send, or to the next few
-/// alone, the death first and the non-200 next; and the `/health` reads
+/// POSTed to `/op` recorded, the n-th one's answer lost on the way where one
+/// is armed lost, and the death signal, a scripted rejection or a non-200
+/// answered where one is armed — to every send, or to the next few alone,
+/// the death first and the non-200 next; and the `/health` reads
 /// counted, one armed to panic once, and each held at a gate while it is
 /// shut.
 struct Fake {
@@ -212,6 +213,11 @@ struct Fake {
     /// Every `/op` dial fails at the connect: the board is not answering,
     /// and no request leaves.
     op_unreachable: AtomicBool,
+    /// The ordinal, from 1, of the frame POSTed to `/op` whose answer is lost.
+    ///
+    /// The frame is recorded, then answered no answer (`DialError::Io`): a
+    /// write that may have landed. It is 0 where none is armed lost.
+    op_lost_at: AtomicUsize,
     op_rejected: Armed<Value>,
     op_refused: Armed<(u16, Value)>,
     next_at: AtomicU64,
@@ -242,6 +248,7 @@ impl Fake {
             sends: Mutex::new(Vec::new()),
             op_closed: AtomicBool::new(false),
             op_unreachable: AtomicBool::new(false),
+            op_lost_at: AtomicUsize::new(0),
             op_rejected: Armed::none(),
             op_refused: Armed::none(),
             next_at: AtomicU64::new(50),
@@ -366,7 +373,14 @@ impl Dialer for Fake {
             if self.op_unreachable.load(Ordering::SeqCst) {
                 return Err(DialError::Connect("the board is not answering".into()));
             }
-            self.sends.lock().unwrap().push(body.clone());
+            let sent = {
+                let mut sends = self.sends.lock().unwrap();
+                sends.push(body.clone());
+                sends.len()
+            };
+            if sent == self.op_lost_at.load(Ordering::SeqCst) {
+                return Err(DialError::Io("the answer was lost on the way".into()));
+            }
             if self.op_closed.load(Ordering::SeqCst) {
                 return Ok(closed());
             }

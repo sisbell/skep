@@ -1,27 +1,34 @@
-//! THE STORE's FENCE (T1–T5): the header written once and read whole with
-//! P38's faces (`v` first) — a header of every other form halting with its
-//! own, and a header the device did not take whole leaving no file — the
-//! torn last line ignored, and cut before the next line is written, and a
-//! damaged middle line halting, the misplaced file moved aside and never
-//! overwriting, the lock a second holder cannot take, compaction once every
-//! line is done and the file recreated, header first, by the next line, a
-//! reopened queue taking an ordinal past every one its file names, and
+//! Tests of the held-burst store: its file, its queue and its budgets.
+//!
+//! The file's cells (T1–T5): the header written once and read whole with
+//! P38's faces, `v` first — a header of every other form halting with its
+//! own, and a header the device did not take whole leaving no file; the
+//! torn last line ignored, and cut before the next line is written; a
+//! damaged middle line halting; the misplaced file moved aside and never
+//! overwriting; the lock a second holder cannot take; compaction once every
+//! line is done, the file recreated header first by the next line; a
+//! reopened queue taking an ordinal past every one its file names; and
 //! persist-first — the line on disk before the append returns, and a copy
 //! the device cut short or whose sync it refused cut back off the file.
 //! Every line form reads back as it was held, and the store is its owner's
-//! alone. And the queue as the memory with the file its copy: a line the
-//! device refused stands in the queue under its ordinal, a re-mark reads
-//! back as the one line it re-marks, and a `done` the device refused still
-//! settles its line, a reopen reading the line as held again. THE
-//! STORE's BUDGETS: the queue's frames held to the board's frame cap and its
-//! lines to the line budget — a reopened queue past it read whole, holding
-//! nothing more until it drains — an unchanged re-mark writing nothing and
-//! a board flapping between two causes growing the file no further than its
-//! re-mark budget, the ordinals held to the page's, the writer refusing a
-//! line its reader would halt on and copying none past the line bound, and
-//! the reader halting on any line it cannot read whole — no UTF-8, a member
-//! missing or of another type, an ordinal past the page's, a line past the
-//! bound — while ignoring a torn last line cut mid-character.
+//! alone.
+//!
+//! The queue's cells, the queue the memory and the file its copy: a line the
+//! device refused stands in the queue under its ordinal; a re-mark reads
+//! back as the one line it re-marks; a `done` the device refused still
+//! settles its line, a reopen reading the line as held again; and a line
+//! kept at a position is the base of the lines behind it on its document,
+//! in the queue and at a reopen.
+//!
+//! The budgets' cells: the queue's frames held to the board's frame cap and
+//! its lines to the line budget — a reopened queue past it read whole,
+//! holding nothing more until it drains; an unchanged re-mark writing
+//! nothing, and a board flapping between two causes growing the file no
+//! further than its re-mark budget; the ordinals held to the page's; the
+//! writer refusing a line its reader would halt on and copying none past the
+//! line bound; and the reader halting on any line it cannot read whole — no
+//! UTF-8, a member missing or of another type, an ordinal past the page's, a
+//! line past the bound — while ignoring a torn last line cut mid-character.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -570,6 +577,30 @@ fn a_reopened_queue_takes_an_ordinal_past_every_one_its_file_names() {
     assert_eq!(next.k, 4, "past every ordinal the file names");
     let read: Vec<(u64, String)> = live(d.open_file(1, "1.0.1").unwrap()).lines().iter().map(|l| (l.k, l.doc.clone())).collect();
     assert_eq!(read, [(1, "1.0.1.0.1".to_string()), (4, "1.0.1.0.4".to_string())], "both lines read back");
+}
+
+/// Checks that a line kept at a position is the base of the lines behind it.
+///
+/// A line kept at a position raises to it the `base` of every line held
+/// after it on its document — a line before it, a line on another document
+/// and a base already past the position each keep their own — and a reopen
+/// raises them again from the `done` line (the mutants that never raise,
+/// raise every document's lines or the lines before it, lower a base past
+/// the position, or forget the raise at a reopen).
+#[test]
+fn a_line_kept_at_a_position_is_the_base_of_the_lines_behind_it() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let held: Vec<u64> = [("1.0.1.0.1", 0), ("1.0.1.0.1", 0), ("1.0.1.0.1", 0), ("1.0.1.0.2", 0), ("1.0.1.0.1", 99)]
+        .into_iter()
+        .map(|(doc, base)| queue.hold(doc, None, base, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k)
+        .collect();
+    queue.done(held[1], Done::Kept { at: Some(42) }).unwrap();
+    let bases = |queue: &HeldQueue| queue.lines().iter().map(|l| (l.k, l.base)).collect::<Vec<_>>();
+    let raised = [(held[0], 0), (held[2], 42), (held[3], 0), (held[4], 99)];
+    assert_eq!(bases(&queue), raised);
+    assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), raised, "a reopen raises them from the `done` line");
 }
 
 /// EVERY LINE FORM READS BACK AS IT WAS HELD (§3c.2), the law over its

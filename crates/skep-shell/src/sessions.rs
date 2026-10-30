@@ -132,9 +132,10 @@ pub struct SessionEntry {
     pub facts: Facts,
     /// The board's log position, read before the session opened.
     ///
-    /// It is a held burst's `base` on a document no acked write of this
-    /// session names (§3c.2), so the resend's read sees every row that could
-    /// have moved it.
+    /// It is a held burst's `base` on a document where the shell knows the
+    /// position of no write of its principal's — no ack, and no landing the
+    /// resend's read found (§3c.2) — so the resend's read sees every row that
+    /// could have moved it.
     pub opened_at: u64,
     /// The reason its end carried, set once by the caller that ended it.
     ///

@@ -13,14 +13,15 @@
 //! until a session that may write stands: one read per document (`GET
 //! /changes`) before its first resend, with §3c.5's three outcomes — (i)
 //! nothing landed, send from the head; (ii) the in-flight burst landed, the
-//! head `done kept`; (iii) the site moved, no line sent and the lines faced
-//! `moved`, never rebased — and a read the board did not answer decides
-//! nothing: the next probe reads again. Every document is read first, and
-//! the lines of those its reads let go then go out in `k` order across the
-//! documents (§3c.5's order, "which keeps each document's order"), so a
-//! `copy` held between two bursts on its source transcludes the source as
-//! it stood when the person wrote it. Each line goes out through the hold's
-//! one reader of a write's answer, as a first dial does.
+//! head `done kept` and its position the document's base, as an ack's is
+//! (§3c.2); (iii) the site moved, no line sent and the lines faced `moved`,
+//! never rebased — and a read the board did not answer decides nothing: the
+//! next probe reads again. Every document is read first, and the lines of
+//! those its reads let go then go out in `k` order across the documents
+//! (§3c.5's order, "which keeps each document's order"), so a `copy` held
+//! between two bursts on its source transcludes the source as it stood when
+//! the person wrote it. Each line goes out through the hold's one reader of
+//! a write's answer, as a first dial does.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -41,6 +42,9 @@ enum ReadOutcome {
     /// No row since `base` — send from the head.
     SendFromHead,
     /// The in-flight burst landed — the head is `done kept` with this `at`.
+    ///
+    /// The position, where the read names one, becomes the document's base,
+    /// as an ack's does (§3c.2).
     Landed { at: Option<u64> },
     /// The site moved — no line sent, the lines faced `moved`, the hands
     /// whose rows the read holds named (§3c.5), each once.
@@ -165,10 +169,11 @@ impl Holds {
     /// Resumes one document by its read (resume-by-read, §3c.5).
     ///
     /// It runs the read and its outcome — a moved document faced, a landed
-    /// head kept — and answers whether the document's lines go out now: a
-    /// document the read sends from the head, or whose landed head leaves
-    /// lines behind it; never one whose head awaits the person's act, which
-    /// is read never, nor one the read left undecided.
+    /// head kept and its position made the document's base (§3c.2) — and
+    /// answers whether the document's lines go out now: a document the read
+    /// sends from the head, or whose landed head leaves lines behind it;
+    /// never one whose head awaits the person's act, which is read never,
+    /// nor one the read left undecided.
     fn resume_doc(&self, session: &SessionEntry, doc: &str) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
@@ -183,7 +188,16 @@ impl Holds {
                 false
             }
             ReadOutcome::Landed { at } => {
-                self.done(board_reference, principal, head.k, Done::Kept { at });
+                // The landing is the session's last write on the document, as
+                // an ack is (§3c.2), so a line held on it from here reads past
+                // it; a later write noted since the read stands.
+                self.with_principal(board_reference, principal, |ph| {
+                    if let Some(at) = at {
+                        let base = ph.last_acked.entry(doc.to_string()).or_insert(at);
+                        *base = (*base).max(at);
+                    }
+                    self.done_line(ph, head.k, Done::Kept { at });
+                });
                 match self.count(board_reference, principal, doc) {
                     0 => {
                         self.emit_held(session, doc, 0, HeldState::Kept, None, &[]);

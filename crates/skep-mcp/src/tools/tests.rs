@@ -17,11 +17,14 @@ fn embedded_catalog_matches_dispatch() {
     assert_eq!(Some(&catalog.tools), file["tools"].as_array(), "entries kept verbatim");
 }
 
-/// Direction one: a file entry the dispatch doesn't know refuses to load,
-/// naming the tool — a ceremony's name among them, which no kind answers.
+/// Direction one: a file entry the dispatch doesn't know refuses to load.
+///
+/// The refusal names the tool — a ceremony's name among them, which no kind
+/// answers, and `publish`, which the shell runs as its `publication` family,
+/// whose rows' dotted names are no tool's either.
 #[test]
 fn unknown_tool_refuses() {
-    for stranger in ["frobnicate", "keygen", "claim", "retire", "upload", "restore", "op", "session", "close"] {
+    for stranger in ["frobnicate", "keygen", "claim", "retire", "upload", "restore", "op", "session", "close", "publish", "publication.open"] {
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         v["tools"].as_array_mut().expect("tools").push(json!({
             "name": stranger,
@@ -37,7 +40,7 @@ fn unknown_tool_refuses() {
 /// naming it — a wire op, a shell call and an apparatus tool alike.
 #[test]
 fn missing_tool_refuses() {
-    for missing in ["insert", "publish", "search", "changes_since", "fetch", "session_info"] {
+    for missing in ["insert", "publication_confirm", "search", "changes_since", "fetch", "session_info"] {
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != missing);
         let err = Catalog::load(&v.to_string()).expect_err("must refuse");
@@ -156,28 +159,36 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
     assert_eq!(frame("insert", json!({"from_": "1.1", "op": "delete"})), json!({"op": "insert", "from_": "1.1"}));
 }
 
-/// The dispatch's two kinds: forty-nine wire ops — every op of wire.md
-/// §Operations, the seven the first catalog lacked among them, the count
-/// by home and the retracted-links read — and ten
-/// adapter tools, no name twice across the two, each wire op a `Tool::Op`
-/// of its own name with no members list, each adapter tool its row's
-/// members, and a ceremony, `upload`, `restore` or `op` no tool at all.
+/// The dispatch has two kinds of tool, and is counted.
+///
+/// Forty-eight wire ops — every op of wire.md §Operations but `publish`, the
+/// six the first catalog lacked among them, the count by home and the
+/// retracted-links read — and fourteen adapter tools, the `publication`
+/// family's four among them; no name twice across the two, each wire op a
+/// `Tool::Op` of its own name with no members list, each adapter tool its
+/// row's members; and a ceremony, `upload`, `restore`, `op`, `publish` or a
+/// row's dotted name no tool at all.
 #[test]
 fn the_dispatch_has_two_kinds_and_is_counted() {
     let names: Vec<&str> = Tool::names().collect();
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
-    assert_eq!(DISPATCH_OPS.len(), 49);
-    assert_eq!(names.len(), 59);
-    for added in ["publish", "effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history"] {
+    assert_eq!(DISPATCH_OPS.len(), 48);
+    assert_eq!(names.len(), 62);
+    for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history"] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }
     assert_eq!(Tool::named("insert").and_then(Tool::members), None, "a wire op's arguments pass through unread");
     assert_eq!(Tool::named("search").and_then(Tool::members), Some(&["query", "opts"][..]));
     assert_eq!(Tool::named("session_info").and_then(Tool::members), Some(&[][..]));
     assert_eq!(Tool::named("fetch"), Some(Tool::Fetch));
+    assert_eq!(Tool::named("publication_open").and_then(Tool::members), Some(&["draft", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"][..]));
+    assert_eq!(Tool::named("publication_cancel").and_then(Tool::members), Some(&[][..]));
     for not_a_tool in ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "frobnicate"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool");
+    }
+    for not_a_tool in ["publish", "publication.open"] {
+        assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool: the shell runs a publication as its call family");
     }
 }
 
@@ -383,9 +394,16 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
         let row = match tool {
             Tool::SessionInfo => continue,
             Tool::ChangesSince => "changes",
+            Tool::PublicationOpen => "publication.open",
+            Tool::PublicationCount => "publication.count",
+            Tool::PublicationConfirm => "publication.confirm",
+            Tool::PublicationCancel => "publication.cancel",
             _ => *name,
         };
-        let head = format!("  {row}(args: {{");
+        // The declarations quote a dotted row's name, a method of the
+        // `Bridge` interface.
+        let method = if row.contains('.') { format!("'{row}'") } else { row.to_string() };
+        let head = format!("  {method}(args: {{");
         let form = declarations
             .lines()
             .find_map(|line| line.strip_prefix(head.as_str()))
@@ -406,5 +424,99 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
         let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
         let schema_required: BTreeSet<&str> = entry["inputSchema"]["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
         assert_eq!(schema_required, required, "{name}: the schema requires what the {row} row requires");
+    }
+}
+
+/// The publication cards state the shell's declared shapes.
+///
+/// Each `publication` tool's card spells every arm of the answer the shell
+/// declares for its row (`shapes::declarations`) — a shape as `{a, b, c?}`, a
+/// field typed by one string literal with its value and an open shape ending
+/// `, …`, the empty answer as `{}` — and the open and count cards the shapes
+/// of the panel's members; the selection's runs, the switches, a destination
+/// and an answer are schema'd as the shell's `Run`, `Switches`, `Destination`
+/// and `OriginAnswer` spell them (SP-24). A shape the shell changes in one
+/// place alone would tell every agent of an answer the shell no longer gives,
+/// or ask an argument it no longer takes.
+#[test]
+fn the_publication_cards_state_the_shells_shapes() {
+    /// Returns a shape's fields as a card spells them.
+    fn spelled(name: &str) -> String {
+        let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+        let mut fields: Vec<String> = shape
+            .fields
+            .iter()
+            .map(|field| match field.ty.strip_prefix('\'').and_then(|ty| ty.strip_suffix('\'')).filter(|ty| !ty.contains('\'')) {
+                Some(value) => format!("{}: \"{value}\"", field.name),
+                None if field.required => field.name.to_string(),
+                None => format!("{}?", field.name),
+            })
+            .collect();
+        if shape.open {
+            fields.push("…".to_string());
+        }
+        format!("{{{}}}", fields.join(", "))
+    }
+    /// Returns an inline object type's member names, `b?` for an optional `b`.
+    fn members(object: &str) -> Vec<&str> {
+        object.trim_matches(|c| c == '{' || c == '}').split(';').filter_map(|member| member.split(':').next()).map(str::trim).filter(|member| !member.is_empty()).collect()
+    }
+    /// Returns a shape's field names, and those of them it requires.
+    fn fields(name: &str) -> (BTreeSet<&'static str>, BTreeSet<&'static str>) {
+        let shape = skep_shell::shapes::shape(name).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+        (shape.fields.iter().map(|field| field.name).collect(), shape.fields.iter().filter(|field| field.required).map(|field| field.name).collect())
+    }
+    /// Returns a schema's property names, and those of them it requires.
+    fn schema_fields(schema: &Value) -> (BTreeSet<&str>, BTreeSet<&str>) {
+        let named = schema["properties"].as_object().expect("a schema's properties").keys().map(String::as_str).collect();
+        let required = schema["required"].as_array().map(|required| required.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        (named, required)
+    }
+    let declarations = skep_shell::shapes::declarations();
+    let alias = |name: &str| -> Vec<String> {
+        let head = format!("export type {name} = ");
+        let line = declarations.lines().find_map(|line| line.strip_prefix(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares {name}"));
+        line.trim_end_matches(';').split('|').map(|arm| arm.trim().to_string()).collect()
+    };
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
+    for (name, row, nested) in [
+        ("publication_open", "publication.open", &["PublicationRow", "Formatting", "Count", "Price", "Window", "Hold"][..]),
+        ("publication_count", "publication.count", &["Count"][..]),
+        ("publication_confirm", "publication.confirm", &[][..]),
+        ("publication_cancel", "publication.cancel", &[][..]),
+    ] {
+        let head = format!("  '{row}'(args: ");
+        let line = declarations.lines().find(|line| line.starts_with(head.as_str())).unwrap_or_else(|| panic!("skep-shell declares the row {row}"));
+        let answer = line.split_once("Promise<Outcome<").and_then(|(_, rest)| rest.strip_suffix(">>;")).unwrap_or_else(|| panic!("the {row} row's answer: {line}"));
+        let card = entry(name)["description"].as_str().expect("a card's description");
+        for arm in answer.split(" | ").map(str::trim) {
+            let said = match arm {
+                "Empty" => "{}".to_string(),
+                inline if inline.starts_with('{') => format!("{{{}}}", members(inline).join(", ")),
+                shape => spelled(shape),
+            };
+            assert!(card.contains(&said), "the {name} card spells the {row} row's answer {said}: {card}");
+        }
+        for shape in nested {
+            let said = spelled(shape);
+            assert!(card.contains(&said), "the {name} card spells {shape} as {said}: {card}");
+        }
+    }
+    let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
+    assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
+    let answers: BTreeSet<String> = alias("OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();
+    let destination = alias("Destination");
+    let literals: BTreeSet<&str> = destination.iter().filter_map(|arm| arm.strip_prefix('\'').and_then(|arm| arm.strip_suffix('\''))).collect();
+    let objects: BTreeSet<&str> = destination.iter().filter(|arm| arm.starts_with('{')).flat_map(|arm| members(arm)).collect();
+    for name in ["publication_count", "publication_confirm"] {
+        let properties = &entry(name)["inputSchema"]["properties"];
+        assert_eq!(schema_fields(&properties["switches"]), fields("Switches"), "{name}: the switches are the shell's Switches");
+        let arms = properties["switches"]["properties"]["destinations"]["additionalProperties"]["oneOf"].as_array().expect("a destination's arms");
+        let spelled_literals: BTreeSet<&str> = arms.iter().filter_map(|arm| arm["enum"].as_array()).flatten().filter_map(Value::as_str).collect();
+        let spelled_objects: BTreeSet<&str> = arms.iter().filter_map(|arm| arm["properties"].as_object()).flat_map(|object| object.keys().map(String::as_str)).collect();
+        assert_eq!((&spelled_literals, &spelled_objects), (&literals, &objects), "{name}: a destination is the shell's Destination");
+        let enumerated: BTreeSet<String> = properties["answers"]["additionalProperties"]["enum"].as_array().expect("the answers' enum").iter().filter_map(Value::as_str).map(str::to_string).collect();
+        assert_eq!(enumerated, answers, "{name}: an answer is the shell's OriginAnswer");
     }
 }

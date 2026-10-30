@@ -1,5 +1,5 @@
 {
-  "instructions": "skep is a substrate of documents, immutable content, and first-class links, served by the skepd daemon. You reach one board through this adapter, which runs the shell's core within it (skep-shell, the engine a person's desktop shell runs on; \"the shell\" below), under ONE SIGNED SESSION it opened at startup for your principal, with your principal's key: every write you make goes out under that session and is attributed to your account forever. A publish-class write — a published document minted, a member published, a write into a published document — carries that key's own signature (its /changes entry's attest); every other carries the board's testimony that your session made it (the entry's key, that key's fingerprint). Tools come in two kinds. A WIRE OPERATION tool (create_new_document, insert, make_link, publish, retrieve_v, image, ...) is one operation of the wire: its name is the frame's op, its arguments are the frame, and its result text is the board's answer to the frame as JSON — the response document, tagged by resp — save a burst the shell holds, whose text is its held answer (HELD BURSTS), and a frame refused, by the board or by the shell before it sends it, whose text is the refusal (REJECTIONS ARE DATA). The other tools are the shell's own calls — search, places, held, resolve, boards, health, probe — and this adapter's apparatus: session_info, changes_since (the shell's changes, as a pull) and fetch (the shell's fetch, as a content block).\n\nWHO YOU ARE. Call session_info first. It reports your principal, your account, the key you sign with (its fingerprint and label), the board, writes (whether this session may write), and the board's health with its mode and log_position. You cannot run key or claim ceremonies here — there is no keygen, enroll, rotate, retire, claim, handoff, accept or recover: those are your person's, at their own client. Your person stops you by retiring your key, and this adapter then stops.\n\nFIND BEFORE YOU WRITE. search(query) finds passages by their words at your reader class (what your session may read); places() lists every document you may read, each with its first line; find_links_v and find_links_ftt find the links on a region or by their slots. Read state on every search and places answer: while state.arm is none or building (or busy), the index is not yet built from the board, so a miss is not absence — ask again later, or read the documents directly. Link or transclude, never retype: cite another's passage with make_link, or transclude it with copy, which shares its identity. Publish, never rewrite: a published document is never edited in place; stage the change in a draft and publish it as the next member of its chain.\n\nYOUR DOCUMENTS. Your account's first document is your PUBLISHED HOME, doc 1, born published: an insert into it is refused published_target — and held, as every burst the board rejects is, until you resolve it (HELD BURSTS). Mint a second document with create_new_document(account) for your text; it is a DRAFT: yours to write, read by you and by whoever the board's read predicate admits — among them the accounts above yours and beneath it, and a grant's holders — and a draft for life, since no document's publication ever changes. TO PUBLISH a draft's text: image(d: draft, region) answers the draft's runs ({i_start, width}); publish(doc, draft, runs: [{origin: draft, i_start, width}]) then appends the next member of doc's chain, born published, and the draft stays a draft, yours to stage the next change in. Give base and base_extent both (the member the draft was staged from, and the number of content positions the staged copy took) or neither (the birth version). For a first publication, mint the published document with create_new_document(account, published: true), then publish the draft into it. search and places call a published document an EDITION: they answer its kind as edition, a draft's as draft.\n\nENCODINGS. Tumblers and addresses are dotted-decimal strings (\"1.0.1.0.1.0.1.1\"), zeros explicit. Spell each component without a leading zero: the shell refuses any other spelling of a burst's doc, fetch's i and places' under. Unbounded naturals (widths, V-position components) are decimal strings (\"5\"); non-negative integers are accepted. Log positions (at/as_of), slots, window sizes, and principal ids are plain JSON numbers. Spans are {\"start\": <tumbler>, \"width\": <tumbler>}, half-open in the tumbler order; zero-width is invalid; the depth-2 content V-span {\"start\": \"1.1\", \"width\": \"0.5\"} names subspace 1 (content), ordinal 1, five positions. V-positions are {\"subspace\", \"ordinal\"} naturals; subspace 1 = content, 2 = links; ordinals 1-based. Content granularity is said, never fallen into: in insert's values array, a bare string mints one single-byte value per UTF-8 byte (\"hello\" is five values at five positions) and {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at ONE position whose interior is permanently unaddressable — no link, transclusion, or compare can ever reach inside it. Deliveries are injective: a maximal run of single-byte values renders as one {\"content\"} item ({\"hex\"} when the run is not UTF-8), each composite value as its own {\"atom\"}/{\"atom_hex\"} item, and a link position as {\"ref\"}. Count positions, not items: {\"content\": \"hello\"} spans five positions, {\"atom\": \"hello\"} one.\n\nREJECTIONS ARE DATA. An operation the board refuses — save a burst the shell holds instead (HELD BURSTS) — is a normal tool result (isError false) whose text is {\"kind\": \"refused\", \"name\", \"status\", \"code\", \"detail\", \"op\", \"body\"}: body is the board's verdict verbatim — {\"resp\": \"rejected\", \"op\", \"code\", \"disposition\", ...} for an operation, or a route's non-200 {\"error\", ...} body — and name is the one token to act on. Where the shell reads the board to compose the attest of a write it signs — create_new_document, fork, version, insert, publish, make_link, emit, nullify, assert_sup or edit_link, into a draft as into a published document — the board's refusal of that read is the answer, as data, its op the read's (image, retrieve_doc_v_span_set or retrieve_v), and the write was not sent. disposition is advisory: permanent (reissuing the same request cannot succeed), reorder (a future committed state may satisfy the precondition; reissue after it commits), retry (transient; the operation did nothing), halt (writes stopped; reads still work). Two answers that are data may still have committed: a write refused poisoned may land when the board restarts, its frames standing in the journal the restart replays, and a write answered internal_panic (a 500) may have committed before the daemon's handler failed. After either, read what it wrote (or changes_since, once the board answers) before you send it again. isError true means the shell could not get the board's verdict, and its text is a refusal of another kind: unreachable (the board is not answering), halt (a face with state, cause and act — attest_not_composed where the shell could not compose the attest of a write it signs: nothing was sent, and where its state names one of your arguments, fix that one), blocked, or shell (the shell's own, by name: malformed_args naming an argument of the wrong form, frame_too_large, session_ended, session_died, query_too_long, ...) — save fetch's two answers of this adapter's own, whose text is a plain sentence (FETCH below). The shell refuses some wire-operation frames itself, before it sends them, nothing sent: its malformed_args names a wire operation's argument as frame.<argument> — a burst's doc must be a document address — and frame_too_large is a burst whose frame would pass the board's cap. A call answered session_died met the end of the session this adapter holds, its reason beside it, and ran nothing: unless that end stops the adapter — your key retired, your prefix blocked — call again, and the next call opens a session afresh; a halt named busy is a sign-in the board did not accept this time, and its act is try again. The shell reissues within a call exactly what the wire says to reissue — write_busy once, durability twice — and never more. A write refused unreachable may still have committed: its frame may have reached the board before its answer was lost, and nothing here reissues it — read what it wrote (or changes_since) before you send it again. Any other write that answers isError did not commit; a burst the board cannot take, or rejects, answers held instead, as data (next paragraph). Every write acknowledgment carries at (the commit that made it true); every read carries as_of (its snapshot).\n\nHELD BURSTS. A burst — an insert, delete, copy, reinstate or rearrange — answers {\"resp\": \"held\", \"held\": <ordinal>, \"cause\"} as data, in place of its ack or the board's verdict, wherever the shell holds it: the board unreachable, its writes halted or poisoned, a third durability; a line of yours already held at the board (cause behind: no burst of yours is sent past a held line); or the board's rejection of it, permanent or reorder (an ordinal past the document's end, a published target) — a refused run, its cause the rejection's token, held() listing the board's verdict beside it as refusal. The shell resends held lines in order once the board answers and takes writes, but never a refused line, nor one whose document moved, nor the lines behind either on its document: those wait until you resolve(held, act) the line — \"drop\" discards it and the lines behind it on its document, none of which then lands; \"send\" hands them back to be sent again. A burst answered held answers no ack: call held() until its line is gone, then read what it wrote. A held line with sent true may already have landed, its answer lost: check before writing it again.\n\nWHAT CHANGED. changes_since(since, limit?) answers what changed on the board since the position since, at your reader class: {\"entries\", \"next\", \"head\"}. Keep next and pass it as the next since; start from session_info's health.log_position, or from 0 for everything. An entry names its docs, op, position and time, and its hand: attest, the entry's own signature, where it is signed — else key, the board's testimony of the session that committed it (that session's key fingerprint, \"bare\" for a bare session, \"system\" for the board's own writes); a draft you may not read never appears.\n\nFETCH. fetch(i) answers the bytes of the picture whose cell sits at the I-address i: an image block (PNG, JPEG, GIF or WebP) where the bytes' magic names one — the type is sniffed off the bytes, never attested — else an embedded resource blob of application/octet-stream; a file past this adapter's cap of 8 MiB is refused naming the cap, and a stream cut short is said so — each isError, its text a plain sentence. Uploading is not offered here yet.\n\nOne naming note: in make_link and emit, the schema argument from_ is the wire's from.",
+  "instructions": "skep is a substrate of documents, immutable content, and first-class links, served by the skepd daemon. You reach one board through this adapter, which runs the shell's core within it (skep-shell, the engine a person's desktop shell runs on; \"the shell\" below), under ONE SIGNED SESSION it opened at startup for your principal, with your principal's key: every write you make goes out under that session and is attributed to your account forever. A publish-class write — a published document minted, a member published, a write into a published document — carries that key's own signature (its /changes entry's attest); every other carries the board's testimony that your session made it (the entry's key, that key's fingerprint). Tools come in two kinds. A WIRE OPERATION tool (create_new_document, insert, make_link, retrieve_v, image, ...) is one operation of the wire: its name is the frame's op, its arguments are the frame, and its result text is the board's answer to the frame as JSON — the response document, tagged by resp — save a burst the shell holds, whose text is its held answer (HELD BURSTS), and a frame refused, by the board or by the shell before it sends it, whose text is the refusal (REJECTIONS ARE DATA). The other tools are the shell's own calls — search, places, held, resolve, boards, health, probe, and the four of a publication, publication_open, publication_count, publication_confirm and publication_cancel, which stand in for the wire's publish (PUBLISHING) — and this adapter's apparatus: session_info, changes_since (the shell's changes, as a pull) and fetch (the shell's fetch, as a content block).\n\nWHO YOU ARE. Call session_info first. It reports your principal, your account, the key you sign with (its fingerprint and label), the board, writes (whether this session may write), and the board's health with its mode and log_position. You cannot run key or claim ceremonies here — there is no keygen, enroll, rotate, retire, claim, handoff, accept or recover: those are your person's, at their own client. Your person stops you by retiring your key, and this adapter then stops.\n\nFIND BEFORE YOU WRITE. search(query) finds passages by their words at your reader class (what your session may read); places() lists every document you may read, each with its first line; find_links_v and find_links_ftt find the links on a region or by their slots. Read state on every search and places answer: while state.arm is none or building (or busy), the index is not yet built from the board, so a miss is not absence — ask again later, or read the documents directly. Link or transclude, never retype: cite another's passage with make_link, or transclude it with copy, which shares its identity. Publish, never rewrite: a published document is never edited in place; stage the change in a draft and publish it as the next member of its chain (PUBLISHING).\n\nYOUR DOCUMENTS. Your account's first document is your PUBLISHED HOME, doc 1, born published: an insert into it is refused published_target — and held, as every burst the board rejects is, until you resolve it (HELD BURSTS). Mint a second document with create_new_document(account) for your text; it is a DRAFT: yours to write, read by you and by whoever the board's read predicate admits — among them the accounts above yours and beneath it, and a grant's holders — and a draft for life, since no document's publication ever changes. To publish a draft's text is to append it to a published document's chain as its next member, born published, or to mint a published document in the same write with the member its first — and the draft stays a draft, yours to stage the next change in (PUBLISHING). search and places call a published document an EDITION: they answer its kind as edition, a draft's as draft.\n\nPUBLISHING. A publication is ONE signed write the shell composes for you from a draft, and no tool sends a publish of yours: stage the text in a draft, then publication_open(draft, doc) — doc the published document whose chain the member joins — or publication_open(draft, mint) — mint the account a new published document is minted under, the member its first. The open holds the PANEL and answers it: rows, the links on the selected words by set, a private set's links left out until switches.on names its row; the count and the price; and windows, runs whose words another unpublished draft of yours holds, each needing an answer. publication_count(switches, answers) answers the count and the price as they would stand. publication_confirm(switches, answers), sent the switches and answers you settled on, reads the draft again and answers one outcome, as data: acknowledged, with the member's address, the panel gone; restated, the draft moved since the panel and nothing sent — read the panel again (publication_open on the same draft) and confirm again; or refused, nothing published, with its arm. publication_cancel drops the panel. One panel stands at a time, and it lives with the session it was opened under: once that session ends — a board restart among the causes, this adapter's next session opened silently — count and confirm answer no_panel, and you open it again. A confirm answered no_panel or session_died after its session ended, or unreachable, may still have published: open and confirm again — where it landed, the draft's words are the member's own, and the new confirm answers refused, arm inert, its inert unchanged.\n\nENCODINGS. Tumblers and addresses are dotted-decimal strings (\"1.0.1.0.1.0.1.1\"), zeros explicit. Spell each component without a leading zero: the shell refuses any other spelling of a burst's doc, fetch's i and places' under. Unbounded naturals (widths, V-position components) are decimal strings (\"5\"); non-negative integers are accepted. Log positions (at/as_of), slots, window sizes, and principal ids are plain JSON numbers. Spans are {\"start\": <tumbler>, \"width\": <tumbler>}, half-open in the tumbler order; zero-width is invalid; the depth-2 content V-span {\"start\": \"1.1\", \"width\": \"0.5\"} names subspace 1 (content), ordinal 1, five positions. V-positions are {\"subspace\", \"ordinal\"} naturals; subspace 1 = content, 2 = links; ordinals 1-based. Content granularity is said, never fallen into: in insert's values array, a bare string mints one single-byte value per UTF-8 byte (\"hello\" is five values at five positions) and {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at ONE position whose interior is permanently unaddressable — no link, transclusion, or compare can ever reach inside it. Deliveries are injective: a maximal run of single-byte values renders as one {\"content\"} item ({\"hex\"} when the run is not UTF-8), each composite value as its own {\"atom\"}/{\"atom_hex\"} item, and a link position as {\"ref\"}. Count positions, not items: {\"content\": \"hello\"} spans five positions, {\"atom\": \"hello\"} one.\n\nREJECTIONS ARE DATA. An operation the board refuses — save a burst the shell holds instead (HELD BURSTS) — is a normal tool result (isError false) whose text is {\"kind\": \"refused\", \"name\", \"status\", \"code\", \"detail\", \"op\", \"body\"}: body is the board's verdict verbatim — {\"resp\": \"rejected\", \"op\", \"code\", \"disposition\", ...} for an operation, or a route's non-200 {\"error\", ...} body — and name is the one token to act on. Where the shell reads the board to compose the attest of a write it signs — create_new_document, fork, version, insert, make_link, emit, nullify, assert_sup or edit_link, into a draft as into a published document — the board's refusal of that read is the answer, as data, its op the read's (image, retrieve_doc_v_span_set or retrieve_v), and the write was not sent. A publication the board refuses, or the shell refuses before it sends it, is publication_confirm's own outcome, refused, as data (PUBLISHING). disposition is advisory: permanent (reissuing the same request cannot succeed), reorder (a future committed state may satisfy the precondition; reissue after it commits), retry (transient; the operation did nothing), halt (writes stopped; reads still work). Two answers that are data may still have committed: a write refused poisoned may land when the board restarts, its frames standing in the journal the restart replays, and a write answered internal_panic (a 500) may have committed before the daemon's handler failed. After either, read what it wrote (or changes_since, once the board answers) before you send it again. isError true means the shell could not get the board's verdict, and its text is a refusal of another kind: unreachable (the board is not answering), halt (a face with state, cause and act — attest_not_composed where the shell could not compose the attest of a write it signs: nothing was sent, and where its state names one of your arguments, fix that one), blocked, or shell (the shell's own, by name: malformed_args naming an argument of the wrong form, frame_too_large, session_ended, session_died, query_too_long, no_panel, ...) — save fetch's two answers of this adapter's own, whose text is a plain sentence (FETCH below). The shell refuses some wire-operation frames itself, before it sends them, nothing sent: its malformed_args names a wire operation's argument as frame.<argument> — a burst's doc must be a document address — and frame_too_large is a burst whose frame would pass the board's cap. A call answered session_died met the end of the session this adapter holds, its reason beside it, and ran nothing — save a publication_confirm, which may have sent its request first (PUBLISHING): unless that end stops the adapter — your key retired, your prefix blocked — call again, and the next call opens a session afresh; a halt named busy is a sign-in the board did not accept this time, and its act is try again. The shell reissues within a call exactly what the wire says to reissue — write_busy once, durability twice — and never more. A write refused unreachable may still have committed: its frame may have reached the board before its answer was lost, and nothing here reissues it — read what it wrote (or changes_since) before you send it again. Any other write that answers isError did not commit, a publication_confirm's aside (PUBLISHING); a burst the board cannot take, or rejects, answers held instead, as data (next paragraph). Every write acknowledgment carries at (the commit that made it true); every read carries as_of (its snapshot).\n\nHELD BURSTS. A burst — an insert, delete, copy, reinstate or rearrange — answers {\"resp\": \"held\", \"held\": <ordinal>, \"cause\"} as data, in place of its ack or the board's verdict, wherever the shell holds it: the board unreachable, its writes halted or poisoned, a third durability; a line of yours already held at the board (cause behind: no burst of yours is sent past a held line); or the board's rejection of it, permanent or reorder (an ordinal past the document's end, a published target) — a refused run, its cause the rejection's token, held() listing the board's verdict beside it as refusal. The shell resends held lines in order once the board answers and takes writes, but never a refused line, nor one whose document moved, nor the lines behind either on its document: those wait until you resolve(held, act) the line — \"drop\" discards it and the lines behind it on its document, none of which then lands; \"send\" hands them back to be sent again. A burst answered held answers no ack: call held() until its line is gone, then read what it wrote. A held line with sent true may already have landed, its answer lost: check before writing it again.\n\nWHAT CHANGED. changes_since(since, limit?) answers what changed on the board since the position since, at your reader class: {\"entries\", \"next\", \"head\"}. Keep next and pass it as the next since; start from session_info's health.log_position, or from 0 for everything. An entry names its docs, op, position and time, and its hand: attest, the entry's own signature, where it is signed — else key, the board's testimony of the session that committed it (that session's key fingerprint, \"bare\" for a bare session, \"system\" for the board's own writes); a draft you may not read never appears.\n\nFETCH. fetch(i) answers the bytes of the picture whose cell sits at the I-address i: an image block (PNG, JPEG, GIF or WebP) where the bytes' magic names one — the type is sniffed off the bytes, never attested — else an embedded resource blob of application/octet-stream; a file past this adapter's cap of 8 MiB is refused naming the cap, and a stream cut short is said so — each isError, its text a plain sentence. Uploading is not offered here yet.\n\nOne naming note: in make_link and emit, the schema argument from_ is the wire's from.",
   "commons_instructions": "The commons is at {addr}: link-type names are addresses in its subspace 3, each documented by a link of type {addr}.0.3.50 (\"defines\").",
   "tools": [
     {
@@ -336,7 +336,7 @@
     },
     {
       "name": "reinstate",
-      "description": "Place runs of permanent content I-addresses into doc at at, by identity — shared identity, not copied bytes: the bytes a delete un-arranged come back at their own addresses, and every link on them returns. Each run is origin, i_start, width (the form publish's runs take); every address must hold a value, and each origin must be a document you may read. A published doc refuses it published_target, which holds it (HELD BURSTS). Response: ack — or held.",
+      "description": "Place runs of permanent content I-addresses into doc at at, by identity — shared identity, not copied bytes: the bytes a delete un-arranged come back at their own addresses, and every link on them returns. Each run is origin, i_start, width, as image answers a run of a document's words — i_start its first content I-address; every address must hold a value, and each origin must be a document you may read. A published doc refuses it published_target, which holds it (HELD BURSTS). Response: ack — or held.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -441,121 +441,6 @@
           }
         },
         "required": ["d_src"],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "publish",
-      "description": "THE SHOT: append the next member of doc's version chain, born published, in one commit, its arrangement the runs you compose. Stage the change in a draft of yours; image(d: draft, region) answers the draft's runs; each run here is {origin, i_start, width} as image answers it — origin the draft, whose runs are re-inserted as fresh identity under doc's own I-space, or another document whose content the member keeps by reference. base and base_extent go together or not at all: base is the member the draft was staged from (doc itself while the chain is empty), base_extent the number of content positions the staged copy took; neither is the birth version. Owner-gated, every run's origin readable to you; the shell signs the shot with your key. Response: ack_addr with the member's address. A replayed shot names a base its own commit left behind and mints that base's daughter, never the trunk's next.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "doc": {
-            "type": "string",
-            "pattern": "^[0-9]+(\\.[0-9]+)*$",
-            "description": "The published document (the trunk) the member is appended to; you own it."
-          },
-          "draft": {
-            "type": "string",
-            "pattern": "^[0-9]+(\\.[0-9]+)*$",
-            "description": "The staging draft whose runs are re-inserted as fresh identity under doc's own I-space."
-          },
-          "runs": {
-            "type": "array",
-            "description": "The member's arrangement in V-order: each run origin, i_start, width — what image(d, region) answers for the draft, origin the draft.",
-            "items": {
-              "type": "object",
-              "description": "One run of permanent content I-addresses.",
-              "properties": {
-                "origin": {
-                  "type": "string",
-                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                  "description": "The document the run's addresses were minted under: the draft, or a document kept by reference."
-                },
-                "i_start": {
-                  "type": "string",
-                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                  "description": "The run's first content I-address, a full element position (doc.0.1.ordinal)."
-                },
-                "width": {
-                  "type": ["string", "integer"],
-                  "description": "Number of positions, an unbounded natural: decimal string canonically (\"5\"); a non-negative integer is accepted."
-                }
-              },
-              "required": ["origin", "i_start", "width"],
-              "additionalProperties": false
-            }
-          },
-          "places": {
-            "type": "array",
-            "description": "The kept places, parallel to runs by index: for a run of the draft, the V-position it held in the draft when you composed the request — where image(draft, region) answered that run — or null; a shorter list is padded with null; absent or all null leaves the draft as it stands. A place may also stand beside a STRAY run: a run of doc's own identity you re-composed by reference to a correspondence record of the draft (the record's published words), where the draft still arranges that record's draft words — the place is theirs. A place beside a window onto any other document is malformed. Outside the signed frame. The commit checks the draft still arranges the run's draft words there and replaces them there by the published identity the member holds; where the draft changed since, the whole publish is refused kept_place_moved with site.index the runs entry, nothing written — read the draft again and compose the places afresh; a stray run no record of the draft names whole is refused stray_place_unrecorded, the same site — read the draft's records again.",
-            "items": {
-              "type": ["object", "null"],
-              "description": "A content V-position, or null for a run with no place.",
-              "properties": {
-                "subspace": {
-                  "type": ["string", "integer"],
-                  "description": "Subspace natural, 1 = content; decimal string canonically."
-                },
-                "ordinal": {
-                  "type": ["string", "integer"],
-                  "description": "1-based ordinal natural, decimal string canonically."
-                }
-              },
-              "required": ["subspace", "ordinal"],
-              "additionalProperties": false
-            }
-          },
-          "base": {
-            "type": "string",
-            "pattern": "^[0-9]+(\\.[0-9]+)*$",
-            "description": "The member the draft was staged from — doc itself while the chain is empty. With base_extent, or neither."
-          },
-          "base_extent": {
-            "type": ["string", "integer"],
-            "description": "The number of content positions the staged copy took, an unbounded natural (decimal string canonically). With base, or neither."
-          },
-          "account": {
-            "type": "string",
-            "pattern": "^[0-9]+(\\.[0-9]+)*$",
-            "description": "THE MINT FORM: the parent account (yours) the commit mints a new published edition under, the shot its birth version — with mint true and no doc."
-          },
-          "mint": {
-            "type": "boolean",
-            "description": "true with account and no doc: mint the edition in this commit. Absent or false is the doc form."
-          },
-          "claim": {
-            "type": "boolean",
-            "description": "true: the commit also writes the edition claim homed in the edition — the one it mints (with mint) or the one doc names, where that edition holds no member yet — to the draft (which is then required). Refused claim_refused where doc already holds a member."
-          },
-          "links": {
-            "type": "array",
-            "description": "The links this publication accepts, each landing as a public copy in its home in the same commit (the signed body carries their rows). An end is {\"addrs\": [addresses — the tag \"member\" for the member being minted, \"edition\" with mint]}, {\"spans\": [{start, width}]} content I-spans, or {\"member\": [{ordinal, width}]} — spans of the member's own positions inside [1, placed] for an end on the draft's new words, spelled canonically: the lowest positions holding each value, consecutive positions merged. ty takes addrs or spans over addresses alone. A refused entry answers link_home_refused, old_refused, duplicate_original, read_with_in_links or a make_link code with site.index the entry.",
-            "items": {
-              "type": "object",
-              "properties": {
-                "home": {"type": "string", "description": "\"member\", or a published document of yours (its address)."},
-                "ty": {"type": "object", "description": "The type slot: {\"addrs\": [...]} or {\"spans\": [...]}."},
-                "from": {"type": "object", "description": "The from end, in any of the three forms."},
-                "to": {"type": "object", "description": "The to end, in any of the three forms."},
-                "old": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$", "description": "The private original this copy stands for; its supersession claim is written in the original's home. Omit where there is none."}
-              },
-              "required": ["home", "ty", "from", "to"],
-              "additionalProperties": false
-            }
-          },
-          "retract": {
-            "type": "array",
-            "description": "Link addresses of yours, homed in published documents of yours, to retract in the same commit; one already retracted is skipped. A refused entry answers retract_refused with site.index and a detail.",
-            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
-          },
-          "read_with": {
-            "type": "array",
-            "description": "Published documents of yours the edition is newly read with; a read-with already standing in a published home of yours is skipped. A refused entry answers read_with_refused with site.index and a detail.",
-            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
-          }
-        },
-        "required": ["draft", "runs"],
         "additionalProperties": false
       }
     },
@@ -2523,6 +2408,173 @@
           }
         },
         "required": ["held", "act"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "publication_open",
+      "description": "The shell's publication.open call, a publication's first step (PUBLISHING): the shell reads your draft, the runs of it you select and every link on their words, and holds a PANEL for this session — nothing written — which publication_count, publication_confirm and publication_cancel act on. Give doc, the published document of yours whose version chain the member joins, or mint, the account a new published document is minted under with the member its first — never both. Response: the panel {rows, formatting, read_with, count, price, windows, hold?}. rows: the sets of links on the selected words — own, notes, private, then public — each {home, kind, label, links, types, line, read_through}; a private row is OFF, its links left out, until switches.on names it. formatting: {marks, cut, removals}, the formatting line. read_with: per published document of yours, whether the edition is read with it now. count: {l, n, r, e, claim, read_with} with every private row OFF (publication_count says each). price: {lists, body, values, reads, bytes, over}, the request against its caps, over each term past its cap — a non-empty over is refused over_cap at confirm. windows: the runs whose words another unpublished draft of yours holds, each {run, origin, owner, i_start, width, counterpart?} and each needing an answer at confirm — publish_first, drop, keep_private, or counterpart where one is offered — none chosen for you. hold: {since}, where a panel of this draft stood behind another and comes back as it stood — a held panel, not a held burst. One panel stands at a time: an open on another draft holds the standing one behind it; an open on a held panel's draft with no selection, or the same one, brings it back, and another selection opens it afresh. Without readable_drafts or published, the open waits on the board's index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "draft": {
+            "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The draft of yours whose text the member carries."
+          },
+          "doc": {
+            "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The published document of yours whose version chain the member joins as its next. Give doc or mint, never both."
+          },
+          "mint": {
+            "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The account a new published document is minted under in the same write, the member its first: a draft's first publication. Give doc or mint, never both."
+          },
+          "claim": {
+            "type": "boolean",
+            "description": "Carry the edition claim in the same write: with mint, or with a doc that holds no member yet; where a member already stands, confirm answers refused, arm claim_refused. Default false."
+          },
+          "selection": {
+            "type": "array",
+            "description": "The text to publish, as runs in V-order; absent, the draft's whole text.",
+            "items": {
+              "type": "object",
+              "description": "One run: width positions of origin's content I-space from the ordinal i_start.",
+              "properties": {
+                "origin": {
+                  "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The document whose content I-space the run lies in: doc, for a run whose first I-address image answers as doc.0.1.ordinal."
+                },
+                "i_start": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "The run's first ordinal in origin's content I-space: the last component of that I-address."
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "The run's positions."
+                }
+              },
+              "required": ["origin", "i_start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "notes": {
+            "type": "array",
+            "description": "Your notes documents, in the order their rows stand.",
+            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+          },
+          "readable_drafts": {
+            "type": "array",
+            "description": "Your drafts the publication reads through, the draft itself joining them. Absent, the board's index lists them, which the open waits on.",
+            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+          },
+          "published": {
+            "type": "array",
+            "description": "Your published documents: where a link's home counts as published, and where a switched-on row's links may go. Absent, the board's index lists them, which the open waits on.",
+            "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+          }
+        },
+        "required": ["draft"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "publication_count",
+      "description": "The shell's publication.count call: {count, price}, the standing panel's count and price as the switches and answers sent here would leave them, worked off the panel with nothing sent to the board (PUBLISHING). count {l, n, r, e, claim, read_with}: l the switched-on rows' links plus the read_with entries the switches need, n the formatting line's marks that re-make nothing, r the retractions no re-make covers, e the re-makes, claim whether the write carries the edition claim, read_with each switched-on row's destination other than the member, once, where the edition is not read with it yet. price: as publication_open answers it, re-run over the rows as switched. The panel keeps these switches and answers, and shows them where it comes back from behind another; publication_confirm reads none of them — send it its own. No panel standing answers no_panel; a home no private row holds, a set that is no published document of yours, a run no window names, or an answer the window does not offer is refused malformed_args naming the member.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "switches": {
+            "type": "object",
+            "description": "The private rows switched on, and where each one's links go.",
+            "properties": {
+              "on": {
+                "type": "array",
+                "description": "The homes of the private rows switched ON; every other private row stays OFF.",
+                "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+              },
+              "destinations": {
+                "type": "object",
+                "description": "Per switched-on home, where its links go: \"member\", the member the confirm publishes (the default), or {\"set\": address}, another published document of yours.",
+                "additionalProperties": {
+                  "oneOf": [
+                    {"type": "string", "enum": ["member"]},
+                    {
+                      "type": "object",
+                      "properties": {
+                        "set": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+                      },
+                      "required": ["set"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "answers": {
+            "type": "object",
+            "description": "One answer per window, keyed by the window's run (its index in the selection, a decimal string): publish_first (publish the window's origin first; this publication stays inert), drop (leave the run out), keep_private (the member keeps the run as a window onto your unpublished origin), or counterpart (the run re-composed by reference to the published words the window's counterpart names), where the window offers one.",
+            "additionalProperties": {"type": "string", "enum": ["publish_first", "drop", "keep_private", "counterpart"]}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "publication_confirm",
+      "description": "The shell's publication.confirm call: publishes the standing panel's selection in ONE write the shell composes off the panel and the switches and answers sent here, signs with your key and sends (PUBLISHING). It reads the draft again first, then answers one outcome, as data. {outcome: \"acknowledged\", member, edition, claim, at, via}: member the member published (the new published document's first at the mint form, edition then that document, else null), claim whether the edition claim rode in the write, at the commit's position, via how the shell knew it landed (answer, twin, records, walk or edition_claim); the panel is gone. {outcome: \"restated\", left, superseded, came, removals_undone, removals_came, selection, race?}: the draft moved since the panel — links left, superseded or came, held removals undone or come, selected runs placed otherwise — and nothing was sent: the panel stands re-stated; read it with publication_open on the same draft and confirm again. {outcome: \"refused\", arm, …}: nothing published, the arm's data beside it — the shell's own before anything is sent, over_cap {over} and inert {inert}: unchanged (the member would change nothing), {unanswered: [run, …]} (a window left without an answer) or {publish_first: [run, …]} (a window answered publish_first: publish its origin first); or the write's: twin, kept_place_moved, unowned_draft, not_owner, claim_refused, window_withheld, needs_signed_session, no_such_document, older_board, head_unreadable, session_ended, budget_race, may_already_stand, own_fault or other. With no panel standing it answers no_panel (isError), and where the board holds writes poisoned or halted it is refused at once with that cause.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "switches": {
+            "type": "object",
+            "description": "The private rows switched on, and where each one's links go.",
+            "properties": {
+              "on": {
+                "type": "array",
+                "description": "The homes of the private rows switched ON; every other private row stays OFF.",
+                "items": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+              },
+              "destinations": {
+                "type": "object",
+                "description": "Per switched-on home, where its links go: \"member\", the member the confirm publishes (the default), or {\"set\": address}, another published document of yours.",
+                "additionalProperties": {
+                  "oneOf": [
+                    {"type": "string", "enum": ["member"]},
+                    {
+                      "type": "object",
+                      "properties": {
+                        "set": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"}
+                      },
+                      "required": ["set"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "answers": {
+            "type": "object",
+            "description": "One answer per window, keyed by the window's run (its index in the selection, a decimal string): publish_first (publish the window's origin first; this publication stays inert), drop (leave the run out), keep_private (the member keeps the run as a window onto your unpublished origin), or counterpart (the run re-composed by reference to the published words the window's counterpart names), where the window offers one.",
+            "additionalProperties": {"type": "string", "enum": ["publish_first", "drop", "keep_private", "counterpart"]}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "publication_cancel",
+      "description": "The shell's publication.cancel call: drops the standing panel, nothing sent and nothing written (PUBLISHING); a panel held behind it stands. With none standing it answers {} all the same. Response: {}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },

@@ -9,15 +9,21 @@
 //! know refuses startup, and a dispatch tool the file doesn't name refuses
 //! startup. The dispatch has two kinds of tool ([`Tool`]): the *wire ops*,
 //! each spelled as the wire spells it, whose arguments are the frame and
-//! which the adapter sends as `op(session, frame)` through the shell; and the
-//! *adapter tools* — the shell's calls (`boards`, `health`, `probe`, `search`,
-//! `places`, `held`, `resolve`) and the apparatus (`session_info`,
-//! `changes_since`, `fetch`) — whose arguments are the bridge's row minus the
-//! session and the board, the adapter supplying each where the row requires
-//! it, and whose members the adapter reads by name. `Tool::admit` is the
-//! dispatch's door, admitting a call or refusing it; `wire_frame` maps a wire
-//! op's call onto its frame, and `Catalog::append_commons` fills the commons
-//! template in beside the check on its placeholder.
+//! which the adapter sends as `op(session, frame)` through the shell — every
+//! op of wire.md §Operations but `publish`, which the shell runs as its
+//! `publication` call family; and the *adapter tools* — the shell's calls
+//! (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`, and the
+//! `publication` family's four, `publication_open`, `publication_count`,
+//! `publication_confirm` and `publication_cancel`) and the apparatus
+//! (`session_info`, `changes_since`, `fetch`) — whose arguments are the
+//! bridge's row minus the session and the board, the adapter supplying each
+//! where the row requires it, and whose members the adapter reads by name. A
+//! `publication` tool spells its row's `.` as `_`, since an agent runtime
+//! takes a tool's name for a function's, whose spelling admits no `.`.
+//! `Tool::admit` is the dispatch's door, admitting a call or refusing it;
+//! `wire_frame` maps a wire op's call onto its frame, and
+//! `Catalog::append_commons` fills the commons template in beside the check on
+//! its placeholder.
 
 use std::fmt;
 
@@ -26,10 +32,15 @@ use serde_json::{Map, Value};
 /// The shipped catalog (`tools.json` beside `Cargo.toml`).
 pub const EMBEDDED: &str = include_str!("../tools.json");
 
-/// The wire operations this adapter maps: every op of wire.md §Operations.
+/// The wire operations this adapter maps: every op of wire.md but `publish`.
 ///
-/// Each is spelled exactly as the wire spells it, since the tool name *is*
-/// the frame's `op`. No general `op` tool ships: every op has a name here.
+/// They are the ops of wire.md §Operations, each spelled exactly as the wire
+/// spells it, since the tool name *is* the frame's `op`. No general `op` tool
+/// ships: every op has a name here. `publish` has none, since the shell
+/// refuses a `publish` frame through its `op` row (`publish_is_a_call`) and
+/// runs a publication itself, composing the one request from the panel it
+/// holds: its `publication` family's four rows are adapter tools (`client.md`
+/// §4b.1's `op` row).
 const DISPATCH_OPS: &[&str] = &[
     // Namespace.
     "create_new_document",
@@ -49,7 +60,6 @@ const DISPATCH_OPS: &[&str] = &[
     "reinstate",
     "rearrange",
     "version",
-    "publish",
     // Links (writes).
     "make_link",
     "emit",
@@ -113,6 +123,22 @@ pub enum Tool {
     Held,
     /// `resolve(session, held, act)`, the shell's: the session supplied.
     Resolve,
+    /// `publication.open(session, draft, …)`, the shell's.
+    ///
+    /// The session is supplied; the shell runs a publication's first steps
+    /// and holds its panel.
+    PublicationOpen,
+    /// `publication.count(session, switches?, answers?)`, the shell's.
+    ///
+    /// The session is supplied.
+    PublicationCount,
+    /// `publication.confirm(session, switches?, answers?)`, the shell's.
+    ///
+    /// The session is supplied; the shell composes the one request off the
+    /// panel, signs and sends it.
+    PublicationConfirm,
+    /// `publication.cancel(session)`, the shell's: the session supplied.
+    PublicationCancel,
     /// The apparatus: who this adapter acts as, and its session's facts.
     SessionInfo,
     /// `changes(session, since, limit?)`, the shell's, as a pull tool.
@@ -135,6 +161,10 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("places", Tool::Places, &["opts"]),
     ("held", Tool::Held, &[]),
     ("resolve", Tool::Resolve, &["held", "act"]),
+    ("publication_open", Tool::PublicationOpen, &["draft", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"]),
+    ("publication_count", Tool::PublicationCount, &["switches", "answers"]),
+    ("publication_confirm", Tool::PublicationConfirm, &["switches", "answers"]),
+    ("publication_cancel", Tool::PublicationCancel, &[]),
     ("session_info", Tool::SessionInfo, &[]),
     ("changes_since", Tool::ChangesSince, &["since", "limit"]),
     ("fetch", Tool::Fetch, &["i"]),

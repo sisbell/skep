@@ -154,11 +154,12 @@ fn the_usage_says_how_it_stops_and_what_a_signal_leaves() {
     for said in [
         "\nstop:\n  stdin's end closes the session at the board and saves the index,",
         "A signal ends the process at once,",
-        "\n  its held bursts already on disk, save one the shell kept in memory\n  alone (answered unwritable or other_window), its session left at the",
+        "\n  its held bursts already on disk, save one the shell kept in memory\n  alone (answered unwritable), its session left at the board until",
         "\n  retiring its key (skep retire)\n",
     ] {
         assert!(USAGE.contains(said), "the usage says {said:?}: {USAGE}");
     }
+    assert!(!USAGE.contains("other_window"), "the usage names no cause the shell does not answer: {USAGE}");
 }
 
 /// The usage says where the log is, and that its reader holds nothing up.

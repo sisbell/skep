@@ -3,9 +3,11 @@
 //! A1 signed only — its writes attested or testified, and no key stops startup;
 //! A1b a principal under the claimant's account signs by reference with the
 //! key enrolled in the set above; A2 the startup line names the refusing
-//! seam and no ceremony tool is listed; A3 the tools — every wire op, the
-//! shell's calls, the apparatus — a publish landing a version, and `fetch`'s
-//! image block, resource blob, cap and cut stream; A4 `changes_since`
+//! seam and no ceremony tool is listed, nor `publish`; A3 the tools — every
+//! wire op but `publish`, the shell's calls, the publication family's among
+//! them, the apparatus — a publication landing a version, its panel dying
+//! with the session and nothing sent twice, and `fetch`'s image block,
+//! resource blob, cap and cut stream; A4 `changes_since`
 //! answering a published write after a position, `next` advancing; A5
 //! `SKEP_BOARD` read and `SKEPD_URL` alone refused; A6 the session's life —
 //! the key retired stops the process, and a relaunch refuses before serving,
@@ -24,16 +26,36 @@ use serde_json::{json, Value};
 
 use crate::common::{base64_decode, draft_of, seeded_bytes, stamped, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
-/// The ten ceremonial rows, the two media rows the shell does not reach,
-/// and the three calls the adapter makes of the shell itself (`op`,
-/// `session`, `close`) — no tool of the adapter's.
-const NOT_OFFERED: [&str; 15] = ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close"];
+/// The names no tool of the adapter's answers.
+///
+/// They are the ten ceremonial rows, the two media rows the shell does not
+/// reach, the three calls the adapter makes of the shell itself (`op`,
+/// `session`, `close`), and the wire's `publish`, which the shell runs as its
+/// `publication` family.
+const NOT_OFFERED: [&str; 16] = ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "publish"];
 
-/// The seven wire ops the first catalog lacked.
-const ADDED_OPS: [&str; 7] = ["publish", "effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants"];
+/// The six wire ops the first catalog lacked, `publish` aside.
+const ADDED_OPS: [&str; 6] = ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants"];
 
 /// The shell's calls and the apparatus, as tools.
-const ADAPTER_TOOLS: [&str; 10] = ["boards", "health", "probe", "search", "places", "held", "resolve", "session_info", "changes_since", "fetch"];
+///
+/// The shell's calls take the publication family's four among them.
+const ADAPTER_TOOLS: [&str; 14] = [
+    "boards",
+    "health",
+    "probe",
+    "search",
+    "places",
+    "held",
+    "resolve",
+    "publication_open",
+    "publication_count",
+    "publication_confirm",
+    "publication_cancel",
+    "session_info",
+    "changes_since",
+    "fetch",
+];
 
 /// The adapter's cap on one fetch, as `media.rs` states it.
 const MAX_FETCH_BYTES: usize = 8 * 1024 * 1024;
@@ -141,11 +163,13 @@ fn a1b_a_principal_under_the_claimants_account_signs_by_reference() {
     assert!(log.contains(&format!("signed as principal {agent} (account {AGENT_SPACE}) with the key {}", fixture.fingerprint)), "{log}");
 }
 
-/// A2 NO PERSON: the startup line on stderr names the refusing seam —
-/// `person seam: refuse` — and `tools/list` names no ceremony, no `upload`,
-/// no `restore`, and none of the calls the adapter makes of the shell itself
-/// (the mutant that opens the shell under the auto arm says
-/// `person seam: auto`).
+/// A2: no person is at the seam, so no ceremony tool is listed, nor `publish`.
+///
+/// The startup line on stderr names the refusing seam, `person seam: refuse`,
+/// and `tools/list` names no ceremony, no `upload`, no `restore`, none of the
+/// calls the adapter makes of the shell itself, and no `publish`, a
+/// publication being the shell's to compose (the mutant that opens the shell
+/// under the auto arm says `person seam: auto`).
 #[test]
 fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() {
     let fixture = Fixture::new("a2");
@@ -161,13 +185,18 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
     assert!(mcp.finish().success());
 }
 
-/// A3: every tool is listed, and a publish through MCP lands a version.
+/// A3: every tool is listed, and a publication through MCP lands a version.
 ///
-/// `tools/list` names every wire op — the seven the first catalog lacked among
-/// them — the shell's seven calls and the three apparatus tools; and the
-/// publish: a published document minted, a draft written, `image` giving the
-/// runs, `publish` taking them, the member read back, its metadata naming the
-/// shot.
+/// `tools/list` names every wire op but `publish` — the six the first catalog
+/// lacked among them — the shell's calls, the publication family's four among
+/// them, and the three apparatus tools; and the publication: a published
+/// document minted, a draft written, `publication_open` holding its panel —
+/// no row, no window, under every cap — `publication_count` its four numbers
+/// with nothing switched on, and `publication_confirm` acknowledging the
+/// member `E.1`, reached by its own answer; the member read back, its
+/// metadata naming the shot, and the panel gone with the acknowledgment —
+/// `publication_count` answers `no_panel`, and `publication_cancel` `{}` all
+/// the same.
 #[test]
 fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let fixture = Fixture::new("a3-tools");
@@ -193,26 +222,67 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     assert!(found["hits"].is_array() && found["state"]["arm"].is_string(), "{found}");
     let grants = mcp.call_json("universal_grants", json!({}));
     assert_eq!(grants["resp"], "universal_grants", "{grants}");
-    // THE PUBLISH: the shot composed from `image`.
+    // THE PUBLICATION: the shell composes the shot from the panel it holds.
     let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
     mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
     let image = mcp.call_json("image", json!({"d": draft, "region": [{"start": "1.1", "width": "0.3"}]}));
     assert_eq!(image["resp"], "runs", "{image}");
     let run = &image["runs"][0];
-    let shot = mcp.acked("publish", json!({"doc": edition, "draft": draft, "runs": [{"origin": draft, "i_start": run["i_start"], "width": run["width"]}]}));
-    let member = shot["addr"].as_str().expect("the member").to_string();
-    assert!(member.starts_with(&edition), "a member of the edition's chain: {member}");
+    let panel = mcp.call_json("publication_open", json!({"draft": draft, "doc": edition}));
+    assert_eq!((&panel["rows"], &panel["windows"], &panel["price"]["over"]), (&json!([]), &json!([]), &json!([])), "no link, no window, under every cap: {panel}");
+    let counted = mcp.call_json("publication_count", json!({}));
+    assert_eq!(counted["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "{counted}");
+    let acked = mcp.call_json("publication_confirm", json!({}));
+    let member = format!("{edition}.1");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str()), (Some("acknowledged"), Some(member.as_str()), Some("answer")), "{acked}");
     let read = mcp.call_json("retrieve_v", json!({"specs": [{"doc": member, "span": {"start": "1.1", "width": "0.3"}}]}));
     assert_eq!(read["items"], json!([{"content": "abc"}]), "{read}");
     let meta = mcp.call_json("doc_metadata", json!({"doc": member}));
     assert_eq!((meta["doc"].as_str(), meta["published"].as_bool()), (Some(edition.as_str()), Some(true)), "{meta}");
     assert_eq!(meta["placed"].as_str(), Some("3"), "the shot's three positions: {meta}");
+    let gone = mcp.call_error("publication_count", json!({}));
+    assert_eq!(gone["name"], "no_panel", "the panel went with the acknowledgment: {gone}");
+    assert_eq!(mcp.call_json("publication_cancel", json!({})), json!({}), "a cancel with no panel standing answers {{}}");
     let frontier = mcp.call_json("content_frontier", json!({"doc": draft}));
     assert_eq!(frontier["resp"], "frontier", "{frontier}");
     let by_identity = mcp.call_json("retrieve_i", json!({"spans": [{"start": run["i_start"], "width": "3"}]}));
     assert_eq!(by_identity["resp"], "i_delivery", "{by_identity}");
     assert!(mcp.finish().success());
+}
+
+/// A3: a publication's panel dies with the session, and nothing is sent twice.
+///
+/// A panel is opened, then the board restarts, every token dying with it and
+/// the session re-opened silently under a fresh reference: the confirm that
+/// follows — the death met at its own read, or found met by the shell's feed
+/// thread — answers `no_panel` (isError), the panel gone with the session
+/// that held it, and the member it would have minted is not registered; a
+/// fresh open and its confirm then publish that member, once (the mutant whose
+/// shell keeps a dead session's panels publishes at the first confirm).
+#[test]
+fn a3_a_publications_panel_dies_with_the_session_and_nothing_is_sent_twice() {
+    let mut fixture = Fixture::new("a3-panel");
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
+    mcp.initialize();
+    let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
+    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
+    let open = json!({"draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]});
+    let panel = mcp.call_json("publication_open", open.clone());
+    assert_eq!(panel["rows"], json!([]), "premise: a panel stands: {panel}");
+    fixture.restart();
+    let gone = mcp.call_error("publication_confirm", json!({}));
+    assert_eq!(gone["name"], "no_panel", "the panel died with its session: {gone}\n{}", mcp.log());
+    let member = format!("{edition}.1");
+    let unminted = mcp.call_json("doc_metadata", json!({"doc": member}));
+    assert_eq!((unminted["kind"].as_str(), unminted["name"].as_str()), (Some("refused"), Some("doc_not_registered")), "nothing was published: {unminted}");
+    mcp.call_json("publication_open", open);
+    let acked = mcp.call_json("publication_confirm", json!({}));
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(member.as_str())), "published once: {acked}");
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(log.contains("re-opened under a fresh reference"), "premise: the session was re-opened:\n{log}");
 }
 
 /// A3 FETCH (rulings 1 (a) and 2 (a)): a seeded PNG comes back as an IMAGE

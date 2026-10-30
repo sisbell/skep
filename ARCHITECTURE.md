@@ -220,7 +220,8 @@ foundation and on the stores above it.
   — two subcommands of the one binary, run with no server.
 - `skep-mcp` — a stdio adapter for agent harnesses over the shell's core
   (`skep-shell`): one signed session for the process's life, every wire
-  op a tool of its name, the shell's calls, a change pull and a blob
+  op but `publish` a tool of its name, the shell's calls — the
+  publication family's four among them — a change pull and a blob
   fetch beside them. One binary: of the skep crates it depends on
   `skep-shell` and `skep-client` — the latter for the types the shell's
   surface names, the inert rendering a key's label and every log line

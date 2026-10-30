@@ -28,19 +28,23 @@
 //! is then reissued once under what stands — the session in the dead one's
 //! place, one it opens itself where the last lapsed, or the reference that died
 //! where the adapter stopped (the death executed nothing: the board refuses a
-//! dead token before it runs the frame) — save that a death after which no
-//! session stands is the answer to the call that met it. A death the shell does
-//! not re-open — the key retired (AUTH-5.28, AUTH-5.77), the account seeded,
-//! the prefix blocked, the board's mode moved, or a restart whose re-open was
-//! refused for any cause but `busy` or a board that did not answer — stops the
-//! adapter: one plain line naming the arm goes to the process's stop, and the
-//! loop serves no line queued behind it; the person stops an agent by retiring
-//! its key, and the adapter's end is what the agent's client sees. A board that
-//! does not answer, or does not accept the sign-in twice in a row (`busy`,
-//! transient by skep-client's own face, AUTH-5.25), is served through: no
-//! session stands, and each call that runs under one opens one afresh,
-//! answering its refusal until the board takes it, a refusal of it judged as a
-//! refused re-open is.
+//! dead token before it runs the frame; and a publication's panel dies with
+//! the session it was held under, the shell's watcher dropping it at the
+//! death, so a reissued `publication.count` or `publication.confirm` answers
+//! `no_panel` and sends nothing — a confirm whose request may have landed
+//! before the death met its landed test is never sent twice) — save that a
+//! death after which no session stands is the answer to the call that met it.
+//! A death the shell does not re-open — the key retired (AUTH-5.28,
+//! AUTH-5.77), the account seeded, the prefix blocked, the board's mode moved,
+//! or a restart whose re-open was refused for any cause but `busy` or a board
+//! that did not answer — stops the adapter: one plain line naming the arm goes
+//! to the process's stop, and the loop serves no line queued behind it; the
+//! person stops an agent by retiring its key, and the adapter's end is what the
+//! agent's client sees. A board that does not answer, or does not accept the
+//! sign-in twice in a row (`busy`, transient by skep-client's own face,
+//! AUTH-5.25), is served through: no session stands, and each call that runs
+//! under one opens one afresh, answering its refusal until the board takes it,
+//! a refusal of it judged as a refused re-open is.
 //!
 //! The bus is subscribed in `Backend::open` before the session opens, so no
 //! death of it is emitted unheard, and drained on a thread of its own for the
@@ -177,17 +181,18 @@ fn carried_line(lines: &Value) -> Option<String> {
 /// `lines` is the `held` row's answer as the session stands at the stop: the
 /// principal's queue. A line its held file holds is read whole and counted at
 /// the next start (`carried_line`); a line the shell kept in memory alone —
-/// answered `unwritable` or `other_window` when it was held, its copy refused
-/// or its file out of reach (client.md §3c.3) — goes with the process. The row
-/// does not tell the two apart, so the line says both. It counts the bursts,
-/// and those `sent` and so perhaps landed (client.md §3c.2). `None` where none
-/// stands.
+/// answered `unwritable` when it was held, the reason beside it: its copy
+/// refused, or its file out of reach, another process's lock on the board's
+/// held store among the causes (client.md §3c.3) — goes with the process. The
+/// row does not tell the two apart, so the line says both. It counts the
+/// bursts, and those `sent` and so perhaps landed (client.md §3c.2). `None`
+/// where none stands.
 fn left_held(lines: &Value) -> Option<String> {
     let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
     let sent = lines.iter().filter(|line| line["sent"] == true).count();
     let bursts = if lines.len() == 1 { "1 burst".to_string() } else { format!("{} bursts", lines.len()) };
     Some(format!(
-        "; it leaves {bursts} held at this board ({sent} sent and so perhaps landed): the next start counts those the held file holds, and any the shell answered `unwritable` or `other_window` was kept in memory alone and goes with this process"
+        "; it leaves {bursts} held at this board ({sent} sent and so perhaps landed): the next start counts those the held file holds, and any the shell answered `unwritable` was kept in memory alone and goes with this process"
     ))
 }
 
@@ -781,9 +786,11 @@ impl Backend {
 
     /// Makes a call of the shell's under the adapter's one session.
     ///
-    /// The calls are `op`, `search`, `places`, `held`, `resolve` and
-    /// `changes`: `args` is the call's own members, the row's object, and the
-    /// session's reference is set in it beside them before each attempt. A row
+    /// The calls are `op`, `search`, `places`, `held`, `resolve`, `changes`
+    /// and the `publication` family's four (`publication.open`,
+    /// `publication.count`, `publication.confirm`, `publication.cancel`):
+    /// `args` is the call's own members, the row's object, and the session's
+    /// reference is set in it beside them before each attempt. A row
     /// whose session form takes a board too (`search`, `places`) reads at the
     /// session's own where none is given, which is this adapter's one board.
     ///

@@ -640,7 +640,7 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
 fn what_the_clean_stop_leaves_held_is_counted_as_it_stands() {
     assert_eq!(left_held(&json!([])), None, "no tail where no burst stands");
     let line = |k: u64, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": "unreachable", "sent": sent, "time": k});
-    let fate = "the next start counts those the held file holds, and any the shell answered `unwritable` or `other_window` was kept in memory alone and goes with this process";
+    let fate = "the next start counts those the held file holds, and any the shell answered `unwritable` was kept in memory alone and goes with this process";
     assert_eq!(left_held(&json!([line(1, true), line(2, false)])), Some(format!("; it leaves 2 bursts held at this board (1 sent and so perhaps landed): {fate}")));
     assert_eq!(left_held(&json!([line(1, false)])), Some(format!("; it leaves 1 burst held at this board (0 sent and so perhaps landed): {fate}")));
 }

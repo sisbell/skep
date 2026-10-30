@@ -29,9 +29,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   a line break in it continues the line indented.
 - **Every tool is one call of the shell.** The wire operations of
   `docs/wire.md` §Operations are tools of their own names — the name is the
-  frame's `op`, the arguments are the frame — the shell's own calls
-  (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`) are
-  tools of theirs, and three are the adapter's apparatus: `session_info`,
+  frame's `op`, the arguments are the frame — save `publish`, which the
+  shell refuses as a frame and composes itself; the shell's own calls
+  (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`, and
+  the four of its `publication` family, `publication_open`,
+  `publication_count`, `publication_confirm` and `publication_cancel`) are
+  tools of theirs; and three are the adapter's apparatus: `session_info`,
   `changes_since` and `fetch`. The catalog an agent reads, `tools.json`
   beside `Cargo.toml`, is embedded and checked against that dispatch at
   startup.
@@ -189,11 +192,11 @@ read each held to skep-client's exchange deadline — and longer as the index
 grows, its save rewriting the index whole. The log says how long each stop
 took: the figure to set the harness's grace before a signal by. A signal
 ends the process at once: its held bursts are already on disk — save one
-the shell answered `unwritable` or `other_window`, kept in memory alone and
-lost with the process — the session lives on at the board until the board
-restarts, and the index resumes from its last save. The person stops an
-agent for good by retiring its key (`skep retire`); every start over that
-store is then refused `retired`.
+the shell answered `unwritable`, kept in memory alone and lost with the
+process — the session lives on at the board until the board restarts, and
+the index resumes from its last save. The person stops an agent for good by
+retiring its key (`skep retire`); every start over that store is then
+refused `retired`.
 
 **Restart.** Stop it, then start it over the same `--dir`: the held bursts,
 counted at the start, and the index carry over. A start over a store

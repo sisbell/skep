@@ -6,16 +6,22 @@
 //! One process per agent, one board, one signed session at a time:
 //!
 //! * **Every tool is one call of the shell**, under that session where the
-//!   call takes one. A wire op's tool name *is* the frame's `op` and its
-//!   arguments *are* the frame (the one mapping is `from_` → `from` on
-//!   make_link/emit, when the arguments carry no `from` of their own), sent
-//!   as `op(session, frame)`: attested where the session's key attests the
-//!   kind, held where the board cannot take a burst or rejects one (the
-//!   `held` answer comes back as data; a refused run's line, and the bursts
-//!   behind it on its document, wait on the agent's `resolve`), a
-//!   `write_busy` reissued once and a `durability` twice within the call, as
-//!   the shell does. The shell's own calls — `boards`, `health`,
-//!   `probe`, `search`, `places`, `held`, `resolve` — are tools of those names,
+//!   call takes one. Every wire op but `publish` is a tool whose name *is*
+//!   the frame's `op` and whose arguments *are* the frame (the one mapping is
+//!   `from_` → `from` on make_link/emit, when the arguments carry no `from`
+//!   of their own), sent as `op(session, frame)`: attested where the
+//!   session's key attests the kind, held where the board cannot take a burst
+//!   or rejects one (the `held` answer comes back as data; a refused run's
+//!   line, and the bursts behind it on its document, wait on the agent's
+//!   `resolve`), a `write_busy` reissued once and a `durability` twice within
+//!   the call, as the shell does. A publication crosses as the shell's
+//!   `publication` family instead: the shell refuses a `publish` frame
+//!   through `op` (`publish_is_a_call`), and composes, signs and sends the
+//!   one request itself from the panel it holds (`client.md` §4b.1's `op`
+//!   row). The shell's own calls — `boards`, `health`, `probe`, `search`,
+//!   `places`, `held`, `resolve`, and that family's four, each named as its
+//!   row with `_` for `.` (`publication_open`, `publication_count`,
+//!   `publication_confirm`, `publication_cancel`) — are tools of those names,
 //!   their arguments the bridge's row minus the session and the board, the
 //!   adapter supplying each where the row requires it; and three are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
@@ -27,12 +33,13 @@
 //!   sees a frame, the shell refuses one it cannot send or hold whole, nothing
 //!   sent, each refusal `isError`: a burst whose `doc` is no document address
 //!   in its one spelling (`malformed_args` naming `frame.doc`) or whose frame
-//!   would pass the board's cap (`frame_too_large`), and a write of the ten
-//!   kinds the session's key attests whose attest it cannot compose from the
-//!   frame (`attest_not_composed`, a halt). Where the board refuses a read the
-//!   shell makes to compose that attest, the call answers the read's verdict,
-//!   as data, and the write is not sent. Past the shell's checks, a frame goes
-//!   to the board, whose strict parse is its validator, its rejection data.
+//!   would pass the board's cap (`frame_too_large`), and a write of the nine
+//!   kinds the session's key attests through `op` — the ten but `publish` —
+//!   whose attest it cannot compose from the frame (`attest_not_composed`, a
+//!   halt). Where the board refuses a read the shell makes to compose that
+//!   attest, the call answers the read's verdict, as data, and the write is
+//!   not sent. Past the shell's checks, a frame goes to the board, whose
+//!   strict parse is its validator, its rejection data.
 //! * **A refusal as a result.** The board's verdict is data: a `refused`
 //!   refusal is a normal tool result, the verdict's body verbatim under `body`
 //!   with the refusal's `kind`, `name`, `status`, `code`, `detail` and `op`
@@ -185,8 +192,8 @@ stop:
   stdin's end closes the session at the board and saves the index,
   seconds where the board answers. A signal ends the process at once,
   its held bursts already on disk, save one the shell kept in memory
-  alone (answered unwritable or other_window), its session left at the
-  board until the board restarts. The person stops an agent for good by
+  alone (answered unwritable), its session left at the board until
+  the board restarts. The person stops an agent for good by
   retiring its key (skep retire)
 
 log:

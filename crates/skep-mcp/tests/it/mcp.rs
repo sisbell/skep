@@ -60,17 +60,6 @@ fn initialize_and_tools_list_serve_the_catalog() {
         assert!(t["description"].as_str().is_some_and(|s| !s.is_empty()), "every tool carries a description: {t}");
         assert!(t["inputSchema"].is_object(), "every tool carries a schema: {t}");
     }
-    // The publication's members (the link-sets design §5.7; lane S3): the
-    // served `publish` schema names the two target forms and the three
-    // deposit lists beside the shot's own members, `draft` and `runs` alone
-    // required — `doc` or `account` the form's own.
-    let publish = tools.iter().find(|t| t["name"] == "publish").expect("the publish tool");
-    let properties = publish["inputSchema"]["properties"].as_object().expect("properties");
-    for member in ["doc", "account", "mint", "claim", "links", "retract", "read_with", "places", "runs", "draft"] {
-        assert!(properties.contains_key(member), "the publish schema names `{member}`: {publish}");
-    }
-    assert_eq!(publish["inputSchema"]["required"], json!(["draft", "runs"]), "{publish}");
-    assert_eq!(publish["inputSchema"]["properties"]["links"]["items"]["required"], json!(["home", "ty", "from", "to"]), "{publish}");
 
     // Stdin EOF is the clean exit.
     let status = mcp.finish();

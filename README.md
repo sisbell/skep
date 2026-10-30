@@ -50,7 +50,7 @@ beside them, the differential-conformance harness.
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
 | `skep-core` | the daemon's core: the session layer, the commits (the door, the feed, the head), the wire codec; the daemon's two crates are what depends on the engine |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
-| `skep-mcp` | stdio MCP adapter for agent harnesses, over the shell's core: one signed session, every wire op by name, search, a change pull, a blob fetch |
+| `skep-mcp` | stdio MCP adapter for agent harnesses, over the shell's core: one signed session, every wire op by name but `publish`, the publication run as the shell's call family, search, a change pull, a blob fetch |
 | `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |
 | `skep-search` | the search index: a library a client embeds — the document model, the tokenizer, the inverted index with positions (no engine, no store, never `skepd`) |
 | `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |

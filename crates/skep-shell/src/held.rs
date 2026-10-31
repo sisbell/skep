@@ -182,14 +182,20 @@ fn now_ms() -> u64 {
 
 /// Why a line is held (§3c.2).
 ///
-/// It holds the line's `cause`, the board's verdict beside a refused run's,
-/// and whether the burst may have landed — the three members a hold writes
-/// and a re-mark rewrites together.
+/// It holds the line's `cause`, the verdict beside a refused run's, and
+/// whether the burst may have landed — the three members a hold writes and
+/// a re-mark rewrites together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reason {
     /// A token of §3c.4's table, or a refused run's own token.
+    ///
+    /// A refused run's token is the board's, or the shell's `answers_lost`
+    /// where it handed the person a line whose resends lost their answer.
     pub cause: String,
-    /// The board's verdict verbatim beside a refused run's line, for the face.
+    /// The verdict beside a refused run's line, for the face.
+    ///
+    /// It is the board's verbatim, or the shell's `answers_lost` refusal
+    /// where it handed the line to the person (§3c.4; skep #608).
     pub refusal: Option<Value>,
     /// Whether the burst may have landed.
     ///
@@ -197,7 +203,9 @@ pub struct Reason {
     /// `Truncated`, `Response`, `TooLarge` or a later transport error, or
     /// the board's `500 internal_panic`), or on a `poisoned` answer, whose
     /// frames the board's journal keeps for its restart; `false` where no
-    /// dial reached the board.
+    /// dial reached the board. A line handed to the person keeps it, and
+    /// `resolve(send)` keeps every line's own, so a line that may have
+    /// landed reads before it is sent again (§3c.5).
     pub sent: bool,
 }
 

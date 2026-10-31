@@ -188,8 +188,8 @@ impl Name {
     pub const NO_SUCH_HELD: Name = Name("no_such_held");
     /// `resolve(session, …)`: the line is `holding` or `sending`.
     ///
-    /// It is not refused or moved — no act exists until the board answers
-    /// (P10).
+    /// It is not refused or moved — no act exists until the board answers or
+    /// the shell hands the line to the person under `answers_lost` (P10).
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
     /// A burst whose frame passes the board's frame cap, refused at the act.
     ///
@@ -202,6 +202,14 @@ impl Name {
     /// Its standing frames or its lines hold the queue's budget already, or
     /// its ordinals are spent — the burst refused, and kept nowhere.
     pub const HELD_FULL: Name = Name("held_full");
+    /// A held line whose resends lost their answer, handed to the person.
+    ///
+    /// The shell sent it `hold`'s `MAX_LOST_ANSWERS` times without an answer
+    /// it could read — a timeout, a garbled answer, the board's handler
+    /// panicking — and stopped: the line is a refused run under this token,
+    /// its `sent` kept, until `resolve` sends it again or drops it (§3c.4;
+    /// skep #608). Its detail names the `tries`.
+    pub const ANSWERS_LOST: Name = Name("answers_lost");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");
 

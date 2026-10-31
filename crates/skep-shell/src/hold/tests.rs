@@ -60,7 +60,7 @@ fn rej(code: &str, disposition: &str) -> Decision {
 /// The reissues a burst has been given: `write_busy` ones and `durability`
 /// ones.
 fn given(write_busy: u32, durability: u32) -> Reissues {
-    Reissues { write_busy, durability }
+    Reissues { write_busy, durability, ..Reissues::default() }
 }
 
 /// A `rejected` document of `code` at the retry disposition.
@@ -143,6 +143,16 @@ fn the_two_acts_are_the_declared_words_and_no_other() {
     }
 }
 
+/// A lost answer the fake's `/op` gives a send it recorded.
+#[derive(Debug, Clone, Copy)]
+enum Lost {
+    /// The answer does not come in time: `DialError::Timeout`.
+    Timeout,
+    /// A `200` whose body is no JSON, as a proxy's page is: the client's
+    /// `DialError::Response`.
+    Garbled,
+}
+
 /// An answer armed at the fake's `/op`: given to every send, or to the
 /// next `n` alone.
 struct Armed<T>(Mutex<Option<(T, Option<usize>)>>);
@@ -218,6 +228,9 @@ struct Fake {
     /// The frame is recorded, then answered no answer (`DialError::Io`): a
     /// write that may have landed. It is 0 where none is armed lost.
     op_lost_at: AtomicUsize,
+    /// A lost answer armed for the sends `/op` records: each recorded, then
+    /// answered with the loss armed.
+    op_lost: Armed<Lost>,
     op_rejected: Armed<Value>,
     op_refused: Armed<(u16, Value)>,
     next_at: AtomicU64,
@@ -249,6 +262,7 @@ impl Fake {
             op_closed: AtomicBool::new(false),
             op_unreachable: AtomicBool::new(false),
             op_lost_at: AtomicUsize::new(0),
+            op_lost: Armed::none(),
             op_rejected: Armed::none(),
             op_refused: Armed::none(),
             next_at: AtomicU64::new(50),
@@ -380,6 +394,12 @@ impl Dialer for Fake {
             };
             if sent == self.op_lost_at.load(Ordering::SeqCst) {
                 return Err(DialError::Io("the answer was lost on the way".into()));
+            }
+            if let Some(lost) = self.op_lost.take() {
+                return match lost {
+                    Lost::Timeout => Err(DialError::Timeout("the answer did not come in time".into())),
+                    Lost::Garbled => Ok(Response { status: 200, headers: Headers::default(), body: b"<html>a proxy's page</html>".to_vec() }),
+                };
             }
             if self.op_closed.load(Ordering::SeqCst) {
                 return Ok(closed());

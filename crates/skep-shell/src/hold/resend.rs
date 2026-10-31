@@ -12,29 +12,33 @@
 //! reads alone (foundations §3.3 state 3), whose principal's lines stay held
 //! until a session that may write stands: one read per document (`GET
 //! /changes`) before its first resend, with §3c.5's three outcomes — (i)
-//! nothing landed, send from the head; (ii) the in-flight burst landed, the
-//! head `done kept` and its position the document's base, as an ack's is
-//! (§3c.2); (iii) the site moved, no line sent and the lines faced `moved`,
-//! never rebased — and a read the board did not answer decides nothing: the
-//! next probe reads again. Every document is read first, and the lines of
-//! those its reads let go then go out in `k` order across the documents
-//! (§3c.5's order, "which keeps each document's order"), so a `copy` held
-//! between two bursts on its source transcludes the source as it stood when
-//! the person wrote it. Each line goes out through the hold's one reader of
-//! a write's answer, as a first dial does.
+//! nothing landed, send from the head, or, the head's resends having lost
+//! their answer [`MAX_LOST_ANSWERS`] times, hand it to the person as a
+//! refused run (`answers_lost`), dialed never again until the person sends
+//! it; (ii) the in-flight burst landed, the head `done kept` and its
+//! position the document's base, as an ack's is (§3c.2); (iii) the site
+//! moved, no line sent and the lines faced `moved`, never rebased — and a
+//! read the board did not answer decides nothing: the next probe reads
+//! again. Every document is read first, and the lines of those its reads
+//! let go then go out in `k` order across the documents (§3c.5's order,
+//! "which keeps each document's order"), so a `copy` held between two
+//! bursts on its source transcludes the source as it stood when the person
+//! wrote it. Each line goes out through the hold's one reader of a write's
+//! answer, as a first dial does.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, line_state, BoardSlot, Dialed, Hand, HeldState, Holds};
-use crate::wire::{delivered_values, values_of};
+use super::{awaits_act, cause, is_lost_answer, line_state, BoardSlot, Dialed, Hand, HeldState, Holds, MAX_LOST_ANSWERS};
 use crate::held::{Done, HeldLine, Reason};
+use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind};
+use crate::wire::{delivered_values, values_of};
 
 /// The outcome of the resend's one read per document (§3c.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,7 +177,8 @@ impl Holds {
     /// answers whether the document's lines go out now: a document the read
     /// sends from the head, or whose landed head leaves lines behind it;
     /// never one whose head awaits the person's act, which is read never,
-    /// nor one the read left undecided.
+    /// nor one the read left undecided, nor one whose head it hands to the
+    /// person ([`Holds::hand_over`]).
     fn resume_doc(&self, session: &SessionEntry, doc: &str) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
@@ -210,6 +215,14 @@ impl Holds {
                 }
             }
             ReadOutcome::SendFromHead => {
+                // Nothing of the head has landed: past its lost answers'
+                // bound it is the person's, dialed never again (§3c.4; skep
+                // #608).
+                let lost = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&head.k).map_or(0, |given| given.lost)).unwrap_or(0);
+                if lost >= MAX_LOST_ANSWERS {
+                    self.hand_over(session, &head, lost);
+                    return false;
+                }
                 self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, &[]);
                 true
             }
@@ -339,7 +352,8 @@ impl Holds {
     ///
     /// Its attest is composed now (§3c.2), and the line settled by what the
     /// dial answered: an ack `done kept`; a hold-class answer or a refused
-    /// run re-marked and faced; a reissue-class answer counted against the
+    /// run re-marked and faced, a lost answer counted against the line
+    /// ([`MAX_LOST_ANSWERS`]); a reissue-class answer counted against the
     /// line and reissued at the next probe, so its third `durability` holds
     /// it; a refusal the table holds nowhere left standing for the next
     /// probe, never `done`; the death signal left to the caller that ends the
@@ -364,7 +378,15 @@ impl Holds {
             Dialed::Held { reason, .. } => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
-                self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
+                self.with_principal(board_reference, principal, |ph| {
+                    // A lost answer counts one try against the line
+                    // (MAX_LOST_ANSWERS); the read decides at the next probe
+                    // whether it landed.
+                    if is_lost_answer(&reason) {
+                        ph.reissues.entry(line.k).or_default().lost += 1;
+                    }
+                    self.remark_line(ph, line.k, reason);
+                });
                 self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
                 ControlFlow::Break(())
             }
@@ -381,6 +403,26 @@ impl Holds {
             }
             Dialed::Died => ControlFlow::Break(()),
         }
+    }
+
+    /// Hands a line whose resends lost their answer to the person (§3c.4).
+    ///
+    /// Its lost answers have reached [`MAX_LOST_ANSWERS`] and the read found
+    /// no landing: the line is re-marked a refused run under the shell's
+    /// `answers_lost`, its `sent` kept — so the person's `send` reads before
+    /// it dials, and a landing the read finds then is kept (§3c.5) — and the
+    /// lines behind it wait with it, as behind any refused run, until
+    /// `resolve` sends or drops it. It is said once in the shell's own
+    /// window, and on the `held` event as `refused` (skep #608).
+    fn hand_over(&self, session: &SessionEntry, head: &HeldLine, lost: u32) {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        let refusal = Refusal::shell(Name::ANSWERS_LOST, json!({"tries": lost})).to_value();
+        // The count reaches its bound only at a lost answer, which marks the
+        // line `sent`; the line keeps whatever it carries.
+        let reason = Reason { sent: head.reason.sent, ..Reason::refused(Name::ANSWERS_LOST.as_str(), refusal) };
+        self.with_principal(board_reference, principal, |ph| self.remark_line(ph, head.k, reason));
+        self.say(format_args!("line {} on {}: {lost} resends lost their answer; it is handed to the person, who may send it again or drop it", head.k, head.doc));
+        self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), &[]);
     }
 
     /// Marks every line of a moved document: `cause: moved`, never rebased.

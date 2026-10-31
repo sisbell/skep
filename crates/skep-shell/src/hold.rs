@@ -38,7 +38,9 @@
 //! `behind` it; and it is held without a dial where a hold stands — the own
 //! node stopped, the board halted, a line of the principal's already held.
 //! The resend sends each held line through the same reader of an answer, a
-//! reissue-class answer there reissued at the next probe.
+//! reissue-class answer there reissued at the next probe, and a line whose
+//! resends keep losing their answer handed to the person after
+//! [`MAX_LOST_ANSWERS`] of them, a refused run under `answers_lost` (§3c.4).
 //!
 //! **The queue** is each principal's [`HeldQueue`], in `k` order across the
 //! board's documents: copied to `held/<chain>/principal-<n>.held` where this
@@ -96,6 +98,22 @@ mod resend;
 /// to tuning.
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
 
+/// The lost answers a held line's resends take before it is the person's.
+///
+/// A resend whose answer is lost — a timeout, a garbled answer, the board's
+/// handler panicking (`internal_panic`): the table's `unreachable` rows with
+/// `sent` — counts one try; a connection never made counts none, nothing
+/// having left. At the bound the next read that finds no landing of the
+/// line hands it to the person as a refused run, `answers_lost`, its `sent`
+/// kept and the lines behind it waiting with it (§3c.4, §3c.5; skep #608);
+/// a read that finds its landing keeps it, so the hand-over never sends it
+/// twice. Chosen against [`PROBE_CADENCE`]: thirty probes at two seconds
+/// hand the line over a minute after its first lost answer where each try
+/// fails at once, a timeout adding its own wait to each. Counted per line
+/// in memory, as the rider is, so a relaunch counts afresh; the first dial
+/// is the person's own call's and counts none.
+const MAX_LOST_ANSWERS: u32 = 30;
+
 /// The short wait before a `write_busy` is reissued.
 ///
 /// It is §3c.4's "a silent reissue after a short wait" — interim, open to
@@ -125,7 +143,9 @@ fn is_burst(frame: &Value) -> bool {
 
 /// §3c.2's causes, as a held line and its answer spell them.
 ///
-/// Beside these, a refused run's line carries the board's own token.
+/// Beside these, a refused run's line carries the board's own token, or the
+/// shell's `answers_lost` where it handed the person a line whose resends
+/// lost their answer ([`MAX_LOST_ANSWERS`]).
 mod cause {
     pub const UNREACHABLE: &str = "unreachable";
     pub const STOPPED: &str = "stopped";
@@ -234,17 +254,24 @@ impl Reissue {
     }
 }
 
-/// The reissues one write has been given so far, by kind.
+/// The reissues one write has been given so far, and the answers it lost.
 ///
-/// They are what [`classify`] bounds the next by: a `write_busy` reissued
-/// once, a `durability` twice, its third holding a burst (§3c.4's rider).
-/// Counted by the caller as it reissues ([`Reissues::note`]), so every
-/// reissue moves the write toward its bound: a write is dialed four times
-/// at most.
+/// The reissues are what [`classify`] bounds the next by: a `write_busy`
+/// reissued once, a `durability` twice, its third holding a burst (§3c.4's
+/// rider). Counted by the caller as it reissues ([`Reissues::note`]), so
+/// every reissue moves the write toward its bound: a write is dialed four
+/// times at most within its call. A held line's lost answers are counted
+/// beside them, across its probes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Reissues {
     write_busy: u32,
     durability: u32,
+    /// The resends whose answer was lost, across the line's probes.
+    ///
+    /// Counted by the resend ([`is_lost_answer`]) and read by no
+    /// [`classify`]: at [`MAX_LOST_ANSWERS`] the line is the person's. The
+    /// person's `send` counts it afresh.
+    lost: u32,
 }
 
 impl Reissues {
@@ -381,9 +408,10 @@ pub enum Resolved {
     /// `"send"`: the document's waiting lines re-marked `behind`.
     ///
     /// They are handed back to the automatic machine (§3c.4; §4b.1: "handed
-    /// to the machine") — the caller hands the board's feed thread its
-    /// probe, so the call answers once the lines are handed back, never
-    /// after a resend's ack.
+    /// to the machine"), each keeping its `sent` and its lost answers
+    /// counted afresh — the caller hands the board's feed thread its probe,
+    /// so the call answers once the lines are handed back, never after a
+    /// resend's ack.
     HandedBack,
 }
 
@@ -582,6 +610,16 @@ fn awaits_act(line: &HeldLine) -> bool {
     matches!(line_state(&line.reason), HeldState::Refused | HeldState::Moved)
 }
 
+/// Returns whether a held line's `reason` is a lost answer.
+///
+/// It is the table's lost-answer row (§3c.2's `sent`): `unreachable` with
+/// `sent`, which a timeout, a garbled answer and the board's
+/// `internal_panic` each answer — never a connection never made, whose
+/// `sent` is false.
+fn is_lost_answer(reason: &Reason) -> bool {
+    reason.cause == cause::UNREACHABLE && reason.sent
+}
+
 /// Why a board's directory is not this shell's while another process holds
 /// its lock (§3c.3: one shell per data directory).
 const ANOTHER_PROCESS: &str = "another process holds this board's held store — one shell per data directory; a second launch hands its address to the running client and exits";
@@ -660,8 +698,8 @@ impl Custody {
 /// It holds where its lines are kept, the queue, the position of its last
 /// write per document whose position the shell knows — its ack's, or the
 /// landing the resend's read found: the `base` a hold on that document takes
-/// (§3c.2) — and the reissues each line's resend has been given, counted
-/// across its probes.
+/// (§3c.2) — and the reissues each line's resend has been given and the
+/// answers its resends lost, counted across its probes.
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
@@ -1170,9 +1208,10 @@ impl Holds {
     /// [`ResolveAct::Drop`] marks the line and every line held after it on
     /// that document — a refused run's `behind` lines, a moved document's
     /// later lines — `done … dropped`; [`ResolveAct::Send`] re-marks the
-    /// document's waiting lines `behind`, handing them back to the automatic
-    /// machine, and answers at once ([`Resolved::HandedBack`]): the probe that
-    /// resends them is the caller's to hand the board's feed thread.
+    /// document's waiting lines `behind`, each keeping its `sent` and its lost
+    /// answers counted afresh, handing them back to the automatic machine,
+    /// and answers at once ([`Resolved::HandedBack`]): the probe that resends
+    /// them is the caller's to hand the board's feed thread.
     ///
     /// # Errors
     ///
@@ -1199,11 +1238,18 @@ impl Holds {
             }
             ResolveAct::Send => {
                 // Re-enter the automatic machine (§3c.4): the document's
-                // waiting lines re-marked `behind`, the read run afresh at the
-                // next probe, and the refusal faced again where it recurs.
-                let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| l.k).collect();
-                for k in ks {
-                    self.remark_line(ph, k, Reason::of(cause::BEHIND, false));
+                // waiting lines re-marked `behind`, each keeping its `sent` —
+                // the read takes a landing it finds as the line's own only
+                // where `sent` stands, so a line that may have landed reads
+                // before it is sent again (§3c.5) — their lost answers counted
+                // afresh, the read run at the next probe, and the refusal
+                // faced again where it recurs.
+                let waiting: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| (l.k, l.reason.sent)).collect();
+                for (k, sent) in waiting {
+                    self.remark_line(ph, k, Reason::of(cause::BEHIND, sent));
+                    if let Some(given) = ph.reissues.get_mut(&k) {
+                        given.lost = 0;
+                    }
                 }
                 Ok(Resolved::HandedBack)
             }

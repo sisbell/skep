@@ -19,9 +19,13 @@
 //! leaving the board free to drain again; a move facing its own document
 //! alone; the own node stopped, `writes.halted` and a third `durability`
 //! holding a burst over time, a reused ordinal's reissues counted afresh;
-//! and every line's read starting past the person's own write — a line held
+//! every line's read starting past the person's own write — a line held
 //! behind a landing or an ack read from its position, and a line held after
-//! a landing the read found reading past it.
+//! a landing the read found reading past it; and a line whose resends keep
+//! losing their answer handed to the person at its bound, a minute or two
+//! of probes — a timeout, a garbled answer and a handler panic each one try,
+//! a connection never made none — its landing kept where the read finds
+//! one, before the hand-over or at the person's `send`.
 
 use super::*;
 
@@ -862,4 +866,150 @@ fn a_line_held_after_a_landing_the_read_found_reads_past_it() {
     let states = g.states();
     assert_eq!(g.fake.sends(), 1, "the line is sent");
     assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// Arms the fake's next send to lose its answer, the `n`-th try's way.
+///
+/// The ways come in turn: a timeout, a garbled answer, and the board's
+/// handler panicking (`500 internal_panic`).
+fn lose_the_next_answer(g: &Ground, n: u32) {
+    match n % 3 {
+        0 => g.fake.op_lost.next(1, Lost::Timeout),
+        1 => g.fake.op_lost.next(1, Lost::Garbled),
+        _ => g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"}))),
+    }
+}
+
+/// Checks that a line whose resends lose their answer is handed over.
+///
+/// A line that may have landed is resent at each probe, each answer lost —
+/// a timeout, a garbled answer and the board's handler panicking in turn,
+/// each one try. Through `MAX_LOST_ANSWERS` tries it holds, `not_resolvable`;
+/// at the next probe, its read finding no landing, it is handed to the
+/// person undialed: a refused run under `answers_lost`, its `sent` kept,
+/// said once on TALK and `refused` on the `held` event. A burst after it is
+/// held `behind`, and the probe dials nothing more; the person's `send`
+/// hands the line back, its tries counted afresh, and the next probe sends
+/// and keeps both (§3c.4; skep #608). The mutants that never count resend
+/// it for ever; the one that keeps the count at the person's `send` hands
+/// it straight back.
+#[test]
+fn a_line_whose_resends_lose_their_answer_is_handed_to_the_person() {
+    let g = ground();
+    let k = g.hold(&insert(DOC, json!(["a"])), "unreachable", true)["held"].as_u64().unwrap();
+    for n in 0..MAX_LOST_ANSWERS {
+        lose_the_next_answer(&g, n);
+        g.holds.probe("b-1");
+    }
+    let tries = MAX_LOST_ANSWERS as usize;
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (tries, Some("unreachable"), Some(true)), "{lines:?}");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap_err().name(), "not_resolvable", "the board's to answer still");
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!(g.fake.sends(), tries, "handed over undialed");
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("answers_lost"), Some(true)), "{lines:?}");
+    assert_eq!(lines[0]["refusal"], json!({"kind": "shell", "name": "answers_lost", "tries": MAX_LOST_ANSWERS}));
+    assert_eq!(g.states(), ["refused"]);
+    let said = g.said.lock().unwrap().clone();
+    let line = format!("held: line {k} on {DOC}: {MAX_LOST_ANSWERS} resends lost their answer");
+    assert_eq!(said.iter().filter(|l| l.starts_with(&line)).count(), 1, "said once: {said:?}");
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]))) else { panic!("held behind the line handed over") };
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), tries, "the lines wait for the person's act");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("behind"), Some(true)), "the person's send keeps `sent`: {lines:?}");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), tries + 2, "both lines sent");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// Checks that a line handed over whose write landed is kept at the send.
+///
+/// A line handed to the person after its resends lost their answer keeps
+/// its `sent`, and the person's `send` keeps it: where the write whose
+/// answer the board lost has landed after all — a row whose testimony the
+/// board lost, the line's values at its site — the next probe's read finds
+/// it and keeps the line, never sending it twice (§3c.5; skep #608; the
+/// mutant whose `send` re-marks the line `sent: false` faces the person's
+/// own text `moved`).
+#[test]
+fn a_handed_over_line_whose_write_landed_is_kept_at_the_persons_send() {
+    let g = ground();
+    let k = g.hold(&insert(DOC, json!(["hello"])), "unreachable", true)["held"].as_u64().unwrap();
+    for _ in 0..MAX_LOST_ANSWERS {
+        g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
+        g.holds.probe("b-1");
+    }
+    g.holds.probe("b-1");
+    assert_eq!(g.lines()[0]["cause"], "answers_lost", "handed to the person");
+    *g.fake.rows.lock().unwrap() = vec![lost_row()];
+    *g.fake.text.lock().unwrap() = "hello".into();
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let states = g.states();
+    assert_eq!(g.fake.sends(), MAX_LOST_ANSWERS as usize, "never sent twice");
+    assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// Checks that a line whose last lost answer landed is never handed over.
+///
+/// Before a line is handed to the person its read runs the landed test
+/// (§3c.5): a line whose resends lost their answer `MAX_LOST_ANSWERS`
+/// times, the last write then found landed — a row whose testimony the
+/// board lost, the line's values at its site — is kept at the next probe,
+/// never refused and never sent again (skep #608; the mutant that hands
+/// the line over before its read refuses text the board holds).
+#[test]
+fn a_line_whose_last_lost_answer_landed_is_kept_never_handed_over() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    for _ in 0..MAX_LOST_ANSWERS {
+        g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
+        g.holds.probe("b-1");
+    }
+    *g.fake.rows.lock().unwrap() = vec![lost_row()];
+    *g.fake.text.lock().unwrap() = "hello".into();
+    let _ = g.states();
+    g.holds.probe("b-1");
+    assert_eq!(g.states(), ["kept"]);
+    assert_eq!(g.fake.sends(), MAX_LOST_ANSWERS as usize, "never sent again");
+    assert!(g.lines().is_empty(), "kept, never refused");
+}
+
+/// Checks that a connection never made counts no try.
+///
+/// Where every resend fails at the connect — the board not answering, no
+/// request leaving — no answer was lost: the line holds `unreachable` past
+/// `MAX_LOST_ANSWERS` probes, `not_resolvable`, until the board answers and
+/// the next probe sends and keeps it (§3c.4; the mutant that counts a
+/// connection never made hands an outage's line to the person).
+#[test]
+fn a_connection_never_made_counts_no_try() {
+    let g = ground();
+    let k = g.hold(&insert(DOC, json!(["a"])), "unreachable", false)["held"].as_u64().unwrap();
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    for _ in 0..=MAX_LOST_ANSWERS {
+        g.holds.probe("b-1");
+    }
+    assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (0, Some("unreachable")));
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap_err().name(), "not_resolvable");
+    g.fake.op_unreachable.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "the board answering, the line is sent");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// Checks that the hand-over comes within a minute or two of probes.
+///
+/// `MAX_LOST_ANSWERS` tries at `PROBE_CADENCE` hand a line over between one
+/// minute and two of wall time where each try fails at once (skep #608).
+#[test]
+fn the_hand_over_comes_within_a_minute_or_two_of_probes() {
+    let wall = u64::from(MAX_LOST_ANSWERS) * PROBE_CADENCE.as_secs();
+    assert!((60..=120).contains(&wall), "{MAX_LOST_ANSWERS} tries at {PROBE_CADENCE:?} take {wall} s");
 }

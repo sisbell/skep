@@ -7,7 +7,7 @@ use skep_content::HasContent;
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3State};
 
-use super::{Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS};
+use super::{arrangement_moved, AsOf, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS};
 use crate::chain::published_target;
 use crate::error::CopyError;
 use crate::ownership::{gate_write, Caller};
@@ -64,7 +64,13 @@ where
     /// above) → `PublishedTarget` (PUB-2.11 on the destination's document,
     /// PUB-2.15 projected; copy-into is an in-place edit and carries no
     /// deposit exemption — the sources, published or private, are never what
-    /// this refuses on) → `NotContentSubspace` → `OutOfBounds`. Then, per
+    /// this refuses on) → `ArrangementMoved` (`as_of` names a state of the
+    /// destination older than its arrangement's last change — the stale-edit
+    /// refusal, skep #442, keyed on [`AsOf`] and judged ahead of every shape
+    /// check, so a stale paste never meets `OutOfBounds` for a position that
+    /// was true when it was typed; the sources are not judged for it, and
+    /// [`AsOf::Unchecked`] skips it) → `NotContentSubspace` → `OutOfBounds`.
+    /// Then, per
     /// spec: `SourceNotRegistered` → `NotOrdinalVSpan` (the span fails
     /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the one shape `resolve`
     /// folds on, so a span COPY rejects is exactly a span `resolve` would
@@ -125,6 +131,7 @@ where
         doc: &Address,
         at: VPos,
         specs: &[VSpec],
+        as_of: AsOf,
     ) -> Result<Seq, TxnError<CopyError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
@@ -141,6 +148,11 @@ where
                 // destination (PUB-2.11).
                 if published_target(world.m3(), doc) {
                     return Err(CopyError::PublishedTarget);
+                }
+                // The stale-edit refusal (skep #442) on the destination,
+                // ahead of every shape check.
+                if let Some((as_of, current)) = arrangement_moved(world.m5(), doc, as_of) {
+                    return Err(CopyError::ArrangementMoved { as_of, current });
                 }
                 if !at.is_content() {
                     return Err(CopyError::NotContentSubspace);

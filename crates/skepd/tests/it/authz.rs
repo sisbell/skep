@@ -1012,6 +1012,9 @@ const LISTED_MATRIX: &[ListedRow] = &[
 /// One presentation, WHOLE: the verdict, and whether that SAME response
 /// carried the death signal.
 fn presented(port: u16, token: &str, frame: &str) -> (String, bool) {
+    // A burst frame is typed at the head read now, as the suite's doors type
+    // it: the column is about the session's standing, never the member.
+    let frame = typed_at_head(port, frame);
     let (st, headers, body) = http_full(port, "POST", "/op", Some(token), frame.as_bytes());
     assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
     (verdict(&json(&body)), header(&headers, "Skepd-Session") == Some("closed"))

@@ -291,6 +291,15 @@ impl Fake {
         self.sends.lock().unwrap().len()
     }
 
+    /// The board's head as the fake stands: the `at` of its last ack, the
+    /// state a burst built now is typed against (`as_of`, wire.md
+    /// §Arrangement; skep #442). The fake judges nothing of it yet — the
+    /// shell's shift lane teaches it the refusal — but every frame the
+    /// suites build is the wire's frame, member and all.
+    fn head(&self) -> u64 {
+        self.next_at.load(Ordering::SeqCst) - 1
+    }
+
     /// The `/health` gate shut: each read waits there until it opens.
     fn shut_health(&self) {
         *self.health_gate.0.lock().unwrap() = true;
@@ -584,15 +593,19 @@ fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) ->
     Ground { holds, fake, session, rx, said, store }
 }
 
-fn insert(doc: &str, values: Value) -> Value {
-    json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": values})
+/// An `insert` of `values` at the document's first position, typed against
+/// `as_of` (wire.md §Arrangement, the typed state): the fake board's head
+/// as the cell read it (`Fake::head`), which is what a page holding the
+/// board's text at that state sends.
+fn insert(doc: &str, values: Value, as_of: u64) -> Value {
+    json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": values, "as_of": as_of})
 }
 
 /// A `delete` of the document's first position, in the wire's own form
 /// (wire.md §Arrangement: `p` and `width`) — a burst whose site no read
-/// confirms.
-fn delete(doc: &str) -> Value {
-    json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": "1"}, "width": "1"})
+/// confirms — typed against `as_of` as [`insert`]'s is.
+fn delete(doc: &str, as_of: u64) -> Value {
+    json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": as_of})
 }
 
 /// A `/changes` row whose testimony the board lost (wire.md §`/changes`):

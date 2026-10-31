@@ -67,7 +67,7 @@ use skep_febe::{
     SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
 };
 use skep_identity::SigAlgRow;
-use skep_kernel::Attestation;
+use skep_kernel::{Attestation, Seq};
 use skep_links::{
     member_end, request_image, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
     PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
@@ -628,21 +628,30 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "effective_owner" => Op::EffectiveOwner { addr: fields.addr("addr")? },
         "doc_metadata" => Op::DocMetadata { doc: fields.addr("doc")? },
+        // The five in-place edits each carry `as_of`, the document state
+        // the edit was typed against (wire.md §Arrangement; skep #442): a
+        // REQUIRED position, read as the response envelope writes one, so a
+        // frame without it is "missing field" — `malformed` by the
+        // envelope's rule — and, taken here on the five alone, the member on
+        // any other op is left for `finish` to refuse as unknown.
         "insert" => Op::Insert {
             doc: fields.addr("doc")?,
             at: fields.vpos("at")?,
             values: fields.vals("values")?,
             deposit: fields.deposit()?,
+            as_of: fields.seq("as_of")?,
         },
         "delete" => Op::Delete {
             doc: fields.addr("doc")?,
             p: fields.vpos("p")?,
             width: fields.nat("width")?,
+            as_of: fields.seq("as_of")?,
         },
         "copy" => Op::Copy {
             doc: fields.addr("doc")?,
             at: fields.vpos("at")?,
             specs: fields.vspecs("specs")?,
+            as_of: fields.seq("as_of")?,
         },
         // The write by identity (wire.md §Arrangement, `reinstate`): the runs
         // in the shot's own form, through the one run parser, so no
@@ -652,8 +661,13 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
             doc: fields.addr("doc")?,
             at: fields.vpos("at")?,
             runs: fields.shot_runs("runs")?,
+            as_of: fields.seq("as_of")?,
         },
-        "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
+        "rearrange" => Op::Rearrange {
+            doc: fields.addr("doc")?,
+            cuts: fields.vposes("cuts")?,
+            as_of: fields.seq("as_of")?,
+        },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
         // The target, the claim's flag, the shot, then its kept places and
         // its deposits beside it (the link-sets design §5.7): the places
@@ -868,6 +882,16 @@ impl Fields {
 
     fn u64(&mut self, k: &'static str) -> PResult<u64> {
         self.field(k, p_u64)
+    }
+
+    /// Takes a required position: a non-negative JSON integer, as every
+    /// position the response envelope writes (`at`, `as_of`) is read back.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the field is missing or is no such integer.
+    fn seq(&mut self, k: &'static str) -> PResult<Seq> {
+        self.u64(k).map(Seq)
     }
 
     /// Takes the optional top-level `attest` member on a checked-set op.

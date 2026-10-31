@@ -5,7 +5,7 @@ use crate::testutil::{a, ca, doc1, doc2, la, n, pca, run, vca, vdoc};
 use crate::vspace::VPos;
 
 fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
-    s.apply_m5(&M5Rec::ContentPlace {
+    s.apply_m5(Seq(1), &M5Rec::ContentPlace {
         doc: doc.clone(),
         at: n(at),
         runs,
@@ -34,7 +34,7 @@ fn content_remove_contracts_the_arrangement_and_leaves_r_standing() {
     // §4: DELETE drops arrangement entries only; R keeps the pair (P2),
     // which is exactly what SHOWDELETIONS reads.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
-    let s = s.apply_m5(&M5Rec::ContentRemove {
+    let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(2),
         width: n(2),
@@ -61,8 +61,8 @@ fn link_seat_appends_at_the_next_link_position_and_never_touches_r() {
     // §8: append at n_L(d) + 1; sequential A_L(d) allocations coalesce to
     // one maximally-merged run (a valid S8★ witness); J-LV — no R.
     let s = M5State::genesis();
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(2) });
     assert_eq!(s.link_count(&doc1()), n(2));
     assert_eq!(s.link_runs(&doc1()).cloned().collect::<Vec<_>>(), vec![run(&la(1), 2)]);
     assert_eq!(s.content_count(&doc1()), n(0));
@@ -88,7 +88,7 @@ fn the_link_seat_fold_mints_through_the_run_door_and_drops_what_it_refuses() {
     // this fold runs inside `Kernel::open`.
     let s = M5State::genesis();
     for link in [doc1(), a(&[1, 0, 1, 0, 1, 0, 2])] {
-        let out = s.apply_m5(&M5Rec::LinkSeat {
+        let out = s.apply_m5(Seq(1), &M5Rec::LinkSeat {
             doc: doc1(),
             link: link.clone(),
         });
@@ -96,7 +96,7 @@ fn the_link_seat_fold_mints_through_the_run_door_and_drops_what_it_refuses() {
         assert_eq!(out.link_runs(&doc1()).len(), 0, "{link:?}");
         // And the subspace is still seatable afterwards, which is what
         // dropping buys and placing would have cost permanently.
-        let after = out.apply_m5(&M5Rec::LinkSeat {
+        let after = out.apply_m5(Seq(1), &M5Rec::LinkSeat {
             doc: doc1(),
             link: la(1),
         });
@@ -109,7 +109,7 @@ fn the_link_seat_fold_mints_through_the_run_door_and_drops_what_it_refuses() {
     }
     // A well-formed seat still lands, so the assertions above are not
     // earned by a fold that has stopped seating anything.
-    let ok = s.apply_m5(&M5Rec::LinkSeat {
+    let ok = s.apply_m5(Seq(1), &M5Rec::LinkSeat {
         doc: doc1(),
         link: la(1),
     });
@@ -123,7 +123,7 @@ fn version_snapshot_shares_the_map_preserving_multiplicity() {
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
     let s = place(&s, &doc1(), 3, vec![run(&ca(1), 2)]); // duplicate placement
     assert_eq!(s.content_count(&doc1()), n(4));
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
@@ -165,7 +165,7 @@ fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
             new: vdoc(),
         };
         let fork_bytes = bincode::serialize(&rec).expect("the record encodes").len();
-        let forked = s.apply_m5(&rec);
+        let forked = s.apply_m5(Seq(1), &rec);
         assert_eq!(
             forked.content_runs(&vdoc()).collect::<Vec<_>>(),
             s.content_runs(&doc1()).collect::<Vec<_>>()
@@ -206,10 +206,10 @@ fn version_snapshot_leaves_the_forks_link_subspace_empty() {
     // document: the state CL-OWN forbids and `stage_seat_link` will not
     // create, reachable then only through versioning.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(2) });
     assert_eq!(s.link_count(&doc1()), n(2));
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
@@ -234,14 +234,14 @@ fn a_fork_keeps_the_arrangement_its_source_had_at_the_fork_point() {
     // the property a lazy or by-reference share — the explicit-runs
     // migration this record's own doc anticipates — would quietly lose.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
     // The source grows…
     let s = place(&s, &doc1(), 3, vec![run(&ca(5), 1)]);
     // …and shrinks, after the fork was taken.
-    let s = s.apply_m5(&M5Rec::ContentRemove {
+    let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(1),
         width: n(1),
@@ -273,7 +273,7 @@ fn every_address_a_document_arranged_is_recorded_in_r() {
     // ONE record placing TWO runs — the shape COPY stages, and the only
     // shape in which a truncated ContentPlace append is observable.
     let s = place(&s, &doc1(), 3, vec![run(&vca(1), 1), run(&ca(5), 2)]);
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
@@ -284,7 +284,7 @@ fn every_address_a_document_arranged_is_recorded_in_r() {
             5,
             "the fixture arranges five positions in {doc:?}"
         );
-        let gone = s.apply_m5(&M5Rec::ContentRemove {
+        let gone = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
             doc: doc.clone(),
             from: n(1),
             width: n(5),
@@ -309,7 +309,7 @@ fn only_placement_and_version_append_to_r() {
     // identically and shows up only as unbounded growth. R itself has to
     // be compared directly.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 4)]);
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
     for r in [
         M5Rec::ContentRemove {
             doc: doc1(),
@@ -326,7 +326,7 @@ fn only_placement_and_version_append_to_r() {
         },
     ] {
         assert_eq!(
-            s.apply_m5(&r).provenance,
+            s.apply_m5(Seq(1), &r).provenance,
             s.provenance,
             "{r:?} must not append to R"
         );
@@ -334,13 +334,13 @@ fn only_placement_and_version_append_to_r() {
     // The three that DO append, so the comparisons above cannot pass
     // vacuously — a `provenance` that had stopped changing at all would
     // satisfy them.
-    let placed = s.apply_m5(&M5Rec::ContentPlace {
+    let placed = s.apply_m5(Seq(1), &M5Rec::ContentPlace {
         doc: doc2(),
         at: n(1),
         runs: vec![run(&ca(1), 1)],
     });
     assert_ne!(placed.provenance, s.provenance);
-    let shot = s.apply_m5(&M5Rec::ShotPlace {
+    let shot = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 1)],
         terms: ShotTerms {
@@ -349,7 +349,7 @@ fn only_placement_and_version_append_to_r() {
         },
     });
     assert_ne!(shot.provenance, s.provenance);
-    let forked = s.apply_m5(&M5Rec::VersionSnapshot {
+    let forked = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
@@ -361,7 +361,7 @@ fn version_snapshot_of_an_empty_source_gives_the_fork_no_arrangement_entry_and_n
     // §7: n = 0 ⇒ no provenance append AND no arrangements entry — the
     // lazy absent-⇒-empty convention stays clean.
     let s0 = M5State::genesis();
-    let s1 = s0.apply_m5(&M5Rec::VersionSnapshot {
+    let s1 = s0.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc2(),
         new: vdoc(),
     });
@@ -378,7 +378,7 @@ fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it()
     // placement is a deposit the head took — a `ContentPlace`, which notes
     // nothing: the arrangement grows (PUB-2.66) and the birth extent does
     // not.
-    let born = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
+    let born = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
         terms: ShotTerms { placed: n(3), base_extent: None },
@@ -423,7 +423,7 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
         a(&[1, 0, 1, 0, 1, 1, 1]),
         a(&[1, 0, 1, 0, 1, 3, 1]),
     ] {
-        s = s.apply_m5(&mint(&doc));
+        s = s.apply_m5(Seq(1), &mint(&doc));
         assert_eq!(s.content_count(&doc), n(2));
         assert_eq!(s.birth_extent(&doc), None, "{doc:?} is no birth version");
     }
@@ -431,7 +431,7 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
         s.birth_extents.is_empty(),
         "and `birth_extents` holds no entry for any of them"
     );
-    let s = s.apply_m5(&mint(&vdoc()));
+    let s = s.apply_m5(Seq(1), &mint(&vdoc()));
     assert_eq!(
         s.birth_extent(&vdoc()),
         Some(&n(2)),
@@ -444,7 +444,7 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
     // An owned VERSION of a memberless published document mints the birth
     // version by `VersionSnapshot`: what it shares is what it is born with.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
@@ -455,7 +455,7 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
     // is noted as zero — the arrangement and R still gain no entry — and
     // the version's first deposit, which notes nothing, leaves it so: a
     // home born with no content stays an edition of nothing (RES-130).
-    let born_empty = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
+    let born_empty = M5State::genesis().apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc2(),
         new: vdoc(),
     });
@@ -465,7 +465,7 @@ fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero
     assert_eq!(deposited.content_count(&vdoc()), n(1));
     assert_eq!(deposited.birth_extent(&vdoc()), Some(&n(0)), "born empty, whatever it took since");
     // A cross-owner fork's `new` is a fresh DOCUMENT and notes nothing.
-    let forked = s.apply_m5(&M5Rec::VersionSnapshot {
+    let forked = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: doc2(),
     });
@@ -481,7 +481,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
     // DEPOSIT, a `ContentPlace` at the same ordinal into the same absent
     // arrangement, notes nothing and grows the count alone. No conforming
     // mint is empty (PUB-3.11).
-    let minted_empty = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
+    let minted_empty = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![],
         terms: ShotTerms { placed: n(0), base_extent: None },
@@ -517,7 +517,7 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
         runs: runs.clone(),
         terms: terms.clone(),
     };
-    let by_shot = M5State::genesis().apply_m5(&shot);
+    let by_shot = M5State::genesis().apply_m5(Seq(1), &shot);
     assert_eq!(
         by_shot.content_runs(&vdoc()).collect::<Vec<_>>(),
         by_place.content_runs(&vdoc()).collect::<Vec<_>>(),
@@ -632,7 +632,7 @@ fn the_fold_answers_records_outside_its_input_class_without_panicking() {
             cut_ordinals: vec![n(1), n(2), n(3)],
         },
     ] {
-        let out = s.apply_m5(&r);
+        let out = s.apply_m5(Seq(1), &r);
         // It answered — and what it answered is still an arrangement:
         // D-SEQ★ holds, the count being the largest arranged ordinal.
         let n_c = out.content_count(&doc1());
@@ -651,12 +651,12 @@ fn fold_is_deterministic_and_state_serde_round_trips() {
     // hence canonical); rebuild_derived is the identity.
     let build = || {
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
-        let s = s.apply_m5(&M5Rec::ContentRemove {
+        let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
             doc: doc1(),
             from: n(2),
             width: n(1),
         });
-        s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) })
+        s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) })
     };
     let first = build();
     let second = build();
@@ -687,7 +687,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
         runs: vec![run(&ca(1), 3)],
         terms: ShotTerms { placed: n(3), base_extent: None },
     };
-    let born = M5State::genesis().apply_m5(&mint);
+    let born = M5State::genesis().apply_m5(Seq(1), &mint);
     let grown = place(&born, &vdoc(), 4, vec![run(&ca(4), 1)]);
     let bytes = bincode::serialize(&grown).expect("state serializes");
     let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
@@ -698,7 +698,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
     // Replay re-derives them: the same records fold to the same birth
     // extents.
     let again = place(
-        &M5State::genesis().apply_m5(&mint),
+        &M5State::genesis().apply_m5(Seq(1), &mint),
         &vdoc(),
         4,
         vec![run(&ca(4), 1)],
@@ -730,11 +730,11 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     // against this test. A corpus seed for the fuzzing tier: this body, at
     // every offset, under every count.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
-    let s = s.apply_m5(&M5Rec::LinkSeat {
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat {
         doc: doc1(),
         link: la(1),
     });
-    let s = s.apply_m5(&M5Rec::ShotPlace {
+    let s = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 2)],
         terms: ShotTerms {
@@ -742,7 +742,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
             base_extent: Some(n(1)),
         },
     });
-    let s = s.apply_m5(&M5Rec::ShotPlace {
+    let s = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: a(&[1, 0, 1, 0, 2, 1]),
         runs: vec![run(&pca(1), 1)],
         terms: ShotTerms {
@@ -752,7 +752,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     });
     // The premise: every collection the slice decodes holds an entry, so the
     // sweep writes over each one's count and over the counts within it.
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: doc2(),
     });
@@ -808,7 +808,7 @@ fn a_version_minted_document_is_noted_with_the_source_it_was_born_sharing() {
     // a bare document here, and a MEMBER where the source had a chain. The
     // source itself answers none: the read answers the address named.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
-    let owned = s.apply_m5(&M5Rec::VersionSnapshot {
+    let owned = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),
     });
@@ -817,7 +817,7 @@ fn a_version_minted_document_is_noted_with_the_source_it_was_born_sharing() {
     // A cross-owner fork taken off the chain's member: the surface a bare
     // published source with members resolves to is its head, and the record
     // names that member, so the fork's source IS the member.
-    let forked = owned.apply_m5(&M5Rec::VersionSnapshot {
+    let forked = owned.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: vdoc(),
         new: fork_doc(),
     });
@@ -838,7 +838,7 @@ fn a_fork_of_an_empty_source_is_noted_all_the_same() {
     // SOURCE★: the fact is the source, not the content — the empty arm
     // installs no arrangement and appends no provenance, and writes the one
     // entry a snapshot writes whatever the surface holds.
-    let s = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
+    let s = M5State::genesis().apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc2(),
         new: fork_doc(),
     });
@@ -854,7 +854,7 @@ fn only_a_version_record_notes_a_fork_source() {
     // reaches this slice with no record at all — so each answers `None`,
     // as does a document nothing has touched and the trunk the version
     // chain belongs to.
-    let shot = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
+    let shot = M5State::genesis().apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: vdoc(),
         runs: vec![run(&ca(1), 2)],
         terms: ShotTerms { placed: n(2), base_extent: None },
@@ -876,11 +876,11 @@ fn a_fork_of_a_fork_answers_its_own_source_one_hop() {
     // first, never the line's root; the whole line is read by iterating,
     // each hop under its own document's gate.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: doc1(),
         new: fork_doc(),
     });
-    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+    let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
         source: fork_doc(),
         new: fork_of_fork_doc(),
     });
@@ -898,11 +898,11 @@ fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
     // from is still its source: the fact is the mint's, not the content's.
     let build = || {
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
-        let s = s.apply_m5(&M5Rec::VersionSnapshot {
+        let s = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
             source: doc1(),
             new: fork_doc(),
         });
-        s.apply_m5(&M5Rec::ContentRemove {
+        s.apply_m5(Seq(1), &M5Rec::ContentRemove {
             doc: fork_doc(),
             from: n(1),
             width: n(3),
@@ -927,9 +927,10 @@ fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
         &live.birth_extents,
         &live.shot_terms,
         &live.fork_sources,
+        &live.arranged_at,
     ))
     .expect("the fields serialize");
-    assert_eq!(fields, bytes, "`fork_sources` is written after `shot_terms`, last");
+    assert_eq!(fields, bytes, "`fork_sources` is written after `shot_terms`, before `arranged_at`");
 }
 
 #[test]
@@ -976,12 +977,111 @@ fn m5rec_survives_a_bincode_round_trip() {
         let bytes = bincode::serialize(&rec).expect("record serializes");
         let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
         assert_eq!(back, rec, "the same record, not merely one folding alike");
-        let folded = base.apply_m5(&rec);
+        let folded = base.apply_m5(Seq(1), &rec);
         assert_ne!(folded, base, "{rec:?} changes the base it folds onto");
         assert_eq!(
             bincode::serialize(&folded).expect("serializes"),
-            bincode::serialize(&base.apply_m5(&back)).expect("serializes"),
+            bincode::serialize(&base.apply_m5(Seq(1), &back)).expect("serializes"),
             "{rec:?}"
         );
     }
+}
+
+/// MOVED★ (skep #442), arm by arm: the four content-touching records and
+/// the snapshot move their document's arranged-at entry to the position
+/// the fold is handed — the shot's and the snapshot's on both branches,
+/// an empty placement and an empty source included — and the link seat
+/// moves none; the snapshot leaves its source's entry where it stood.
+#[test]
+fn every_arm_that_changes_a_content_arrangement_notes_its_position_and_the_link_seat_does_not() {
+    let s = M5State::genesis();
+    assert_eq!(s.arranged_at(&doc1()), None, "never arranged");
+    let s = s.apply_m5(
+        Seq(3),
+        &M5Rec::ContentPlace { doc: doc1(), at: n(1), runs: vec![run(&ca(1), 3)] },
+    );
+    assert_eq!(s.arranged_at(&doc1()), Some(Seq(3)), "the placement");
+    let s = s.apply_m5(Seq(5), &M5Rec::ContentRemove { doc: doc1(), from: n(2), width: n(1) });
+    assert_eq!(s.arranged_at(&doc1()), Some(Seq(5)), "the removal");
+    let s = s.apply_m5(
+        Seq(7),
+        &M5Rec::ContentReorder { doc: doc1(), cut_ordinals: vec![n(1), n(2), n(3)] },
+    );
+    assert_eq!(s.arranged_at(&doc1()), Some(Seq(7)), "the reorder");
+    let s = s.apply_m5(Seq(9), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    assert_eq!(s.link_count(&doc1()), n(1), "the link was seated…");
+    assert_eq!(s.arranged_at(&doc1()), Some(Seq(7)), "…and moved the entry nowhere");
+    // The snapshot: `new` at its mint, the source where it stood — on the
+    // sharing branch and the empty-source branch alike.
+    let s = s.apply_m5(Seq(11), &M5Rec::VersionSnapshot { source: doc1(), new: vdoc() });
+    assert_eq!(s.arranged_at(&vdoc()), Some(Seq(11)), "the fork starts at its mint");
+    assert_eq!(s.arranged_at(&doc1()), Some(Seq(7)), "the source is untouched");
+    let s = s.apply_m5(Seq(13), &M5Rec::VersionSnapshot { source: doc2(), new: a(&[1, 0, 2, 0, 1]) });
+    assert_eq!(s.content_count(&a(&[1, 0, 2, 0, 1])), n(0), "an empty source shares nothing…");
+    assert_eq!(s.arranged_at(&a(&[1, 0, 2, 0, 1])), Some(Seq(13)), "…and its fork is noted all the same");
+    assert_eq!(s.arranged_at(&doc2()), None, "an empty source never arranged stays so");
+    // The shot's placement: the member at the shot, placed or empty.
+    let terms = ShotTerms { placed: n(1), base_extent: None };
+    let s = s.apply_m5(
+        Seq(17),
+        &M5Rec::ShotPlace { doc: pca_member(), runs: vec![run(&pca(1), 1)], terms: terms.clone() },
+    );
+    assert_eq!(s.arranged_at(&pca_member()), Some(Seq(17)), "the shot's member");
+    let empty_member = a(&[1, 0, 1, 0, 2, 1]);
+    let s = s.apply_m5(Seq(19), &M5Rec::ShotPlace { doc: empty_member.clone(), runs: vec![], terms });
+    assert_eq!(s.content_count(&empty_member), n(0));
+    assert_eq!(s.arranged_at(&empty_member), Some(Seq(19)), "an empty placement is noted too");
+}
+
+/// The member the shot places into in the cell above: pdoc's first member.
+fn pca_member() -> Address {
+    a(&[1, 0, 1, 0, 3, 1])
+}
+
+/// The arranged-at map rides the checkpoint as its five siblings do, is
+/// re-derived by replay to the same bytes, and is the slice's LAST field —
+/// after `fork_sources`, under the same no-default rule — so a checkpoint
+/// written before it ends where it would begin and decodes no default.
+#[test]
+fn the_arranged_at_positions_ride_the_checkpoint_last_and_replay_re_derives_them() {
+    let build = || {
+        let s = M5State::genesis().apply_m5(
+            Seq(4),
+            &M5Rec::ContentPlace { doc: doc1(), at: n(1), runs: vec![run(&ca(1), 3)] },
+        );
+        let s = s.apply_m5(Seq(6), &M5Rec::VersionSnapshot { source: doc1(), new: vdoc() });
+        s.apply_m5(Seq(9), &M5Rec::ContentRemove { doc: doc1(), from: n(1), width: n(3) })
+    };
+    let live = build();
+    assert_eq!(live.arranged_at(&doc1()), Some(Seq(9)));
+    assert_eq!(live.arranged_at(&vdoc()), Some(Seq(6)));
+    let bytes = bincode::serialize(&live).expect("state serializes");
+    let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
+    assert_eq!(back, live);
+    assert_eq!(back.arranged_at(&doc1()), Some(Seq(9)), "the checkpoint carries it");
+    assert_eq!(bincode::serialize(&build()).expect("serializes"), bytes, "replay equals live");
+    let fields = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+        &live.arranged_at,
+    ))
+    .expect("the fields serialize");
+    assert_eq!(fields, bytes, "`arranged_at` is written after `fork_sources`, last");
+    // A body cut short of the map — a checkpoint written before it — does
+    // not decode: the no-default rule.
+    let without: Vec<u8> = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+    ))
+    .expect("the five fields serialize");
+    assert!(
+        bincode::deserialize::<M5State>(&without).is_err(),
+        "a checkpoint body without the map must fail to decode, never read as never arranged"
+    );
 }

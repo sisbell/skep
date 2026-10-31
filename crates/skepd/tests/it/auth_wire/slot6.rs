@@ -461,7 +461,7 @@ fn a_content_session_writes_content_and_deposits_no_credential() {
     // opened the session, its row carrying `attest` and no `key`, the scope
     // being nowhere in the record.
     let ordinal = next_content_ordinal(port, Some(&content), CLAIMANT_DOC1);
-    let v = op(port, Some(&content), &insert_frame(CLAIMANT_DOC1, ordinal, "z", true));
+    let v = op(port, Some(&content), &insert_frame(CLAIMANT_DOC1, ordinal, "z", true, head_position(port)));
     let at = acked_at(&v);
     let page = json(&http(port, "GET", &format!("/changes?since={}", at - 1), Some(&content), b"").1);
     let entry = page["changes"]

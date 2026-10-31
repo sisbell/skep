@@ -2,10 +2,51 @@
 //! its guards in their documented order.
 
 use skep_address::{Address, Span, SpanSet};
-use skep_arrangement::{CopyError, HasM5, Run, VSpec};
+use skep_arrangement::{AsOf, CopyError, HasM5, Run, VSpec};
 use skep_content::HasContent;
+use skep_kernel::Seq;
 
 use crate::common::*;
+
+/// The stale-edit refusal (skep #442) on COPY, keyed on the destination. A
+/// copy into a draft never arranged lands whatever state it is typed
+/// against and records the destination's position; a second typed at the
+/// same older state is refused `ArrangementMoved` with both positions and
+/// commits nothing. Ahead of every shape check and every spec: a stale copy
+/// past the boundary, or naming an unregistered source, meets the one code
+/// and never `OutOfBounds` or `SourceNotRegistered`; the source's own
+/// arrangement moving refuses nothing.
+#[test]
+fn a_copy_typed_against_an_older_destination_is_refused_ahead_of_the_shape_checks() {
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    let spec = VSpec { source: doc1(), span: vspan(1, 1, 1) };
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc2()), None);
+    let at = vs
+        .copy(P1, &doc2(), vp(1, 1), &[spec.clone()], AsOf::Typed(Seq(0)))
+        .expect("a destination never arranged admits a copy typed at genesis");
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc2()), Some(at));
+    let before = k.current_seq();
+    assert_eq!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec.clone()], AsOf::Typed(Seq(0)))),
+        CopyError::ArrangementMoved { as_of: Seq(0), current: at }
+    );
+    let unregistered = VSpec { source: a(&[1, 0, 1, 0, 9]), span: vspan(1, 1, 1) };
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 99), &[spec.clone()], AsOf::Typed(Seq(0)))),
+        CopyError::ArrangementMoved { .. }
+    ));
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[unregistered], AsOf::Typed(Seq(0)))),
+        CopyError::ArrangementMoved { .. }
+    ));
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    // The source moving on is no change to the destination: a copy typed at
+    // the destination's own position lands after doc1 is edited.
+    vs.delete(P1, &doc1(), vp(1, 3), n(1), now(&k)).expect("the source moves on");
+    vs.copy(P1, &doc2(), vp(1, 2), &[spec], AsOf::Typed(at)).expect("typed at the destination's state");
+    assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(2));
+}
 
 #[test]
 fn copy_transcludes_by_reference_and_records_provenance() {
@@ -23,6 +64,7 @@ fn copy_transcludes_by_reference_and_records_provenance() {
                 source: doc1(),
                 span: vspan(1, 1, 2),
             }],
+            now(&k),
         )
         .expect("copy commits");
     let s = k.snapshot();
@@ -54,6 +96,7 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
+        now(&k),
     )
     .expect("self-copy commits");
     let s = k.snapshot();
@@ -71,21 +114,21 @@ fn copy_rejects_each_documented_guard() {
     let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     // Destination checks first (as INSERT, minus EmptyContent).
     assert!(matches!(
-        rejected(vs.copy(P1, &unregistered_doc, vp(1, 1), &[])),
+        rejected(vs.copy(P1, &unregistered_doc, vp(1, 1), &[], now(&k))),
         CopyError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[])),
+        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[], now(&k))),
         CopyError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[], now(&k))),
         CopyError::OutOfBounds
     ));
     // Subspace before bounds: the destination position is BOTH in the link
     // subspace and past doc2's only admissible boundary (n_C + 1 = 1).
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(2, 99), &[])),
+        rejected(vs.copy(P1, &doc2(), vp(2, 99), &[], now(&k))),
         CopyError::NotContentSubspace
     ));
     let spec = |source: Address, span: Span| VSpec { source, span };
@@ -93,31 +136,31 @@ fn copy_rejects_each_documented_guard() {
     // placement position, whatever the spec. Admitted, the splice would
     // clamp it to 1 and place at the front.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 0), &[spec(doc1(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 0), &[spec(doc1(), vspan(1, 1, 1))], now(&k))),
         CopyError::OutOfBounds
     ));
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))], now(&k))),
         CopyError::SourceNotRegistered
     ));
     // Destination before spec: a link-subspace destination beside a spec
     // whose source is unregistered. "Destination first, then per spec" is
     // the documented order; the other reading gives SourceNotRegistered.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))], now(&k))),
         CopyError::NotContentSubspace
     ));
     // …the destination's bounds included: a position past doc2's only
     // admissible boundary beside the same unregistered source.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))], now(&k))),
         CopyError::OutOfBounds
     ));
     // NotOrdinalVSpan: a T12-legal [m, n] width with m > 0 is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
     let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), action_point_1)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), action_point_1)], now(&k))),
         CopyError::NotOrdinalVSpan
     ));
     // NotOrdinalVSpan also on a T12-legal span whose WIDTH is deeper than two: its
@@ -126,17 +169,17 @@ fn copy_rejects_each_documented_guard() {
     // it would resolve five ordinals for a span reaching [1, 6, 0].
     let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), deep_width)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), deep_width)], now(&k))),
         CopyError::NotOrdinalVSpan
     ));
     // Content-residence guard (§5).
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(2, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(2, 1, 1))], now(&k))),
         CopyError::SourceNotContentSubspace
     ));
     // Registered-but-content-empty source is a typed verdict, not a skip.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(1, 1, 1))], now(&k))),
         CopyError::EmptySource
     ));
     // Which of the per-spec verdicts wins, in each documented pair.
@@ -144,27 +187,27 @@ fn copy_rejects_each_documented_guard() {
     // is mis-shaped. Shape first would answer NotOrdinalVSpan.
     let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(unregistered_doc.clone(), action_point_1)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(unregistered_doc.clone(), action_point_1)], now(&k))),
         CopyError::SourceNotRegistered
     ));
     // Shape before residence: this span is BOTH mis-shaped (action-point-1)
     // and in the link subspace, and the shape check runs first.
     let action_point_1_in_link = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), action_point_1_in_link)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), action_point_1_in_link)], now(&k))),
         CopyError::NotOrdinalVSpan
     ));
     // Residence before emptiness: doc2 is content-empty AND asked for in the
     // link subspace, and the residence check runs first.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(2, 1, 1))])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(2, 1, 1))], now(&k))),
         CopyError::SourceNotContentSubspace
     ));
     // Shape before emptiness: doc2 is BOTH content-empty and asked for with
     // a mis-shaped span.
     let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), action_point_1)])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), action_point_1)], now(&k))),
         CopyError::NotOrdinalVSpan
     ));
     // WHICH SPEC speaks when two are defective: the list is walked, and the
@@ -180,18 +223,18 @@ fn copy_rejects_each_documented_guard() {
             &doc2(),
             vp(1, 1),
             &[spec(doc1(), action_point_1), spec(unregistered_doc.clone(), vspan(1, 1, 1))]
-        )),
+        , now(&k))),
         CopyError::NotOrdinalVSpan
     ));
     // Span-level out-of-range stays accept-and-intersect: clipping to
     // nothing is EmptyResult…
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(1, 5, 2))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(1, 5, 2))], now(&k))),
         CopyError::EmptyResult
     ));
     // …as is an empty spec list.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[], now(&k))),
         CopyError::EmptyResult
     ));
     // Two of COPY's guards are not exercised from here, both in

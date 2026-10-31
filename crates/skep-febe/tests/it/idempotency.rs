@@ -36,6 +36,7 @@ fn recall_answers_the_memoized_ack_ahead_of_execute_and_misses_as_execute_would(
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'x'])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
     let id = ReqId(b"ins-recall".to_vec());
     assert_eq!(fx.febe.recall(fx.user, &id, OpKind::Insert), None, "nothing committed under the id yet");
@@ -66,6 +67,7 @@ fn a_sequential_retry_replays_its_ack_and_a_fresh_session_re_executes() {
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'x'])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
 
     let (addr1, at1) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", insert()));
@@ -131,10 +133,11 @@ fn a_write_reusing_a_req_id_under_another_kind_executes_rather_than_replaying() 
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![b'x'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
 
-    let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1) };
+    let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1), as_of: head(&fx) };
     let at_del = ack(ex_id(&fx.febe, fx.user, b"same", del()));
     assert!(at_del > at_ins, "the cross-kind write executed and committed on its own account");
 
@@ -158,6 +161,7 @@ fn an_id_reused_for_a_different_write_of_the_same_kind_answers_the_first_ack_and
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![byte])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
     let first = ack_addr(ex_id(&fx.febe, fx.user, b"reused", insert(b'x')));
     let before = fx.febe.log_position();
@@ -180,6 +184,7 @@ fn an_oversized_request_id_is_answered_and_its_retry_re_executes() {
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'y'])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
 
     let over = vec![b'k'; MAX_REQ_ID_BYTES + 1];
@@ -237,7 +242,7 @@ fn a_retried_delete_replays_its_bare_ack() {
     let fx = setup();
     let d = create_doc(&fx);
     insert3(&fx, &d);
-    let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1) };
+    let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1), as_of: head(&fx) };
 
     let at = ack(ex_id(&fx.febe, fx.user, b"del-1", del()));
     let before = fx.febe.log_position();
@@ -273,6 +278,7 @@ fn a_front_door_built_at_two_evicts_the_first_entry_at_the_third() {
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![byte])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
 
     let first = ack_addr(ex_id(&fx.febe, fx.user, b"one", insert(b'a')));

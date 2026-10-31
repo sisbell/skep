@@ -72,14 +72,16 @@ fn changes_answers_what_changed_since_a_position_at_the_sessions_class() {
     written(&boot, &frames::delegate(&sibling, 2, None));
     let two = bare(2);
     let sibling_home = addr(written(&two, &frames::create_home(&sibling, None)));
-    let foreign = addr(written(&two, &frames::create_document(&sibling, false, None)));
-    written(&two, &json!({"op": "insert", "doc": foreign, "at": {"subspace": "1", "ordinal": "1"}, "values": ["theirs"]}));
+    let minted = written(&two, &frames::create_document(&sibling, false, None));
+    let foreign = addr(minted.clone());
+    written(&two, &json!({"op": "insert", "doc": foreign, "at": {"subspace": "1", "ordinal": "1"}, "values": ["theirs"], "as_of": minted["at"]}));
     // The position N, the board's head as the session reads it.
     let n = shell.call("health", &json!({"board": board})).unwrap()["health"]["log_position"].as_u64().unwrap();
     // A write by a second session of the claimant's after N.
     let one = bare(1);
-    let draft = addr(written(&one, &frames::create_document("1.0.1", false, None)));
-    let at = written(&one, &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["mine"]}))["at"].as_u64().unwrap();
+    let minted = written(&one, &frames::create_document("1.0.1", false, None));
+    let draft = addr(minted.clone());
+    let at = written(&one, &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["mine"], "as_of": minted["at"]}))["at"].as_u64().unwrap();
     let page = shell.call("changes", &json!({"session": session, "since": n})).unwrap();
     crate::shapes::assert_declared("ChangesAnswer", &page);
     let entries = page["entries"].as_array().unwrap();

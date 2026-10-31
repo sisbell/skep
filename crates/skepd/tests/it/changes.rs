@@ -1520,10 +1520,11 @@ fn pre_feature_positions_answer_bare_entries() {
         // append at a fresh position (PUB-2.59's shape; PUB-9.13's declared horn) —
         // the one write a published home admits in place, its prose declared under
         // a MEMBER type, ENROLL's (PUB-2.60's residue). The subject is unchanged.
+        // Typed against the home's mint, the one ack this writer holds on it.
         match exec(
             s1,
             &format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":"{T_ENROLL}"}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":"{T_ENROLL}","as_of":3}}"#
             ),
         ) {
             Response::AckAddr { at, .. } => {
@@ -2794,4 +2795,77 @@ fn a_panic_before_the_commit_records_nothing() {
 
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
+}
+
+/// The stale-edit refusal on the wire (wire.md §Arrangement, the typed
+/// state; skep #442). An insert typed at the draft's current position lands
+/// as before; the same frame typed at the state before that write is
+/// `rejected` `arrangement_moved`, `permanent`, its `site` naming `as_of` —
+/// the typed state, echoed — and `current`, the position the draft last
+/// changed at; the refusal commits nothing — the head stands where the
+/// landing left it and the feed carries no row above it — and the same text
+/// typed at the current state lands. A frame without the member is
+/// `malformed` at the door.
+#[test]
+fn a_stale_insert_is_refused_arrangement_moved_with_both_positions_and_leaves_no_row() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mine = Some(owner.as_str());
+    let minted = op(port, mine, &create_frame(CLAIMANT_ACCOUNT, Some(false)));
+    let draft = acked_addr(&minted);
+    let typed = minted["at"].as_u64().expect("the mint's position");
+    // Typed at the draft's current state — its mint's — the insert lands.
+    let landed = op(
+        port,
+        mine,
+        &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["ab"],"as_of":{typed}}}"#),
+    );
+    let current = expect_resp(&landed, "ack_addr")["at"].as_u64().expect("the landing's position");
+    assert!(current > typed);
+    let head = head_position(port);
+    assert_eq!(head, current, "the landing is the head");
+    // Typed at the state before it: refused with both positions, no commit,
+    // no row.
+    let stale = op(
+        port,
+        mine,
+        &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"],"as_of":{typed}}}"#),
+    );
+    assert_eq!(stale["resp"].as_str(), Some("rejected"), "{stale}");
+    assert_eq!(
+        (stale["op"].as_str(), stale["code"].as_str(), stale["disposition"].as_str()),
+        (Some("insert"), Some("arrangement_moved"), Some("permanent")),
+        "{stale}"
+    );
+    assert_eq!(
+        (stale["site"]["as_of"].as_u64(), stale["site"]["current"].as_u64()),
+        (Some(typed), Some(current)),
+        "the two positions ride `site`: {stale}"
+    );
+    assert_eq!(stale["site"].as_object().map(|s| s.len()), Some(2), "and nothing else does: {stale}");
+    assert!(stale.get("detail").is_none(), "{stale}");
+    assert_eq!(head_position(port), head, "a refusal commits nothing");
+    assert!(entry_ats(&changes_ok(port, mine, &format!("since={current}"))).is_empty(), "and appears in no feed row");
+    // Typed at the current state, the same text lands.
+    let again = op(
+        port,
+        mine,
+        &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"],"as_of":{current}}}"#),
+    );
+    expect_resp(&again, "ack_addr");
+    // Without the member the frame is `malformed` at the door (wire.md §The
+    // request envelope): posted raw, past the two doors that type a frame.
+    let (st, body) = http(
+        port,
+        "POST",
+        "/op",
+        mine,
+        format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"3"}},"values":["y"]}}"#).as_bytes(),
+    );
+    assert_eq!(st, 200);
+    let bare = json(&body);
+    assert_eq!((bare["code"].as_str(), bare["op"].as_str()), (Some("malformed"), Some("unparseable")), "{bare}");
+    assert!(bare["detail"].as_str().is_some_and(|d| d.contains("missing field 'as_of'")), "{bare}");
 }

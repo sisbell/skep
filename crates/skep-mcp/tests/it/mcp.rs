@@ -152,7 +152,8 @@ fn insert_seats_a_string_byte_by_byte_and_an_atom_at_one_position() {
     // "hello" seats five values at positions 1..=5, so width "0.5" covers
     // it exactly and the delivery is one content item.
     let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
 
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.5"}}]}));
@@ -161,7 +162,8 @@ fn insert_seats_a_string_byte_by_byte_and_an_atom_at_one_position() {
 
     // An atom form: ONE composite value at ONE position, never coalesced
     // into the per-byte run beside it.
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [{"atom": "chunk"}]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [{"atom": "chunk"}]}));
     assert_eq!(v["resp"], "ack_addr", "atom insert: {v}");
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.6"}}]}));
     assert_eq!(v["items"], json!([{"content": "hello"}, {"atom": "chunk"}]));
@@ -179,16 +181,19 @@ fn make_link_takes_from_as_the_wires_from_and_follow_link_reads_the_to_slot() {
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
 
     // make_link (through the schema's from_ → the wire's from) and
     // follow_link on the TO slot.
     let doc2 = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": doc2, "at": {"subspace": "1", "ordinal": "1"}, "values": ["linked"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc2, "at": {"subspace": "1", "ordinal": "1"}, "values": ["linked"]}));
     assert_eq!(v["resp"], "ack_addr");
     let tdoc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": tdoc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["type:jump"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": tdoc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["type:jump"]}));
     assert_eq!(v["resp"], "ack_addr");
 
     let v = mcp.call_json(
@@ -225,12 +230,14 @@ fn daemon_restart_reopens_the_session_and_reissues() {
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "the pre-restart write: {v}");
 
     fixture.restart();
 
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}));
     assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}\n{}", mcp.log());
 
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.11"}}]}));
@@ -254,7 +261,8 @@ fn make_link_addrs_form_records_names_verbatim() {
     mcp.initialize();
 
     let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
     let i_start = v["addr"].as_str().expect("first minted I-address").to_string();
 
@@ -335,7 +343,8 @@ fn a_frame_the_shell_cannot_send_is_refused_before_the_board_sees_it() {
     let fixture = Fixture::new("shell-refuses");
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
-    let refused = mcp.call_error("insert", json!({"doc": CLAIMANT_ACCOUNT, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
+    let typed = mcp.position();
+    let refused = mcp.call_error("insert", json!({"as_of": typed, "doc": CLAIMANT_ACCOUNT, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
     assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some("frame.doc")), "the burst's door: {refused}");
     assert_eq!(mcp.call_json("held", json!({})), json!([]), "no line held");
     let halted = mcp.call_error("create_new_document", json!({"account": 7}));
@@ -402,9 +411,11 @@ fn no_session_token_and_no_key_seed_reaches_a_tool_result_or_a_log_line() {
     let mut texts = Vec::new();
     texts.push(mcp.call("session_info", json!({})).1);
     let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    texts.push(mcp.call("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]})).1);
+    let typed = mcp.position();
+    texts.push(mcp.call("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]})).1);
     fixture.restart();
-    texts.push(mcp.call("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "2"}, "values": ["y"]})).1);
+    let typed = mcp.position();
+    texts.push(mcp.call("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "2"}, "values": ["y"]})).1);
     texts.push(mcp.call("boards", json!({})).1);
     texts.push(mcp.call("retrieve_v", json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]})).1);
     let (status, log) = mcp.finish_logged();
@@ -431,7 +442,8 @@ fn a_log_no_one_reads_fails_no_work() {
     let mut mcp = Launch::over(&fixture, 1).stderr(Stdio::from(writer)).spawn();
     mcp.initialize();
     let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
+    let typed = mcp.position();
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
     assert_eq!(v["resp"], "ack_addr", "{v}");
     assert!(mcp.finish().success(), "the clean exit, its log unwritable");
     let (reader, writer) = std::io::pipe().expect("a pipe");

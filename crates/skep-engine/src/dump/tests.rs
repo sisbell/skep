@@ -1,4 +1,5 @@
 use skep_address::{validate, Nat, Span};
+use skep_arrangement::AsOf;
 use skep_arrangement::{Caller, Deposit, VPos, VSpec};
 use skep_content::Val;
 use skep_links::SlotArg;
@@ -48,6 +49,7 @@ pub(super) fn populated_world() -> (Engine, World) {
             VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("insert succeeds");
     engine

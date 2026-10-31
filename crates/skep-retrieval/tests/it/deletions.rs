@@ -2,6 +2,7 @@
 //! one document and current in the other, deduplicated and T1-ordered, read
 //! off the addresses as named.
 
+use skep_arrangement::AsOf;
 use skep_arrangement::VSpec;
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Deletions, DeletionsError, Delivery, Query};
@@ -24,10 +25,11 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1, ca2]
-    vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits"); // doc1 = [ca1, ca3]; deleted ca2
-    vs.delete(P1, &doc2(), vp(1, 1), n(1)).expect("delete commits"); // doc2 = [ca2]; deleted ca1
+    vs.delete(P1, &doc1(), vp(1, 2), n(1), AsOf::Typed(k.current_seq())).expect("delete commits"); // doc1 = [ca1, ca3]; deleted ca2
+    vs.delete(P1, &doc2(), vp(1, 1), n(1), AsOf::Typed(k.current_seq())).expect("delete commits"); // doc2 = [ca2]; deleted ca1
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
@@ -86,6 +88,7 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     vs.copy(
@@ -96,9 +99,10 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
-    vs.delete(P1, &doc1(), vp(1, 1), n(1)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq())).expect("delete commits");
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
@@ -129,9 +133,10 @@ fn show_deletions_excludes_an_address_a_document_deleted_and_holds_again() {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1]
-    vs.delete(P1, &doc1(), vp(1, 1), n(1))
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // doc1 = [ca2, ca3]
     {
         let s = k.snapshot();
@@ -152,6 +157,7 @@ fn show_deletions_excludes_an_address_a_document_deleted_and_holds_again() {
             source: doc2(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc1 = [ca2, ca3, ca1]: ca1 is back
     let s = k.snapshot();
@@ -180,11 +186,12 @@ fn show_deletions_orders_a_multi_address_half_by_tumbler_not_by_arrangement() {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1, ca2]
-    vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)])
+    vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)], AsOf::Typed(k.current_seq()))
         .expect("rearrange commits"); // doc2 = [ca2, ca1]
-    vs.delete(P1, &doc1(), vp(1, 1), n(3))
+    vs.delete(P1, &doc1(), vp(1, 1), n(3), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // doc1 drops all three
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -231,7 +238,7 @@ fn show_deletions_enumerates_the_address_named_and_does_not_float() {
         .version(PrincipalId(1), &pdoc(), None)
         .expect("fork commits");
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("head deposit commits");
     assert_eq!(start, vca(1)); // the head holds vca1 at V4; pdoc's own arrangement never will
     vs.copy(
@@ -242,9 +249,10 @@ fn show_deletions_enumerates_the_address_named_and_does_not_float() {
             source: fork.clone(),
             span: vspan(1, 4, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc1 = [vca1]
-    vs.delete(P1, &doc1(), vp(1, 1), n(1))
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // DELETED(vca1, doc1)
     let s = k.snapshot();
     let q = Query::new(&s);

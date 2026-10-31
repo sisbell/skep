@@ -50,7 +50,7 @@ impl WorldState for World {
             Record::M3(x) => World { m3: self.m3.apply_m3(at, x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
             Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
-            Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
+            Record::M5(x) => World { m5: self.m5.apply_m5(at, x), ..self.clone() },
             Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
         }
     }
@@ -246,6 +246,7 @@ fn insert_op() -> Op {
         at: VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
         values: vec![Val::new(vec![1u8])],
         deposit: Deposit::Undeclared,
+        as_of: Seq(7),
     }
 }
 
@@ -697,7 +698,9 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
         panic!("the bootstrap session delegates the prefix");
     };
     let owner = febe.open_session(DRAFT_OWNER);
-    let Response::AckAddr { addr: doc, .. } =
+    // Each edit is typed against the owner's own last ack on the draft
+    // (skep #442): the mint's, then each write's in turn.
+    let Response::AckAddr { addr: doc, at: mut typed } =
         issue(owner, Op::CreateNewDocument { account, published: Some(false) })
     else {
         panic!("the owner mints a draft");
@@ -707,11 +710,18 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
         at: VPos::content(Nat::from(1u32)),
         values: [b'a', b'b', b'c'].map(|b| Val::new(vec![b])).to_vec(),
         deposit: Deposit::Undeclared,
+        as_of: typed,
     };
-    assert!(matches!(issue(owner, insert), Response::AckAddr { .. }), "the owner fills its draft");
+    let Response::AckAddr { at, .. } = issue(owner, insert) else {
+        panic!("the owner fills its draft");
+    };
+    typed = at;
     let p = VPos::content(Nat::from(2u32));
-    let deleted = issue(owner, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
-    assert!(matches!(deleted, Response::Ack { .. }), "the owner deletes the middle element");
+    let deleted = issue(owner, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32), as_of: typed });
+    let Response::Ack { at } = deleted else {
+        panic!("the owner deletes the middle element");
+    };
+    typed = at;
     for k in 0..doublings {
         let extent = 2u32 << k;
         let whole = Span::new(tum(&[1, 1]), tum(&[0, extent]))
@@ -720,8 +730,12 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
             doc: doc.clone(),
             at: VPos::content(Nat::from(extent + 1)),
             specs: vec![VSpec { source: doc.clone(), span: whole }],
+            as_of: typed,
         };
-        assert!(matches!(issue(owner, copy), Response::Ack { .. }), "the owner doubles its draft");
+        let Response::Ack { at } = issue(owner, copy) else {
+            panic!("the owner doubles its draft");
+        };
+        typed = at;
     }
     doc
 }
@@ -1023,17 +1037,20 @@ fn a_version_member_answers_its_trunks_birth_version() {
     let mint = |published: bool| {
         let op = Op::CreateNewDocument { account: account.clone(), published: Some(published) };
         match issue(owner, op) {
-            Response::AckAddr { addr, .. } => addr,
+            Response::AckAddr { addr, at } => (addr, at),
             other => panic!("the owner mints a document: {other:?}"),
         }
     };
-    let edition = mint(true);
-    let draft = mint(false);
+    let (edition, minted_at) = mint(true);
+    let (draft, _) = mint(false);
+    // The deposit is typed against the owner's own last ack on the edition:
+    // its mint's (skep #442).
     let deposit = Op::Insert {
         doc: edition.clone(),
         at: VPos::content(Nat::from(1u32)),
         values: [b'a', b'b', b'c'].map(|b| Val::new(vec![b])).to_vec(),
         deposit: Deposit::Declared(deposit_class_types()[0].clone()),
+        as_of: minted_at,
     };
     assert!(matches!(issue(owner, deposit), Response::AckAddr { .. }), "the owner deposits");
     let Response::AckAddr { addr: member, .. } =

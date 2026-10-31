@@ -186,7 +186,7 @@ fn a_reinstated_span_brings_its_links_back_at_the_same_address() {
     let i_start = element(&draft, 3);
     assert_eq!(image(port, token, &draft, 3, 4), vec![(i_start.clone(), "4".to_string())]);
 
-    expect_resp(&op(port, token, &delete_frame(&draft, 3, 4)), "ack");
+    expect_resp(&op(port, token, &delete_frame(&draft, 3, 4, head_position(port))), "ack");
     assert_eq!(text(port, token, &draft, 1, 7), "heworld");
     assert_eq!(count_v(port, token, &draft, 3, 4), floor, "the suffix shifted in: the link is on no position");
     assert!(!links_v(port, token, &draft, 1, 7).contains(&link), "no arranged position carries the link");
@@ -317,14 +317,14 @@ fn a_reinstated_run_of_the_editions_own_bytes_rides_the_next_shot_by_reference_w
 
     // THE STAGING DRAFT (PUB-2.27): the member's five positions by reference.
     let d1 = owner_draft(port, &owner);
-    expect_resp(&op(port, mine, &copy_frame(&d1, 1, &member1, 1, 5)), "ack");
+    expect_resp(&op(port, mine, &copy_frame(&d1, 1, &member1, 1, 5, head_position(port))), "ack");
     assert_eq!(image(port, mine, &d1, 1, 5), vec![own_run.clone()]);
     assert!(links_v(port, mine, &d1, 2, 2).contains(&plink), "the public link reaches the draft's copy");
     let floor_d1 = count_v(port, mine, &d1, 2, 2) - 1;
 
     // THE EDIT: positions 2–3 removed — the link is on no position of the
     // draft — then REINSTATED at their own addresses.
-    expect_resp(&op(port, mine, &delete_frame(&d1, 2, 2)), "ack");
+    expect_resp(&op(port, mine, &delete_frame(&d1, 2, 2, head_position(port))), "ack");
     assert_eq!(text(port, mine, &d1, 1, 3), "hlo");
     assert_eq!(count_v(port, mine, &d1, 2, 2), floor_d1);
     assert!(!links_v(port, mine, &d1, 1, 3).contains(&plink), "the link is on no position of the draft");
@@ -380,7 +380,7 @@ fn the_wire_frame_is_the_op_and_a_write_on_op_at_is_refused() {
     let mine = Some(owner.as_str());
 
     // The example's frame, verbatim: parsed and answered as `reinstate`.
-    let example = r#"{"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}"#;
+    let example = r#"{"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}"#;
     let v = op(port, mine, example);
     assert_eq!(v["resp"].as_str(), Some("rejected"), "{v}");
     assert_eq!(v["op"].as_str(), Some("reinstate"), "the frame is the op: {v}");
@@ -394,7 +394,7 @@ fn the_wire_frame_is_the_op_and_a_write_on_op_at_is_refused() {
         "POST",
         "/op-at",
         mine,
-        format!(r#"{{"at":{head},"frame":{}}}"#, reinstate(&draft, 1, std::slice::from_ref(&one))).as_bytes(),
+        format!(r#"{{"at":{head},"frame":{}}}"#, typed_at_head(port, &reinstate(&draft, 1, std::slice::from_ref(&one)))).as_bytes(),
     );
     assert_eq!(st, 400, "{}", String::from_utf8_lossy(&body));
     assert_eq!(json(&body)["error"].as_str(), Some("write_at_history"));

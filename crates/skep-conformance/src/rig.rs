@@ -24,7 +24,7 @@ use skep_arrangement::VSpec;
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::{Deposit, Op, OpKind, OperationSurface, Request, Response, SessionId};
-use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
 use skep_links::{Endset, SlotArg};
 use skep_namespace::PrincipalId;
 
@@ -76,8 +76,9 @@ const TYPES_CAPACITY: u64 = 8;
 pub struct Rig {
     // Held so the engine (and its kernel Arc) outlives the command surface;
     // EngineStores owns its own Arc clone, but keeping the assembler visible
-    // makes the ownership story auditable.
-    _engine: Engine,
+    // makes the ownership story auditable — and read for the head position
+    // every burst op the rig builds is typed against (`head`).
+    engine: Engine,
     febe: OperationSurface<World>,
     /// Bootstrap session — all delegations run under it (π₀'s prefix `[1]` is
     /// an ancestor of every prefix we mint).
@@ -182,8 +183,10 @@ impl Rig {
     ) -> Result<Address, RigError> {
         let exec = |op: Op| execute(febe, session, op);
         let mint = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
-        let doc = match exec(mint) {
-            Response::AckAddr { addr, .. } => addr,
+        // The mint's ack is the state the insert into the fresh document is
+        // typed against (skep #442): the one state of it this writer has seen.
+        let (doc, minted_at) = match exec(mint) {
+            Response::AckAddr { addr, at } => (addr, at),
             other => return Err(format!("types-doc create failed: {}", brief(&other))),
         };
         let values: Vec<Val> =
@@ -193,6 +196,7 @@ impl Rig {
             at: VPoint::content(1).vpos(),
             values,
             deposit: Deposit::Undeclared,
+            as_of: minted_at,
         }) {
             Response::AckAddr { .. } => Ok(doc),
             other => Err(format!("types-doc insert failed: {}", brief(&other))),
@@ -233,7 +237,7 @@ impl Rig {
         let home = Rig::setup_grant(&febe, session, &account)?;
         let types_doc = Rig::types_document(&febe, session, &account)?;
         Ok(Rig {
-            _engine: engine,
+            engine,
             febe,
             bootstrap_session,
             sessions: BTreeMap::from([(account.clone(), (session, PrincipalId(1)))]),
@@ -253,6 +257,15 @@ impl Rig {
     /// script.
     pub fn exec(&self, o: Op) -> Response {
         execute(&self.febe, self.current_session, o)
+    }
+
+    /// The engine's committed head: the document state every burst op the
+    /// rig builds is typed against (skep #442). The rig is the wire's one
+    /// writer, driving its own engine through the door, so the head it reads
+    /// is the state its positions are true of and is never stale; read at
+    /// each build, never kept across one.
+    pub fn head(&self) -> Seq {
+        self.engine.kernel().current_seq()
     }
 
     /// Create one scenario document: CREATENEWDOCUMENT in the current

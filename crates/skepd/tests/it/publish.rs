@@ -1289,7 +1289,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
     let d2 = draft_with(port, &bare, "xyz");
     let yz = format!("{d2}.0.1.2");
     assert_eq!(image_as(port, Some(&bare), &d2, 2, 2), vec![(yz.clone(), "2".to_string())]);
-    expect_resp(&op(port, Some(&bare), &rearrange_frame(&d2, [1, 2, 3])), "ack");
+    expect_resp(&op(port, Some(&bare), &rearrange_frame(&d2, [1, 2, 3], head_position(port))), "ack");
     assert_eq!(text_as(port, Some(&bare), &d2, 1, 3), "yxz");
     let stale = placed(&publish(&e, Some((&member, 2)), Some(&d2), &[run(&d2, &yz, 2)]), place(2));
     let before = head(port);
@@ -1372,7 +1372,7 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire
     assert_eq!(member, format!("{e}.1"));
     assert_eq!(image_as(port, Some(&bare), &d, 2, 2), vec![(fresh.clone(), "2".to_string())]);
     // The stray act: the draft's own `b c`, reinstated after them.
-    expect_resp(&op(port, Some(&bare), &reinstate_frame(&d, 4, &[(&d, &b, 2)])), "ack");
+    expect_resp(&op(port, Some(&bare), &reinstate_frame(&d, 4, &[(&d, &b, 2)], head_position(port))), "ack");
     assert_eq!(text_as(port, Some(&bare), &d, 1, 5), "abcbc");
     assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(b.clone(), "2".to_string())], "the record's draft words, private text again");
     // The second shot: the head's `b c` by reference, then the stray run

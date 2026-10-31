@@ -2,7 +2,7 @@ use skep_address::{Address, Nat};
 use skep_arrangement::Shot;
 use skep_engine::types::t_grant;
 use skep_febe::Disposition;
-use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
 use skep_links::SlotArg;
 use skep_namespace::BOOTSTRAP_PRINCIPAL;
 
@@ -59,6 +59,7 @@ fn a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_as
         at: VPos::content(Nat::from(1u32)),
         values: vec![Val::new(atom.as_bytes().to_vec())],
         deposit,
+        as_of: Seq(7),
     };
     let check = |op: Op| attestation_check(world, &op, BOOTSTRAP_PRINCIPAL, None, None);
     let unavailable: Result<Option<Attestation>, CredentialRefusal> =
@@ -100,7 +101,7 @@ fn a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_as
         "a signed record into a document that is no doc 1: the check runs"
     );
     let delete =
-        Op::Delete { doc: doc1.clone(), p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) };
+        Op::Delete { doc: doc1.clone(), p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32), as_of: Seq(7) };
     assert_eq!(check(delete), Ok(None), "outside the checked set");
     assert_eq!(check(grant_in(doc1.clone())), unavailable, "a grant, no attest presented");
     assert_eq!(check(insert(&doc1, Deposit::Undeclared, "x")), unavailable, "an undeclared insert");
@@ -161,7 +162,7 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
         "a base outside the document's chain is refused ahead of the gate"
     );
     let not_a_shot =
-        Op::Delete { doc: h.clone(), p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) };
+        Op::Delete { doc: h.clone(), p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32), as_of: Seq(7) };
     assert!(
         !refused_at_or_before_the_source_gate(world, &not_a_shot, SYSTEM_PRINCIPAL),
         "an op that is no shot is answered on the side the check refuses on"
@@ -220,7 +221,8 @@ fn the_sessions_own_key_is_the_first_candidate() {
     let atom = exec(
         sid,
         json!({"op": "insert", "doc": doc1, "at": {"subspace": "1", "ordinal": "1"},
-               "values": [{"atom": encode_enroll(&genesis)}], "deposit": enroll}),
+               "values": [{"atom": encode_enroll(&genesis)}], "deposit": enroll,
+               "as_of": febe.log_position().0}),
     );
     exec(
         sid,

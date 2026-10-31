@@ -2,6 +2,7 @@
 //! and the bounding box that is their hull.
 
 use skep_address::{Span, SpanSet};
+use skep_arrangement::AsOf;
 use skep_arrangement::seat_link;
 use skep_retrieval::{ExtentError, Query};
 
@@ -107,7 +108,7 @@ fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
     seat_link(&k, &doc1(), &la(2)).expect("seat commits"); // n_L = 2
     let before = k.snapshot();
     let q_before = Query::new(&before);
-    vs.delete(P1, &doc1(), vp(1, 3), n(1))
+    vs.delete(P1, &doc1(), vp(1, 3), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // n_C = 2, still ≥ 1
     let after = k.snapshot();
     let q_after = Query::new(&after);

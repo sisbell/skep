@@ -2,10 +2,39 @@
 //! shares, and the version-chain refusals on the owned arm.
 
 use skep_address::SpanSet;
-use skep_arrangement::{seat_link, Caller, Deposit, HasM5, Shot, VersionError, Vstream};
+use skep_arrangement::{seat_link, AsOf, Caller, Deposit, HasM5, Shot, VersionError, Vstream};
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::common::*;
+
+/// A version minted by `version` starts with a recorded position (skep
+/// #442): its mint's, on the owned arm and the cross-owner arm alike, an
+/// empty source included — so the first edit of a fork typed before its
+/// mint is refused, and one typed at the mint lands. The source's own
+/// position is untouched by the snapshot.
+#[test]
+fn a_version_starts_with_its_mints_position_and_the_source_keeps_its_own() {
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    let source_at = k.snapshot().world().m5().arranged_at(&doc1()).expect("doc1 arranged");
+    let (fork, minted_at) = vs.version(PrincipalId(2), &doc1(), None).expect("cross-owner fork");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().arranged_at(&fork), Some(minted_at), "the fork's position is its mint");
+    assert_eq!(s.world().m5().arranged_at(&doc1()), Some(source_at), "the source's is its own");
+    let forker = Caller::Principal(PrincipalId(2));
+    assert!(matches!(
+        rejected(vs.insert(forker, &fork, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, AsOf::Typed(source_at))),
+        skep_arrangement::InsertError::ArrangementMoved { .. }
+    ));
+    vs.insert(forker, &fork, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, AsOf::Typed(minted_at))
+        .expect("typed at the mint, the fork's first edit lands");
+    // The owned arm, off an empty source: doc2 holds nothing, and its
+    // version — a cross-owner fork here, doc2 being private — is noted all
+    // the same.
+    let (empty_fork, empty_at) = vs.version(PrincipalId(2), &doc2(), None).expect("a fork of an empty source");
+    assert_eq!(k.snapshot().world().m5().content_count(&empty_fork), n(0));
+    assert_eq!(k.snapshot().world().m5().arranged_at(&empty_fork), Some(empty_at));
+}
 
 #[test]
 fn owned_version_shares_the_map_and_diverges_copy_on_write() {
@@ -43,7 +72,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     // Deposit into the fork: its content chain mints LENGTH-9 elements; the
     // source is untouched.
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("a declared deposit at the fork's fresh position commits");
     assert_eq!(start, vca(1));
     let s = k.snapshot();
@@ -95,6 +124,7 @@ fn a_parent_accounts_principal_versions_its_sub_accounts_document_across_ownersh
         vp(1, 1),
         vec![val(b"s")],
         Deposit::Undeclared,
+        now(&k),
     )
     .expect("the sub-account's principal edits its own draft");
     let (fork, _) = vs
@@ -150,7 +180,7 @@ fn a_version_born_empty_keeps_a_birth_extent_of_zero_through_its_first_deposit()
         .version(PrincipalId(1), &pdoc(), None)
         .expect("the birth version, of an empty edition");
     assert_eq!(member, vdoc(), "the chain's first member");
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit landing in the head the version minted");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
@@ -176,7 +206,7 @@ fn nothing_a_version_mints_carries_shot_terms() {
     let (birth, _) = vs
         .version(PrincipalId(1), &pdoc(), None)
         .expect("the birth version, of an empty edition");
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit landing in the head");
     let (later, _) = vs
         .version(PrincipalId(1), &pdoc(), None)
@@ -214,7 +244,7 @@ fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named(
     let (member1, _) = vs
         .version(PrincipalId(1), &pdoc(), None)
         .expect("an empty-source member");
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared(), now(&k))
         .expect("lands in the head member1");
     let (member2, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("forks the head");
     assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));

@@ -212,12 +212,12 @@ mod tests {
             Err(e) => panic!("fresh home link must be admitted, got {e:?}"),
         };
         assert!(matches!(&rec, M5Rec::LinkSeat { .. }));
-        let s = s.apply_m5(&rec);
+        let s = s.apply_m5(Seq(1), &rec);
         let second = match stage_seat_link(&s, &doc1(), &la(2)) {
             Ok(rec) => rec,
             Err(e) => panic!("second seat must be admitted, got {e:?}"),
         };
-        let s = s.apply_m5(&second);
+        let s = s.apply_m5(Seq(1), &second);
         // la(1) and la(2) coalesced into one width-2 run; both re-seats are
         // caught by I-extent membership.
         assert_eq!(s.link_count(&doc1()), n(2));

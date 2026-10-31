@@ -8,8 +8,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    as_ordinal_vspan, deposit_class_types, ordinal_vspan, Base, Caller, Deposit, HasM5, M5State,
-    Run, ShotRun, VPos, Vstream,
+    as_ordinal_vspan, deposit_class_types, ordinal_vspan, AsOf, Base, Caller, Deposit, HasM5,
+    M5State, Run, ShotRun, VPos, Vstream,
 };
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -89,7 +89,7 @@ impl WorldState for World {
                 ..self.clone()
             },
             Rec::M5(x) => World {
-                m5: self.m5.apply_m5(x),
+                m5: self.m5.apply_m5(at, x),
                 ..self.clone()
             },
         }
@@ -318,12 +318,28 @@ pub fn place_of(footprint: &SpanSet) -> VPos {
     VPos { subspace: v.subspace.clone(), ordinal: v.ordinal.clone() }
 }
 
+/// The state an edit made here is typed against: the kernel's committed
+/// head at the call — the `as_of` a read made now would answer, which is
+/// what a writer that has just read the document holds (skep #442). Asked
+/// at each call, never kept, so a cell that writes twice types its second
+/// edit against the state its first left.
+pub fn now(k: &Kernel<World>) -> AsOf {
+    AsOf::Typed(k.current_seq())
+}
+
 /// Leave doc1 (the draft) holding `a`, `b`, `c` at content ordinals 1..3,
 /// and hand back the `Vstream` the caller goes on to drive.
 pub fn insert_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(kernel);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
-        .expect("insert commits");
+    vs.insert(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        vec![val(b"a"), val(b"b"), val(b"c")],
+        Deposit::Undeclared,
+        now(kernel),
+    )
+    .expect("insert commits");
     vs
 }
 
@@ -332,8 +348,15 @@ pub fn insert_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
 /// at its fresh positions (PUB-2.59, PUB-9.13).
 pub fn deposit_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(kernel);
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared())
-        .expect("a declared deposit at the edition's fresh positions commits");
+    vs.insert(
+        P1,
+        &pdoc(),
+        vp(1, 1),
+        vec![val(b"a"), val(b"b"), val(b"c")],
+        declared(),
+        now(kernel),
+    )
+    .expect("a declared deposit at the edition's fresh positions commits");
     vs
 }
 

@@ -100,7 +100,8 @@ fn a1_the_signed_session_writes_and_no_key_stops_startup() {
     assert!(row.get("key").is_none(), "a signed entry's one authority is its signature: {row}");
     assert_eq!((row["class"].as_str(), &row["docs"]), (Some("published"), &json!([edition["addr"]])), "{row}");
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let inserted = mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["signed"]}));
+    let typed = mcp.position();
+    let inserted = mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["signed"]}));
     let row = entry_at(&mut mcp, since, inserted["at"].as_u64().expect("the commit's position"));
     assert_eq!(row["key"], fixture.fingerprint, "the draft write's testimony names the signing key: {row}");
     assert_eq!((row["class"].as_str(), &row["docs"]), (Some("drafts"), &json!([draft])), "{row}");
@@ -151,7 +152,8 @@ fn a1b_a_principal_under_the_claimants_account_signs_by_reference() {
     assert!(row["attest"]["sig"].is_string() && row.get("key").is_none(), "the agent's publish-class mint landed attested: {row}");
     let draft = draft_of(&mut mcp, AGENT_SPACE);
     assert!(draft.starts_with(&format!("{AGENT_SPACE}.0.")), "a document of the agent space's own: {draft}");
-    let inserted = mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["by reference"]}));
+    let typed = mcp.position();
+    let inserted = mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["by reference"]}));
     let row = entry_at(&mut mcp, since, inserted["at"].as_u64().expect("at"));
     assert_eq!(row["key"], fixture.fingerprint, "the draft write's testimony is the key above: {row}");
     let owner = mcp.call_json("effective_owner", json!({"addr": draft}));
@@ -225,7 +227,8 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     // THE PUBLICATION: the shell composes the shot from the panel it holds.
     let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
+    let typed = mcp.position();
+    mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
     let image = mcp.call_json("image", json!({"d": draft, "region": [{"start": "1.1", "width": "0.3"}]}));
     assert_eq!(image["resp"], "runs", "{image}");
     let run = &image["runs"][0];
@@ -267,7 +270,8 @@ fn a3_a_publications_panel_dies_with_the_session_and_nothing_is_sent_twice() {
     mcp.initialize();
     let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
+    let typed = mcp.position();
+    mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
     let open = json!({"draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]});
     let panel = mcp.call_json("publication_open", open.clone());
     assert_eq!(panel["rows"], json!([]), "premise: a panel stands: {panel}");
@@ -401,7 +405,8 @@ fn a4_changes_since_answers_a_published_write_after_a_position_and_next_advances
     let two = fixture.bare_session(2);
     let sibling_home = fixture.write(&two, json!({"op": "create_new_document", "account": sibling}));
     let foreign = fixture.write(&two, json!({"op": "create_new_document", "account": sibling}));
-    fixture.write(&two, json!({"op": "insert", "doc": foreign, "at": {"subspace": "1", "ordinal": "1"}, "values": ["theirs"]}));
+    let typed = fixture.guest(json!({"op": "effective_owner", "addr": "1.0.1"}))["as_of"].as_u64().expect("a read names where it sits");
+    fixture.write(&two, json!({"op": "insert", "doc": foreign, "at": {"subspace": "1", "ordinal": "1"}, "values": ["theirs"], "as_of": typed}));
     let page = mcp.call_json("changes_since", json!({"since": next}));
     let entries = page["entries"].as_array().expect("entries");
     assert!(entries.iter().any(|e| e["class"] == "drafts" && e["docs"] == json!([draft])), "the claimant's own draft rides the drafts class: {page}");
@@ -504,13 +509,17 @@ fn a6_a_board_that_is_gone_answers_unreachable_and_the_adapter_stays_up() {
     let mut fixture = Fixture::new("a6-gone");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
-    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    // The draft's mint is the one ack the agent holds on it, and the one
+    // state it can type against once the board is gone.
+    let minted = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    let draft = minted["addr"].as_str().expect("doc addr").to_string();
+    let typed = minted["at"].as_u64().expect("the mint's position");
     fixture.stop();
     let read = mcp.call_error("doc_metadata", json!({"doc": draft}));
     assert_eq!(read["kind"], "unreachable", "{read}");
     let mint = mcp.call_error("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
     assert_eq!(mint["kind"], "unreachable", "a non-burst write is faced: {mint}");
-    let held = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["held"]}));
+    let held = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["held"]}));
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "a burst is held: {held}");
     let lines = mcp.call_json("held", json!({}));
     assert_eq!(lines[0]["doc"], draft, "{lines}");
@@ -660,20 +669,24 @@ fn a7_a_burst_the_board_refuses_is_held_and_the_bursts_behind_it_wait() {
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let refused = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+    let typed = mcp.position();
+    let refused = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
     assert_eq!(refused["resp"], "held", "a rejected burst is held, as data: {refused}");
     assert!(refused["cause"].as_str().is_some_and(|c| c.starts_with("out_of_bounds")), "its cause the rejection's token: {refused}");
     let lines = mcp.call_json("held", json!({}));
     assert_eq!(lines[0]["refusal"]["code"], "out_of_bounds", "the board's verdict beside the line: {lines}");
-    let behind = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
+    let typed = mcp.position();
+    let behind = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
     assert_eq!((behind["resp"].as_str(), behind["cause"].as_str()), (Some("held"), Some("behind")), "a later burst waits behind it: {behind}");
     let k = refused["held"].as_u64().expect("the refused line's ordinal");
     assert_eq!(mcp.call_json("resolve", json!({"held": k, "act": "drop"})), json!({}));
     assert_eq!(mcp.call_json("held", json!({})), json!([]), "the drop takes the line behind it too");
-    mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
+    let typed = mcp.position();
+    mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
     let frontier = mcp.call_json("content_frontier", json!({"doc": draft}));
     assert_eq!(frontier["next"], "2", "the insert acked is the one value the draft minted: neither dropped line landed: {frontier}");
-    let home = mcp.call_json("insert", json!({"doc": CLAIMANT_DOC1, "at": {"subspace": "1", "ordinal": "1"}, "values": ["h"]}));
+    let typed = mcp.position();
+    let home = mcp.call_json("insert", json!({"as_of": typed, "doc": CLAIMANT_DOC1, "at": {"subspace": "1", "ordinal": "1"}, "values": ["h"]}));
     assert_eq!(home["resp"], "held", "an insert into the published home is held: {home}");
     assert!(home["cause"].as_str().is_some_and(|c| c.starts_with("published_target")), "its cause the rejection's token: {home}");
     assert!(mcp.finish().success());
@@ -693,11 +706,16 @@ fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     let mut fixture = Fixture::new("a8");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
-    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    // The draft's mint is the one ack the agent holds on it: the insert's
+    // typed state, with no tool call spent on a read (the stop line below
+    // counts the loop's answers).
+    let minted = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    let draft = minted["addr"].as_str().expect("doc addr").to_string();
+    let typed = minted["at"].as_u64().expect("the mint's position");
     fixture.restart();
     // The write after the restart answers on stdout, which the driver
     // parses line by line, while the drain says the re-open on talk.
-    let v = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
+    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
     assert_eq!(v["resp"], "ack_addr", "{v}");
     for _ in 0..3 {
         assert_eq!(mcp.request("ping", json!({}))["result"], json!({}));

@@ -11,7 +11,7 @@ use crate::common;
 
 use common::*;
 use skep_address::{document_of, parent, validate, Address, Level, Tumbler};
-use skep_arrangement::{trunk_of, Caller, Deposit, Run, Shot, ShotRun};
+use skep_arrangement::{trunk_of, AsOf, Caller, Deposit, Run, Shot, ShotRun};
 use skep_content::Val;
 use skep_engine::{Engine, IssuerGrantIndexRow, UniversalGrantIndexRow, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
@@ -635,7 +635,7 @@ fn the_publish_shot_publishes_a_new_member_and_leaves_its_staging_draft_a_draft(
     let caller = Caller::Principal(D);
     let (start, _) = engine
         .vstream()
-        .insert(caller, &draft_home, vp(1, 1), vec![Val::new(vec![b's'])], Deposit::Undeclared)
+        .insert(caller, &draft_home, vp(1, 1), vec![Val::new(vec![b's'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("the owner writes its draft doc 1");
     let (edition, _) = engine
         .namespace()
@@ -979,6 +979,7 @@ fn a_to_slot_that_is_not_empty_but_denotes_nothing_grants_to_nobody() {
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the owner writes two values into its draft");
     let (link, _) = engine
@@ -1935,6 +1936,7 @@ fn an_element_of_a_draft_is_judged_as_itself_not_as_its_document() {
             vp(1, 1),
             vec![Val::new(vec![b'x'])],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the owner writes its draft");
     let w = world(&engine);

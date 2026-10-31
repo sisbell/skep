@@ -7,7 +7,7 @@ use skep_address::{Address, Nat};
 use skep_kernel::{Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3State};
 
-use super::Vstream;
+use super::{arrangement_moved, AsOf, Vstream};
 use crate::chain::published_target;
 use crate::error::DeleteError;
 use crate::ownership::{gate_write, Caller};
@@ -38,11 +38,15 @@ where
     /// wins): `DocNotRegistered` → `NotOwner` (the ω gate) →
     /// `PublishedTarget` (PUB-2.11 on the document `doc` projects to,
     /// PUB-2.15 — a delete is an in-place edit and has no deposit form) →
-    /// `NotContentSubspace` → `NotArranged` (`p.ordinal ∉ [1, n_C]`) →
-    /// `OutOfBounds` (`ordinal + width − 1 > n_C`) → `EmptyWidth`
-    /// (`width = 0`). The kernel's own failures — `OverBudget`,
-    /// `Unencodable`, `Durability`, `Poisoned` — come back as `transact`
-    /// returns them.
+    /// `ArrangementMoved` (`as_of` names a state older than `doc`'s last
+    /// arrangement change — the stale-edit refusal, skep #442, keyed on
+    /// [`AsOf`] and judged ahead of every shape check so a stale delete never
+    /// meets `NotArranged` or `OutOfBounds` for a range that was true when it
+    /// was typed; [`AsOf::Unchecked`] skips it) → `NotContentSubspace` →
+    /// `NotArranged` (`p.ordinal ∉ [1, n_C]`) → `OutOfBounds`
+    /// (`ordinal + width − 1 > n_C`) → `EmptyWidth` (`width = 0`). The
+    /// kernel's own failures — `OverBudget`, `Unencodable`, `Durability`,
+    /// `Poisoned` — come back as `transact` returns them.
     ///
     /// **The arranged and containment checks may not be transposed**, and the
     /// reason is not only which verdict a caller reads: `NotArranged` also
@@ -57,10 +61,11 @@ where
         doc: &Address,
         p: VPos,
         width: Nat,
+        as_of: AsOf,
     ) -> Result<Seq, TxnError<DeleteError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
-            .transact(&[key], |stg| stage_delete_at(stg, caller, doc, p, width))
+            .transact(&[key], |stg| stage_delete_at(stg, caller, doc, p, width, as_of))
             .map(|((), seq)| seq)
     }
 }
@@ -91,6 +96,11 @@ where
 /// `content_lock_key(doc)` alone — a caller composing several stagings under
 /// one transaction supplies the union of their keys.
 ///
+/// `as_of` is the state the removal was typed against, checked as `delete`
+/// checks it: the publication's re-window passes [`AsOf::Unchecked`], its
+/// removal staged behind the shot's own check by identity and never refused
+/// for a position the stagings before it moved.
+///
 /// # Errors
 ///
 /// `delete`'s refusals, in the order it states — `DocNotRegistered` through
@@ -103,6 +113,7 @@ pub fn stage_delete_at<W>(
     doc: &Address,
     p: VPos,
     width: Nat,
+    as_of: AsOf,
 ) -> Result<(), DeleteError>
 where
     W: WorldState + HasM5 + HasM3,
@@ -118,6 +129,10 @@ where
     // PUB-6.36 slot 5: the in-place advance refusal (PUB-2.11).
     if published_target(stg.working().m3(), doc) {
         return Err(DeleteError::PublishedTarget);
+    }
+    // The stale-edit refusal (skep #442), ahead of every shape check.
+    if let Some((as_of, current)) = arrangement_moved(stg.working().m5(), doc, as_of) {
+        return Err(DeleteError::ArrangementMoved { as_of, current });
     }
     if !p.is_content() {
         return Err(DeleteError::NotContentSubspace);

@@ -53,7 +53,7 @@ use std::slice::from_ref;
 use std::sync::Arc;
 
 use skep_address::Address;
-use skep_arrangement::{Deposit, VPos};
+use skep_arrangement::{AsOf, Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
 use skep_links::{coverage_class, enc, Caller, Endset, Pattern, ShippedType, Tip, Tuple, View};
@@ -382,9 +382,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // architecture. A def write is no deposit: the declaration is a
         // credential-class client's (PUB-2.59), so this insert is
         // `Undeclared` — the door the published-target requirement above is
-        // stated against.
-        let (start, _insert_seq) =
-            vstream.insert(Caller::System, home, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
+        // stated against. And it names no typed state (skep #442): the
+        // position above is a snapshot read's, re-validated by M5 against
+        // committed state as today, so the insert takes the UNCHECKED arm
+        // of the stale-edit check rather than refusing the definer for a
+        // race its own bounds check already judges.
+        let (start, _insert_seq) = vstream.insert(
+            Caller::System,
+            home,
+            at,
+            vec![Val::new(bytes)],
+            Deposit::Undeclared,
+            AsOf::Unchecked,
+        )?;
         match self.register_pred(home, &start) {
             Ok((_pdef_tuple, seq)) => Ok((start, seq)),
             // The insert committed: the refusal carries the start, the

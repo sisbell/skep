@@ -646,7 +646,7 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
 
     // THE RE-WINDOW (5c): D's text replaced by E.3's spans — the shot's
     // placed runs are what D now holds.
-    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN)), "ack");
+    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN, head_position(port))), "ack");
     expect_resp(&copy_span(port, &bare, &d, 1, &e3, P_LEN + 1, W_LEN), "ack");
     assert_eq!(image_runs(port, Some(&bare), &d, 1, W_LEN), vec![w_fresh_3.clone()], "D windows E.3's fresh spans");
     // The shot's own correspondence record (lane S1), D's second link, `to`
@@ -662,8 +662,8 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
 
     // THE PUT-BACK: W removed and its draft-native I-runs reinstated at
     // their own addresses, so D arranges them again.
-    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN)), "ack");
-    expect_resp(&op(port, Some(&bare), &reinstate_frame(&d, 1, &[(&d, &w_native.0, W_LEN)])), "ack");
+    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN, head_position(port))), "ack");
+    expect_resp(&op(port, Some(&bare), &reinstate_frame(&d, 1, &[(&d, &w_native.0, W_LEN)], head_position(port))), "ack");
     assert_eq!(image_runs(port, Some(&bare), &d, 1, W_LEN), vec![w_native.clone()], "the draft-native spans again");
     assert_eq!(text_of(port, Some(&bare), &d, 1, W_LEN), W);
     assert_eq!(
@@ -732,7 +732,7 @@ fn a_put_back_passage_offers_its_original_again_and_takes_a_second_claim() {
 
     // The re-window onto E.4 takes it off the list again: both copies and
     // the record stand on the one identity.
-    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN)), "ack");
+    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN, head_position(port))), "ack");
     expect_resp(&copy_span(port, &bare, &d, 1, &e4, P_LEN + 1, W_LEN), "ack");
     assert_eq!(
         find_links_v(port, Some(&signed), &d, 1, W_LEN),
@@ -1034,7 +1034,7 @@ fn a_daughters_accepted_originals_are_not_offered_again_on_its_line() {
 
     // The re-window (5c): D windows the daughter's spans — P and the fresh W,
     // I-adjacent under E's own content chain and so imaged as one run.
-    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN)), "ack");
+    expect_resp(&op(port, Some(&bare), &delete_frame(&d, 1, W_LEN, head_position(port))), "ack");
     expect_resp(&copy_span(port, &bare, &d, 1, &e11, 1, P_LEN + W_LEN), "ack");
     assert_eq!(fresh[0].0, format!("{}.0.1.{}", c.e, P_LEN + 1), "the fresh identity follows P under E's chain");
     assert_eq!(

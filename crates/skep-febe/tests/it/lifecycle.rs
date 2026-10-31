@@ -229,20 +229,20 @@ fn the_document_family_answers_end_to_end() {
     assert!(holders.contains(&version), "the version that shares it contains it too");
 
     // COPY transcludes into the empty fork; its arrangement is now non-empty.
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: fork.clone(), at: vp(1, 1), specs: vec![vspec(&edition, 1, 1)] }));
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: fork.clone(), at: vp(1, 1), specs: vec![vspec(&edition, 1, 1)], as_of: head(&fx) }));
     let (fork_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: fork.clone() }));
     assert_ne!(fork_set, SpanSet::empty());
 
     // The in-place edits run in a DRAFT staged from the edition (PUB-2.27):
     // the edition itself refuses them (PUB-2.11).
-    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: edition.clone(), p: vp(1, 3), width: nat(1) }));
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: edition.clone(), p: vp(1, 3), width: nat(1), as_of: head(&fx) }));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
     let draft = create_doc(&fx);
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: draft.clone(), at: vp(1, 1), specs: vec![vspec(&edition, 1, 3)] }));
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: draft.clone(), at: vp(1, 1), specs: vec![vspec(&edition, 1, 3)], as_of: head(&fx) }));
 
     // DELETE closes the gap in the draft; the removed I-address is still current
     // in the version — exactly SHOWDELETIONS' a-with-b half.
-    ack(ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) }));
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1), as_of: head(&fx) }));
     let rep = deletions(ex(&fx.febe, fx.user, Op::ShowDeletions { d_a: draft.clone(), d_b: version.clone() }));
     assert_eq!(rep.deleted_from_a_with_b.len(), 1);
     assert!(rep.deleted_from_b_with_a.is_empty(), "nothing was deleted from the version");
@@ -251,7 +251,7 @@ fn the_document_family_answers_end_to_end() {
     ack(ex(
         &fx.febe,
         fx.user,
-        Op::Rearrange { doc: draft.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
+        Op::Rearrange { doc: draft.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)], as_of: head(&fx) },
     ));
 
     assert!(fx.febe.log_position() >= at, "the log never regresses past a committed write (G0)");
@@ -276,6 +276,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         at: vp(1, 4),
         values: vec![skep_content::Val::new(vec![b'x'])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
     let refusals = vec![
         (OpKind::Insert, ex(&fx.febe, fx.user, undeclared)),
@@ -284,7 +285,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             ex(
                 &fx.febe,
                 fx.user,
-                Op::Copy { doc: edition.clone(), at: vp(1, 4), specs: vec![vspec(&draft, 1, 1)] },
+                Op::Copy { doc: edition.clone(), at: vp(1, 4), specs: vec![vspec(&draft, 1, 1)], as_of: head(&fx) },
             ),
         ),
         // The write by identity is an in-place edit as `copy` is: a run of
@@ -301,19 +302,20 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
                         origin: draft.clone(),
                         run: Run::new(draft_start.clone(), nat(1)).expect("a content run"),
                     }],
+                    as_of: head(&fx),
                 },
             ),
         ),
         (
             OpKind::Delete,
-            ex(&fx.febe, fx.user, Op::Delete { doc: edition.clone(), p: vp(1, 1), width: nat(1) }),
+            ex(&fx.febe, fx.user, Op::Delete { doc: edition.clone(), p: vp(1, 1), width: nat(1), as_of: head(&fx) }),
         ),
         (
             OpKind::Rearrange,
             ex(
                 &fx.febe,
                 fx.user,
-                Op::Rearrange { doc: edition.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
+                Op::Rearrange { doc: edition.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)], as_of: head(&fx) },
             ),
         ),
         // PUB-2.7: an explicit private member of the owner's published edition.
@@ -356,6 +358,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             at: vp(1, 4),
             values: vec![skep_content::Val::new(vec![b'r'])],
             deposit: declared(),
+            as_of: head(&fx),
         },
     ));
     let rej = rejected(ex(
@@ -366,6 +369,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             at: vp(1, 2),
             values: vec![skep_content::Val::new(vec![b'r'])],
             deposit: declared(),
+            as_of: head(&fx),
         },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
@@ -382,6 +386,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             at: vp(1, 5),
             values: vec![skep_content::Val::new(vec![b'r'])],
             deposit: Deposit::Declared(edition.clone()),
+            as_of: head(&fx),
         },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
@@ -600,6 +605,7 @@ fn refusals_arrive_typed_classified_and_localized() {
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![1u8])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
     assert_eq!(rej.op, OpKind::Insert);
@@ -622,7 +628,7 @@ fn refusals_arrive_typed_classified_and_localized() {
     let rej = rejected(ex(
         &fx.febe,
         fx.user,
-        Op::Delete { doc: ghost, p: vp(1, 1), width: nat(1) },
+        Op::Delete { doc: ghost, p: vp(1, 1), width: nat(1), as_of: head(&fx) },
     ));
     assert_eq!(rej.code, RejectCode::DocNotRegistered);
     assert_eq!(rej.disposition, Disposition::Reorder);

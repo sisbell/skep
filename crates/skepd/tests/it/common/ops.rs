@@ -50,6 +50,32 @@ pub fn head_position(port: u16) -> u64 {
     json(&get(port, "/health").1)["log_position"].as_u64().expect("log_position")
 }
 
+/// The five in-place edits, which carry the typed state `as_of` (wire.md
+/// §Arrangement; skep #442).
+pub const BURST_OPS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
+
+/// `frame` typed against the board's head as read at the send (skep #442).
+///
+/// A burst frame — one of [`BURST_OPS`] — that names no `as_of` gains one:
+/// [`head_position`], the position a read made now answers, which is the
+/// state a cell that composed its positions against the live board holds.
+/// A frame that names its own state keeps it, so a cell about the check
+/// spells the state it means; every other frame, and bytes that are no
+/// JSON object, pass through untouched, so the refusal cells send what they
+/// wrote. It is the one door [`op`](crate::common::op) gives every frame,
+/// beside the attest it attaches; a cell that must send a burst WITHOUT the
+/// member posts through `op_as_written`.
+pub fn typed_at_head(port: u16, frame: &str) -> String {
+    let Ok(mut v) = serde_json::from_str::<Value>(frame) else { return frame.to_string() };
+    let Some(obj) = v.as_object_mut() else { return frame.to_string() };
+    let burst = obj.get("op").and_then(Value::as_str).is_some_and(|op| BURST_OPS.contains(&op));
+    if !burst || obj.contains_key("as_of") {
+        return frame.to_string();
+    }
+    obj.insert("as_of".to_string(), Value::from(head_position(port)));
+    v.to_string()
+}
+
 /// The committed position a write's ack carries.
 pub fn acked_at(v: &Value) -> u64 {
     assert!(
@@ -206,22 +232,38 @@ pub fn published_edition(port: u16, signed: &str) -> String {
 /// declared class type — so it names a MEMBER type, [`T_ENROLL`], which the
 /// door admits on the type alone (PUB-2.11, RES-249/261), what the bytes are
 /// being nothing it can test.
-pub fn insert_frame(doc: &str, ordinal: u64, text: &str, deposit: bool) -> String {
+///
+/// `as_of` is the typed state (wire.md §Arrangement): a position where the
+/// cell holds one, or `None` where the frame is typed at its send by the
+/// suite's door ([`typed_at_head`]) — a table walked in order, each cell's
+/// state the one its predecessors left.
+pub fn insert_frame(doc: &str, ordinal: u64, text: &str, deposit: bool, as_of: impl Into<Option<u64>>) -> String {
     let declaration = if deposit { format!(r#","deposit":"{T_ENROLL}""#) } else { String::new() };
     format!(
-        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["{text}"]{declaration}}}"#
+        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["{text}"]{declaration}{}}}"#,
+        typed_member(as_of)
     )
 }
 
-/// An UNDECLARED per-byte insert — the draft's own edit.
+/// The `as_of` member a builder appends: the position given, or nothing
+/// where the door types the frame at its send.
+fn typed_member(as_of: impl Into<Option<u64>>) -> String {
+    match as_of.into() {
+        Some(position) => format!(r#","as_of":{position}"#),
+        None => String::new(),
+    }
+}
+
+/// An UNDECLARED per-byte insert — the draft's own edit, typed against the
+/// head as read now ([`head_position`]).
 pub fn insert_text(port: u16, session: &str, doc: &str, ordinal: u64, text: &str) -> Value {
-    op(port, Some(session), &insert_frame(doc, ordinal, text, false))
+    op(port, Some(session), &insert_frame(doc, ordinal, text, false, head_position(port)))
 }
 
 /// A DECLARED per-byte deposit at a fresh position — the one insert a
 /// published document admits (PUB-2.59). Returns the first minted I-address.
 pub fn deposit_text(port: u16, signed: &str, doc: &str, ordinal: u64, text: &str) -> String {
-    acked_addr(&op(port, Some(signed), &insert_frame(doc, ordinal, text, true)))
+    acked_addr(&op(port, Some(signed), &insert_frame(doc, ordinal, text, true, head_position(port))))
 }
 
 /// A private draft of the claimant's holding `text` from ordinal 1.
@@ -239,38 +281,49 @@ pub fn edition_with(port: u16, signed: &str, text: &str) -> String {
     e
 }
 
-pub fn copy_frame(doc: &str, at: u64, source: &str, from: u64, width: u64) -> String {
+/// A `copy` into `doc` at content ordinal `at` of `width` positions of
+/// `source` from `from`, typed against the destination state `as_of`.
+pub fn copy_frame(doc: &str, at: u64, source: &str, from: u64, width: u64, as_of: impl Into<Option<u64>>) -> String {
     format!(
-        r#"{{"op":"copy","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"specs":[{{"source":"{source}","span":{{"start":"1.{from}","width":"0.{width}"}}}}]}}"#
+        r#"{{"op":"copy","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"specs":[{{"source":"{source}","span":{{"start":"1.{from}","width":"0.{width}"}}}}]{}}}"#,
+        typed_member(as_of)
     )
 }
 
 pub fn copy_span(port: u16, session: &str, doc: &str, at: u64, source: &str, from: u64, width: u64) -> Value {
-    op(port, Some(session), &copy_frame(doc, at, source, from, width))
+    op(port, Some(session), &copy_frame(doc, at, source, from, width, head_position(port)))
 }
 
-pub fn delete_frame(doc: &str, at: u64, width: u64) -> String {
+/// A `delete` of `width` positions of `doc` from content ordinal `at`,
+/// typed against the document state `as_of`.
+pub fn delete_frame(doc: &str, at: u64, width: u64, as_of: impl Into<Option<u64>>) -> String {
     format!(
-        r#"{{"op":"delete","doc":"{doc}","p":{{"subspace":"1","ordinal":"{at}"}},"width":"{width}"}}"#
+        r#"{{"op":"delete","doc":"{doc}","p":{{"subspace":"1","ordinal":"{at}"}},"width":"{width}"{}}}"#,
+        typed_member(as_of)
     )
 }
 
 /// `reinstate` into `doc` at content ordinal `at`, each run `(origin,
 /// i_start, width)` — the write by identity (wire.md §Arrangement), whose
-/// runs take the form `publish`'s do.
-pub fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)]) -> String {
+/// runs take the form `publish`'s do — typed against the destination state
+/// `as_of`.
+pub fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)], as_of: impl Into<Option<u64>>) -> String {
     let runs: Vec<String> =
         runs.iter().map(|(origin, i_start, width)| run(origin, i_start, *width)).collect();
     format!(
-        r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}]}}"#,
-        runs.join(",")
+        r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}]{}}}"#,
+        runs.join(","),
+        typed_member(as_of)
     )
 }
 
-pub fn rearrange_frame(doc: &str, cuts: [u64; 3]) -> String {
+/// A three-cut `rearrange` of `doc`, typed against the document state
+/// `as_of`.
+pub fn rearrange_frame(doc: &str, cuts: [u64; 3], as_of: impl Into<Option<u64>>) -> String {
     let [a, b, c] = cuts;
     format!(
-        r#"{{"op":"rearrange","doc":"{doc}","cuts":[{{"subspace":"1","ordinal":"{a}"}},{{"subspace":"1","ordinal":"{b}"}},{{"subspace":"1","ordinal":"{c}"}}]}}"#
+        r#"{{"op":"rearrange","doc":"{doc}","cuts":[{{"subspace":"1","ordinal":"{a}"}},{{"subspace":"1","ordinal":"{b}"}},{{"subspace":"1","ordinal":"{c}"}}]{}}}"#,
+        typed_member(as_of)
     )
 }
 

@@ -864,8 +864,11 @@ same state and meets the same refusal. The one gap is the `500` above: a
 first frame that committed and was then answered `500 internal_panic`
 left no memo, so a re-ask after it re-executes — which is why a client
 reads the board before any re-send after a `500`, and never the memo
-alone. The memo is the best-effort hint it was: nothing here survives a
-restart.
+alone. A frame refused `arrangement_moved` (§Arrangement, the typed
+state) is a refusal like any other: not memoized, so a re-send under
+the same `id` — the same frame, or one re-typed against a fresh read —
+is judged afresh. The memo is the best-effort hint it was: nothing here
+survives a restart.
 
 ### HTTP status codes
 
@@ -1546,7 +1549,8 @@ Fields:
   `next_account_prefix` and issuing a *different* request.
 * `site` — optional fault localization, present only when the store
   reported one: `{"operand": "first"|"second"?, "region": n?, "slot": n?,
-  "index": n?, "fault": "<span fault>"?, "addr": "<address>"?}`.
+  "index": n?, "fault": "<span fault>"?, "addr": "<address>"?,
+  "as_of": n?, "current": n?}`.
   `index`/`fault` localize a malformed span in a multi-span request;
   `operand`/`region` localize compare inputs; `slot` localizes an
   `edit_link` successor fault to one of its three slots, in the read-back
@@ -1556,7 +1560,12 @@ Fields:
   (or target link) that failed the ownership check; on a `withheld`
   rejection, the origin DOCUMENT a `publish` shot may not read,
   or the document argument a READ may not — a read carrying
-  several document arguments names the first, in declaration order.
+  several document arguments names the first, in declaration order;
+  `as_of` and `current` ride an `arrangement_moved` rejection alone, as
+  positions — the document state the refused edit named, echoed, and
+  the position the document's arrangement last changed at (§Arrangement,
+  the typed state), the state a writer reads again before placing its
+  text afresh.
   Span faults: `not_ordinal_level`, `not_level_uniform`,
   `start_not_zero_free`, `start_too_shallow`.
 * `detail` — optional message (always present on `unparseable`, where
@@ -1655,7 +1664,16 @@ each resolved run's start, a reinstate every address of every run),
 `empty_result` (copy: the net placement is empty once the specs are
 clipped; reinstate: its run list is empty),
 `not_arranged` (delete: the position's ordinal names no arranged content
-position), `out_of_bounds`, `empty_width`, `bad_cut_count`,
+position), `out_of_bounds`, `arrangement_moved` (the five in-place
+edits: the typed state the frame names — its as_of member, §Arrangement
+— is below the position the document's content arrangement last changed
+at — permanent, the same frame can never land and the act that does is
+another frame typed against a fresh read; refused behind
+`published_target` and ahead of every shape check, so a stale frame never
+meets `out_of_bounds`; carries `site.as_of`, the typed state echoed, and
+`site.current`, that last change's position; a link write homed in the
+document moves no arrangement and never raises it), `empty_width`,
+`bad_cut_count`,
 `not_ascending`, `empty_content_subspace` (rearrange: the document's
 content subspace is empty), `not_a_principal` (version: the caller's id
 names no principal), `node_tier_cross_owner` (version of a document the
@@ -3009,16 +3027,37 @@ as its trunk HEAD in every arrangement reader (head-float), and a
 declared deposit into the chain lands in the head member's arrangement
 (§The publish shot and head-float).
 
+The typed state: each of the five in-place edits — `insert`, `delete`,
+`copy`, `reinstate` and `rearrange` — carries `as_of`, REQUIRED: the
+position of the document state the edit was typed against, the same
+coordinate a read answers in its own `as_of` (§The response envelope:
+every response names where it sits), so a writer passes back the `as_of`
+of the read its text came from, raised by the `at` of each of its own
+acks on the document. The board keeps, per document, the position its
+content arrangement last changed at — a placement, a removal, a
+rearrangement, a shot or a `version` minting it — and refuses a frame
+whose `as_of` is below it `arrangement_moved` (§Rejection codes), behind
+`published_target` and ahead of every shape check, so a frame typed
+against an older arrangement meets the one code and never
+`out_of_bounds` for positions that were true when it was typed. A frame
+typed against the current state lands exactly as it did without the
+member. A frame without it is `malformed` (§The request envelope). A
+link write homed in the document — `make_link` and its kin — is not an
+arrangement change and never refuses the next edit.
+
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first
 minted I-address). `content` and `gate` are defences (§Rejection codes):
 M4's no-overwrite and M3's inc gate, which no well-formed request
-against a healthy store reaches. This example inserts **eleven
+against a healthy store reaches. `as_of` is the document state the
+insert was typed against (above), REQUIRED; an insert typed against an
+older arrangement — for a declared deposit, the arrangement it lands in
+— is refused `arrangement_moved`. This example inserts **eleven
 single-byte values at eleven positions** — the string form is per-byte:
 
 <!-- wire: request insert -->
 ```json
-{"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["hello, wire"]}
+{"as_of":7,"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["hello, wire"]}
 ```
 
 Granularity is said, never fallen into: the atom forms mint one composite
@@ -3028,7 +3067,7 @@ bytes, and one non-UTF-8 composite — eighteen positions:
 
 <!-- wire: request insert -->
 ```json
-{"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["per-byte text ",{"atom":"one indivisible value"},{"hex":"c328"},{"atom_hex":"00ff"}]}
+{"as_of":7,"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["per-byte text ",{"atom":"one indivisible value"},{"hex":"c328"},{"atom_hex":"00ff"}]}
 ```
 
 The optional top-level `attest` member — `{"alg": <an ALGS token>,
@@ -3083,24 +3122,30 @@ second position:
 
 <!-- wire: request insert -->
 ```json
-{"at":{"ordinal":"2","subspace":"1"},"deposit":"1.1.0.1.0.1.0.3.1","doc":"1.0.1.0.1","op":"insert","values":[{"atom":"one credential record"}]}
+{"as_of":7,"at":{"ordinal":"2","subspace":"1"},"deposit":"1.1.0.1.0.1.0.3.1","doc":"1.0.1.0.1","op":"insert","values":[{"atom":"one credential record"}]}
 ```
 
 **`delete`** — remove `width` positions of `doc` starting at `p`. → `ack`.
 A `p` whose ordinal names no arranged content position is `not_arranged`.
+`as_of` is the document state the delete was typed against (the typed
+state, above), REQUIRED; a delete typed against an older arrangement is
+refused `arrangement_moved`.
 
 <!-- wire: request delete -->
 ```json
-{"doc":"1.0.1.0.1","op":"delete","p":{"ordinal":"3","subspace":"1"},"width":"2"}
+{"as_of":7,"doc":"1.0.1.0.1","op":"delete","p":{"ordinal":"3","subspace":"1"},"width":"2"}
 ```
 
 **`copy`** — transclude the given source spans into `doc` at `at` (shared
 identity, not copied bytes). → `ack`. A net placement that is empty once
-the specs are clipped is `empty_result`.
+the specs are clipped is `empty_result`. `as_of` is the DESTINATION's
+typed state (above), REQUIRED; a copy typed against an older arrangement
+of `doc` is refused `arrangement_moved` — the sources are not judged for
+it.
 
 <!-- wire: request copy -->
 ```json
-{"at":{"ordinal":"6","subspace":"1"},"doc":"1.0.1.0.1","op":"copy","specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.5"}}]}
+{"as_of":7,"at":{"ordinal":"6","subspace":"1"},"doc":"1.0.1.0.1","op":"copy","specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.5"}}]}
 ```
 
 **`reinstate`** — place runs of PERMANENT content I-addresses into `doc`
@@ -3119,7 +3164,10 @@ version-chain refusals), and on a claimed board a bare session's into
 an owned published document meets `signed_session_required` ahead of it
 (§Credential refusals). It has no entry frame — nothing of its kind
 lands in the published world — so an `attest` member on it is dropped
-unread, as on `copy`.
+unread, as on `copy`. `as_of` is the DESTINATION's typed state (the
+typed state, above), REQUIRED; a reinstate typed against an older
+arrangement of `doc` is refused `arrangement_moved` — the origins are
+not judged for it.
 
 The reach is WIDE: `origin` may be any document the session principal
 may READ — the source consult of §The read predicate, at the write door
@@ -3148,16 +3196,19 @@ destination.
 
 <!-- wire: request reinstate -->
 ```json
-{"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}
+{"as_of":7,"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}
 ```
 
 **`rearrange`** — pivot/swap `doc`'s content about the cut positions.
 → `ack`. A `doc` whose content subspace is empty is
-`empty_content_subspace`.
+`empty_content_subspace`. `as_of` is the document state the cuts were
+typed against (the typed state, above), REQUIRED; a rearrange typed
+against an older arrangement is refused `arrangement_moved`, ahead of
+the cut count's own check.
 
 <!-- wire: request rearrange -->
 ```json
-{"cuts":[{"ordinal":"1","subspace":"1"},{"ordinal":"3","subspace":"1"},{"ordinal":"6","subspace":"1"}],"doc":"1.0.1.0.1","op":"rearrange"}
+{"as_of":7,"cuts":[{"ordinal":"1","subspace":"1"},{"ordinal":"3","subspace":"1"},{"ordinal":"6","subspace":"1"}],"doc":"1.0.1.0.1","op":"rearrange"}
 ```
 
 **`version`** — the content-sharing, copy-on-write fork of `d_src`.
@@ -3531,7 +3582,7 @@ refused `unbound_cell` where the caller holds no lease on its hash:
 
 <!-- wire: request insert -->
 ```json
-{"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.2","op":"insert","values":[{"atom":"{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}"}]}
+{"as_of":7,"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.2","op":"insert","values":[{"atom":"{\"type\":\"1.1.0.1.0.1.0.3.89\",\"hash\":\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\",\"size\":5}"}]}
 ```
 
 ```json

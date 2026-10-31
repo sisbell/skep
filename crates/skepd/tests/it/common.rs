@@ -1404,9 +1404,13 @@ pub fn open_session(port: u16, principal: u64) -> String {
 /// it signed itself, posts through [`op_as_written`] or [`http`] directly, as
 /// the refusal cells do.
 pub fn op(port: u16, token: Option<&str>, frame: &str) -> Value {
+    // The typed state first (skep #442): a burst frame naming no `as_of` is
+    // typed against the head read now (`typed_at_head`); then the attest,
+    // composed over the body the member lies outside of.
+    let frame = typed_at_head(port, frame);
     let frame = match token {
-        Some(t) => attach_attest(port, t, frame),
-        None => frame.to_string(),
+        Some(t) => attach_attest(port, t, &frame),
+        None => frame,
     };
     op_as_written(port, token, &frame)
 }
@@ -1414,8 +1418,12 @@ pub fn op(port: u16, token: Option<&str>, frame: &str) -> Value {
 /// [`op`] with the frame sent AS WRITTEN — no `attest` attached beyond what
 /// the caller composed, whatever the token: a member it signed by hand, a
 /// broken one, or none at all. The refusal cells' door, and every cell that
-/// signs its own frame.
+/// signs its own frame. One member is not the caller's to leave out: a
+/// burst frame naming no `as_of` is typed against the head read at the send
+/// here as at [`op`] (`typed_at_head`), the attest's body lying outside it;
+/// a cell about the member itself posts through [`http`].
 pub fn op_as_written(port: u16, token: Option<&str>, frame: &str) -> Value {
+    let frame = typed_at_head(port, frame);
     let (st, body) = http(port, "POST", "/op", token, frame.as_bytes());
     assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
     json(&body)

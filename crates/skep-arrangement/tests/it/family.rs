@@ -9,6 +9,7 @@
 use skep_address::{document_of, Address};
 use skep_arrangement::{trunk_of, Caller, Deposit, HasM5, Run, SegmentRun, Shot, ShotRun, Vstream};
 use skep_content::{ContentStore, HasContent};
+use skep_kernel::Kernel;
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::common::*;
@@ -21,8 +22,8 @@ fn ca2(ordinal: u32) -> Address {
 
 /// Leave doc2 — P1's second private draft, the family's other draft —
 /// holding `x`, `y` at ca2(1..2).
-fn insert_xy(vs: &Vstream<'_, World>) {
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y")], Deposit::Undeclared)
+fn insert_xy(k: &Kernel<World>, vs: &Vstream<'_, World>) {
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y")], Deposit::Undeclared, now(k))
         .expect("doc2 holds x y");
 }
 
@@ -73,7 +74,7 @@ fn a_shot_naming_also_re_inserts_the_other_drafts_runs_as_fresh_identity() {
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // doc1, the rendering draft: a b c at ca(1..3)
-    insert_xy(&vs); // doc2, the family's other draft: x y at ca2(1..2)
+    insert_xy(&k, &vs); // doc2, the family's other draft: x y at ca2(1..2)
     let shot = family(
         vec![doc2()],
         vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 3), shot_run(&doc2(), &ca2(1), 2)],
@@ -133,9 +134,9 @@ fn an_identity_two_named_drafts_share_is_minted_once_and_placed_by_reference_aft
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k); // doc1: a b c at ca(1..3)
-    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(2), 2)])
+    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(2), 2)], now(&k))
         .expect("doc2 holds doc1's b c by identity");
-    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"x")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"x")], Deposit::Undeclared, now(&k))
         .expect("doc2 holds x of its own at ca2(1)");
     let shot = family(
         vec![doc2()],
@@ -175,10 +176,10 @@ fn the_address_forms_agree_as_the_body_spells_them_over_two_homes() {
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k);
-    insert_xy(&vs);
+    insert_xy(&k, &vs);
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     let (w, _) = vs
-        .insert(Caller::Principal(PrincipalId(3)), &subdoc, vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+        .insert(Caller::Principal(PrincipalId(3)), &subdoc, vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("the sub-account's draft holds w");
     let shot = family(
         vec![doc2()],

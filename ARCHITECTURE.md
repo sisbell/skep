@@ -1140,8 +1140,9 @@ Its rules of mechanism: SP-21, SP-28.
 
 `skep-arrangement` owns what a document holds: per document a content and a
 link run-list (its arrangement), the provenance relation R (every content
-address a document has ever held), and three per-member facts — the birth
-extent, the shot terms and the fork source — all in one slice, `M5State`.
+address a document has ever held), three per-member facts — the birth
+extent, the shot terms and the fork source — and per document the position
+its content arrangement last changed at, all in one slice, `M5State`.
 It is the one place in the workspace where state is destroyed: `delete`
 removes positions and `rearrange` reorders them, in place, and R keeps
 every address a delete removed. Its modules are declared in `src/lib.rs`
@@ -1163,8 +1164,8 @@ that pin the seals a foreign crate meets.
 Rules that hold across its files:
 
 - **One fold.** A committed `M5State` comes only from `apply_m5` over an
-  `M5Rec`, and inside this crate only `state.rs` builds one: three of its
-  five fields are private there, the arrangement map among them, so every
+  `M5Rec`, and inside this crate only `state.rs` builds one: four of its
+  six fields are private there, the arrangement map among them, so every
   other module reaches an arrangement through `state.rs`'s `arrangement_of`
   and the absent-⇒-empty convention it applies. The fold reaches one the
   same way and calls nothing defined in `reads.rs` or `shot.rs`, the other

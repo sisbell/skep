@@ -969,6 +969,9 @@ static WRITE_BUSY_RETRIES: AtomicU64 = AtomicU64::new(0);
 /// every other cell of this suite writes serially and never meets the pool,
 /// and the suite's shared `op_as_written` keeps its 200 assertion.
 fn op_as_written_retrying_write_busy(port: u16, token: &str, frame: &str) -> Value {
+    // Typed at the head read now where the frame names no state, as the
+    // suite's doors type a burst.
+    let frame = &typed_at_head(port, frame);
     let deadline = Instant::now() + WRITE_BUSY_PATIENCE;
     let mut backoff = WRITE_BUSY_BACKOFF_FIRST;
     loop {

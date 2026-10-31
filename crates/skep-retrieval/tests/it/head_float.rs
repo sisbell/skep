@@ -4,6 +4,7 @@
 //! moving with the head, and FINDDOCSCONTAINING not.
 
 use skep_address::{Address, SpanSet};
+use skep_arrangement::AsOf;
 use skep_arrangement::{HasM5, Vstream};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Delivery, OriginError, Query};
@@ -31,7 +32,7 @@ fn a_published_address_answers_from_its_trunk_head_once_it_has_one() {
     }
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // the trunk's first member, and so its head
-    vs.insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
+    vs.insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("fork deposit commits"); // head = [a, b, c, z]
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -117,7 +118,7 @@ fn a_published_address_with_an_empty_arrangement_of_its_own_reports_its_head() {
         // the head's.
         assert_eq!(ok_of(q.doc_vspanset(&pdoc())), SpanSet::empty());
     }
-    vs.insert(P1, &fork, vp(1, 1), vec![val(b"z")], declared())
+    vs.insert(P1, &fork, vp(1, 1), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("head deposit commits");
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -170,7 +171,7 @@ fn a_pinned_member_answers_its_own_arrangement_after_the_head_moves_on() {
         .expect("second fork commits");
     assert_eq!(first, vdoc());
     assert_eq!(second, a(&[1, 0, 1, 0, 3, 2])); // the trunk's second member, now its head
-    vs.insert(P1, &second, vp(1, 4), vec![val(b"z")], declared())
+    vs.insert(P1, &second, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("head deposit commits"); // head = [a, b, c, z]
     let s = k.snapshot();
     let q = Query::new(&s);

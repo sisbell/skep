@@ -20,7 +20,7 @@ use common::*;
 use skep_address::Address;
 use skep_arrangement::published_target;
 use skep_content::Val;
-use skep_febe::{Deposit, Op, OpKind, OperationSurface, SessionId};
+use skep_febe::{Deposit, Op, OpKind, OperationSurface, RejectCode, Response, SessionId};
 use skep_kernel::{Kernel, Seq};
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -37,24 +37,36 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
     let before = fx.febe.log_position();
 
     // Each thread extracts its own `(Address, Seq)` before joining, so
-    // nothing but plain data crosses back.
+    // nothing but plain data crosses back. Each types its insert against
+    // the head it reads (skep #442), and — the writers racing on ONE
+    // document — a writer whose state another's commit moved past is
+    // refused `arrangement_moved` and reads again before it sends again, as
+    // a client does; every writer lands, each at its own commit.
+    let fx = &fx;
     let acks: Vec<(Address, Seq)> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..WRITERS)
             .map(|i| {
                 let doc = doc.clone();
-                let febe = &fx.febe;
-                let user = fx.user;
-                scope.spawn(move || {
-                    ack_addr(ex(
-                        febe,
-                        user,
+                scope.spawn(move || loop {
+                    let typed = head(fx);
+                    match ex(
+                        &fx.febe,
+                        fx.user,
                         Op::Insert {
-                            doc,
+                            doc: doc.clone(),
                             at: vp(1, 1),
                             values: vec![Val::new(vec![b'a' + i])],
                             deposit: Deposit::Undeclared,
+                            as_of: typed,
                         },
-                    ))
+                    ) {
+                        Response::AckAddr { addr, at } => break (addr, at),
+                        Response::Rejected(rej) if rej.code == RejectCode::ArrangementMoved => {
+                            assert_eq!(rej.site.as_ref().and_then(|s| s.as_of), Some(typed));
+                            continue;
+                        }
+                        other => panic!("writer {i}: {other:?}"),
+                    }
                 })
             })
             .collect();

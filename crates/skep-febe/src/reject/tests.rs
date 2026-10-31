@@ -33,6 +33,7 @@ fn invariant_forced_and_state_dependent_codes_are_permanent() {
         RejectCode::NotNextForm,
         RejectCode::NotArranged,
         RejectCode::OutOfBounds,
+    RejectCode::ArrangementMoved,
         RejectCode::EmptySource,
         RejectCode::EmptyContentSubspace,
         RejectCode::RangeNotPresent,
@@ -235,6 +236,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::EmptyResult
         | RejectCode::NotArranged
         | RejectCode::OutOfBounds
+        | RejectCode::ArrangementMoved
         | RejectCode::EmptyWidth
         | RejectCode::BadCutCount
         | RejectCode::NotAscending

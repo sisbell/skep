@@ -258,7 +258,7 @@ pub use error::{
 };
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, MintedRun, Pairing, PublishWorld, Vstream, MAX_COPY_RESOLVE_STEPS,
+    stage_reinstate_at, AsOf, MintedRun, Pairing, PublishWorld, Vstream, MAX_COPY_RESOLVE_STEPS,
     MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;

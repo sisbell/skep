@@ -138,6 +138,7 @@ fn all_requests() -> Vec<Request> {
                     Val::new(vec![0u8, 255]),
                 ],
                 deposit: Deposit::Undeclared,
+                as_of: Seq(7),
             },
         ),
         // The deposit declaration (PUB-9.13, DECLARED): rides only when made,
@@ -149,10 +150,11 @@ fn all_requests() -> Vec<Request> {
                 at: vp(1, 2),
                 values: vec![Val::new(b"record".to_vec())],
                 deposit: Deposit::Declared(a(&[1, 1, 0, 1, 0, 1, 0, 3, 1])),
+                as_of: Seq(7),
             },
         ),
-        rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
-        rq(None, Op::Copy { doc: d1(), at: vp(1, 6), specs: vec![vs(d2(), 1, 5)] }),
+        rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2), as_of: Seq(7) }),
+        rq(None, Op::Copy { doc: d1(), at: vp(1, 6), specs: vec![vs(d2(), 1, 5)], as_of: Seq(7) }),
         // The write by identity: the shot's run form under `runs` — the
         // document's own run and a window onto another document's I-space.
         rq(
@@ -164,9 +166,10 @@ fn all_requests() -> Vec<Request> {
                     shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 4]), 5),
                     shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1),
                 ],
+                as_of: Seq(7),
             },
         ),
-        rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)] }),
+        rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)], as_of: Seq(7) }),
         rq(None, Op::Version { d_src: d1(), published: None }),
         rq(None, Op::Version { d_src: d1(), published: Some(false) }),
         // The publish shot (wire v7.3): the ordinary shot off a member with
@@ -1168,7 +1171,7 @@ fn the_deposit_declaration_reads_absent_or_a_class_type_address_and_nothing_else
     let codec = JsonCodec;
     let frame = |field: &str| {
         format!(
-            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["a"]{field}}}"#
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["a"],"as_of":7{field}}}"#
         )
         .into_bytes()
     };
@@ -1647,14 +1650,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 90 codes, pinned.
+/// The full `RejectCode` wire-name table — all 91 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 90] = [
+    let table: [(RejectCode, &str); 91] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1693,6 +1696,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::EmptyResult, "empty_result"),
         (RejectCode::NotArranged, "not_arranged"),
         (RejectCode::OutOfBounds, "out_of_bounds"),
+        (RejectCode::ArrangementMoved, "arrangement_moved"),
         (RejectCode::EmptyWidth, "empty_width"),
         (RejectCode::BadCutCount, "bad_cut_count"),
         (RejectCode::NotAscending, "not_ascending"),
@@ -1837,6 +1841,8 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
             index: Some(2),
             fault: Some(SpanFault::StartTooShallow),
             addr: Some(d2()),
+            as_of: Some(Seq(5)),
+            current: Some(Seq(9)),
         }),
         detail: Some("d2 not registered".into()),
         io_kind: None,
@@ -1848,6 +1854,9 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
     assert_eq!(v["site"]["index"].as_u64(), Some(2));
     assert_eq!(v["site"]["fault"].as_str(), Some("start_too_shallow"));
     assert_eq!(v["site"]["addr"].as_str(), Some("1.0.1.0.2"));
+    // The stale-edit refusal's two positions ride as positions (skep #442).
+    assert_eq!(v["site"]["as_of"].as_u64(), Some(5));
+    assert_eq!(v["site"]["current"].as_u64(), Some(9));
     assert_eq!(v["detail"].as_str(), Some("d2 not registered"));
 }
 
@@ -1920,12 +1929,12 @@ fn lenient_forms_parse_and_re_emit_canonically() {
     let codec = JsonCodec;
     // Integer nats and shuffled fields.
     let lenient =
-        br#"{"values":["hi"],"doc":"1.0.1.0.1","op":"insert","at":{"subspace":1,"ordinal":1}}"#;
+        br#"{"values":["hi"],"doc":"1.0.1.0.1","op":"insert","as_of":7,"at":{"subspace":1,"ordinal":1}}"#;
     let parsed = parse_ok(&codec, lenient);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["at"]["subspace"].as_str(), Some("1"), "canonical nats are strings");
     // Uppercase hex reads; canonical output is lowercase.
-    let hexed = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[{"hex":"00FF"}]}"#;
+    let hexed = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[{"hex":"00FF"}],"as_of":7}"#;
     let parsed = parse_ok(&codec, hexed);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["values"][0]["hex"].as_str(), Some("00ff"));
@@ -1935,7 +1944,7 @@ fn lenient_forms_parse_and_re_emit_canonically() {
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["q"]["home"].as_str(), Some("empty"));
     // A beyond-u64 natural rides the string form.
-    let wide = br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"18446744073709551616"}"#;
+    let wide = br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"18446744073709551616","as_of":7}"#;
     let parsed = parse_ok(&codec, wide);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["width"].as_str(), Some("18446744073709551616"));
@@ -2003,7 +2012,7 @@ fn value_write_forms_round_trip() {
     let codec = JsonCodec;
     let frame = |values: &str| {
         format!(
-            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":{values}}}"#
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":{values},"as_of":7}}"#
         )
     };
     let vals = |req: &Request| match &req.op {
@@ -2227,7 +2236,7 @@ fn every_malformed_frame_fails_parse_with_a_detail() {
         br#"{"op":"fork","surprise":1}"#,
         br#"{"op":"version"}"#,
         br#"{"op":"version","d_src":"0.1"}"#,
-        br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true]}"#,
+        br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true],"as_of":7}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"resolve":[]}}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"addrs":["0.1"]}}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":{"spans":[{"start":"1.0.1.0.1.0.1.1","width":"0"}]},"to":[],"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}"#,
@@ -2238,7 +2247,7 @@ fn every_malformed_frame_fails_parse_with_a_detail() {
         // wraps rather than merely differing if the parse is ever widened
         // to `as_i64()`.
         br#"{"op":"follow_link","a":"1.0.1.0.1.0.2.1","slot":-1}"#,
-        br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":-1}"#,
+        br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":-1,"as_of":7}"#,
         br#"{"op":"window_v","d":"1.0.1.0.1","region":[{"start":"1.1","width":"0.5"}],"cur":null,"n":2.5}"#,
     ];
     for frame in bad {
@@ -2364,4 +2373,61 @@ fn an_ispan_slot_round_trips_at_the_cap_and_is_refused_past_it() {
     let req = parse_ok(&codec, frame);
     assert_eq!(req, make(1), "the I-span parses to the span of five positions from its start");
     assert_eq!(codec.marshal_request(&req), frame, "and renders back as the I-span it was sent as");
+}
+
+/// The typed state's grammar (wire.md §Arrangement, the typed state; skep
+/// #442): each of the five in-place edits REQUIRES `as_of` — a frame without
+/// it is "missing field", `malformed` by the envelope's rule, and one whose
+/// member is no position is refused on the field — and no other op admits
+/// it: present on a mint, a read or a link write it is "unknown field", as
+/// any member an op does not take. With it the frame parses, carries the
+/// position, and marshals it back in the canonical form.
+#[test]
+fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op() {
+    let codec = JsonCodec;
+    let refused = |frame: &str| match codec.parse(frame.as_bytes()) {
+        Err(e) => e.detail.unwrap_or_else(|| panic!("{frame}: a parse failure carries a detail")),
+        Ok(_) => panic!("frame must not parse: {frame}"),
+    };
+    let five = [
+        r#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":["a"]}"#,
+        r#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#,
+        r#"{"op":"copy","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.1"}}]}"#,
+        r#"{"op":"reinstate","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
+        r#"{"op":"rearrange","doc":"1.0.1.0.1","cuts":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"2"},{"subspace":"1","ordinal":"3"}]}"#,
+    ];
+    for frame in five {
+        let detail = refused(frame);
+        assert!(detail.contains("missing field 'as_of'"), "{frame}: {detail}");
+        let with = |member: &str| format!("{},\"as_of\":{member}}}", &frame[..frame.len() - 1]);
+        // A position: parsed, carried, marshaled back.
+        let req = parse_ok(&codec, with("7").as_bytes());
+        let typed = match &req.op {
+            Op::Insert { as_of, .. }
+            | Op::Delete { as_of, .. }
+            | Op::Copy { as_of, .. }
+            | Op::Reinstate { as_of, .. }
+            | Op::Rearrange { as_of, .. } => *as_of,
+            other => panic!("{frame}: {other:?}"),
+        };
+        assert_eq!(typed, Seq(7), "{frame}");
+        let canonical = String::from_utf8(codec.marshal_request(&req)).expect("utf-8");
+        assert!(canonical.starts_with(r#"{"as_of":7,"#), "the member marshals first, a position: {canonical}");
+        assert_eq!(parse_ok(&codec, canonical.as_bytes()), req, "parse ∘ marshal is a fixpoint");
+        // No position: a string, a negative, a null — refused on the field.
+        for bad in [r#""7""#, "-1", "null", "7.5"] {
+            let detail = refused(&with(bad));
+            assert!(detail.contains("'as_of'"), "{frame} with as_of {bad}: {detail}");
+        }
+    }
+    for frame in [
+        r#"{"op":"create_new_document","account":"1.0.1","as_of":7}"#,
+        r#"{"op":"version","d_src":"1.0.1.0.1","as_of":7}"#,
+        r#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.1"}}],"as_of":7}"#,
+        r#"{"op":"make_link","home":"1.0.1.0.1","from":{"addrs":["1.0.1.0.1.0.1.1"]},"to":{"addrs":["1.0.1.0.1.0.1.2"]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]},"as_of":7}"#,
+        r#"{"op":"doc_metadata","doc":"1.0.1.0.1","as_of":7}"#,
+    ] {
+        let detail = refused(frame);
+        assert!(detail.contains("unknown field 'as_of'"), "{frame}: {detail}");
+    }
 }

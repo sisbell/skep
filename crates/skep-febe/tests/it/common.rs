@@ -55,7 +55,7 @@ impl WorldState for World {
             Record::M3(x) => World { m3: self.m3.apply_m3(at, x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
             Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
-            Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
+            Record::M5(x) => World { m5: self.m5.apply_m5(at, x), ..self.clone() },
             Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
         }
     }
@@ -365,6 +365,19 @@ pub fn ex(febe: &OperationSurface<World>, session: SessionId, op: Op) -> Respons
     febe.execute(session, Request::from(op))
 }
 
+/// The document state a burst op built here is typed against (skep #442):
+/// the `as_of` of a read made now through the surface — the owner-of-address
+/// read of the fixture's account, the cheapest read the door serves — which
+/// is the board's committed head. Read at each build, never kept, so a cell
+/// that writes twice types its second edit against the state its first
+/// left; a cell about the check itself names its state by hand.
+pub fn head(fx: &Fixture) -> Seq {
+    match ex(&fx.febe, fx.user, Op::EffectiveOwner { addr: fx.account.clone() }) {
+        Response::EffectiveOwner { as_of, .. } => as_of,
+        other => panic!("the owner-of-address read answers: {other:?}"),
+    }
+}
+
 pub fn ex_id(febe: &OperationSurface<World>, session: SessionId, id: &[u8], op: Op) -> Response {
     febe.execute(session, Request { id: Some(ReqId(id.to_vec())), ..Request::from(op) })
 }
@@ -645,6 +658,7 @@ pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ))
 }
@@ -669,6 +683,7 @@ pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
             deposit: declared(),
+            as_of: head(&fx),
         },
     ))
 }
@@ -703,13 +718,13 @@ pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
     assert!(run_count >= 2 && run_count.is_power_of_two(), "a power of two from 2: {run_count}");
     let d = create_doc(fx);
     insert3(fx, &d);
-    ack(ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 2), width: nat(1) }));
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 2), width: nat(1), as_of: head(&fx) }));
     let mut extent = 2;
     while extent < run_count {
         ack(ex(
             &fx.febe,
             fx.user,
-            Op::Copy { doc: d.clone(), at: vp(1, extent + 1), specs: vec![vspec(&d, 1, extent)] },
+            Op::Copy { doc: d.clone(), at: vp(1, extent + 1), specs: vec![vspec(&d, 1, extent)], as_of: head(&fx) },
         ));
         extent *= 2;
     }
@@ -774,6 +789,7 @@ pub fn commit_every_write(
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
     let (fork, _) = ack_addr(write(fx.user, Op::Fork { published: None }));
@@ -797,9 +813,9 @@ pub fn commit_every_write(
     };
     ack_addr(write(fx.user, Op::Publish { target: PublishTarget::Document(edition), shot, places: Vec::new(), deposits: PublishDeposits::default() }));
 
-    ack(write(fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)] }));
-    ack(write(fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) }));
-    ack(write(fx.user, Op::Rearrange { doc: draft, cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] }));
+    ack(write(fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)], as_of: head(&fx) }));
+    ack(write(fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1), as_of: head(&fx) }));
+    ack(write(fx.user, Op::Rearrange { doc: draft, cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)], as_of: head(&fx) }));
 
     // ── the link family, on a document whose three ordinals are intact ──
     let home = create_doc(fx);

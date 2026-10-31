@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use crate::fixture::*;
 use crate::mutilate::*;
 use skep_address::{Address, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, EngineError, OpenError};
@@ -574,7 +575,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
         for i in 0..8u32 {
             engine
                 .vstream()
-                .insert(OWNER, &doc, vp(1, i + 1), vec![Val::new(vec![b'a' + i as u8; BLOB])], Deposit::Undeclared)
+                .insert(OWNER, &doc, vp(1, i + 1), vec![Val::new(vec![b'a' + i as u8; BLOB])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
                 .expect("blob insert");
         }
         engine.kernel().checkpoint().expect("blob checkpoint");
@@ -647,7 +648,7 @@ fn hazard_d_child_process_entry() {
         let ord = (i + 1) as u32;
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, ord), vec![Val::new(vec![b'a' + (i % 26) as u8; BLOB])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, ord), vec![Val::new(vec![b'a' + (i % 26) as u8; BLOB])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("hazard child: insert");
         let seq = engine.kernel().current_seq().0;
         let mut out = stdout.lock();

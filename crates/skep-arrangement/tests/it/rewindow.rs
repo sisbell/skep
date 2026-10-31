@@ -37,7 +37,7 @@
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
     head_lock_key, stage_delete_at, stage_publish, stage_reinstate_at, trunk_head, trunk_of,
-    DeleteError, Deposit, HasM5, PublishError, ReinstateError, Run, Shot, ShotRun, Vstream,
+    AsOf, DeleteError, Deposit, HasM5, PublishError, ReinstateError, Run, Shot, ShotRun, Vstream,
 };
 use skep_content::HasContent;
 use skep_kernel::{Kernel, Seq, TxnError};
@@ -132,11 +132,11 @@ fn rewindow(
         }
         // (iv) The fresh I-run at the run's place.
         let placed = [ShotRun { origin: trunk_of(&doc), run: fresh }];
-        stage_reinstate_at(stg, P1, draft, place_of(kept), &placed)?;
+        stage_reinstate_at(stg, P1, draft, place_of(kept), &placed, AsOf::Unchecked)?;
         // (v) The draft-native run, where the placement left it — read off
         // the working world, never carried over from before it.
         let after = stg.working().m5().project(draft, &coverage);
-        stage_delete_at(stg, P1, draft, place_of(&after), run.width().clone())?;
+        stage_delete_at(stg, P1, draft, place_of(&after), run.width().clone(), AsOf::Unchecked)?;
         Ok(member)
     })
 }
@@ -223,7 +223,21 @@ fn a_shots_fresh_run_replaces_the_drafts_run_at_its_kept_place_in_the_same_commi
         vec![ca(2).tumbler().clone()]
     );
     assert_eq!(m5.content_count(&doc1()), n(3));
-    assert_eq!(trunk_head(s.world().m3(), &pdoc()), Some(member));
+    assert_eq!(trunk_head(s.world().m3(), &pdoc()), Some(member.clone()));
+    // The re-window moved the draft's recorded position to the shot's
+    // commit (skep #442), and the member starts at it too: an edit typed
+    // before the shot is refused on the re-windowed draft, one typed at the
+    // shot's position lands. The staged bodies themselves took the unchecked
+    // arm, so the commit above was never refused by the check.
+    assert_eq!(m5.arranged_at(&doc1()), Some(seq), "the re-windowed draft moved at the shot");
+    assert_eq!(m5.arranged_at(&member), Some(seq), "the member starts at the shot");
+    let vs = Vstream::new(&k);
+    assert_eq!(
+        rejected(vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, AsOf::Typed(before.seq()))),
+        skep_arrangement::InsertError::ArrangementMoved { as_of: before.seq(), current: seq }
+    );
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, AsOf::Typed(seq))
+        .expect("an edit typed at the shot's position lands on the re-windowed draft");
 }
 
 /// What `D` did to the named run between the kept place's reading and the
@@ -235,7 +249,7 @@ struct Since {
     start: u32,
     width: u32,
     /// The edit `D` takes after the place is read.
-    disturb: fn(&Vstream<'_, World>),
+    disturb: fn(&Kernel<World>, &Vstream<'_, World>),
     /// Where `D` arranges the named span afterwards.
     now: fn() -> SpanSet,
 }
@@ -259,8 +273,8 @@ fn a_run_moved_split_or_deleted_since_the_place_was_read_refuses_and_nothing_is_
             what: "moved",
             start: 2,
             width: 1,
-            disturb: |vs| {
-                vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)])
+            disturb: |k, vs| {
+                vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)], now(&k))
                     .expect("a | b → b a: b first");
             },
             now: || SpanSet::singleton(vspan(1, 1, 1)),
@@ -269,8 +283,8 @@ fn a_run_moved_split_or_deleted_since_the_place_was_read_refuses_and_nothing_is_
             what: "split",
             start: 2,
             width: 2,
-            disturb: |vs| {
-                vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"x")], Deposit::Undeclared)
+            disturb: |k, vs| {
+                vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"x")], Deposit::Undeclared, now(&k))
                     .expect("a b x c: x inside the named b c");
             },
             now: || [vspan(1, 2, 1), vspan(1, 4, 1)].into_iter().collect(),
@@ -279,8 +293,8 @@ fn a_run_moved_split_or_deleted_since_the_place_was_read_refuses_and_nothing_is_
             what: "deleted",
             start: 2,
             width: 1,
-            disturb: |vs| {
-                vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("a c: b gone");
+            disturb: |k, vs| {
+                vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("a c: b gone");
             },
             now: SpanSet::empty,
         },
@@ -291,7 +305,7 @@ fn a_run_moved_split_or_deleted_since_the_place_was_read_refuses_and_nothing_is_
         let named = Run::new(ca(cell.start), n(cell.width)).expect("the named run");
         let kept = k.snapshot().world().m5().project(&doc1(), &coverage_of(&named));
         assert_eq!(kept, SpanSet::singleton(vspan(1, cell.start, cell.width)), "{}", cell.what);
-        (cell.disturb)(&vs);
+        (cell.disturb)(&k, &vs);
         let disturbed = k.snapshot();
         let runs_before = content_runs_of(&disturbed, &doc1());
         let bytes_before = bytes_of(&disturbed, &doc1());
@@ -345,9 +359,9 @@ fn a_run_moved_split_or_deleted_since_the_place_was_read_refuses_and_nothing_is_
 fn the_named_span_is_re_windowed_whether_a_whole_run_of_the_draft_or_a_piece_of_one() {
     let whole = |k: &Kernel<World>| {
         let vs = Vstream::new(k);
-        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared).expect("a at ca(1)");
-        vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"c")], Deposit::Undeclared).expect("c at ca(2)");
-        vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"b")], Deposit::Undeclared)
+        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared, now(&k)).expect("a at ca(1)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"c")], Deposit::Undeclared, now(&k)).expect("c at ca(2)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"b")], Deposit::Undeclared, now(&k))
             .expect("b at ca(3), between");
     };
     let piece = |k: &Kernel<World>| {

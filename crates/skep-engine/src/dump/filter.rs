@@ -24,9 +24,10 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A trailing component inside an authoritative slice is that
 //!   store's own serde field, and a private one: `map` is M4's,
-//!   `arrangements`, `provenance` and `fork_sources` are M5's (its third and
-//!   fourth, `birth_extents` and `shot_terms`, are kept whole by name and end
-//!   no path), `links` is M7's. So a store author renaming a field it never
+//!   `arrangements`, `provenance`, `fork_sources` and `arranged_at` are M5's
+//!   (its third and fourth, `birth_extents` and `shot_terms`, are kept whole
+//!   by name and end no path), `links` is M7's. So a store author renaming a
+//!   field it never
 //!   published has no reason to look here, and the rename would leave the
 //!   filter silently filtering nothing — which is why every path is asserted
 //!   to name a place in the tree.
@@ -144,6 +145,13 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   not secret (PUB-1.13), the fork's readers already hold the source's
 ///   I-addresses through `image`, and nothing else of the source rides with
 ///   it.
+/// * `authoritative.arrangement.arranged_at` — the entries keyed by an
+///   unreadable document leave, as the arrangements' do: the map is keyed by
+///   the document whose content arrangement a record changed, and the
+///   position it holds says that the document exists and when it last
+///   moved, which is the document's own readers' to know and no one else's.
+///   An entry stays exactly where the reader class reads the document — the
+///   same test its arrangement stays under.
 /// * `authoritative.links.links` — a link homed in an unreadable document
 ///   leaves.
 /// * `publication` — the section reduced per entry to the readable drafts:
@@ -253,6 +261,7 @@ pub(super) fn filter_tree(
     retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "fork_sources"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "arranged_at"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "links", "links"], &keep_serde_form);
 
     retain_seq(&mut root, &["publication"], &keep_dotted);

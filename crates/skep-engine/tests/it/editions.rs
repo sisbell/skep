@@ -17,6 +17,7 @@ use std::cell::Cell;
 
 use common::*;
 use skep_address::{document_of, parent, subtree_of, Address, Span};
+use skep_arrangement::AsOf;
 use skep_arrangement::{deposit_class_types, Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, World};
@@ -461,6 +462,7 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
             Deposit::Declared(deposit_class_types()[0].clone()),
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("a declared deposit at fresh positions (PUB-2.59)");
     let (ranged, _) = engine

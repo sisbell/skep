@@ -9,6 +9,7 @@
 use std::{fmt, io};
 
 use skep_address::Address;
+use skep_kernel::Seq;
 use skep_retrieval::{Operand, SpanFault};
 
 use crate::request::OpKind;
@@ -174,6 +175,21 @@ pub struct FaultSite {
     /// `already_published` naming the member the words were published into,
     /// `claim_refused` naming the edition that already holds a member.
     pub addr: Option<Address>,
+    /// The document state a refused edit was typed against (skep #442).
+    ///
+    /// `arrangement_moved`'s alone, beside `current`: the frame's `as_of`,
+    /// echoed, so a client holding several frames on one document knows
+    /// which state the refused one named. Filled by M5's five
+    /// `ArrangementMoved` verdicts and nothing else.
+    pub as_of: Option<Seq>,
+    /// The position the refused edit's document last changed its arrangement
+    /// at (skep #442).
+    ///
+    /// `arrangement_moved`'s alone, beside `as_of`: the state the edit's
+    /// positions would have to be true of — the newest the writer must read
+    /// before placing its text again. Filled with `as_of`, and by the same
+    /// five verdicts.
+    pub current: Option<Seq>,
 }
 
 /// The deduped union of every store error variant plus M10's own (§5).
@@ -277,6 +293,20 @@ pub enum RejectCode {
     NotArranged,
     /// A position or range lies outside the bounds its operation admits.
     OutOfBounds,
+    /// An in-place edit typed against an older state of its document (skep
+    /// #442).
+    ///
+    /// The five edits — `insert`, `delete`, `copy`, `reinstate`, `rearrange`
+    /// — each name the document state their positions are true of (`as_of`);
+    /// where the document's content arrangement last changed at a position
+    /// past it, M5 refuses the edit behind `published_target` and ahead of
+    /// every shape check, so a stale frame meets this code and never
+    /// `out_of_bounds`. Carries `site.as_of`, the typed state echoed, and
+    /// `site.current`, the position of that last change. Permanent by the
+    /// catch-all: the same frame can never land, and the act that does is
+    /// another frame, typed against a fresh read. A link write homed in the
+    /// document moves no arrangement and so never raises it.
+    ArrangementMoved,
     /// A width is zero.
     EmptyWidth,
     /// A rearrange holds neither three cuts nor four.

@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 
 use skep_address::{Address, Span, SpanSet};
+use skep_arrangement::AsOf;
 use skep_arrangement::{seat_link, HasM5, VSpec};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{
@@ -29,7 +30,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // shares pdoc's three
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(
@@ -46,6 +47,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
                 span: vspan(1, 4, 1),
             },
         ],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("mixed copy commits"); // doc2 = [ca1, vca1]
     {
@@ -60,7 +62,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     }
     // doc1 drops ca1 — it stays an R-candidate (permanence) but the
     // present-tense filter removes it.
-    vs.delete(P1, &doc1(), vp(1, 1), n(1)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq())).expect("delete commits");
     let s = k.snapshot();
     let q = Query::new(&s);
     assert_eq!(
@@ -129,7 +131,7 @@ fn find_docs_containing_answers_exactly_the_documents_holding_a_covered_address_
     // ghost the present-tense filter must drop.
     let k = mem_kernel();
     let vs = three_runs(&k); // doc1 = [ca1, ca2, ca3]; doc2 = [doc2_ca1][ca1, ca2][ca1]
-    vs.delete(P1, &doc1(), vp(1, 1), n(1))
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // doc1 = [ca2, ca3]
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -225,7 +227,7 @@ fn find_docs_containing_filtered_consults_its_predicate_of_every_candidate_ahead
     // filter that paid `arranges_any` first would never ask about it.
     let k = mem_kernel();
     let vs = three_runs(&k); // doc2 = [x][ca1, ca2][ca1]; doc1 = [ca1, ca2, ca3]
-    vs.delete(P1, &doc1(), vp(1, 1), n(3))
+    vs.delete(P1, &doc1(), vp(1, 1), n(3), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // doc1 holds nothing now: a GHOST for ca1
     let s = k.snapshot();
     let q = Query::new(&s);

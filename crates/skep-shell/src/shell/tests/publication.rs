@@ -181,8 +181,9 @@ impl Ground {
 
     /// A draft of the claimant's holding `text`.
     fn draft(&self, text: &str) -> String {
-        let d = self.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
-        self.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text]}));
+        let minted = self.op(json!({"op": "create_new_document", "account": "1.0.1"}));
+        let d = minted["addr"].as_str().expect("an ack_addr").to_string();
+        self.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}));
         d
     }
 
@@ -400,10 +401,10 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     let e1 = format!("{edition}.1");
     assert_eq!(first["member"].as_str(), Some(e1.as_str()), "{first}");
     // D goes on; A inherits D's whole arrangement by identity and adds its own.
-    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"]}));
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"], "as_of": g.position()}));
     let a_draft = g.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
-    g.op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}]}));
-    g.op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"]}));
+    g.op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}], "as_of": g.position()}));
+    g.op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"], "as_of": g.position()}));
     // A's panel naming D among `also`.
     let panel = g
         .call("publication.open", json!({"session": g.session, "draft": a_draft, "doc": edition, "also": [d], "readable_drafts": [a_draft, d], "published": [edition]}))

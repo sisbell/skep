@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use skep_arrangement::{Deposit, Run, ShotRun, VPos};
+use skep_arrangement::{AsOf, Deposit, Run, ShotRun, VPos};
 use skep_febe::{PublishDeposits, PublishTarget};
 use skep_blobs::HashFunction;
-use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
 use skep_namespace::{head_document, system_account, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 
 use super::*;
@@ -25,6 +25,7 @@ fn insert(doc: &Address, bytes: Vec<u8>) -> Op {
         at: VPos::content(Nat::from(1u32)),
         values: vec![Val::new(bytes)],
         deposit: Deposit::Undeclared,
+        as_of: Seq(7),
     }
 }
 
@@ -67,6 +68,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
             VPos::content(Nat::from(1u32)),
             vec![Val::new(canonical())],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the engine, below the door, writes any bytes")
         .0;
@@ -137,6 +139,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
         at: VPos::content(Nat::from(1u32)),
         values: vec![Val::new(canonical())],
         deposit: Deposit::Declared(skep_engine::types::t_grant().clone()),
+        as_of: Seq(7),
     };
     assert_eq!(door(declared, SYSTEM_PRINCIPAL), Some(MediaRefusal::PublishedTarget));
     assert_eq!(
@@ -198,6 +201,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
             VPos::content(Nat::from(1u32)),
             vec![Val::new(real())],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the engine, below the door, writes any bytes")
         .0;

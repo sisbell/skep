@@ -46,8 +46,10 @@
 //!
 //! **Layout.** This file is the handle and what its operations share — the
 //! three budgets, J0's two allocation steps ([`allocate_for_placement`] for an
-//! atom, [`allocate_stretch_for_placement`] for a run of single-byte values)
-//! and the head key ([`head_lock_key`]). Each operation is a child module
+//! atom, [`allocate_stretch_for_placement`] for a run of single-byte values),
+//! the head key ([`head_lock_key`]), and the state an edit was typed against
+//! ([`AsOf`]) with the one check the five in-place edits key on it
+//! ([`arrangement_moved`]). Each operation is a child module
 //! holding one `impl` block — `ops/insert.rs`, `ops/publish.rs`,
 //! `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
 //! `ops/version.rs` — and sees this file's private items and none of its
@@ -81,12 +83,13 @@ use skep_address::{Address, Nat};
 use skep_content::{
     stage_stretch, stage_write, ContentError, ContentStretch, ContentWrite, HasContent, Val,
 };
-use skep_kernel::{Attestation, Kernel, LockKey, Staging, WorldState};
+use skep_kernel::{Attestation, Kernel, LockKey, Seq, Staging, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 
 use crate::chain::trunk_of;
 use crate::run::Run;
 use crate::run_list::extend_or_push_run;
+use crate::state::M5State;
 
 // COPY (ASN-0118): transclusion by reference, allocating nothing.
 mod copy;
@@ -257,10 +260,51 @@ pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
 /// past [`MAX_PLACED_RUNS`] is.
 pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 
+/// The document state an edit was typed against (skep #442).
+///
+/// It is the value the five in-place edits take beside their positions —
+/// [`insert`](Vstream::insert), [`delete`](Vstream::delete),
+/// [`copy`](Vstream::copy), [`reinstate`](Vstream::reinstate),
+/// [`rearrange`](Vstream::rearrange) — and the one question the write path
+/// asks of [`M5State::arranged_at`]: whether the document's arrangement has
+/// changed since the state the edit's positions are true of. A frame's
+/// positions are true of one state of the document; typed against an older
+/// one, they land a little off and nothing says so. Two arms, as
+/// [`Deposit`](crate::Deposit) has two: an edit is typed against a state or
+/// it is not, so a match on it is exhaustive and the unchecked arm is spelled
+/// where it is used. No `Default` and no `From<Seq>`: a position becomes this
+/// value with the arm written out, where a reader sees which it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AsOf {
+    /// The position of the state the edit was typed against.
+    ///
+    /// It is the wire's `as_of`: the `as_of` of the read the edit's text came
+    /// from, raised by the `at` of each of the writer's own acks on the
+    /// document — one coordinate with a read's `as_of` and a write's `at`,
+    /// the position in the committed log. The edit is refused
+    /// `ArrangementMoved` where the document's arrangement last changed at a
+    /// position past it (the ops' shared `arrangement_moved`), behind the
+    /// published-target
+    /// refusal and ahead of every shape check, so a stale edit meets its own
+    /// code and never `OutOfBounds`; typed at or past that change, or on a
+    /// document never arranged, it lands exactly as an unchecked one.
+    Typed(Seq),
+    /// No state named: the edit is judged on its positions alone.
+    ///
+    /// Three writers pass it, each with a reason the check could not improve
+    /// on: the daemon's head writer and the rule engine's definer, in-process
+    /// writers under their own serial lock that nothing races; and the
+    /// publication's re-window of a draft at its kept places, staged inside
+    /// the shot's own commit behind a stricter check — by identity, refused
+    /// `KeptPlaceMoved` — which this check would only duplicate, and refuse
+    /// where the identity check does not.
+    Unchecked,
+}
+
 /// M5's transact-driving op handle over M2 (§B).
 ///
 /// It is a thin borrow of the engine's kernel and, on an attested handle, of
-/// an attestation. The pure reads live on [`M5State`](crate::M5State)
+/// an attestation. The pure reads live on [`M5State`]
 /// (reached through [`HasM5`](crate::HasM5)); this type owns only the seven
 /// editing/versioning operations — INSERT, DELETE, COPY, REINSTATE,
 /// REARRANGE, VERSION and the publish shot — that M10 (and, for `insert`, M9)
@@ -535,6 +579,32 @@ where
 /// one transaction supplies the union of their keys, this among them.
 pub fn head_lock_key(doc: &Address) -> LockKey {
     M3State::version_lock_key(&trunk_of(doc))
+}
+
+/// Returns a stale edit's two positions — the state it was typed against
+/// and the document's current one — or `None` where it may land.
+///
+/// It is the one check the five in-place edits share (skep #442), asked of
+/// the transaction's working state after the published-target refusal and
+/// before the first shape check: one lookup of [`M5State::arranged_at`] for
+/// `doc` — the arrangement the edit lands in, which for a declared deposit
+/// is the surface the deposit lands in rather than the address named — and
+/// one comparison. Refused exactly where the typed position is BELOW the
+/// position the document's arrangement last changed at: a typed state at or
+/// past that change passes, a document never arranged passes, and the
+/// unchecked arm passes without the lookup. Reads no run and makes no read
+/// of its own beyond the working state every other check reads, so an edit
+/// typed against the current state costs what it cost before the check.
+///
+/// The two positions come back in the order the refusal names them: the
+/// typed state first, then the current one, each op's `ArrangementMoved`
+/// carrying them as `as_of` and `current`.
+fn arrangement_moved(m5: &M5State, doc: &Address, as_of: AsOf) -> Option<(Seq, Seq)> {
+    let AsOf::Typed(typed) = as_of else { return None };
+    match m5.arranged_at(doc) {
+        Some(current) if typed < current => Some((typed, current)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

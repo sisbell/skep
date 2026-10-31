@@ -6,7 +6,7 @@ use skep_address::{Address, Nat};
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3State};
 
-use super::Vstream;
+use super::{arrangement_moved, AsOf, Vstream};
 use crate::chain::published_target;
 use crate::error::RearrangeError;
 use crate::ownership::{gate_write, Caller};
@@ -51,7 +51,12 @@ where
     /// wins, per R-PRE): `DocNotRegistered` → `NotOwner` (the ω gate) →
     /// `PublishedTarget` (PUB-2.11 on the document `doc` projects to,
     /// PUB-2.15; a re-arrangement is an in-place edit and has no deposit
-    /// form) → `BadCutCount` (3|4) → `NotAscending` (strict) →
+    /// form) → `ArrangementMoved` (`as_of` names a state older than `doc`'s
+    /// last arrangement change — the stale-edit refusal, skep #442, keyed on
+    /// [`AsOf`] and judged ahead of every shape check, the cut count's
+    /// included, so stale cuts never meet `OutOfBounds` for positions that
+    /// were true when they were typed; [`AsOf::Unchecked`] skips it) →
+    /// `BadCutCount` (3|4) → `NotAscending` (strict) →
     /// `NotContentSubspace` (every cut) → `OutOfBounds` (CS5 lower bound
     /// `1 ≤ ord(c₀)` and upper bound `ord(c_last) ≤ n_C + 1`) →
     /// `EmptyContentSubspace` (R-PRE(ii)). That last verdict is defensive
@@ -69,6 +74,7 @@ where
         caller: Caller,
         doc: &Address,
         cuts: &[VPos],
+        as_of: AsOf,
     ) -> Result<Seq, TxnError<RearrangeError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
@@ -83,6 +89,13 @@ where
                 // PUB-6.36 slot 5: the in-place advance refusal (PUB-2.11).
                 if published_target(stg.working().m3(), doc) {
                     return Err(RearrangeError::PublishedTarget);
+                }
+                // The stale-edit refusal (skep #442), ahead of every shape
+                // check — the cut count's included.
+                if let Some((as_of, current)) =
+                    arrangement_moved(stg.working().m5(), doc, as_of)
+                {
+                    return Err(RearrangeError::ArrangementMoved { as_of, current });
                 }
                 // Three cuts or four (R-PRE), binding the first and the last:
                 // the two the bounds check below asks the arrangement about.

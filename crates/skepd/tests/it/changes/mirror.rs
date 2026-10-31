@@ -105,7 +105,7 @@ fn the_feed_is_the_mirrors_whole_input() {
         // edit, and the draft's mint before it, both outside the checked set.
         let v = op_as_written(port, Some(&signed), &create_frame(CLAIMANT_ACCOUNT, None));
         let (draft_at, draft) = (acked_at(&v), acked_addr(&v));
-        let v = op_as_written(port, Some(&signed), &insert_frame(&draft, 1, "x", false));
+        let v = op_as_written(port, Some(&signed), &insert_frame(&draft, 1, "x", false, head_position(port)));
         let insert_at = acked_at(&v);
 
         // A bare draft mint, and a bare `make_link` into it.

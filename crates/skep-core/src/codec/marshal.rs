@@ -238,9 +238,16 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             (op_name(OpKind::EffectiveOwner), vec![("addr", j_addr(addr))])
         }
         Op::DocMetadata { doc } => (op_name(OpKind::DocMetadata), vec![("doc", j_addr(doc))]),
-        Op::Insert { doc, at, values, deposit } => {
-            let mut pairs =
-                vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
+        // The five in-place edits marshal their typed state `as_of` as a
+        // position, the form a response's `at` and `as_of` take (skep #442);
+        // the member is required on the wire, so it always rides.
+        Op::Insert { doc, at, values, deposit, as_of } => {
+            let mut pairs = vec![
+                ("doc", j_addr(doc)),
+                ("at", j_vpos(at)),
+                ("values", j_values(values)),
+                ("as_of", j_seq(*as_of)),
+            ];
             // Canonical: the declaration rides only when made, as the class
             // type it names (PUB-2.64) — absent *is* `Undeclared` on the wire,
             // so an undeclared insert marshals to no field and
@@ -251,21 +258,37 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             }
             (op_name(OpKind::Insert), pairs)
         }
-        Op::Delete { doc, p, width } => (
+        Op::Delete { doc, p, width, as_of } => (
             op_name(OpKind::Delete),
-            vec![("doc", j_addr(doc)), ("p", j_vpos(p)), ("width", j_nat(width))],
+            vec![
+                ("doc", j_addr(doc)),
+                ("p", j_vpos(p)),
+                ("width", j_nat(width)),
+                ("as_of", j_seq(*as_of)),
+            ],
         ),
-        Op::Copy { doc, at, specs } => (
+        Op::Copy { doc, at, specs, as_of } => (
             op_name(OpKind::Copy),
-            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("specs", j_vspecs(specs))],
+            vec![
+                ("doc", j_addr(doc)),
+                ("at", j_vpos(at)),
+                ("specs", j_vspecs(specs)),
+                ("as_of", j_seq(*as_of)),
+            ],
         ),
-        Op::Reinstate { doc, at, runs } => (
+        Op::Reinstate { doc, at, runs, as_of } => (
             op_name(OpKind::Reinstate),
-            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("runs", j_shot_runs(runs))],
+            vec![
+                ("doc", j_addr(doc)),
+                ("at", j_vpos(at)),
+                ("runs", j_shot_runs(runs)),
+                ("as_of", j_seq(*as_of)),
+            ],
         ),
-        Op::Rearrange { doc, cuts } => {
-            (op_name(OpKind::Rearrange), vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts))])
-        }
+        Op::Rearrange { doc, cuts, as_of } => (
+            op_name(OpKind::Rearrange),
+            vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts)), ("as_of", j_seq(*as_of))],
+        ),
         Op::Version { d_src, published } => {
             let mut pairs = vec![("d_src", j_addr(d_src))];
             pairs.extend(published_pair(published));
@@ -686,6 +709,14 @@ fn j_site(s: &FaultSite) -> Value {
     }
     if let Some(a) = &s.addr {
         pairs.push(("addr", j_addr(a)));
+    }
+    // The stale-edit refusal's two positions (skep #442), as positions: the
+    // typed state echoed and the document's current one.
+    if let Some(typed) = s.as_of {
+        pairs.push(("as_of", j_seq(typed)));
+    }
+    if let Some(current) = s.current {
+        pairs.push(("current", j_seq(current)));
     }
     obj(pairs)
 }
@@ -1419,6 +1450,9 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::EmptyResult => "empty_result",
         RejectCode::NotArranged => "not_arranged",
         RejectCode::OutOfBounds => "out_of_bounds",
+        // The stale-edit refusal (skep #442), tabled with the Arrangement
+        // family in §Rejection codes.
+        RejectCode::ArrangementMoved => "arrangement_moved",
         RejectCode::EmptyWidth => "empty_width",
         RejectCode::BadCutCount => "bad_cut_count",
         RejectCode::NotAscending => "not_ascending",

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use common::*;
 use skep_address::Address;
-use skep_arrangement::Deposit;
+use skep_arrangement::{AsOf, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, EngineStores, Kernel};
 use skep_febe::{Disposition, Op, OperationSurface, RejectCode, Request, Response, SessionId};
@@ -62,6 +62,7 @@ fn engine_world_satisfies_the_febe_demand() {
             at: vp(1, 1),
             values: vec![Val::new(vec![b'w'])],
             deposit: Deposit::Undeclared,
+            as_of: engine.kernel().current_seq(),
         }),
     ));
 
@@ -125,6 +126,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
             at: vp(1, 1),
             values: vec![Val::new(vec![b'w'])],
             deposit: Deposit::Undeclared,
+            as_of: engine.kernel().current_seq(),
         }),
     ));
 
@@ -187,13 +189,13 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let (_acct, doc) = setup_draft(&engine);
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
 
     let past = engine.kernel().current_seq();
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'y'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'y'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
 
     let world = engine.world_at(past).expect("a committed boundary answers");

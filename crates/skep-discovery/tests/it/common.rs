@@ -16,6 +16,7 @@ use std::cell::RefCell;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::{
     deposit_class_types, reading_surface, Deposit, HasM5, M5Rec, M5State, Run, Shot, ShotRun, VPos,
     VSpec,
@@ -72,7 +73,7 @@ impl WorldState for World {
                 ..self.clone()
             },
             Record::M5(x) => World {
-                m5: self.m5.apply_m5(x),
+                m5: self.m5.apply_m5(at, x),
                 ..self.clone()
             },
             Record::Links(x) => World {
@@ -456,7 +457,7 @@ pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
         .map(|i| Val::new(vec![b'a' + (i % 26) as u8]))
         .collect();
     skep_arrangement::Vstream::new(k)
-        .insert(SYS, doc, vp(1, 1), vals, Deposit::Undeclared)
+        .insert(SYS, doc, vp(1, 1), vals, Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("test content INSERT succeeds");
 }
 
@@ -489,6 +490,7 @@ pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
             },
             vals,
             Deposit::Declared(deposit_class_types()[0].clone()),
+            AsOf::Typed(k.current_seq()),
         )
         .expect("a declared deposit at the fresh end is admitted into a published document");
 }
@@ -559,6 +561,7 @@ pub fn doc2_past_the_run_budget_at_two_run_counts(
                 &doc2(),
                 vp(1, 1),
                 &vec![spec(&doc1(), 1, 1, 1); copies],
+                AsOf::Typed(k.current_seq()),
             )
             .expect("copy succeeds");
     };

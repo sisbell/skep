@@ -1033,6 +1033,7 @@ impl Cx<'_> {
             at: at.vpos(),
             values,
             deposit: Deposit::Undeclared,
+            as_of: self.rig.head(),
         }))
     }
 
@@ -1061,7 +1062,12 @@ impl Cx<'_> {
             }
         }
         let d = self.bound(doc).map_err(CopyNeverBound::Destination)?;
-        Ok(self.rig.exec(Op::Copy { doc: d, at: VPoint::content(ord).vpos(), specs }))
+        Ok(self.rig.exec(Op::Copy {
+            doc: d,
+            at: VPoint::content(ord).vpos(),
+            specs,
+            as_of: self.rig.head(),
+        }))
     }
 
     /// DELETE `region` of golden `doc`, a content-subspace delete mirrored
@@ -1096,7 +1102,12 @@ impl Cx<'_> {
             }
         }
         let p = region.at().vpos();
-        Ok(self.rig.exec(Op::Delete { doc: d, p, width: Nat::from(region.width) }))
+        Ok(self.rig.exec(Op::Delete {
+            doc: d,
+            p,
+            width: Nat::from(region.width),
+            as_of: self.rig.head(),
+        }))
     }
 
     /// REARRANGE golden `doc` at content `cuts` — three cuts pivot, four
@@ -1116,7 +1127,7 @@ impl Cx<'_> {
         }
         let d = self.bound(doc)?;
         let cuts = cuts.iter().map(|&c| VPoint::content(c).vpos()).collect();
-        Ok(self.rig.exec(Op::Rearrange { doc: d, cuts }))
+        Ok(self.rig.exec(Op::Rearrange { doc: d, cuts, as_of: self.rig.head() }))
     }
 
     /// MAKELINK homed in golden `home` over endsets already resolved

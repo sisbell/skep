@@ -12,6 +12,7 @@ use crate::heap::settled_heap_bytes;
 use common::*;
 use im::OrdSet;
 use skep_address::{document_of, Address, Span};
+use skep_arrangement::AsOf;
 use skep_arrangement::{HasM5, Run, Vstream};
 use skep_discovery::{
     content_vspan, count_v_by_home_on, count_v_on, find_links_v_history_on, findlinks_v_on,
@@ -364,7 +365,7 @@ fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
     // doc1: its own position at V1, the deeper document's transcluded at V2.
     seed_content(&k, &doc1(), 1);
     Vstream::new(&k)
-        .copy(SYS, &doc1(), vp(1, 2), &[spec(&deep, 1, 1, 1)])
+        .copy(SYS, &doc1(), vp(1, 2), &[spec(&deep, 1, 1, 1)], AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     let store = LinkWriter::new(&k, &EVERYONE);
     let near = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
@@ -484,13 +485,14 @@ fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
     let vstream = Vstream::new(&k);
     // doc2: that whole run transcluded, then `MAX` width-1 runs behind it,
     // none abutting the next — `MAX + 1` runs over `2 × MAX + 1` positions.
-    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, wide)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, wide)], AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     vstream.copy(
         SYS,
         &doc2(),
         vp(1, wide + 1),
         &vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy succeeds");
     assert_eq!(
@@ -598,7 +600,7 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     // times, each placement a width-1 run that abuts nothing.
     let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -715,7 +717,7 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
     // short in the ordinals each span walks.
     let specs = vec![spec(&doc1(), 1, 1, WIDTH); run_count];
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -755,7 +757,7 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
     // `min(2 × MAX + 1, 2 × MAX)`, its reach `e − 1`, where above the two were
     // one number — and the region is priced at the square still, and admitted.
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, WIDTH)])
+        .copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, WIDTH)], AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -787,7 +789,7 @@ fn image_refuses_a_walk_past_the_square_before_resolving_any_run() {
     seed_content(&k, &doc1(), 1);
     let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     let snap = k.snapshot();
     assert_eq!(

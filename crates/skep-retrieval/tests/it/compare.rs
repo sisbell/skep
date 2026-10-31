@@ -3,6 +3,7 @@
 //! deterministic presentation (R3) — checked against a per-position oracle.
 
 use skep_address::{Address, Nat, Span};
+use skep_arrangement::AsOf;
 use skep_arrangement::{HasM5, VPos, VSpec};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{CompareReport, CorrPair, Delivery, Query, RegionSpec};
@@ -24,6 +25,7 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
             source: doc1(),
             span: vspan(1, 2, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca2]
     let s = k.snapshot();
@@ -69,6 +71,7 @@ fn compare_reports_the_full_width_of_each_overlap() {
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1, ca2, ca3], one run
     let s = k.snapshot();
@@ -102,6 +105,7 @@ fn compare_takes_each_blocks_v_start_from_the_span_that_named_it() {
             source: doc1(),
             span: vspan(1, 3, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca3]
     let s = k.snapshot();
@@ -197,6 +201,7 @@ fn compare_confines_every_pair_to_the_two_named_regions() {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1, ca2]
     let s = k.snapshot();
@@ -241,6 +246,7 @@ fn compare_clips_an_overrunning_window_to_its_documents_bound_prefix() {
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1, ca2, ca3]
     let s = k.snapshot();
@@ -365,7 +371,7 @@ fn compare_joins_blocks_of_different_address_lengths_without_pairing_across_them
     deposit3(&k); // pdoc = [pca1, pca2, pca3]
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(
@@ -382,6 +388,7 @@ fn compare_joins_blocks_of_different_address_lengths_without_pairing_across_them
                 span: vspan(1, 4, 1),
             },
         ],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("mixed copy commits"); // doc2 = [ca1][vca1]: an 8-component run, then a 9-component one
     let s = k.snapshot();
@@ -457,6 +464,7 @@ fn compare_lists_two_pairs_that_share_a_presentation_key_in_emission_order() {
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits"); // doc2 = [ca1, ca2, ca3], ONE run
     let s = k.snapshot();

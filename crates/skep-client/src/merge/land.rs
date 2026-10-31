@@ -680,11 +680,14 @@ impl Writer<'_> {
             )
         })?;
         let stem = merged.key.text();
+        // Typed against the state the extent was read at (skep #442): the
+        // reader's highest `as_of`, which that read just raised.
         let v = self.answered_write(
             &frames::insert_plain_atom(
                 &journal.to_string(),
                 ordinal,
                 &text,
+                self.reader.as_of(),
                 Some(&format!("{stem}.record")),
             ),
             "appending the record",
@@ -787,11 +790,16 @@ impl Writer<'_> {
         let ops = script(&current, &target);
         let stem = merged.key.text();
         let doc = into.to_string();
+        // Each edit of the script is typed against `position` (skep #442):
+        // the state the draft was imaged at, raised by each edit's own ack,
+        // so a draft another hand moved under the landing is refused
+        // `arrangement_moved` at the first edit, with nothing of the script
+        // landed off.
         let mut position = self.reader.as_of();
         for (k, op) in ops.iter().enumerate() {
             let id = format!("{stem}.draft.{}", k + 1);
             let frame = match op {
-                InPlaceOp::Delete { p, width } => frames::delete(&doc, *p, *width, Some(&id)),
+                InPlaceOp::Delete { p, width } => frames::delete(&doc, *p, *width, position, Some(&id)),
                 InPlaceOp::Reinstate { at, runs } => {
                     let runs: Vec<Value> = runs
                         .iter()
@@ -809,7 +817,7 @@ impl Writer<'_> {
                             ))
                         })
                         .collect::<Result<_, Refusal>>()?;
-                    frames::reinstate(&doc, *at, &runs, Some(&id))
+                    frames::reinstate(&doc, *at, &runs, position, Some(&id))
                 }
             };
             let v = self.answered_write(&frame, "editing the draft")?;
@@ -834,6 +842,11 @@ impl Writer<'_> {
                         | "source_not_registered"
                         | "not_arranged"
                         | "out_of_bounds" => own_fault("the draft landing", &r),
+                        // The draft moved under the landing — another hand's
+                        // edit since it was imaged, a race and never this
+                        // client's fault: the board's verdict, faced, and the
+                        // merge run again over a fresh read.
+                        "arrangement_moved" => Refusal::Halt(r.refused(&v)),
                         _ => Refusal::Halt(r.refused(&v)),
                     });
                 }

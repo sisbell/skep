@@ -364,7 +364,7 @@ fn two_concurrent_first_mints_bear_exactly_one_published_home() {
         // The door's behavioural read, from the LOSING session: the home is
         // behind the publish gate, the draft takes a bare write.
         let bare_write = |doc: &str| {
-            op(port, Some(&sessions[1 - winner]), &insert_frame(doc, 1, "p", false))
+            op(port, Some(&sessions[1 - winner]), &insert_frame(doc, 1, "p", false, head_position(port)))
         };
         assert_eq!(rejected_detail(&bare_write(&home)), GATED, "round {rounds}");
         expect_resp(&bare_write(&draft), "ack_addr");

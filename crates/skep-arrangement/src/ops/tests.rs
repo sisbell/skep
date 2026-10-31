@@ -28,10 +28,10 @@ struct MiniWorld {
 
 impl WorldState for MiniWorld {
     type Record = M5Rec;
-    fn apply(&self, _at: Seq, r: &M5Rec) -> MiniWorld {
+    fn apply(&self, at: Seq, r: &M5Rec) -> MiniWorld {
         MiniWorld {
             m3: self.m3.clone(),
-            m5: self.m5.apply_m5(r),
+            m5: self.m5.apply_m5(at, r),
         }
     }
 }
@@ -47,7 +47,7 @@ impl HasM5 for MiniWorld {
 }
 
 fn mini_kernel() -> Kernel<MiniWorld> {
-    let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+    let m5 = M5State::genesis().apply_m5(Seq(0), &M5Rec::ContentPlace {
         doc: doc1(),
         at: n(1),
         runs: vec![run(&ca(1), 5)],
@@ -262,9 +262,9 @@ fn delete_and_rearrange_drive_a_minimal_world() {
     let vs = Vstream::new(&k);
     // The seeded owner of doc1 — the ω gate is exercised, not skipped.
     let p1 = Caller::Principal(PrincipalId(1));
-    vs.delete(p1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
+    vs.delete(p1, &doc1(), vp(1, 2), n(1), AsOf::Typed(k.current_seq())).expect("delete commits");
     let seq = vs
-        .rearrange(p1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)])
+        .rearrange(p1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)], AsOf::Typed(k.current_seq()))
         .expect("rearrange commits");
     let s = k.snapshot();
     assert_eq!(s.seq(), seq);
@@ -290,15 +290,15 @@ fn a_staged_delete_keeps_deletes_bound_and_reads_what_the_staging_before_it_left
     let ((), seq) = k
         .transact(&[M3State::content_lock_key(&doc1())], |stg| {
             // [ca1, ca2, ca3, ca4, ca5] → [ca1, ca4, ca5].
-            stage_delete_at(stg, p1, &doc1(), vp(1, 2), n(2))?;
+            stage_delete_at(stg, p1, &doc1(), vp(1, 2), n(2), AsOf::Unchecked)?;
             // Ordinal 4 is arranged no more: the staging before it left
             // three positions.
             assert_eq!(
-                stage_delete_at(stg, p1, &doc1(), vp(1, 4), n(1)),
+                stage_delete_at(stg, p1, &doc1(), vp(1, 4), n(1), AsOf::Unchecked),
                 Err(DeleteError::NotArranged)
             );
             // [ca1, ca4, ca5] → [ca1, ca4].
-            stage_delete_at(stg, p1, &doc1(), vp(1, 3), n(1))
+            stage_delete_at(stg, p1, &doc1(), vp(1, 3), n(1), AsOf::Unchecked)
         })
         .expect("the two deletes commit as one");
     let s = k.snapshot();
@@ -321,25 +321,25 @@ fn the_in_place_refusal_needs_only_the_registry_and_the_arrangement() {
     let p1 = Caller::Principal(PrincipalId(1));
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.delete(p1, &pdoc(), vp(1, 1), n(1))),
+        rejected(vs.delete(p1, &pdoc(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))),
         DeleteError::PublishedTarget
     ));
     assert!(matches!(
-        rejected(vs.rearrange(p1, &pdoc(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(p1, &pdoc(), &[vp(1, 1), vp(1, 2), vp(1, 3)], AsOf::Typed(k.current_seq()))),
         RearrangeError::PublishedTarget
     ));
     assert!(matches!(
-        rejected(vs.delete(Caller::System, &pdoc(), vp(1, 1), n(1))),
+        rejected(vs.delete(Caller::System, &pdoc(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))),
         DeleteError::PublishedTarget
     ));
     // ω stands ahead of it: a stranger learns nothing about publication.
     assert!(matches!(
-        rejected(vs.delete(Caller::Principal(PrincipalId(2)), &pdoc(), vp(1, 1), n(1))),
+        rejected(vs.delete(Caller::Principal(PrincipalId(2)), &pdoc(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))),
         DeleteError::NotOwner(d) if d == pdoc()
     ));
     assert_eq!(k.current_seq(), before, "a refusal commits nothing");
     // And the draft beside it is edited as before.
-    vs.delete(p1, &doc1(), vp(1, 1), n(1)).expect("a draft's delete commits");
+    vs.delete(p1, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq())).expect("a draft's delete commits");
 }
 
 #[test]
@@ -376,4 +376,26 @@ fn the_shots_admission_needs_only_the_registry_and_the_arrangement() {
         shot_admission(s.world(), p1, &pdoc(), &plain(vec![window]), &anyone),
         Ok(())
     );
+}
+
+/// The one check the five edits share (skep #442), over its whole domain:
+/// a typed state below the document's recorded position answers the two
+/// positions, typed first; one at it, one past it, one on a document never
+/// arranged, and the unchecked arm answer nothing — so an edit typed against
+/// the current state costs the lookup and no refusal.
+#[test]
+fn the_stale_edit_check_refuses_exactly_a_typed_state_below_the_recorded_position() {
+    let never = M5State::genesis();
+    let arranged = never.apply_m5(
+        Seq(7),
+        &M5Rec::ContentPlace { doc: doc1(), at: n(1), runs: vec![run(&ca(1), 1)] },
+    );
+    assert_eq!(arranged.arranged_at(&doc1()), Some(Seq(7)));
+    assert_eq!(arrangement_moved(&arranged, &doc1(), AsOf::Typed(Seq(6))), Some((Seq(6), Seq(7))));
+    assert_eq!(arrangement_moved(&arranged, &doc1(), AsOf::Typed(Seq(0))), Some((Seq(0), Seq(7))));
+    assert_eq!(arrangement_moved(&arranged, &doc1(), AsOf::Typed(Seq(7))), None, "at the change");
+    assert_eq!(arrangement_moved(&arranged, &doc1(), AsOf::Typed(Seq(8))), None, "past it");
+    assert_eq!(arrangement_moved(&arranged, &doc1(), AsOf::Unchecked), None, "the unchecked arm");
+    assert_eq!(arrangement_moved(&arranged, &doc2(), AsOf::Typed(Seq(0))), None, "never arranged");
+    assert_eq!(arrangement_moved(&never, &doc1(), AsOf::Typed(Seq(0))), None, "never arranged");
 }

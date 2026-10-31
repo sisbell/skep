@@ -458,13 +458,16 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
     // Its home first: a mint into an account without one is `mint_home_first`.
     assert_eq!(mint(&board, &forker, FORKER_ACCOUNT, false), format!("{FORKER_ACCOUNT}.0.1"));
     let fork_frame = json!({"op": "version", "d_src": base.to_string(), "published": false});
-    let fork = addr(acked_addr(&acked(board.op(Some(&forker), &fork_frame))).expect("the fork"));
+    let forked = acked(board.op(Some(&forker), &fork_frame));
+    let fork = addr(acked_addr(&forked).expect("the fork"));
+    let forked_at = forked["at"].as_u64().expect("the fork's position");
     assert!(fork.to_string().starts_with(&format!("{FORKER_ACCOUNT}.0.")), "{fork}");
     let meta = read(&board, Some(&token), &frames::doc_metadata(&fork.to_string()));
     assert_eq!(meta["source"].as_str(), Some(base.to_string().as_str()), "the served source: {meta}");
     assert_eq!(meta["published"].as_bool(), Some(false), "{meta}");
-    // The forker removes " sat" — positions 8–11 of its own draft.
-    acked(board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, None)));
+    // The forker removes " sat" — positions 8–11 of its own draft, typed
+    // against the fork's own mint, the forker's last ack on it.
+    acked(board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
     assert_eq!(
         image(&board, &token, &fork, 7),
         vec![(format!("{d}.0.1.1"), 7)],

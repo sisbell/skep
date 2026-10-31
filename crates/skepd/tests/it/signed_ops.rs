@@ -355,7 +355,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     // Outside the publish class (a private draft), signed, with an attest:
     // admitted, the member dropped.
     let draft = owner_draft(port, &signed);
-    let mut frame: Value = serde_json::from_str(&insert_frame(&draft, 1, "x", false)).unwrap();
+    let mut frame: Value = serde_json::from_str(&insert_frame(&draft, 1, "x", false, head_position(port))).unwrap();
     frame["attest"] = attached["attest"].clone();
     let v = op_as_written(port, Some(&signed), &frame.to_string());
     let at = acked_at(&v);
@@ -646,9 +646,9 @@ fn the_ten_ops_commit_attested_where_the_check_demands_it() {
     // so the narrowed exemption does not reach it (as7-E1 (a)) — unattested,
     // the check's (1); attested, it commits SIGNED, its slot filled.
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
-    let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
+    let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true, head_position(port)));
     assert_eq!(verdict(&v), "credential_refused:attestation_required", "prose under a record kind, unattested: {v}");
-    let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "s", true));
+    let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "s", true, head_position(port)));
     let dep_at = acked_at(&v);
     assert!(
         sd.daemon().attestation_at(Seq(dep_at)).unwrap().is_some(),
@@ -656,9 +656,9 @@ fn the_ten_ops_commit_attested_where_the_check_demands_it() {
     );
     // An UNDECLARED insert into the published home: the check demands and
     // verifies, then the store refuses — the check's order.
-    let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
+    let v = op_as_written(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false, head_position(port)));
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
-    let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
+    let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false, head_position(port)));
     assert_eq!(verdict(&v), "published_target", "the check passed; the store's own refusal");
 }
 
@@ -991,10 +991,10 @@ fn the_record_deposit_exemption_reaches_a_signed_record_in_a_doc_1_alone() {
     // (a) Prose under the kind, into the edition: the check, not the exemption.
     let ordinal = next_content_ordinal(port, Some(&signed), &edition);
     let before = head_position(port);
-    let v = op_as_written(port, Some(&signed), &insert_frame(&edition, ordinal, "p", true));
+    let v = op_as_written(port, Some(&signed), &insert_frame(&edition, ordinal, "p", true, head_position(port)));
     assert_eq!(verdict(&v), "credential_refused:attestation_required", "{v}");
     assert_eq!(head_position(port), before, "nothing landed");
-    let v = op(port, Some(&signed), &insert_frame(&edition, ordinal, "p", true));
+    let v = op(port, Some(&signed), &insert_frame(&edition, ordinal, "p", true, head_position(port)));
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested, committed SIGNED: {v}");
 
     // (b) A record of the kind with NO `sig` into doc 1: refused at the
@@ -1112,7 +1112,7 @@ fn a_member_addressed_write_is_framed_over_its_trunk() {
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested over the trunk");
     assert_eq!(text_of(port, None, &m2, 1, 3), "abc");
     // The insert addressed to the member: the check passes, the store refuses.
-    let v = op(port, Some(&signed), &insert_frame(&m1, 4, "d", false));
+    let v = op(port, Some(&signed), &insert_frame(&m1, 4, "d", false, head_position(port)));
     assert_eq!(verdict(&v), "published_target", "framed over the trunk, refused by the store: {v}");
 }
 

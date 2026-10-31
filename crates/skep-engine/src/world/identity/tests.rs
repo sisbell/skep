@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use skep_address::{Address, Nat};
+use skep_arrangement::AsOf;
 use skep_arrangement::{Caller, Deposit, VPos};
 use skep_content::Val;
 use skep_identity::{
@@ -56,6 +57,7 @@ fn deposit_record(
             VPos::content(Nat::from(ordinal)),
             vec![Val::new(record.into_bytes())],
             Deposit::Declared(ty.clone()),
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the record atom lands at the home's next position");
     engine
@@ -155,6 +157,7 @@ fn an_inert_credential_deposit_enters_the_links_and_moves_the_slice_nowhere() {
             VPos::content(Nat::from(1u32)),
             vec![Val::new(record.into_bytes())],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("an ordinary insert into the owner's draft");
     engine
@@ -353,6 +356,7 @@ fn rotate_the_journal(engine: &Engine, dir: &Path, acct: &Address) {
                 VPos::content(Nat::from(ordinal)),
                 vec![Val::new(value)],
                 Deposit::Undeclared,
+                AsOf::Typed(engine.kernel().current_seq()),
             )
             .expect("a bulk insert into the owner's draft");
     }
@@ -444,6 +448,7 @@ fn a_slice_less_checkpoint_with_no_credential_deposit_loads_as_the_empty_table_a
                 VPos::content(Nat::from(1u32)),
                 vec![Val::new(b"x".to_vec())],
                 Deposit::Declared(t_enroll().clone()),
+                AsOf::Typed(engine.kernel().current_seq()),
             )
             .expect("prose declared under a member type lands");
         engine.kernel().checkpoint().expect("checkpoint").0

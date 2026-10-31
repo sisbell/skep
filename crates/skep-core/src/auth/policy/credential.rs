@@ -1020,7 +1020,8 @@ mod tests {
         let atom = |ordinal: u64, text: String, t: &Address| {
             json!({"op": "insert", "doc": doc1,
                    "at": {"subspace": "1", "ordinal": ordinal.to_string()},
-                   "values": [{"atom": text}], "deposit": ty(t)})
+                   "values": [{"atom": text}], "deposit": ty(t),
+                   "as_of": febe.log_position().0})
         };
         let link = |from: &str, to: &[&str], t: &Address| {
             json!({"op": "make_link", "home": doc1, "from": {"addrs": [from]},

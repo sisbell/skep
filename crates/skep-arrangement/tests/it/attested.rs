@@ -31,15 +31,15 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     // A plain handle's writes: the slot empty.
     let plain = Vstream::new(&k);
     let (_, s_plain) = plain
-        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
+        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared, now(&k))
         .expect("insert commits");
     // An attested handle's `insert`: the slot filled for that transaction.
     let attested = Vstream::attested(&k, Some(&tag1));
     let (_, s_att) = attested
-        .insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared())
+        .insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared(), now(&k))
         .expect("the declared deposit commits");
     // The same attested handle's `delete`: outside the checked set, the plain arm.
-    let s_del = attested.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
+    let s_del = attested.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("delete commits");
     // …and its `copy` and `rearrange`: the plain arm as well; its `version`
     // — a publish-class kind — the attested arm.
     let from_doc1 = [VSpec {
@@ -48,10 +48,10 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     }];
     let pivot = [vp(1, 1), vp(1, 2), vp(1, 3)];
     let s_copy = attested
-        .copy(P1, &doc2(), vp(1, 1), &from_doc1)
+        .copy(P1, &doc2(), vp(1, 1), &from_doc1, now(&k))
         .expect("copy commits");
     let s_rearrange = attested
-        .rearrange(P1, &doc1(), &pivot)
+        .rearrange(P1, &doc1(), &pivot, now(&k))
         .expect("rearrange commits");
     let (_, s_fork) = attested
         .version(PrincipalId(2), &doc1(), None)
@@ -90,12 +90,12 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     // (`Vstream::attested`'s obligation).
     let copied = attested;
     let (_, s_copied) = copied
-        .insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared())
+        .insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared(), now(&k))
         .expect("a second deposit commits");
     assert_eq!(k.attestation_at(s_copied).unwrap(), Some(tag1.clone()));
     let none = Vstream::attested(&k, None);
     let (_, s_none) = none
-        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared())
+        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared(), now(&k))
         .expect("a third deposit commits");
     assert_eq!(k.attestation_at(s_none).unwrap(), None);
 
@@ -104,12 +104,12 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     let twin_dir = tempdir().expect("tempdir");
     let twin = Kernel::<World>::open(cfg_fsync(twin_dir.path()), genesis()).expect("open");
     let vs = Vstream::new(&twin);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared, now(&k))
         .unwrap();
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared()).unwrap();
-    vs.delete(P1, &doc1(), vp(1, 2), n(1)).unwrap();
-    vs.copy(P1, &doc2(), vp(1, 1), &from_doc1).unwrap();
-    vs.rearrange(P1, &doc1(), &pivot).unwrap();
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared(), now(&k)).unwrap();
+    vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).unwrap();
+    vs.copy(P1, &doc2(), vp(1, 1), &from_doc1, now(&k)).unwrap();
+    vs.rearrange(P1, &doc1(), &pivot, now(&k)).unwrap();
     vs.version(PrincipalId(2), &doc1(), None).unwrap();
     let shot = Shot {
         base: None,
@@ -118,8 +118,8 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         runs: vec![shot_run(&doc1(), &ca(1), 1), shot_run(&doc1(), &ca(3), 1)],
     };
     vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1))).unwrap();
-    vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared()).unwrap();
-    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared()).unwrap();
+    vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared(), now(&k)).unwrap();
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared(), now(&k)).unwrap();
     assert_eq!(twin.chain_at(s_plain).unwrap(), k.chain_at(s_plain).unwrap(), "unsigned alike");
     assert_ne!(twin.chain_at(s_att).unwrap(), k.chain_at(s_att).unwrap(), "the first filled slot parts them");
     assert_ne!(twin.chain_head(), k.chain_head(), "the slot is inside its chain link");

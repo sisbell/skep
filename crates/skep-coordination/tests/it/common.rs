@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, Vstream};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
@@ -49,7 +50,7 @@ impl WorldState for World {
             Record::M3(x) => World { m3: self.m3.apply_m3(at, x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
             Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
-            Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
+            Record::M5(x) => World { m5: self.m5.apply_m5(at, x), ..self.clone() },
             Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
         }
     }
@@ -317,7 +318,7 @@ pub fn insert_raw(k: &Arc<Kernel<World>>, doc: &Address, bytes: Vec<u8>) -> Addr
     let content_count = snap.world().m5().content_count(doc);
     let at = VPos::content(content_count + 1u32);
     let (start, _) = Vstream::new(k.as_ref())
-        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)], Deposit::Undeclared)
+        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("test content INSERT succeeds");
     start
 }

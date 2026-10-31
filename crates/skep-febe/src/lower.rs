@@ -26,7 +26,7 @@ use skep_arrangement::{
 };
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
-use skep_kernel::TxnError;
+use skep_kernel::{Seq, TxnError};
 use skep_links::{
     AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, PlanFault,
     PublicationError,
@@ -229,6 +229,18 @@ impl Lower for ContentError {
 
 // ──────────────────────────── M5 (arrangement) ─────────────────────────────
 
+/// The stale-edit refusal's lowering (skep #442), one for the five edits.
+///
+/// The two positions ride as the rejection's own `site` members: `as_of`,
+/// the typed state echoed, and `current`, the document's last arrangement
+/// change — numbers a client shifts by, never a `detail` token.
+fn arrangement_moved(as_of: Seq, current: Seq) -> (RejectCode, Option<FaultSite>) {
+    (
+        RejectCode::ArrangementMoved,
+        Some(FaultSite { as_of: Some(as_of), current: Some(current), ..FaultSite::default() }),
+    )
+}
+
 impl Lower for SeatError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         let code = match self {
@@ -246,6 +258,7 @@ impl Lower for InsertError {
             InsertError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             InsertError::NotOwner(a) => not_owner(a),
             InsertError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            InsertError::ArrangementMoved { as_of, current } => arrangement_moved(as_of, current),
             InsertError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             InsertError::OutOfBounds => (RejectCode::OutOfBounds, None),
             InsertError::EmptyContent => (RejectCode::EmptyContent, None),
@@ -261,6 +274,7 @@ impl Lower for CopyError {
             CopyError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             CopyError::NotOwner(a) => not_owner(a),
             CopyError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            CopyError::ArrangementMoved { as_of, current } => arrangement_moved(as_of, current),
             CopyError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             CopyError::OutOfBounds => (RejectCode::OutOfBounds, None),
             CopyError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
@@ -289,6 +303,7 @@ impl Lower for ReinstateError {
             ReinstateError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             ReinstateError::NotOwner(a) => not_owner(a),
             ReinstateError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            ReinstateError::ArrangementMoved { as_of, current } => arrangement_moved(as_of, current),
             ReinstateError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             ReinstateError::OutOfBounds => (RejectCode::OutOfBounds, None),
             ReinstateError::BadRun => (RejectCode::BadRun, None),
@@ -306,6 +321,7 @@ impl Lower for DeleteError {
             DeleteError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             DeleteError::NotOwner(a) => not_owner(a),
             DeleteError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            DeleteError::ArrangementMoved { as_of, current } => arrangement_moved(as_of, current),
             DeleteError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             DeleteError::NotArranged => (RejectCode::NotArranged, None),
             DeleteError::OutOfBounds => (RejectCode::OutOfBounds, None),
@@ -320,6 +336,7 @@ impl Lower for RearrangeError {
             RearrangeError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             RearrangeError::NotOwner(a) => not_owner(a),
             RearrangeError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            RearrangeError::ArrangementMoved { as_of, current } => arrangement_moved(as_of, current),
             RearrangeError::BadCutCount => (RejectCode::BadCutCount, None),
             RearrangeError::NotAscending => (RejectCode::NotAscending, None),
             RearrangeError::NotContentSubspace => (RejectCode::NotContentSubspace, None),

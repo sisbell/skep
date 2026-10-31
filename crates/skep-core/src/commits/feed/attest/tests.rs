@@ -451,7 +451,8 @@ fn claimed_in_memory() -> Engine {
     let atom = exec(
         sid,
         json!({"op": "insert", "doc": doc1, "at": {"subspace": "1", "ordinal": "1"},
-               "values": [{"atom": genesis}], "deposit": ty(t_enroll())}),
+               "values": [{"atom": genesis}], "deposit": ty(t_enroll()),
+               "as_of": febe.log_position().0}),
     );
     let link = |from: &str, to: &[&str], t: &Address| {
         json!({"op": "make_link", "home": doc1, "from": {"addrs": [from]},

@@ -73,10 +73,10 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     let vs = deposit_abc(&k);
     // Two foreign private documents: doc2 (P1's draft) and the sub-account's
     // document, owned by principal 3.
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared).expect("doc2");
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared, now(&k)).expect("doc2");
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
-    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared).expect("subdoc");
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k)).expect("subdoc");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
     // Every origin a consult is asked about, in the order asked.
@@ -201,10 +201,10 @@ fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refu
     // shot named by a member whose runs are the edition's own.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared).expect("doc2");
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared, now(&k)).expect("doc2");
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
-    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared).expect("subdoc");
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k)).expect("subdoc");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
     assert!(doc2() < subdoc, "the address order the run orders below reverse");
@@ -291,7 +291,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
     // shooter may not read without the gate ever being asked.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared, now(&k))
         .expect("doc2 holds w, x");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
@@ -310,7 +310,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
         )
         .expect("the head windows w..x");
     let (y, _) = vs
-        .insert(P1, &doc2(), vp(1, 3), vec![val(b"y")], Deposit::Undeclared)
+        .insert(P1, &doc2(), vp(1, 3), vec![val(b"y")], Deposit::Undeclared, now(&k))
         .expect("doc2 grows y");
     assert_eq!(y, a(&[1, 0, 1, 0, 2, 0, 1, 3]), "y continues w..x's I-extent");
     let refusing = recording_consult(&asked, vec![]);
@@ -368,7 +368,7 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
     // the base never answered for, with the consult never asked.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x"), val(b"y")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x"), val(b"y")], Deposit::Undeclared, now(&k))
         .expect("doc2 holds w, x, y");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let y = a(&[1, 0, 1, 0, 2, 0, 1, 3]);
@@ -549,6 +549,7 @@ fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any(
         vp(1, 1),
         vec![val(b"w"), val(b"x")],
         Deposit::Undeclared,
+        now(&k),
     )
     .expect("doc2 holds w, x");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
@@ -602,7 +603,7 @@ fn a_shot_rendering_its_drafts_content_many_times_over_mints_each_identity_once(
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: pca(1..3), memberless
     let forty: Vec<Val> = (0..40u8).map(|b| val(&[b'a' + b % 26])).collect();
-    vs.insert(P1, &doc1(), vp(1, 1), forty, Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), forty, Deposit::Undeclared, now(&k))
         .expect("the draft holds forty values");
     let repeats = 4096;
     assert!(repeats * 40 > MAX_REINSERTED_VALUES, "the fixture renders past the old sum");
@@ -677,7 +678,7 @@ fn a_draft_the_caller_does_not_own_is_refused_at_the_shots_own_door() {
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     let (start, _) = vs
-        .insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+        .insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("the sub-account's draft holds a byte");
     let anyone = |_: &World, _: &Address| true;
     let own_class = readable_by(PrincipalId(1));
@@ -755,7 +756,7 @@ fn an_also_draft_the_caller_does_not_own_is_refused_after_the_drafts_own_check_a
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     let (start, _) = vs
-        .insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+        .insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("the sub-account's draft holds a byte");
     let unregistered = a(&[1, 0, 1, 1, 0, 9]);
     let anyone = |_: &World, _: &Address| true;
@@ -852,7 +853,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
         .create_new_document(sub, &a(&[1, 0, 1, 1]), Some(false))
         .expect("the sub-account mints a second private draft");
     let (start, _) = vs
-        .insert(Caller::Principal(sub), &draft, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+        .insert(Caller::Principal(sub), &draft, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("the draft holds a byte");
     assert!(
         !earlier.world().m3().is_registered_document(&draft),
@@ -1121,7 +1122,7 @@ fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
     let readable = readable_by(PrincipalId(1));
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
     let (member_start, _) = vs
-        .insert(P1, &member1, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &member1, vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit named by the member, minted under its content chain");
     assert_eq!(member_start, vca(1));
     let shoot = |runs: Vec<ShotRun>, draft: Option<Address>| {
@@ -1238,7 +1239,7 @@ fn a_shot_refused_for_a_dangling_run_leaves_no_member_no_mint_and_no_placement()
     assert!(!s.world().m3().is_registered_document(&vdoc()), "no member");
     assert_eq!(trunk_head(s.world().m3(), &pdoc()), None);
     // The content chain did not move: the next deposit lands at ordinal 4.
-    let (start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared()).expect("deposit");
+    let (start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k)).expect("deposit");
     assert_eq!(start, pca(4), "no content mint was committed by the refused shot");
     // And the ordinary shot still lands, so the refusal above is about the
     // dangling run and not about publishing being closed.
@@ -1279,6 +1280,7 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
             vp(1, 1),
             vec![val(b"s")],
             Deposit::Undeclared,
+            now(&k),
         )
         .expect("a private draft P1 may not read holds a byte");
     let unregistered = a(&[1, 0, 1, 0, 9]);

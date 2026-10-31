@@ -7,11 +7,46 @@
 //! real state can reach, in its documented order.
 
 use skep_address::{Address, SpanSet};
-use skep_arrangement::{Caller, Deposit, HasM5, ReinstateError, Run, ShotRun, Vstream};
+use skep_arrangement::{AsOf, Caller, Deposit, HasM5, ReinstateError, Run, ShotRun, Vstream};
 use skep_content::HasContent;
 use skep_namespace::PrincipalId;
 
 use crate::common::*;
+
+/// The stale-edit refusal (skep #442) on REINSTATE, keyed on the
+/// destination. The undo typed at the position the delete left — the
+/// delete's own ack — lands as it did; a second typed at that same state is
+/// refused `ArrangementMoved` with both positions and commits nothing.
+/// Ahead of every shape check and every run: a stale placement past the
+/// boundary, or of a run defective in its shape, meets the one code and
+/// never `OutOfBounds` or `BadRun`.
+#[test]
+fn a_reinstate_typed_against_an_older_destination_is_refused_ahead_of_the_shape_checks() {
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    let typed = vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("b removed");
+    let b = shot_run(&doc1(), &ca(2), 1);
+    let at = vs
+        .reinstate(P1, &doc1(), vp(1, 2), &[b.clone()], AsOf::Typed(typed))
+        .expect("the undo typed at the delete's ack lands");
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc1()), Some(at), "the ack is the new position");
+    let before = k.current_seq();
+    assert_eq!(
+        rejected(vs.reinstate(P1, &doc1(), vp(1, 2), &[b.clone()], AsOf::Typed(typed))),
+        ReinstateError::ArrangementMoved { as_of: typed, current: at }
+    );
+    let mis_stated = shot_run(&doc2(), &ca(1), 1);
+    assert!(matches!(
+        rejected(vs.reinstate(P1, &doc1(), vp(1, 99), &[b.clone()], AsOf::Typed(typed))),
+        ReinstateError::ArrangementMoved { .. }
+    ));
+    assert!(matches!(
+        rejected(vs.reinstate(P1, &doc1(), vp(1, 1), &[mis_stated], AsOf::Typed(typed))),
+        ReinstateError::ArrangementMoved { .. }
+    ));
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    assert_eq!(bytes_of(&k.snapshot(), &doc1()), vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+}
 
 /// T1e — the act the owner's ruling asks for: a delete, then a reinstate of
 /// the same I-run at the same position, and the document is what it was
@@ -31,7 +66,7 @@ fn a_delete_then_a_reinstate_of_the_same_run_restores_the_arrangement_byte_for_b
     assert_eq!(addrs_before, vec![ca(1), ca(2), ca(3)], "premise: a, b, c at their mints");
     let stored_before = before.world().content().len();
 
-    vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("delete commits");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&doc1()), n(2));
     assert_eq!(s.world().m5().point(&doc1(), &vp(1, 2)), Some(ca(3)), "the suffix shifted left");
@@ -39,7 +74,7 @@ fn a_delete_then_a_reinstate_of_the_same_run_restores_the_arrangement_byte_for_b
     // THE ACT: the removed run, by its permanent address, back at its
     // position — `copy` cannot name it, no arrangement holding it now.
     let seq = vs
-        .reinstate(P1, &doc1(), vp(1, 2), &[shot_run(&doc1(), &ca(2), 1)])
+        .reinstate(P1, &doc1(), vp(1, 2), &[shot_run(&doc1(), &ca(2), 1)], now(&k))
         .expect("reinstate commits");
     let s = k.snapshot();
     assert_eq!(s.seq(), seq);
@@ -70,8 +105,8 @@ fn a_delete_then_a_reinstate_of_the_same_run_restores_the_arrangement_byte_for_b
 fn a_removed_run_is_placed_into_another_document_by_identity_and_a_duplicate_is_admitted() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
-    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(2), 1)])
+    vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("delete commits");
+    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(2), 1)], now(&k))
         .expect("a run of another document's I-space is placed by identity");
     let s = k.snapshot();
     assert_eq!(s.world().m5().point(&doc2(), &vp(1, 1)), Some(ca(2)));
@@ -79,7 +114,7 @@ fn a_removed_run_is_placed_into_another_document_by_identity_and_a_duplicate_is_
 
     // Edge 1: `ca(1)` is arranged at doc1's ordinal 1 and placed again at
     // its end — the arrangement keeps the multiplicity.
-    vs.reinstate(P1, &doc1(), vp(1, 3), &[shot_run(&doc1(), &ca(1), 1)])
+    vs.reinstate(P1, &doc1(), vp(1, 3), &[shot_run(&doc1(), &ca(1), 1)], now(&k))
         .expect("a run already arranged is placed again");
     let s = k.snapshot();
     let m5 = s.world().m5();
@@ -102,10 +137,10 @@ fn a_removed_run_is_placed_into_another_document_by_identity_and_a_duplicate_is_
 fn reinstate_places_a_run_whose_extent_holds_a_key_off_its_chain() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"XY"), val(b"UV")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"XY"), val(b"UV")], Deposit::Undeclared, now(&k))
         .expect("two atoms commit");
     store_unminted(&k, &a(&[1, 0, 1, 0, 1, 0, 1, 1, 7]), b"i");
-    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(1), 2)])
+    vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(1), 2)], now(&k))
         .expect("every address of the run holds a value");
     let s = k.snapshot();
     let m5 = s.world().m5();
@@ -143,7 +178,7 @@ fn reinstate_rejects_each_documented_guard() {
 
     // Destination first, as COPY.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &unregistered_doc, vp(1, 1), &[sound.clone()])),
+        rejected(vs.reinstate(P1, &unregistered_doc, vp(1, 1), &[sound.clone()], now(&k))),
         ReinstateError::DocNotRegistered
     ));
     let not_owner = rejected(vs.reinstate(
@@ -151,73 +186,74 @@ fn reinstate_rejects_each_documented_guard() {
         &doc1(),
         vp(1, 1),
         &[sound.clone()],
+        now(&k),
     ));
     assert_eq!(not_owner, ReinstateError::NotOwner(doc1()), "the destination rides the verdict");
     assert!(matches!(
-        rejected(vs.reinstate(P1, &pdoc(), vp(1, 1), &[link_start.clone()])),
+        rejected(vs.reinstate(P1, &pdoc(), vp(1, 1), &[link_start.clone()], now(&k))),
         ReinstateError::PublishedTarget
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(2, 1), &[link_start.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(2, 1), &[link_start.clone()], now(&k))),
         ReinstateError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 2), &[link_start.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 2), &[link_start.clone()], now(&k))),
         ReinstateError::OutOfBounds
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 0), &[sound.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 0), &[sound.clone()], now(&k))),
         ReinstateError::OutOfBounds
     ));
     // Subspace before bounds: both wrong at once.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(2, 99), &[sound.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(2, 99), &[sound.clone()], now(&k))),
         ReinstateError::NotContentSubspace
     ));
     // Per run: the shape.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[link_start.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[link_start.clone()], now(&k))),
         ReinstateError::BadRun
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[mis_stated.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[mis_stated.clone()], now(&k))),
         ReinstateError::BadRun
     ));
     // The origin's registration.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[ghost.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[ghost.clone()], now(&k))),
         ReinstateError::SourceNotRegistered
     ));
     // The bytes — at every address: ca(2) and ca(3) are present, ca(4) is
     // not, and the run's start alone would have admitted it.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[never_minted.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[never_minted.clone()], now(&k))),
         ReinstateError::DanglingSource
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(2), 3)])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[shot_run(&doc1(), &ca(2), 3)], now(&k))),
         ReinstateError::DanglingSource
     ));
     // WHICH RUN SPEAKS: the first defective one, in order.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[sound.clone(), mis_stated.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[sound.clone(), mis_stated.clone()], now(&k))),
         ReinstateError::BadRun
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[mis_stated.clone(), ghost.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[mis_stated.clone(), ghost.clone()], now(&k))),
         ReinstateError::BadRun
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[ghost, mis_stated.clone()])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[ghost, mis_stated.clone()], now(&k))),
         ReinstateError::SourceNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[never_minted, mis_stated])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[never_minted, mis_stated], now(&k))),
         ReinstateError::DanglingSource
     ));
     // The empty list.
     assert!(matches!(
-        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[])),
+        rejected(vs.reinstate(P1, &doc2(), vp(1, 1), &[], now(&k))),
         ReinstateError::EmptyResult
     ));
     assert_eq!(k.current_seq(), before, "every refusal commits nothing");

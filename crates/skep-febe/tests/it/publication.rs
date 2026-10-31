@@ -634,7 +634,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_and_a_moved_place_is_refused_wit
     // A second draft, `b` and `a` swapped after the place of `b` was read.
     let draft2 = create_doc(&fx);
     insert3(&fx, &draft2);
-    ack(ex(&fx.febe, fx.user, Op::Rearrange { doc: draft2.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] }));
+    ack(ex(&fx.febe, fx.user, Op::Rearrange { doc: draft2.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)], as_of: head(&fx) }));
     assert_eq!(text(&draft2), b"bac");
     let b = Run::new(under(&draft2, &[0, 1, 2]), nat(1)).expect("b");
     let stale = Shot {
@@ -688,7 +688,7 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
     let fresh = Run::new(under(&edition, &[0, 1, 1]), nat(2)).expect("the member's fresh run");
     assert_eq!(image(&draft, 3), vec![a.clone(), fresh.clone()], "the premise: the draft re-windowed");
     // The stray act.
-    ack(ex(&fx.febe, fx.user, Op::Reinstate { doc: draft.clone(), at: vp(1, 4), runs: vec![ShotRun { origin: draft.clone(), run: bc.clone() }] }));
+    ack(ex(&fx.febe, fx.user, Op::Reinstate { doc: draft.clone(), at: vp(1, 4), runs: vec![ShotRun { origin: draft.clone(), run: bc.clone() }], as_of: head(&fx) }));
     assert_eq!(image(&draft, 5), vec![a.clone(), fresh.clone(), bc.clone()], "the record's draft words, back at 4");
     // The second shot: the head's run by reference, then the stray run by
     // reference to the record's `to`, its place beside it.

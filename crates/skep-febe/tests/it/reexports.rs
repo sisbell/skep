@@ -77,9 +77,10 @@ fn a_request_is_built_spelling_one_crate() {
             at: at.clone(),
             values: vec![Val::new(vec![1u8])],
             deposit: Deposit::Undeclared,
+            as_of: Seq(7),
         },
-        Op::Copy { doc: doc.clone(), at: at.clone(), specs: vec![vspec.clone()] },          // M5
-        Op::Reinstate { doc: doc.clone(), at, runs: vec![shot_run] },                       // M5
+        Op::Copy { doc: doc.clone(), at: at.clone(), specs: vec![vspec.clone()], as_of: Seq(7) },          // M5
+        Op::Reinstate { doc: doc.clone(), at, runs: vec![shot_run], as_of: Seq(7) },                       // M5
         Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: span.clone() }] },       // M6
         Op::Compare {
             rho1: vec![RegionSpec { doc: doc.clone(), spans: vec![span] }],

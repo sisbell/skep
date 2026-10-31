@@ -27,18 +27,19 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     let link1 = a(&[1, 0, 1, 0, 3, 0, 2, 1]);
     let fork = a(&[1, 0, 2, 0, 1]);
     let bytes_before;
+    let arranged_before;
     {
         let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
         let vs = Vstream::new(&k);
-        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
+        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared, now(&k))
             .expect("insert commits");
-        vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared())
+        vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared(), now(&k))
             .expect("deposit commits");
         k.checkpoint().expect("checkpoint");
-        vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
-        vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y"), val(b"z")], Deposit::Undeclared)
+        vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("delete commits");
+        vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y"), val(b"z")], Deposit::Undeclared, now(&k))
             .expect("the second draft takes three values");
-        vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 4)])
+        vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 4)], now(&k))
             .expect("rearrange commits"); // pivot: x | y z → y z x
         seat_link(&k, &pdoc(), &link1).expect("seat commits");
         let (minted, _) = vs.version(PrincipalId(2), &pdoc(), None).expect("fork commits");
@@ -46,7 +47,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         // A source deposit AFTER the fork: on replay the VersionSnapshot must
         // fold at its own journal slot and read pdoc as it was there, not as
         // the source ends up.
-        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"d")], declared())
+        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"d")], declared(), now(&k))
             .expect("post-fork source deposit commits");
         // The shot: the edition's four positions by reference and doc1's
         // surviving `c` re-inserted as fresh identity — the member holds five.
@@ -67,6 +68,13 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         assert_eq!(member, vdoc());
         let s = k.snapshot();
         bytes_before = bincode::serialize(s.world().m5()).expect("slice serializes");
+        // The arranged-at positions (skep #442) as the live fold left them:
+        // doc1's and pdoc's first entries rode the checkpoint path, the
+        // delete, the pivot, the fork, the post-fork deposit and the shot
+        // the replay path — each the position its own commit answered.
+        arranged_before =
+            [doc1(), doc2(), pdoc(), fork.clone(), vdoc()].map(|d| s.world().m5().arranged_at(&d));
+        assert!(arranged_before.iter().all(Option::is_some), "{arranged_before:?}");
     }
     let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("reopen");
     let s = k.snapshot();
@@ -74,6 +82,11 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(
         bincode::serialize(m5).expect("slice serializes"),
         bytes_before
+    );
+    assert_eq!(
+        [doc1(), doc2(), pdoc(), fork.clone(), vdoc()].map(|d| m5.arranged_at(&d)),
+        arranged_before,
+        "the arranged-at positions survive the checkpoint and the replay alike"
     );
     assert_eq!(m5.content_count(&doc1()), n(2));
     assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(3)));
@@ -105,6 +118,6 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(reading_surface(s.world().m3(), &pdoc()), vdoc());
     // The recovered arrangement still drives edits.
     let vs = Vstream::new(&k);
-    vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], Deposit::Undeclared, now(&k))
         .expect("post-recovery insert commits");
 }

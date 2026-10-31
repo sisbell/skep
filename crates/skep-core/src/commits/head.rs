@@ -181,7 +181,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{
-    birth_version, trunk_head, Base, Caller, Deposit, HasM5, Run, Shot, ShotRun, VPos,
+    birth_version, trunk_head, AsOf, Base, Caller, Deposit, HasM5, Run, Shot, ShotRun, VPos,
 };
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
@@ -999,21 +999,34 @@ impl HeadWriter {
         values: Vec<Val>,
         refused: Refused<'_>,
     ) -> Option<Address> {
+        // The op's typed state is the committed head this writer holds under
+        // the serial guard — a real position, for the feed's meta — and the
+        // store call passes the UNCHECKED arm (skep #442): nothing races an
+        // in-process writer under the serial lock, so the stale-edit check
+        // has nothing to judge here.
         let op = Op::Insert {
             doc: draft.clone(),
             at: VPos::content(ordinal),
             values,
             deposit: Deposit::Undeclared,
+            as_of: self.stores.kernel().current_seq(),
         };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
-        let Op::Insert { doc, at, values, deposit } = op else {
+        let Op::Insert { doc, at, values, deposit, .. } = op else {
             return None;
         };
         // The refusal lowered as the front door lowers an `insert`'s.
         self.run_commit(wp, serial, meta, refused, move || {
             self.stores
                 .vstream()
-                .insert(Caller::Principal(SYSTEM_PRINCIPAL), &doc, at, values, deposit)
+                .insert(
+                    Caller::Principal(SYSTEM_PRINCIPAL),
+                    &doc,
+                    at,
+                    values,
+                    deposit,
+                    AsOf::Unchecked,
+                )
                 .map_err(|e| lower_txn(OpKind::Insert, e))
         })
     }

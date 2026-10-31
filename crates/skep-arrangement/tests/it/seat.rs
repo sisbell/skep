@@ -2,9 +2,27 @@
 //! and a published document seated as a draft is.
 
 use skep_address::SpanSet;
-use skep_arrangement::{seat_link, stage_seat_link, HasM5, Run, SeatError};
+use skep_arrangement::{seat_link, stage_seat_link, AsOf, Deposit, HasM5, Run, SeatError};
 
 use crate::common::*;
+
+/// A link write homed in a draft is not an arrangement change (skep #442):
+/// seating moves the draft's recorded position nowhere, so an edit typed
+/// against the state before the seat still lands, and the draft's position
+/// after it is the edit's own.
+#[test]
+fn a_seated_link_moves_no_arranged_at_position_and_refuses_no_edit_typed_before_it() {
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    let typed = k.snapshot().world().m5().arranged_at(&doc1()).expect("the insert arranged doc1");
+    let (_, seated_at) = seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
+    assert!(seated_at > typed, "the seat took a position of its own");
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc1()), Some(typed), "…and moved the draft's not at all");
+    let (_, at) = vs
+        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, AsOf::Typed(typed))
+        .expect("an edit typed before the link write lands");
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc1()), Some(at));
+}
 
 #[test]
 fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
@@ -37,7 +55,7 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
     let foreign = a(&[1, 0, 1, 0, 2, 0, 2, 1]); // doc2's home link
     assert_eq!(rejected(seat_link(&k, &doc1(), &foreign)), SeatError::NotHomeLink);
     // Link survival: a text delete leaves the link subspace untouched.
-    vs.delete(P1, &doc1(), vp(1, 1), n(3)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(3), now(&k)).expect("delete commits");
     let s = k.snapshot();
     assert_eq!(s.world().m5().link_count(&doc1()), n(2));
     // Link writes are OUTSIDE the version-chain rule (PUB-2.12): a home link

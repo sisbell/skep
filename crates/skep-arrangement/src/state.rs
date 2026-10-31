@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use num_traits::One;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
+use skep_kernel::Seq;
 
 use crate::chain::is_birth_version;
 use crate::decode::entry_by_entry;
@@ -120,6 +121,23 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// as `source` to every reader of the fork and a merge takes as a cross-owner
 /// fork's base. Nothing reads them to decide a write.
 ///
+/// **The arranged-at positions** (`arranged_at`; skep #442) are the sixth
+/// field, and the one a write reads: for every document whose content
+/// arrangement a record has changed, the position of the last record that
+/// changed it — the commit position M2 hands the fold, which is the `at`
+/// that commit's write was acknowledged at. The fold notes it off the five
+/// records that touch a content run-list ([`ContentPlace`](M5Rec::ContentPlace),
+/// [`ShotPlace`](M5Rec::ShotPlace), [`ContentRemove`](M5Rec::ContentRemove),
+/// [`ContentReorder`](M5Rec::ContentReorder) for their `doc`, and
+/// [`VersionSnapshot`](M5Rec::VersionSnapshot) for the `new` it mints an
+/// arrangement for) and never off a [`LinkSeat`](M5Rec::LinkSeat), which
+/// touches the link run-list alone: a link write homed in a draft is not a
+/// change to the draft's arrangement. It is what the five in-place edits ask
+/// through [`arranged_at`](M5State::arranged_at) to refuse an edit typed
+/// against an older state of the document (`Vstream`'s `AsOf`), and it is
+/// state the checkpoint must carry: a journal replay re-derives it, but
+/// below the reclaim floor nothing else holds the position.
+///
 /// **Class invariants**, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
 ///
@@ -206,6 +224,26 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   a checkpoint written without the field fails to decode rather than
 ///   answering `None` for a fork, the map carrying no default (the engine's
 ///   World door states the rule).
+/// * **MOVED★ — a document's arranged-at position is the position of the
+///   last record that changed its content arrangement.** `arranged_at` gains
+///   or moves `doc`'s entry at every [`ContentPlace`](M5Rec::ContentPlace),
+///   [`ShotPlace`](M5Rec::ShotPlace), [`ContentRemove`](M5Rec::ContentRemove)
+///   and [`ContentReorder`](M5Rec::ContentReorder) naming `doc`, and `new`'s
+///   at the [`VersionSnapshot`](M5Rec::VersionSnapshot) that mints it — on
+///   both branches of each arm that has two, an empty placement and an empty
+///   source included, since the fact is the record and not the content it
+///   left — to the position the fold is handed for that record; and at no
+///   other: a [`LinkSeat`](M5Rec::LinkSeat) moves no entry, so a link write
+///   homed in the draft never refuses the next edit typed before it. The
+///   position handed is the record's commit position, every record of a
+///   transaction folded at the transaction's own (M2's `Staging::sealed`,
+///   its replay at the marker's `committed_at`), so an entry equals the `at`
+///   the commit that wrote it was acknowledged at and never exceeds it — a
+///   writer typing after its own ack is never refused for it. On the decode
+///   path, as SOURCE★: carried whole, re-established by no door, and a
+///   checkpoint written without the field fails to decode rather than
+///   answering `None` — which would admit every stale edit — the map
+///   carrying no default.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -278,6 +316,15 @@ pub struct M5State {
     // answer `None` for a fork.
     #[serde(deserialize_with = "entry_by_entry")]
     pub(crate) fork_sources: im::OrdMap<Address, Address>,
+    // Each document whose content arrangement a record has changed → the
+    // position of the last such record (MOVED★); written by the fold alone,
+    // read by `arranged_at` for the five in-place edits' check. Appended
+    // last, after `fork_sources`, under the same no-default rule: a
+    // checkpoint written without this field must fail to decode and hand the
+    // open to the journal, which recomputes the map — never decode as "never
+    // arranged" and admit every stale edit.
+    #[serde(deserialize_with = "entry_by_entry")]
+    arranged_at: im::OrdMap<Address, Seq>,
 }
 
 /// The shot's two client terms, per member the shot minted (signed-ops D25).
@@ -438,8 +485,8 @@ impl M5State {
     /// Returns Σ₀ for M5, every field empty.
     ///
     /// That is `{}` arrangements, `{}` provenance, `{}` birth extents, `{}`
-    /// shot terms, `{}` fork sources. Deterministic, per M2's
-    /// byte-identical-genesis caller contract.
+    /// shot terms, `{}` fork sources, `{}` arranged-at positions.
+    /// Deterministic, per M2's byte-identical-genesis caller contract.
     pub fn genesis() -> M5State {
         M5State::default()
     }
@@ -580,11 +627,41 @@ impl M5State {
         self.shot_terms.get(member)
     }
 
+    /// Returns the position `doc`'s content arrangement last changed at.
+    ///
+    /// It is the arranged-at map's entry (MOVED★ on [`M5State`]): the commit
+    /// position of the last record that placed into, removed from, reordered
+    /// or minted `doc`'s content arrangement — a placement's, a shot's, a
+    /// removal's, a reorder's, or the `version` snapshot's that minted `doc`
+    /// — which is the `at` that commit's write was acknowledged at. `None`
+    /// for a document never arranged: one created and not yet written, a
+    /// `fork`-minted document, an address never minted, and a document
+    /// whose only writes were link writes, since a seated link moves no
+    /// entry. A read's `as_of` is never below the entry of a document it
+    /// read, so an edit typed against that read passes the five in-place
+    /// edits' check (`Vstream`'s `AsOf`), which refuses exactly a typed
+    /// position below this one.
+    ///
+    /// Answers the address named, as every read here does: asked of a bare
+    /// published document with members it answers that document's own
+    /// entry, never its trunk head's; a declared deposit's check asks for
+    /// the surface the deposit lands in. One map lookup, reading no run; the
+    /// position is `Copy`.
+    pub fn arranged_at(&self, doc: &Address) -> Option<Seq> {
+        self.arranged_at.get(doc).copied()
+    }
+
     /// Folds `r` into a new state: the pure, deterministic M2 fold.
     ///
     /// It discharges M2's `apply` obligation (§3–§8 folds), dispatched by the
     /// engine's `World::apply` from the variant that carries `M5Rec` (the
-    /// engine's `Record::Arrangement`) — on live commit and on replay alike.
+    /// engine's `Record::Arrangement`) — on live commit and on replay alike —
+    /// with `at` the position of the commit the record belongs to (M2's
+    /// `WorldState::apply`), which the fold keeps for every document whose
+    /// content arrangement the record changes (the arranged-at map, MOVED★)
+    /// and reads for nothing else. A position is a journal fact and never a
+    /// clock (DOCTRINE D1), so the fold stays a pure function of the
+    /// journal's content and order.
     ///
     /// **Totality domain** (§10): total over minted-or-validly-recovered
     /// records — an `M5Rec` an op staged after validating its preconditions
@@ -599,7 +676,11 @@ impl M5State {
     /// journal order, so `source`'s arrangement is reconstructed to its
     /// fork-point value before the snapshot reads it.
     #[must_use = "apply_m5 returns the folded state; it does not modify the receiver"]
-    pub fn apply_m5(&self, r: &M5Rec) -> M5State {
+    pub fn apply_m5(&self, at: Seq, r: &M5Rec) -> M5State {
+        // The arranged-at map with `doc`'s entry moved to this record's
+        // position (MOVED★): what every arm that changes a content
+        // arrangement installs, and the `LinkSeat` arm alone does not.
+        let moved = |doc: &Address| self.arranged_at.update(doc.clone(), at);
         match r {
             // §3/§5 fold: splice + eager coalesce, and append each placed
             // run's iextent to R in the same fold — one new M5State, one M2
@@ -611,13 +692,15 @@ impl M5State {
             // `ContentPlace` naming one is a deposit the head took, and one
             // that names it before its mint's record — which no op stages —
             // notes nothing rather than its own count as the birth.
-            M5Rec::ContentPlace { doc, at, runs } => M5State {
-                arrangements: self
-                    .arrangements_with_content(doc, |c| c.splice_in(at, runs.iter().cloned())),
+            M5Rec::ContentPlace { doc, at: ordinal, runs } => M5State {
+                arrangements: self.arrangements_with_content(doc, |c| {
+                    c.splice_in(ordinal, runs.iter().cloned())
+                }),
                 provenance: self.provenance.append(doc, runs),
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
+                arranged_at: moved(doc),
             },
             // The shot's placement (signed-ops D25): `ContentPlace` at
             // ordinal 1 — the same splice, the same R-append — and the
@@ -638,6 +721,10 @@ impl M5State {
                 let content = self.content_list(doc).splice_in(&Nat::one(), runs.iter().cloned());
                 let birth_extents = self.birth_extents_noting(doc, || content.total_width());
                 let shot_terms = self.shot_terms.update(doc.clone(), terms.clone());
+                // The member's arranged-at entry is noted on both branches
+                // (MOVED★): the mint is the arrangement's first change, an
+                // empty placement included.
+                let arranged_at = moved(doc);
                 if runs.is_empty() {
                     M5State {
                         arrangements: self.arrangements.clone(),
@@ -645,6 +732,7 @@ impl M5State {
                         birth_extents,
                         shot_terms,
                         fork_sources: self.fork_sources.clone(),
+                        arranged_at,
                     }
                 } else {
                     M5State {
@@ -653,6 +741,7 @@ impl M5State {
                         birth_extents,
                         shot_terms,
                         fork_sources: self.fork_sources.clone(),
+                        arranged_at,
                     }
                 }
             }
@@ -666,6 +755,7 @@ impl M5State {
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
+                arranged_at: moved(doc),
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
@@ -675,6 +765,7 @@ impl M5State {
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
+                arranged_at: moved(doc),
             },
             // §8 fold: append `link` after the link subspace's arranged
             // positions, coalescing with the prior link run if I-adjacent
@@ -691,6 +782,10 @@ impl M5State {
             // it is worse than dropping it, a link run whose I-extent covered a
             // whole document or a whole subspace refusing every later link of
             // that document for good, CL-UNIQ being I-extent membership.
+            //
+            // No arranged-at entry moves (MOVED★): the link run-list is no
+            // part of the content arrangement, so a link write homed in the
+            // draft never refuses an edit typed before it.
             M5Rec::LinkSeat { doc, link } => M5State {
                 arrangements: match Run::new(link.clone(), Nat::one()) {
                     Ok(seated) => self.arrangements_with_link(doc, |l| l.append(seated)),
@@ -700,6 +795,7 @@ impl M5State {
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
+                arranged_at: self.arranged_at.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
@@ -747,10 +843,17 @@ impl M5State {
             // record is the one that says so. The entry is `new → source` as
             // the record carries it: the surface the op resolved, a member or
             // a bare document, and never a reading of it made here.
+            //
+            // The arranged-at entry is noted for `new` on both branches too
+            // (MOVED★): the mint is the first change to the arrangement `new`
+            // starts with, whatever `source` held, so a version minted by
+            // `version` starts with a recorded position; `source`'s entry is
+            // untouched (V3).
             M5Rec::VersionSnapshot { source, new } => {
                 let content = self.content_list(source).clone();
                 let birth_extents = self.birth_extents_noting(new, || content.total_width());
                 let fork_sources = self.fork_sources.update(new.clone(), source.clone());
+                let arranged_at = moved(new);
                 if content.is_empty() {
                     M5State {
                         arrangements: self.arrangements.clone(),
@@ -758,6 +861,7 @@ impl M5State {
                         birth_extents,
                         shot_terms: self.shot_terms.clone(),
                         fork_sources,
+                        arranged_at,
                     }
                 } else {
                     let provenance = self.provenance.append(new, content.iter());
@@ -771,6 +875,7 @@ impl M5State {
                         birth_extents,
                         shot_terms: self.shot_terms.clone(),
                         fork_sources,
+                        arranged_at,
                     }
                 }
             }

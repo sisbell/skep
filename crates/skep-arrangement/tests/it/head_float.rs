@@ -20,7 +20,7 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     assert_eq!(member1, vdoc());
     // Named by the bare address: minted under pdoc's content chain, placed
     // in member1.
-    let (bare_start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared()).expect("deposit");
+    let (bare_start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k)).expect("deposit");
     assert_eq!(bare_start, pca(4));
     {
         let s = k.snapshot();
@@ -31,10 +31,10 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     }
     // Named by the head itself: minted under the member's content chain,
     // placed in it; judged fresh against the head's extent.
-    let (head_start, _) = vs.insert(P1, &member1, vp(1, 5), vec![val(b"y")], declared()).expect("deposit");
+    let (head_start, _) = vs.insert(P1, &member1, vp(1, 5), vec![val(b"y")], declared(), now(&k)).expect("deposit");
     assert_eq!(head_start, vca(1));
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"q")], declared())),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"q")], declared(), now(&k))),
         InsertError::PublishedTarget
     ), "ordinal 4 is arranged in the head: not a deposit shape");
     // A second member: `version` shares the HEAD's arrangement (five
@@ -52,15 +52,15 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     }
     // Named by the PINNED member1: the deposit lands in the head member2,
     // and member1 never grows (PUB-2.66).
-    vs.insert(P1, &member1, vp(1, 6), vec![val(b"x")], declared()).expect("deposit named by a pinned member");
+    vs.insert(P1, &member1, vp(1, 6), vec![val(b"x")], declared(), now(&k)).expect("deposit named by a pinned member");
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert_eq!(m5.content_count(&member1), n(5), "a pinned member's arrangement never grows");
     assert_eq!(m5.content_count(&member2), n(6), "the head's did");
     assert_eq!(read_v(&s, &member2, 6), b"x".to_vec());
     // The in-place refusal still holds on every address of the chain.
-    assert!(matches!(rejected(vs.delete(P1, &pdoc(), vp(1, 1), n(1))), DeleteError::PublishedTarget));
-    assert!(matches!(rejected(vs.delete(P1, &member2, vp(1, 1), n(1))), DeleteError::PublishedTarget));
+    assert!(matches!(rejected(vs.delete(P1, &pdoc(), vp(1, 1), n(1), now(&k))), DeleteError::PublishedTarget));
+    assert!(matches!(rejected(vs.delete(P1, &member2, vp(1, 1), n(1), now(&k))), DeleteError::PublishedTarget));
 }
 
 #[test]
@@ -73,10 +73,10 @@ fn a_version_of_a_pinned_member_forks_the_member_not_the_head() {
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
-    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("lands in the head member1");
     let (member2, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
-    vs.insert(P1, &pdoc(), vp(1, 5), vec![val(b"y")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 5), vec![val(b"y")], declared(), now(&k))
         .expect("lands in the head member2");
     {
         let s = k.snapshot();
@@ -103,16 +103,16 @@ fn copy_reads_a_published_source_at_the_address_named_not_at_its_head() {
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
-    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("lands in the head member1"); // member1: a b c z; pdoc: a b c
     assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), member1);
     // Named by the bare address: the pre-chain arrangement's three positions,
     // the span's fourth clipped away — not the head's four.
-    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 4) }])
+    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 4) }], now(&k))
         .expect("a copy naming the bare address commits");
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(3));
     // Named by the head: its four.
-    vs.copy(P1, &doc2(), vp(1, 1), &[VSpec { source: member1, span: vspan(1, 1, 4) }])
+    vs.copy(P1, &doc2(), vp(1, 1), &[VSpec { source: member1, span: vspan(1, 1, 4) }], now(&k))
         .expect("a copy naming the head commits");
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(4));
 }
@@ -125,14 +125,14 @@ fn copy_refuses_as_empty_a_bare_edition_whose_content_lives_in_its_head() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (head, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("an empty-source member");
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared(), now(&k))
         .expect("lands in the head");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&head), n(1));
     assert_eq!(reading_surface(s.world().m3(), &pdoc()), head, "readers answer the head");
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 1) }])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 1) }], now(&k))),
         CopyError::EmptySource
     ));
     assert_eq!(k.current_seq(), before, "the refusal commits nothing");

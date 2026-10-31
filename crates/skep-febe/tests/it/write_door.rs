@@ -96,28 +96,29 @@ fn a_copy_is_withheld_naming_its_first_unreadable_source() {
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![b'x'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
 
     // One spec, unreadable: withheld, the source named.
-    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_doc, 1, 1)] });
+    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) });
     assert_withheld(r, OpKind::Copy, &unreadable_doc);
     // Two specs, the SECOND unreadable: `site.addr` is the second (PUB-6.4).
     let r = ex(
         &fx.febe,
         other,
-        Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&their_draft, 1, 1), vspec(&unreadable_doc, 1, 1)] },
+        Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&their_draft, 1, 1), vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) },
     );
     assert_withheld(r, OpKind::Copy, &unreadable_doc);
     // Nothing was placed by either refusal.
     let before = fx.febe.log_position();
-    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_doc, 1, 1)] });
+    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) });
     assert!(matches!(r, skep_febe::Response::Rejected(_)));
     assert_eq!(fx.febe.log_position(), before, "a withheld copy commits nothing");
 
     // The owner reads its own document, so its copy of the same source lands.
     let user_draft = create_doc(&fx);
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: user_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 2)] }));
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: user_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 2)], as_of: head(&fx) }));
 }
 
 /// THE WIDE REACH at the door (the replacement act's record, Q2 — the owner:
@@ -160,6 +161,7 @@ fn a_reinstate_is_withheld_naming_its_first_unreadable_origin_and_admits_a_reada
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![b'x'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
     let run = |origin: &Address, start: &Address, width: u32| ShotRun {
@@ -167,7 +169,7 @@ fn a_reinstate_is_withheld_naming_its_first_unreadable_origin_and_admits_a_reada
         run: Run::new(start.clone(), nat(width)).expect("a content run"),
     };
     let reinstate =
-        |doc: &Address, at: u32, runs: Vec<ShotRun>| Op::Reinstate { doc: doc.clone(), at: vp(1, at), runs };
+        |doc: &Address, at: u32, runs: Vec<ShotRun>| Op::Reinstate { doc: doc.clone(), at: vp(1, at), runs, as_of: head(&fx) };
     // What the predicate was asked since the last look, on anyone's behalf
     // but USER's.
     let asked = || std::mem::take(&mut *consulted.lock().expect("no poisoning"));
@@ -323,7 +325,7 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
         assert_eq!(rej.site.expect("the failing home").addr.as_ref(), Some(&unreadable_doc));
     };
     assert_not_owner(
-        ex(&fx.febe, other, Op::Copy { doc: unreadable_doc.clone(), at: vp(1, 4), specs: vec![vspec(&unreadable_doc, 1, 1)] }),
+        ex(&fx.febe, other, Op::Copy { doc: unreadable_doc.clone(), at: vp(1, 4), specs: vec![vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) }),
         OpKind::Copy,
     );
     assert_not_owner(
@@ -381,7 +383,7 @@ fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_
     let (user_draft, original) = linked_doc(&fx);
     let fragmented = create_doc(&fx);
     insert3(&fx, &fragmented);
-    ack(ex(&fx.febe, fx.user, Op::Delete { doc: fragmented.clone(), p: vp(1, 2), width: nat(1) }));
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: fragmented.clone(), p: vp(1, 2), width: nat(1), as_of: head(&fx) }));
     let contiguous = create_doc(&fx);
     insert3(&fx, &contiguous);
     let runs_over = |d: &Address| {
@@ -592,6 +594,7 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![b'x'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
 
@@ -848,6 +851,7 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![b'x'])],
             deposit: Deposit::Undeclared,
+            as_of: head(&fx),
         },
     ));
     assert_eq!(stores_own.code, RejectCode::PublishedTarget, "premise: M5's own refusal");
@@ -856,7 +860,7 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::Copy { doc: their_edition.clone(), at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] },
+        Op::Copy { doc: their_edition.clone(), at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) },
     ));
     assert_eq!(rej.op, OpKind::Copy);
     assert_eq!(
@@ -875,7 +879,7 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
 
     // A DRAFT destination still meets the source consult…
     assert_withheld(
-        ex(&fx.febe, other, Op::Copy { doc: their_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] }),
+        ex(&fx.febe, other, Op::Copy { doc: their_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) }),
         OpKind::Copy,
         &unreadable_doc,
     );
@@ -888,7 +892,7 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::Copy { doc: their_edition, at: vp(1, 1), specs: vec![vspec(&readable_doc, 1, 1)] },
+        Op::Copy { doc: their_edition, at: vp(1, 1), specs: vec![vspec(&readable_doc, 1, 1)], as_of: head(&fx) },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
     assert!(rej.site.is_none() && rej.detail.is_none());
@@ -924,12 +928,14 @@ fn the_destinations_own_gate_stands_ahead_of_the_doors_published_target() {
         doc: doc.clone(),
         at: vp(1, 1),
         specs: vec![vspec(&unreadable_doc, 1, 1)],
+        as_of: head(&fx),
     };
     let insert = |doc: &Address| Op::Insert {
         doc: doc.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'x'])],
         deposit: Deposit::Undeclared,
+        as_of: head(&fx),
     };
 
     let before = fx.febe.log_position();
@@ -966,7 +972,7 @@ fn an_unregistered_destination_also_stands_ahead_of_the_consult() {
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::Copy { doc: ghost, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] },
+        Op::Copy { doc: ghost, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)], as_of: head(&fx) },
     ));
     assert_eq!(rej.op, OpKind::Copy);
     assert_eq!(rej.code, RejectCode::DocNotRegistered, "registration stands ahead: {rej}");
@@ -1112,4 +1118,73 @@ fn an_ispan_slot_into_an_unreadable_document_is_not_withheld_and_is_stored_as_gi
     let successor =
         link_value(ex(&fx.febe, other, Op::ReadLink { a: succ })).expect("the stranger's successor");
     assert_eq!(successor.from_slot(), &Endset::from_spans([inside]), "the re-made end, verbatim");
+}
+
+/// The stale-edit refusal through the door (skep #442). A `delete` typed at
+/// the draft's current position lands; the same frame typed at the state
+/// before that write is refused `arrangement_moved`, `permanent`, its
+/// `site` carrying the typed state echoed and the position the draft last
+/// changed at — ahead of the shape checks, so a stale delete of a range the
+/// draft no longer holds meets the one code — and each of the other four
+/// edits typed against that state meets it too. A `make_link` homed in the
+/// draft is no arrangement change: an insert typed before it lands, and the
+/// draft's position afterwards is the insert's own.
+#[test]
+fn an_edit_typed_against_an_older_arrangement_is_refused_with_both_positions_and_a_link_moves_none() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    let (_, inserted_at) = insert3(&fx, &d);
+    let stale = |op: Op| rejected(ex(&fx.febe, fx.user, op));
+    // Typed at the current position: lands.
+    let deleted_at = ack(ex(
+        &fx.febe,
+        fx.user,
+        Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1), as_of: inserted_at },
+    ));
+    assert!(deleted_at > inserted_at);
+    // Typed before it: refused with both positions.
+    let rej = stale(Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1), as_of: inserted_at });
+    assert_eq!((rej.op, rej.code, rej.disposition), (OpKind::Delete, RejectCode::ArrangementMoved, Disposition::Permanent));
+    let site = rej.site.expect("the refusal names both positions");
+    assert_eq!((site.as_of, site.current), (Some(inserted_at), Some(deleted_at)), "{site:?}");
+    assert!(site.addr.is_none() && site.index.is_none(), "nothing else rides the code: {site:?}");
+    // Ahead of the shape checks: a stale range the draft never held.
+    assert_eq!(
+        stale(Op::Delete { doc: d.clone(), p: vp(1, 99), width: nat(1), as_of: inserted_at }).code,
+        RejectCode::ArrangementMoved
+    );
+    // The five share the code.
+    let typed = inserted_at;
+    for op in [
+        Op::Insert { doc: d.clone(), at: vp(1, 1), values: vec![skep_content::Val::new(vec![b'x'])], deposit: Deposit::Undeclared, as_of: typed },
+        Op::Copy { doc: d.clone(), at: vp(1, 1), specs: vec![vspec(&d, 1, 1)], as_of: typed },
+        Op::Reinstate { doc: d.clone(), at: vp(1, 1), runs: vec![ShotRun { origin: d.clone(), run: Run::new(elem_addr(ElemPos { doc: d.clone(), subspace: nat(1), ordinal: nat(1) }).expect("a content element"), nat(1)).expect("a run") }], as_of: typed },
+        Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)], as_of: typed },
+    ] {
+        let kind = op.kind();
+        let rej = stale(op);
+        assert_eq!((rej.op, rej.code), (kind, RejectCode::ArrangementMoved));
+        assert_eq!(rej.site.and_then(|s| s.current), Some(deleted_at), "{kind:?}");
+    }
+    // A link write homed in the draft moves nothing.
+    let (_, linked_at) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::MakeLink {
+            home: d.clone(),
+            from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+            to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+            ty: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+            replaces: None,
+        },
+    ));
+    assert!(linked_at > deleted_at);
+    let (_, landed_at) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert { doc: d.clone(), at: vp(1, 3), values: vec![skep_content::Val::new(vec![b'd'])], deposit: Deposit::Undeclared, as_of: deleted_at },
+    ));
+    assert!(landed_at > linked_at, "an insert typed before the link write lands after it");
+    let rej = stale(Op::Delete { doc: d, p: vp(1, 1), width: nat(1), as_of: linked_at });
+    assert_eq!(rej.site.and_then(|s| s.current), Some(landed_at), "the draft's position is the insert's, never the link's");
 }

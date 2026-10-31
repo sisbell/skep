@@ -58,9 +58,9 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     // under the edition's own I-space — no address of the draft survives.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 3) }])
+    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 3) }], now(&k))
         .expect("the staging copy shares identity");
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], Deposit::Undeclared, now(&k))
         .expect("the stager types");
     // A home link seated in the base: the shot places content alone, so it
     // stays the base's (CL-OWN, PUB-2.12) and the member is born with an
@@ -135,7 +135,7 @@ fn a_shot_places_the_runs_the_client_rendered_not_what_the_draft_holds_at_commit
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c, memberless
     insert_abc(&k); // the draft doc1: a b c at ca(1..3)
-    vs.delete(P1, &doc1(), vp(1, 2), n(1))
+    vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k))
         .expect("the stager un-arranges b after the render");
     let (member, _) = vs
         .publish(
@@ -181,7 +181,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         .expect("the first member");
     assert_eq!(member1, vdoc());
     // The window's origin: doc2, P1's own private draft (readable to P1).
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared).expect("doc2 holds a byte");
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k)).expect("doc2 holds a byte");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let staged = |member: &Address| Shot {
         base: Some(base(member, 3)),
@@ -240,12 +240,12 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         )
         .expect("the head");
     // The stager copies the head's three positions and drops the middle one.
-    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: member1.clone(), span: vspan(1, 1, 3) }])
+    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: member1.clone(), span: vspan(1, 1, 3) }], now(&k))
         .expect("staged");
-    vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("the stager un-arranges b");
+    vs.delete(P1, &doc1(), vp(1, 2), n(1), now(&k)).expect("the stager un-arranges b");
     // The interval's deposit: into the BARE address, landing in the head.
     let (start, _) = vs
-        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit at the head's fresh position");
     assert_eq!(start, pca(4), "minted under the document's own content chain");
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(4), "it landed in the HEAD (PUB-2.66)");
@@ -303,7 +303,7 @@ fn the_birth_shape_carries_no_tail_and_a_memberless_base_carries_its_deposits() 
     let birth = |base_named: Option<Base>| {
         let k = mem_kernel();
         let vs = deposit_abc(&k); // pdoc: a b c, memberless
-        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
+        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k))
             .expect("a deposit into the memberless edition, after the render");
         let (member, _) = vs
             .publish(
@@ -340,7 +340,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
-    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit into the memberless edition, after the render took three");
     let (member, _) = vs
         .publish(
@@ -378,7 +378,7 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
         );
     }
     // A deposit into the head grows the member and not its birth.
-    vs.insert(P1, &pdoc(), vp(1, 6), vec![val(b"y")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 6), vec![val(b"y")], declared(), now(&k))
         .expect("a deposit landing in the head D.1");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(6));
@@ -418,7 +418,7 @@ fn a_birth_version_the_shot_minted_empty_is_noted_at_zero_and_carries_its_terms(
             "the terms: nothing placed, no base — the birth bit"
         );
     }
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit landing in the head the shot minted");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
@@ -445,7 +445,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"d"), val(b"e")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"d"), val(b"e")], Deposit::Undeclared, now(&k))
         .expect("doc2, the window's source: d e at its first two addresses");
     let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, 2, 0, 1, ordinal]);
     // Two windows onto doc2, adjacent; the draft's `a` re-inserted; the
@@ -536,7 +536,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("doc2, the window's source, holds w");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let shot = Shot {
@@ -601,7 +601,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("doc2, a window's source, holds w");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let shot = Shot {
@@ -776,7 +776,7 @@ fn a_shot_reinserts_a_draft_run_whose_extent_holds_a_key_off_its_chain() {
     // as the next two identities on the edition's content chain.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"XY"), val(b"UV")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"XY"), val(b"UV")], Deposit::Undeclared, now(&k))
         .expect("the staging draft doc1: two atoms at ca(1..2)");
     store_unminted(&k, &a(&[1, 0, 1, 0, 1, 0, 1, 1, 7]), b"i");
     let shot = Shot {
@@ -817,7 +817,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared, now(&k))
         .expect("doc2, the window's source, holds w");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let readable = readable_by(PrincipalId(1));
@@ -831,7 +831,7 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
         .publish(P1, &pdoc(), &head_shot, &readable)
         .expect("the head");
     let (z, _) = vs
-        .insert(P1, &head, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &head, vp(1, 4), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit named by the head");
     assert_eq!(
         z,
@@ -929,6 +929,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
         vp(1, 1),
         vec![val(b"w"), val(b"x")],
         Deposit::Undeclared,
+        now(&k),
     )
     .expect("doc2, the windows' source, holds w x");
     let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, 2, 0, 1, ordinal]);
@@ -952,7 +953,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
         )
         .expect("the base");
     let (z, _) = vs
-        .insert(P1, &base_member, vp(1, 5), vec![val(b"z")], declared())
+        .insert(P1, &base_member, vp(1, 5), vec![val(b"z")], declared(), now(&k))
         .expect("a deposit the base took while the head");
     assert_eq!(
         z,

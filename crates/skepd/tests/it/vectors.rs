@@ -75,7 +75,10 @@ use common::*;
 use serde_json::{json, Value};
 
 /// Walk a table of `(cell, token, frame, expected verdict)` and report every
-/// divergence at once, cell by cell.
+/// divergence at once, cell by cell. A burst cell is built with no typed
+/// state and typed at its send by the door (`op`), against the state the
+/// cells before it left — a table built whole before its walk would
+/// otherwise type a later cell against a head an earlier cell minted past.
 fn walk(port: u16, matrix: &str, cells: &[(&str, &str, String, &str)]) {
     let mut mismatches: Vec<String> = Vec::new();
     for (cell, token, frame, expected) in cells {
@@ -131,17 +134,17 @@ fn m2_5_the_publish_class_gate_s_input_rows_bare_and_signed() {
         ("row 2: a flagless version of the published doc 1, bare", br, version_frame(CLAIMANT_DOC1, None), GATED),
         ("row 2: a flagless version of the published doc 1, signed", sg, version_frame(CLAIMANT_DOC1, None), "ok"),
         // ── PUB-6.37: published() on REGISTERED addresses only — registration speaks ahead of the gate ──
-        ("registration ahead of the gate: an insert into an unregistered document, bare", br, insert_frame(&never, 1, "x", false), "doc_not_registered"),
+        ("registration ahead of the gate: an insert into an unregistered document, bare", br, insert_frame(&never, 1, "x", false, None), "doc_not_registered"),
         ("registration ahead of the gate: a version of an unregistered source, bare", br, version_frame(&never, None), "source_not_registered"),
         ("registration ahead of the gate: a nullify from an unregistered home, bare", br, nullify_frame(&never, &pub_a), "home_not_registered"),
         // ── row 3: a write homed in an existing document reads published(home), whatever the op ──
-        ("row 3: a declared deposit into doc 1, bare", br, insert_frame(CLAIMANT_DOC1, ordinal, "x", true), GATED),
-        ("row 3: the same deposit, signed", sg, insert_frame(CLAIMANT_DOC1, ordinal, "x", true), "ok"),
+        ("row 3: a declared deposit into doc 1, bare", br, insert_frame(CLAIMANT_DOC1, ordinal, "x", true, None), GATED),
+        ("row 3: the same deposit, signed", sg, insert_frame(CLAIMANT_DOC1, ordinal, "x", true, None), "ok"),
         ("row 3: a link homed in doc 1, bare", br, link_frame(CLAIMANT_DOC1, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 9)), GATED),
         ("row 3: an emit homed in doc 1, bare", br, emit_frame(CLAIMANT_DOC1), GATED),
         ("row 3: an assert_sup homed in doc 1, bare", br, assert_sup_frame(CLAIMANT_DOC1, &pub_a, &pub_b), GATED),
         ("row 3: an edit_link whose successor lands in doc 1, bare", br, edit_link_frame(&pub_a, CLAIMANT_DOC1, &draft, "[]", &ghost_ty(CLAIMANT_DOC1, 10)), GATED),
-        ("row 3: a write homed in a draft, bare — the mode's disclosed cost", br, insert_frame(&draft, 1, "d", false), "ok"),
+        ("row 3: a write homed in a draft, bare — the mode's disclosed cost", br, insert_frame(&draft, 1, "d", false, None), "ok"),
         // ── row 4: nullify reads published(home) ∨ published(document_of(target)) ──
         ("row 4: nullify — a draft-homed record against a published-homed target, bare", br, nullify_frame(&draft, &pub_b), GATED),
         ("row 4: nullify — a draft-homed record against a draft-homed target: a draft write, bare", br, nullify_frame(&draft, &draft_link), "ok"),
@@ -182,11 +185,11 @@ fn m2_6_the_write_side_order_pair_by_pair() {
         ("slot 1 ahead of slot 2: the owner's explicit-false first mint into X's EMPTY account", br, create_frame(&x_acct, Some(false)), "not_owner"),
         ("slot 2 ahead of slot 3: X's version of an UNREGISTERED source", x_sess.as_str(), version_frame(&never, None), "credential_refused:mint_home_first"),
         ("slot 2 ahead of slot 4: X's bare version of the published doc 1", x_sess.as_str(), version_frame(CLAIMANT_DOC1, None), "credential_refused:mint_home_first"),
-        ("slot 1 ahead of slot 4: a stranger's bare declared deposit into the published doc 1", s.session.as_str(), insert_frame(CLAIMANT_DOC1, 2, "x", true), "not_owner"),
+        ("slot 1 ahead of slot 4: a stranger's bare declared deposit into the published doc 1", s.session.as_str(), insert_frame(CLAIMANT_DOC1, 2, "x", true, None), "not_owner"),
         ("slot 1 ahead of slot 4: a stranger's bare nullify naming the published doc 1 as home", s.session.as_str(), nullify_frame(CLAIMANT_DOC1, &pub_l), "not_owner"),
-        ("slot 1 ahead of slot 5: a stranger's undeclared insert into the published doc 1 is never published_target", s.session.as_str(), insert_frame(CLAIMANT_DOC1, 2, "x", false), "not_owner"),
-        ("slot 4 ahead of slot 5: the bare owner's in-place edit of doc 1", br, insert_frame(CLAIMANT_DOC1, 2, "x", false), GATED),
-        ("slot 4 ahead of slot 6: a bare stranger's copy from the owner's draft into ITS OWN published doc 1", s.session.as_str(), copy_frame(&s.doc1, 1, &d, 1, 1), GATED),
+        ("slot 1 ahead of slot 5: a stranger's undeclared insert into the published doc 1 is never published_target", s.session.as_str(), insert_frame(CLAIMANT_DOC1, 2, "x", false, None), "not_owner"),
+        ("slot 4 ahead of slot 5: the bare owner's in-place edit of doc 1", br, insert_frame(CLAIMANT_DOC1, 2, "x", false, None), GATED),
+        ("slot 4 ahead of slot 6: a bare stranger's copy from the owner's draft into ITS OWN published doc 1", s.session.as_str(), copy_frame(&s.doc1, 1, &d, 1, 1, None), GATED),
     ];
     walk(port, "2.6, PUB-6.36's write-side order", &cells);
     sd.shutdown();
@@ -332,7 +335,7 @@ fn m2_6_slot_5_the_model_s_refusal_speaks_ahead_of_the_per_source_consult() {
     let a = seat_stranger(port, 971);
     let a_signed = hire(port, &signed, CLAIMANT_DOC1, &a.account, 971, &distinct_key(71));
 
-    let v = op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &d, 1, 1));
+    let v = op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &d, 1, 1, None));
     assert_eq!(verdict(&v), "published_target", "2.6: slot 5 speaks ahead of slot 6: {v}");
     sd.shutdown();
 }
@@ -584,7 +587,7 @@ fn m2_11_the_unfiltered_cells_answer_whole_at_origin() {
     // whole (`a_with_b` = current in D ∧ deleted from J).
     let j = owner_draft(port, &owner);
     expect_resp(&copy_span(port, &owner, &j, 1, &d, 1, 2), "ack");
-    expect_resp(&op(port, Some(&owner), &delete_frame(&j, 1, 1)), "ack");
+    expect_resp(&op(port, Some(&owner), &delete_frame(&j, 1, 1, None)), "ack");
     let control = deletion_addrs(&op(port, Some(&owner), &deletions_frame(&j, &d)));
     assert_eq!(control, BTreeSet::from([i1.clone()]), "the control: the cut run's draft-origin I-address, itself");
     // …and over the two published members, the owner's own answer — empty

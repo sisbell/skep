@@ -12,6 +12,7 @@ use crate::heap::{heap_bytes, settled_heap_bytes};
 
 use common::*;
 use skep_address::{classify_spans, is_prefix, Address, Span, SpanRel};
+use skep_arrangement::AsOf;
 use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
     addressably_discoverable_from_on, project_on, OrphanReport, QueryError, FROM, MAX_ANSWER_SPANS,
@@ -193,7 +194,7 @@ fn discoverability_agrees_with_the_region_familys_stab_on_every_span_relation() 
 
     // Position 4 leaves doc1, which then arranges `[ca(1), ca(4))` alone.
     Vstream::new(&k)
-        .delete(SYS, &doc1(), vp(1, 4), n(1))
+        .delete(SYS, &doc1(), vp(1, 4), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete succeeds");
     let reads = Reads(&k);
     let region = [vspan(1, 1, 3)];
@@ -551,7 +552,7 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     // caller can build it far faster than a reader can pay for it.
     let vstream = Vstream::new(&k);
     let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
-    vstream.copy(SYS, &doc2(), vp(1, 1), &specs).expect("copy succeeds");
+    vstream.copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq())).expect("copy succeeds");
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
@@ -580,7 +581,7 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
 
     // One CONTENT run past it, and both refuse — the quantities differ, the
     // constant does not.
-    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)], AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         reads.project(&e1, FROM, &doc2()),
@@ -726,7 +727,7 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
     let exact = link(&store, &doc1(), &wide_from(0, m - 2), &[ca(101)]);
     let vstream = Vstream::new(&k);
     let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 1];
-    vstream.copy(SYS, &doc2(), vp(1, 1), &specs).expect("copy succeeds");
+    vstream.copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq())).expect("copy succeeds");
     let reads = Reads(&k);
     assert_eq!(
         k.snapshot().world().m5().link_runs(&doc2()).len(),
@@ -739,7 +740,7 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
 
     // One run more. The run count is AT the budget, which admits it; the
     // product is (M + 1)M, past the square.
-    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)], AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -778,11 +779,11 @@ fn the_touch_test_builds_nothing_per_pair() {
     let vstream = Vstream::new(&k);
     let specs = vec![spec(&doc1(), 1, 1, 1); 32];
     vstream
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     let fewer = k.snapshot();
     vstream
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     let more = k.snapshot();
     assert_eq!(fewer.world().m5().content_runs(&doc2()).len(), 32);
@@ -881,6 +882,7 @@ fn project_holds_its_product_to_the_answer_budget() {
             &doc2(),
             vp(1, 1),
             &vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS],
+            AsOf::Typed(k.current_seq()),
         )
         .expect("copy succeeds");
     assert_eq!(

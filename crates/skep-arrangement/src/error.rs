@@ -13,6 +13,7 @@ use std::fmt;
 
 use skep_address::Address;
 use skep_content::ContentError;
+use skep_kernel::Seq;
 use skep_namespace::MintError;
 
 /// INSERT rejection (ASN-0116; §3).
@@ -33,6 +34,15 @@ use skep_namespace::MintError;
 /// PUB-9.13's declared horn). The face, verbatim from PUB-2.11's table:
 /// "⟨D⟩ is published — it advances by versions. Stage your change in a
 /// draft, then publish it as the next version."
+///
+/// `ArrangementMoved` is the stale-edit refusal (skep #442), the same on
+/// all five in-place edits: the insert was typed against a state of the
+/// arrangement it lands in older than that arrangement's last change
+/// ([`AsOf`](crate::AsOf)), so its positions are true of a state the
+/// document has moved past. It carries both positions — `as_of`, the typed
+/// state, echoed; `current`, the position the arrangement last changed at
+/// — and is judged ahead of every shape check, so a stale insert meets it
+/// and never `OutOfBounds`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InsertError {
     /// `doc` is not a registered document.
@@ -41,6 +51,9 @@ pub enum InsertError {
     NotOwner(Address),
     /// `doc`'s document is published and this insert is not the exemption.
     PublishedTarget,
+    /// The insert was typed against a state older than the arrangement's
+    /// last change: `as_of` the typed state, `current` that change's position.
+    ArrangementMoved { as_of: Seq, current: Seq },
     /// `at` is not in the content subspace `s_C`.
     NotContentSubspace,
     /// `at.ordinal` is outside `[1, n_C + 1]` of the arrangement landed in.
@@ -81,7 +94,10 @@ pub enum InsertError {
 /// publication — and their readability is the caller's
 /// ([`Vstream::copy`](crate::Vstream::copy)). Same face as
 /// [`InsertError::PublishedTarget`]; no deposit exemption — only a declared
-/// `insert` rides it (PUB-2.59).
+/// `insert` rides it (PUB-2.59). `ArrangementMoved` is the stale-edit
+/// refusal on the destination ([`InsertError::ArrangementMoved`]'s, skep
+/// #442): the paste was typed against a state of the destination older than
+/// its arrangement's last change; the sources are not judged for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CopyError {
     /// The destination `doc` is not a registered document.
@@ -90,6 +106,9 @@ pub enum CopyError {
     NotOwner(Address),
     /// The destination's document is published; copy-into edits in place.
     PublishedTarget,
+    /// The copy was typed against a state older than the destination's last
+    /// arrangement change: `as_of` the typed state, `current` that change's.
+    ArrangementMoved { as_of: Seq, current: Seq },
     /// `at` is not in the content subspace `s_C`.
     NotContentSubspace,
     /// `at.ordinal` is outside the destination's `[1, n_C + 1]`.
@@ -128,7 +147,10 @@ pub enum CopyError {
 /// is empty). Which wins is stated on
 /// [`Vstream::reinstate`](crate::Vstream::reinstate). No `Withheld`: the
 /// origins' readability is the caller's, as COPY's sources' is, discharged
-/// at M10's door.
+/// at M10's door. `ArrangementMoved` is the stale-edit refusal on the
+/// destination ([`InsertError::ArrangementMoved`]'s, skep #442): the undo
+/// was typed against a state of the destination older than its
+/// arrangement's last change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReinstateError {
     /// The destination `doc` is not a registered document.
@@ -137,6 +159,10 @@ pub enum ReinstateError {
     NotOwner(Address),
     /// The destination's document is published; a re-placement edits in place.
     PublishedTarget,
+    /// The re-placement was typed against a state older than the
+    /// destination's last arrangement change: `as_of` the typed state,
+    /// `current` that change's position.
+    ArrangementMoved { as_of: Seq, current: Seq },
     /// `at` is not in the content subspace `s_C`.
     NotContentSubspace,
     /// `at.ordinal` is outside the destination's `[1, n_C + 1]`.
@@ -157,9 +183,11 @@ pub enum ReinstateError {
 ///
 /// A delete is refused unless the doc is registered, the caller is its
 /// owner, its document is not published (`PublishedTarget` — PUB-2.11's
-/// refusal, the face of [`InsertError::PublishedTarget`]), `subspace(p) =
-/// s_C`, `p` is arranged (`ordinal ∈ [1, n_C]`), the range is contained
-/// (`ordinal + width − 1 ≤ n_C`), and `width ≥ 1`.
+/// refusal, the face of [`InsertError::PublishedTarget`]), it was typed
+/// against the arrangement's current state (`ArrangementMoved` — the
+/// stale-edit refusal, [`InsertError::ArrangementMoved`]'s, skep #442),
+/// `subspace(p) = s_C`, `p` is arranged (`ordinal ∈ [1, n_C]`), the range is
+/// contained (`ordinal + width − 1 ≤ n_C`), and `width ≥ 1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteError {
     /// `doc` is not a registered document.
@@ -168,6 +196,9 @@ pub enum DeleteError {
     NotOwner(Address),
     /// `doc`'s document is published: a delete is an in-place edit.
     PublishedTarget,
+    /// The delete was typed against a state older than the arrangement's
+    /// last change: `as_of` the typed state, `current` that change's position.
+    ArrangementMoved { as_of: Seq, current: Seq },
     /// `p` is not in the content subspace `s_C`.
     NotContentSubspace,
     /// `p.ordinal` names no arranged content position.
@@ -182,11 +213,14 @@ pub enum DeleteError {
 ///
 /// A rearrange is refused unless the document is registered, the caller is
 /// its owner, the document is not published (`PublishedTarget` — PUB-2.11's
-/// refusal, the face of [`InsertError::PublishedTarget`]), there are 3 or 4
-/// cuts, strictly ascending, all subspace s_C, CS5 lower bound `1 ≤ ord(c₀)`
-/// and upper bound `ord(c_last) ≤ n_C + 1` hold (both `OutOfBounds`), and
-/// the content subspace is non-empty (`EmptyContentSubspace`, R-PRE(ii)).
-/// Whether that last verdict can be reached past the ones before it is
+/// refusal, the face of [`InsertError::PublishedTarget`]), it was typed
+/// against the arrangement's current state (`ArrangementMoved` — the
+/// stale-edit refusal, [`InsertError::ArrangementMoved`]'s, skep #442),
+/// there are 3 or 4 cuts, strictly ascending, all subspace s_C, CS5 lower
+/// bound `1 ≤ ord(c₀)` and upper bound `ord(c_last) ≤ n_C + 1` hold (both
+/// `OutOfBounds`), and the content subspace is non-empty
+/// (`EmptyContentSubspace`, R-PRE(ii)). Whether that last verdict can be
+/// reached past the ones before it is
 /// [`Vstream::rearrange`](crate::Vstream::rearrange)'s to say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RearrangeError {
@@ -196,6 +230,9 @@ pub enum RearrangeError {
     NotOwner(Address),
     /// `doc`'s document is published: a re-arrangement is an in-place edit.
     PublishedTarget,
+    /// The rearrange was typed against a state older than the arrangement's
+    /// last change: `as_of` the typed state, `current` that change's position.
+    ArrangementMoved { as_of: Seq, current: Seq },
     /// `cuts` holds neither three cuts nor four.
     BadCutCount,
     /// The cuts' ordinals are not strictly ascending.
@@ -491,6 +528,9 @@ impl fmt::Display for InsertError {
             InsertError::PublishedTarget => f.write_str(
                 "insert: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version (an undeclared insert, one declared under a type the deposit class does not hold, and a declared insert at any position but a fresh content one are each an in-place edit)",
             ),
+            InsertError::ArrangementMoved { .. } => f.write_str(
+                "insert: typed against a state older than the document's last arrangement change (as_of is below it); read the document again and place the text against what it holds now",
+            ),
             InsertError::NotContentSubspace => {
                 f.write_str("insert: at.subspace is not the content subspace s_C")
             }
@@ -526,6 +566,9 @@ impl fmt::Display for CopyError {
             CopyError::PublishedTarget => {
                 "copy: the destination document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
             }
+            CopyError::ArrangementMoved { .. } => {
+                "copy: typed against a state older than the destination's last arrangement change (as_of is below it); read the destination again and place the copy against what it holds now"
+            }
             CopyError::NotContentSubspace => "copy: at.subspace is not the content subspace s_C",
             CopyError::OutOfBounds => {
                 "copy: at.ordinal is outside the valid insertion range [1, n_C + 1]"
@@ -559,6 +602,9 @@ impl fmt::Display for ReinstateError {
             }
             ReinstateError::PublishedTarget => {
                 "reinstate: the destination document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
+            ReinstateError::ArrangementMoved { .. } => {
+                "reinstate: typed against a state older than the destination's last arrangement change (as_of is below it); read the destination again and place the runs against what it holds now"
             }
             ReinstateError::NotContentSubspace => {
                 "reinstate: at.subspace is not the content subspace s_C"
@@ -594,6 +640,9 @@ impl fmt::Display for DeleteError {
             DeleteError::PublishedTarget => {
                 "delete: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
             }
+            DeleteError::ArrangementMoved { .. } => {
+                "delete: typed against a state older than the document's last arrangement change (as_of is below it); read the document again and place the removal against what it holds now"
+            }
             DeleteError::NotContentSubspace => "delete: p.subspace is not the content subspace s_C",
             DeleteError::NotArranged => "delete: p.ordinal names no arranged content position",
             DeleteError::OutOfBounds => "delete: the range overruns the arranged content (ordinal + width − 1 > n_C)",
@@ -612,6 +661,9 @@ impl fmt::Display for RearrangeError {
             }
             RearrangeError::PublishedTarget => {
                 "rearrange: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
+            RearrangeError::ArrangementMoved { .. } => {
+                "rearrange: typed against a state older than the document's last arrangement change (as_of is below it); read the document again and place the cuts against what it holds now"
             }
             RearrangeError::BadCutCount => "rearrange: exactly 3 or 4 cuts are required",
             RearrangeError::NotAscending => "rearrange: cut ordinals must be strictly ascending",

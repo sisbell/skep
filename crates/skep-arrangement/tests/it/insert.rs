@@ -2,9 +2,57 @@
 //! returns, and the order of its refusals.
 
 use skep_address::SpanSet;
-use skep_arrangement::{Deposit, HasM5, InsertError, Run, Vstream};
+use skep_arrangement::{AsOf, Deposit, HasM5, InsertError, Run, Vstream};
+use skep_kernel::Seq;
 
 use crate::common::*;
+
+/// The stale-edit refusal (skep #442) on INSERT. An insert typed at the
+/// position the draft's arrangement last changed at lands as it did, its
+/// ack the new position; one typed below it is refused `ArrangementMoved`
+/// carrying the typed state and the current one, and commits nothing. The
+/// refusal stands ahead of every shape check: a stale insert at an ordinal
+/// the draft no longer admits, or into the link subspace, meets the one
+/// code and never `OutOfBounds` or `NotContentSubspace`. A draft never
+/// arranged admits any typed state, and the unchecked arm skips the check.
+#[test]
+fn an_insert_typed_against_an_older_arrangement_is_refused_ahead_of_the_shape_checks() {
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    let typed = k.snapshot().world().m5().arranged_at(&doc1()).expect("the insert arranged doc1");
+    assert_eq!(typed, k.current_seq(), "the recorded position is the commit's own");
+    // Typed at the current position: lands exactly as before the check.
+    let (start, at) = vs
+        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, AsOf::Typed(typed))
+        .expect("an insert typed at the current state lands");
+    assert_eq!(start, ca(4));
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc1()), Some(at), "the ack is the new position");
+    // Typed before that write: refused with both positions, nothing committed.
+    let before = k.current_seq();
+    assert_eq!(
+        rejected(vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared, AsOf::Typed(typed))),
+        InsertError::ArrangementMoved { as_of: typed, current: at }
+    );
+    // Ahead of the shape checks: past the boundary, and in the link subspace.
+    assert!(matches!(
+        rejected(vs.insert(P1, &doc1(), vp(1, 99), vec![val(b"x")], Deposit::Undeclared, AsOf::Typed(typed))),
+        InsertError::ArrangementMoved { .. }
+    ));
+    assert!(matches!(
+        rejected(vs.insert(P1, &doc1(), vp(2, 1), vec![], Deposit::Undeclared, AsOf::Typed(typed))),
+        InsertError::ArrangementMoved { .. }
+    ));
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(4));
+    // A draft never arranged passes whatever state it is typed against…
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc2()), None);
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")], Deposit::Undeclared, AsOf::Typed(Seq(0)))
+        .expect("a document never arranged admits an edit typed at genesis");
+    // …and the unchecked arm names no state at all.
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"u")], Deposit::Undeclared, AsOf::Unchecked)
+        .expect("the unchecked arm lands");
+    assert_eq!(read_v(&k.snapshot(), &doc1(), 1), b"u".to_vec());
+}
 
 #[test]
 fn insert_mints_writes_places_and_returns_the_run_start() {
@@ -13,7 +61,7 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, seq) = vs
-        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
+        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared, now(&k))
         .expect("insert commits");
     assert_eq!(start, ca(1));
     assert_eq!(k.current_seq(), seq);
@@ -45,7 +93,7 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     let vs = insert_abc(&k);
     // Tail append continues the frontier ⇒ I-adjacent ⇒ still one run (M12).
     let (start, _) = vs
-        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
+        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, now(&k))
         .expect("append commits");
     assert_eq!(start, ca(4));
     {
@@ -54,7 +102,7 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     }
     // Interior insert splits the run; the suffix shifts for free (§1).
     let (start, _) = vs
-        .insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared)
+        .insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared, now(&k))
         .expect("interior insert commits");
     assert_eq!(start, ca(5));
     let s = k.snapshot();
@@ -82,24 +130,24 @@ fn insert_rejects_in_documented_order_and_commits_nothing() {
     let before = k.current_seq();
     let unregistered_doc = a(&[1, 0, 1, 0, 9]); // never registered
     assert!(matches!(
-        rejected(vs.insert(P1, &unregistered_doc, vp(2, 0), vec![], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &unregistered_doc, vp(2, 0), vec![], Deposit::Undeclared, now(&k))),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(2, 0), vec![], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &doc1(), vp(2, 0), vec![], Deposit::Undeclared, now(&k))),
         InsertError::EmptyContent
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(2, 99), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &doc1(), vp(2, 99), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(1, 0), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &doc1(), vp(1, 0), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::OutOfBounds
     ));
     // n_C = 0: the only valid insertion ordinal is 1 (FirstInsertionPosition).
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::OutOfBounds
     ));
     assert_eq!(k.current_seq(), before);

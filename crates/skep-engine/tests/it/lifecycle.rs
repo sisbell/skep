@@ -10,6 +10,7 @@ use crate::common;
 
 use common::*;
 use skep_address::Address;
+use skep_arrangement::AsOf;
 use skep_arrangement::{deposit_class_types, Deposit};
 use skep_content::Val;
 use skep_discovery::findlinks_v_on;
@@ -58,6 +59,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 vp(1, 1),
                 vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
                 Deposit::Declared(deposit_class_types()[0].clone()),
+                AsOf::Typed(engine.kernel().current_seq()),
             )
             .expect("insert succeeds");
 

@@ -24,10 +24,11 @@ fn find_docs_containing_composes_candidates_with_the_present_tense_filter() {
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
+        now(&k),
     )
     .expect("copy commits");
     // doc1 deletes the region; doc2 still holds it.
-    vs.delete(P1, &doc1(), vp(1, 1), n(3)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(3), now(&k)).expect("delete commits");
     let s = k.snapshot();
     let m5 = s.world().m5();
     let region = SpanSet::singleton(
@@ -58,7 +59,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
-    vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")], declared())
+    vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")], declared(), now(&k))
         .expect("a deposit at the fork's fresh positions commits"); // mints vca(1..2), length 9
     vs.copy(
         P1,
@@ -74,6 +75,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
                 span: vspan(1, 4, 2),
             },
         ],
+        now(&k),
     )
     .expect("mixed copy commits");
     {
@@ -101,7 +103,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(spans[0].width(), &t(&[0, 2]));
     }
     // Delete everything in doc2: BOTH classes surface in deletions.
-    vs.delete(P1, &doc2(), vp(1, 1), n(4)).expect("delete commits");
+    vs.delete(P1, &doc2(), vp(1, 1), n(4), now(&k)).expect("delete commits");
     let s = k.snapshot();
     let d = s.world().m5().deletions(&doc2());
     let mut lens: Vec<usize> = d.iter().map(|span| span.start().len()).collect();
@@ -120,7 +122,7 @@ fn reads_fold_an_absent_document_to_empty_results() {
     // ignored the document they are asked about.
     let vs = insert_abc(&k);
     seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
-    vs.delete(P1, &doc1(), vp(1, 1), n(1)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), now(&k)).expect("delete commits");
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert!(m5.resolve(&doc2(), &vspan(1, 1, 1)).is_empty());
@@ -166,6 +168,7 @@ fn the_lazy_resolution_yields_what_resolve_collects_and_a_prefix_when_stopped() 
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
+        now(&k),
     )
     .expect("self-copy commits"); // [ca1..3][ca1..3]: two runs
     seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");

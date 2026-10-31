@@ -67,7 +67,7 @@ use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_client::address::parse_address;
 use skep_client::board::{
-    acked_addr, frames, Answer, Board, ChainAtAnswer, Opened, Rejection, Scope, SessionBody, Token,
+    acked_addr, acked_at, frames, Answer, Board, ChainAtAnswer, Opened, Rejection, Scope, SessionBody, Token,
 };
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::DialError;
@@ -272,6 +272,14 @@ pub struct Writer<'b> {
     /// been written ([`may_have_sent`]) or the answer was `poisoned`
     /// ([`Unsettled`]).
     in_flight: Option<InFlight>,
+    /// The `at` of the newest ack this writer received.
+    ///
+    /// It is the document state the next insert is typed against (wire.md
+    /// §Arrangement, the typed state; skep #442) until a newer ack moves it
+    /// — the mint's for a draft's first chunk, then each chunk's own. `None`
+    /// until the first ack of the run: a resumed run's first insert types
+    /// against the board's head, read once.
+    last_acked: Option<u64>,
 }
 
 impl<'b> Writer<'b> {
@@ -309,6 +317,7 @@ impl<'b> Writer<'b> {
             reads: 0,
             stall_said: None,
             in_flight: None,
+            last_acked: None,
         })
     }
 
@@ -429,7 +438,12 @@ impl<'b> Writer<'b> {
             }
             let transient = match answer {
                 Ok(Answer::Document(v)) => match Rejection::of(&v) {
-                    None => return Ok(v),
+                    None => {
+                        if let Some(at) = acked_at(&v) {
+                            self.last_acked = Some(at);
+                        }
+                        return Ok(v);
+                    }
                     Some(r) if r.key() == "durability" => Transient::Durability,
                     Some(r) if r.token() == "attestation_invalid:board_unavailable" => {
                         Transient::BoardUnavailable
@@ -546,12 +560,15 @@ impl<'b> Writer<'b> {
     /// The frames hold at most [`INSERT_CHUNK`] bytes at consecutive
     /// ordinals — the envelope id `id` on the first frame, `id:2`, `id:3`,
     /// … on the rest; under `token` where one is given, else the session.
-    /// It answers the next fresh ordinal.
+    /// It answers the next fresh ordinal. Each frame is typed against the
+    /// writer's newest ack (`as_of`, wire.md §Arrangement; skep #442): the
+    /// mint's for a draft's first chunk, then the chunk before it — or, in a
+    /// run that has acked nothing yet, the board's head read once.
     ///
     /// # Errors
     ///
     /// Returns the halt the first frame that does not land comes to, as
-    /// [`Writer::write_as`] answers it.
+    /// [`Writer::write_as`] answers it, or the halt the head's read comes to.
     pub fn insert(
         &mut self,
         token: Option<&Token>,
@@ -561,6 +578,13 @@ impl<'b> Writer<'b> {
         id: &str,
     ) -> Result<u64, Halt> {
         let token = token.cloned().unwrap_or_else(|| self.session.token().clone());
+        let mut typed = match self.last_acked {
+            Some(at) => at,
+            None => {
+                self.reads += 1;
+                self.board.health()?.log_position()
+            }
+        };
         let mut from = 0usize;
         let mut at = ordinal;
         let mut chunk = 0u64;
@@ -581,9 +605,11 @@ impl<'b> Writer<'b> {
                 "doc": doc,
                 "at": {"subspace": "1", "ordinal": at.to_string()},
                 "values": [value],
+                "as_of": typed,
             });
             let chunk_id = if chunk == 1 { id.to_string() } else { format!("{id}:{chunk}") };
-            self.write_as(&token, frame, &chunk_id)?;
+            let acked = self.write_as(&token, frame, &chunk_id)?;
+            typed = acked_at(&acked).unwrap_or(typed);
             at += (end - from) as u64;
             from = end;
         }

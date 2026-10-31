@@ -3,6 +3,7 @@
 //! WF_V's inadmissible cases, each refused distinctly and never clipped.
 
 use skep_address::Span;
+use skep_arrangement::AsOf;
 use skep_arrangement::seat_link;
 use skep_namespace::{HasM3, PrincipalId};
 use skep_retrieval::{ExtentError, OriginError, Query, SpanFault};
@@ -52,7 +53,7 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // one component deeper than its source…
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared(), AsOf::Typed(k.current_seq()))
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // …and its own chain one component longer
     let s = k.snapshot();

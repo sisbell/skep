@@ -9,6 +9,7 @@ use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::Address;
+use skep_arrangement::AsOf;
 use skep_arrangement::Vstream;
 use skep_discovery::{count_ftt_on, findlinks_ftt_on, window_ftt_on, FourSet, SlotSpec, FROM, TYPE};
 use skep_kernel::Kernel;
@@ -622,7 +623,7 @@ fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds
     // The link's only witness in doc1 leaves the arrangement. The link is not
     // retracted, and it is still resident.
     Vstream::new(&k)
-        .delete(SYS, &doc1(), vp(1, 1), n(1))
+        .delete(SYS, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete succeeds");
     assert!(k.snapshot().world().links().is_active(&la(1)));
 

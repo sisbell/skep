@@ -48,8 +48,8 @@
 use skep_address::{document_of, shift, validate, Address, Nat, SpanSet, Tumbler};
 use skep_arrangement::{
     head_lock_key, ordinal_vspan, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, stage_seat_link, trunk_head, trunk_of, Caller, HasM5, M5State, Pairing,
-    PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
+    stage_reinstate_at, stage_seat_link, trunk_head, trunk_of, AsOf, Caller, HasM5, M5State,
+    Pairing, PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
 };
 use skep_kernel::{LockKey, Seq, Staging, TxnError, MAX_TXN_BYTES};
 use skep_namespace::{HasM3, M3State};
@@ -712,12 +712,17 @@ where
         if !arranged_at(stg.working().m5(), draft, place, pieces.iter().map(|piece| &piece.from)) {
             return Err(PublicationError::KeptPlaceMoved { index });
         }
-        // (b) The replacement, piece by piece at each piece's offset.
+        // (b) The replacement, piece by piece at each piece's offset. The
+        //     two staged bodies take the UNCHECKED arm of the stale-edit
+        //     check (skep #442): the check by identity above is the
+        //     stricter one and this commit's own, and the positions handed
+        //     here are read off the working world the stagings before them
+        //     moved, which no typed state could name.
         let mut offset = Nat::from(0u32);
         for piece in &pieces {
             let at = VPos::content(&place.ordinal + &offset);
             let fresh = ShotRun { origin: trunk.clone(), run: piece.to.clone() };
-            stage_reinstate_at(stg, caller, draft, at.clone(), &[fresh])?;
+            stage_reinstate_at(stg, caller, draft, at.clone(), &[fresh], AsOf::Unchecked)?;
             // The draft-native piece, where the placement left it: the
             // published piece's width past its place, read off the working
             // world.
@@ -725,7 +730,7 @@ where
             if !arranged_at(stg.working().m5(), draft, &moved, [&piece.from]) {
                 return Err(PublicationError::KeptPlaceMoved { index });
             }
-            stage_delete_at(stg, caller, draft, moved, piece.from.width().clone())?;
+            stage_delete_at(stg, caller, draft, moved, piece.from.width().clone(), AsOf::Unchecked)?;
             offset = &offset + piece.from.width();
         }
     }

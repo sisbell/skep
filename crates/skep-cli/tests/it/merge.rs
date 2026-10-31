@@ -233,7 +233,8 @@ impl Rig {
                 }
                 Staged::Fresh { text } => {
                     let d = self.draft();
-                    let insert = json!({"op": "insert", "doc": d.to_string(), "at": {"subspace": "1", "ordinal": "1"}, "values": [text]});
+                    let as_of = self.board.health().unwrap().log_position();
+                    let insert = json!({"op": "insert", "doc": d.to_string(), "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": as_of});
                     acked_at(&Rig::acked(self.board.op(Some(&self.bare), &insert))).expect("the insert's position");
                     let image = self.image(&self.bare, &d, text.len() as u64);
                     assert_eq!(image.len(), 1, "one burst at one caret is one run: {image:?}");
@@ -538,7 +539,8 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     let head = rig.shot(&session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
     let forker = rig.forker();
     let fork = rig.fork(&forker, &base);
-    Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, None)));
+    let forked_at = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
     let meta = rig.read(&token, &frames::doc_metadata(&fork.to_string()));
     assert_eq!(meta["source"].as_str(), Some(base.to_string().as_str()), "the premise — the board serves the fork's source: {meta}");
     let (d_s, fork_s, head_s) = (d.to_string(), fork.to_string(), head.to_string());

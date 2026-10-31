@@ -65,6 +65,16 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   explicit-private member of a published one
   (`PrivateVersionOfPublished`, PUB-2.7). Link seating is outside the
   rule (PUB-2.12).
+- **The stale-edit refusal** — each of the five in-place edits names the
+  document state it was typed against (`AsOf::Typed`, the position of the
+  read its positions came from; `AsOf::Unchecked` for the three in-process
+  writers nothing races). The slice keeps, per document, the position its
+  content arrangement last changed at (`M5State::arranged_at`, set by
+  every placing, removing, reordering or minting record and never by a
+  link seat), and an edit typed below it is refused `ArrangementMoved`
+  carrying both positions — behind `PublishedTarget`, ahead of every shape
+  check — so a stale edit never lands a position off and never answers
+  `OutOfBounds` for positions that were true when it was typed.
 - **Provenance (R)** — the append-only provenance relation: which
   addresses a document has ever contained, including a fork's shared
   ones. It is recorded, not recomputable: an arrangement that no longer holds an

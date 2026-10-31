@@ -3,6 +3,7 @@
 //! gate's precedence across the operations that take a whole request.
 
 use skep_address::{Span, SpanSet};
+use skep_arrangement::AsOf;
 use skep_arrangement::{seat_link, Deposit, VSpec};
 use skep_kernel::Seq;
 use skep_namespace::HasM3;
@@ -28,6 +29,7 @@ fn as_of_reports_the_pinned_seq_and_queries_never_mutate() {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     let before = k.current_seq();
@@ -81,7 +83,7 @@ fn a_query_answers_from_its_pinned_snapshot_after_later_commits() {
     let vs = insert3(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("insert commits");
     assert_ne!(
         k.current_seq(),

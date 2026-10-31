@@ -238,8 +238,8 @@ fn wire_deposit<T: RecordEntry>(board: &Board, token: &Token, hand: &HybridSigne
     let alg = HybridSigner::public_key(hand).alg();
     let frame = RecordFrame { alg, board: term, home_account: &home_account, home, ty, to: &[subject], sigless: sigless.as_bytes() }.compose().expect("frame");
     let text = canonical_record(entries, Some(&sig_hex(&HybridSigner::sign(hand, &frame))));
-    let ordinal = next_content_ordinal(board, Some(token), home).expect("ordinal");
-    let Answer::Document(v) = board.op(Some(token), &frames::insert_atom(home, ordinal, &text, ty, None)).expect("insert") else { return Err("closed".into()) };
+    let (ordinal, as_of) = next_content_ordinal(board, Some(token), home).expect("ordinal");
+    let Answer::Document(v) = board.op(Some(token), &frames::insert_atom(home, ordinal, &text, ty, as_of, None)).expect("insert") else { return Err("closed".into()) };
     let Some(atom) = acked_addr(&v).map(str::to_string) else { return Err(v.to_string()) };
     let Answer::Document(v) = board.op(Some(token), &frames::make_link(home, &[&atom], &[subject], ty, None)).expect("link") else { return Err("closed".into()) };
     acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
@@ -425,11 +425,20 @@ pub fn mint(board: &Board, token: &Token, account: &str, published: bool) -> Str
     acked_addr(&v).unwrap_or_else(|| panic!("the mint was refused: {v}")).to_string()
 }
 
+/// The document state a burst frame built here is typed against (skep #442):
+/// the `as_of` of a read of `doc` made now — its span set, the read a
+/// writer places its text against — which is the board's committed head.
+pub fn typed_at(board: &Board, token: &Token, doc: &str) -> u64 {
+    let Answer::Document(v) = board.op(Some(token), &frames::span_set(doc)).expect("the span set read") else { panic!("closed") };
+    v["as_of"].as_u64().unwrap_or_else(|| panic!("the read names where it sits: {v}"))
+}
+
 /// `insert` of `text` PER-BYTE at content ordinal `ordinal` of `doc` — the
 /// `str` form, one single-byte value per byte (wire.md §Value encodings) —
 /// as the budgets suite feeds its board; the ack's position.
 pub fn insert_text(board: &Board, token: &Token, doc: &str, ordinal: u64, text: &str) -> u64 {
-    let frame = serde_json::json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [text]});
+    let as_of = typed_at(board, token, doc);
+    let frame = serde_json::json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [text], "as_of": as_of});
     let Answer::Document(v) = board.op(Some(token), &frame).expect("insert") else { panic!("closed") };
     skep_client::board::acked_at(&v).unwrap_or_else(|| panic!("the insert was refused: {v}"))
 }

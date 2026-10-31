@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::{
     deposit_class_types, Caller, Deposit, HasM5, M5State, Run, Shot, ShotRun, VPos, VSpec, Vstream,
 };
@@ -87,7 +88,7 @@ impl WorldState for World {
                 ..self.clone()
             },
             Rec::M5(x) => World {
-                m5: self.m5.apply_m5(x),
+                m5: self.m5.apply_m5(at, x),
                 ..self.clone()
             },
         }
@@ -307,7 +308,7 @@ pub fn positions(d: &Delivery) -> usize {
 /// doc1 arranged with content a, b, c (ca1..ca3).
 pub fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("insert commits");
     vs
 }
@@ -317,7 +318,7 @@ pub fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
 /// (PUB-2.59, PUB-9.13).
 pub fn deposit3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared())
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared(), AsOf::Typed(k.current_seq()))
         .expect("deposit commits");
     vs
 }
@@ -328,7 +329,7 @@ pub fn deposit3(k: &Kernel<World>) -> Vstream<'_, World> {
 /// per-run claim in the suites is about.
 pub fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = insert3(k);
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("insert commits");
     vs.copy(
         P1,
@@ -338,6 +339,7 @@ pub fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     vs.copy(
@@ -348,6 +350,7 @@ pub fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     vs
@@ -365,7 +368,7 @@ pub fn fragmented_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
         span: vspan(1, 1, 1),
     };
     for at in [1, 4097] {
-        vs.copy(P1, &doc2(), vp(1, at), &vec![ca1_spec.clone(); 4096])
+        vs.copy(P1, &doc2(), vp(1, at), &vec![ca1_spec.clone(); 4096], AsOf::Typed(k.current_seq()))
             .expect("copy commits");
     }
     vs
@@ -439,6 +442,7 @@ pub fn fanout_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     vs.copy(
@@ -449,9 +453,10 @@ pub fn fanout_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
-    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")], Deposit::Undeclared)
+    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("insert commits");
     vs
 }

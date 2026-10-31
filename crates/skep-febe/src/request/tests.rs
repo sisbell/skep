@@ -57,20 +57,22 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
                 at: vpos(),
                 values: vec![Val::new(vec![1u8])],
                 deposit: Deposit::Undeclared,
+                as_of: Seq(7),
             },
             false,
         ),
-        (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32) }, false),
-        (Op::Copy { doc: doc(), at: vpos(), specs: vec![vspec()] }, false),
+        (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32), as_of: Seq(7) }, false),
+        (Op::Copy { doc: doc(), at: vpos(), specs: vec![vspec()], as_of: Seq(7) }, false),
         (
             Op::Reinstate {
                 doc: doc(),
                 at: vpos(),
                 runs: vec![run_of(&addr(&[1, 0, 1, 0, 2]), &[1, 0, 1, 0, 2, 0, 1, 1])],
+                as_of: Seq(7),
             },
             false,
         ),
-        (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
+        (Op::Rearrange { doc: doc(), cuts: vec![vpos()], as_of: Seq(7) }, false),
         (Op::Version { d_src: doc(), published: None }, false),
         (
             Op::Publish {
@@ -221,6 +223,7 @@ fn an_op_renders_its_values_by_count_and_every_variant_by_its_kind() {
         at: vpos(),
         values: vec![Val::new(b"secret".to_vec()), Val::new(vec![0xA5])],
         deposit: Deposit::Undeclared,
+        as_of: Seq(7),
     };
     let rendered = format!("{insert:?}");
     assert!(rendered.contains("values: 2 values"), "the values render as their count: {rendered}");
@@ -390,7 +393,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
     let ispan_in_d2 = Span::new(tum(&[1, 0, 1, 0, 2, 0, 1, 1]), tum(&[0, 0, 0, 0, 0, 0, 0, 2]))
         .expect("a content I-span");
 
-    let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)] };
+    let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)], as_of: Seq(7) };
     assert_eq!(op.source_arguments(), vec![&d2, &d3], "copy: each spec's source, by index");
     // `reinstate`: each origin ONCE, at its first run, in run order; a run
     // of the destination's own I-space — stated as the document or as a
@@ -406,6 +409,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
             run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 7]),
             run_of(&member_of_d1, &[1, 0, 1, 0, 1, 1, 0, 1, 1]),
         ],
+        as_of: Seq(7),
     };
     assert_eq!(
         op.source_arguments(),
@@ -416,6 +420,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         doc: d1.clone(),
         at: vpos(),
         runs: vec![run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 2])],
+        as_of: Seq(7),
     };
     assert!(own_only.source_arguments().is_empty(), "a document's own I-space needs no consult");
     let op = Op::Version { d_src: d2.clone(), published: None };

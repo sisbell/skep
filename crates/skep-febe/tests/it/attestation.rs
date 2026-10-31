@@ -41,7 +41,7 @@ fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
     // marker slot of the commit it makes is empty.
     let draft = create_doc(&fx);
     insert3(&fx, &draft);
-    ack(ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 2), width: nat(1) }));
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 2), width: nat(1), as_of: head(&fx) }));
     let second = elem_addr(ElemPos { doc: draft.clone(), subspace: nat(1), ordinal: nat(2) })
         .unwrap_or_else(|_| panic!("valid element position"));
     let before = fx.febe.log_position();
@@ -52,6 +52,7 @@ fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
             origin: draft,
             run: Run::new(second, nat(1)).expect("a content run"),
         }],
+        as_of: head(&fx),
     };
     let at = ack(
         fx.febe

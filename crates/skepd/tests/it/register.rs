@@ -81,7 +81,7 @@ fn i1_a_publication_is_fixed_at_birth_at_every_position_and_the_exception_set_on
     let v = op(port, Some(&signed), &create_frame(CLAIMANT_ACCOUNT, Some(true)));
     let (edition, at_edition) = (acked_addr(&v), acked_at(&v));
     let at_write = acked_at(&insert_text(port, &owner, &draft, 1, "d"));
-    let at_deposit = acked_at(&op(port, Some(&signed), &insert_frame(&edition, 1, "e", true)));
+    let at_deposit = acked_at(&op(port, Some(&signed), &insert_frame(&edition, 1, "e", true, head_position(port))));
     let v = version_of(port, &signed, &edition, None);
     let (member, at_member) = (acked_addr(&v), acked_at(&v));
     let at_link = acked_at(&op(port, Some(&owner), &link_frame(&draft, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(&draft, 1))));
@@ -172,7 +172,7 @@ fn i1_d_a_pinned_member_s_image_at_any_later_position_equals_its_image_at_mint()
     let (m2, at_m2) = (acked_addr(&v), acked_at(&v));
     assert_eq!(m2, format!("{e}.2"));
     // A deposit into the chain — it lands in the head m2 (PUB-2.66).
-    let at_z = acked_at(&op(port, Some(&signed), &insert_frame(&e, 5, "z", true)));
+    let at_z = acked_at(&op(port, Some(&signed), &insert_frame(&e, 5, "z", true, head_position(port))));
     // A daughter off the pinned m1 (PUB-2.55).
     let d2 = draft_with(port, &owner, "q");
     let mut runs2 = shot_runs(port, None, &m1, 1, 3);
@@ -425,7 +425,7 @@ fn i3_a_a_bare_op_stream_leaves_the_guest_projection_unchanged_but_for_content_e
     let before_refusals = head_position(port);
     let ordinal = next_content_ordinal(port, None, CLAIMANT_DOC1);
     for (what, frame) in [
-        ("a write homed in the published doc 1", insert_frame(CLAIMANT_DOC1, ordinal, "x", true)),
+        ("a write homed in the published doc 1", insert_frame(CLAIMANT_DOC1, ordinal, "x", true, head_position(port))),
         ("a flagless version of a published source", version_frame(CLAIMANT_DOC1, None)),
         ("a mint resolving published", create_frame(CLAIMANT_ACCOUNT, Some(true))),
         ("a published fork", fork_frame(Some(true))),
@@ -706,7 +706,7 @@ fn i6_a_the_shot_composes_from_the_rendered_runs_never_the_draft_s_arrangement_a
     let render = shot_runs(port, Some(&owner), &d, 1, 5);
     assert_eq!(text_of(port, Some(&owner), &d, 1, 5), "abcxy");
     // The draft moves after the sight.
-    expect_resp(&op(port, Some(&owner), &delete_frame(&d, 1, 1)), "ack");
+    expect_resp(&op(port, Some(&owner), &delete_frame(&d, 1, 1, head_position(port))), "ack");
     expect_resp(&insert_text(port, &owner, &d, 1, "Q"), "ack_addr");
     assert_eq!(text_of(port, Some(&owner), &d, 1, 5), "Qbcxy", "the draft as it stands at commit");
 
@@ -740,9 +740,9 @@ fn i10_a_the_pre_claim_catalogue_is_refused_claim_first() {
         ("fork", fork_frame(None)),
         ("version", version_frame(&a.doc1, None)),
         ("create_new_document into a non-empty account", create_frame(&a.account, None)),
-        ("delete", delete_frame(&a.doc1, 1, 1)),
-        ("rearrange", rearrange_frame(&a.doc1, [1, 2, 3])),
-        ("copy", copy_frame(&a.doc1, 1, &a.doc1, 1, 1)),
+        ("delete", delete_frame(&a.doc1, 1, 1, head_position(port))),
+        ("rearrange", rearrange_frame(&a.doc1, [1, 2, 3], head_position(port))),
+        ("copy", copy_frame(&a.doc1, 1, &a.doc1, 1, 1, head_position(port))),
         ("publish", publish_frame(&a.doc1, None, None, &[])),
         ("make_link", link_frame(&a.doc1, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(&a.doc1, 1))),
         ("emit", emit_frame(&a.doc1)),

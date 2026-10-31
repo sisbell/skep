@@ -296,7 +296,11 @@ pub fn compare(rho1: &[Value], rho2: &[Value]) -> Value {
 /// Builds a declared deposit of one atom into `doc` at `ordinal`.
 ///
 /// `deposit` names the record's class type address (AUTH-5.4; PUB-2.64).
-pub fn insert_atom(doc: &str, ordinal: u64, atom: &str, deposit_type: &str, id: Option<&str>) -> Value {
+/// `as_of` is the document state the deposit is typed against (wire.md
+/// §Arrangement, `insert`; skep #442): the `as_of` of the read that found
+/// `ordinal`, which the board refuses `arrangement_moved` where the
+/// arrangement the deposit lands in has changed since.
+pub fn insert_atom(doc: &str, ordinal: u64, atom: &str, deposit_type: &str, as_of: u64, id: Option<&str>) -> Value {
     with_id(
         json!({
             "op": "insert",
@@ -304,6 +308,7 @@ pub fn insert_atom(doc: &str, ordinal: u64, atom: &str, deposit_type: &str, id: 
             "at": {"subspace": "1", "ordinal": ordinal.to_string()},
             "values": [{"atom": atom}],
             "deposit": deposit_type,
+            "as_of": as_of,
         }),
         id,
     )
@@ -315,39 +320,44 @@ pub fn insert_atom(doc: &str, ordinal: u64, atom: &str, deposit_type: &str, id: 
 /// `values` one composite `atom` and no `deposit` member — an append into
 /// the writer's own draft, the merge journal's (the merge record's §4),
 /// where a declaration would be inert. [`insert_atom`] is the declared form
-/// a credential record takes.
-pub fn insert_plain_atom(doc: &str, ordinal: u64, atom: &str, id: Option<&str>) -> Value {
+/// a credential record takes. `as_of` is the draft state the insert is
+/// typed against: the `as_of` of the read that found `ordinal`.
+pub fn insert_plain_atom(doc: &str, ordinal: u64, atom: &str, as_of: u64, id: Option<&str>) -> Value {
     with_id(
         json!({
             "op": "insert",
             "doc": doc,
             "at": {"subspace": "1", "ordinal": ordinal.to_string()},
             "values": [{"atom": atom}],
+            "as_of": as_of,
         }),
         id,
     )
 }
 
-/// Builds `{"op":"delete","doc":…,"p":{…},"width":…}` (wire.md §Arrangement).
+/// Builds `{"op":"delete","doc":…,"p":{…},"width":…,"as_of":…}` (wire.md
+/// §Arrangement).
 ///
 /// It removes `width` content positions of the draft `doc` from ordinal `p`
 /// — one in-place edit of the merge's draft landing (the merge record's
-/// §1.5).
-pub fn delete(doc: &str, p: u64, width: u64, id: Option<&str>) -> Value {
+/// §1.5) — typed against the draft state `as_of`, the position the landing
+/// read the draft at, raised by each of its own acks.
+pub fn delete(doc: &str, p: u64, width: u64, as_of: u64, id: Option<&str>) -> Value {
     with_id(
-        json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": p.to_string()}, "width": width.to_string()}),
+        json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": p.to_string()}, "width": width.to_string(), "as_of": as_of}),
         id,
     )
 }
 
-/// Builds `{"op":"reinstate","doc":…,"at":{…},"runs":[…]}`.
+/// Builds `{"op":"reinstate","doc":…,"at":{…},"runs":[…],"as_of":…}`.
 ///
 /// It places `runs` by identity before content ordinal `at` of the draft
 /// `doc` (wire.md §Arrangement, `reinstate`), each as [`shot_run`] spells it
-/// — the other in-place edit of the merge's draft landing.
-pub fn reinstate(doc: &str, at: u64, runs: &[Value], id: Option<&str>) -> Value {
+/// — the other in-place edit of the merge's draft landing — typed against
+/// the draft state `as_of`, as [`delete`]'s is.
+pub fn reinstate(doc: &str, at: u64, runs: &[Value], as_of: u64, id: Option<&str>) -> Value {
     with_id(
-        json!({"op": "reinstate", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "runs": runs}),
+        json!({"op": "reinstate", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "runs": runs, "as_of": as_of}),
         id,
     )
 }

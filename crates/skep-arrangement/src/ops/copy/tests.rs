@@ -26,11 +26,11 @@ struct GateWorld {
 
 impl WorldState for GateWorld {
     type Record = M5Rec;
-    fn apply(&self, _at: Seq, r: &M5Rec) -> GateWorld {
+    fn apply(&self, at: Seq, r: &M5Rec) -> GateWorld {
         GateWorld {
             m3: self.m3.clone(),
             content: self.content.clone(),
-            m5: self.m5.apply_m5(r),
+            m5: self.m5.apply_m5(at, r),
         }
     }
 }
@@ -60,7 +60,7 @@ fn gate_kernel(present: &[u32]) -> Kernel<GateWorld> {
 /// The same world arranging the runs a caller chooses — for the tests
 /// whose subject is the source's RUN COUNT rather than its bytes.
 fn gate_kernel_arranging(runs: Vec<Run>, present: &[u32]) -> Kernel<GateWorld> {
-    let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+    let m5 = M5State::genesis().apply_m5(Seq(0), &M5Rec::ContentPlace {
         doc: doc1(),
         at: n(1),
         runs,
@@ -96,7 +96,7 @@ fn copy_rejects_a_source_run_whose_start_is_absent_from_the_content_store() {
     // Nothing written: the resolved run's start, ca(1), is absent.
     let k = gate_kernel(&[]);
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &from_doc1(2))),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &from_doc1(2), AsOf::Typed(k.current_seq()))),
         CopyError::DanglingSource
     ));
 
@@ -104,7 +104,7 @@ fn copy_rejects_a_source_run_whose_start_is_absent_from_the_content_store() {
     // without this, the rejection above could be earned by anything.
     let k = gate_kernel(&[1, 2, 3]);
     Vstream::new(&k)
-        .copy(p1, &doc2(), vp(1, 1), &from_doc1(2))
+        .copy(p1, &doc2(), vp(1, 1), &from_doc1(2), AsOf::Typed(k.current_seq()))
         .expect("a resolved run whose start is present is admitted");
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(2));
 
@@ -115,7 +115,7 @@ fn copy_rejects_a_source_run_whose_start_is_absent_from_the_content_store() {
     // is how such a change announces itself.
     let k = gate_kernel(&[1, 2]);
     Vstream::new(&k)
-        .copy(p1, &doc2(), vp(1, 1), &from_doc1(3))
+        .copy(p1, &doc2(), vp(1, 1), &from_doc1(3), AsOf::Typed(k.current_seq()))
         .expect("the run start is present, so the run is admitted");
 }
 
@@ -137,7 +137,7 @@ fn copy_refuses_a_placement_past_the_run_budget_before_building_it() {
         .take(MAX_PLACED_RUNS + 1)
         .collect();
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &over_budget_specs)),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &over_budget_specs, AsOf::Typed(k.current_seq()))),
         CopyError::TooManyRuns
     ));
     // Nothing was placed: the refusal happens inside the closure, before
@@ -146,7 +146,7 @@ fn copy_refuses_a_placement_past_the_run_budget_before_building_it() {
     // And the cap refuses only what is past it — an ordinary copy still
     // commits, so the assertion above is not earned by refusing COPY.
     Vstream::new(&k)
-        .copy(p1, &doc2(), vp(1, 1), &over_budget_specs[..3])
+        .copy(p1, &doc2(), vp(1, 1), &over_budget_specs[..3], AsOf::Typed(k.current_seq()))
         .expect("a placement inside the budget commits");
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(3));
 }
@@ -183,7 +183,7 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
         span: vspan(1, 1, source_run_count as u32),
     }];
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole)),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole, AsOf::Typed(k.current_seq()))),
         CopyError::TooManyRuns
     ));
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(0));
@@ -197,7 +197,7 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
                 source: doc1(),
                 span: vspan(1, source_run_count as u32, 1),
             }]
-        )),
+        , AsOf::Typed(k.current_seq()))),
         CopyError::DanglingSource
     ));
     // A span inside the budget over the same source still commits, so the
@@ -211,6 +211,7 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
                 source: doc1(),
                 span: vspan(1, 1, 4),
             }],
+            AsOf::Typed(k.current_seq()),
         )
         .expect("a span inside the budget commits");
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(4));
@@ -228,6 +229,7 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
                 source: doc1(),
                 span: vspan(1, 1, MAX_PLACED_RUNS as u32),
             }],
+            AsOf::Typed(k.current_seq()),
         )
         .expect("a placement of exactly the budget commits");
     assert_eq!(
@@ -292,7 +294,7 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     let before = k.current_seq();
     // One spec past the budget, however little each walks.
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget + 1))),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget + 1), AsOf::Typed(k.current_seq()))),
         CopyError::TooManyRuns
     ));
     // The budget's specs, then one aimed past the end: the crossing spec is
@@ -300,7 +302,7 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     let mut crossing = specs(&first, at_budget);
     crossing.push(past_the_end.clone());
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing)),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing, AsOf::Typed(k.current_seq()))),
         CopyError::TooManyRuns
     ));
     // AHEAD of the walk, visibly: a crossing spec that would walk onto the
@@ -308,23 +310,23 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     let mut crossing_onto_the_hole = specs(&first, at_budget);
     crossing_onto_the_hole.push(last.clone());
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing_onto_the_hole)),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing_onto_the_hole, AsOf::Typed(k.current_seq()))),
         CopyError::TooManyRuns
     ));
     // Under the budget the same spec is walked, and refused for the hole.
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&last, 1))),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&last, 1), AsOf::Typed(k.current_seq()))),
         CopyError::DanglingSource
     ));
     // Under the budget a spec past the end is walked, and keeps nothing.
     assert!(matches!(
-        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&past_the_end, 1))),
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&past_the_end, 1), AsOf::Typed(k.current_seq()))),
         CopyError::EmptyResult
     ));
     assert_eq!(k.current_seq(), before, "every refusal commits nothing");
     // At the budget the specs are walked, and what they keep is placed.
     Vstream::new(&k)
-        .copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget))
+        .copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget), AsOf::Typed(k.current_seq()))
         .expect("a copy charged exactly the budget is walked");
     assert_eq!(
         k.snapshot().world().m5().content_count(&doc2()),
@@ -348,20 +350,20 @@ fn copy_into_a_published_destination_refuses_before_reading_its_sources() {
         span: vspan(1, 1, 2),
     }];
     assert!(matches!(
-        rejected(vs.copy(p1, &pdoc(), vp(1, 1), &dangling)),
+        rejected(vs.copy(p1, &pdoc(), vp(1, 1), &dangling, AsOf::Typed(k.current_seq()))),
         CopyError::PublishedTarget
     ));
     // Ahead of the destination's own shape checks as well: a
     // link-subspace position past every boundary.
     assert!(matches!(
-        rejected(vs.copy(p1, &pdoc(), vp(2, 99), &[])),
+        rejected(vs.copy(p1, &pdoc(), vp(2, 99), &[], AsOf::Typed(k.current_seq()))),
         CopyError::PublishedTarget
     ));
     assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(0));
     // The control: into the draft, the same spec is read — and refused
     // for what it is.
     assert!(matches!(
-        rejected(vs.copy(p1, &doc2(), vp(1, 1), &dangling)),
+        rejected(vs.copy(p1, &doc2(), vp(1, 1), &dangling, AsOf::Typed(k.current_seq()))),
         CopyError::DanglingSource
     ));
 }

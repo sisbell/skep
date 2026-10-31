@@ -739,7 +739,7 @@ fn find_docs_containing_drops_a_container_the_caller_cannot_read() {
     ack(ex(
         &fx.febe,
         fx.user,
-        Op::Copy { doc: unreadable_doc.clone(), at: vp(1, 1), specs: vec![vspec(&readable_doc, 1, 1)] },
+        Op::Copy { doc: unreadable_doc.clone(), at: vp(1, 1), specs: vec![vspec(&readable_doc, 1, 1)], as_of: head(&fx) },
     ));
     unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let other = fx.febe.open_session(OTHER);
@@ -808,7 +808,7 @@ fn a_delivery_masks_an_unreadable_origin_in_place() {
     ack(ex(
         &fx.febe,
         fx.user,
-        Op::Copy { doc: readable_doc.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_origin, 1, 1)] },
+        Op::Copy { doc: readable_doc.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_origin, 1, 1)], as_of: head(&fx) },
     ));
     unreadable.lock().expect("no poisoning").push(unreadable_origin.clone());
     let other = fx.febe.open_session(OTHER);
@@ -883,7 +883,7 @@ fn a_retired_session_reads_as_the_guest_while_its_writes_are_refused() {
     let (prefix, _) = maybe_addr(ex(&fx.febe, fx.user, Op::PrincipalPrefix { id: USER }));
     assert!(prefix.is_some(), "logout narrows the read surface, it does not close it");
 
-    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: d, p: vp(1, 1), width: nat(1) }));
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: d, p: vp(1, 1), width: nat(1), as_of: head(&fx) }));
     assert_eq!(rej.code, RejectCode::Unauthenticated, "a write is gated where a read is masked");
 }
 

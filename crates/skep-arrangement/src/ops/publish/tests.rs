@@ -11,6 +11,7 @@ use skep_namespace::PrincipalId;
 
 use super::*;
 use crate::deposit::Deposit;
+use crate::ops::AsOf;
 use crate::shot::{Base, ShotRun};
 use crate::state::M5State;
 use crate::testutil::{a, ca, doc1, mem_kernel_of, n, pca, pdoc, rejected, run, seeded_m3, vp};
@@ -78,7 +79,7 @@ impl WorldState for ShotWorld {
             ShotRec::M5(x) => ShotWorld {
                 m3: self.m3.clone(),
                 content: self.content.clone(),
-                m5: self.m5.apply_m5(x),
+                m5: self.m5.apply_m5(at, x),
             },
         }
     }
@@ -113,7 +114,7 @@ fn shot_kernel(member_runs: Vec<Run>, present: &[u32]) -> Kernel<ShotWorld> {
     let m5 = if member_runs.is_empty() {
         M5State::genesis()
     } else {
-        M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+        M5State::genesis().apply_m5(Seq(0), &M5Rec::ContentPlace {
             doc: pdoc_member(),
             at: n(1),
             runs: member_runs,
@@ -315,7 +316,7 @@ fn a_shot_reinserts_a_drafts_one_byte_values_as_one_stretch() {
         let cw = stage_write(&content, ca(k), Val::new([*byte])).expect("fresh");
         content = content.apply_write(&cw);
     }
-    let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+    let m5 = M5State::genesis().apply_m5(Seq(0), &M5Rec::ContentPlace {
         doc: doc1(),
         at: n(1),
         runs: vec![run(&ca(1), 3)],
@@ -396,7 +397,7 @@ fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_me
     let k = shot_kernel(head_runs, &ordinals);
     let vs = Vstream::new(&k);
     let values = vec![Val::new(&b"d"[..])];
-    vs.insert(p1, &doc1(), vp(1, 1), values, Deposit::Undeclared)
+    vs.insert(p1, &doc1(), vp(1, 1), values, Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("the draft holds one value, at ca(1)");
     let anyone = |_: &ShotWorld, _: &Address| true;
     let carrying_past = |extent: u32| Shot {

@@ -676,7 +676,8 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let refused = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+    let typed = mcp.position();
+    let refused = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
     assert_eq!(refused["resp"], "held", "premise: a refused run is held: {refused}");
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}\n{log}");
@@ -692,7 +693,8 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let mut halted = Launch::over(&fixture, 1).logged().spawn();
     halted.initialize();
     halted.log_holding(&[&format!("held: the held file {} is halted (written by a newer skep)", file.display())], Duration::from_secs(10));
-    let refusal = halted.call_error("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
+    let typed = halted.position();
+    let refusal = halted.call_error("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
     assert_eq!(refusal["name"], "store_halted", "{refusal}");
     assert!(halted.finish().success());
     std::fs::write(&file, b"[1]\n").expect("a held file whose header line is no object");
@@ -700,7 +702,8 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     damaged.initialize();
     let log = damaged.log_holding(&[&format!("held: the held file {} is halted (damaged", file.display())], Duration::from_secs(10));
     assert!(log.contains("no skep reads it whole") && !log.contains("run the skep that wrote it"), "the act a damaged file asks:\n{log}");
-    let refusal = damaged.call_error("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
+    let typed = damaged.position();
+    let refusal = damaged.call_error("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
     assert_eq!(refusal["name"], "store_halted", "{refusal}");
     assert!(damaged.finish().success());
 }
@@ -716,7 +719,8 @@ fn a_signal_leaves_the_held_bursts_on_disk_for_the_next_start() {
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-    let held = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+    let typed = mcp.position();
+    let held = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
     assert_eq!(held["resp"], "held", "premise: a refused run is held: {held}");
     assert!(!mcp.kill().success(), "ended by the signal");
     let mut again = Launch::over(&fixture, 1).logged().spawn();
@@ -749,7 +753,8 @@ fn a_burst_kept_in_memory_alone_is_said_to_go_with_the_process() {
         let mut mcp = Launch::over(&fixture, 1).logged().spawn();
         mcp.initialize();
         let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
-        let held = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+        let typed = mcp.position();
+        let held = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
         (held, mcp.finish_logged())
     });
     std::fs::set_permissions(chain, std::fs::Permissions::from_mode(0o700)).expect("the held directory's mode restored");

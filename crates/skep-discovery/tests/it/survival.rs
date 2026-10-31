@@ -7,6 +7,7 @@ use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::Address;
+use skep_arrangement::AsOf;
 use skep_arrangement::{Caller, DeleteError, HasM5, Vstream};
 use skep_discovery::{delete_orphans_on, FourSet, OrphanError, OrphanReport, MAX_IMAGE_RUNS};
 use skep_kernel::{Kernel, Snapshot, TxnError};
@@ -156,7 +157,7 @@ fn delete_orphans_previews_exactly_what_the_delete_orphans() {
                 .collect();
 
             Vstream::new(&k)
-                .delete(SYS, &doc1(), vp(1, p), n(width))
+                .delete(SYS, &doc1(), vp(1, p), n(width), AsOf::Typed(k.current_seq()))
                 .expect("the request the preview accepted");
 
             let orphaned_by_delete: Vec<Address> = before
@@ -270,6 +271,7 @@ fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
                         &doc,
                         vp(subspace, ordinal),
                         n(width),
+                        AsOf::Typed(k.current_seq()),
                     );
                     assert_eq!(
                         preview.is_ok(),
@@ -306,7 +308,7 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
         .expect("the preview accepts");
     // … and the DELETE it previews refuses this caller outright.
     assert!(matches!(
-        Vstream::new(&k).delete(stranger, &doc1(), vp(1, 1), n(1)),
+        Vstream::new(&k).delete(stranger, &doc1(), vp(1, 1), n(1), AsOf::Typed(k.current_seq())),
         Err(TxnError::Rejected(DeleteError::NotOwner(_)))
     ));
 
@@ -318,7 +320,7 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
         Err(OrphanError::OutOfBounds)
     );
     assert!(matches!(
-        Vstream::new(&k).delete(stranger, &doc1(), vp(1, 9), n(1)),
+        Vstream::new(&k).delete(stranger, &doc1(), vp(1, 9), n(1), AsOf::Typed(k.current_seq())),
         Err(TxnError::Rejected(DeleteError::NotOwner(_)))
     ));
 }
@@ -345,7 +347,7 @@ fn the_preview_answers_a_published_target_the_delete_refuses() {
     );
     // … and the DELETE it previews is refused outright.
     assert!(matches!(
-        Vstream::new(&k).delete(SYS, &pdoc(), vp(1, 1), n(1)),
+        Vstream::new(&k).delete(SYS, &pdoc(), vp(1, 1), n(1), AsOf::Typed(k.current_seq())),
         Err(TxnError::Rejected(DeleteError::PublishedTarget))
     ));
 
@@ -376,7 +378,7 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     seed_content(&k, &doc1(), 1);
     let vstream = Vstream::new(&k);
     let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
-    vstream.copy(SYS, &doc2(), vp(1, 1), &specs).expect("copy succeeds");
+    vstream.copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq())).expect("copy succeeds");
     let reads = Reads(&k);
 
     // At the budget: one run deleted and every other retained, `MAX` in all.
@@ -384,7 +386,7 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
         .delete_orphans(&doc2(), &vp(1, 1), &n(1))
         .expect("at the budget");
 
-    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)], AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -413,7 +415,7 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     );
     // And the DELETE it previews, which stabs nothing, admits the request.
     vstream
-        .delete(SYS, &doc2(), vp(1, 1), n(1))
+        .delete(SYS, &doc2(), vp(1, 1), n(1), AsOf::Typed(k.current_seq()))
         .expect("the DELETE admits it");
 }
 
@@ -472,7 +474,7 @@ fn the_preview_budget_counts_the_link_runs_the_second_stab_takes() {
     let mut specs = vec![spec(&doc1(), 1, 1, 3)];
     specs.extend(vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 2]);
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     let reads = Reads(&k);
 
@@ -517,7 +519,7 @@ fn the_preview_budget_counts_the_runs_the_range_splits() {
     let mut specs = vec![spec(&doc1(), 1, 1, 3)];
     specs.extend(vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 2]);
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .copy(SYS, &doc2(), vp(1, 1), &specs, AsOf::Typed(k.current_seq()))
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),

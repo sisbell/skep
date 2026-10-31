@@ -13,6 +13,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -99,7 +100,7 @@ impl WorldState for World {
                 ..self.clone()
             },
             Record::M5(x) => World {
-                m5: self.m5.apply_m5(x),
+                m5: self.m5.apply_m5(at, x),
                 ..self.clone()
             },
             Record::Links(x) => World {
@@ -527,7 +528,7 @@ pub fn journaled_over(world: World) -> Journaled {
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(Caller::System, doc, vp(1, 1), vals, Deposit::Undeclared)
+        .insert(Caller::System, doc, vp(1, 1), vals, Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("test content INSERT succeeds");
 }
 
@@ -547,6 +548,7 @@ pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
                 vp(1, 1),
                 vec![Val::new(vec![b'a' + (i % 26) as u8])],
                 Deposit::Undeclared,
+                AsOf::Typed(k.current_seq()),
             )
             .expect("test content INSERT succeeds");
     }
@@ -559,7 +561,7 @@ pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
 pub fn copy_prefix(k: &Kernel<World>, src: &Address, width: u32, dst: &Address, times: u32) {
     for _ in 0..times {
         skep_arrangement::Vstream::new(k)
-            .copy(Caller::System, dst, vp(1, 1), &[spec(src, 1, 1, width)])
+            .copy(Caller::System, dst, vp(1, 1), &[spec(src, 1, 1, width)], AsOf::Typed(k.current_seq()))
             .expect("test content COPY succeeds");
     }
 }

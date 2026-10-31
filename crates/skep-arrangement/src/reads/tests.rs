@@ -4,9 +4,10 @@ use super::*;
 use crate::state::M5Rec;
 use crate::testutil::{a, ca, doc1, doc2, la, n, run, t, vca, vp, vspan};
 use skep_address::subtree_of;
+use skep_kernel::Seq;
 
 fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
-    s.apply_m5(&M5Rec::ContentPlace {
+    s.apply_m5(Seq(1), &M5Rec::ContentPlace {
         doc: doc.clone(),
         at: n(at),
         runs,
@@ -53,8 +54,8 @@ fn resolve_serves_the_link_subspace_off_its_own_run_list() {
     // `SourceNotContentSubspace` a needed guard rather than a formality,
     // and what M7 relies on when it builds a slot endset.
     let s = arranged();
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(2) });
     assert_eq!(s.resolve(&doc1(), &vspan(2, 1, 2)), vec![run(&la(1), 2)]);
     // Clipped to n_L, exactly as the content side is.
     assert!(s.resolve(&doc1(), &vspan(2, 3, 1)).is_empty());
@@ -101,8 +102,8 @@ fn the_arrangement_states_which_positions_it_admits() {
     assert!(!s.contains_content_range(&doc1(), &n(2), &n(5)));
     // Seating is I-extent membership, so an interior position of a
     // coalesced link run counts.
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(2) });
     assert_eq!(s.link_runs(&doc1()).len(), 1);
     assert!(s.seats_link(&doc1(), &la(1)));
     assert!(s.seats_link(&doc1(), &la(2)));
@@ -136,8 +137,8 @@ fn the_counts_a_caller_prices_with_are_the_lengths_of_what_they_count() {
     // which a delete leaves standing (P2) and a link seat never adds to
     // (J-LV).
     let s = arranged(); // ca(1..3) then vca(1..2): two runs, two placements
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) }); // coalesces
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(2) }); // coalesces
     assert_eq!(s.content_run_count(&doc1()), s.content_runs(&doc1()).len());
     assert_eq!(s.content_run_count(&doc1()), 2, "two runs over five positions");
     assert_eq!(s.link_run_count(&doc1()), s.link_runs(&doc1()).len());
@@ -150,7 +151,7 @@ fn the_counts_a_caller_prices_with_are_the_lengths_of_what_they_count() {
     // Emptiness is the count's zero, asked of the list rather than summed:
     // a document arranging content is not empty, whatever its links.
     assert!(!s.content_is_empty(&doc1()));
-    let s = s.apply_m5(&M5Rec::ContentRemove {
+    let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(1),
         width: n(5),
@@ -193,7 +194,7 @@ fn the_runs_are_lent_in_v_order_with_their_length_and_reverse_walk() {
         vec![&second, &first]
     );
     // The link subspace lends its own list, by the same walk.
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
     assert_eq!(s.link_runs(&doc1()).collect::<Vec<_>>(), vec![&run(&la(1), 1)]);
     assert_eq!(s.link_runs(&doc1()).len(), s.link_run_count(&doc1()));
     // An absent document lends nothing, in either subspace.
@@ -214,9 +215,9 @@ fn each_subspace_arranges_the_dense_prefix_its_count_names() {
     // fragmented, mixed-length arrangement, after the one fold arm that
     // would open a hole in the middle if the representation admitted one.
     let s = arranged(); // ca(1..3) then vca(1..2): two runs, two lengths
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(3) }); // not I-adjacent
-    let s = s.apply_m5(&M5Rec::ContentRemove {
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(3) }); // not I-adjacent
+    let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(2),
         width: n(2),
@@ -283,7 +284,7 @@ fn point_answers_m_of_d_and_folds_bad_positions_to_none() {
     assert_eq!(s.point(&doc1(), &vp(1, 0)), None); // ordinal 0
     assert_eq!(s.point(&doc2(), &vp(1, 1)), None); // absent doc
     // Link subspace answers off the link run-list.
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
     assert_eq!(s.point(&doc1(), &vp(2, 1)), Some(la(1)));
 }
 
@@ -351,8 +352,8 @@ fn project_reports_content_positions_only() {
     // addresses share the content addresses' length class, so this is
     // decided by the run-lists consulted, not by a length mismatch.
     let s = arranged();
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
-    let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+    let s = s.apply_m5(Seq(1), &M5Rec::LinkSeat { doc: doc1(), link: la(2) });
     let links = run(&la(1), 2).iextent();
     assert_eq!(links.start().len(), ca(1).tumbler().len());
     assert!(s.project(&doc1(), &SpanSet::singleton(links.clone())).is_empty());
@@ -503,19 +504,19 @@ fn an_address_the_document_still_arranges_elsewhere_is_not_deleted() {
     // #3) — would report `b` after the first removal.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
     let s = place(&s, &doc1(), 4, vec![run(&ca(1), 3)]); // a b c a b c
-    let one_b = s.apply_m5(&M5Rec::ContentRemove {
+    let one_b = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(2),
         width: n(1),
     });
     assert!(one_b.deletions(&doc1()).is_empty(), "the other b is still arranged");
-    let one_copy = s.apply_m5(&M5Rec::ContentRemove {
+    let one_copy = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(4),
         width: n(3),
     });
     assert!(one_copy.deletions(&doc1()).is_empty(), "a, b and c are each still arranged");
-    let last_b = one_copy.apply_m5(&M5Rec::ContentRemove {
+    let last_b = one_copy.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(2),
         width: n(1),
@@ -565,7 +566,7 @@ fn deletions_is_ever_contained_minus_the_image_over_every_two_placement_history(
                 check(&placed, &ever, &label);
                 for from in 1..=n_c {
                     for width in 1..=n_c + 1 - from {
-                        let removed = placed.apply_m5(&M5Rec::ContentRemove {
+                        let removed = placed.apply_m5(Seq(1), &M5Rec::ContentRemove {
                             doc: doc1(),
                             from: n(from),
                             width: n(width),
@@ -589,7 +590,7 @@ fn deletions_subtracts_within_each_level_class() {
     let s = arranged(); // ever: len-8 [ca1,ca4) + len-9 [vca1,vca3); image same
     assert!(s.deletions(&doc1()).is_empty());
     // Drop everything: both classes surface.
-    let s = s.apply_m5(&M5Rec::ContentRemove {
+    let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(1),
         width: n(5),
@@ -633,7 +634,7 @@ fn ever_containing_keeps_a_ghost_whose_footprint_is_now_empty() {
     // the gap between the two answers IS `ghosts`.
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
     let s = place(&s, &doc2(), 1, vec![run(&ca(1), 2)]);
-    let s = s.apply_m5(&M5Rec::ContentRemove {
+    let s = s.apply_m5(Seq(1), &M5Rec::ContentRemove {
         doc: doc1(),
         from: n(1),
         width: n(2),

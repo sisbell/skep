@@ -85,7 +85,7 @@ fn a_natural_field_meets_the_digit_cap_at_both_ends() {
     assert!(e.0.contains("natural has") && e.0.contains("digit wire cap"), "{e}");
     let frame = |width: &str| {
         format!(
-            r#"{{"op":"delete","doc":"1.0.1.0.1","p":{{"subspace":"1","ordinal":"1"}},"width":"{width}"}}"#
+            r#"{{"op":"delete","doc":"1.0.1.0.1","p":{{"subspace":"1","ordinal":"1"}},"width":"{width}","as_of":7}}"#
         )
     };
     assert!(parse_request(frame(&at_cap).as_bytes()).is_ok(), "a width at the cap is a frame");
@@ -285,7 +285,7 @@ fn negative_and_fractional_numbers_are_not_integers() {
 #[test]
 fn the_daemon_parse_splits_the_presented_attest_from_the_request() {
     let frame = format!(
-        r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["x"],"attest":{{"alg":"{}","sig":"{}"}}}}"#,
+        r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["x"],"as_of":7,"attest":{{"alg":"{}","sig":"{}"}}}}"#,
         skep_identity::ALG_MLDSA65_ED25519,
         "ab".repeat(8)
     );
@@ -318,6 +318,7 @@ fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
             at: VPos::content(Nat::from(1u32)),
             values: vec![Val::new(vec![b'x'])],
             deposit: Deposit::Undeclared,
+            as_of: Seq(7),
         },
         attest: Some(attest.clone()),
     };
@@ -326,7 +327,7 @@ fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
     assert_eq!(back, insert, "and reproduces the request, the member included");
     let delete = Request {
         id: None,
-        op: Op::Delete { doc, p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) },
+        op: Op::Delete { doc, p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32), as_of: Seq(7) },
         attest: Some(attest),
     };
     let e = parse_request(&JsonCodec.marshal_request(&delete))
@@ -344,7 +345,7 @@ fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
 fn every_width_the_table_names_fits_the_kernels_slot_and_one_past_its_cap_is_unparseable() {
     let frame = |token: &str, width: usize| {
         format!(
-            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["x"],"attest":{{"alg":"{token}","sig":"{}"}}}}"#,
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["x"],"as_of":7,"attest":{{"alg":"{token}","sig":"{}"}}}}"#,
             "ab".repeat(width)
         )
     };
@@ -378,7 +379,7 @@ fn every_width_the_table_names_fits_the_kernels_slot_and_one_past_its_cap_is_unp
 /// unsigned write's member as `null` with `unparseable`.
 #[test]
 fn an_attest_of_null_is_the_members_absence() {
-    let frame = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":["x"],"attest":null}"#;
+    let frame = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":["x"],"as_of":7,"attest":null}"#;
     let request =
         parse_request(frame).unwrap_or_else(|e| panic!("`attest: null` parses as absence: {e}"));
     assert!(request.attest.is_none(), "null is no attestation");

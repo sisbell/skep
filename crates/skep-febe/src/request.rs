@@ -8,7 +8,7 @@ use skep_address::{document_of, Address, Level, Nat, Span, Tumbler};
 use skep_arrangement::{trunk_of, Deposit, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
-use skep_kernel::Attestation;
+use skep_kernel::{Attestation, Seq};
 use skep_links::{Endset, PublishDeposits, PublishTarget, SlotArg, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
@@ -243,11 +243,27 @@ pub enum Op {
     /// the wire is `Undeclared`; into a draft the declaration is inert. It is
     /// M5's own two-variant type, carried verbatim: M10 decides nothing about
     /// it, the class test included.
-    Insert { doc: Address, at: VPos, values: Vec<Val>, deposit: Deposit },
+    ///
+    /// `as_of` is the document state the edit was typed against (skep
+    /// #442), the wire's required member of the same name on all five
+    /// in-place edits: the position of the state its positions are true of —
+    /// the `as_of` of the read the text came from, raised by the `at` of
+    /// each of the writer's own acks on the document. M10 hands it to the
+    /// store as the checked arm of M5's `AsOf`, where an edit typed against
+    /// a state older than the arrangement's last change is refused
+    /// `arrangement_moved` with both positions, behind `published_target`
+    /// and ahead of every shape check; M10 reads nothing of it, and the
+    /// signed entry's body never carries it.
+    Insert { doc: Address, at: VPos, values: Vec<Val>, deposit: Deposit, as_of: Seq },
     /// DELETE (ASN-0117).
-    Delete { doc: Address, p: VPos, width: Nat },
+    ///
+    /// `as_of` is the typed state, as on [`Op::Insert`].
+    Delete { doc: Address, p: VPos, width: Nat, as_of: Seq },
     /// COPY / transclusion (ASN-0118).
-    Copy { doc: Address, at: VPos, specs: Vec<VSpec> },
+    ///
+    /// `as_of` is the destination's typed state, as on [`Op::Insert`]; the
+    /// sources are not judged for it.
+    Copy { doc: Address, at: VPos, specs: Vec<VSpec>, as_of: Seq },
     /// REINSTATE, the write by identity (the replacement act's record).
     ///
     /// `runs` are content I-runs the client names beside the document each
@@ -262,10 +278,13 @@ pub enum Op {
     /// run order ([`Op::source_arguments`]), the destination's own I-space
     /// excepted, as the shot's gate excepts it. M5's gates are the shot's on a
     /// client-named run — every address probed — and M10 hands the runs
-    /// through verbatim.
-    Reinstate { doc: Address, at: VPos, runs: Vec<ShotRun> },
+    /// through verbatim. `as_of` is the destination's typed state, as on
+    /// [`Op::Insert`]; the origins are not judged for it.
+    Reinstate { doc: Address, at: VPos, runs: Vec<ShotRun>, as_of: Seq },
     /// REARRANGE (pivot/swap).
-    Rearrange { doc: Address, cuts: Vec<VPos> },
+    ///
+    /// `as_of` is the typed state, as on [`Op::Insert`].
+    Rearrange { doc: Address, cuts: Vec<VPos>, as_of: Seq },
     /// CREATENEWVERSION (ASN-0123) — the content-sharing, copy-on-write fork.
     ///
     /// `published` is the three-valued flag with `None` ⇒ inherit

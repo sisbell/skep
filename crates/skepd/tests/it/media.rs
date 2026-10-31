@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Nat, Tumbler};
-use skep_arrangement::{Caller, Deposit, VPos};
+use skep_arrangement::{AsOf, Caller, Deposit, VPos};
 use skep_content::{HasContent, Val};
 use skep_engine::{Engine, KernelConfig};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource};
@@ -144,6 +144,7 @@ pub(crate) fn seed_pre_fence_draft(dir: &Path, principal: u64, account: &str, by
             VPos::content(Nat::from(1u32)),
             vec![Val::new(bytes.to_vec())],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the engine, below the door, writes any bytes");
     draft.tumbler().to_string()
@@ -263,8 +264,13 @@ fn a_cell_inserted_into_a_draft_is_refused_in_p10s_form_and_nothing_commits() {
     let draft = owner_draft(port, &bare);
     let before = head_position(port);
     for token in [&bare, &signed] {
-        let (st, body) =
-            http(port, "POST", "/op", Some(token), cell_frame(&draft, 1, &canonical_cell(), None).as_bytes());
+        let (st, body) = http(
+            port,
+            "POST",
+            "/op",
+            Some(token),
+            typed_at_head(port, &cell_frame(&draft, 1, &canonical_cell(), None)).as_bytes(),
+        );
         assert_eq!(st, 200);
         assert_eq!(
             String::from_utf8(body).expect("utf-8"),

@@ -13,7 +13,7 @@ use crate::common;
 
 use common::*;
 use skep_address::Address;
-use skep_arrangement::Deposit;
+use skep_arrangement::{AsOf, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_kernel::TxnError;
@@ -100,7 +100,7 @@ fn populated_dump() -> (String, Deposited) {
     let (_acct, doc) = setup_draft(&engine);
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
     let deposited = deposit_every_hint_family(&engine, &doc, &start);
     (engine.world_dump().into_string(), deposited)
@@ -161,7 +161,7 @@ fn a_draft_with_two_links(engine: &Engine) -> (Address, Address, Address) {
     let (_acct, doc) = setup_draft(engine);
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
     let visibility = World::visible_to(OWNER);
     let make_link = |from: u32, to: u32| {
@@ -241,7 +241,7 @@ fn the_nullified_family_is_the_whole_tombstone_set_because_only_links_are_retrac
     let (_acct, doc) = setup_draft(&engine);
     let (position, _) = engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
     let visibility = World::visible_to(OWNER);
     for (what, target) in [("the document", &doc), ("a content position", &position)] {
@@ -356,7 +356,7 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
         let (acct, doc) = setup_draft(&engine);
         let (start, _) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert succeeds");
         deposit_every_hint_family(&engine, &doc, &start);
         for byte in [b'r', b's', b't'] {
@@ -366,7 +366,7 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
                 .expect("the delegated owner may create a document");
             engine
                 .vstream()
-                .insert(OWNER, &d, vp(1, 1), vec![Val::new(vec![byte])], Deposit::Undeclared)
+                .insert(OWNER, &d, vp(1, 1), vec![Val::new(vec![byte])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
                 .expect("insert succeeds");
         }
         engine
@@ -396,7 +396,7 @@ fn a_world_replayed_onto_a_content_only_checkpoint_dumps_byte_equal_to_the_live_
         // History batch A (below the checkpoint): content.
         let (start, _) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert succeeds");
 
         // Checkpoint mid-history, so recovery is checkpoint + replay, not a
@@ -447,7 +447,7 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
         let (_acct, doc) = setup_draft(&engine);
         let (start, _) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert succeeds");
         deposit_every_hint_family(&engine, &doc, &start);
 
@@ -458,7 +458,7 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
         // A short replay tail above it, so recovery is genuinely base + fold.
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'r'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'r'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert succeeds");
 
         dump_live = engine.world_dump();
@@ -485,7 +485,7 @@ fn a_reconstructed_historical_world_carries_faithful_hints() {
     let (_acct, doc) = setup_draft(&engine);
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
 
     let past = engine.kernel().current_seq();
@@ -513,7 +513,7 @@ fn a_caller_pinned_world_dumps_deterministically() {
     let (_acct, doc) = setup_draft(&engine);
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'v'])], Deposit::Undeclared)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'v'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
 
     let snap = engine.kernel().snapshot();
@@ -542,7 +542,7 @@ fn the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt() {
     let (_acct, draft) = setup_draft(&engine);
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &draft, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .insert(OWNER, &draft, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
         .expect("insert succeeds");
     let deposited = deposit_every_hint_family(&engine, &draft, &start);
     let live = engine.kernel().snapshot().world().clone();

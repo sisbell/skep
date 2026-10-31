@@ -1,4 +1,5 @@
 use skep_address::parent;
+use skep_arrangement::AsOf;
 use skep_arrangement::{trunk_of, Caller, Deposit, Run, Shot, ShotRun, VPos};
 use skep_content::Val;
 use skep_kernel::TxnError;
@@ -66,6 +67,7 @@ fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
         (vec!["authoritative", "arrangement", "arrangements"], Shape::Map),
         (vec!["authoritative", "arrangement", "provenance"], Shape::Map),
         (vec!["authoritative", "arrangement", "fork_sources"], Shape::Map),
+        (vec!["authoritative", "arrangement", "arranged_at"], Shape::Map),
         (vec!["authoritative", "links", "links"], Shape::Map),
         (vec!["publication"], Shape::Seq),
     ];
@@ -238,12 +240,13 @@ fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
             &["frontiers", "minted_at", "nodes", "principals", "publication"][..],
         ),
         ("content", &["map"]),
-        // M5's three keyed fields reduced — the fork sources by the fork,
-        // the key — and its birth memo and shot terms kept WHOLE with the
-        // reason in `filter_tree`'s statement.
+        // M5's four keyed fields reduced — the fork sources by the fork,
+        // the key, the arranged-at positions by the document — and its
+        // birth memo and shot terms kept WHOLE with the reason in
+        // `filter_tree`'s statement.
         (
             "arrangement",
-            &["arrangements", "birth_extents", "fork_sources", "provenance", "shot_terms"],
+            &["arranged_at", "arrangements", "birth_extents", "fork_sources", "provenance", "shot_terms"],
         ),
         // M7's skip-serialized hints occupy no bytes and so no key.
         ("links", &["links"]),
@@ -364,6 +367,7 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
             VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
             vec![Val::new(vec![b'd'])],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the owner writes its draft");
     let (birth_member, _) = engine
@@ -634,6 +638,7 @@ fn a_mixed_subject_slot_keys_the_member_it_denotes_as_members_does() {
             VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
             vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the owner writes its draft");
     // One position, then two: a unit-depth span beside one that is not.

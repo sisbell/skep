@@ -378,8 +378,11 @@ fn e_trial(trial: u64) -> (usize, usize) {
     let mut i: u64 = 0;
     loop {
         i += 1;
+        // Typed against the writer's newest ack (`as_of`): the one state of
+        // the home this writer has seen.
+        let typed = *acks.last().expect("the mint's ack stands before the first insert");
         let frame = format!(
-            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{}"],"deposit":"{T_ENROLL}"}}"#,
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{}"],"deposit":"{T_ENROLL}","as_of":{typed}}}"#,
             expect_char(i)
         );
         match try_op(port, Some(&s1), &frame) {
@@ -515,11 +518,12 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         // (PUB-2.59).
         for i in 1..=5u64 {
             let ch = char::from(b'a' + (i - 1) as u8);
+            let typed = *acks.last().expect("the ack before");
             let v = route_op(
                 &d,
                 Some(&s1),
                 &format!(
-                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{ch}"],"deposit":"{T_ENROLL}"}}"#
+                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{ch}"],"deposit":"{T_ENROLL}","as_of":{typed}}}"#
                 ),
             );
             acks.push(v["at"].as_u64().expect("insert at"));
@@ -717,11 +721,12 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
         acks.push(v["at"].as_u64().expect("home at"));
         // Declared deposits at the published home's fresh positions (PUB-2.59).
         for i in 1..=2u64 {
+            let typed = *acks.last().expect("the ack before");
             let v = route_op(
                 &d,
                 Some(&s1),
                 &format!(
-                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["x"],"deposit":"{T_ENROLL}"}}"#
+                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["x"],"deposit":"{T_ENROLL}","as_of":{typed}}}"#
                 ),
             );
             acks.push(v["at"].as_u64().expect("insert at"));
@@ -1567,11 +1572,14 @@ fn h_a_crash_inside_the_blob_finish_reopens_to_what_the_order_promises() {
         let token = route_session(&d, CLAIMANT_PRINCIPAL);
         let file = dir.join("blobs").join("blake3").join(&hex);
         let (deposits, uploads) = deposit_read(&d, &token);
-        let draft = acked_addr(&route_op(&d, Some(&token), &create_frame(CLAIMANT_ACCOUNT, Some(false))));
+        let minted = route_op(&d, Some(&token), &create_frame(CLAIMANT_ACCOUNT, Some(false)));
+        let draft = acked_addr(&minted);
+        let minted_at = minted["at"].as_u64().expect("the draft's mint position");
         let insert = |d: &Daemon| {
             let frame = serde_json::json!({
                 "op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"},
                 "values": [{"atom": cell_of(&bytes, bytes.len() as u64)}],
+                "as_of": minted_at,
             })
             .to_string();
             verdict(&route_op(d, Some(&token), &frame))

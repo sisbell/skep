@@ -1,10 +1,52 @@
 //! REARRANGE (§B; ASN-0119): the pivot and the swap, the cut counts it admits,
 //! and its refusals in order.
 
-use skep_arrangement::{Deposit, HasM5, RearrangeError, VPos, Vstream};
+use skep_arrangement::{AsOf, Deposit, HasM5, RearrangeError, VPos, Vstream};
 use skep_kernel::TxnError;
 
 use crate::common::*;
+
+/// The stale-edit refusal (skep #442) on REARRANGE. Cuts typed at the
+/// position the draft's arrangement last changed at land as they did; cuts
+/// typed below it are refused `ArrangementMoved` with both positions and
+/// commit nothing. Ahead of every shape check, the cut count's included: a
+/// stale frame of two cuts, of unordered cuts, or of cuts past the boundary
+/// meets the one code and never `BadCutCount`, `NotAscending` or
+/// `OutOfBounds`.
+#[test]
+fn a_rearrange_typed_against_an_older_arrangement_is_refused_ahead_of_the_shape_checks() {
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    let typed = k.snapshot().world().m5().arranged_at(&doc1()).expect("the insert arranged doc1");
+    let at = vs
+        .rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 4)], AsOf::Typed(typed))
+        .expect("cuts typed at the current state land");
+    assert_eq!(k.snapshot().world().m5().arranged_at(&doc1()), Some(at), "the ack is the new position");
+    let before = k.current_seq();
+    assert_eq!(
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 4)], AsOf::Typed(typed))),
+        RearrangeError::ArrangementMoved { as_of: typed, current: at }
+    );
+    for cuts in [vec![vp(1, 1), vp(1, 2)], vec![vp(1, 2), vp(1, 2), vp(1, 3)], vec![vp(1, 1), vp(1, 2), vp(1, 9)]] {
+        assert!(
+            matches!(
+                rejected(vs.rearrange(P1, &doc1(), &cuts, AsOf::Typed(typed))),
+                RearrangeError::ArrangementMoved { .. }
+            ),
+            "{cuts:?}: the stale refusal speaks before the shape's"
+        );
+    }
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 4)], AsOf::Unchecked)
+        .expect("the unchecked arm lands");
+    let s = k.snapshot();
+    let got: Vec<Vec<u8>> = (1..=3).map(|i| read_v(&s, &doc1(), i)).collect();
+    assert_eq!(
+        got,
+        vec![b"c".to_vec(), b"a".to_vec(), b"b".to_vec()],
+        "a | b c → b c a, then b | c a → c a b: the unchecked pivot landed"
+    );
+}
 
 #[test]
 fn rearrange_pivot_exchanges_the_two_adjacent_regions() {
@@ -18,9 +60,10 @@ fn rearrange_pivot_exchanges_the_two_adjacent_regions() {
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
         Deposit::Undeclared,
+        now(&k),
     )
     .expect("insert commits");
-    vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 6)])
+    vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 6)], now(&k))
         .expect("pivot commits");
     let s = k.snapshot();
     let got: Vec<Vec<u8>> = (1..=5).map(|i| read_v(&s, &doc1(), i)).collect();
@@ -41,9 +84,10 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
         Deposit::Undeclared,
+        now(&k),
     )
     .expect("insert commits");
-    vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)])
+    vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)], now(&k))
         .expect("swap commits");
     let s = k.snapshot();
     let got: Vec<Vec<u8>> = (1..=5).map(|i| read_v(&s, &doc1(), i)).collect();
@@ -56,49 +100,49 @@ fn rearrange_rejects_in_documented_order() {
     let vs = insert_abc(&k);
     let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.rearrange(P1, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2)], now(&k))),
         RearrangeError::BadCutCount
     ));
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::NotAscending
     ));
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(2, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(2, 1), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::NotContentSubspace
     ));
     // n_C = 3 ⇒ upper bound is 4.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 5)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 5)], now(&k))),
         RearrangeError::OutOfBounds
     ));
     // …and the lower bound, which the upper bound's check cannot stand in
     // for: a first cut at ordinal 0, the rest ascending and in bounds.
     // Admitted, the fold's clamp would read it as 1 and exchange a with b c.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 0), vp(1, 2), vp(1, 4)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 0), vp(1, 2), vp(1, 4)], now(&k))),
         RearrangeError::OutOfBounds
     ));
     // Which wins, in each documented pair. Count before ascent: two cuts,
     // descending.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 1)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 1)], now(&k))),
         RearrangeError::BadCutCount
     ));
     // Ascent before subspace: three cuts, out of order, with the middle one
     // in the link subspace.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(2, 1), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(2, 1), vp(1, 3)], now(&k))),
         RearrangeError::NotAscending
     ));
     // Subspace before bounds: ascending cuts, the first in the link
     // subspace, the last past doc1's upper bound of n_C + 1 = 4.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), &[vp(2, 1), vp(1, 2), vp(1, 9)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(2, 1), vp(1, 2), vp(1, 9)], now(&k))),
         RearrangeError::NotContentSubspace
     ));
     // Bounds before emptiness, which is what makes `EmptyContentSubspace`
@@ -108,7 +152,7 @@ fn rearrange_rejects_in_documented_order() {
     // would make an unreachable verdict reachable, and M10 would then have
     // to handle it.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::OutOfBounds
     ));
 }
@@ -130,19 +174,20 @@ fn rearrange_admits_three_or_four_cuts_and_refuses_every_other_count() {
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
         Deposit::Undeclared,
+        now(&k),
     )
     .expect("insert commits"); // n_C = 5: boundaries 1..=6 are admissible
     let cuts: Vec<VPos> = (1..=6).map(|o| vp(1, o)).collect();
     let before = k.current_seq();
     for count in [0usize, 1, 2, 5, 6] {
-        match vs.rearrange(P1, &doc1(), &cuts[..count]) {
+        match vs.rearrange(P1, &doc1(), &cuts[..count], now(&k)) {
             Err(TxnError::Rejected(RearrangeError::BadCutCount)) => {}
             other => panic!("{count} cuts: expected BadCutCount, got {other:?}"),
         }
     }
     assert_eq!(k.current_seq(), before, "no refused count commits");
     for count in [3usize, 4] {
-        vs.rearrange(P1, &doc1(), &cuts[..count])
+        vs.rearrange(P1, &doc1(), &cuts[..count], now(&k))
             .unwrap_or_else(|e| panic!("{count} cuts: expected a commit, got {e:?}"));
     }
 }

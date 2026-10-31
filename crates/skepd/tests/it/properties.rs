@@ -477,10 +477,13 @@ fn fallback_insert(shadow: &mut Shadow, state: &mut RunState, pi: usize, op_inde
     let di = shadow.principals[pi].docs[0];
     let b = shadow.principals[pi].alphabet[0];
     let id = state.next_id();
+    // Typed against the run's committed head (`as_of`): the state the
+    // shadow's positions are true of.
     let frame = format!(
-        r#"{{"op":"insert","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["{}"]}}"#,
+        r#"{{"op":"insert","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["{}"],"as_of":{}}}"#,
         shadow.docs[di].addr,
-        char::from(b)
+        char::from(b),
+        state.head
     );
     commit(shadow, state, pi, frame, op_index);
     shadow.docs[di].content.insert(0, ContentItem::Byte(b));
@@ -528,8 +531,9 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let val = if *atom { json!({ "atom": text }) } else { json!(text) };
             let id = state.next_id();
             let frame = format!(
-                r#"{{"op":"insert","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"values":[{val}]}}"#,
-                shadow.docs[di].addr
+                r#"{{"op":"insert","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"values":[{val}],"as_of":{}}}"#,
+                shadow.docs[di].addr,
+                state.head
             );
             commit(shadow, state, pi, frame, op_index);
             let at0 = (pos - 1) as usize;
@@ -556,8 +560,9 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let width = 1 + (*wd as u64) % maxw;
             let id = state.next_id();
             let frame = format!(
-                r#"{{"op":"delete","id":"{id}","doc":"{}","p":{{"subspace":"1","ordinal":"{pos}"}},"width":"{width}"}}"#,
-                shadow.docs[di].addr
+                r#"{{"op":"delete","id":"{id}","doc":"{}","p":{{"subspace":"1","ordinal":"{pos}"}},"width":"{width}","as_of":{}}}"#,
+                shadow.docs[di].addr,
+                state.head
             );
             commit(shadow, state, pi, frame, op_index);
             let p0 = (pos - 1) as usize;
@@ -579,8 +584,8 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let pos = 1 + (*at as u64) % (dstlen + 1);
             let id = state.next_id();
             let frame = format!(
-                r#"{{"op":"copy","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"specs":[{{"source":"{}","span":{{"start":"1.{from}","width":"0.{width}"}}}}]}}"#,
-                shadow.docs[di].addr, shadow.docs[si].addr
+                r#"{{"op":"copy","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"specs":[{{"source":"{}","span":{{"start":"1.{from}","width":"0.{width}"}}}}],"as_of":{}}}"#,
+                shadow.docs[di].addr, shadow.docs[si].addr, state.head
             );
             commit(shadow, state, pi, frame, op_index);
             // Resolution precedes staging (a self-copy sees the pre-edit
@@ -623,9 +628,10 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             );
             let id = state.next_id();
             let frame = format!(
-                r#"{{"op":"reinstate","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"runs":[{}]}}"#,
+                r#"{{"op":"reinstate","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"runs":[{}],"as_of":{}}}"#,
                 shadow.docs[di].addr,
-                runs.join(",")
+                runs.join(","),
+                state.head
             );
             commit(shadow, state, pi, frame, op_index);
             let f0 = (from - 1) as usize;
@@ -649,8 +655,9 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let c3 = c2 + 1 + (*c as u64) % (len + 1 - c2);
             let id = state.next_id();
             let frame = format!(
-                r#"{{"op":"rearrange","id":"{id}","doc":"{}","cuts":[{{"subspace":"1","ordinal":"{c1}"}},{{"subspace":"1","ordinal":"{c2}"}},{{"subspace":"1","ordinal":"{c3}"}}]}}"#,
-                shadow.docs[di].addr
+                r#"{{"op":"rearrange","id":"{id}","doc":"{}","cuts":[{{"subspace":"1","ordinal":"{c1}"}},{{"subspace":"1","ordinal":"{c2}"}},{{"subspace":"1","ordinal":"{c3}"}}],"as_of":{}}}"#,
+                shadow.docs[di].addr,
+                state.head
             );
             commit(shadow, state, pi, frame, op_index);
             // Swapping the adjacent regions [c1,c2) and [c2,c3) is a left

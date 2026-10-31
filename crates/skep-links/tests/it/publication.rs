@@ -29,6 +29,7 @@
 //! cells above pass unchanged, carrying none.
 
 use skep_address::{Address, Span, SpanSet};
+use skep_arrangement::AsOf;
 use skep_arrangement::{
     head_lock_key, trunk_head, Caller, Deposit, HasM5, PublishError, ReinstateError, Run, Shot,
     ShotRun, VPos, Vstream,
@@ -64,7 +65,7 @@ fn shot(base: Option<(&Address, u32)>, runs: Vec<ShotRun>) -> Shot {
 fn draft_holding(k: &Kernel<World>, text: &str) {
     let vals: Vec<Val> = text.bytes().map(|b| Val::new([b])).collect();
     Vstream::new(k)
-        .insert(P1, &doc1(), vp(1, 1), vals, Deposit::Undeclared)
+        .insert(P1, &doc1(), vp(1, 1), vals, Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("the draft's insert commits");
 }
 
@@ -171,7 +172,7 @@ fn the_twin_fence_refuses_a_run_a_record_already_names_and_stages_nothing() {
     let (m1, _) = w.publication(P1, &PublishTarget::Document(pdoc()), &shot(None, vec![shot_run(&doc1(), &ca(1), 3)]), &[], &PublishDeposits::default()).expect("the first shot");
     // A second member, placing the published words by reference and a
     // fresh `d` from the draft: a record for `d` alone.
-    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared).expect("d at ca(4)");
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(4)");
     let (m2, _) = w
         .publication(P1, &PublishTarget::Document(pdoc()), &shot(Some((&m1, 3)), vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(4), 1)]), &[], &PublishDeposits::default())
         .expect("a fresh run lands");
@@ -201,7 +202,7 @@ fn the_twin_fence_refuses_a_run_a_record_already_names_and_stages_nothing() {
 
     // The parent type is an ordinary link, admitted at the open surface:
     // one FROM `e`, never published, fences nothing.
-    Vstream::new(&k).insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'e'])], Deposit::Undeclared).expect("e at ca(5)");
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'e'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("e at ca(5)");
     let parent = a(&[1, 1, 0, 1, 0, 1, 0, 3, 102]);
     w.makelink(
         P1,
@@ -397,9 +398,9 @@ fn spans(pairs: &[(u32, u32)]) -> SpanSet {
 fn a_shots_fresh_run_replaces_the_drafts_run_at_its_kept_place_in_the_one_commit() {
     let whole = |k: &Kernel<World>| {
         let vs = Vstream::new(k);
-        vs.insert(P1, &doc1(), vp(1, 1), vec![Val::new([b'a'])], Deposit::Undeclared).expect("a at ca(1)");
-        vs.insert(P1, &doc1(), vp(1, 2), vec![Val::new([b'c'])], Deposit::Undeclared).expect("c at ca(2)");
-        vs.insert(P1, &doc1(), vp(1, 2), vec![Val::new([b'b'])], Deposit::Undeclared).expect("b at ca(3), between");
+        vs.insert(P1, &doc1(), vp(1, 1), vec![Val::new([b'a'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("a at ca(1)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![Val::new([b'c'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("c at ca(2)");
+        vs.insert(P1, &doc1(), vp(1, 2), vec![Val::new([b'b'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("b at ca(3), between");
     };
     let piece = |k: &Kernel<World>| draft_holding(k, "abc");
     let cells: [(&str, &dyn Fn(&Kernel<World>), Run, u32, Vec<Run>, Vec<Run>); 2] = [
@@ -441,7 +442,7 @@ fn a_shots_fresh_run_replaces_the_drafts_run_at_its_kept_place_in_the_one_commit
 struct Since {
     what: &'static str,
     /// The edit doc1 takes after the places are read.
-    disturb: fn(&Vstream<'_, World>),
+    disturb: fn(&Kernel<World>, &Vstream<'_, World>),
     /// The bytes doc1 reads afterwards, which the refusal leaves standing.
     after: &'static str,
 }
@@ -468,29 +469,29 @@ fn a_run_moved_split_or_deleted_since_its_place_was_read_refuses_with_its_entry_
     let cells = [
         Since {
             what: "swapped within the span",
-            disturb: |vs| {
-                vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 3), vp(1, 4)]).expect("a c b d");
+            disturb: |k, vs| {
+                vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 3), vp(1, 4)], AsOf::Typed(k.current_seq())).expect("a c b d");
             },
             after: "acbd",
         },
         Since {
             what: "moved after d",
-            disturb: |vs| {
-                vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 5)]).expect("a d b c");
+            disturb: |k, vs| {
+                vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 5)], AsOf::Typed(k.current_seq())).expect("a d b c");
             },
             after: "adbc",
         },
         Since {
             what: "split",
-            disturb: |vs| {
-                vs.insert(P1, &doc1(), vp(1, 3), vec![Val::new([b'x'])], Deposit::Undeclared).expect("a b x c d");
+            disturb: |k, vs| {
+                vs.insert(P1, &doc1(), vp(1, 3), vec![Val::new([b'x'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("a b x c d");
             },
             after: "abxcd",
         },
         Since {
             what: "deleted",
-            disturb: |vs| {
-                vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("a c d");
+            disturb: |k, vs| {
+                vs.delete(P1, &doc1(), vp(1, 2), n(1), AsOf::Typed(k.current_seq())).expect("a c d");
             },
             after: "acd",
         },
@@ -502,7 +503,7 @@ fn a_run_moved_split_or_deleted_since_its_place_was_read_refuses_with_its_entry_
         // The client's P4 reading: `a` at 1, `b c` at 2.
         assert_eq!(footprint(&k, &doc1(), &a), spans(&[(1, 1)]), "{}", cell.what);
         assert_eq!(footprint(&k, &doc1(), &bc), spans(&[(2, 2)]), "{}", cell.what);
-        (cell.disturb)(&Vstream::new(&k));
+        (cell.disturb)(&k, &Vstream::new(&k));
         let disturbed = k.snapshot();
         assert_eq!(bytes_of(&k, &doc1()), cell.after, "{}", cell.what);
         let runs_before = runs_of(&k, &doc1());
@@ -547,7 +548,7 @@ fn a_run_the_draft_arranges_twice_is_re_windowed_at_the_named_place_and_left_sta
     for (named, other) in [(4u32, 2u32), (2, 4)] {
         let k = kernel_over(edition_world());
         draft_holding(&k, "abc");
-        Vstream::new(&k).copy(P1, &doc1(), vp(1, 4), &[spec(&doc1(), 1, 2, 1)]).expect("a b c b: b twice");
+        Vstream::new(&k).copy(P1, &doc1(), vp(1, 4), &[spec(&doc1(), 1, 2, 1)], AsOf::Typed(k.current_seq())).expect("a b c b: b twice");
         let b = run(&ca(2), 1);
         assert_eq!(bytes_of(&k, &doc1()), "abcb");
         assert_eq!(footprint(&k, &doc1(), &b), spans(&[(2, 1), (4, 1)]), "the premise: the identity at two places");
@@ -574,7 +575,7 @@ fn a_run_the_draft_arranges_twice_is_re_windowed_at_the_named_place_and_left_sta
 fn a_run_named_twice_with_a_place_on_each_re_windows_the_second_to_the_firsts_fresh_run() {
     let k = kernel_over(edition_world());
     draft_holding(&k, "abc");
-    Vstream::new(&k).copy(P1, &doc1(), vp(1, 4), &[spec(&doc1(), 1, 2, 1)]).expect("a b c b");
+    Vstream::new(&k).copy(P1, &doc1(), vp(1, 4), &[spec(&doc1(), 1, 2, 1)], AsOf::Typed(k.current_seq())).expect("a b c b");
     let b = run(&ca(2), 1);
     let the_shot = Shot {
         base: None,
@@ -606,7 +607,7 @@ fn a_published_document_named_as_the_draft_is_refused_at_the_placement_and_lands
     let world = edition_world();
     let k = kernel_over(World { m3: world.m3.apply_m3(Seq(0), &M3Rec::allocate(published_draft.clone(), true)), ..world });
     Vstream::new(&k)
-        .insert(P1, &published_draft, vp(1, 1), vec![Val::new([b'q'])], Deposit::Declared(skep_arrangement::deposit_class_types()[0].clone()))
+        .insert(P1, &published_draft, vp(1, 1), vec![Val::new([b'q'])], Deposit::Declared(skep_arrangement::deposit_class_types()[0].clone()), AsOf::Typed(k.current_seq()))
         .expect("a declared deposit at the published document's fresh position");
     let q = Run::new(a(&[1, 0, 1, 0, 4, 0, 1, 1]), n(1)).expect("a run");
     let the_shot = Shot { base: None, draft: Some(published_draft.clone()), also: vec![], runs: vec![ShotRun { origin: published_draft.clone(), run: q }] };
@@ -639,7 +640,7 @@ fn stray_board(k: &Kernel<World>) -> Address {
     draft_holding(k, "abc");
     let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(2), 2)] };
     let (member, _) = writer(k).publication(P1, &PublishTarget::Document(pdoc()), &the_shot, &places(1, &[(0, 2)]), &PublishDeposits::default()).expect("E.1");
-    Vstream::new(k).reinstate(P1, &doc1(), vp(1, 4), &[ShotRun { origin: doc1(), run: run(&ca(2), 2) }]).expect("the stray act");
+    Vstream::new(k).reinstate(P1, &doc1(), vp(1, 4), &[ShotRun { origin: doc1(), run: run(&ca(2), 2) }], AsOf::Typed(k.current_seq())).expect("the stray act");
     assert_eq!(bytes_of(k, &doc1()), "abcbc");
     assert_eq!(runs_of(k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(2), 2)], "the premise: the record's from, back in the draft at 4");
     assert_eq!(records_in_doc1(k), vec![record(&run(&ca(2), 2), &run(&pca(1), 2))]);
@@ -735,8 +736,8 @@ fn a_stray_run_that_is_a_piece_of_a_record_or_spans_two_records_is_re_windowed_p
     assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 4)], "the premise: the fresh identity adjoining, one run");
     assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(2), 2), &run(&pca(1), 2)), record(&run(&ca(4), 2), &run(&pca(3), 2))]);
     let vs = Vstream::new(&k);
-    vs.reinstate(P1, &doc1(), vp(1, 6), &[ShotRun { origin: doc1(), run: run(&ca(3), 1) }]).expect("c, the piece");
-    vs.reinstate(P1, &doc1(), vp(1, 7), &[ShotRun { origin: doc1(), run: run(&ca(2), 4) }]).expect("b c d e, across both");
+    vs.reinstate(P1, &doc1(), vp(1, 6), &[ShotRun { origin: doc1(), run: run(&ca(3), 1) }], AsOf::Typed(k.current_seq())).expect("c, the piece");
+    vs.reinstate(P1, &doc1(), vp(1, 7), &[ShotRun { origin: doc1(), run: run(&ca(2), 4) }], AsOf::Typed(k.current_seq())).expect("b c d e, across both");
     assert_eq!(bytes_of(&k, &doc1()), "abcdecbcde");
     let before = k.snapshot();
     let the_shot = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(2), 1), shot_run(&pdoc(), &pca(1), 4)]);
@@ -762,7 +763,7 @@ fn a_stray_run_that_is_a_piece_of_a_record_or_spans_two_records_is_re_windowed_p
 fn a_stray_run_whose_draft_words_moved_since_is_refused_with_its_entry_and_writes_nothing() {
     let k = kernel_over(edition_world());
     stray_board(&k);
-    Vstream::new(&k).delete(P1, &doc1(), vp(1, 4), n(1)).expect("a b c c");
+    Vstream::new(&k).delete(P1, &doc1(), vp(1, 4), n(1), AsOf::Typed(k.current_seq())).expect("a b c c");
     assert_eq!(bytes_of(&k, &doc1()), "abcc");
     let disturbed = k.snapshot();
     let runs_before = runs_of(&k, &doc1());
@@ -794,7 +795,7 @@ fn a_stray_run_no_record_of_the_draft_covers_whole_is_refused_with_its_entry_and
     let into_e = PublishTarget::Document(pdoc());
     let none = PublishDeposits::default();
     Vstream::new(&k)
-        .insert(P1, &doc2(), vp(1, 1), "xy".bytes().map(|b| Val::new([b])).collect(), Deposit::Undeclared)
+        .insert(P1, &doc2(), vp(1, 1), "xy".bytes().map(|b| Val::new([b])).collect(), Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("doc2 holding x y");
     let from_doc2 = Shot {
         base: Some(skep_arrangement::Base { member: pmember(1), extent: n(2) }),
@@ -943,7 +944,7 @@ fn board(k: &Kernel<World>) -> (Address, Address) {
 fn a_publication_lands_its_copy_claim_retraction_and_read_with_in_one_commit() {
     let k = journaled_over(deposits_world());
     let (l, m) = board(&k);
-    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared).expect("d at ca(4)");
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(4)");
     let before = k.snapshot();
     let the_shot = shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 1)]);
     let deposits = PublishDeposits {
@@ -1224,7 +1225,7 @@ fn each_refused_entry_names_its_index_and_commits_nothing() {
         refused_plan(&k, &the_shot, links_only(vec![copy(NamedAddress::Member, Some(l.clone()))])),
         PlanFault::Old { index: 0, cause: OldCause::Superseded }
     );
-    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared).expect("d at ca(4)");
+    Vstream::new(&k).insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(4)");
     let the_shot = shot_off_head(&k, vec![shot_run(&doc1(), &ca(4), 1)]);
     let on_new_words = entry(NamedAddress::Member, member_spans(4, 1), addrs(&[&doc2()]), addrs(&[&citation()]), Some(l.clone()));
     publish(&k, &the_shot, &links_only(vec![on_new_words])).expect("an entry on fresh words is covered by nothing");
@@ -1628,9 +1629,9 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     // re-windowed at its place — each shot placing its one fresh run, and
     // minting its one record.
     let vs = Vstream::new(&k);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'x', b'y'])], Deposit::Undeclared).expect("an atom at ca(4)");
-    vs.insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'd'])], Deposit::Undeclared).expect("d at ca(5)");
-    vs.insert(P1, &doc1(), vp(1, 6), vec![Val::new([b'e'])], Deposit::Undeclared).expect("e at ca(6)");
+    vs.insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'x', b'y'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("an atom at ca(4)");
+    vs.insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(5)");
+    vs.insert(P1, &doc1(), vp(1, 6), vec![Val::new([b'e'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("e at ca(6)");
     let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes - placed_run - record;
     let byte = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(5), 1)]), &[], &none)) - shot_bytes - placed_run - record;
     let byte_placed = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(6), 1)]), &places(1, &[(0, 6)]), &none)) - shot_bytes - placed_run - record;
@@ -1738,7 +1739,7 @@ fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
 fn other_draft_holding(k: &Kernel<World>, text: &str) {
     let vals: Vec<Val> = text.bytes().map(|b| Val::new([b])).collect();
     Vstream::new(k)
-        .insert(P1, &doc2(), vp(1, 1), vals, Deposit::Undeclared)
+        .insert(P1, &doc2(), vp(1, 1), vals, Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("doc2's insert commits");
 }
 

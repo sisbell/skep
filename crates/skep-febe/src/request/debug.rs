@@ -41,34 +41,41 @@ impl fmt::Debug for Op {
             Op::EffectiveOwner { addr } => {
                 f.debug_struct("EffectiveOwner").field("addr", addr).finish()
             }
-            Op::Insert { doc, at, values, deposit } => f
+            Op::Insert { doc, at, values, deposit, as_of } => f
                 .debug_struct("Insert")
                 .field("doc", doc)
                 .field("at", at)
                 .field("values", &format_args!("{} values", values.len()))
                 .field("deposit", deposit)
+                .field("as_of", as_of)
                 .finish(),
-            Op::Delete { doc, p, width } => f
+            Op::Delete { doc, p, width, as_of } => f
                 .debug_struct("Delete")
                 .field("doc", doc)
                 .field("p", p)
                 .field("width", width)
+                .field("as_of", as_of)
                 .finish(),
-            Op::Copy { doc, at, specs } => f
+            Op::Copy { doc, at, specs, as_of } => f
                 .debug_struct("Copy")
                 .field("doc", doc)
                 .field("at", at)
                 .field("specs", specs)
+                .field("as_of", as_of)
                 .finish(),
-            Op::Reinstate { doc, at, runs } => f
+            Op::Reinstate { doc, at, runs, as_of } => f
                 .debug_struct("Reinstate")
                 .field("doc", doc)
                 .field("at", at)
                 .field("runs", runs)
+                .field("as_of", as_of)
                 .finish(),
-            Op::Rearrange { doc, cuts } => {
-                f.debug_struct("Rearrange").field("doc", doc).field("cuts", cuts).finish()
-            }
+            Op::Rearrange { doc, cuts, as_of } => f
+                .debug_struct("Rearrange")
+                .field("doc", doc)
+                .field("cuts", cuts)
+                .field("as_of", as_of)
+                .finish(),
             Op::Version { d_src, published } => f
                 .debug_struct("Version")
                 .field("d_src", d_src)

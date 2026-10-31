@@ -11,7 +11,10 @@ use skep_content::{ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
-use super::{allocate_for_placement, allocate_stretch_for_placement, head_lock_key, Vstream};
+use super::{
+    allocate_for_placement, allocate_stretch_for_placement, arrangement_moved, head_lock_key,
+    AsOf, Vstream,
+};
 use crate::chain::{deposit_surface, published_target};
 use crate::deposit::{deposit_class_types, Deposit};
 use crate::error::InsertError;
@@ -101,6 +104,19 @@ where
     /// the named address's content chain whichever arrangement the deposit
     /// lands in; only the placement floats.
     ///
+    /// **The state the insert was typed against** (`as_of`; skep #442). Its
+    /// positions are true of one state of the arrangement it lands in, and
+    /// [`AsOf::Typed`] names it: the `as_of` of the read the text came from,
+    /// raised by the `at` of each of the writer's own acks. Where that
+    /// arrangement — the surface decided above, so for a declared deposit the
+    /// head member's — last changed at a position past it, the insert is
+    /// refused `ArrangementMoved` carrying both positions, behind the
+    /// published-target refusal and ahead of every shape check, so a stale
+    /// insert never meets `OutOfBounds` for positions that were true when it
+    /// was typed. One lookup off the working state (the ops' shared
+    /// `arrangement_moved`); [`AsOf::Unchecked`] skips it, and says on its
+    /// own card which three writers pass it.
+    ///
     /// **Cost, and who owns it.** This op admits any `values` length: there is
     /// no analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
     /// and none is owed, because the size of an INSERT is the size of the
@@ -134,7 +150,9 @@ where
     ///
     /// Each refusal comes as `TxnError::Rejected`, in this order (which error
     /// wins): `DocNotRegistered` → `NotOwner` (the in-txn ω gate) →
-    /// `PublishedTarget` (above) → `EmptyContent` → `NotContentSubspace`
+    /// `PublishedTarget` (above) → `ArrangementMoved` (the typed state is
+    /// below the landing arrangement's last change, above) → `EmptyContent`
+    /// → `NotContentSubspace`
     /// (`at.subspace ≠ s_C`) → `OutOfBounds` (the arrangement does not admit
     /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
     /// so ordinal = 1 when n_C = 0). Then, per maximal run of single-byte
@@ -161,6 +179,7 @@ where
         at: VPos,
         values: Vec<Val>,
         deposit: Deposit,
+        as_of: AsOf,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
         // The content chain's key, and — for a declared deposit, which reads
         // the version chain's frontier to find where it lands — the head's
@@ -217,6 +236,13 @@ where
                     return Err(InsertError::PublishedTarget);
                 }
             };
+            // The stale-edit refusal (skep #442), keyed on the arrangement
+            // the insert lands in, ahead of every shape check.
+            if let Some((as_of, current)) =
+                arrangement_moved(stg.working().m5(), &surface, as_of)
+            {
+                return Err(InsertError::ArrangementMoved { as_of, current });
+            }
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
             }

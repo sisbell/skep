@@ -97,8 +97,9 @@ fn ghost_link(port: u16, session: &str, home: &str, ordinal: u64) -> String {
     ))
 }
 
-/// `copy` into `doc` at content ordinal `at`, each spec `(source, from, width)`.
-fn copy_frame(doc: &str, at: u64, specs: &[(&str, u64, u64)]) -> String {
+/// `copy` into `doc` at content ordinal `at`, each spec `(source, from,
+/// width)`, typed against the destination state `as_of`.
+fn copy_frame(doc: &str, at: u64, specs: &[(&str, u64, u64)], as_of: u64) -> String {
     let specs: Vec<String> = specs
         .iter()
         .map(|(source, from, width)| {
@@ -106,7 +107,7 @@ fn copy_frame(doc: &str, at: u64, specs: &[(&str, u64, u64)]) -> String {
         })
         .collect();
     format!(
-        r#"{{"op":"copy","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"specs":[{}]}}"#,
+        r#"{{"op":"copy","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"specs":[{}],"as_of":{as_of}}}"#,
         specs.join(",")
     )
 }
@@ -114,7 +115,7 @@ fn copy_frame(doc: &str, at: u64, specs: &[(&str, u64, u64)]) -> String {
 /// `reinstate` into `doc` at content ordinal `at`, each run `(origin,
 /// i_start, width)` — the write by identity, whose origins the door
 /// consults as it consults `copy`'s sources.
-fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)]) -> String {
+fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)], as_of: u64) -> String {
     let runs: Vec<String> = runs
         .iter()
         .map(|(origin, i_start, width)| {
@@ -122,7 +123,7 @@ fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)]) -> String {
         })
         .collect();
     format!(
-        r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}]}}"#,
+        r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}],"as_of":{as_of}}}"#,
         runs.join(",")
     )
 }
@@ -236,18 +237,18 @@ fn copy_from_a_private_source_is_withheld_to_the_non_entitled_and_lands_for_the_
     let src_run: (&str, u64, u64) = (src.as_str(), 1, 2);
     // OWNER, into a second draft of its own.
     let dst = create_doc(port, &owner, CLAIMANT_ACCOUNT);
-    expect_resp(&op(port, Some(&owner), &copy_frame(&dst, 1, &[src_run])), "ack");
+    expect_resp(&op(port, Some(&owner), &copy_frame(&dst, 1, &[src_run], head_position(port))), "ack");
     // SUBTREE: reads the owner's draft by containment, so the copy lands.
-    expect_resp(&op(port, Some(&sub.session), &copy_frame(&sub.draft, 1, &[src_run])), "ack");
+    expect_resp(&op(port, Some(&sub.session), &copy_frame(&sub.draft, 1, &[src_run], head_position(port))), "ack");
     // NON-ENTITLED: withheld, the source named, nothing placed.
-    assert_withheld(&op(port, Some(&c.session), &copy_frame(&c.draft, 1, &[src_run])), &src);
+    assert_withheld(&op(port, Some(&c.session), &copy_frame(&c.draft, 1, &[src_run], head_position(port))), &src);
     // Two specs, the SECOND unreadable: `site.addr` is the second.
     expect_resp(&insert_text(port, &c.session, &c.draft, 1, "own"), "ack_addr");
     assert_withheld(
         &op(
             port,
             Some(&c.session),
-            &copy_frame(&c.draft, 4, &[(c.draft.as_str(), 1, 1), (src.as_str(), 1, 1)]),
+            &copy_frame(&c.draft, 4, &[(c.draft.as_str(), 1, 1), (src.as_str(), 1, 1)], head_position(port)),
         ),
         &src,
     );
@@ -255,13 +256,13 @@ fn copy_from_a_private_source_is_withheld_to_the_non_entitled_and_lands_for_the_
     let v = op(port, Some(&c.session), &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{}"}}"#, c.draft));
     assert_eq!(expect_resp(&v, "span_set")["set"][0]["width"].as_str(), Some("0.3"), "{v}");
     // Slot 1 first: the same source into the OWNER's document is `not_owner`.
-    assert_not_owner(&op(port, Some(&c.session), &copy_frame(&dst, 1, &[(src.as_str(), 1, 1)])), &dst);
+    assert_not_owner(&op(port, Some(&c.session), &copy_frame(&dst, 1, &[(src.as_str(), 1, 1)], head_position(port))), &dst);
     // GRANT-HOLDER: withheld before the grant, landing after it.
-    assert_withheld(&op(port, Some(&b.session), &copy_frame(&b.draft, 1, &[src_run])), &src);
+    assert_withheld(&op(port, Some(&b.session), &copy_frame(&b.draft, 1, &[src_run], head_position(port))), &src);
     deposit_grant(port, &signed, CLAIMANT_DOC1, &src, Some(&b.account));
-    expect_resp(&op(port, Some(&b.session), &copy_frame(&b.draft, 1, &[src_run])), "ack");
+    expect_resp(&op(port, Some(&b.session), &copy_frame(&b.draft, 1, &[src_run], head_position(port))), "ack");
     // GUEST: no session — refused at slot 0, ahead of every consult.
-    assert_eq!(code(&op(port, None, &copy_frame(&c.draft, 1, &[src_run]))), "unauthenticated");
+    assert_eq!(code(&op(port, None, &copy_frame(&c.draft, 1, &[src_run], head_position(port)))), "unauthenticated");
 
     sd.shutdown();
 }
@@ -293,11 +294,11 @@ fn reinstate_from_a_private_origin_is_withheld_to_the_non_entitled_and_lands_for
 
     // OWNER, into a second draft of its own.
     let dst = create_doc(port, &owner, CLAIMANT_ACCOUNT);
-    expect_resp(&op(port, Some(&owner), &reinstate_frame(&dst, 1, &[secret])), "ack");
+    expect_resp(&op(port, Some(&owner), &reinstate_frame(&dst, 1, &[secret], head_position(port))), "ack");
     // SUBTREE: reads the owner's draft by containment, so the run lands.
-    expect_resp(&op(port, Some(&sub.session), &reinstate_frame(&sub.draft, 1, &[secret])), "ack");
+    expect_resp(&op(port, Some(&sub.session), &reinstate_frame(&sub.draft, 1, &[secret], head_position(port))), "ack");
     // NON-ENTITLED: withheld, the origin named, nothing placed.
-    assert_withheld(&op(port, Some(&c.session), &reinstate_frame(&c.draft, 1, &[secret])), &src);
+    assert_withheld(&op(port, Some(&c.session), &reinstate_frame(&c.draft, 1, &[secret], head_position(port))), &src);
     // Two runs, the stranger's own first and the private origin second:
     // `site.addr` is the second.
     expect_resp(&insert_text(port, &c.session, &c.draft, 1, "own"), "ack_addr");
@@ -306,7 +307,7 @@ fn reinstate_from_a_private_origin_is_withheld_to_the_non_entitled_and_lands_for
         &op(
             port,
             Some(&c.session),
-            &reinstate_frame(&c.draft, 4, &[(c.draft.as_str(), c_i1.as_str(), 1), secret]),
+            &reinstate_frame(&c.draft, 4, &[(c.draft.as_str(), c_i1.as_str(), 1), secret], head_position(port)),
         ),
         &src,
     );
@@ -314,14 +315,14 @@ fn reinstate_from_a_private_origin_is_withheld_to_the_non_entitled_and_lands_for
     let v = op(port, Some(&c.session), &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{}"}}"#, c.draft));
     assert_eq!(expect_resp(&v, "span_set")["set"][0]["width"].as_str(), Some("0.3"), "{v}");
     // Slot 1 first: the same run into the OWNER's document is `not_owner`.
-    assert_not_owner(&op(port, Some(&c.session), &reinstate_frame(&dst, 1, &[secret])), &dst);
+    assert_not_owner(&op(port, Some(&c.session), &reinstate_frame(&dst, 1, &[secret], head_position(port))), &dst);
     // GRANT-HOLDER: withheld before the grant. The owner then DELETES the
     // span from its draft, and once granted the holder's reinstate of the
     // un-arranged addresses lands all the same — by identity.
-    assert_withheld(&op(port, Some(&b.session), &reinstate_frame(&b.draft, 1, &[secret])), &src);
-    expect_resp(&op(port, Some(&owner), &delete_frame(&src, 1, 2)), "ack");
+    assert_withheld(&op(port, Some(&b.session), &reinstate_frame(&b.draft, 1, &[secret], head_position(port))), &src);
+    expect_resp(&op(port, Some(&owner), &delete_frame(&src, 1, 2, head_position(port))), "ack");
     deposit_grant(port, &signed, CLAIMANT_DOC1, &src, Some(&b.account));
-    expect_resp(&op(port, Some(&b.session), &reinstate_frame(&b.draft, 1, &[secret])), "ack");
+    expect_resp(&op(port, Some(&b.session), &reinstate_frame(&b.draft, 1, &[secret], head_position(port))), "ack");
     let v = op(port, Some(&b.session), &read1_frame(&b.draft));
     assert_eq!(
         expect_resp(&v, "delivery")["items"],
@@ -329,7 +330,7 @@ fn reinstate_from_a_private_origin_is_withheld_to_the_non_entitled_and_lands_for
         "the removed byte, at its own address, in the holder's draft: {v}"
     );
     // GUEST: no session — refused at slot 0, ahead of every consult.
-    assert_eq!(code(&op(port, None, &reinstate_frame(&c.draft, 1, &[secret]))), "unauthenticated");
+    assert_eq!(code(&op(port, None, &reinstate_frame(&c.draft, 1, &[secret], head_position(port)))), "unauthenticated");
 
     sd.shutdown();
 }
@@ -359,7 +360,7 @@ fn a_reinstate_run_is_bad_run_then_source_not_registered_then_dangling_source_at
     let link_el = format!("{src}.0.2.1");
     let never = format!("{CLAIMANT_ACCOUNT}.0.99");
     let never_el = format!("{never}.0.1.1");
-    let send = |runs: &[(&str, &str, u64)]| op(port, Some(&owner), &reinstate_frame(&dst, 1, runs));
+    let send = |runs: &[(&str, &str, u64)]| op(port, Some(&owner), &reinstate_frame(&dst, 1, runs, head_position(port)));
     let before = head_position(port);
 
     assert_permanent(&send(&[(dst.as_str(), &el1, 1)]), "bad_run");
@@ -609,7 +610,7 @@ fn an_unregistered_source_answers_source_not_registered_never_withheld() {
     let never = format!("{CLAIMANT_ACCOUNT}.0.99");
 
     for frame in [
-        copy_frame(&c.draft, 1, &[(never.as_str(), 1, 1)]),
+        copy_frame(&c.draft, 1, &[(never.as_str(), 1, 1)], head_position(port)),
         version_frame(&never),
         edit_link_frame(&public_l, &c.draft, Some(&never), 1),
     ] {
@@ -783,13 +784,13 @@ fn a_copy_from_an_unreadable_source_into_a_published_destination_answers_publish
 
     // A readable source: slot 5, the store's own in-place refusal.
     assert_eq!(
-        code(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(a.draft.as_str(), 1, 1)]))),
+        code(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(a.draft.as_str(), 1, 1)], head_position(port)))),
         "published_target"
     );
     // An unreadable source: slot 5 still speaks first — the door answers
     // the model's refusal before it would consult the source (PUB-6.36).
     assert_eq!(
-        code(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(src.as_str(), 1, 1)]))),
+        code(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(src.as_str(), 1, 1)], head_position(port)))),
         "published_target"
     );
 

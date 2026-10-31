@@ -132,7 +132,7 @@ fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     let before = position(&shell.call("health", &json!({"board": board})).unwrap());
     let writes = [
         json!({"op": "create_new_document", "account": "1.0.1"}),
-        json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
+        json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"], "as_of": before}),
         json!({"op": "create_new_document", "account": "1.0.1", "published": true}),
     ];
     let refused: Vec<Refusal> = writes.iter().map(|frame| shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err()).collect();
@@ -151,7 +151,7 @@ fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     // form refuses it, as it refuses every `WRITE_KINDS` member — undialed,
     // which a listener that counts its connections holds
     // (`the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial`).
-    let reinstate = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "reinstate", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "runs": [{"origin": draft, "i_start": format!("{draft}.0.1.1"), "width": "1"}]}})).unwrap_err();
+    let reinstate = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "reinstate", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "runs": [{"origin": draft, "i_start": format!("{draft}.0.1.1"), "width": "1"}], "as_of": before}})).unwrap_err();
     assert_eq!(reinstate.name(), "write_in_guest_form");
     assert_eq!(position(&shell.call("health", &json!({"board": board})).unwrap()), before, "the refused reinstate committed nothing");
     // History past the head: the board's own `beyond_head` under its own
@@ -233,8 +233,9 @@ fn a_closed_sessions_drafts_rows_precede_its_session_died() {
     let rx = shell.subscribe();
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
-    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}})).unwrap();
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"], "as_of": minted["at"]}})).unwrap();
     shell.call("close", &json!({"session": session})).unwrap();
     // The close has answered: everything it emitted is on the stream.
     let seen: Vec<Event> = rx.try_iter().filter(|e| e.name == EventName::Feed || e.name == EventName::SessionDied).collect();
@@ -286,8 +287,9 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     // A draft, filled, then the shot into the edition through the
     // publication family — a `publish` frame through `op` is refused as a
     // call (§4b.1) — the body read back.
-    let draft = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
-    signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}})).unwrap();
+    let minted = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": minted["at"]}})).unwrap();
     let through_op = signed.call("op", &json!({"session": session, "frame": {"op": "publish", "doc": doc, "draft": draft, "runs": []}})).unwrap_err();
     assert_eq!(through_op.name(), "publish_is_a_call", "{through_op}");
     signed
@@ -383,8 +385,9 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     // draft, the member).
     let edition = |text: &str| -> (String, String, String) {
         let doc = addr(write(json!({"op": "create_new_document", "account": "1.0.1", "published": true})));
-        let draft = addr(write(json!({"op": "create_new_document", "account": "1.0.1"})));
-        write(json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [text]}));
+        let minted = write(json!({"op": "create_new_document", "account": "1.0.1"}));
+        let draft = addr(minted.clone());
+        write(json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}));
         let run = first_run(&draft, text.len() as u64);
         let member = addr(shot(json!({"op": "publish", "doc": doc, "draft": draft, "runs": [{"origin": draft, "i_start": run["i_start"], "width": run["width"]}]})));
         (doc, draft, member)
@@ -429,8 +432,8 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     // The record deposit names the head member, so a `doc` term that is not
     // the trunk shows.
     let token = signed.sessions.get(&signed_session).unwrap().token.clone();
-    let next = skep_client::ceremony::deposit::next_content_ordinal(&signed.boards[0].board, Some(&token), &other).unwrap();
-    let deposit = json!({"op": "insert", "doc": other_member, "at": {"subspace": "1", "ordinal": next.to_string()}, "values": [{"atom": "xy"}], "deposit": "1.1.0.1.0.1.0.3.1"});
+    let (next, as_of) = skep_client::ceremony::deposit::next_content_ordinal(&signed.boards[0].board, Some(&token), &other).unwrap();
+    let deposit = json!({"op": "insert", "doc": other_member, "at": {"subspace": "1", "ordinal": next.to_string()}, "values": [{"atom": "xy"}], "deposit": "1.1.0.1.0.1.0.3.1", "as_of": as_of});
     bare_write("the deposit", &deposit);
     let acked = signed.call("op", &json!({"session": signed_session, "frame": deposit})).unwrap_or_else(|r| panic!("the deposit: {r}\n{}", talk()));
     assert!(acked["resp"].as_str().is_some_and(|resp| resp.starts_with("ack")), "the deposit: {acked}");
@@ -723,7 +726,9 @@ fn the_codecs_budgets_are_the_shells() {
     };
     let spec = json!({"doc": "1.0.1.0.1", "span": {"start": "1.1", "width": "0.1"}});
     let deep = |components: usize| format!("1.0.1.0.1{}", ".1".repeat(components - 5));
-    let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.9", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)]});
+    // Typed at genesis: the frame names a document no board holds, and what
+    // is under test is the codec's cap, met before any state is asked.
+    let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.9", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)], "as_of": 0});
     let cells = [
         ("a list", json!({"op": "retrieve_v", "specs": vec![spec.clone(); MAX_WIRE_LIST]}), json!({"op": "retrieve_v", "specs": vec![spec; MAX_WIRE_LIST + 1]})),
         ("an address", json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS)}), json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS + 1)})),
@@ -896,14 +901,14 @@ fn a_released_supplement_keeps_its_drafts_cursor() {
     };
     let minted = shell.call("op", &json!({"session": first, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
     let draft = minted["addr"].as_str().unwrap().to_string();
-    let inserted = shell.call("op", &json!({"session": first, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap();
+    let inserted = shell.call("op", &json!({"session": first, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
     for at in [&minted["at"], &inserted["at"]] {
         for session in [&first, &second] {
             wait_for(&seen, drafts_row(at, session));
         }
     }
     assert_eq!(shell.call("close", &json!({"session": first})).unwrap(), json!({}));
-    let again = shell.call("op", &json!({"session": second, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+    let again = shell.call("op", &json!({"session": second, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": inserted["at"]}})).unwrap();
     wait_for(&seen, drafts_row(&again["at"], &second));
     let fed = |at: &Value, session: &str| seen.lock().unwrap().iter().filter(|e| drafts_row(at, session)(e)).count();
     let owed = [(&minted["at"], &first, 1), (&minted["at"], &second, 1), (&inserted["at"], &first, 1), (&inserted["at"], &second, 1), (&again["at"], &second, 1), (&again["at"], &first, 0)];
@@ -1018,8 +1023,9 @@ fn places_lists_the_boards_documents_at_the_calls_class() {
     let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
-    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello\nworld"]}})).unwrap();
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello\nworld"], "as_of": minted["at"]}})).unwrap();
     let place = json!({"doc": draft, "kind": "draft", "label": "hello", "standing": "yours_to_read"});
     let deadline = Instant::now() + Duration::from_secs(30);
     let own = loop {

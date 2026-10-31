@@ -469,7 +469,12 @@ fn cell_of(hash: &str, size: u64) -> String {
 /// The cell inserted into `draft` at ordinal 1 under `token`, as ONE
 /// composite value: the I-address it sits at.
 fn insert_cell(port: u16, token: &str, draft: &str, cell: &str) -> String {
-    let v = op(port, Some(token), &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [{"atom": cell}]}));
+    // Typed against the board's head as read now (`as_of`, wire.md
+    // §Arrangement): `/health`'s `log_position`.
+    let (st, _, body) = http(port, "GET", "/health", None, b"");
+    assert_eq!(st, 200, "health: {}", String::from_utf8_lossy(&body));
+    let typed = serde_json::from_slice::<Value>(&body).expect("health is JSON")["log_position"].as_u64().expect("the head");
+    let v = op(port, Some(token), &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [{"atom": cell}], "as_of": typed}));
     assert_eq!(v["resp"], "ack_addr", "the cell's insert: {v}");
     v["addr"].as_str().expect("the cell's address").to_string()
 }
@@ -764,6 +769,15 @@ impl Mcp {
         let (is_error, text) = self.call(tool, args);
         assert!(is_error, "{tool}: expected isError: {text}");
         serde_json::from_str(&text).unwrap_or_else(|_| json!({"text": text}))
+    }
+
+    /// The board's head as the agent reads it: `session_info`'s
+    /// `health.log_position` — the state a burst built now is typed against
+    /// (`as_of`, wire.md §Arrangement; the instructions' THE TYPED STATE),
+    /// read at each build, never kept.
+    pub fn position(&mut self) -> u64 {
+        let info = self.call_json("session_info", json!({}));
+        info["health"]["log_position"].as_u64().unwrap_or_else(|| panic!("the health's position: {info}"))
     }
 
     /// A write through the adapter, acknowledged: its answer.

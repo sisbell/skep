@@ -167,7 +167,8 @@ fn first_shot(board: &Board, session: &Session<'_>, signer: &HybridSigner, bare_
 
 /// `copy` of `source`'s positions `from ..` into `doc` at `at`: a window.
 fn copy(board: &Board, token: &Token, doc: &str, at: u64, source: &str, from: u64, width: u64) {
-    let frame = json!({"op": "copy", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "specs": [{"source": source, "span": {"start": format!("1.{from}"), "width": format!("0.{width}")}}]});
+    let as_of = crate::common::typed_at(board, token, doc);
+    let frame = json!({"op": "copy", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "specs": [{"source": source, "span": {"start": format!("1.{from}"), "width": format!("0.{width}")}}], "as_of": as_of});
     acked(board.op(Some(token), &frame));
 }
 
@@ -526,7 +527,8 @@ fn a_moved_place_is_refused_with_its_entry_and_the_reread_restates_the_selection
     let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).unwrap() else { panic!("inert") };
     assert_eq!(request.places, vec![Some(2)]);
     // The move: `y` and `x` swapped after the place was read.
-    acked(board.op(Some(&bare_token), &json!({"op": "rearrange", "doc": d, "cuts": [{"subspace": "1", "ordinal": "1"}, {"subspace": "1", "ordinal": "2"}, {"subspace": "1", "ordinal": "3"}]})));
+    let as_of = crate::common::typed_at(&board, &bare_token, &d);
+    acked(board.op(Some(&bare_token), &json!({"op": "rearrange", "doc": d, "cuts": [{"subspace": "1", "ordinal": "1"}, {"subspace": "1", "ordinal": "2"}, {"subspace": "1", "ordinal": "3"}], "as_of": as_of})));
     let sent = send(&p, &inputs, &mut request).expect("sent");
     let Sent::Refused(Refusal::KeptPlaceMoved { index, race }) = sent else { panic!("{sent:?}") };
     assert_eq!(index, 0);

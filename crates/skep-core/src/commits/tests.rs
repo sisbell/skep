@@ -1,4 +1,5 @@
 use super::*;
+use skep_arrangement::AsOf;
 use skep_content::Val;
 use skep_namespace::PrincipalId;
 
@@ -147,6 +148,7 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
             Val::new(b"b".as_slice()),
         ],
         deposit: Deposit::Undeclared,
+        as_of: Seq(7),
     };
     let minting = write_meta(&insert).expect("a write").minting;
     assert!(matches!(&minting, Minting::Insert { naming } if naming == &[1]), "{minting:?}");
@@ -155,6 +157,7 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
         at: VPos::content(Nat::from(1u32)),
         values: vec![Val::new(b"ab".as_slice())],
         deposit: Deposit::Undeclared,
+        as_of: Seq(7),
     };
     assert!(
         matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty())
@@ -162,9 +165,9 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     // A `copy`, a `reinstate` and a `version` share identity: each arm
     // states no cell.
     let copy =
-        Op::Copy { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), specs: Vec::new() };
+        Op::Copy { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), specs: Vec::new(), as_of: Seq(7) };
     let reinstate =
-        Op::Reinstate { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), runs: Vec::new() };
+        Op::Reinstate { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), runs: Vec::new(), as_of: Seq(7) };
     let version = Op::Version { d_src: doc.clone(), published: None };
     for op in [copy, reinstate, version] {
         assert!(matches!(write_meta(&op).expect("a write").minting, Minting::None));
@@ -203,6 +206,7 @@ fn a_reinstate_row_names_its_destination_and_never_a_runs_origin() {
             origin: origin.clone(),
             run: Run::new(addr("1.0.1.0.2.0.1.1"), Nat::from(1u32)).expect("a content run"),
         }],
+        as_of: Seq(7),
     };
     let meta = write_meta(&op).expect("a write");
     assert_eq!(meta.kind, OpKind::Reinstate);
@@ -273,6 +277,7 @@ fn each_write_states_the_terms_its_row_carries() {
         at: VPos::content(Nat::from(1u32)),
         values: Vec::new(),
         deposit: Deposit::Undeclared,
+        as_of: Seq(7),
     };
     for (op, name) in [
         (emit, "emit"),
@@ -1387,6 +1392,7 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
             at: at(),
             values: bulk.clone(),
             deposit: Deposit::Undeclared,
+            as_of: Seq(7),
         };
         let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
         let serial = wp.serial_lock();
@@ -1399,6 +1405,7 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
                     at(),
                     bulk.clone(),
                     Deposit::Undeclared,
+                    AsOf::Unchecked,
                 )
                 .expect("the insert commits");
             Response::AckAddr { addr, at }
@@ -1532,6 +1539,7 @@ fn the_attest_stores_resident_slots_are_bounded_by_the_window_and_its_file_kept(
             at: at.clone(),
             values: values.clone(),
             deposit: Deposit::Undeclared,
+            as_of: Seq(7),
         };
         let signed = Some(Signed::Marker(slot.clone()));
         let meta = write_meta(&op).expect("a write").attributed("cd".repeat(32), signed);
@@ -1539,7 +1547,14 @@ fn the_attest_stores_resident_slots_are_bounded_by_the_window_and_its_file_kept(
         let resp = wp.commit_under(&serial, meta, || {
             let (addr, at) = stores
                 .vstream_attested(Some(&slot))
-                .insert(Caller::Principal(SYSTEM_PRINCIPAL), &doc, at, values, Deposit::Undeclared)
+                .insert(
+                    Caller::Principal(SYSTEM_PRINCIPAL),
+                    &doc,
+                    at,
+                    values,
+                    Deposit::Undeclared,
+                    AsOf::Unchecked,
+                )
                 .expect("the insert commits");
             Response::AckAddr { addr, at }
         });

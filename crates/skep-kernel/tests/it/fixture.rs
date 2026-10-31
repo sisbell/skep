@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use crate::mutilate::seg_file;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::{Caller, Deposit, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
@@ -296,12 +297,12 @@ impl Fixture {
         // 4–5: content (multi-value insert = a multi-record composite).
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert ab");
         capture(&engine, &mut boundaries);
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert c");
         capture(&engine, &mut boundaries);
 
@@ -343,7 +344,7 @@ impl Fixture {
         capture(&engine, &mut boundaries);
 
         // 11: a delete.
-        engine.vstream().delete(OWNER, &doc, vp(1, 1), n(1)).expect("delete");
+        engine.vstream().delete(OWNER, &doc, vp(1, 1), n(1), AsOf::Typed(engine.kernel().current_seq())).expect("delete");
         capture(&engine, &mut boundaries);
 
         if extent == Extent::Golden {
@@ -380,6 +381,7 @@ impl Fixture {
                     vp(1, 1),
                     vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
                     Deposit::Undeclared,
+                    AsOf::Typed(engine.kernel().current_seq()),
                 )
                 .expect("insert xyz");
             capture(&engine, &mut boundaries);
@@ -390,7 +392,7 @@ impl Fixture {
             //     stretch.
             engine
                 .vstream()
-                .insert(OWNER, &doc2, vp(1, 4), vec![Val::new(b"atom".to_vec())], Deposit::Undeclared)
+                .insert(OWNER, &doc2, vp(1, 4), vec![Val::new(b"atom".to_vec())], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
                 .expect("insert the atom");
             capture(&engine, &mut boundaries);
 
@@ -400,7 +402,7 @@ impl Fixture {
             //     copy below wants.
             engine
                 .vstream()
-                .rearrange(OWNER, &doc2, &[vp(1, 1), vp(1, 2), vp(1, 4)])
+                .rearrange(OWNER, &doc2, &[vp(1, 1), vp(1, 2), vp(1, 4)], AsOf::Typed(engine.kernel().current_seq()))
                 .expect("pivot doc2");
             capture(&engine, &mut boundaries);
 
@@ -409,7 +411,7 @@ impl Fixture {
             //     two runs.
             engine
                 .vstream()
-                .copy(OWNER, &doc, vp(1, 3), &[vspec(&doc2, 1, 3)])
+                .copy(OWNER, &doc, vp(1, 3), &[vspec(&doc2, 1, 3)], AsOf::Typed(engine.kernel().current_seq()))
                 .expect("copy doc2's range into doc");
             capture(&engine, &mut boundaries);
 
@@ -417,7 +419,7 @@ impl Fixture {
             //     the first document now holds.
             engine
                 .vstream()
-                .rearrange(OWNER, &doc, &[vp(1, 1), vp(1, 2), vp(1, 4), vp(1, 6)])
+                .rearrange(OWNER, &doc, &[vp(1, 1), vp(1, 2), vp(1, 4), vp(1, 6)], AsOf::Typed(engine.kernel().current_seq()))
                 .expect("swap in doc");
             capture(&engine, &mut boundaries);
         }

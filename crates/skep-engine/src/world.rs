@@ -221,14 +221,15 @@ impl fmt::Debug for World {
 /// slice's top-level fields to the count, and says what it cannot see below
 /// that level.
 ///
-/// `1` names seven layouts, each the one before it with one change: the first
+/// `1` names eight layouts, each the one before it with one change: the first
 /// carries M3's publication bit; the second appends M5's birth memo to its
 /// slice, and the third the shot terms after it; the fourth appends the
 /// identity slice after M7's (AUTH-2.79); the fifth holds each of M4's
 /// entries as a value or a stretch — a tagged enum where a bare value stood —
 /// and gains the stretch record, [`Record::ContentStretch`]; the sixth
-/// appends the fork sources to the arrangement slice; and the seventh
-/// appends the position map to the namespace slice. They stand under one
+/// appends the fork sources to the arrangement slice; the seventh appends
+/// the position map to the namespace slice; and the eighth appends the
+/// arranged-at positions to the arrangement slice. They stand under one
 /// count because no served board exists and the dev boards are re-seeded,
 /// the kernel's golden regenerated under the current stamps. No base any
 /// build wrote in the first reaches this word through a header this build
@@ -240,8 +241,9 @@ impl fmt::Debug for World {
 /// its first such entry, whose value's length prefix reads as an entry tag no
 /// variant or an overlong stretch (skep-content's suite pins both shapes);
 /// one that passes its content map — an empty one, or one of tagged entries
-/// — meets the arrangement slice short of its fork sources, which carry no
-/// default; a body written before the position map reads the content slice's
+/// — meets the arrangement slice short of its fork sources, or of its
+/// arranged-at positions, neither of which carries a default; a body
+/// written before the position map reads the content slice's
 /// bytes as that map and every slice after it as the one before, and runs
 /// off the body's end (`a_base_written_before_the_position_map_fails_to_decode`
 /// holds it on genesis and on worlds holding links); and the board then
@@ -461,8 +463,12 @@ impl WorldState for World {
                 );
                 World { content: self.content.apply_stretch(x), ..self.clone() }
             }
+            // The commit position rides into M5's fold as into M3's: the
+            // arrangement slice keeps, per document, the position its
+            // content arrangement last changed at (the arranged-at map), for
+            // the five in-place edits' stale-edit check.
             Record::Arrangement(x) => {
-                World { arrangement: self.arrangement.apply_m5(x), ..self.clone() }
+                World { arrangement: self.arrangement.apply_m5(at, x), ..self.clone() }
             }
             Record::Links(x) => {
                 // The grant fold rides the Links arm, from the record just

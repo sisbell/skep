@@ -98,8 +98,9 @@ fn library_draft(board_origin: &str) -> String {
         assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "the library's write: {v}");
         v
     };
-    let draft = written(&frames::create_document("1.0.1", false, None))["addr"].as_str().unwrap().to_string();
-    written(&json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    let minted = written(&frames::create_document("1.0.1", false, None));
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    written(&json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"], "as_of": minted["at"]}));
     let _ = board.session_close(&token);
     draft
 }
@@ -467,7 +468,7 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     let before = position();
     for frame in [
         json!({"op": "create_new_document", "account": "1.0.1"}),
-        json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
+        json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"], "as_of": before}),
         json!({"op": "create_new_document", "account": "1.0.1", "published": true}),
     ] {
         let refused = keep(provider.refused("op", json!({"session": session, "frame": frame})));
@@ -928,8 +929,9 @@ fn f5_the_signed_mode_acks_a_publish_class_write() {
     let edition = signed.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}}));
     assert_eq!(edition["resp"], "ack_addr", "{edition}");
     // A content-scoped session: a credential deposit refuses `content_session`.
-    let draft = signed.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}))["addr"].as_str().unwrap().to_string();
-    signed.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}}));
+    let minted = signed.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    signed.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": minted["at"]}}));
     // The shot crosses as `publication.confirm`, composed and attested by
     // the provider's shell; a `publish` frame through `op` is refused as a
     // call (client.md §4b.1, decision 1 (b)).
@@ -997,12 +999,13 @@ fn f5b_the_publication_family_over_the_bridge() {
     let session = signed.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
     let op = |frame: Value| signed.result("op", json!({"session": session, "frame": frame}));
     let addr = |frame: Value| op(frame)["addr"].as_str().unwrap().to_string();
+    let position = || signed.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
     let draft_of = |text: &str| {
-        let d = addr(json!({"op": "create_new_document", "account": "1.0.1"}));
-        op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text]}));
+        let minted = op(json!({"op": "create_new_document", "account": "1.0.1"}));
+        let d = minted["addr"].as_str().unwrap().to_string();
+        op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}));
         d
     };
-    let position = || signed.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
     let edition = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
     let draft = draft_of("the quick brown fox");
     let notes = draft_of("notes here");
@@ -1099,17 +1102,20 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     let session = signed.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
     let op = |frame: Value| signed.result("op", json!({"session": session, "frame": frame}));
     let addr = |frame: Value| op(frame)["addr"].as_str().unwrap().to_string();
+    // The typed state of each burst (wire.md §Arrangement): the board's head
+    // as the session reads it, the state its positions are true of.
+    let position = || signed.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
     let edition = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
     let d = addr(json!({"op": "create_new_document", "account": "1.0.1"}));
-    op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": ["the quick brown fox"]}));
+    op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": ["the quick brown fox"], "as_of": position()}));
     signed.result("publication.open", json!({"session": session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]}));
     let first = signed.result("publication.confirm", json!({"session": session}));
     let e1 = format!("{edition}.1");
     assert_eq!(first["member"].as_str(), Some(e1.as_str()), "{first}");
-    op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"]}));
+    op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"], "as_of": position()}));
     let a_draft = addr(json!({"op": "create_new_document", "account": "1.0.1"}));
-    op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}]}));
-    op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"]}));
+    op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}], "as_of": position()}));
+    op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"], "as_of": position()}));
     // THE FAMILY's PANEL AND CONFIRM.
     let repeated = signed.refused("publication.open", json!({"session": session, "draft": a_draft, "doc": edition, "also": [d, d]}));
     assert_eq!((repeated["name"].as_str(), repeated["what"].as_str()), (Some("malformed_args"), Some("also")), "{repeated}");
@@ -1325,7 +1331,7 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     // line `sent: true` (§3c.2: the frames stay in the journal and land at a
     // restart), and `held(session)` lists it.
     assert_eq!(provider.result("fault/poison", json!({}))["door"], "poison");
-    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": minted["addr"], "at": {"subspace": "1", "ordinal": "1"}, "values": ["p"]}}));
+    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": minted["addr"], "at": {"subspace": "1", "ordinal": "1"}, "values": ["p"], "as_of": minted["at"]}}));
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
     let rows = provider.result("held", json!({"session": session}));
     assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists the burst: {rows}");
@@ -1376,11 +1382,12 @@ fn a_held_burst_is_resent_through_the_provider_after_a_restart() {
     let rx = provider.events();
     let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
     let session = provider.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
-    let draft = provider.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}))["addr"].as_str().unwrap().to_string();
-    provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}}));
+    let minted = provider.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let inserted = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}}));
     // The daemon stops: the next burst is held `unreachable`.
     sd.shutdown();
-    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}}));
+    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": inserted["at"]}}));
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
     assert_eq!(provider.result("held", json!({"session": session})).as_array().unwrap().len(), 1);
     // Restart at the same port; the session ends — the restart arm re-opening
@@ -1474,8 +1481,9 @@ fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
         out.push(call("op", json!({"session": session, "frame": {"op": "principal_prefix", "principal": 1}})));
         let minted = call("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
         let draft = minted["result"]["addr"].as_str().unwrap().to_string();
+        let minted_at = minted["result"]["at"].clone();
         out.push(minted);
-        out.push(call("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["same"]}})));
+        out.push(call("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["same"], "as_of": minted_at}})));
         out.push(call("op", json!({"guest": true, "board": board, "frame": {"op": "doc_metadata", "doc": draft}})));
         out.push(call("close", json!({"session": session})));
         out.push(call("op", json!({"session": session, "frame": {"op": "principal_prefix", "principal": 1}})));

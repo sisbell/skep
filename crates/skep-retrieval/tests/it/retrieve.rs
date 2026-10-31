@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 
 use skep_address::{Address, Span};
+use skep_arrangement::AsOf;
 use skep_arrangement::{seat_link, Deposit, HasM5, VSpec, Vstream};
 use skep_content::HasContent;
 use skep_namespace::{HasM3, PrincipalId};
@@ -86,6 +87,7 @@ fn retrieve_v_delivers_a_mixed_insert_as_bytes_content_bytes_across_the_seams() 
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"XY"), val(b"d"), val(b"e"), val(b"f")],
         Deposit::Undeclared,
+        AsOf::Typed(k.current_seq()),
     )
     .expect("insert commits");
     let s = k.snapshot();
@@ -121,6 +123,7 @@ fn retrieve_v_delivers_a_run_whose_extent_holds_a_key_off_its_chain() {
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"XY"), val(b"d"), val(b"e"), val(b"f")],
         Deposit::Undeclared,
+        AsOf::Typed(k.current_seq()),
     )
     .expect("insert commits");
     skep_content::write(&k, &a(&[1, 0, 1, 0, 1, 0, 1, 4, 7]), val(b"i"))
@@ -201,10 +204,10 @@ fn retrieve_v_delivers_each_stored_atom_itself_and_a_stretch_piece_as_one_alloca
     // replaces — holding the same bytes.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"hello")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"hello")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("an atom commits");
     for at in [1, 2] {
-        vs.copy(P1, &doc2(), vp(1, at), &[VSpec { source: doc1(), span: vspan(1, 1, 1) }])
+        vs.copy(P1, &doc2(), vp(1, at), &[VSpec { source: doc1(), span: vspan(1, 1, 1) }], AsOf::Typed(k.current_seq()))
             .expect("copy commits");
     }
     let s = k.snapshot();
@@ -245,7 +248,7 @@ fn retrieve_v_delivers_content_a_source_document_has_deleted() {
     // registered-empty, which is a success, not a rejection.
     let k = mem_kernel();
     let vs = three_runs(&k);
-    vs.delete(P1, &doc1(), vp(1, 1), n(3))
+    vs.delete(P1, &doc1(), vp(1, 1), n(3), AsOf::Typed(k.current_seq()))
         .expect("delete commits"); // doc1 drops all three
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -487,7 +490,7 @@ fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // is delivered as two pieces, one per stretch.
     let k = mem_kernel();
     let vs = insert3(&k);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared, AsOf::Typed(k.current_seq()))
         .expect("insert commits");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_run_count(&doc1()), 1, "the premise: one arranged run");
@@ -590,13 +593,14 @@ fn retrieve_v_refuses_a_delivery_past_its_budget_whole() {
         vp(1, 1),
         vec![val(b"x"); 64],
         Deposit::Undeclared,
+        AsOf::Typed(k.current_seq()),
     )
     .expect("insert commits");
     let whole = VSpec {
         source: doc1(),
         span: vspan(1, 1, 64),
     };
-    vs.copy(P1, &doc2(), vp(1, 1), &vec![whole; 4096])
+    vs.copy(P1, &doc2(), vp(1, 1), &vec![whole; 4096], AsOf::Typed(k.current_seq()))
         .expect("copy commits");
     let s = k.snapshot();
     let q = Query::new(&s);

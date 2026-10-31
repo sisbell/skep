@@ -28,6 +28,10 @@ struct HeldGround {
     board: String,
     session: String,
     draft: String,
+    /// The draft's state as the ground leaves it: the `at` of its one acked
+    /// insert, which every burst on the draft is typed against (`as_of`,
+    /// wire.md §Arrangement) until one of them is acked.
+    at: u64,
 }
 
 /// Builds the ground: a claimed board and a signed shell opened over it.
@@ -43,9 +47,11 @@ fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
-    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap();
-    HeldGround { shell, seen, board, session, draft }
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let acked = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap();
+    let at = acked["at"].as_u64().unwrap_or_else(|| panic!("the ground's insert is acked: {acked}"));
+    HeldGround { shell, seen, board, session, draft, at }
 }
 
 /// Checks that a held burst is resent after a restart and kept.
@@ -62,10 +68,10 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let port = sd.port();
-    let HeldGround { shell, seen, board, session, draft } = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
     // Stop the daemon; the next burst's dial fails `unreachable` and is held.
     sd.shutdown();
-    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     assert_eq!(held["cause"], "unreachable", "{held}");
     let rows = shell.call("held", &json!({"session": session})).unwrap();
@@ -109,18 +115,18 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
 fn the_poisoned_write_path_holds_bursts_poisoned_then_halted() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let HeldGround { shell, session, draft, .. } = held_ground(&dir, &sd);
+    let HeldGround { shell, session, draft, at, .. } = held_ground(&dir, &sd);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
     // The poisoning burst is refused `poisoned` directly and held.
-    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 1, "held(session) lists it");
     // Once the feed's probe reads `writes.halted` true, a further burst holds
     // `halted` (before any dial).
     let deadline = Instant::now() + Duration::from_secs(20);
     let halted = loop {
-        let answer = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "3"}, "values": ["c"]}})).unwrap();
+        let answer = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "3"}, "values": ["c"], "as_of": at}})).unwrap();
         if answer["cause"] == "halted" {
             break answer;
         }
@@ -160,11 +166,11 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let port = sd.port();
-    let HeldGround { shell, seen, board, session, draft } = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
     let store = dir.path().join("store");
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
-    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]}})).unwrap();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": at}})).unwrap();
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists it: {rows}");
@@ -217,17 +223,17 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
 fn a_burst_that_committed_then_panicked_is_kept_and_sent_once() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let HeldGround { shell, seen, session, draft, .. } = held_ground(&dir, &sd);
-    let insert = |ordinal: &str, value: &str| json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [value]}});
+    let HeldGround { shell, seen, session, draft, at, .. } = held_ground(&dir, &sd);
+    let insert = |ordinal: &str, value: &str, as_of: u64| json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": ordinal}, "values": [value], "as_of": as_of}});
     // The thread held and every commit crossing: the next commit sets the
     // flag and runs nothing, the one after runs the checkpoint inline.
     sd.daemon().hold_the_checkpoint_thread();
     sd.daemon().set_checkpoint_bytes_bound(1);
-    let acked = shell.call("op", &insert("2", "b")).unwrap();
+    let acked = shell.call("op", &insert("2", "b", at)).unwrap();
     let base = acked["at"].as_u64().unwrap_or_else(|| panic!("the burst before is acked: {acked}"));
     assert!(sd.daemon().checkpoint_is_due_now(), "the crossing's flag stands, so the next commit runs the checkpoint inline");
     sd.daemon().panic_at_the_next_kernel_step(Step::CheckpointCreate);
-    let held = shell.call("op", &insert("3", "c")).unwrap();
+    let held = shell.call("op", &insert("3", "c", base)).unwrap();
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
     wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
     let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
@@ -275,14 +281,15 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
     let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    let draft = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
-    let first = signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    let minted = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let first = signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": minted["at"]}})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
     let base = first["at"].as_u64().expect("the ack's position");
     // The in-flight burst: attested as the shell attests it, written under
     // the session's token through the board itself.
     let entry = signed.sessions.get(&session).unwrap();
     let SessionKind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
-    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]});
+    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"], "as_of": base});
     let attested = entry.attest(&signed.store, &frame).unwrap();
     assert!(attested.get("attest").is_some(), "the shell attests every insert");
     let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
@@ -331,10 +338,10 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
 fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let HeldGround { shell, seen, session, draft, .. } = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, session, draft, at, .. } = held_ground(&dir, &sd);
     // A burst past the draft's head: `out_of_bounds`, a permanent refusal → a
     // refused run (an insert at a far ordinal the draft has no room for).
-    let far = json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}});
+    let far = json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"], "as_of": at}});
     let refused = shell.call("op", &far).unwrap();
     assert_eq!(refused["resp"], "held", "a permanent refusal is a refused run: {refused}");
     let k = refused["held"].as_u64().unwrap();
@@ -342,7 +349,7 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "refused");
     // Two more bursts on the document while the run stands → held `behind`.
     for v in ["s", "t"] {
-        let behind = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900001"}, "values": [v]}})).unwrap();
+        let behind = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900001"}, "values": [v], "as_of": at}})).unwrap();
         assert_eq!(behind["cause"], "behind", "{behind}");
     }
     assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 3);
@@ -390,12 +397,12 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     let store = dir.path().join("store");
     let draft;
     {
-        let HeldGround { shell, session, draft: d, .. } = held_ground(&dir, &sd);
+        let HeldGround { shell, session, draft: d, at, .. } = held_ground(&dir, &sd);
         draft = d;
         // Stop the node under the shell's feet, then a burst holds
         // `unreachable`.
         sd.shutdown();
-        let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+        let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
         assert_eq!(held["resp"], "held", "{held}");
         assert_eq!(held["cause"], "unreachable");
         // The line is on disk before any close: `held(session)` lists it.
@@ -466,7 +473,7 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let held_dir = HeldDir::new(&store, skep_search::Chain::from_bytes(term.chain));
     held_dir.ensure().unwrap();
     let Opened::Live { mut queue, .. } = held_dir.open_file(2, "1.0.2").unwrap() else { panic!("a fresh file") };
-    let two = json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["two"]});
+    let two = json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["two"], "as_of": 0});
     assert!(queue.hold("1.0.2.0.1", None, 0, two, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     drop(queue);
     // One shell (so one lock on `held/<chain>/`) holding a session for each of
@@ -478,11 +485,13 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let second = shell.sessions.register(&shell.boards[0], open_bare(&shell.boards[0].board, 2).unwrap(), &mut shell.feed(&board));
     shell.holds.open_session(&second);
     let s2 = second.reference.clone();
-    let d1 = shell.call("op", &json!({"session": s1, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    let minted = shell.call("op", &json!({"session": s1, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let d1 = minted["addr"].as_str().unwrap().to_string();
+    let typed = minted["at"].as_u64().unwrap();
     // The board goes down: principal 1's next burst is held `unreachable` in
     // its own file, `principal-1.held`, beside `principal-2.held`.
     sd.shutdown();
-    let h1 = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "2"}, "values": ["one"]}})).unwrap();
+    let h1 = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "2"}, "values": ["one"], "as_of": typed}})).unwrap();
     assert_eq!(h1["resp"], "held");
     assert!(store.join("held").exists(), "the directory stands");
     let p2 = std::fs::read_dir(store.join("held")).unwrap().flatten().map(|e| e.path().join("principal-2.held")).find(|p| p.is_file()).expect("principal 2's file stands");
@@ -497,7 +506,7 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let text = format!("{rows1}{h1}");
     assert!(!text.contains("principal-2") && !text.contains("principal-1") && !text.contains("/held/") && !text.contains(&store.display().to_string()), "no path, directory or principal file name crosses: {text}");
     // Principal 1's own acts touch principal 1's file alone.
-    let behind = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "4"}, "values": ["three"]}})).unwrap();
+    let behind = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "4"}, "values": ["three"], "as_of": typed}})).unwrap();
     assert_eq!(behind["cause"], "behind", "{behind}");
     assert_eq!(shell.call("resolve", &json!({"session": s1, "held": 1, "act": "drop"})).unwrap_err().name(), "not_resolvable");
     assert_eq!(std::fs::read(&p2).unwrap(), p2_bytes, "principal 2's file is untouched by principal 1's acts");
@@ -527,9 +536,10 @@ fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
     sd.shutdown();
-    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hi"]}})).unwrap();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hi"], "as_of": minted["at"]}})).unwrap();
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
     let sd = spawn_at(&dir.path().join("board"), true, port);
     wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
@@ -565,10 +575,10 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let store = dir.path().join("store");
     let draft;
     {
-        let HeldGround { shell, session, draft: d, .. } = held_ground(&dir, &sd);
+        let HeldGround { shell, session, draft: d, at, .. } = held_ground(&dir, &sd);
         draft = d;
         sd.shutdown();
-        let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+        let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
         assert_eq!(held["cause"], "unreachable", "{held}");
         shell.shutdown();
     }
@@ -602,7 +612,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let read = again.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
     assert_eq!(text_of(&read), "ab", "the resent burst is on the board: {read}\n{}", lines.lock().unwrap().join("\n"));
     sd.shutdown();
-    let held = again.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "3"}, "values": ["c"]}})).unwrap();
+    let held = again.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "3"}, "values": ["c"], "as_of": read["as_of"]}})).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     let file = std::fs::read_to_string(held_path(&store).expect("the held file stands")).unwrap();
     let header = file.lines().next().unwrap();
@@ -621,7 +631,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
 fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let HeldGround { shell, seen, board, session, draft } = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
     let writer = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let entry = shell.sessions.get(&session).unwrap();
     let stop = AtomicBool::new(false);
@@ -632,7 +642,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
                 thread::sleep(Duration::from_millis(500));
             }
         });
-        let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]});
+        let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at});
         shell.holds.hold(&entry, Burst::admit(frame, &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
         let deadline = Instant::now() + PROBE_CADENCE * 3;
         let kept = loop {
@@ -650,6 +660,57 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     assert!(kept, "the line was not kept within three probe cadences while the board kept committing");
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
     assert_eq!(text_of(&read), "ab", "{read}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks the interim for a burst typed against an older state (skep #442).
+///
+/// Until the shell's shift lands, the board's `arrangement_moved` — a
+/// `permanent` refusal — meets the shell as any permanent refusal does: a
+/// REFUSED run, faced with the board's verdict. Another write lands on the
+/// draft after the ground's insert; a burst typed against the ground's
+/// state is refused `arrangement_moved`, its line listed with the board's
+/// verdict naming the typed state and the current one, and nothing of it
+/// lands — the draft reads what the other write left, and no row stands
+/// above that write. The same text typed against the current state lands,
+/// once the refused run is dropped (the mutant that lands the stale burst
+/// writes the text a position off; the one that holds it `behind` or
+/// resends it faces no verdict).
+#[test]
+fn a_burst_typed_against_an_older_state_is_a_refused_run_and_nothing_lands() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, seen, session, draft, at, .. } = held_ground(&dir, &sd);
+    // Another write on the draft: the ground's state `at` is older now.
+    let moved = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
+    let current = moved["at"].as_u64().unwrap_or_else(|| panic!("the second insert is acked: {moved}"));
+    assert!(current > at);
+    // The stale burst: typed against `at`, refused `arrangement_moved` — a
+    // refused run naming the code, the line listing the board's verdict.
+    let stale = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["x"], "as_of": at}})).unwrap();
+    assert_eq!(stale["resp"], "held", "a permanent refusal is a refused run: {stale}");
+    assert!(stale["cause"].as_str().unwrap().starts_with("arrangement_moved"), "{stale}");
+    let k = stale["held"].as_u64().unwrap();
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "refused");
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
+    let verdict = &rows[0]["refusal"];
+    assert_eq!(verdict["code"], "arrangement_moved", "the board's verdict rides the line: {rows}");
+    assert_eq!(verdict["disposition"], "permanent", "{rows}");
+    assert_eq!((verdict["site"]["as_of"].as_u64(), verdict["site"]["current"].as_u64()), (Some(at), Some(current)), "the two positions: {rows}");
+    // Nothing landed: the draft reads `ab`, and no row stands above the
+    // other write.
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "{read}");
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    assert!(changes_under(&shell.boards[0].board, &token, &draft, current).is_empty(), "a refusal commits nothing");
+    // Typed against the current state, the text lands.
+    shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap();
+    let landed = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["x"], "as_of": current}})).unwrap();
+    assert_eq!(landed["resp"], "ack_addr", "{landed}");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "axb", "{read}");
     shell.shutdown();
     sd.shutdown();
 }

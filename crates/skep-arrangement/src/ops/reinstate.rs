@@ -8,7 +8,7 @@ use skep_content::HasContent;
 use skep_kernel::{Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3State};
 
-use super::{Vstream, MAX_PLACED_RUNS};
+use super::{arrangement_moved, AsOf, Vstream, MAX_PLACED_RUNS};
 use crate::chain::{published_target, trunk_of};
 use crate::error::ReinstateError;
 use crate::ownership::{gate_write, Caller};
@@ -85,7 +85,13 @@ where
     /// wins). Destination first, as COPY: `DocNotRegistered` → `NotOwner` (the
     /// ω gate on the destination only) → `PublishedTarget` (PUB-2.11 on the
     /// destination's document, PUB-2.15 projected; a re-placement is an
-    /// in-place edit and carries no deposit exemption) → `NotContentSubspace`
+    /// in-place edit and carries no deposit exemption) → `ArrangementMoved`
+    /// (`as_of` names a state of the destination older than its
+    /// arrangement's last change — the stale-edit refusal, skep #442, keyed
+    /// on [`AsOf`] and judged ahead of every shape check, so a stale undo
+    /// never meets `OutOfBounds` for a position that was true when it was
+    /// typed; the origins are not judged for it, and [`AsOf::Unchecked`]
+    /// skips it) → `NotContentSubspace`
     /// → `OutOfBounds`. Then, per run, in the order given, the first defective
     /// run deciding (COPY's "which spec speaks" rule): `BadRun` (the start is
     /// no content element, or the stated `origin` does not project to the
@@ -110,10 +116,11 @@ where
         doc: &Address,
         at: VPos,
         runs: &[ShotRun],
+        as_of: AsOf,
     ) -> Result<Seq, TxnError<ReinstateError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
-            .transact(&[key], |stg| stage_reinstate_at(stg, caller, doc, at, runs))
+            .transact(&[key], |stg| stage_reinstate_at(stg, caller, doc, at, runs, as_of))
             .map(|((), seq)| seq)
     }
 }
@@ -145,6 +152,11 @@ where
 /// one transaction supplies the union of their keys. `reinstate`'s
 /// precondition on the origins' readability is the caller's here as there.
 ///
+/// `as_of` is the state the placement was typed against, checked as
+/// `reinstate` checks it: the publication's re-window passes
+/// [`AsOf::Unchecked`], its placement staged behind the shot's own check by
+/// identity and never refused for a position the stagings before it moved.
+///
 /// # Errors
 ///
 /// `reinstate`'s refusals, in the order it states — `DocNotRegistered`
@@ -157,6 +169,7 @@ pub fn stage_reinstate_at<W>(
     doc: &Address,
     at: VPos,
     runs: &[ShotRun],
+    as_of: AsOf,
 ) -> Result<(), ReinstateError>
 where
     W: WorldState + HasM5 + HasM3 + HasContent,
@@ -175,6 +188,11 @@ where
     // a re-placement is an edit in place.
     if published_target(world.m3(), doc) {
         return Err(ReinstateError::PublishedTarget);
+    }
+    // The stale-edit refusal (skep #442) on the destination, ahead of
+    // every shape check.
+    if let Some((as_of, current)) = arrangement_moved(world.m5(), doc, as_of) {
+        return Err(ReinstateError::ArrangementMoved { as_of, current });
     }
     if !at.is_content() {
         return Err(ReinstateError::NotContentSubspace);

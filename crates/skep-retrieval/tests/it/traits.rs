@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use skep_arrangement::AsOf;
 use skep_arrangement::VSpec;
 use skep_retrieval::{
     CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
@@ -40,6 +41,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     let s = k.snapshot();
@@ -251,6 +253,7 @@ fn the_answer_collections_behave_like_std_collections() {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("copy commits");
     let s = k.snapshot();

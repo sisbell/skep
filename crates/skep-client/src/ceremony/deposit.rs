@@ -203,35 +203,49 @@ impl Written<'_> {
 ///
 /// The death signal, a refusal of the read, an extent at the top of the
 /// ordinal range, and [`Board::op`]'s errors.
-pub fn next_content_ordinal(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, Halt> {
+pub fn next_content_ordinal(board: &Board, token: Option<&Token>, doc: &str) -> Result<(u64, u64), Halt> {
     ordinal_at(board, token, doc).map_err(Halt::from)
 }
 
-/// Returns the next free content ordinal, as [`next_content_ordinal`] does.
+/// Returns the next free content ordinal, as [`next_content_ordinal`] does,
+/// beside the position the read answered it at.
 ///
-/// Its death signal is the deposit's own arm.
+/// The pair is what an insert at that ordinal names (wire.md §Arrangement;
+/// skep #442): the position, and the `as_of` of the read it is true of,
+/// which the frame carries so the board can refuse it `arrangement_moved`
+/// where the arrangement has moved since. Its death signal is the deposit's
+/// own arm.
 ///
 /// # Errors
 ///
 /// The death signal is [`DepositHalt::SessionClosed`]; a refusal of the read
 /// is the board's; an extent at the top of the ordinal range, which leaves
-/// no ordinal after it, is the board's fault and halts before the insert;
-/// and [`Board::op`]'s errors.
-fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, DepositHalt> {
+/// no ordinal after it, is the board's fault and halts before the insert,
+/// as is an answer that names no position; and [`Board::op`]'s errors.
+fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<(u64, u64), DepositHalt> {
     match board.op(token, &frames::span_set(doc))? {
         Answer::Closed => Err(DepositHalt::SessionClosed(closed_face("reading the home's extent"))),
         Answer::Document(v) => {
             if let Some(r) = Rejection::of(&v) {
                 return Err(r.refused(&v).into());
             }
-            answers::content_extent(&v).checked_add(1).ok_or_else(|| {
+            let ordinal = answers::content_extent(&v).checked_add(1).ok_or_else(|| {
                 DepositHalt::Other(Halt::face(
                     format!("{doc} answered an extent with no ordinal after it"),
                     "`retrieve_doc_v_span_set` named a content extent at the top of the ordinal range, so no position \
                      stands where the record could land",
                     "this is a fault in the board, not in your keys; nothing was written",
                 ))
-            })
+            })?;
+            let as_of = answers::as_of(&v).ok_or_else(|| {
+                DepositHalt::Other(Halt::face(
+                    format!("{doc} answered an extent with no position"),
+                    "`retrieve_doc_v_span_set` answered no `as_of` (wire.md §The response envelope: every read names where it sits), \
+                     so the insert cannot name the state it is typed against",
+                    "this is a fault in the board, not in your keys; nothing was written",
+                ))
+            })?;
+            Ok((ordinal, as_of))
         }
     }
 }
@@ -339,15 +353,18 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
     };
 
     // The insert, declared under the record's class type, at the next free
-    // content ordinal; `published_target` — this client's own position
-    // arithmetic raced — re-reads the ordinal and re-sends once under the
-    // same id (§5.3), and a second `published_target` is the halt below.
+    // content ordinal and typed against the read that found it (`as_of`,
+    // skep #442); `published_target` or `arrangement_moved` — this client's
+    // own position arithmetic raced another deposit into the home — re-reads
+    // the ordinal and re-sends once under the same id (§5.3), and a second
+    // of either is the halt below.
     let insert_id = format!("{}.insert", d.id);
     let link_id = format!("{}.link", d.id);
     let mut atom = None;
     for _ in 0..2 {
-        let ordinal = ordinal_at(board, Some(token), d.home)?;
-        let v = match board.op(Some(token), &frames::insert_atom(d.home, ordinal, &record_text, ty, Some(&insert_id)))? {
+        let (ordinal, as_of) = ordinal_at(board, Some(token), d.home)?;
+        let frame = frames::insert_atom(d.home, ordinal, &record_text, ty, as_of, Some(&insert_id));
+        let v = match board.op(Some(token), &frame)? {
             Answer::Closed => return Err(DepositHalt::SessionClosed(closed_face("inserting the record"))),
             Answer::Document(v) => v,
         };
@@ -357,14 +374,14 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         }
         let Some(r) = Rejection::of(&v) else { return Err(shape_face(&v).into()) };
         match r.key() {
-            "published_target" => continue,
+            "published_target" | "arrangement_moved" => continue,
             _ => return Err(insert_face(&r, &v).into()),
         }
     }
     let Some(atom) = atom else {
         return Err(DepositHalt::Other(Halt::face(
-            "the record's insert was refused twice as an in-place edit",
-            "`published_target` answered the re-sent insert: this client's position arithmetic is wrong at this home",
+            "the record's insert was refused twice as an in-place edit or as typed against a moved home",
+            "`published_target` or `arrangement_moved` answered the re-sent insert: this client's position arithmetic is wrong at this home",
             "this is this client's frame and never your act; nothing was written",
         )));
     };

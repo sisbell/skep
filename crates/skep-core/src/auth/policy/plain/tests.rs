@@ -77,7 +77,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     let home = crate::codec::wire_address(&board.home).expect("the home's address");
     let fragment = |count: usize| {
         for _ in 0..count {
-            exec(&board.febe, maker, json!({"op": "insert", "doc": board.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}));
+            exec(&board.febe, maker, json!({"op": "insert", "doc": board.draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": board.febe.log_position().0}));
         }
     };
     let shot = |draft: Option<Address>, runs: usize| Shot {
@@ -291,7 +291,8 @@ fn a_correspondence_records_nullify_is_refused_to_its_owner_and_falls_through_fo
         &board.febe,
         maker,
         json!({"op": "insert", "doc": home, "at": {"subspace": "1", "ordinal": "1"},
-               "values": [{"atom": genesis}], "deposit": t_enroll().to_string()}),
+               "values": [{"atom": genesis}], "deposit": t_enroll().to_string(),
+               "as_of": board.febe.log_position().0}),
     )
     .to_string();
     let link = |from: &str, to: &[&str], ty: &Address| {

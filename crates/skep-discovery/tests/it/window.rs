@@ -6,6 +6,7 @@ use crate::common;
 use crate::heap::settled_heap_bytes;
 
 use common::*;
+use skep_arrangement::AsOf;
 use skep_arrangement::Vstream;
 use skep_discovery::{
     find_links_v_history_on, findlinks_v_on, window_ftt_on, window_v_on, FourSet, LinkRow,
@@ -61,7 +62,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     // arrangement, so la(2) leaves the matched set by view-loss while it
     // stays active — and the key-cut resume needs no lookup of it.
     Vstream::new(&k)
-        .delete(SYS, &doc1(), vp(1, 2), n(1))
+        .delete(SYS, &doc1(), vp(1, 2), n(1), AsOf::Typed(k.current_seq()))
         .expect("delete succeeds");
     assert!(
         k.snapshot().world().links().is_active(&la(2)),

@@ -11,6 +11,7 @@ use crate::common;
 
 use common::*;
 use skep_address::Address;
+use skep_arrangement::AsOf;
 use skep_arrangement::{deposit_class_types, Caller, Deposit, HasM5};
 use skep_content::{HasContent, Val};
 use skep_engine::types::{
@@ -276,6 +277,7 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
             Deposit::Declared(deposit_class_types()[0].clone()),
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("insert into the ghost doc succeeds");
     assert_eq!(

@@ -777,6 +777,7 @@ mod tests {
     use skep_address::{validate, Nat, Span, Tumbler};
     use skep_arrangement::{Deposit, Run, ShotRun, VPos, VSpec};
     use skep_content::Val;
+    use skep_kernel::Seq;
     use skep_links::SlotArg;
 
     use super::*;
@@ -864,6 +865,7 @@ mod tests {
             at: vpos(),
             values: vec![Val::new(vec![1u8])],
             deposit: Deposit::Undeclared,
+            as_of: Seq(7),
         };
         assert_eq!(insert.write_consult(), WriteConsult::NotTaken);
     }
@@ -917,6 +919,7 @@ mod tests {
             doc: d.clone(),
             at: vpos(),
             specs: vec![VSpec { source: src.clone(), span: vspan() }],
+            as_of: Seq(7),
         };
         assert_eq!(copy.in_place_destination(), Some(&d));
         let reinstate = Op::Reinstate {
@@ -927,6 +930,7 @@ mod tests {
                 run: Run::new(addr(&[1, 0, 1, 0, 2, 0, 1, 1]), Nat::from(1u32))
                     .expect("a content run"),
             }],
+            as_of: Seq(7),
         };
         assert_eq!(reinstate.in_place_destination(), Some(&d));
         assert_eq!(reinstate.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));

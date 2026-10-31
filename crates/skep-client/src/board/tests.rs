@@ -42,10 +42,14 @@ fn an_enrolled_entry_is_admitted_only_where_its_fingerprint_is_its_keys() {
 #[test]
 fn the_frames_spell_the_wire() {
     assert_eq!(frames::unit_span("1.0.1"), json!([{"start": "1.0.1", "width": "0.0.1"}]));
-    let f = frames::insert_atom("1.0.1.0.1", 1, "{}", T_ENROLL, Some("x"));
+    let f = frames::insert_atom("1.0.1.0.1", 1, "{}", T_ENROLL, 7, Some("x"));
     assert_eq!(f["deposit"], T_ENROLL);
     assert_eq!(f["id"], "x");
     assert_eq!(f["at"]["ordinal"], "1");
+    assert_eq!(f["as_of"], 7, "the typed state rides as a position (wire.md §Arrangement)");
+    assert_eq!(frames::insert_plain_atom("1.0.1.0.2", 3, "{}", 11, None)["as_of"], 11);
+    assert_eq!(frames::delete("1.0.1.0.2", 3, 1, 12, None)["as_of"], 12);
+    assert_eq!(frames::reinstate("1.0.1.0.2", 3, &[], 13, None)["as_of"], 13);
     let r = Rejection::of(&json!({"code":"credential_refused","detail":"content_session","disposition":"permanent","op":"make_link","resp":"rejected"})).unwrap();
     assert_eq!(r.token(), "credential_refused:content_session");
 }

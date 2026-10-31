@@ -21,15 +21,15 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
     let p2 = Caller::Principal(PrincipalId(2));
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.insert(p2, &doc1(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(p2, &doc1(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::NotOwner(d) if d == doc1()
     ));
     assert!(matches!(
-        rejected(vs.delete(p2, &doc1(), vp(1, 1), n(1))),
+        rejected(vs.delete(p2, &doc1(), vp(1, 1), n(1), now(&k))),
         DeleteError::NotOwner(d) if d == doc1()
     ));
     assert!(matches!(
-        rejected(vs.rearrange(p2, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(p2, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::NotOwner(d) if d == doc1()
     ));
     assert!(matches!(
@@ -41,17 +41,17 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
                 source: doc1(),
                 span: vspan(1, 1, 1),
             }]
-        )),
+        , now(&k))),
         CopyError::NotOwner(d) if d == doc1()
     ));
     // The ω gate precedes every shape check INSERT makes: an empty value
     // list from a non-owner is refused as NotOwner, not as EmptyContent.
     assert!(matches!(
-        rejected(vs.insert(p2, &doc1(), vp(1, 1), vec![], Deposit::Undeclared)),
+        rejected(vs.insert(p2, &doc1(), vp(1, 1), vec![], Deposit::Undeclared, now(&k))),
         InsertError::NotOwner(d) if d == doc1()
     ));
     assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
-    vs.delete(P1, &doc1(), vp(1, 1), n(1))
+    vs.delete(P1, &doc1(), vp(1, 1), n(1), now(&k))
         .expect("the owner's delete still commits");
 }
 
@@ -68,15 +68,15 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
     let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     let p2 = Caller::Principal(PrincipalId(2));
     assert!(matches!(
-        rejected(vs.insert(p2, &unregistered_doc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(p2, &unregistered_doc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.delete(p2, &unregistered_doc, vp(1, 1), n(1))),
+        rejected(vs.delete(p2, &unregistered_doc, vp(1, 1), n(1), now(&k))),
         DeleteError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.rearrange(p2, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(p2, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)], now(&k))),
         RearrangeError::DocNotRegistered
     ));
     assert!(matches!(
@@ -88,7 +88,7 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
                 source: doc1(),
                 span: vspan(1, 1, 1),
             }]
-        )),
+        , now(&k))),
         CopyError::DocNotRegistered
     ));
     // The shot opens at the same door: its slot 1 answers registration
@@ -128,7 +128,7 @@ fn the_system_caller_bypasses_the_owner_check_but_not_registration() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, _) = vs
-        .insert(Caller::System, &doc1(), vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+        .insert(Caller::System, &doc1(), vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("the automation path writes without a principal");
     assert_eq!(start, ca(1));
     assert_eq!(
@@ -138,11 +138,11 @@ fn the_system_caller_bypasses_the_owner_check_but_not_registration() {
     // And into a document owned by a different principal — the exemption is
     // not "System happens to own this one".
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
-    vs.insert(Caller::System, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+    vs.insert(Caller::System, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("no document's ω restricts the automation path");
     // Registration is not waived.
     assert!(matches!(
-        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 9]), vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 9]), vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::DocNotRegistered
     ));
 }
@@ -159,16 +159,16 @@ fn ownership_is_exact_in_both_directions() {
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     // Sub-delegated child vs the parent's doc.
     assert!(matches!(
-        rejected(vs.insert(sub, &doc1(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(sub, &doc1(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::NotOwner(_)
     ));
     // Parent vs the child's doc.
     assert!(matches!(
-        rejected(vs.insert(P1, &subdoc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &subdoc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared, now(&k))),
         InsertError::NotOwner(_)
     ));
     // The sub-account's own principal edits its own doc.
-    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared, now(&k))
         .expect("sub-owner insert commits");
 }
 
@@ -195,6 +195,7 @@ fn copy_reads_foreign_sources_into_an_owned_destination() {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
+        now(&k),
     )
     .expect("foreign-SOURCE copy into an owned destination commits");
     let s = k.snapshot();
@@ -210,6 +211,7 @@ fn copy_reads_foreign_sources_into_an_owned_destination() {
             source: pdoc(),
             span: vspan(1, 1, 3),
         }],
+        now(&k),
     )
     .expect("a published source is copied into a draft");
     assert_eq!(k.snapshot().world().m5().content_count(&fork), n(5));

@@ -121,7 +121,7 @@ fn the_op_handle_copies_as_the_reference_it_is() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     copies(vs);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared, now(&k))
         .expect("the handle is still usable after being copied out");
 }
 

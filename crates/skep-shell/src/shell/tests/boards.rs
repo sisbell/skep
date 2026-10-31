@@ -267,7 +267,9 @@ fn the_nodes_running_hands_its_probe_to_the_boards_feed_thread() {
     shell.set_node_state(NodeState::Stopped);
     let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare };
     let session = shell.sessions.register(&shell.boards[0], Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut shell.feed(&board));
-    let frame = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]});
+    // Typed at genesis: the board is a tarpit that answers no state, and
+    // what is under test is the probe's hand-over, never the frame's fate.
+    let frame = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"], "as_of": 0});
     let held = shell.holds.hold(&session, Burst::admit(frame, &session).unwrap(), Reason::of("stopped", false)).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     let started = Instant::now();

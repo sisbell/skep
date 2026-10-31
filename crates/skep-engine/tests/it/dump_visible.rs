@@ -13,6 +13,7 @@ use crate::common;
 
 use common::*;
 use skep_address::{validate, Address, Nat, Tumbler};
+use skep_arrangement::AsOf;
 use skep_arrangement::{Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, Seq, World};
@@ -61,6 +62,7 @@ fn board(engine: &Engine) -> Board {
             vp(1, 1),
             vec![Val::new(SECRET.to_vec()), Val::new(vec![b'x'])],
             Deposit::Undeclared,
+            AsOf::Typed(engine.kernel().current_seq()),
         )
         .expect("the owner writes its draft");
     let (link_a, _) = engine

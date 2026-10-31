@@ -80,11 +80,14 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
         // M5's fifth field, `fork_sources`, joined the slice under the
         // standing no-stamp ruling renewed (the fork-source design record,
         // decision 3, 2026-10-17: no served board exists; dev boards
-        // regenerate), so the count above did not move with it.
+        // regenerate), so the count above did not move with it — and its
+        // sixth, `arranged_at`, the position each document's content
+        // arrangement last changed at (skep #442), under the same ruling
+        // renewed once more.
         (
             "arrangement",
             field_names(&world.arrangement),
-            &["arrangements", "provenance", "birth_extents", "shot_terms", "fork_sources"],
+            &["arrangements", "provenance", "birth_extents", "shot_terms", "fork_sources", "arranged_at"],
         ),
         ("links", field_names(&world.links), &["links"]),
         // AUTH-1.40's compatibility surface, at the World: the slice's two
@@ -393,12 +396,13 @@ fn links_in_a_draft_named(shapes: &[(bool, bool)]) -> (World, Address) {
 }
 
 /// `world`'s bytes as a build from before M5's birth memo wrote them: the
-/// stamp, then each store slice's, with M5's cut short of its three trailing
+/// stamp, then each store slice's, with M5's cut short of its four trailing
 /// maps — the memo, after it the shot terms that joined the slice with D25's
-/// (c′), and after those the fork sources that joined it with the
-/// fork-source record's arm A
+/// (c′), after those the fork sources that joined it with the fork-source
+/// record's arm A, and after those the arranged-at positions that joined it
+/// with the stale-edit check (skep #442)
 /// (`each_slice_serializes_the_fields_the_format_count_names`), all EMPTY
-/// in every world handed here, so the three eight-byte zero lengths that
+/// in every world handed here, so the four eight-byte zero lengths that
 /// end M5's bytes — and no identity slice, which no build of that age wrote
 /// either. Checked rather than assumed: each length is read off the slice's
 /// serde form, and the same parts kept whole, with the identity slice after
@@ -407,7 +411,7 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
     let SerdeTree::Map(fields) = to_tree(&world.arrangement) else {
         panic!("M5State serializes as a struct — a map of its fields")
     };
-    for trailing in ["birth_extents", "shot_terms", "fork_sources"] {
+    for trailing in ["birth_extents", "shot_terms", "fork_sources", "arranged_at"] {
         let field = fields.iter().find_map(|(name, value)| match name {
             SerdeTree::Str(s) if s.as_str() == trailing => Some(value),
             _ => None,
@@ -437,15 +441,15 @@ fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
         "a World's bytes are the stamp, then each store slice's, then the identity slice"
     );
     assert!(
-        arrangement_bytes.ends_with(&[0u8; 24]),
-        "the empty memo's, the empty shot terms' and the empty fork sources' zero lengths end \
-         M5's bytes"
+        arrangement_bytes.ends_with(&[0u8; 32]),
+        "the empty memo's, the empty shot terms', the empty fork sources' and the empty \
+         arranged-at positions' zero lengths end M5's bytes"
     );
     [
         stamp.as_slice(),
         namespace_bytes.as_slice(),
         content_bytes.as_slice(),
-        &arrangement_bytes[..arrangement_bytes.len() - 24],
+        &arrangement_bytes[..arrangement_bytes.len() - 32],
         links_bytes.as_slice(),
     ]
     .concat()

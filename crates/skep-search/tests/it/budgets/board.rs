@@ -388,6 +388,9 @@ impl DevBoard {
         let mut at = 0;
         let mut from = 0usize;
         let mut ordinal = ordinal;
+        // Each chunk is typed against the board's head as read before the
+        // first, then the chunk before it (`as_of`, wire.md §Arrangement).
+        let mut typed = self.board.health().expect("the board's health").log_position();
         while from < bytes.len() {
             let mut end = (from + INSERT_CHUNK).min(bytes.len());
             let value = match std::str::from_utf8(bytes) {
@@ -404,6 +407,7 @@ impl DevBoard {
                 "doc": doc.to_string(),
                 "at": {"subspace": "1", "ordinal": ordinal.to_string()},
                 "values": [value],
+                "as_of": typed,
             });
             let v = self.op(&frame);
             if v["resp"].as_str() != Some("ack_addr") {
@@ -414,6 +418,7 @@ impl DevBoard {
                 ));
             }
             at = acked_at(&v).expect("an ack carries at");
+            typed = at;
             ordinal += (end - from) as u64;
             from = end;
         }

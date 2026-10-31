@@ -29,11 +29,11 @@ struct GateWorld {
 
 impl WorldState for GateWorld {
     type Record = M5Rec;
-    fn apply(&self, _at: Seq, r: &M5Rec) -> GateWorld {
+    fn apply(&self, at: Seq, r: &M5Rec) -> GateWorld {
         GateWorld {
             m3: self.m3.clone(),
             content: self.content.clone(),
-            m5: self.m5.apply_m5(r),
+            m5: self.m5.apply_m5(at, r),
         }
     }
 }
@@ -94,20 +94,20 @@ fn reinstate_into_a_published_destination_refuses_before_any_run_is_judged() {
     // holding nothing at all.
     let defective = [ShotRun { origin: doc1(), run: run(&la(1), 1) }];
     assert!(matches!(
-        rejected(vs.reinstate(p1, &pdoc(), vp(1, 1), &defective)),
+        rejected(vs.reinstate(p1, &pdoc(), vp(1, 1), &defective, AsOf::Typed(k.current_seq()))),
         ReinstateError::PublishedTarget
     ));
     // Ahead of the destination's own shape checks as well: a link-subspace
     // position past every boundary, with nothing to place.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &pdoc(), vp(2, 99), &[])),
+        rejected(vs.reinstate(p1, &pdoc(), vp(2, 99), &[], AsOf::Typed(k.current_seq()))),
         ReinstateError::PublishedTarget
     ));
     assert_eq!(content_count(&k, &pdoc()), n(0));
     // The control: into the draft, the run is read — and refused for its
     // own defect.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &defective)),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &defective, AsOf::Typed(k.current_seq()))),
         ReinstateError::BadRun
     ));
     assert_eq!(content_count(&k, &doc2()), n(0), "a refusal places nothing");
@@ -130,13 +130,13 @@ fn a_run_is_judged_by_its_shape_then_its_origin_then_its_bytes_and_the_first_def
     // the wrong document — `BadRun`, never `DanglingSource`…
     let mis_stated = ShotRun { origin: doc2(), run: run(&ca(9), 1) };
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[mis_stated.clone()])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[mis_stated.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::BadRun
     ));
     // …and rightly stated, the same address is probed and refused for its
     // absence.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[of_doc1(9, 1)])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[of_doc1(9, 1)], AsOf::Typed(k.current_seq()))),
         ReinstateError::DanglingSource
     ));
     // Registration before bytes: an unregistered document's own address,
@@ -145,7 +145,7 @@ fn a_run_is_judged_by_its_shape_then_its_origin_then_its_bytes_and_the_first_def
     let ghost = a(&[1, 0, 1, 0, 9]);
     let ghost_run = ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1) };
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[ghost_run.clone()])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[ghost_run.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::SourceNotRegistered
     ));
     // Shape before registration: that same address stated under doc1 is
@@ -156,16 +156,16 @@ fn a_run_is_judged_by_its_shape_then_its_origin_then_its_bytes_and_the_first_def
             &doc2(),
             vp(1, 1),
             &[ShotRun { origin: doc1(), run: run(&a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1) }]
-        )),
+        , AsOf::Typed(k.current_seq()))),
         ReinstateError::BadRun
     ));
     // The destination's own checks stand ahead of every run.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(2, 1), &[mis_stated.clone()])),
+        rejected(vs.reinstate(p1, &doc2(), vp(2, 1), &[mis_stated.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[mis_stated.clone()])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[mis_stated.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::OutOfBounds
     ));
     assert_eq!(content_count(&k, &doc2()), n(0), "every refusal places nothing");
@@ -177,24 +177,25 @@ fn a_run_is_judged_by_its_shape_then_its_origin_then_its_bytes_and_the_first_def
         &doc2(),
         vp(1, 1),
         &[ShotRun { origin: a(&[1, 0, 1, 0, 1, 1]), run: run(&ca(1), 1) }],
+        AsOf::Typed(k.current_seq()),
     )
     .expect("a member names its document's own I-space");
     assert_eq!(content_count(&k, &doc2()), n(1));
     // WHICH RUN SPEAKS: the list is walked and the first defective run
     // decides. A sound run, then a mis-stated one: the second's verdict.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[of_doc1(2, 1), mis_stated.clone()])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[of_doc1(2, 1), mis_stated.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::BadRun
     ));
     // A dangling run, then a mis-stated one: the FIRST's verdict — read the
     // other way (guards outermost, runs within) `BadRun` would win.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[of_doc1(9, 1), mis_stated.clone()])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[of_doc1(9, 1), mis_stated.clone()], AsOf::Typed(k.current_seq()))),
         ReinstateError::DanglingSource
     ));
     // An unregistered origin, then a mis-stated run: the first's again.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[ghost_run, mis_stated])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 2), &[ghost_run, mis_stated], AsOf::Typed(k.current_seq()))),
         ReinstateError::SourceNotRegistered
     ));
     assert_eq!(content_count(&k, &doc2()), n(1), "the one admitted run alone was placed");
@@ -213,15 +214,15 @@ fn every_address_of_a_run_is_probed_not_its_start_alone() {
     let k = gate_kernel(&[1, 2]);
     let vs = Vstream::new(&k);
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[of_doc1(1, 3)])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &[of_doc1(1, 3)], AsOf::Typed(k.current_seq()))),
         ReinstateError::DanglingSource
     ));
     assert_eq!(content_count(&k, &doc2()), n(0), "a refusal places nothing");
-    vs.reinstate(p1, &doc2(), vp(1, 1), &[of_doc1(1, 2)])
+    vs.reinstate(p1, &doc2(), vp(1, 1), &[of_doc1(1, 2)], AsOf::Typed(k.current_seq()))
         .expect("a run whose every address holds a value is admitted");
     assert_eq!(content_count(&k, &doc2()), n(2));
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 3), &[of_doc1(3, 1)])),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 3), &[of_doc1(3, 1)], AsOf::Typed(k.current_seq()))),
         ReinstateError::DanglingSource
     ));
     assert_eq!(content_count(&k, &doc2()), n(2));
@@ -243,8 +244,8 @@ fn a_staged_reinstate_reads_the_working_world_and_a_refusal_discards_the_whole_t
     // position arranged, so 2 is the append boundary): refused, and the
     // first placement goes with it.
     let refused = rejected(k.transact(&key, |stg| {
-        stage_reinstate_at(stg, p1, &doc2(), vp(1, 1), &[of_doc1(1, 1)])?;
-        stage_reinstate_at(stg, p1, &doc2(), vp(1, 3), &[of_doc1(2, 1)])
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 1), &[of_doc1(1, 1)], AsOf::Unchecked)?;
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 3), &[of_doc1(2, 1)], AsOf::Unchecked)
     }));
     assert_eq!(refused, ReinstateError::OutOfBounds);
     assert_eq!(k.current_seq(), before, "the refusal commits nothing of the transaction");
@@ -252,9 +253,9 @@ fn a_staged_reinstate_reads_the_working_world_and_a_refusal_discards_the_whole_t
     // In order: ca(1) at 1; ca(3) at the boundary the first left; ca(2)
     // between them — one run, the run-list's own merge.
     k.transact(&key, |stg| {
-        stage_reinstate_at(stg, p1, &doc2(), vp(1, 1), &[of_doc1(1, 1)])?;
-        stage_reinstate_at(stg, p1, &doc2(), vp(1, 2), &[of_doc1(3, 1)])?;
-        stage_reinstate_at(stg, p1, &doc2(), vp(1, 2), &[of_doc1(2, 1)])
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 1), &[of_doc1(1, 1)], AsOf::Unchecked)?;
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 2), &[of_doc1(3, 1)], AsOf::Unchecked)?;
+        stage_reinstate_at(stg, p1, &doc2(), vp(1, 2), &[of_doc1(2, 1)], AsOf::Unchecked)
     })
     .expect("three placements commit as one");
     let s = k.snapshot();
@@ -284,33 +285,33 @@ fn the_budget_is_measured_as_each_run_lands_duplicates_are_admitted_and_an_empty
     let same: Vec<ShotRun> =
         std::iter::repeat_with(|| of_doc1(1, 1)).take(MAX_PLACED_RUNS + 1).collect();
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &same)),
+        rejected(vs.reinstate(p1, &doc2(), vp(1, 1), &same, AsOf::Typed(k.current_seq()))),
         ReinstateError::TooManyRuns
     ));
     assert_eq!(content_count(&k, &doc2()), n(0), "refused inside the closure: nothing staged");
     // Exactly the budget: placed whole, one address MAX_PLACED_RUNS times.
-    vs.reinstate(p1, &doc2(), vp(1, 1), &same[..MAX_PLACED_RUNS])
+    vs.reinstate(p1, &doc2(), vp(1, 1), &same[..MAX_PLACED_RUNS], AsOf::Typed(k.current_seq()))
         .expect("a placement of exactly the budget commits, duplicates and all");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_run_count(&doc2()), MAX_PLACED_RUNS);
     assert_eq!(s.world().m5().content_count(&doc2()), n(MAX_PLACED_RUNS as u32));
     assert_eq!(s.world().m5().point(&doc2(), &vp(1, 2)), Some(ca(1)), "the same address again");
     // I-adjacent runs of one origin are one run of the accumulator.
-    vs.reinstate(p1, &doc1(), vp(1, 1), &[of_doc1(1, 1), of_doc1(2, 2)])
+    vs.reinstate(p1, &doc1(), vp(1, 1), &[of_doc1(1, 1), of_doc1(2, 2)], AsOf::Typed(k.current_seq()))
         .expect("adjacent runs commit");
     assert_eq!(k.snapshot().world().m5().content_run_count(&doc1()), 1);
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(3));
     // The empty list — and the destination's checks ahead of it.
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc1(), vp(1, 4), &[])),
+        rejected(vs.reinstate(p1, &doc1(), vp(1, 4), &[], AsOf::Typed(k.current_seq()))),
         ReinstateError::EmptyResult
     ));
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc1(), vp(2, 1), &[])),
+        rejected(vs.reinstate(p1, &doc1(), vp(2, 1), &[], AsOf::Typed(k.current_seq()))),
         ReinstateError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.reinstate(p1, &doc1(), vp(1, 0), &[])),
+        rejected(vs.reinstate(p1, &doc1(), vp(1, 0), &[], AsOf::Typed(k.current_seq()))),
         ReinstateError::OutOfBounds
     ));
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(3));

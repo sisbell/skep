@@ -12,7 +12,7 @@
 // `m3()`/`m5()`/`links()`/`content()` methods the read arms call, so no
 // accessor trait is imported here by name.
 use skep_address::{ordinal, shift, validate, Nat};
-use skep_arrangement::{published_target, trunk_of, M5Rec};
+use skep_arrangement::{published_target, trunk_of, AsOf, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_by_home_on, count_v_on,
@@ -159,27 +159,32 @@ where
             // (PUB-9.13), class type and all (PUB-2.64), so the exemption is
             // claimed only by the `Deposit::Declared` the client sent: M10
             // converts nothing and tests nothing — the class test is M5's.
-            Op::Insert { doc, at, values, deposit } => {
+            // The typed state rides the same way (skep #442): the frame's
+            // `as_of` is the checked arm of M5's `AsOf`, and the store's
+            // check — behind `published_target`, ahead of every shape check
+            // — is the one judgment of it; this door decides nothing of it,
+            // on any of the five.
+            Op::Insert { doc, at, values, deposit, as_of } => {
                 let (start, committed_at) = self
                     .stores
                     .vstream_attested(attest)
-                    .insert(wc.caller(), &doc, at, values, deposit)
+                    .insert(wc.caller(), &doc, at, values, deposit, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?; // returns post-commit
                 Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
             }
-            Op::Delete { doc, p, width } => {
+            Op::Delete { doc, p, width, as_of } => {
                 let at = self
                     .stores
                     .vstream_attested(attest)
-                    .delete(wc.caller(), &doc, p, width)
+                    .delete(wc.caller(), &doc, p, width, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }
-            Op::Copy { doc, at, specs } => {
+            Op::Copy { doc, at, specs, as_of } => {
                 let committed_at = self
                     .stores
                     .vstream_attested(attest)
-                    .copy(wc.caller(), &doc, at, &specs)
+                    .copy(wc.caller(), &doc, at, &specs, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
@@ -189,19 +194,19 @@ where
             // the distinct origins in run order), so the store takes no
             // predicate; the handle drops the attestation for a kind outside
             // its three.
-            Op::Reinstate { doc, at, runs } => {
+            Op::Reinstate { doc, at, runs, as_of } => {
                 let committed_at = self
                     .stores
                     .vstream_attested(attest)
-                    .reinstate(wc.caller(), &doc, at, &runs)
+                    .reinstate(wc.caller(), &doc, at, &runs, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
-            Op::Rearrange { doc, cuts } => {
+            Op::Rearrange { doc, cuts, as_of } => {
                 let at = self
                     .stores
                     .vstream_attested(attest)
-                    .rearrange(wc.caller(), &doc, &cuts)
+                    .rearrange(wc.caller(), &doc, &cuts, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }

@@ -59,7 +59,13 @@
 //! map — every document, member and link the fixture mints, at the position
 //! the fold is handed for its record — under the same ruling renewed again:
 //! the checkpoint's body and every dump moved, the segment and the fixture's
-//! ops did not.
+//! ops did not. And 2026-10-31, when M5's slice gained its arranged-at
+//! positions — every document whose content arrangement a record of the
+//! fixture changes, at the position the fold is handed for that record (the
+//! stale-edit check, skep #442) — under the same ruling renewed once more:
+//! the checkpoint's body and every dump moved, the segment and the fixture's
+//! ops did not; the pre-stretch artifacts stand, their reader pin taking the
+//! new map's line out of each dump as it takes the two before it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -337,17 +343,20 @@ fn pre_stretch_dumps() -> BTreeMap<u64, String> {
 }
 
 /// A dump of this build over the pre-stretch board, as the pre-stretch build
-/// rendered it. Three differences between the two, and nothing else moves:
+/// rendered it. Four differences between the two, and nothing else moves:
 /// M4's entry form — a bare value then, `Value([..])` now, every entry of an
 /// opened old board being a one-byte value — so the `Value(` … `)` wrapper
 /// is taken off each content entry; M5's fifth map, `fork_sources`, which
 /// the pre-stretch build did not hold and this build renders in every dump
 /// — empty before the fixture's cross-owner version, one entry from it on —
 /// so that entry is taken out of M5's rendering whole
-/// ([`without_the_fork_sources`]); and M3's fifth map, `minted_at`, likewise
+/// ([`without_the_fork_sources`]); M3's fifth map, `minted_at`, likewise
 /// unheld then and rendered now — the seed's two documents at genesis, and
 /// every document, member and link the fixture mints at its position — taken
-/// out of M3's rendering whole ([`without_the_minted_at`]).
+/// out of M3's rendering whole ([`without_the_minted_at`]); and M5's sixth
+/// map, `arranged_at`, likewise — every document the fixture's edits arrange,
+/// at the position of its last change — taken out of M5's rendering whole
+/// ([`without_the_arranged_at`]).
 fn without_the_value_wrapper(dump: &str) -> String {
     let mut out = String::with_capacity(dump.len());
     let mut rest = dump;
@@ -359,7 +368,27 @@ fn without_the_value_wrapper(dump: &str) -> String {
         assert!(inner[close..].starts_with(')'), "the wrapper closes after the list");
         rest = &inner[close + 1..];
     }
-    without_the_minted_at(&without_the_fork_sources(&format!("{out}{rest}")))
+    without_the_minted_at(&without_the_fork_sources(&without_the_arranged_at(&format!(
+        "{out}{rest}"
+    ))))
+}
+
+/// `dump` with M5's `arranged_at` entry taken out of the arrangement slice,
+/// as [`without_the_fork_sources`] takes its fifth map: the key, its map —
+/// addresses render as nested lists and positions as bare integers, so the
+/// first `}` after the key closes it — and the separator that follows, since
+/// the entry is the slice's FIRST (`arranged_at` sorts before
+/// `arrangements`) and never its last. Asserted PRESENT, for the reason that
+/// twin states.
+fn without_the_arranged_at(dump: &str) -> String {
+    const KEY: &str = "\"arranged_at\": {";
+    let at = dump.find(KEY).expect("this build renders M5's arranged-at positions in every dump");
+    let after_key = &dump[at + KEY.len()..];
+    let close = after_key.find('}').expect("the arranged-at map closes");
+    let rest = &after_key[close + 1..];
+    let rest = rest.strip_prefix(", ").expect("the entry is followed by its sibling");
+    assert!(!rest.contains(KEY), "M5's arranged-at positions render once");
+    format!("{}{rest}", &dump[..at])
 }
 
 /// `dump` with M3's `minted_at` entry taken out of the namespace slice, as

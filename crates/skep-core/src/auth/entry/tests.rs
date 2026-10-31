@@ -2,6 +2,7 @@ use skep_address::Span;
 use skep_febe::{Codec, OpKind};
 use skep_identity::{entry_body_publish, entry_body_record, EntrySlot};
 use skep_links::{enc, registry, ShippedType};
+use skep_kernel::Seq;
 
 use super::*;
 use crate::codec::op_name;
@@ -143,6 +144,7 @@ fn an_op_outside_the_checked_set_stops_compose_loudly() {
         doc: head_document(),
         p: VPos::content(Nat::from(1u32)),
         width: Nat::from(1u32),
+        as_of: Seq(7),
     };
     let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL, board);
 }

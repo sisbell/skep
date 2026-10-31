@@ -76,6 +76,7 @@ use crate::mutilate::{
     RECORD_BYTES_AT,
 };
 use sha2::{Digest, Sha256};
+use skep_arrangement::AsOf;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
@@ -944,7 +945,7 @@ fn c07_a_closed_segment_rolled_back_to_an_older_copy_breaks_at_the_next_segments
             .expect("create a draft");
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert a");
         // The OLDER copy: three transactions, ending on a committed marker.
         let older = fs::read(&seg1).expect("seg-1 before the fill");
@@ -956,17 +957,18 @@ fn c07_a_closed_segment_rolled_back_to_an_older_copy_breaks_at_the_next_segments
                 vp(1, 2),
                 vec![Val::new(vec![0x5A; SEGMENT_FILL])],
                 Deposit::Undeclared,
+                AsOf::Typed(engine.kernel().current_seq()),
             )
             .expect("the ~1 MiB insert");
         assert_eq!(segment_count(&dir), 1, "the fill lands in seg-1");
         let (_, rotated) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'b'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'b'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert b");
         assert_eq!(segment_count(&dir), 2, "the commit after the fill rotates");
         let (_, last) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 4), vec![Val::new(vec![b'c'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 4), vec![Val::new(vec![b'c'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert c");
         (older, rotated.0, last.0, engine.world_dump())
     };
@@ -1685,6 +1687,7 @@ impl TwoSegments {
                 vp(1, 1),
                 vec![Val::new(vec![0x5A; SEGMENT_FILL])],
                 Deposit::Undeclared,
+                AsOf::Typed(engine.kernel().current_seq()),
             )
             .expect("the ~1 MiB insert");
         let base = filled.0;
@@ -1697,13 +1700,13 @@ impl TwoSegments {
         assert_eq!(segment_count(dir), 1, "a checkpoint rotates nothing");
         let (_, b) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'b'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'b'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert b");
         assert_eq!(segment_count(dir), 2, "the commit after the fill rotates");
         chains.insert(b.0, engine.kernel().chain_head());
         let (_, c) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], Deposit::Undeclared)
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], Deposit::Undeclared, AsOf::Typed(engine.kernel().current_seq()))
             .expect("insert c");
         chains.insert(c.0, engine.kernel().chain_head());
         let dump_at_head = engine.world_dump();

@@ -39,7 +39,7 @@ use super::*;
 #[test]
 fn outcome_i_no_row_sends_from_the_head() {
     let g = ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the head is sent once");
     assert_eq!(g.fake.sends.lock().unwrap()[0]["op"], "insert");
@@ -59,7 +59,7 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     let g = ground();
     *g.fake.text.lock().unwrap() = "hello".into();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sends.lock().unwrap());
     assert!(g.lines().is_empty(), "the line is done kept");
@@ -80,7 +80,7 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
 fn the_resend_sends_its_lines_in_k_order_across_the_documents() {
     let g = ground();
     for (doc, value) in [(DOC, "a"), (OTHER, "b"), (DOC, "c")] {
-        g.hold(&insert(doc, json!([value])), "unreachable", false);
+        g.hold(&insert(doc, json!([value]), g.fake.head()), "unreachable", false);
     }
     g.holds.probe("b-1");
     let sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| format!("{} {}", f["doc"].as_str().unwrap_or("?"), f["values"][0].as_str().unwrap_or("?"))).collect();
@@ -98,7 +98,7 @@ fn the_resend_sends_its_lines_in_k_order_across_the_documents() {
 #[test]
 fn a_death_signal_at_a_resend_leaves_its_line_standing() {
     let g = ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.fake.op_closed.store(true, Ordering::SeqCst);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line was dialed");
@@ -123,7 +123,7 @@ fn a_death_signal_at_a_resend_leaves_its_line_standing() {
 #[test]
 fn a_resend_answered_internal_panic_reads_before_it_sends_again() {
     let g = ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
     g.holds.probe("b-1");
     let lines = g.lines();
@@ -151,8 +151,8 @@ fn a_probe_resends_every_principals_lines() {
     let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
     let second = g.holds.sessions.register(&board, open, &mut NoSupplements);
     g.holds.open_session(&second);
-    g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
-    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"])), &second).unwrap(), Reason::of("unreachable", false)).unwrap();
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"]), g.fake.head()), &second).unwrap(), Reason::of("unreachable", false)).unwrap();
     g.holds.probe("b-1");
     let mut sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| f["doc"].as_str().unwrap_or("?").to_string()).collect();
     sent.sort();
@@ -169,7 +169,7 @@ fn a_probe_resends_every_principals_lines() {
 fn outcome_iii_a_foreign_row_moves_the_document() {
     let g = ground();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "no line of a moved document is sent");
     let lines = g.lines();
@@ -191,7 +191,7 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
 #[test]
 fn a_bare_session_resends_no_held_line() {
     let g = bare_ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.holds.probe("b-1");
     assert_eq!((g.fake.health_reads.load(Ordering::SeqCst), g.fake.sends()), (1, 0), "the board is read, and nothing is sent under the bare session");
     assert_eq!(g.lines().len(), 1, "the line stands");
@@ -224,7 +224,7 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
         let g = ground_in(TempDir::new().unwrap(), facts, 0);
         *g.fake.text.lock().unwrap() = "hello".into();
         *g.fake.rows.lock().unwrap() = vec![row];
-        g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+        g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
         g.holds.probe("b-1");
         (g.states(), g.fake.sends())
     };
@@ -247,22 +247,23 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
 #[test]
 fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
     let lost = lost_row();
-    let walk = |frame: Value, text: &str, sent: bool| -> (Vec<String>, usize) {
+    // Each walk's frame is typed against its own ground's head.
+    let walk = |frame: &dyn Fn(u64) -> Value, text: &str, sent: bool| -> (Vec<String>, usize) {
         let g = ground();
         *g.fake.text.lock().unwrap() = text.into();
         *g.fake.rows.lock().unwrap() = vec![lost.clone()];
-        g.hold(&frame, "poisoned", sent);
+        g.hold(&frame(g.fake.head()), "poisoned", sent);
         g.holds.probe("b-1");
         (g.states(), g.fake.sends())
     };
-    let (states, sends) = walk(insert(DOC, json!(["hello"])), "hello", true);
+    let (states, sends) = walk(&|at| insert(DOC, json!(["hello"]), at), "hello", true);
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the landed insert is kept: {states:?}");
     assert_eq!(sends, 0, "the landed head is not re-sent");
-    let (states, sends) = walk(insert(DOC, json!(["hello"])), "other", true);
+    let (states, sends) = walk(&|at| insert(DOC, json!(["hello"]), at), "other", true);
     assert!(states.contains(&"moved".to_string()) && sends == 0, "values that differ: moved, nothing sent: {states:?}");
-    let (states, sends) = walk(delete(DOC), "hello", true);
+    let (states, sends) = walk(&|at| delete(DOC, at), "hello", true);
     assert!(states.contains(&"moved".to_string()) && sends == 0, "a kind the site read cannot confirm: moved: {states:?}");
-    let (states, sends) = walk(insert(DOC, json!(["hello"])), "hello", false);
+    let (states, sends) = walk(&|at| insert(DOC, json!(["hello"]), at), "hello", false);
     assert!(states.contains(&"moved".to_string()) && sends == 0, "a head never sent reads any row as moved: {states:?}");
 }
 
@@ -277,7 +278,7 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
 fn a_read_the_board_refuses_decides_nothing() {
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = Some((503, json!({"error": "feed_rebuilding", "detail": "the feed is being re-covered"})));
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "nothing is sent on a read the board refused");
     assert_eq!(g.lines()[0]["cause"], "unreachable", "the line stands as it was");
@@ -302,7 +303,7 @@ fn history_reclaimed_decides_by_the_arrangement() {
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     *g.fake.text.lock().unwrap() = "hello".into();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is not re-sent");
     assert!(g.lines().is_empty(), "the values at the site keep it");
@@ -311,14 +312,14 @@ fn history_reclaimed_decides_by_the_arrangement() {
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     *g.fake.text.lock().unwrap() = "other".into();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (0, Some("moved")), "values that differ: moved");
 
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     g.fake.site_unread.store(true, Ordering::SeqCst);
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0);
     assert_eq!(g.lines()[0]["cause"], "unreachable", "an unread site decides nothing: the line stands");
@@ -336,7 +337,7 @@ fn history_reclaimed_decides_by_the_arrangement() {
 fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     let g = ground();
     g.fake.op_rejected.every(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line was sent");
     assert_eq!(g.lines().len(), 1, "and stands: the board did not take it");
@@ -368,7 +369,7 @@ fn another_processs_lock_leaves_the_directory_not_yet_this_shells() {
     let held_dir = store.path().join("held").join("ab".repeat(32));
     let facts = writer_facts(&store);
     let g = ground_in(store, facts, 0);
-    let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    let answer = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("unreachable")), "the hold's own cause, no second shell's: {answer}");
     let why = answer["unwritable"].as_str().unwrap_or_else(|| panic!("the answer says why: {answer}"));
     assert!(why.contains("another process holds this board's held store") && why.contains("one shell per data directory"), "{why}");
@@ -380,11 +381,11 @@ fn another_processs_lock_leaves_the_directory_not_yet_this_shells() {
     // The other process lets go: the lock is tried again at the next probe,
     // the directory taken, and the next line copied to the board's file.
     drop(other_process);
-    let still = g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+    let still = g.hold(&insert(DOC, json!(["b"]), g.fake.head()), "unreachable", false);
     assert!(still["unwritable"].is_string(), "until a probe or a session's open tries the lock again: {still}");
     g.holds.probe("b-1");
     assert!(g.lines().is_empty(), "resent and kept");
-    let next = g.hold(&insert(DOC, json!(["c"])), "unreachable", false);
+    let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
     assert!(next.get("unwritable").is_none(), "the directory is this shell's now: {next}");
     assert!(std::fs::read_to_string(held_dir.join("principal-1.held")).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
 }
@@ -397,7 +398,7 @@ fn moved_hands(rows: impl Fn(&str, &str) -> Vec<Value>) -> Vec<Value> {
     let KeyId(other) = FileStore::open(store.path().join("store")).generate(Some(skep_client::sheet::Label::new("phone").unwrap())).unwrap();
     let g = ground_in(store, facts, 0);
     *g.fake.rows.lock().unwrap() = rows(&g.own_key(), &other.to_hex());
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.holds.probe("b-1");
     let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document moved");
     assert_held_event_declared(&moved);
@@ -444,7 +445,7 @@ fn a_moved_documents_hands_are_named_each_once() {
 #[test]
 fn a_drain_that_unwinds_leaves_the_board_free_to_drain() {
     let g = ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.fake.panic_next_health.store(true, Ordering::SeqCst);
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.holds.probe("b-1")));
     assert!(unwound.is_err(), "the health read panicked");
@@ -463,7 +464,7 @@ fn a_drain_that_unwinds_leaves_the_board_free_to_drain() {
 #[test]
 fn a_probe_while_a_drain_runs_dials_nothing() {
     let g = ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     g.fake.shut_health();
     // The ground's receiver is no `Sync`: the threads take its holds and its
     // board alone.
@@ -628,8 +629,8 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
             None => {}
         }
         let frame = match head {
-            Insert => insert(DOC, json!(["hello"])),
-            Delete => delete(DOC),
+            Insert => insert(DOC, json!(["hello"]), g.fake.head()),
+            Delete => delete(DOC, g.fake.head()),
         };
         g.hold(&frame, "unreachable", sent);
         g.holds.probe("b-1");
@@ -665,8 +666,8 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
 fn a_moved_document_faces_its_own_lines_alone() {
     let g = ground();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
-    g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
-    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]))) else { panic!("held behind the line") };
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]), g.fake.head())) else { panic!("held behind the line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     g.holds.probe("b-1");
     let lines = g.lines();
@@ -686,7 +687,7 @@ fn a_moved_document_faces_its_own_lines_alone() {
 fn a_stopped_node_holds_every_burst_until_it_runs() {
     let g = ground();
     g.holds.set_node_stopped("b-1", true);
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head())) else { panic!("held before the dial") };
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "{held}");
     assert_eq!(g.lines()[0]["sent"], false);
     g.holds.probe("b-1");
@@ -709,7 +710,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     let g = ground();
     g.fake.writes_halted.store(true, Ordering::SeqCst);
     g.holds.note_health("b-1", &g.session.board.health().unwrap());
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head())) else { panic!("held before the dial") };
     assert_eq!(held["cause"], "halted", "{held}");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "a board whose writes are halted is sent nothing");
@@ -717,7 +718,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the read that says writes go ends the hold");
     assert!(g.lines().is_empty());
-    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
+    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]), g.fake.head())) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "the hold has ended: {next}");
 }
 
@@ -731,7 +732,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
 fn a_third_durability_on_a_resent_line_holds_it() {
     let g = ground();
     g.fake.op_rejected.every(retry("durability"));
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     for (probe, cause) in [(1, "unreachable"), (2, "unreachable"), (3, "durability")] {
         g.holds.probe("b-1");
         assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (probe, Some(cause)), "probe {probe}");
@@ -754,13 +755,13 @@ fn a_third_durability_on_a_resent_line_holds_it() {
 fn a_reused_ordinal_starts_its_reissues_afresh() {
     let g = ground();
     g.fake.op_rejected.next(2, retry("durability"));
-    let first = g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     for _ in 0..3 {
         g.holds.probe("b-1");
     }
     assert_eq!(g.fake.sends(), 3, "reissued twice, then sent and kept");
     assert!(g.lines().is_empty(), "the line is kept and the queue empties");
-    let again = g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+    let again = g.hold(&insert(DOC, json!(["b"]), g.fake.head()), "unreachable", false);
     assert_eq!((first["held"].as_u64(), again["held"].as_u64()), (Some(1), Some(1)), "the ordinal is reused");
     g.fake.op_rejected.next(1, retry("durability"));
     g.holds.probe("b-1");
@@ -780,7 +781,7 @@ fn a_probe_with_no_line_standing_dials_nothing() {
     let reads = || g.fake.health_reads.load(Ordering::SeqCst);
     g.holds.probe("b-1");
     assert_eq!((reads(), g.fake.sends()), (0, 0), "an empty queue is probed for nothing");
-    g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     g.holds.probe("b-1");
     assert_eq!((reads(), g.fake.sends()), (1, 1), "a standing line is probed and sent");
     assert!(g.lines().is_empty(), "and kept");
@@ -801,8 +802,8 @@ fn a_line_held_behind_a_landing_reads_past_it() {
     let g = ground();
     *g.fake.rows.lock().unwrap() = vec![lost_row()];
     *g.fake.text.lock().unwrap() = "hello".into();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.hold(&insert(DOC, json!(["!"])), "behind", false);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
+    g.hold(&insert(DOC, json!(["!"]), g.fake.head()), "behind", false);
     g.fake.op_unreachable.store(true, Ordering::SeqCst);
     g.holds.probe("b-1");
     let lines = g.lines();
@@ -831,7 +832,7 @@ fn a_line_behind_an_acked_line_reads_past_its_ack() {
         let g = ground();
         g.fake.next_at.store(60, Ordering::SeqCst);
         g.fake.op_lost_at.store(2, Ordering::SeqCst);
-        let frame = |value: &str| if kind == "insert" { insert(DOC, json!([value])) } else { delete(DOC) };
+        let frame = |value: &str| if kind == "insert" { insert(DOC, json!([value]), g.fake.head()) } else { delete(DOC, g.fake.head()) };
         g.hold(&frame("a"), "unreachable", false);
         g.hold(&frame("b"), "behind", false);
         g.holds.probe("b-1");
@@ -859,10 +860,10 @@ fn a_line_held_after_a_landing_the_read_found_reads_past_it() {
     let g = ground();
     *g.fake.rows.lock().unwrap() = vec![lost_row()];
     *g.fake.text.lock().unwrap() = "hello".into();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     g.holds.probe("b-1");
     assert!(g.lines().is_empty(), "the landed line is kept");
-    g.hold(&insert(DOC, json!(["!"])), "unreachable", false);
+    g.hold(&insert(DOC, json!(["!"]), g.fake.head()), "unreachable", false);
     assert_eq!(g.lines()[0]["base"], 77, "the landing is the document's base");
     g.fake.next_at.store(78, Ordering::SeqCst);
     g.holds.probe("b-1");
@@ -899,7 +900,7 @@ fn lose_the_next_answer(g: &Ground, n: u32) {
 #[test]
 fn a_line_whose_resends_lose_their_answer_is_handed_to_the_person() {
     let g = ground();
-    let k = g.hold(&insert(DOC, json!(["a"])), "unreachable", true)["held"].as_u64().unwrap();
+    let k = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", true)["held"].as_u64().unwrap();
     for n in 0..MAX_LOST_ANSWERS {
         lose_the_next_answer(&g, n);
         g.holds.probe("b-1");
@@ -918,7 +919,7 @@ fn a_line_whose_resends_lose_their_answer_is_handed_to_the_person() {
     let said = g.said.lock().unwrap().clone();
     let line = format!("held: line {k} on {DOC}: {MAX_LOST_ANSWERS} resends lost their answer");
     assert_eq!(said.iter().filter(|l| l.starts_with(&line)).count(), 1, "said once: {said:?}");
-    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]))) else { panic!("held behind the line handed over") };
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head())) else { panic!("held behind the line handed over") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), tries, "the lines wait for the person's act");
@@ -942,7 +943,7 @@ fn a_line_whose_resends_lose_their_answer_is_handed_to_the_person() {
 #[test]
 fn a_handed_over_line_whose_write_landed_is_kept_at_the_persons_send() {
     let g = ground();
-    let k = g.hold(&insert(DOC, json!(["hello"])), "unreachable", true)["held"].as_u64().unwrap();
+    let k = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true)["held"].as_u64().unwrap();
     for _ in 0..MAX_LOST_ANSWERS {
         g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
         g.holds.probe("b-1");
@@ -970,7 +971,7 @@ fn a_handed_over_line_whose_write_landed_is_kept_at_the_persons_send() {
 #[test]
 fn a_line_whose_last_lost_answer_landed_is_kept_never_handed_over() {
     let g = ground();
-    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
     for _ in 0..MAX_LOST_ANSWERS {
         g.fake.op_refused.next(1, (500, json!({"error": "internal_panic"})));
         g.holds.probe("b-1");
@@ -994,7 +995,7 @@ fn a_line_whose_last_lost_answer_landed_is_kept_never_handed_over() {
 #[test]
 fn a_connection_never_made_counts_no_try() {
     let g = ground();
-    let k = g.hold(&insert(DOC, json!(["a"])), "unreachable", false)["held"].as_u64().unwrap();
+    let k = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false)["held"].as_u64().unwrap();
     g.fake.op_unreachable.store(true, Ordering::SeqCst);
     for _ in 0..=MAX_LOST_ANSWERS {
         g.holds.probe("b-1");
@@ -1031,7 +1032,7 @@ fn a_line_that_may_have_landed_stays_so_through_resends_that_never_left() {
         let facts = writer_facts(&store);
         let g = ground_over(fake, store, facts, 0);
         g.fake.op_unreachable.store(!unreadable_head, Ordering::SeqCst);
-        g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+        g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
         for _ in 0..=MAX_LOST_ANSWERS {
             g.holds.probe("b-1");
         }

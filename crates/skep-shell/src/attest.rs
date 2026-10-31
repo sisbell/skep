@@ -15,22 +15,24 @@
 //! classification, and an `attest` on a write outside it is dropped unread,
 //! so every write of the ten kinds under a signed session is attested, a
 //! draft's included — save a frame an `attest` already rides
-//! ([`wants_attest`]) and a write at a board with no `H.1` to sign over
-//! (`SessionEntry::attest`). One composer: the body builders are
-//! `skep-identity`'s, as the daemon's verifier composes through them
-//! (`skep-core`'s `auth/entry.rs`), the slots as stored — an address-form
-//! slot's unit spans, a V-spec slot's I-extents resolved through `image`,
-//! as `skep-dev seed`'s link is — and a `publish`'s copied runs by their
-//! values, read back through the origin's arrangement under the session's
-//! own token, a window by its address. A frame the composer cannot make — a
-//! value it cannot read, a slot source it may not read, a term it cannot
-//! spell — halts naming what stopped it, and nothing is sent: the shell
-//! never sends a frame it could not sign. A death signal met at one of
-//! those reads is no halt of the composer's but the session's end
-//! ([`Unattested::Died`]), which its caller runs. The wire's value forms,
-//! both ways, are `wire`'s: the composer spells a frame's `values` and
-//! reads a delivery back through them, and faces what they refuse as its
-//! own halt.
+//! ([`wants_attest`]) and a write at a board no one has claimed that serves
+//! no `H.1` to sign over; a head record that stands and cannot be read, or a
+//! claimed board that serves none, refuses the write `head_unreadable`, never
+//! sending it unsigned (`SessionEntry::attest`; SP-14). One composer: the
+//! body builders are `skep-identity`'s, as the daemon's verifier composes
+//! through them (`skep-core`'s `auth/entry.rs`), the slots as stored — an
+//! address-form slot's unit spans, a V-spec slot's I-extents resolved
+//! through `image`, as `skep-dev seed`'s link is — and a `publish`'s copied
+//! runs by their values, read back through the origin's arrangement under
+//! the session's own token, a window by its address. A frame the composer
+//! cannot make — a value it cannot read, a slot source it may not read, a
+//! term it cannot spell — halts naming what stopped it, and nothing is
+//! sent: the shell never sends a frame it could not sign. A death signal
+//! met at one of those reads is no halt of the composer's but the session's
+//! end ([`Unattested::Died`]), which its caller runs. The wire's value
+//! forms, both ways, are `wire`'s: the composer spells a frame's `values`
+//! and reads a delivery back through them, and faces what they refuse as
+//! its own halt.
 //!
 //! **The board's budgets, kept as the board keeps them.** Every read the
 //! composer makes is one a page's frame names, and every value it holds is
@@ -216,11 +218,13 @@ pub struct Composer<'a> {
 
 /// Why the composer attached no attest.
 ///
-/// Either the call's refusal — its own halt, and the halt of the `H.1` read
-/// it signs over, as `attest_not_composed`; `store_unreadable` where the
-/// session's key file cannot be read and `no_account` where the board
-/// answered the session none (`SessionEntry::attest`); a board's refusal of
-/// a read verbatim; `unreachable` where a read went unanswered — or the
+/// Either the call's refusal — its own halt, as `attest_not_composed`;
+/// `head_unreadable` where the board's head record, which it signs over,
+/// stands and cannot be read, or a claimed board serves none (SP-14);
+/// `store_unreadable` where the session's key file cannot be read and
+/// `no_account` where the board answered the session none
+/// (`SessionEntry::attest`); a board's refusal of a read verbatim;
+/// `unreachable` where a read went unanswered — or the
 /// session's death signal met at one of its reads, which is no refusal of
 /// the composer's: the caller ends the session (`Sessions::end`) and
 /// answers `session_died` with the reason the end derives.

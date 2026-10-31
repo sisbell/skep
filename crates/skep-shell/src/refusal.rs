@@ -188,7 +188,8 @@ impl Name {
     pub const NO_SUCH_HELD: Name = Name("no_such_held");
     /// `resolve(session, …)`: the line is `holding` or `sending`.
     ///
-    /// It is not refused or moved — no act exists until the board answers or
+    /// It is not refused or moved — no act exists until the board answers,
+    /// its head record reads again where the line holds `head_unreadable`, or
     /// the shell hands the line to the person under `answers_lost` (P10).
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
     /// A burst whose frame passes the board's frame cap, refused at the act.
@@ -255,6 +256,13 @@ impl Name {
     ///
     /// Nothing was sent.
     pub const ATTEST_NOT_COMPOSED: Name = Name("attest_not_composed");
+    /// A signed session's write whose signature could not be made.
+    ///
+    /// The signature names the board's head record (`H.1`), which stands and
+    /// cannot be read, or which a claimed board serves none of (SP-14): the
+    /// face's cause says which, and why. Nothing was sent unsigned; a burst is
+    /// held under this cause until the record reads again.
+    pub const HEAD_UNREADABLE: Name = Name("head_unreadable");
 
     /// Returns the token.
     pub fn as_str(self) -> &'static str {

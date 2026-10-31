@@ -149,7 +149,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldRow",
         open: false,
-        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal, `doc` the draft, `base` the resend's read start, `frame` the page's frame as composed (no attest), `sent` whether the burst may have landed — a dial whose answer was lost (the board's `internal_panic` among them), or a `poisoned` answer (§3c.2), `refusal` the verdict for a refused run — the board's, or the shell's `answers_lost` where it handed the person a line whose resends kept losing their answer (§3c.4), its `sent` kept",
+        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal, `doc` the draft, `base` the resend's read start, `frame` the page's frame as composed (no attest), `sent` whether the burst may have landed — a dial whose answer was lost (the board's `internal_panic` among them), or a `poisoned` answer (§3c.2), `refusal` the verdict for a refused run — the board's, or the shell's `answers_lost` where it handed the person a line whose resends kept losing their answer (§3c.4), its `sent` kept; at a line held `head_unreadable`, the shell's refusal naming why its signature could not be made, the line holding all the same (SP-14)",
         fields: &[req("held", "number"), req("doc", "string"), req("base", "number"), req("frame", "unknown"), req("cause", "string"), req("sent", "boolean"), req("time", "number"), opt("refusal", "unknown")],
     },
     Shape {
@@ -259,7 +259,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "PublicationRefused",
         open: true,
-        doc: "`publication.confirm` — THE REFUSAL: a typed arm with its face's DATA beside `arm` and never a string — the library's `twin {member, missing}`, `kept_place_moved {index, race}` (where the re-read found no difference to re-state), `unowned_draft {draft}`, `not_owner {addr}`, `claim_refused {edition}` (crossing as the board answered it, nothing re-sent), `window_withheld {origin}`, `needs_signed_session`, `no_such_document`, `older_board {detail}`, `head_unreadable` (nothing sent), `session_ended {reason}`, `budget_race {detail}`, `may_already_stand`, `own_fault {fault}`, `other {refusal}` — and the shell's own two BEFORE ANY FRAME: `over_cap {over}` and `inert {inert}`",
+        doc: "`publication.confirm` — THE REFUSAL: a typed arm with its face's DATA beside `arm` and never a string — the library's `twin {member, missing}`, `kept_place_moved {index, race}` (where the re-read found no difference to re-state), `unowned_draft {draft}`, `not_owner {addr}`, `claim_refused {edition}` (crossing as the board answered it, nothing re-sent), `window_withheld {origin}`, `needs_signed_session`, `no_such_document`, `older_board {detail}`, `head_unreadable` (nothing sent), `session_ended {reason}`, `budget_race {detail}`, `may_already_stand`, `own_fault {fault}`, `other {refusal}` — and the shell's own three BEFORE ANY FRAME: `over_cap {over}`, `inert {inert}` and `head_unreadable {refusal}`, the refusal naming why the signature could not be made (SP-14)",
         fields: &[req("outcome", "'refused'"), req("arm", "string")],
     },
     Shape {

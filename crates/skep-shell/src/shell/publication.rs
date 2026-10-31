@@ -739,7 +739,8 @@ impl Shell {
     /// composed; the re-read, a difference answered as the re-statement with
     /// nothing sent and the panel re-stated for the next confirm; the build,
     /// an inert request refused `inert`; the price's verdict, `over_cap`; a
-    /// claimed board whose head record cannot be read, `head_unreadable`;
+    /// head record that stands and cannot be read, or a claimed board that
+    /// serves none, `head_unreadable` with the refusal that says why (SP-14);
     /// then `sent`, the library's send with its one re-ask, its re-sign and
     /// its landed test, a lost answer the board holds nothing of re-sent
     /// once; the outcome's event; and at the board's `kept_place_moved` the
@@ -757,7 +758,8 @@ impl Shell {
     /// the arguments against the panel (`confirmed_args`);
     /// `write_in_bare_session`; `stopped`, `poisoned` or `halted` where a
     /// hold stands at the board; `store_unreadable`, `no_account`; then the
-    /// reads' and the send's faults as `publication.open` names them. A
+    /// reads' and the send's faults as `publication.open` names them, the
+    /// board term's read among them (`SessionEntry::signing_term`). A
     /// refusal of the composition or the board is the RESULT's third shape,
     /// never an error here.
     pub(super) fn publication_confirm(&self, args: &Value) -> Result<Value, Refusal> {
@@ -805,12 +807,16 @@ impl Shell {
             self.publication_event(&session, &draft, "refused", json!({"arm": "over_cap"}));
             return Ok(refused_json("over_cap", json!({"over": over_json(&request.price)})));
         }
-        // Never unsigned on a claimed board: the library refuses it too, but
-        // the check here keeps `sent` from being said of a frame that never
-        // leaves.
-        if session.board.board_term()?.is_none() && session.board.health()?.claimant().is_some() {
-            self.publication_event(&session, &draft, "refused", json!({"arm": "head_unreadable"}));
-            return Ok(refused_json("head_unreadable", json!({})));
+        // Never unsigned where a signature is owed (SP-14): the library
+        // refuses it too, but the check here keeps `sent` from being said of
+        // a frame that never leaves.
+        match session.signing_term() {
+            Ok(_) => {}
+            Err(refusal @ Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }) => {
+                self.publication_event(&session, &draft, "refused", json!({"arm": "head_unreadable"}));
+                return Ok(refused_json("head_unreadable", json!({"refusal": refusal.to_value()})));
+            }
+            Err(refusal) => return Err(refusal),
         }
         self.publication_event(&session, &draft, "sent", json!({}));
         // The send, under the session that stands — re-opened once where the

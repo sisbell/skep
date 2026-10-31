@@ -25,7 +25,12 @@
 //! board that is unreachable is no such hold, its dial failing as it fails.
 //! A write takes that path under a session that may write alone: the `op`
 //! row refuses a bare session's before any dial (`SessionEntry::may_write`),
-//! and the resend sends under no bare session.
+//! and the resend sends under no bare session. A write the session's key
+//! owes a signature is never sent without one: where the board's head
+//! record, which the signature names, stands and cannot be read, or a
+//! claimed board serves none, a burst is held `head_unreadable`, its line
+//! carrying the refusal that says why and resent once the record reads, and
+//! any other write is refused so, nothing sent (SP-14).
 //!
 //! **The burst.** A burst is an `op` under a session (never the guest form)
 //! whose `frame["op"]` is one of [`BURST_KINDS`] — the burst machine's five
@@ -143,9 +148,10 @@ fn is_burst(frame: &Value) -> bool {
 
 /// §3c.2's causes, as a held line and its answer spell them.
 ///
-/// Beside these, a refused run's line carries the board's own token, or the
-/// shell's `answers_lost` where it handed the person a line whose resends
-/// lost their answer ([`MAX_LOST_ANSWERS`]).
+/// Beside these, the shell's own `head_unreadable` holds a signed write
+/// whose signature could not be made, and a refused run's line carries the
+/// board's own token, or the shell's `answers_lost` where it handed the
+/// person a line whose resends lost their answer ([`MAX_LOST_ANSWERS`]).
 mod cause {
     pub const UNREACHABLE: &str = "unreachable";
     pub const STOPPED: &str = "stopped";
@@ -154,6 +160,12 @@ mod cause {
     pub const DURABILITY: &str = "durability";
     pub const BEHIND: &str = "behind";
     pub const MOVED: &str = "moved";
+    /// A signed write held for want of its signature.
+    ///
+    /// The board's head record (`H.1`), which the signature names, stands and
+    /// cannot be read, or a claimed board serves none (SP-14); the line holds,
+    /// its refusal saying why, until the record reads again.
+    pub const HEAD_UNREADABLE: &str = "head_unreadable";
 }
 
 /// A hand whose row moved a held document (§3c.5; §4b.2's `held` event).
@@ -534,8 +546,11 @@ impl Dialed {
 ///
 /// Nothing is dialed ([`Holds::attest_where_owed`]): the death signal met
 /// at one of the composer's reads; a read that did not reach the board held
-/// like the dial's own failure, `sent: false`, since the write never left;
-/// the composer's own refusal faced.
+/// like the dial's own failure, `sent: false`, since the write never left; a
+/// signature the board's head record could not be read for held
+/// `head_unreadable`, `sent: false`, its line carrying the refusal that says
+/// why — a burst so held, any other write so refused (SP-14); the
+/// composer's own refusal faced.
 impl From<Unattested> for Dialed {
     fn from(why: Unattested) -> Dialed {
         match why {
@@ -545,6 +560,12 @@ impl From<Unattested> for Dialed {
                 Decision::Hold { cause, .. } => Dialed::Held { reason: Reason::of(cause, false), refusal: Refusal::Unreachable(e) },
                 _ => Dialed::Faced(Refusal::Unreachable(e)),
             },
+            // Never sent unsigned: the line holds until the record reads,
+            // carrying why it waits.
+            Unattested::Refused(refusal @ Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }) => {
+                let reason = Reason { cause: cause::HEAD_UNREADABLE.to_string(), refusal: Some(refusal.to_value()), sent: false };
+                Dialed::Held { reason, refusal }
+            }
             Unattested::Refused(refusal) => Dialed::Faced(refusal),
         }
     }
@@ -556,10 +577,10 @@ impl From<Unattested> for Dialed {
 /// attests the frame's kind and no attest rides it yet
 /// (`SessionEntry::attest`, `wants_attest`), and the frame borrowed as it
 /// stands otherwise — a bare session's frame, a read, a kind outside the
-/// checked set, an attest the page supplied, a board with no `H.1` to sign
-/// over. Made by [`Holds::attest_where_owed`] alone, so [`Holds::dial`]
-/// sends no frame the session's attest did not see — and never the frame a
-/// held line keeps, which carries no attest (§3c.2).
+/// checked set, an attest the page supplied, a board no one has claimed
+/// that serves no head record. Made by [`Holds::attest_where_owed`] alone,
+/// so [`Holds::dial`] sends no frame the session's attest did not see — and
+/// never the frame a held line keeps, which carries no attest (§3c.2).
 #[derive(Debug)]
 struct AttestedWhereOwed<'f>(Cow<'f, Value>);
 
@@ -591,9 +612,13 @@ impl HeldState {
 ///
 /// It is in the words §4b.1's `resolve` row and §4b.2's `held` event share:
 /// `refused` (a refused run's), `moved` (a moved document's), else
-/// `holding`; `sending` is the resend's, never a line's at rest.
+/// `holding` — a line held `head_unreadable` among them, whose refusal says
+/// why it waits and which awaits no act of the person's (P10); `sending` is
+/// the resend's, never a line's at rest.
 fn line_state(reason: &Reason) -> HeldState {
-    if reason.refusal.is_some() {
+    if reason.cause == cause::HEAD_UNREADABLE {
+        HeldState::Holding
+    } else if reason.refusal.is_some() {
         HeldState::Refused
     } else if reason.cause == cause::MOVED {
         HeldState::Moved
@@ -610,12 +635,13 @@ fn awaits_act(line: &HeldLine) -> bool {
     matches!(line_state(&line.reason), HeldState::Refused | HeldState::Moved)
 }
 
-/// Returns whether a held line's `reason` is a lost answer.
+/// Returns whether a dial's `reason` is a lost answer.
 ///
 /// It is the table's lost-answer row (§3c.2's `sent`): `unreachable` with
 /// `sent`, which a timeout, a garbled answer and the board's
 /// `internal_panic` each answer — never a connection never made, whose
-/// `sent` is false.
+/// `sent` is false. It reads the dial's own answer: a held line's reason
+/// keeps an earlier dial's `sent` through a resend that never left.
 fn is_lost_answer(reason: &Reason) -> bool {
     reason.cause == cause::UNREACHABLE && reason.sent
 }
@@ -643,13 +669,13 @@ impl Directory {
     /// Returns the directory `H.1`'s read names (§3c.1).
     ///
     /// It is made `0700` and locked where the board term stands, and not yet
-    /// this shell's — why said — where the board has no `H.1` (an unclaimed
-    /// board keeps no held text), the read, the directory or the lock
+    /// this shell's — why said — where the board serves no `H.1`, whose
+    /// chain names the directory, the read, the directory or the lock
     /// refused, or another process holds the lock ([`ANOTHER_PROCESS`]).
     fn of(data_dir: &Path, board_term: Result<Option<BoardTerm>, Halt>) -> Directory {
         let board_term = match board_term {
             Ok(Some(board_term)) => board_term,
-            Ok(None) => return Directory::NotYet("the board has no H.1 yet, and an unclaimed board keeps no held text".to_string()),
+            Ok(None) => return Directory::NotYet("the board serves no H.1, whose chain names its held store's directory".to_string()),
             Err(h) => return Directory::NotYet(format!("the board's H.1 could not be read: {h}")),
         };
         let dir = HeldDir::new(data_dir, Chain::from_bytes(board_term.chain));

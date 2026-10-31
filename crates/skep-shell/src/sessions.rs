@@ -17,7 +17,11 @@
 //! foundations §3.3 state 3). A write under a session that holds a key
 //! carries the attest that key signs where one is owed
 //! ([`SessionEntry::attest`]), whichever caller sends it — a call's `op`, or
-//! the held-burst resend's.
+//! the held-burst resend's — and none goes out unsigned where a signature is
+//! owed: the board term it signs over is read at the session's board
+//! ([`SessionEntry::signing_term`]), and a head record that stands and cannot
+//! be read, or a claimed board that serves none, refuses the write
+//! `head_unreadable` (SP-14).
 //!
 //! **The end** ([`Sessions::end`]). A death signal is met by two callers —
 //! the shell, when a call's token answers `Skepd-Session: closed`, and the
@@ -72,12 +76,13 @@ use skep_client::board::{KeySetAnswer, Opened, Scope, SessionBody, Token};
 use skep_client::ceremony::handshake::{handshake_prechecked, key_face, Site};
 use skep_client::derive::records::{credential_records, Hand, Records};
 use skep_client::derive::{origin_arm, precheck, KeyDiagnosis, Mode, Walk};
+use skep_client::halt::{Face, Halt};
 use skep_client::search::SessionRef;
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 use skep_client::{Board, Origin};
-use skep_identity::{Fingerprint, PublicKey};
+use skep_identity::{BoardTerm, Fingerprint, PublicKey};
 
 use crate::attest::{in_checked_set, wants_attest, Composer, Unattested};
 use crate::events::{EventBus, EventName};
@@ -170,31 +175,69 @@ impl SessionEntry {
         }
     }
 
-    /// Returns the attest a write under this session carries, on its frame.
+    /// Returns the board term a signed write under this session signs over.
     ///
-    /// The attest (`attest`'s rule) is composed at the session's own board
-    /// and signed by the key [`SessionEntry::attesting_key`] names for the
-    /// frame's op, where it names one and [`wants_attest`] admits the frame —
-    /// the one place the composer's precondition is discharged — and attached
-    /// to a copy of the frame, the one copy made; the frame is borrowed as it
-    /// stands otherwise, and where the board has no `H.1` to sign over (the
-    /// board judges that write).
+    /// It is `H.1`'s pair, read at the session's own board
+    /// (`Board::board_term`); none where the board serves no head record and
+    /// names no claimant — a board no one has claimed, which takes a write
+    /// unsigned. A head record that stands and cannot be read, and a claimed
+    /// board that serves none, are never read as no record (SP-14): a write
+    /// owed a signature is then never sent without one.
     ///
     /// # Errors
     ///
-    /// Nothing is then to be sent. Returns `attest_not_composed` where the
-    /// composer, or the read of the board's `H.1` it signs over, halted;
-    /// `store_unreadable` where the session's key file cannot be read;
-    /// `no_account` where the board answered the session no account; the
-    /// board's refusal, or `unreachable`, where a read it needed was refused
-    /// or not answered; and [`Unattested::Died`] where a read it made met the
-    /// session's death signal, whose end is the caller's to run.
+    /// Returns `unreachable` where a read it makes — the head record's, then
+    /// `/health`'s — goes unanswered; and `head_unreadable`, a halt's face
+    /// naming why, where the head record stands and cannot be read, the
+    /// board refuses its read, or the board serves none and names a claimant
+    /// or cannot say through `/health` whether it does.
+    pub fn signing_term(&self) -> Result<Option<BoardTerm>, Refusal> {
+        match self.board.board_term() {
+            Ok(Some(board_term)) => Ok(Some(board_term)),
+            Ok(None) => match self.board.health() {
+                Ok(health) => match health.claimant() {
+                    None => Ok(None),
+                    Some(claimant) => Err(head_unreadable(format!("the board names {claimant} its claimant and serves no head record (`H.1`)"))),
+                },
+                Err(Halt::Dial(e)) => Err(Refusal::Unreachable(e)),
+                Err(h) => Err(head_unreadable(format!("the board serves no head record (`H.1`), and its `/health` could not say whether it is claimed: {h}"))),
+            },
+            Err(Halt::Dial(e)) => Err(Refusal::Unreachable(e)),
+            Err(Halt::Halt(face)) => Err(head_unreadable(format!("{}: {}", face.state, face.cause))),
+            Err(h) => Err(head_unreadable(format!("the board refused the read of its head record (`H.1`): {h}"))),
+        }
+    }
+
+    /// Returns the attest a write under this session carries, on its frame.
+    ///
+    /// The attest (`attest`'s rule) is composed at the session's own board
+    /// over the board term [`SessionEntry::signing_term`] reads, and signed
+    /// by the key [`SessionEntry::attesting_key`] names for the frame's op,
+    /// where it names one and [`wants_attest`] admits the frame — the one
+    /// place the composer's precondition is discharged — and attached to a
+    /// copy of the frame, the one copy made; the frame is borrowed as it
+    /// stands otherwise, and at a board no one has claimed that serves no
+    /// head record, which takes the write unsigned.
+    ///
+    /// # Errors
+    ///
+    /// Nothing is then to be sent. The checks run in this order, the first
+    /// that holds answering:
+    ///
+    /// 1. `head_unreadable` and `unreachable` where the board term cannot be
+    ///    had ([`SessionEntry::signing_term`]);
+    /// 2. `store_unreadable` where the session's key file cannot be read;
+    /// 3. `no_account` where the board answered the session no account;
+    /// 4. the composer's: `attest_not_composed` where it halted, the board's
+    ///    refusal or `unreachable` where a read it made was refused or not
+    ///    answered, and [`Unattested::Died`] where a read it made met the
+    ///    session's death signal, whose end is the caller's to run.
     pub fn attest<'f>(&self, store: &FileStore, frame: &'f Value) -> Result<Cow<'f, Value>, Unattested> {
         let Some(fp) = frame["op"].as_str().and_then(|op| self.attesting_key(op)) else { return Ok(Cow::Borrowed(frame)) };
         if !wants_attest(frame) {
             return Ok(Cow::Borrowed(frame));
         }
-        let Some(board_term) = self.board.board_term()? else { return Ok(Cow::Borrowed(frame)) };
+        let Some(board_term) = self.signing_term()? else { return Ok(Cow::Borrowed(frame)) };
         let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, board_term };
@@ -213,6 +256,21 @@ impl SessionEntry {
     pub fn search_view(&self) -> SessionRef<'_> {
         SessionRef { token: &self.token, principal: self.facts.principal, account: self.facts.account.as_deref().unwrap_or("") }
     }
+}
+
+/// Returns `head_unreadable`: a signed write's signature could not be made.
+///
+/// Its face says the write was not sent, `why` the board's head record could
+/// not be read as its cause, and that a held burst is resent once it reads.
+fn head_unreadable(why: String) -> Refusal {
+    Refusal::named(
+        Name::HEAD_UNREADABLE,
+        Face {
+            state: "this write was not sent: its signature names the board's head record (`H.1`), which could not be read".to_string(),
+            cause: why,
+            act: "nothing was sent unsigned: a held burst is resent once the record reads again, and another write may be made again then; the record is the board's own, its operator's to repair — never your keys".to_string(),
+        },
+    )
 }
 
 /// The drafts supplements of a board, as a session's caller reaches them.

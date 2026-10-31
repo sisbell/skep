@@ -24,13 +24,19 @@
 //! It checks the burst's door too: a burst the board takes at no send
 //! refused at the act and held never — past the frame cap as sent, or as a
 //! signed resend would send it, a page-supplied attest counted out of every
-//! resend, naming no document, an insert a signed session cannot attest —
-//! the read of the board's `H.1` an attest signs over halting as the
-//! composer's own refusal, and its answer lost holding the burst unsent;
-//! one the queue has no room for, by its frames' bytes or by its lines,
-//! refused `held_full`; and each board's hold its own, a burst at one board
-//! answered while another board's hold is held, dialed and kept at the
-//! board its session stands at.
+//! resend, naming no document, an insert a signed session cannot attest; one
+//! the queue has no room for, by its frames' bytes or by its lines, refused
+//! `held_full`; and each board's hold its own, a burst at one board answered
+//! while another board's hold is held, dialed and kept at the board its
+//! session stands at.
+//!
+//! And it checks the board term a signed write signs over (SP-14): a signed
+//! burst over a head record (`H.1`) that stands and cannot be read, or none at
+//! a board that names a claimant, held `head_unreadable` with nothing sent
+//! unsigned, tried again at each probe and sent attested once the record
+//! reads; a write the hold never holds refused so; the head read halting, or
+//! its answer lost, holding the burst unsent; and an unclaimed board serving
+//! no record the one board a signed write goes out unsigned at.
 
 use super::*;
 
@@ -534,18 +540,20 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
 
 /// Checks that a line the store cannot copy says why and stands (§3c.3).
 ///
-/// It stands in memory ("Persist first"): at a board with no `H.1` to name
-/// its directory, the burst is held under its own cause — never
-/// `other_window`, another window's lock alone — its answer `unwritable`
-/// naming the missing term, nothing written; at a file the device refuses
-/// (a directory where the file would be), the device's refusal rides the
-/// answer. Either line stands in the queue, and the next probe resends and
-/// keeps it (the mutant that drops `unwritable` tells the page a burst a
-/// crash would lose is on disk).
+/// It stands in memory ("Persist first"): at an unclaimed board with no
+/// `H.1` to name its directory, the burst is held under its own cause —
+/// never `other_window`, another window's lock alone — its answer
+/// `unwritable` naming the missing term, nothing written; at a file the
+/// device refuses (a directory where the file would be), the device's
+/// refusal rides the answer. Either line stands in the queue, and the next
+/// probe resends and keeps it, unsigned at the unclaimed board, which has no
+/// term to sign over (the mutant that drops `unwritable` tells the page a
+/// burst a crash would lose is on disk).
 #[test]
 fn a_line_the_store_cannot_copy_says_why_and_stands() {
     let fake = Fake::new();
     fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
     let store = TempDir::new().unwrap();
     let facts = writer_facts(&store);
     let g = ground_over(fake, store, facts, 0);
@@ -754,24 +762,135 @@ fn a_page_supplied_attest_is_counted_out_of_every_resend() {
     assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
 }
 
-/// Checks that a head read that halts is the composer's refusal.
+/// Checks that a head read that halts holds the burst unsent.
 ///
-/// Under a session whose key attests an insert, the read of the board's
-/// `H.1` the attest signs over answered with the death signal — no
-/// session's answer, a token-free read's halt — refuses the burst
-/// `attest_not_composed`, nothing dialed and nothing held (the mutant that
-/// converts the read's halt past the composer's own conversion answers the
-/// bare `halt`, a refusal the page cannot read as the shell's failure to
-/// sign).
+/// Under a session whose key attests an insert, the read of the board's `H.1`
+/// the attest signs over answered with the death signal — no session's
+/// answer, a token-free read's halt — holds the burst `head_unreadable`,
+/// `sent: false`, its refusal naming the halt, with nothing dialed (SP-14; the
+/// mutant that reads the halt as no record sends the burst unsigned, and the
+/// one that faces it as the composer's own refusal loses the burst).
 #[test]
-fn a_head_read_that_halts_is_the_composers_refusal() {
+fn a_head_read_that_halts_holds_the_burst_unsent() {
     let fake = Fake::new();
     fake.head_closed.store(true, Ordering::SeqCst);
     let g = ground_over(fake, TempDir::new().unwrap(), keyed_facts(), 0);
-    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))) else { panic!("refused, nothing sent") };
-    assert_eq!(refused.name(), "attest_not_composed", "{refused}");
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))) else { panic!("held, nothing sent") };
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("head_unreadable")), "{held}");
+    let lines = g.lines();
+    let refusal = &lines[0]["refusal"];
+    assert_eq!((lines[0]["sent"].as_bool(), refusal["name"].as_str()), (Some(false), Some("head_unreadable")), "{lines:?}");
+    assert!(refusal["cause"].as_str().is_some_and(|cause| cause.contains("met the death signal")), "the refusal names the halt: {refusal}");
+    assert_eq!(g.fake.sends(), 0, "nothing dialed");
+}
+
+/// Checks that a signed burst over an unreadable head record is held unsent.
+///
+/// A writer's attest signs over the board's head record (`H.1`). Where the
+/// record stands and cannot be read — a content item, an atom of no JSON, a
+/// record of another type, of no position or of no chain, a read the board
+/// refuses or answers `500` — or the board names a claimant and serves none,
+/// as an empty delivery or `doc_not_registered`, and where an unclaimed
+/// board's record is damaged, the burst is held `head_unreadable` with nothing
+/// dialed. The answer's `unwritable` names `H.1`; the line, `sent: false`,
+/// carries the refusal that says why; it awaits no act of the person's; and a
+/// probe tries it again and sends nothing. Once the record reads, the next
+/// probe sends it attested and keeps it (SP-14; the mutants that read a record
+/// that cannot be read as no record send the person's text unsigned, and the
+/// one that faces the refusal at the act loses the burst).
+#[test]
+fn a_signed_burst_over_an_unreadable_head_record_is_held_and_sent_once_it_reads() {
+    let delivery = |items: Value| Some((200, json!({"resp": "delivery", "items": items})));
+    let atom = |record: Value| delivery(json!([{"atom": record.to_string()}]));
+    let rejected = |code: &str| Some((200, json!({"resp": "rejected", "code": code, "disposition": "permanent", "op": "retrieve_v"})));
+    let chain = "ab".repeat(32);
+    let (refused, named) = ("refused the read of its head record", "names 1.0.1 its claimant and serves no head record");
+    let cells = [
+        ("a content item", delivery(json!([{"content": "x"}])), false, false, "its value is no record atom"),
+        ("an atom of no JSON", delivery(json!([{"atom": "not a head record"}])), false, false, "its value is no JSON"),
+        ("a record of another type", atom(json!({"type": "skep-other", "position": 1, "chain": chain})), false, false, "a record of another type"),
+        ("a record of no position", atom(json!({"type": "skep-head", "chain": chain})), false, false, "it names no position"),
+        ("a record of no chain", atom(json!({"type": "skep-head", "position": 1})), false, false, "it names no chain"),
+        ("a read the board refuses", rejected("out_of_bounds"), false, false, refused),
+        ("a read answered `500`", Some((500, json!({"error": "internal_panic"}))), false, false, refused),
+        ("an empty delivery at a claimed board", None, true, false, named),
+        ("`doc_not_registered` at a claimed board", rejected("doc_not_registered"), false, false, named),
+        ("a damaged record at an unclaimed board", delivery(json!([{"atom": "not a head record"}])), false, true, "its value is no JSON"),
+    ];
+    for (cell, head, no_head, unclaimed, why) in cells {
+        let fake = Fake::new();
+        *fake.head_answer.lock().unwrap() = head;
+        fake.no_head.store(no_head, Ordering::SeqCst);
+        fake.unclaimed.store(unclaimed, Ordering::SeqCst);
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("{cell}: held, never sent unsigned") };
+        crate::shapes::assert_declared("HeldAnswer", &held);
+        assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("head_unreadable")), "{cell}: {held}");
+        assert!(held["unwritable"].as_str().is_some_and(|unwritable| unwritable.contains("H.1")), "{cell}: the line is in memory alone, and says why: {held}");
+        let lines = g.lines();
+        let refusal = &lines[0]["refusal"];
+        assert_eq!((lines[0]["sent"].as_bool(), refusal["name"].as_str(), refusal["kind"].as_str()), (Some(false), Some("head_unreadable"), Some("halt")), "{cell}: {lines:?}");
+        assert!(refusal["cause"].as_str().is_some_and(|cause| cause.contains(why)), "{cell}: the refusal says why: {refusal}");
+        assert_eq!((g.fake.sends(), g.states()), (0, vec!["holding".to_string()]), "{cell}: nothing dialed");
+        let k = lines[0]["held"].as_u64().unwrap();
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap_err().name(), "not_resolvable", "{cell}: it awaits no act of the person's");
+        g.holds.probe("b-1");
+        assert_eq!((g.fake.sends(), g.states()), (0, vec!["sending".to_string(), "holding".to_string()]), "{cell}: tried again, nothing sent");
+        *g.fake.head_answer.lock().unwrap() = None;
+        g.fake.no_head.store(false, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        let sent = g.fake.sends.lock().unwrap().clone();
+        assert!(sent.len() == 1 && sent[0].get("attest").is_some(), "{cell}: sent once the record reads, attested: {sent:?}");
+        assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "{cell}: and kept");
+    }
+}
+
+/// Checks that a write the hold never holds is refused over an unreadable head
+/// record.
+///
+/// A signed session's `make_link` over a head record that stands and cannot be
+/// read is refused `head_unreadable`, the halt's face naming why the record
+/// could not be read, with nothing dialed and nothing held (SP-14; the mutant
+/// that reads the record as none sends the link unsigned).
+#[test]
+fn a_write_the_hold_never_holds_is_refused_over_an_unreadable_head_record() {
+    let fake = Fake::new();
+    *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let link = json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": [DOC]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
+    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, link) else { panic!("refused, never sent unsigned") };
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["kind"].as_str()), ("head_unreadable", Some("halt")), "{v}");
+    assert!(v["cause"].as_str().is_some_and(|cause| cause.contains("its value is no JSON")), "the refusal says why: {v}");
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
     assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
+}
+
+/// Checks that an unclaimed board with no head record takes a signed write
+/// unsigned.
+///
+/// It is the one board a signed write goes out unsigned at: no claimant named
+/// and no head record served, so no board term stands to sign over, and the
+/// burst is dialed as it stands, no `attest` riding it, and acked (the mutant
+/// that refuses every board serving no record takes no signed write at a board
+/// before its claim).
+#[test]
+fn an_unclaimed_board_with_no_head_record_takes_a_signed_write_unsigned() {
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(ack)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("sent and answered") };
+    assert_eq!(ack["resp"], "ack", "{ack}");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert!(sent.len() == 1 && sent[0].get("attest").is_none(), "sent as it stands, unsigned: {sent:?}");
+    assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held");
 }
 
 /// Checks that an unanswered read the attest needs holds the burst unsent.

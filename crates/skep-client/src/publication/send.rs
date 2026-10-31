@@ -1,40 +1,43 @@
-//! THE SEND AND THE FACES (the link-sets design §5.7; wire.md §The publish
-//! shot and head-float, the refusal table).
+//! The send of a built publication, and the faces of its answer.
 //!
-//! The frame goes through `Board::op` under the session's token with the
-//! request's `id`; its `attest` is the entry frame over the body the one
-//! body builder composed from the request AS BUILT — never a body the
-//! lists do not match — under `H.1`'s pair. A publication is NEVER SENT
-//! UNSIGNED on a claimed board: a board whose head record cannot be read
-//! and whose `/health` names a claimant answers [`Refusal::HeadUnreadable`],
-//! the halt's data, never the warn arm (the owner's ruling (3)); a board no
-//! one has claimed takes the frame without an `attest`.
+//! It is the link-sets design §5.7 and wire.md §The publish shot and
+//! head-float, with the refusal table. The frame goes through `Board::op`
+//! under the session's token with the request's `id`; its `attest` is the
+//! entry frame over the body the one body builder composed from the request
+//! as built — never a body the lists do not match — under `H.1`'s pair.
 //!
-//! THE `id` POLICY: the same `id` on the same session for a lost answer —
-//! one re-ask after a transport fault, which a pending frame answers when
-//! its turn comes and a committed write answers from its memo; a refusal
-//! is not memoized, so a request re-composed or re-signed takes a FRESH
-//! `id`; after `500 internal_panic`, a dead session or a second transport
-//! fault the board is READ FIRST — the landed test — before any re-send,
-//! never the memo alone.
+//! **Never unsigned where a signature is owed.** A board whose head record
+//! stands and cannot be read halts the send naming why, claimed or not
+//! (`Board::board_term`; SP-14), and a claimed board serving no head record
+//! answers [`Refusal::HeadUnreadable`], the halt's data, never a warning: no
+//! frame leaves either. A board no one has claimed, serving no head record,
+//! alone takes the frame without an `attest`.
 //!
-//! THE REFUSAL FAMILY, each a typed arm with its `site`: `already_published`
-//! → the landed test on the member it names — pass, the acknowledgment (the
-//! twin read as the ack); fail, the twin face's data; `kept_place_moved` →
-//! the entry and the race's KEY, the feed's newest row under the draft since
-//! the request's reads and its `key`, for the caller's re-read and
-//! re-statement; `stray_place_unrecorded` → this library's own bug;
-//! `publication_over_budget` → the price's verdict re-run: a race where this
-//! price admitted the request, the library's own bug where it did not;
+//! **The `id` policy.** The same `id` on the same session for a lost answer:
+//! one re-ask after a transport fault, which a pending frame answers when its
+//! turn comes and a committed write answers from its memo. A refusal is not
+//! memoized, so a request re-composed or re-signed takes a fresh `id`. After
+//! `500 internal_panic`, a dead session or a second transport fault the board
+//! is read first — the landed test — before any re-send, never the memo
+//! alone.
+//!
+//! **The refusal family**, each a typed arm with its `site`:
+//! `already_published` → the landed test on the member it names — pass, the
+//! acknowledgment (the twin read as the ack); fail, the twin face's data;
+//! `kept_place_moved` → the entry and the race's key, the feed's newest row
+//! under the draft since the request's reads and its `key`, for the caller's
+//! re-read and re-statement; `stray_place_unrecorded` → this library's own
+//! bug; `publication_over_budget` → the price's verdict re-run: a race where
+//! this price admitted the request, the library's own bug where it did not;
 //! `not_owner` naming the draft → the unowned draft, named; `not_owner` on
 //! `doc` or the account → named too; `claim_refused` → the edition named
-//! already holds a member, so the claim is a first version's no longer (skep
-//! #692) — the caller sends the shot without it; the six deposit tokens → own-bug arms
-//! with their entry and detail; `attestation_invalid:signature` → ONE
-//! re-sign with the skipped deposits dropped — presence re-read for every
-//! `retract` and `read_with` entry — under a fresh `id`; `unparseable` on a
-//! request carrying an optional member → the older-board arm; the shot's own
-//! table's codes → the library's own fault; `withheld`,
+//! already holds a member, so the claim is a first version's no longer
+//! (skep #692) — the caller sends the shot without it; the six deposit tokens
+//! → own-bug arms with their entry and detail; `attestation_invalid:signature`
+//! → one re-sign with the skipped deposits dropped — presence re-read for
+//! every `retract` and `read_with` entry — under a fresh `id`; `unparseable`
+//! on a request carrying an optional member → the older-board arm; the shot's
+//! own table's codes → the library's own fault; `withheld`,
 //! `signed_session_required`, `doc_not_registered` as the merge names them;
 //! everything else the board's refusal verbatim.
 
@@ -188,8 +191,10 @@ pub enum Refusal {
         /// The board's detail.
         detail: Option<String>,
     },
-    /// The board is claimed and its head record cannot be read: never sent
-    /// unsigned.
+    /// The board is claimed and serves no head record: never sent unsigned.
+    ///
+    /// A record that stands and cannot be read is the read's halt
+    /// ([`Fault::Halt`]), never sent either.
     HeadUnreadable,
     /// The death signal: the session ended before or at the write. The
     /// caller opens a session and runs the landed test before any re-send.
@@ -234,8 +239,9 @@ const DEPOSIT_CODES: [&str; 6] = ["link_home_refused", "old_refused", "duplicate
 ///
 /// # Errors
 ///
-/// The reads' faults, the `H.1` and `/health` reads' halts, and a transport
-/// fault the landed test could not read past.
+/// The reads' faults; the `H.1` and `/health` reads' halts, a head record
+/// that stands and cannot be read among them, which sends nothing (SP-14);
+/// and a transport fault the landed test could not read past.
 pub fn send(p: &Publisher<'_>, inputs: &Inputs, request: &mut Request) -> Result<Sent, Fault> {
     let door = Door::new(p.board, p.token);
     send_with(&door, p, inputs, request)

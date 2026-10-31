@@ -1176,13 +1176,22 @@ impl Board {
     ///
     /// The pair (signed-ops D13) is read once per board by `retrieve_v` on
     /// the pinned first member of the head document (wire.md §The other
-    /// endpoints) and parsed off the `skep-head` record; `None` while the
-    /// board has no `H.1` (unclaimed, or the one write after a refused head).
-    /// It is the one per-board content read the fence admits.
+    /// endpoints) and parsed off the `skep-head` record. It is `None` only
+    /// where the board serves no `H.1` — unclaimed, or the one write after a
+    /// refused head — and never where a record stands that cannot be read
+    /// (SP-14). Only a pair is kept: an absence or an error is read again at
+    /// the next call. It is the one per-board content read the fence admits.
     ///
     /// # Errors
     ///
-    /// [`Board::guest`]'s errors.
+    /// In this order:
+    ///
+    /// 1. [`Board::guest`]'s errors;
+    /// 2. a rejection other than `doc_not_registered`, the board's refusal;
+    /// 3. a halt naming why, where a record stands and cannot be read: its
+    ///    answer no delivery, its first item no record atom, the atom no
+    ///    JSON, the record of another type, or naming no position or no
+    ///    chain.
     pub fn board_term(&self) -> Result<Option<BoardTerm>, Halt> {
         if let Some(term) = self.term.get() {
             return Ok(Some(*term));
@@ -1194,21 +1203,41 @@ impl Board {
         Ok(term)
     }
 
+    /// Reads the board term off `H.1`, as [`Board::board_term`] keeps it.
+    ///
+    /// No record is `None`: the head document not registered, or a delivery
+    /// holding no item. A record that stands is read whole or refused naming
+    /// why, never read as no record (SP-14).
+    ///
+    /// # Errors
+    ///
+    /// [`Board::board_term`]'s, in its order.
     fn read_board_term(&self) -> Result<Option<BoardTerm>, Halt> {
         let v = self.guest(&frames::retrieve_v(HEAD_MEMBER_1, 1, 1))?;
-        let Some(bytes) = answers::first_atom(&v) else {
-            return Ok(None);
+        if let Some(r) = Rejection::of(&v) {
+            return if r.key() == "doc_not_registered" { Ok(None) } else { Err(r.refused(&v)) };
+        }
+        let unreadable = |why: &str| {
+            Halt::face(
+                "the board's head record (`H.1`) stands and cannot be read",
+                format!("{why}; a signed write's entry frame signs over the position and chain it names (signed-ops D13), so none can be made at this board"),
+                "this is the board's own record, never your keys: its operator restores it, and no signature is made at this board until it reads",
+            )
         };
-        let rec: Value = match serde_json::from_slice(&bytes) {
-            Ok(r) => r,
-            Err(_) => return Ok(None),
-        };
-        if rec["type"].as_str() != Some("skep-head") {
+        if v["resp"].as_str() != Some("delivery") {
+            return Err(unreadable("its answer is no delivery"));
+        }
+        let Some(items) = v["items"].as_array() else { return Err(unreadable("its delivery holds no item list")) };
+        if items.is_empty() {
             return Ok(None);
         }
-        let (Some(position), Some(chain)) = (rec["position"].as_u64(), rec["chain"].as_str().and_then(crate::hex::decode32)) else {
-            return Ok(None);
-        };
+        let Some(bytes) = answers::first_atom(&v) else { return Err(unreadable("its value is no record atom")) };
+        let rec: Value = serde_json::from_slice(&bytes).map_err(|_| unreadable("its value is no JSON"))?;
+        if rec["type"].as_str() != Some("skep-head") {
+            return Err(unreadable("it is a record of another type"));
+        }
+        let Some(position) = rec["position"].as_u64() else { return Err(unreadable("it names no position")) };
+        let Some(chain) = rec["chain"].as_str().and_then(crate::hex::decode32) else { return Err(unreadable("it names no chain")) };
         Ok(Some(BoardTerm { log_position: position, chain }))
     }
 }

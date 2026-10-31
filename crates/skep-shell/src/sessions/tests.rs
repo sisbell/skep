@@ -9,8 +9,11 @@
 //! and a retirement read naming the position it read whatever its hand; a
 //! principal's supplement following its standing sessions, a key's diagnosis
 //! named by the list it stands in, a session's key attesting the ten kinds with
-//! an entry frame alone and a write going out under a signed session alone, and
-//! a frame no attest is owed for borrowed as it stands, never copied.
+//! an entry frame alone and a write going out under a signed session alone, a
+//! frame no attest is owed for borrowed as it stands, never copied, and the
+//! board term a signed write signs over read only where the board's head record
+//! reads: one that stands and cannot be read, or a claimed board that serves
+//! none, refused `head_unreadable` and never read as no record (SP-14).
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -437,13 +440,14 @@ fn a_sessions_key_attests_the_checked_kinds_alone() {
     assert_eq!((signed.may_write(), bare.may_write()), (true, false), "a write goes out under the signed session alone");
 }
 
-/// A FRAME NO ATTEST IS OWED FOR is borrowed as it stands, never copied: a
-/// bare session's insert, a signed session's `delete` (outside the checked
-/// set), and a signed session's insert whose attest the page supplied —
-/// each answered before any read, the board one nothing answers at, whose
-/// silence would answer `attest_not_composed` (the mutant that copies the
-/// frame on every path pays a deep copy per send for nothing; the one that
-/// reads the board's `H.1` first refuses a frame it was never to sign).
+/// Checks that a frame no attest is owed for is borrowed as it stands.
+///
+/// A bare session's insert, a signed session's `delete` (outside the checked
+/// set), and a signed session's insert whose attest the page supplied are each
+/// answered before any read and never copied, at a board nothing answers at,
+/// whose silence would answer `unreachable` (the mutant that copies the frame
+/// on every path pays a deep copy per send for nothing; the one that reads the
+/// board's `H.1` first refuses a frame it was never to sign).
 #[test]
 fn a_frame_no_attest_is_owed_for_is_borrowed_as_it_stands() {
     let (sessions, store) = (Sessions::new(None, Arc::new(|_: &str| {})), FileStore::open("/nonexistent/store"));
@@ -455,5 +459,129 @@ fn a_frame_no_attest_is_owed_for_is_borrowed_as_it_stands() {
     let supplied = json!({"op": "insert", "doc": "1.0.1.0.1", "values": ["a"], "attest": {"alg": "x", "sig": "00"}});
     for (session, frame) in [(&bare, &insert), (&signed, &delete), (&signed, &supplied)] {
         assert!(matches!(session.attest(&store, frame), Ok(Cow::Borrowed(as_it_stands)) if std::ptr::eq(as_it_stands, frame)), "{frame}");
+    }
+}
+
+/// An answer a board under test gives one read.
+#[derive(Debug, Clone)]
+enum Answered {
+    /// A `200` carrying this document.
+    Document(Value),
+    /// This status, carrying this body.
+    Status(u16, Value),
+    /// No answer: the dial fails at the connect.
+    Unanswered,
+    /// The death signal: a `200` whose `Skepd-Session` says `closed`.
+    Closed,
+}
+
+impl Answered {
+    /// Returns the answer as the board's dialer gives it.
+    fn dialed(&self) -> Result<Response, DialError> {
+        let answer = |status: u16, v: &Value| Ok(Response { status, headers: Headers::default(), body: v.to_string().into_bytes() });
+        match self {
+            Answered::Document(v) => answer(200, v),
+            Answered::Status(status, v) => answer(*status, v),
+            Answered::Unanswered => Err(DialError::Connect("the board is not answering".into())),
+            Answered::Closed => Ok(Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() }),
+        }
+    }
+}
+
+/// A board answering the read of its head record (`H.1`) with `head`, and
+/// `/health` with `health`, its `/health` reads counted; every other read
+/// refused `doc_not_registered`.
+struct HeadBoard {
+    head: Answered,
+    health: Answered,
+    health_reads: AtomicUsize,
+}
+
+impl Dialer for HeadBoard {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if req.path.starts_with("/health") {
+            self.health_reads.fetch_add(1, Ordering::SeqCst);
+            return self.health.dialed();
+        }
+        let frame: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        if frame["op"] == "retrieve_v" && frame["specs"][0]["doc"] == skep_client::board::HEAD_MEMBER_1 {
+            return self.head.dialed();
+        }
+        Answered::Document(json!({"resp": "rejected", "code": "doc_not_registered", "disposition": "reorder"})).dialed()
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// What a signed write under a session signs over, as a cell expects it.
+#[derive(Debug)]
+enum Signs {
+    /// The board term at this log position, over the board's chain.
+    Over(u64),
+    /// Nothing: the board names no claimant and serves no head record.
+    Unsigned,
+    /// Nothing either: a read went unanswered, `unreachable`.
+    Unreachable,
+    /// Nothing either: refused `head_unreadable`, its face's cause naming this.
+    HeadUnreadable(&'static str),
+}
+
+/// Checks that a board term is read only where the board's head record reads.
+///
+/// It is SP-14 at the board term a signed write signs over, cell by cell: a
+/// record read whole is the term, and no `/health` read is made; no record at
+/// a board that names no claimant is none, the write going out unsigned; no
+/// record at a claimed board, a record that stands and cannot be read (no JSON,
+/// another type), a head read the board refuses, answers with the death signal
+/// or answers `500`, and a `/health` that cannot say whether the board is
+/// claimed are each refused `head_unreadable`, a halt's face naming why; and a
+/// read that goes unanswered is `unreachable`. The mutants that read a claimed
+/// board's missing record as an unclaimed board's, a damaged record or a
+/// refused read as no record, or a `/health` that cannot answer as unclaimed
+/// each send a signed session's write unsigned.
+#[test]
+fn a_board_term_is_read_only_where_the_boards_head_record_reads() {
+    let health = |claimant: Value| {
+        Answered::Document(json!({"ok": true, "log_position": 10, "auth": {"claimant": claimant, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}}))
+    };
+    let (claimed, unclaimed) = (health(json!("1.0.1")), health(Value::Null));
+    let delivery = |items: Value| Answered::Document(json!({"resp": "delivery", "items": items}));
+    let atom = |record: Value| delivery(json!([{"atom": record.to_string()}]));
+    let head = atom(json!({"type": "skep-head", "position": 1, "chain": "ab".repeat(32)}));
+    let other_type = atom(json!({"type": "skep-other", "position": 1, "chain": "ab".repeat(32)}));
+    let none = Answered::Document(json!({"resp": "rejected", "code": "doc_not_registered", "disposition": "reorder"}));
+    let refused = Answered::Document(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"}));
+    let named = "names 1.0.1 its claimant";
+    let cells = [
+        ("a record read whole", head, claimed.clone(), Signs::Over(1), 0),
+        ("no record, no claimant", none.clone(), unclaimed.clone(), Signs::Unsigned, 1),
+        ("no record, a claimant named", none.clone(), claimed.clone(), Signs::HeadUnreadable(named), 1),
+        ("an empty delivery, a claimant named", delivery(json!([])), claimed.clone(), Signs::HeadUnreadable(named), 1),
+        ("a record of no JSON, no claimant", delivery(json!([{"atom": "not a head record"}])), unclaimed, Signs::HeadUnreadable("its value is no JSON"), 0),
+        ("a record of another type", other_type, claimed.clone(), Signs::HeadUnreadable("a record of another type"), 0),
+        ("the head read unanswered", Answered::Unanswered, claimed.clone(), Signs::Unreachable, 0),
+        ("no record, `/health` unanswered", none.clone(), Answered::Unanswered, Signs::Unreachable, 1),
+        ("no record, `/health` refused", none, Answered::Status(503, json!({"error": "write_busy"})), Signs::HeadUnreadable("could not say whether it is claimed"), 1),
+        ("the head read refused", refused, claimed.clone(), Signs::HeadUnreadable("refused the read of its head record"), 0),
+        ("the head read met the death signal", Answered::Closed, claimed.clone(), Signs::HeadUnreadable("met the death signal"), 0),
+        ("the head read answered `500`", Answered::Status(500, json!({"error": "internal_panic"})), claimed, Signs::HeadUnreadable("refused the read of its head record"), 0),
+    ];
+    for (cell, head, health, signs, health_reads) in cells {
+        let dialer = Arc::new(HeadBoard { head, health, health_reads: AtomicUsize::new(0) });
+        let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&dialer)));
+        let entry = Sessions::new(None, Arc::new(|_: &str| {})).register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+        match (signs, entry.signing_term()) {
+            (Signs::Over(position), Ok(Some(term))) => assert_eq!(term, BoardTerm { log_position: position, chain: [0xab; 32] }, "{cell}"),
+            (Signs::Unsigned, Ok(None)) | (Signs::Unreachable, Err(Refusal::Unreachable(_))) => {}
+            (Signs::HeadUnreadable(why), Err(refusal)) => {
+                let v = refusal.to_value();
+                assert_eq!((refusal.name(), v["kind"].as_str()), ("head_unreadable", Some("halt")), "{cell}: {v}");
+                assert!(v["cause"].as_str().is_some_and(|cause| cause.contains(why)), "{cell}: {v}");
+            }
+            (signs, answered) => panic!("{cell}: {signs:?} expected, {answered:?} answered"),
+        }
+        assert_eq!(dialer.health_reads.load(Ordering::SeqCst), health_reads, "{cell}: the `/health` reads");
     }
 }

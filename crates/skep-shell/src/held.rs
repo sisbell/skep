@@ -187,15 +187,20 @@ fn now_ms() -> u64 {
 /// a re-mark rewrites together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reason {
-    /// A token of §3c.4's table, or a refused run's own token.
+    /// A token of §3c.4's table, the shell's `head_unreadable`, or a refused
+    /// run's own token.
     ///
     /// A refused run's token is the board's, or the shell's `answers_lost`
     /// where it handed the person a line whose resends lost their answer.
+    /// `head_unreadable` holds a signed write whose signature could not be
+    /// made, until the board's head record reads again (SP-14).
     pub cause: String,
-    /// The verdict beside a refused run's line, for the face.
+    /// The verdict beside a refused run's line, or a held line's reason.
     ///
     /// It is the board's verbatim, or the shell's `answers_lost` refusal
-    /// where it handed the line to the person (§3c.4; skep #608).
+    /// where it handed the line to the person (§3c.4; skep #608); at a line
+    /// held `head_unreadable`, the shell's refusal naming why the signature
+    /// could not be made, the line holding all the same.
     pub refusal: Option<Value>,
     /// Whether the burst may have landed.
     ///
@@ -203,9 +208,11 @@ pub struct Reason {
     /// `Truncated`, `Response`, `TooLarge` or a later transport error, or
     /// the board's `500 internal_panic`), or on a `poisoned` answer, whose
     /// frames the board's journal keeps for its restart; `false` where no
-    /// dial reached the board. A line handed to the person keeps it, and
-    /// `resolve(send)` keeps every line's own, so a line that may have
-    /// landed reads before it is sent again (§3c.5).
+    /// dial of the burst reached the board. A resend's re-mark keeps it,
+    /// whatever that resend answers: one that never left, or one the board
+    /// refused, says nothing of an earlier dial's write. A line handed to the
+    /// person keeps it too, and `resolve(send)` keeps every line's own, so a
+    /// line that may have landed reads before it is sent again (§3c.5).
     pub sent: bool,
 }
 

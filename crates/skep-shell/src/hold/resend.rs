@@ -24,7 +24,9 @@
 //! "which keeps each document's order"), so a `copy` held between two
 //! bursts on its source transcludes the source as it stood when the person
 //! wrote it. Each line goes out through the hold's one reader of a write's
-//! answer, as a first dial does.
+//! answer, as a first dial does. A line that may have landed stays so through
+//! every resend short of its ack, so its next read still takes a landing it
+//! finds as the line's own (§3c.2's `sent`).
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -352,7 +354,9 @@ impl Holds {
     ///
     /// Its attest is composed now (§3c.2), and the line settled by what the
     /// dial answered: an ack `done kept`; a hold-class answer or a refused
-    /// run re-marked and faced, a lost answer counted against the line
+    /// run re-marked and faced, the line keeping its `sent` — a resend that
+    /// never left, or one the board refused, says nothing of an earlier
+    /// dial's write (§3c.2) — and a lost answer counted against the line
     /// ([`MAX_LOST_ANSWERS`]); a reissue-class answer counted against the
     /// line and reissued at the next probe, so its third `durability` holds
     /// it; a refusal the table holds nowhere left standing for the next
@@ -378,11 +382,15 @@ impl Holds {
             Dialed::Held { reason, .. } => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
+                // A lost answer counts one try against the line
+                // (MAX_LOST_ANSWERS), read off this dial's own answer; the
+                // read decides at the next probe whether it landed.
+                let lost = is_lost_answer(&reason);
+                // The line keeps its `sent`: a resend that never left, or one
+                // the board refused, says nothing of an earlier dial's write.
+                let reason = Reason { sent: reason.sent || line.reason.sent, ..reason };
                 self.with_principal(board_reference, principal, |ph| {
-                    // A lost answer counts one try against the line
-                    // (MAX_LOST_ANSWERS); the read decides at the next probe
-                    // whether it landed.
-                    if is_lost_answer(&reason) {
+                    if lost {
                         ph.reissues.entry(line.k).or_default().lost += 1;
                     }
                     self.remark_line(ph, line.k, reason);

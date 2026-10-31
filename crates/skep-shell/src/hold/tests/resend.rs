@@ -11,9 +11,12 @@
 //! order, the lines sent in `k` order across the documents; the own hand on
 //! a read; a refusal the table holds nowhere, and the death signal, leaving
 //! a resent line standing; a resend answered `500 internal_panic` marking
-//! its line `sent: true`, its landing then kept by the read; a second
-//! window's burst resent from memory; every principal's lines resent by one
-//! probe, a bare session's line resent by none until a session of its
+//! its line `sent: true`, its landing then kept by the read; a line that may
+//! have landed staying so through resends that never left, over a head
+//! record that cannot be read or a connection never made, its landing kept
+//! by the read; a second window's burst resent from memory; every
+//! principal's lines resent by one probe, a bare session's line resent by
+//! none until a session of its
 //! principal's that may write stands, and a probe with no line standing
 //! dialing nothing; one drain per board at a time, and a drain that unwinds
 //! leaving the board free to drain again; a move facing its own document
@@ -1002,6 +1005,48 @@ fn a_connection_never_made_counts_no_try() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the board answering, the line is sent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// Checks that a line that may have landed stays so through resends that
+/// never left.
+///
+/// A line held `sent: true`, its first dial's answer lost, is resent at each
+/// probe, and each resend never leaves: its signature not made over a head
+/// record that cannot be read, or its connection never made. Past
+/// `MAX_LOST_ANSWERS` probes the line stands `sent: true`, nothing dialed and
+/// no try counted; and where the earlier write has landed after all — a row
+/// whose testimony the board lost, the line's values at its site — the next
+/// probe's read keeps it, never sent twice (§3c.2; the mutant that re-marks
+/// with the resend's own `sent` faces the person's own text `moved`, and the
+/// one that counts a try off the line's kept `sent` hands an outage's line to
+/// the person).
+#[test]
+fn a_line_that_may_have_landed_stays_so_through_resends_that_never_left() {
+    for (cell, unreadable_head, cause) in [("a head record that cannot be read", true, "head_unreadable"), ("a connection never made", false, "unreachable")] {
+        let fake = Fake::new();
+        if unreadable_head {
+            *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+        }
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        g.fake.op_unreachable.store(!unreadable_head, Ordering::SeqCst);
+        g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+        for _ in 0..=MAX_LOST_ANSWERS {
+            g.holds.probe("b-1");
+        }
+        let lines = g.lines();
+        assert_eq!((g.fake.sends(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (0, Some(cause), Some(true)), "{cell}: {lines:?}");
+        *g.fake.head_answer.lock().unwrap() = None;
+        g.fake.op_unreachable.store(false, Ordering::SeqCst);
+        *g.fake.rows.lock().unwrap() = vec![lost_row()];
+        *g.fake.text.lock().unwrap() = "hello".into();
+        let _ = g.states();
+        g.holds.probe("b-1");
+        let states = g.states();
+        assert_eq!(g.fake.sends(), 0, "{cell}: never sent twice");
+        assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{cell}: {states:?}");
+    }
 }
 
 /// Checks that the hand-over comes within a minute or two of probes.

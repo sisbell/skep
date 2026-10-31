@@ -163,6 +163,8 @@ struct World {
     claimed: bool,
     /// `H.1` answers its record.
     head: bool,
+    /// `H.1` answers a record that stands and cannot be read.
+    damaged_head: bool,
     key: Option<PublicKey>,
 }
 
@@ -401,7 +403,13 @@ impl World {
                 let spec = &frame["specs"][0];
                 let doc = spec["doc"].as_str().unwrap();
                 if doc == HEAD_MEMBER_1 {
-                    let items = if self.head { json!([{"atom": json!({"type": "skep-head", "position": 1, "chain": chain_hex(1)}).to_string()}]) } else { json!([]) };
+                    let items = if self.damaged_head {
+                        json!([{"atom": "not a head record"}])
+                    } else if self.head {
+                        json!([{"atom": json!({"type": "skep-head", "position": 1, "chain": chain_hex(1)}).to_string()}])
+                    } else {
+                        json!([])
+                    };
                     return Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})));
                 }
                 let (from, width) = span_of(&spec["span"]);
@@ -1551,11 +1559,13 @@ fn the_send_is_acknowledged_and_the_commit_holds_every_deposit() {
     assert_eq!(dialer.world().position, position, "the memo, not a second commit");
 }
 
-/// NEVER UNSIGNED ON A CLAIMED BOARD: a head record that cannot be read where
-/// `/health` names a claimant is the halt's data, no frame sent; a board no
-/// one claimed takes the frame without an `attest`.
+/// Checks that a claimed board serving no head record sends nothing.
+///
+/// Where `H.1` serves no record and `/health` names a claimant, the send is
+/// refused `Refusal::HeadUnreadable`, no frame sent; a board no one claimed
+/// takes the frame without an `attest`.
 #[test]
-fn an_unreadable_head_on_a_claimed_board_sends_nothing() {
+fn a_claimed_board_serving_no_head_record_sends_nothing() {
     let (world, _) = World::base();
     let (dialer, board, signer) = open(world);
     let tok = token();
@@ -1578,6 +1588,33 @@ fn an_unreadable_head_on_a_claimed_board_sends_nothing() {
     assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
     assert!(dialer2.frames("publish")[0].get("attest").is_none(), "an unclaimed board takes the frame unsigned");
     let _ = signer;
+}
+
+/// Checks that a head record that stands and cannot be read sends nothing.
+///
+/// The read halts naming why (SP-14), on a claimed board and on one no one
+/// claimed alike, and no frame leaves: a damaged record is never read as no
+/// record (the mutant that reads it as none sends the frame unsigned where no
+/// one claimed the board).
+#[test]
+fn a_damaged_head_record_sends_nothing_claimed_or_not() {
+    let tok = token();
+    for claimed in [true, false] {
+        let (dialer, board, signer) = open({
+            let (mut w, _) = World::base();
+            w.claimed = claimed;
+            w.damaged_head = true;
+            w
+        });
+        let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+        let p = publisher(&board, &tok, &signer);
+        dialer.clear();
+        match send(&p, &inputs(), &mut request) {
+            Err(Fault::Halt(Halt::Halt(face))) => assert!(face.state.contains("`H.1`") && face.cause.contains("no JSON"), "claimed {claimed}: {face}"),
+            other => panic!("claimed {claimed}: {other:?}"),
+        }
+        assert!(dialer.frames("publish").is_empty(), "claimed {claimed}: no frame: {:?}", dialer.ops());
+    }
 }
 
 /// THE REFUSAL FAMILY's arms, each from the board's own refusal with its

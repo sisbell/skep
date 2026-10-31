@@ -274,6 +274,48 @@ fn the_board_term_is_read_once_and_never_cached_absent() {
     assert_eq!(fake.log(), ["POST /op retrieve_v", "POST /op retrieve_v"], "the third answered from the cache");
 }
 
+/// Checks that only a head record the board does not serve is no term.
+///
+/// A board serving no `H.1` — the head document not registered, or a
+/// delivery holding no item — answers none; a record that stands and cannot
+/// be read halts naming why, never read as no record (SP-14), and is read
+/// again at the next call; a rejection of another code is the board's
+/// refusal (the mutant that reads a damaged record as none lets a signed
+/// write go out unsigned).
+#[test]
+fn a_head_record_present_but_unreadable_halts_and_only_an_absent_one_is_none() {
+    let answer = |body: Value| {
+        let fake = fake::Fake::new(move |_| fake::json(200, body.clone()));
+        (fake::board(&fake), fake)
+    };
+    let delivery = |items: Value| json!({"as_of": 12, "items": items, "resp": "delivery"});
+    let head = |record: Value| delivery(json!([{"atom": record.to_string()}]));
+    for absent in [json!({"code": "doc_not_registered", "disposition": "reorder", "op": "retrieve_v", "resp": "rejected"}), delivery(json!([]))] {
+        assert_eq!(answer(absent.clone()).0.board_term(), Ok(None), "{absent}");
+    }
+    let cells = [
+        (delivery(json!([{"content": "{}"}])), "no record atom"),
+        (delivery(json!([{"atom": "not json"}])), "no JSON"),
+        (head(json!({"chain": "07".repeat(32), "position": 12, "type": "skep-other"})), "of another type"),
+        (head(json!({"chain": "07".repeat(32), "type": "skep-head"})), "no position"),
+        (head(json!({"chain": "07", "position": 12, "type": "skep-head"})), "no chain"),
+        (json!({}), "no delivery"),
+        (json!({"resp": "delivery"}), "no item list"),
+    ];
+    for (body, why) in cells {
+        let (board, fake) = answer(body.clone());
+        for _ in 0..2 {
+            match board.board_term() {
+                Err(Halt::Halt(face)) => assert!(face.state.contains("`H.1`") && face.cause.contains(why), "{body}: {face}"),
+                other => panic!("{body}: {other:?}"),
+            }
+        }
+        assert_eq!(fake.log(), ["POST /op retrieve_v", "POST /op retrieve_v"], "{body}: an error is read again");
+    }
+    let refused = answer(json!({"code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v", "resp": "rejected"})).0.board_term();
+    assert!(matches!(&refused, Err(Halt::Refused(r)) if r.token() == "out_of_bounds"), "{refused:?}");
+}
+
 /// AUTH-6.15: the `key` of the row at one position, as the feed writes it —
 /// absent on a signed row, `null` where lost, `bare`, `system`, a
 /// fingerprint, and anything else lost — a row at another position no

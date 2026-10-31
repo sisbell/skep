@@ -1,18 +1,21 @@
-//! THE HOLD's FENCE: the classification table (T6) — every `DialError`, every
-//! disposition, `poisoned`, `internal_panic`, `write_busy` once/twice,
-//! `durability` once/twice/three times, and an ack, each to exactly its row,
-//! the table the one owner of every reissue's bound; the five kinds are
-//! bursts and the eleven other `WRITE_KINDS` are not; the five held states
-//! are the declared ones, and the two acts of `resolve` the declared words
-//! and no other spelling. And the ground its two children stand on: a fake
-//! board (`Fake`) — its `H.1`, its `/changes` rows, a draft's text, the
-//! frames POSTed to `/op` recorded and a refusal or the death signal armed
-//! for a send — the holds over it with a session opened as the shell opens
-//! one and every line the hold says on TALK recorded (`Ground`), and each
-//! `held` event, `held` row and `held` answer held to its declaration. The
-//! ground's session is a writer's — signed, under a key its store generates,
-//! since a bare session reads alone and no probe resends under it — save
-//! where a cell asks for a bare one (`bare_ground`) or for a key no store
+//! The hold's classification table, and the ground its child suites stand on.
+//!
+//! The table (T6) takes every `DialError`, every disposition, `poisoned`,
+//! `internal_panic`, `write_busy` once and twice, `durability` once, twice and
+//! three times, and an ack, each to exactly its row, the table the one owner of
+//! every reissue's bound; the five kinds are bursts and the eleven other
+//! `WRITE_KINDS` are not; the five held states are the declared ones, and the
+//! two acts of `resolve` the declared words and no other spelling.
+//!
+//! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
+//! record's place, and whether it names a claimant; its `/changes` rows, a
+//! draft's text, the frames POSTed to `/op` recorded and a refusal or the death
+//! signal armed for a send — the holds over it with a session opened as the
+//! shell opens one and every line the hold says on `Talk` recorded (`Ground`),
+//! and each `held` event, `held` row and `held` answer held to its declaration.
+//! The ground's session is a writer's — signed, under a key its store
+//! generates, since a bare session reads alone and no probe resends under it —
+//! save where a cell asks for a bare one (`bare_ground`) or for a key no store
 //! holds (`keyed_facts`). `write` holds the one path of a session's `op` — a
 //! burst's door and its hold, and a write the hold never holds; `resend` the
 //! probe and the resend walk.
@@ -193,25 +196,34 @@ impl<T: Clone> Armed<T> {
     }
 }
 
-/// A board under test: the chain `board_term` reads — or no `H.1` at all,
-/// where one is armed missing, the death signal, where its read is armed
-/// closed, or an answer lost on the way, where it is armed unanswered; the
-/// `/changes` rows the read sees, each served
-/// only past the query's `since` and at or under its `under`, or a refusal
-/// armed in the page's place; the draft's text, of which a `retrieve_v`
-/// answers the positions it names — or no answer, the death signal, or one
-/// position more than it names, where the site is armed so; the frames
-/// POSTed to `/op` recorded, the n-th one's answer lost on the way where one
-/// is armed lost, and the death signal, a scripted rejection or a non-200
-/// answered where one is armed — to every send, or to the next few alone,
-/// the death first and the non-200 next; and the `/health` reads
-/// counted, one armed to panic once, and each held at a gate while it is
+/// A board under test, its every answer armed or recorded.
+///
+/// It holds the chain `board_term` reads — or no `H.1` at all, where one is
+/// armed missing; the death signal, where its read is armed closed; an answer
+/// lost on the way, where it is armed unanswered; or the answer armed in its
+/// place, a record that cannot be read among them — and whether `/health`
+/// names a claimant, as it does unless armed unclaimed. It holds the
+/// `/changes` rows the read sees, each served only past the query's `since`
+/// and at or under its `under`, or a refusal armed in the page's place; the
+/// draft's text, of which a `retrieve_v` answers the positions it names — or
+/// no answer, the death signal, or one position more than it names, where the
+/// site is armed so; the frames POSTed to `/op` recorded, the n-th one's answer
+/// lost on the way where one is armed lost, and the death signal, a scripted
+/// rejection or a non-200 answered where one is armed — to every send, or to
+/// the next few alone, the death first and the non-200 next; and the `/health`
+/// reads counted, one armed to panic once, and each held at a gate while it is
 /// shut.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
     head_closed: AtomicBool,
     head_unreachable: AtomicBool,
+    /// The answer armed for the head record's read, in the record's place.
+    ///
+    /// It is a status and its body, a `200`'s body the document served.
+    head_answer: Mutex<Option<(u16, Value)>>,
+    /// Whether `/health` names no claimant: a board no one has claimed.
+    unclaimed: AtomicBool,
     rows: Mutex<Vec<Value>>,
     changes_refused: Mutex<Option<(u16, Value)>>,
     text: Mutex<String>,
@@ -252,6 +264,8 @@ impl Fake {
             no_head: AtomicBool::new(false),
             head_closed: AtomicBool::new(false),
             head_unreachable: AtomicBool::new(false),
+            head_answer: Mutex::new(None),
+            unclaimed: AtomicBool::new(false),
             rows: Mutex::new(Vec::new()),
             changes_refused: Mutex::new(None),
             text: Mutex::new(String::new()),
@@ -338,8 +352,9 @@ impl Dialer for Fake {
             drop(opened.wait_while(gate.lock().unwrap(), |shut| *shut).unwrap());
             assert!(!self.panic_next_health.swap(false, Ordering::SeqCst), "the health read is made to panic");
             let halted = self.writes_halted.load(Ordering::SeqCst);
+            let claimant = if self.unclaimed.load(Ordering::SeqCst) { Value::Null } else { Value::from("1.0.1") };
             return Ok(ok(
-                json!({"ok": true, "log_position": 10, "chain_head": self.chain, "auth": {"claimant": "1.0.1", "local_trust": true, "origins": [], "signed_origins": []}, "media": {"uploads": true}, "head_time": 1, "writes": {"halted": halted}}),
+                json!({"ok": true, "log_position": 10, "chain_head": self.chain, "auth": {"claimant": claimant, "local_trust": true, "origins": [], "signed_origins": []}, "media": {"uploads": true}, "head_time": 1, "writes": {"halted": halted}}),
             ));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
@@ -363,6 +378,9 @@ impl Dialer for Fake {
                     }
                     if self.head_unreachable.load(Ordering::SeqCst) {
                         return Err(DialError::Io("the head read's answer was lost".into()));
+                    }
+                    if let Some((status, answer)) = self.head_answer.lock().unwrap().clone() {
+                        return Ok(respond(status, answer));
                     }
                     if self.no_head.load(Ordering::SeqCst) {
                         return Ok(ok(json!({"resp": "delivery", "items": []})));

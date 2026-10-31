@@ -244,7 +244,7 @@ pub struct HeldLine {
     pub id: Option<String>,
     /// The `since` of the resend's read (§3c.5).
     ///
-    /// It is the position of its principal's last write on `doc` that the
+    /// It is the position of its principal's latest write on `doc` that the
     /// shell knows when the line is held — its ack's, or the landing the
     /// resend's read found — or else the open position of the session it is
     /// held under (§3c.2). A line held before it on `doc` and kept at a later

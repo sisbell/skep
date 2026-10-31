@@ -2,10 +2,11 @@
 //!
 //! The suite checks a `halted` hold before any dial `sent: false`; a burst
 //! held under the first hold that stands, over all eight cells of the
-//! three; the `base` a hold takes from every kind of ack; the refused run's
-//! `resolve(drop)` dropping it and every line held behind it on its own
-//! document alone, and a drop's `held` event saying the state of the line
-//! that stands first after it; a held line under the board's own directory;
+//! three; the `base` a hold takes from every kind of ack, an ack read after
+//! a later one lowering it never; the refused run's `resolve(drop)`
+//! dropping it and every line held behind it on its own document alone,
+//! and a drop's `held` event saying the state of the line that stands
+//! first after it; a held line under the board's own directory;
 //! a refusal the table holds nowhere faced at the first dial, a
 //! `write_busy` and a first and second `durability` reissued within the
 //! first dial's call and a third holding the burst; a burst answered
@@ -96,9 +97,9 @@ fn a_burst_is_held_under_the_first_hold_that_stands() {
     }
 }
 
-/// Checks the base a hold takes (§3c.2): the last ack's `at`, else the open.
+/// Checks the base a hold takes (§3c.2): the latest ack's `at`, else the open.
 ///
-/// It is the `at` of the last acked write on its document — whatever its
+/// It is the `at` of the latest acked write on its document — whatever its
 /// kind: a mint's, a fork's and a version's at the `addr` it minted, a link
 /// write's at its `home`, an edit's at both its documents, a burst's at its
 /// `doc` — and where none, the session's open position: a burst held on a
@@ -154,6 +155,42 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     let at = ack["at"].as_u64().unwrap();
     g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
     assert_eq!(g.lines()[0]["base"], at);
+}
+
+/// Checks that an ack read after a later one never lowers the base (§3c.2).
+///
+/// Answers are noted as they are read — a call's on its connection's thread,
+/// a resend's on the board's feed thread — not as the board committed them: a
+/// link homed in the document at 99 and an insert there at 100, noted in
+/// either order, leave 100 the base of the next burst held on it, whose read
+/// passes over both of the principal's rows, sends it and keeps it (the
+/// mutant that overwrites the base with each ack's `at` reads from 99 where
+/// the answers came out of order, and faces the person's own insert as a
+/// move; the one that keeps the first position noted does so where they came
+/// in order).
+#[test]
+fn an_ack_read_after_a_later_one_never_lowers_the_base() {
+    let link = json!({"op": "make_link", "home": DOC, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}});
+    let acks = [(link, json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 99})), (insert(DOC, json!(["a"])), json!({"resp": "ack", "at": 100}))];
+    for in_commit_order in [false, true] {
+        let g = ground();
+        let mut read = acks.clone();
+        if !in_commit_order {
+            read.reverse();
+        }
+        for (frame, ack) in &read {
+            g.holds.note_ack(&g.session, frame, ack);
+        }
+        let own = |at: u64, op: &str| json!({"at": at, "op": op, "key": g.own_key(), "docs": [DOC]});
+        *g.fake.rows.lock().unwrap() = vec![own(99, "make_link"), own(100, "insert")];
+        g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+        assert_eq!(g.lines()[0]["base"], 100, "in commit order {in_commit_order}: the later write's position stands");
+        g.fake.next_at.store(101, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        let states = g.states();
+        assert_eq!(g.fake.sends(), 1, "in commit order {in_commit_order}: the line is sent");
+        assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "in commit order {in_commit_order}: {states:?}");
+    }
 }
 
 /// Checks that a refused run's drop drops its `behind` lines.

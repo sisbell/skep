@@ -10,7 +10,8 @@
 //! dialed, and each answer read once through the classification table
 //! ([`classify`]: §3c.4's hold(cause) / reissue / neither) — an ack carried
 //! and its `at` noted for the `base` of the next hold on every document it
-//! names (§3c.2); a reissue-class answer reissued within the call, a
+//! names (§3c.2), a later position never lowered by an earlier one read
+//! after it; a reissue-class answer reissued within the call, a
 //! `write_busy` once after [`WRITE_BUSY_WAIT`], a first and second
 //! `durability` as-is, so the page meets the ack or the next refusal
 //! (§4b.1's `op` row); and anything else faced at the act, save a burst's
@@ -721,11 +722,12 @@ impl Custody {
 
 /// One principal's hold at one board.
 ///
-/// It holds where its lines are kept, the queue, the position of its last
-/// write per document whose position the shell knows — its ack's, or the
-/// landing the resend's read found: the `base` a hold on that document takes
-/// (§3c.2) — and the reissues each line's resend has been given and the
-/// answers its resends lost, counted across its probes.
+/// It holds where its lines are kept, the queue, the position of its latest
+/// write per document whose position the shell knows — the greatest of its
+/// acks' and of the landings the resend's read found, each noted by
+/// [`PrincipalHold::note_position`]: the `base` a hold on that document
+/// takes (§3c.2) — and the reissues each line's resend has been given and
+/// the answers its resends lost, counted across its probes.
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
@@ -737,6 +739,20 @@ struct PrincipalHold {
 impl PrincipalHold {
     fn new() -> PrincipalHold {
         PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new() }
+    }
+
+    /// Notes `at`, the position of a write of the principal's on `doc`.
+    ///
+    /// It is the document's `base` from here where it is past the position
+    /// noted there, which stands otherwise (§3c.2). Answers are noted in the
+    /// order they are read, not the order the board committed them — a
+    /// call's on its connection's thread, a resend's and a landing the
+    /// resend's read found on the board's feed thread — so an earlier write
+    /// read after a later one never lowers the base below that later write,
+    /// whose row the next hold's read would take for a move (§3c.5).
+    fn note_position(&mut self, doc: &str, at: u64) {
+        let base = self.last_acked.entry(doc.to_string()).or_insert(at);
+        *base = (*base).max(at);
     }
 
     /// Returns how many lines stand on `doc`.
@@ -1158,7 +1174,7 @@ impl Holds {
     ///
     /// `board_hold` is that board's hold. The line is the burst as stored,
     /// its frame carrying no attest, copied to its file where it has one,
-    /// its `base` the position of the principal's last write on the document
+    /// its `base` the position of the principal's latest write on the document
     /// that the shell knows — its ack's, or the landing the resend's read
     /// found — or else the session's open position (§3c.2); the `held` event
     /// is emitted, and the answer is `{resp: held, held: <k>, cause}`, and
@@ -1198,9 +1214,10 @@ impl Holds {
     /// Notes an acked session write (§3c.2).
     ///
     /// Its `at` becomes the `base` of the next hold on every document its row
-    /// names — whatever its kind, a burst's, a mint's or a link's, the first
-    /// dial's and the resend's alike, each noted where its answer is read. A
-    /// read, or a refusal, notes nothing.
+    /// names where it is past the position noted there, which stands otherwise
+    /// ([`PrincipalHold::note_position`]) — whatever its kind, a burst's, a
+    /// mint's or a link's, the first dial's and the resend's alike, each
+    /// noted where its answer is read. A read, or a refusal, notes nothing.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
         let docs = written_docs(frame, ack);
@@ -1210,7 +1227,7 @@ impl Holds {
         let mut board_hold = self.lock(&session.board_reference);
         let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(PrincipalHold::new);
         for doc in docs {
-            ph.last_acked.insert(doc.to_string(), at);
+            ph.note_position(doc, at);
         }
     }
 

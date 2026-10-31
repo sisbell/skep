@@ -195,13 +195,12 @@ impl Holds {
                 false
             }
             ReadOutcome::Landed { at } => {
-                // The landing is the session's last write on the document, as
-                // an ack is (§3c.2), so a line held on it from here reads past
-                // it; a later write noted since the read stands.
+                // The landing is noted as the session's ack is (§3c.2), so a
+                // line held on the document from here reads past it; a later
+                // write noted since the read stands.
                 self.with_principal(board_reference, principal, |ph| {
                     if let Some(at) = at {
-                        let base = ph.last_acked.entry(doc.to_string()).or_insert(at);
-                        *base = (*base).max(at);
+                        ph.note_position(doc, at);
                     }
                     self.done_line(ph, head.k, Done::Kept { at });
                 });

@@ -9,12 +9,13 @@
 //! two acts of `resolve` the declared words and no other spelling.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
-//! record's place, and whether it names a claimant; its `/changes` rows, a
-//! draft's text, the frames POSTed to `/op` recorded, a look taken as each is
-//! recorded, and a refusal or the death signal armed for a send — the holds
-//! over it with a session opened as the
+//! record's place, and whether it names a claimant; its `/changes` rows and
+//! the reads of them counted, a draft's text, the frames POSTed to `/op`
+//! recorded, a look taken as each is recorded, and a refusal or the death
+//! signal armed for a send — the holds over it with a session opened as the
 //! shell opens one and every line the hold says on `Talk` recorded (`Ground`),
-//! and each `held` event, `held` row and `held` answer held to its declaration.
+//! a burst held through the hold's own door at the base a hold takes now, and
+//! each `held` event, `held` row and `held` answer held to its declaration.
 //! The ground's session is a writer's — signed, under a key its store
 //! generates, since a bare session reads alone and no probe resends under it —
 //! save where a cell asks for a bare one (`bare_ground`) or for a key no store
@@ -211,8 +212,10 @@ impl<T: Clone> Armed<T> {
 /// place, a record that cannot be read among them — and whether `/health`
 /// names a claimant, as it does unless armed unclaimed. It holds the
 /// `/changes` rows the read sees, each served only past the query's `since`
-/// and at or under its `under`, or a refusal armed in the page's place; the
-/// draft's text, of which a `retrieve_v` answers the positions it names — or
+/// and at or under its `under`, or a refusal armed in the page's place — the
+/// page budget's for the next few reads among them — and the reads of them
+/// counted; the draft's text, of which a `retrieve_v`
+/// answers the positions it names — or
 /// no answer, the death signal, or one position more than it names, where the
 /// site is armed so; the frames POSTed to `/op` recorded, a look the cell
 /// takes as each is recorded, the n-th one's answer lost on the way where one
@@ -233,6 +236,12 @@ struct Fake {
     unclaimed: AtomicBool,
     rows: Mutex<Vec<Value>>,
     changes_refused: Mutex<Option<(u16, Value)>>,
+    /// The page budget's refusal armed for the next `/changes` reads: `400
+    /// malformed_changes` naming the `fits` armed, the page then served at
+    /// the limit re-asked.
+    changes_too_large: Armed<u64>,
+    /// The `/changes` reads made, a page or a refusal answered alike.
+    changes_reads: AtomicUsize,
     text: Mutex<String>,
     site_unread: AtomicBool,
     site_closed: AtomicBool,
@@ -280,6 +289,8 @@ impl Fake {
             unclaimed: AtomicBool::new(false),
             rows: Mutex::new(Vec::new()),
             changes_refused: Mutex::new(None),
+            changes_too_large: Armed::none(),
+            changes_reads: AtomicUsize::new(0),
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
             site_closed: AtomicBool::new(false),
@@ -380,8 +391,12 @@ impl Dialer for Fake {
             ));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
+            self.changes_reads.fetch_add(1, Ordering::SeqCst);
             if let Some((status, body)) = self.changes_refused.lock().unwrap().clone() {
                 return Ok(respond(status, body));
+            }
+            if let Some(fits) = self.changes_too_large.take() {
+                return Ok(respond(400, json!({"error": "malformed_changes", "fits": fits})));
             }
             let since = query(&req.path, "since").unwrap_or(0);
             let limit = query(&req.path, "limit").unwrap_or(256) as usize;
@@ -525,9 +540,26 @@ impl Ground {
     /// A burst held for `cause`, `sent` as a lost answer's would be: the
     /// `held` answer, held to its declaration (`HeldAnswer`).
     fn hold(&self, frame: &Value, cause: &str, sent: bool) -> Value {
-        let answer = self.holds.hold(&self.session, self.burst(frame), Reason::of(cause, sent)).unwrap();
+        let answer = self.hold_for(frame, Reason::of(cause, sent)).unwrap();
         crate::shapes::assert_declared("HeldAnswer", &answer);
         answer
+    }
+
+    /// A burst held for `reason` through the hold's own door, at the base a
+    /// hold on its document takes now — as a dial's answer holds it, no dial
+    /// between: the `held` answer, or the hold's refusal.
+    fn hold_for(&self, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
+        let burst = self.burst(frame);
+        let base = self.base_of(&burst.doc);
+        self.holds.hold(&self.session, burst, reason, base)
+    }
+
+    /// The base a line held on `doc` under the ground's session takes now
+    /// (§3c.2): its principal's latest acked write there, else the session's
+    /// open.
+    fn base_of(&self, doc: &str) -> u64 {
+        let (board, principal, opened_at) = (self.session.board_reference.as_str(), self.session.facts.principal, self.session.opened_at);
+        self.holds.with_principal(board, principal, |ph| ph.base_of(doc, opened_at)).unwrap_or(opened_at)
     }
 
     /// The session's own hand as a `/changes` row's `key` names it (wire.md

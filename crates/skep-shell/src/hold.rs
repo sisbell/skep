@@ -11,7 +11,9 @@
 //! ([`classify`]: §3c.4's hold(cause) / reissue / neither) — an ack carried
 //! and its `at` noted for the `base` of the next hold on every document it
 //! names (§3c.2), a later position never lowered by an earlier one read
-//! after it; a reissue-class answer reissued within the call, a
+//! after it, and entered in the board's acked positions, which the resend's
+//! read never takes for a line's lost landing ([`BoardHold::acked`]); a
+//! reissue-class answer reissued within the call, a
 //! `write_busy` once after [`WRITE_BUSY_WAIT`], a first and second
 //! `durability` as-is, so the page meets the ack or the next refusal
 //! (§4b.1's `op` row); and anything else faced at the act, save a burst's
@@ -72,7 +74,7 @@
 //! wait is another's.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -177,13 +179,13 @@ mod cause {
 
 /// A hand whose row moved a held document (§3c.5; §4b.2's `held` event).
 ///
-/// Each is read off a `/changes` row since the burst's typed state where the
-/// board refused it as typed against an older state, or since the hold's
-/// `base` where the resend's read found the move: this store's
-/// own key, another key with the label this shell's key store holds for it,
-/// an unsigned hand under local trust, or a row whose testimony the board
-/// lost — the data of the three forms the moved face draws, the strings
-/// the copy's.
+/// Each is read off a `/changes` row since the burst's typed state, where
+/// the board refused it as typed against an older state — the one route to
+/// a moved document; the resend's read judges no move: this store's own
+/// key, another key with the label this shell's key store holds for it, an
+/// unsigned hand under local trust, or a row whose testimony the board lost
+/// — the data of the three forms the moved face draws, the strings the
+/// copy's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hand {
     /// `own`, `other`, `bare` or `lost`.
@@ -753,8 +755,13 @@ impl Custody {
 /// write per document whose position the shell knows — the greatest of its
 /// acks' and of the landings the resend's read found, each noted by
 /// [`PrincipalHold::note_position`]: the `base` a hold on that document
-/// takes (§3c.2) — and the reissues each line's resend has been given and
-/// the answers its resends lost, counted across its probes.
+/// takes ([`PrincipalHold::base_of`], §3c.2), the position the resend's
+/// read of the line starts from, read before the burst's dial so an ack
+/// read during the dial never lifts it past the line's own landing — and
+/// the reissues each line's resend has been given and the answers its
+/// resends lost, counted across its probes. An ack touches no standing
+/// line's base: a line held keeps the base it was held at, raised only
+/// behind a line kept on its document (`HeldQueue::done`).
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
@@ -776,10 +783,20 @@ impl PrincipalHold {
     /// call's on its connection's thread, a resend's and a landing the
     /// resend's read found on the board's feed thread — so an earlier write
     /// read after a later one never lowers the base below that later write,
-    /// whose row the next hold's read would take for a move (§3c.5).
+    /// whose row the next hold's read would otherwise read again.
     fn note_position(&mut self, doc: &str, at: u64) {
         let base = self.last_acked.entry(doc.to_string()).or_insert(at);
         *base = (*base).max(at);
+    }
+
+    /// Returns the `base` a line held on `doc` takes now (§3c.2).
+    ///
+    /// It is the position of the principal's latest write on `doc` that the
+    /// shell knows — its ack's, or the landing the resend's read found — or
+    /// else `opened_at`, the open position of the session the line is held
+    /// under. A burst's send reads it before its dial ([`Holds::send_burst`]).
+    fn base_of(&self, doc: &str, opened_at: u64) -> u64 {
+        self.last_acked.get(doc).copied().unwrap_or(opened_at)
     }
 
     /// Returns how many lines stand on `doc`.
@@ -791,11 +808,32 @@ impl PrincipalHold {
 /// One board's hold.
 ///
 /// It holds its directory, the three states that hold every burst before
-/// any dial — and refuse the six unholdable writes at once — and each
-/// principal's queue.
+/// any dial — and refuse the six unholdable writes at once — the positions
+/// this shell acked at the board, and each principal's queue.
 #[derive(Debug)]
 struct BoardHold {
     directory: Directory,
+    /// The positions this shell acked at the board (§3c.5).
+    ///
+    /// Every ack [`Holds::note_ack`] reads enters its `at`, whatever
+    /// documents its row names, and every landing the resend's read finds
+    /// enters its position; in memory, for the shell's life. The resend's
+    /// landed test skips a row at one of them: a write this shell was
+    /// answered for is never the lost landing of a line, though its hand is
+    /// the same key and its kind the head's — a sibling session's burst
+    /// through this hold, or the person's own write on another connection
+    /// acked while the line's dial was out (skep #737). What it cannot hold,
+    /// named: a row of the same key not through this shell — the `skep`
+    /// command's, which dials the board itself — stays a candidate for a
+    /// landing of the same kind; and a relaunch starts the set empty, so a
+    /// row an earlier run acked is a candidate again. No bound is kept: a
+    /// position is of no further use only once no line held later can read
+    /// from below it, and a line's base — its principal's last acked
+    /// position on its document, else its session's open — can lie below
+    /// any acked position for the shell's life; the set grows by one `u64`
+    /// per ack, a few megabytes over a day of a write a second, and dies
+    /// with the shell.
+    acked: HashSet<u64>,
     /// Whether the last read of `/health.writes.halted` answered true.
     ///
     /// The read is the feed's tick's, or the probe's: every burst holds
@@ -909,7 +947,7 @@ impl Holds {
         let boards = boards
             .into_iter()
             .map(|entry| {
-                let hold = BoardHold { directory: Directory::NotYet("no session has opened at this board yet".to_string()), writes_halted: false, poisoned: false, node_stopped: false, principals: HashMap::new() };
+                let hold = BoardHold { directory: Directory::NotYet("no session has opened at this board yet".to_string()), acked: HashSet::new(), writes_halted: false, poisoned: false, node_stopped: false, principals: HashMap::new() };
                 (entry.reference.clone(), BoardSlot { board: Arc::clone(&entry.board), hold: Mutex::new(hold), draining: AtomicBool::new(false) })
             })
             .collect();
@@ -1124,12 +1162,21 @@ impl Holds {
     /// carrying the board's verdict and the `held` event naming the hands
     /// whose rows moved the document — one more read the call waits on
     /// ([`Holds::hands_since_typed_state`]); anything else faced at the act.
+    ///
+    /// The `base` a held line takes — the position the resend's read of it
+    /// starts from (§3c.2) — is read under the board's lock BEFORE the dial,
+    /// with the standing hold, and handed to the hold either path takes
+    /// ([`Holds::hold_line`] at once, [`Holds::hold`] after the dial): an ack
+    /// of another write of the principal's read while the dial is out — a
+    /// sibling session's, or the person's on another connection — raises the
+    /// base of the next hold alone, never this line's, so the read of a line
+    /// whose answer was lost starts below its own landing (skep #737).
     fn send_burst(&self, session: &SessionEntry, frame: Value) -> OpAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst,
             Err(refusal) => return OpAnswer::Answered(Err(refusal)),
         };
-        {
+        let base = {
             let mut board_hold = self.lock(&session.board_reference);
             // A burst's hold before any dial is the own node stopped, else the
             // writes halted (§3c.4's two for a burst; a `poisoned` answer is
@@ -1142,21 +1189,22 @@ impl Holds {
             } else {
                 None
             };
-            let line_stands = match self.principal_hold(&mut board_hold, session) {
-                Ok(ph) => !ph.queue.lines().is_empty(),
+            let (line_stands, base) = match self.principal_hold(&mut board_hold, session) {
+                Ok(ph) => (!ph.queue.lines().is_empty(), ph.base_of(&burst.doc, session.opened_at)),
                 Err(refusal) => return OpAnswer::Answered(Err(refusal)),
             };
             let hold_cause = standing.or(line_stands.then_some(cause::BEHIND));
             if let Some(cause) = hold_cause {
-                return OpAnswer::Answered(self.hold_line(&mut board_hold, session, burst, Reason::of(cause, false), &[]));
+                return OpAnswer::Answered(self.hold_line(&mut board_hold, session, burst, Reason::of(cause, false), base, &[]));
             }
-        }
+            base
+        };
         match self.dial_within_call(session, burst.frame()) {
             Dialed::Acked(ack) => {
                 self.note_ack(session, burst.frame(), &ack);
                 OpAnswer::Answered(Ok(ack))
             }
-            Dialed::Held { reason, .. } => OpAnswer::Answered(self.hold(session, burst, reason)),
+            Dialed::Held { reason, .. } => OpAnswer::Answered(self.hold(session, burst, reason, base)),
             Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => OpAnswer::Answered(Err(refusal)),
             Dialed::Died => OpAnswer::Died,
         }
@@ -1191,9 +1239,12 @@ impl Holds {
     /// Holds an admitted burst for `reason`, as a dial's answer held it.
     ///
     /// The burst is taken, its frame the held line's own: the answer is the
-    /// `held` answer ([`Holds::hold_line`]). A burst the board refused as
-    /// typed against an older state is held `moved`, its event naming the
-    /// hands whose rows moved the document
+    /// `held` answer ([`Holds::hold_line`]). `base` is the position the
+    /// line's resend read starts from (§3c.2), the caller's to have read
+    /// before its dial ([`Holds::send_burst`]; [`PrincipalHold::base_of`]) —
+    /// a hold made with no dial between reads it the same way, now. A burst
+    /// the board refused as typed against an older state is held `moved`,
+    /// its event naming the hands whose rows moved the document
     /// ([`Holds::hands_since_typed_state`]), read before the board's lock is
     /// taken, as every dial is made outside it.
     ///
@@ -1201,19 +1252,20 @@ impl Holds {
     ///
     /// Returns `store_halted` where P38 halted the file, and `held_full`
     /// where the principal's queue is full ([`Holds::hold_line`]).
-    pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason) -> Result<Value, Refusal> {
+    pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, base: u64) -> Result<Value, Refusal> {
         let hands = self.hands_since_typed_state(session, &burst.doc, &reason);
-        self.hold_line(&mut self.lock(&session.board_reference), session, burst, reason, &hands)
+        self.hold_line(&mut self.lock(&session.board_reference), session, burst, reason, base, &hands)
     }
 
     /// Enters one line in the principal's queue at the session's board.
     ///
     /// `board_hold` is that board's hold. The line is the burst as stored,
-    /// its frame carrying no attest, copied to its file where it has one,
-    /// its `base` the position of the principal's latest write on the document
-    /// that the shell knows — its ack's, or the landing the resend's read
-    /// found — or else the session's open position (§3c.2); the `held` event
-    /// is emitted — a moved line's naming `hands`, the hands whose rows moved
+    /// its frame carrying no attest, copied to its file where it has one, its
+    /// `base` the caller's — the position of the principal's latest write on
+    /// the document that the shell knew when the burst was sent, its ack's or
+    /// the landing the resend's read found, or else the session's open
+    /// position (§3c.2; [`PrincipalHold::base_of`]) — the `held` event is
+    /// emitted — a moved line's naming `hands`, the hands whose rows moved
     /// its document, and no cause, as every moved document's face does — and
     /// the answer is `{resp: held, held: <k>, cause}`, and `unwritable`
     /// beside it — why — where the device refused its copy or the file is
@@ -1227,11 +1279,10 @@ impl Holds {
     /// queue holds its budget already (`held::MAX_HELD_FRAME_BYTES`'s bytes,
     /// or `held::MAX_HELD_LINES`'s lines) or its ordinals are spent, and
     /// nothing held.
-    fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason, hands: &[Hand]) -> Result<Value, Refusal> {
+    fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason, base: u64, hands: &[Hand]) -> Result<Value, Refusal> {
         let ph = self.principal_hold(board_hold, session)?;
         let (doc, frame) = burst.into_stored();
         let id = frame["id"].as_str().map(str::to_owned);
-        let base = ph.last_acked.get(&doc).copied().unwrap_or(session.opened_at);
         let state = line_state(&reason);
         let said = reason.cause.clone();
         let entered = ph.queue.hold(&doc, id.as_deref(), base, frame, reason).map_err(queue_refused)?;
@@ -1250,24 +1301,37 @@ impl Holds {
         Ok(answer)
     }
 
-    /// Notes an acked session write (§3c.2).
+    /// Notes an acked session write (§3c.2, §3c.5).
     ///
-    /// Its `at` becomes the `base` of the next hold on every document its row
-    /// names where it is past the position noted there, which stands otherwise
-    /// ([`PrincipalHold::note_position`]) — whatever its kind, a burst's, a
-    /// mint's or a link's, the first dial's and the resend's alike, each
-    /// noted where its answer is read. A read, or a refusal, notes nothing.
+    /// Its `at` enters the board's acked positions ([`BoardHold::acked`]),
+    /// whatever documents its row names, and becomes the `base` of the next
+    /// hold on every document its row names where it is past the position
+    /// noted there, which stands otherwise ([`PrincipalHold::note_position`])
+    /// — whatever its kind, a burst's, a mint's or a link's, the first dial's
+    /// and the resend's alike, each noted where its answer is read. No
+    /// standing line is touched: a line held keeps the base it was held at.
+    /// A read, or a refusal, notes nothing.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
+        let mut board_hold = self.lock(&session.board_reference);
+        board_hold.acked.insert(at);
         let docs = written_docs(frame, ack);
         if docs.is_empty() {
             return;
         }
-        let mut board_hold = self.lock(&session.board_reference);
         let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(PrincipalHold::new);
         for doc in docs {
             ph.note_position(doc, at);
         }
+    }
+
+    /// Returns whether this shell acked a write at `at` on the board.
+    ///
+    /// It is the resend's landed test's question of a row
+    /// ([`BoardHold::acked`]): a row at an acked position is a write this
+    /// shell was answered for, never a line's lost landing.
+    fn acked(&self, board_reference: &str, at: u64) -> bool {
+        self.lock(board_reference).acked.contains(&at)
     }
 
     /// Answers `held(session)`: the acting principal's held lines at its board.
@@ -1497,8 +1561,7 @@ impl Holds {
     /// Returns the hands of `rows`, each once (§3c.5; §4b.2).
     ///
     /// The rows are the `/changes` rows since a burst's typed state the
-    /// board's verdict names, or since a hold's `base` the resend's read
-    /// holds.
+    /// board's verdict names ([`Holds::hands_since_typed_state`]).
     ///
     /// A row is this store's `own` where its `key` is the session's
     /// fingerprint, or where it is a signed entry — `attest` in place of

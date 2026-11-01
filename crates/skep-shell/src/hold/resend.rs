@@ -11,28 +11,32 @@
 //! principal's that may write — never a bare one, the keyless session that
 //! reads alone (foundations §3.3 state 3), whose principal's lines stay held
 //! until a session that may write stands: one read per document (`GET
-//! /changes`) before its first resend, with §3c.5's three outcomes — (i)
-//! nothing landed, send from the head, or, the head's resends having lost
-//! their answer [`MAX_LOST_ANSWERS`] times, hand it to the person as a
+//! /changes`) before its first resend, which answers one question of the
+//! document's head — did its own write land? — and nothing more: (i)
+//! nothing of it landed, send from the head, or, the head's resends having
+//! lost their answer [`MAX_LOST_ANSWERS`] times, hand it to the person as a
 //! refused run (`answers_lost`), dialed never again until the person sends
 //! it; (ii) the in-flight burst landed, the head `done kept` and its
-//! position the document's base, as an ack's is (§3c.2); (iii) the site
-//! moved, no line sent and the lines faced `moved`, never rebased — and a
-//! read the board did not answer decides nothing: the next probe reads
-//! again. Every document is read first, and the lines of those its reads
-//! let go then go out in `k` order across the documents (§3c.5's order,
-//! "which keeps each document's order"), so a `copy` held between two
-//! bursts on its source transcludes the source as it stood when the person
-//! wrote it. Each line goes out through the hold's one reader of a write's
-//! answer, as a first dial does, and the board's verdict is a second route to
-//! (iii): a line it refuses as typed against an older state of its document
-//! (`arrangement_moved`) faces the document `moved` as the read's move does,
-//! the verdict kept on the line and the hands read once since the line's
-//! typed state. A resend marks its line as one that may have landed before it
-//! dials, synced, and the line stays so through every resend short of its ack
-//! and through a move, so its next read takes a landing it finds as the
-//! line's own — after a crash or a refused write between a dial and its
-//! answer too (§3c.2's `sent`).
+//! position the document's base, as an ack's is (§3c.2). A head no dial of
+//! which left is not read at all: it goes from the head. A row that is not
+//! the head's own landing is no verdict — the person's own later write, a
+//! sibling's, another hand's — and the head goes from the head; and a read
+//! the board did not answer decides nothing: the next probe reads again.
+//! Whether the DOCUMENT MOVED is the board's to say, (iii), by one route:
+//! a line it refuses as typed against an older state of its document
+//! (`arrangement_moved`, the frame's `as_of` below the arrangement's last
+//! change) faces the document `moved`, never rebased, the verdict kept on
+//! the line and the hands read once since the line's typed state; the read
+//! judges no move. Every document is read first, and the lines of those its
+//! reads let go then go out in `k` order across the documents (§3c.5's
+//! order, "which keeps each document's order"), so a `copy` held between
+//! two bursts on its source transcludes the source as it stood when the
+//! person wrote it. Each line goes out through the hold's one reader of a
+//! write's answer, as a first dial does. A resend marks its line as one
+//! that may have landed before it dials, synced, and the line stays so
+//! through every resend short of its ack and through a move, so its next
+//! read takes a landing it finds as the line's own — after a crash or a
+//! refused write between a dial and its answer too (§3c.2's `sent`).
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -42,29 +46,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, is_lost_answer, line_state, BoardSlot, Dialed, Hand, HeldState, Holds, MAX_LOST_ANSWERS};
+use super::{awaits_act, cause, is_lost_answer, line_state, BoardSlot, Dialed, HeldState, Holds, MAX_LOST_ANSWERS};
 use crate::held::{Done, HeldLine, Reason};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind};
 use crate::wire::{delivered_values, values_of};
 
 /// The outcome of the resend's one read per document (§3c.5).
+///
+/// The read answers whether the document's head's own write landed, and
+/// nothing more: whether the document moved is the board's verdict on the
+/// send ([`Holds::send_line`]'s moved arm), never the read's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReadOutcome {
-    /// No row since `base` — send from the head.
+    /// No row since `base` is the head's own landing — send from the head.
+    ///
+    /// Every row read is no verdict: the person's own later write, a
+    /// sibling's, another hand's. The board judges the send's typed state.
     SendFromHead,
     /// The in-flight burst landed — the head is `done kept` with this `at`.
     ///
     /// The position, where the read names one, becomes the document's base,
-    /// as an ack's does (§3c.2).
+    /// as an ack's does (§3c.2), and joins the board's acked positions.
     Landed { at: Option<u64> },
-    /// The site moved — no line sent, the lines faced `moved`, the hands
-    /// whose rows the read holds named (§3c.5), each once.
-    Moved(Vec<Hand>),
     /// The board answered no page: nothing is decided.
     ///
     /// It answered a refusal (`feed_rebuilding`), the death signal, or no
-    /// answer, and the next probe reads again.
+    /// answer — or the site read the landing needed went unanswered — and
+    /// the next probe reads again.
     Unread,
 }
 
@@ -180,36 +189,41 @@ impl Holds {
 
     /// Resumes one document by its read (resume-by-read, §3c.5).
     ///
-    /// It runs the read and its outcome — a moved document faced, a landed
-    /// head kept and its position made the document's base (§3c.2) — and
-    /// answers whether the document's lines go out now: a document the read
-    /// sends from the head, or whose landed head leaves lines behind it;
-    /// never one whose head awaits the person's act, which is read never,
-    /// nor one the read left undecided, nor one whose head it hands to the
-    /// person ([`Holds::hand_over`]).
+    /// It runs the read and its outcome — a landed head kept, its position
+    /// made the document's base (§3c.2) and entered in the board's acked
+    /// positions — and answers whether the document's lines go out now: a
+    /// document the read sends from the head, or whose landed head leaves
+    /// lines behind it; never one whose head awaits the person's act, which
+    /// is read never, nor one the read left undecided, nor one whose head it
+    /// hands to the person ([`Holds::hand_over`]). A head no dial of which
+    /// left (`sent` false) is not read at all: nothing of it can stand on the
+    /// board, so it goes from the head.
     fn resume_doc(&self, session: &SessionEntry, doc: &str) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
         if awaits_act(&head) {
             return false;
         }
-        match self.read_outcome(session, doc, &head) {
+        let outcome = if head.reason.sent { self.read_outcome(session, doc, &head) } else { ReadOutcome::SendFromHead };
+        match outcome {
             ReadOutcome::Unread => false,
-            ReadOutcome::Moved(hands) => {
-                self.mark_moved(board_reference, principal, doc, None);
-                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, &hands);
-                false
-            }
             ReadOutcome::Landed { at } => {
-                // The landing is noted as the session's ack is (§3c.2), so a
-                // line held on the document from here reads past it; a later
-                // write noted since the read stands.
-                self.with_principal(board_reference, principal, |ph| {
+                // The landing is noted as the session's ack is (§3c.2, §3c.5):
+                // a line held on the document from here reads past it, and no
+                // read takes its row for another line's landing; a later write
+                // noted since the read stands.
+                {
+                    let mut board_hold = self.lock(board_reference);
                     if let Some(at) = at {
-                        ph.note_position(doc, at);
+                        board_hold.acked.insert(at);
                     }
-                    self.done_line(ph, head.k, Done::Kept { at });
-                });
+                    if let Some(ph) = board_hold.principals.get_mut(&principal) {
+                        if let Some(at) = at {
+                            ph.note_position(doc, at);
+                        }
+                        self.done_line(ph, head.k, Done::Kept { at });
+                    }
+                }
                 match self.count(board_reference, principal, doc) {
                     0 => {
                         self.emit_held(session, doc, 0, HeldState::Kept, None, &[]);
@@ -239,75 +253,98 @@ impl Holds {
     /// Reads the document once (§3c.5), to one of the outcomes.
     ///
     /// The read is `GET /changes?since=<base>&under=<doc>&drafts=true` under
-    /// the session, at a page of two rows — the question is none, one, or
-    /// more. At most one held burst can have landed without its ack (§7b's
-    /// single writer): a `sent` head's one row is its landing where it is of
-    /// the session's own hand ([`own_row`]), its `op` the head's and its site
-    /// not contradicting it, or where the board lost its testimony
+    /// the session, the rows since `base` IN ORDER — a page whose `more`
+    /// stands with no landing found read on from its `last`, at the route's
+    /// default page and, where a page is too large to serve, at the limit
+    /// that `fits`, as the feed's reads are — and it asks one question of a
+    /// `sent` head: did its own write land? At most one held burst can have
+    /// landed without its ack (§7b's single writer, the head), so THE FIRST
+    /// ROW that is the head's landing is its landing, whatever rows follow
+    /// it — the lines behind the head are nobody's to judge here: each is
+    /// read as a head in its turn, and the board judges every send's typed
+    /// state. A row is the landing where it is of the session's own hand
+    /// ([`own_row`]), its `op` the head's, and the head's site does not
+    /// contradict it — or where the board lost its testimony
     /// ([`testimony_lost`]: the `poisoned` burst a restart replays, a burst
-    /// whose write panicked past its commit) and the site confirms it; any
-    /// other row is (iii), the hands of the rows the page holds named with
-    /// it (`Holds::hands_of`) — the page the read already holds and no
-    /// further read, as §3c.5 has it.
+    /// whose write panicked past its commit) and the site confirms it — AND
+    /// it stands at no position this shell acked ([`BoardHold::acked`]): a
+    /// row of the same key and kind at an acked position is a sibling's
+    /// write through this shell, answered, never the lost landing; a row of
+    /// the same key not through this shell — the `skep` command's — the set
+    /// cannot tell apart, named as the residue. The site ([`Holds::site`])
+    /// is the document's now, read once for the first row that asks for it:
+    /// an `insert` whose values stand at its site landed; one whose values do
+    /// not is no landing of any row, so the head goes from the head at once;
+    /// a kind no read confirms trusts the own hand and the op alone, and
+    /// trusts a row whose hand is lost not at all. Every other row — the
+    /// person's own later write of another kind, a sibling's, another hand's
+    /// — is no verdict: whether the document moved is the board's
+    /// (`arrangement_moved`, [`Holds::send_line`]), not this read's.
     fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
-        let query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: Some(2) };
-        let page = match session.board.changes(Some(&session.token), &query) {
-            Ok(ChangesAnswer::Page(page)) => page,
-            // `base` aged below the floor: the arrangement alone decides.
-            Ok(ChangesAnswer::HistoryReclaimed { .. }) => return self.reclaimed_outcome(session, doc, head),
-            // A page of two rows too large to serve holds two rows or more,
-            // none of them read: no hand to name.
-            Ok(ChangesAnswer::TooLarge { .. }) => return ReadOutcome::Moved(Vec::new()),
-            Ok(_) | Err(_) => return ReadOutcome::Unread,
-        };
-        let moved = || ReadOutcome::Moved(self.hands_of(session, &page.changes));
-        let [row] = page.changes.as_slice() else {
-            return if page.changes.is_empty() { ReadOutcome::SendFromHead } else { moved() };
-        };
-        if !head.reason.sent || page.more {
-            return moved();
-        }
-        let landed = ReadOutcome::Landed { at: row["at"].as_u64() };
-        if own_row(session, row) && row["op"].as_str() == head.frame["op"].as_str() {
-            // A kind the site read cannot confirm trusts the op-and-hand match.
-            return match self.site(session, doc, head) {
-                Site::Equal | Site::Unconfirmable => landed,
-                Site::Differs => moved(),
-                Site::Unread => ReadOutcome::Unread,
+        let board_reference = session.board_reference.as_str();
+        let mut query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: None };
+        // The site is the document's, not a row's: read once, for the first
+        // row that asks.
+        let mut site = None;
+        loop {
+            let page = match session.board.changes(Some(&session.token), &query) {
+                Ok(ChangesAnswer::Page(page)) => page,
+                // `base` lies below the feed's floor — a hole in the feed's
+                // files (wire.md §`/changes`): the arrangement alone decides.
+                Ok(ChangesAnswer::HistoryReclaimed { .. }) => return self.reclaimed_outcome(session, doc, head),
+                // A page past the board's budget is re-asked at the limit that
+                // fits, as `feed::page_from` re-asks it; the client refuses a
+                // `fits` that does not shrink the page, so the re-asks end.
+                Ok(ChangesAnswer::TooLarge { fits }) => {
+                    query.limit = Some(fits);
+                    continue;
+                }
+                Ok(_) | Err(_) => return ReadOutcome::Unread,
             };
+            for row in &page.changes {
+                let at = row["at"].as_u64();
+                // A write this shell was answered for is never the lost landing.
+                if at.is_some_and(|at| self.acked(board_reference, at)) {
+                    continue;
+                }
+                let own = own_row(session, row) && row["op"].as_str() == head.frame["op"].as_str();
+                if !own && !testimony_lost(row) {
+                    continue;
+                }
+                let landed = match *site.get_or_insert_with(|| self.site(session, doc, head)) {
+                    Site::Equal => true,
+                    // A kind the site read cannot confirm trusts the op-and-hand
+                    // match; a row whose hand the board lost has none to trust.
+                    Site::Unconfirmable => own,
+                    // The head's values do not stand at its site: no row is its
+                    // landing, and the board judges the send's typed state.
+                    Site::Differs => return ReadOutcome::SendFromHead,
+                    Site::Unread => return ReadOutcome::Unread,
+                };
+                if landed {
+                    return ReadOutcome::Landed { at };
+                }
+            }
+            if !page.more {
+                return ReadOutcome::SendFromHead;
+            }
+            query.since = page.last;
+            query.limit = None;
         }
-        // A row whose testimony the board lost — `docs`, `key` and `op` the
-        // reserved null (wire.md §`/changes`): a commit whose recorded row
-        // the write path never wrote — re-derived from the journal at the
-        // board's open, as a `poisoned` burst's landing at the restart is
-        // (§3c.2), or written bare by the write path's catch of a panic past
-        // the commit, as a burst answered `internal_panic` may be
-        // (`operations.md` §4 row 34). The feed cannot say whose it is, so
-        // the arrangement alone decides, as on `history_reclaimed` (§3c.5),
-        // and decisively: an `insert` whose values read back equal is (ii);
-        // a kind the site read cannot confirm faces the person (iii).
-        if testimony_lost(row) {
-            return match self.site(session, doc, head) {
-                Site::Equal => landed,
-                Site::Differs | Site::Unconfirmable => moved(),
-                Site::Unread => ReadOutcome::Unread,
-            };
-        }
-        moved()
     }
 
     /// Returns the outcome of a `history_reclaimed` on the read (§3c.5).
     ///
-    /// The arrangement alone decides — a `sent` head's values read back equal
-    /// at its site is (ii); any difference, a kind no read confirms, or a
-    /// head never sent is (iii), no row read and so no hand to name.
+    /// No row can be read, so the arrangement alone decides the one
+    /// question: a `sent` head's values read back equal at its site is (ii),
+    /// kept with no position to name; any difference, or a kind no read
+    /// confirms, is no landing found, and the head goes from the head — the
+    /// board judging its typed state (`arrangement_moved`), as it judges
+    /// every send; a site read the board does not answer decides nothing.
     fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
-        if !head.reason.sent {
-            return ReadOutcome::Moved(Vec::new());
-        }
         match self.site(session, doc, head) {
             Site::Equal => ReadOutcome::Landed { at: None },
-            Site::Differs | Site::Unconfirmable => ReadOutcome::Moved(Vec::new()),
+            Site::Differs | Site::Unconfirmable => ReadOutcome::SendFromHead,
             Site::Unread => ReadOutcome::Unread,
         }
     }
@@ -361,8 +398,9 @@ impl Holds {
     /// have landed before the dial leaves, and the line settled by what the
     /// dial answered: an ack `done kept`; the line refused as typed against
     /// an older state of its document, the document faced `moved`
-    /// ([`Holds::mark_moved`]), the board's verdict kept on the line and the
-    /// hands whose rows moved it named; a hold-class answer or a refused run
+    /// ([`Holds::mark_moved`]) — the one route to that face — the board's
+    /// verdict kept on the line and the hands whose rows moved it named; a
+    /// hold-class answer or a refused run
     /// re-marked and faced, the line keeping its `sent` — a resend that never
     /// left, or one the board refused, says nothing of an earlier dial's write
     /// (§3c.2) — and a lost answer counted against the line
@@ -401,10 +439,11 @@ impl Holds {
             }
             Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
                 // The board refused the line as typed against an older state
-                // of its document: the document is faced moved, as the read's
-                // move faces it — each line keeping its own `sent`, the line
-                // refused keeping the board's verdict — and named by the hands
-                // whose rows moved it since the line's typed state (§3c.5).
+                // of its document: the document is faced moved — the board's
+                // verdict the one judge of a move — each line keeping its own
+                // `sent`, the line refused keeping the verdict, and named by
+                // the hands whose rows moved it since the line's typed state
+                // (§3c.5).
                 let hands = self.hands_since_typed_state(session, &line.doc, &reason);
                 self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
                 self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
@@ -467,12 +506,15 @@ impl Holds {
 
     /// Marks every line of a moved document: `cause: moved`, never rebased.
     ///
-    /// No line is sent. Each keeps its own `sent`, so a line that may have
-    /// landed reads before it is sent again (§3c.2). `judged` is the line the
-    /// board refused as typed against an older state of the document, with
-    /// the board's verdict, kept as its refusal — the state the line was typed
-    /// against and the document's current one; none where the resend's read
-    /// found the move. The exact rebase by identity — the burst's anchor
+    /// It is reached from the board's verdict alone — a resend refused as
+    /// typed against an older state of its document ([`Holds::send_line`]);
+    /// a first dial so refused is held `moved` by `Holds::hold` — never from
+    /// the read, which judges no move. No line is sent. Each keeps its own
+    /// `sent`, so a line that may have landed reads before it is sent again
+    /// (§3c.2). `judged` is the line the board refused, with the board's
+    /// verdict, kept as its refusal — the state the line was typed against
+    /// and the document's current one; a moved reason carries one
+    /// (`Dialed::refused`). The exact rebase by identity — the burst's anchor
     /// re-found and the delta placed after it — stays named as open (§3c.5,
     /// the record §5 Q3): it needs an anchor the page's frame does not carry
     /// today, and a silent inexact rebase could put words where the person
@@ -531,11 +573,12 @@ fn delivers(delivery: &Value, want: &[Cow<'_, [u8]>]) -> bool {
 /// publish-class write alone and drops it on a draft's (wire.md §The two
 /// attestation codes), so a burst's row is the unsigned form today, its
 /// `key` the signing key's fingerprint; the signed form stands for a row
-/// the wire's rule admits. The read's other two guards (`op` equal, the
-/// content confirmed) stand beside this one, so another key's signed row
-/// still reads as (iii). A bare session has no hand of its own: it writes
-/// nothing (`SessionEntry::may_write`) and the resend reads under no bare
-/// session, so every row is another's to one.
+/// the wire's rule admits. The read's other guards (`op` equal, the content
+/// confirmed, the position not one this shell acked) stand beside this one,
+/// so another key's signed row of another kind is no landing. A bare
+/// session has no hand of its own: it writes nothing
+/// (`SessionEntry::may_write`) and the resend reads under no bare session,
+/// so every row is another's to one.
 fn own_row(session: &SessionEntry, row: &Value) -> bool {
     let SessionKind::Signed { fingerprint, .. } = &session.facts.kind else { return false };
     row["key"].as_str() == Some(fingerprint.to_hex().as_str()) || (row.get("key").is_none() && row.get("attest").is_some())

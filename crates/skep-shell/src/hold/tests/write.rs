@@ -212,7 +212,7 @@ fn a_refused_run_drops_its_behind_lines() {
     let g = ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
     let head = insert(DOC, json!(["a"]), g.fake.head());
-    let k1 = g.holds.hold(&g.session, g.burst(&head), Reason::refused("out_of_bounds", verdict.clone())).unwrap()["held"].as_u64().unwrap();
+    let k1 = g.hold_for(&head, Reason::refused("out_of_bounds", verdict.clone())).unwrap()["held"].as_u64().unwrap();
     // Two more bursts on the same document arrive while the run stands
     // → behind.
     let behind = |values: Value| -> Value {
@@ -318,7 +318,7 @@ fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     let moved = Reason { cause: "moved".to_string(), refusal: Some(verdict.clone()), sent: false };
     assert_eq!(line_state(&moved), HeldState::Moved, "the verdict beside it, the line is moved");
     let g = ground();
-    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]), 40)), moved.clone()).unwrap()["held"].as_u64().unwrap();
+    let k = g.hold_for(&insert(DOC, json!(["a"]), 40), moved.clone()).unwrap()["held"].as_u64().unwrap();
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head())) else { panic!("held behind the moved line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     let lines = g.lines();
@@ -330,7 +330,7 @@ fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 2, "both sent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
-    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["c"]), 40)), moved).unwrap()["held"].as_u64().unwrap();
+    let k = g.hold_for(&insert(DOC, json!(["c"]), 40), moved).unwrap()["held"].as_u64().unwrap();
     assert_eq!(g.states(), ["moved"]);
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
     assert_eq!((g.states(), g.lines().len()), (vec!["kept".to_string()], 0), "the drop of the document's one line says `kept`");
@@ -362,7 +362,7 @@ fn a_held_line_lands_under_the_boards_own_directory() {
 fn a_drop_drops_its_own_documents_run_and_no_other() {
     let g = ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    let k1 = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]), g.fake.head())), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    let k1 = g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]), g.fake.head())) else { panic!("held behind the run") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
@@ -583,7 +583,7 @@ fn a_death_signal_at_a_writes_dial_holds_nothing() {
 fn resolve_send_answers_once_the_lines_are_handed_back() {
     let g = ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]), g.fake.head())), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    let k = g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
     assert_eq!((g.fake.sends(), g.fake.health_reads.load(Ordering::SeqCst)), (0, 0), "nothing is dialed in the act");
     assert_eq!(g.lines()[0]["cause"], "behind", "the run's line re-marked `behind`");
@@ -644,7 +644,7 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     assert_eq!(g.fake.sends(), 0, "nothing is dialed past a halted file");
     assert_eq!(g.holds.lines(&g.session).unwrap_err().name(), "store_halted");
     assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "store_halted", "an act on a line answers the halt, never no line");
-    let held = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["x"]), g.fake.head())), Reason::of("unreachable", false));
+    let held = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::of("unreachable", false));
     assert_eq!(held.unwrap_err().name(), "store_halted", "no line is held");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
 }
@@ -1068,7 +1068,7 @@ fn a_burst_past_the_queues_line_budget_is_refused_held_full() {
     fake.no_head.store(true, Ordering::SeqCst);
     let g = ground_over(fake, TempDir::new().unwrap(), bare_facts(), 0);
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]), g.fake.head())), Reason::refused("out_of_bounds", verdict)).unwrap();
+    g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap();
     for n in 1..MAX_HELD_LINES {
         g.hold(&delete(&format!("1.0.1.0.{}", 100 + n), g.fake.head()), "behind", false);
     }
@@ -1155,7 +1155,7 @@ fn a_burst_at_one_board_waits_on_no_other_boards_hold() {
 #[test]
 fn a_sessions_held_line_is_kept_at_the_board_it_stands_at() {
     let TwoBoards { holds, sessions, store, fakes } = two_boards();
-    let held = holds.hold(&sessions[1], Burst::admit(insert(DOC, json!(["z"]), fakes[1].head()), &sessions[1]).unwrap(), Reason::of("unreachable", false)).unwrap();
+    let held = holds.hold(&sessions[1], Burst::admit(insert(DOC, json!(["z"]), fakes[1].head()), &sessions[1]).unwrap(), Reason::of("unreachable", false), sessions[1].opened_at).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     let file = |chain: &str| store.path().join("held").join(chain).join("principal-1.held");
     assert!(file(&"cd".repeat(32)).is_file() && !file(&"ab".repeat(32)).exists(), "the line is kept in b-2's directory alone");
@@ -1213,7 +1213,7 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
     let g = ground();
     // A refused run's line: the one `resolve(drop)` settles.
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]), g.fake.head())), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    let k = g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     let ours = Chain::parse(&"ab".repeat(32)).unwrap();
     let board_dir = g.store.path().join("held").join(ours.to_string());
     let held = board_dir.join("principal-1.held");

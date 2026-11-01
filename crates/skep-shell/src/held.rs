@@ -252,14 +252,18 @@ pub struct HeldLine {
     pub doc: String,
     /// The page's envelope `id`, where it sent one (A-60).
     pub id: Option<String>,
-    /// The `since` of the resend's read (§3c.5).
+    /// The `since` of the resend's read (§3c.5): the position the read of
+    /// the line's own landing starts from, its one job.
     ///
     /// It is the position of its principal's latest write on `doc` that the
-    /// shell knows when the line is held — its ack's, or the landing the
+    /// shell knew when the burst was sent — its ack's, or the landing the
     /// resend's read found — or else the open position of the session it is
-    /// held under (§3c.2). A line held before it on `doc` and kept at a later
-    /// position raises it to that position ([`HeldQueue::done`]), so its read
-    /// never takes the person's own write for a move.
+    /// held under (§3c.2), read before the burst's dial so it is never past
+    /// the line's own landing. A line held before it on `doc` and kept at a
+    /// later position raises it to that position ([`HeldQueue::done`]), so
+    /// its read starts past that landing. An ack of a later write raises it
+    /// never: the read takes no row for a move, and a row of the shell's
+    /// own that is not the line's landing is no verdict.
     pub base: u64,
     /// The page's wire frame as composed, with no `attest` (§3c.2).
     pub frame: Value,
@@ -397,8 +401,9 @@ fn is_done_line(m: &Map<String, Value>) -> bool {
 ///
 /// `behind` are the lines held after a line on `doc` kept at `at` — its ack's
 /// position, or the landing the resend's read found: the person's own write,
-/// which no read of a line behind it may take for a move. A base already past
-/// `at` stands.
+/// which the read of a line behind it starts past — a line behind is never
+/// dialed while the kept line stands, so no landing of its own lies below
+/// `at`. A base already past `at` stands.
 fn raise_bases<'a>(behind: impl Iterator<Item = &'a mut HeldLine>, doc: &str, at: u64) {
     for line in behind.filter(|line| line.doc == doc) {
         line.base = line.base.max(at);

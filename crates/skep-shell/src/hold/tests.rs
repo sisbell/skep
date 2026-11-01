@@ -2,15 +2,17 @@
 //!
 //! The table (T6) takes every `DialError`, every disposition, `poisoned`,
 //! `internal_panic`, `write_busy` once and twice, `durability` once, twice and
-//! three times, and an ack, each to exactly its row, the table the one owner of
-//! every reissue's bound; the five kinds are bursts and the eleven other
+//! three times, `arrangement_moved`, and an ack, each to exactly its row, the
+//! table the one owner of every reissue's bound; the five kinds are bursts and
+//! the eleven other
 //! `WRITE_KINDS` are not; the five held states are the declared ones, and the
 //! two acts of `resolve` the declared words and no other spelling.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, and whether it names a claimant; its `/changes` rows, a
-//! draft's text, the frames POSTed to `/op` recorded and a refusal or the death
-//! signal armed for a send — the holds over it with a session opened as the
+//! draft's text, the frames POSTed to `/op` recorded, a look taken as each is
+//! recorded, and a refusal or the death signal armed for a send — the holds
+//! over it with a session opened as the
 //! shell opens one and every line the hold says on `Talk` recorded (`Ground`),
 //! and each `held` event, `held` row and `held` answer held to its declaration.
 //! The ground's session is a writer's — signed, under a key its store
@@ -74,7 +76,9 @@ fn retry(code: &str) -> Value {
 /// THE CLASSIFICATION TABLE (§3c.4): each outcome to exactly its row. The own
 /// node stopped, an ack and the death signal sit outside `classify`
 /// (`DialOutcome`'s doc); a write the hold never holds is read through it as
-/// a burst is, and faced where a burst is held (`write`'s suite).
+/// a burst is, and faced where a burst is held (`write`'s suite). The mutant
+/// that leaves `arrangement_moved` to the disposition's row holds a stale
+/// burst as a refused run, whose resend meets the same refusal.
 #[test]
 fn every_outcome_classifies_to_exactly_its_row() {
     // No connection made — the burst did not leave (`sent: false`).
@@ -117,6 +121,9 @@ fn every_outcome_classifies_to_exactly_its_row() {
     // A `permanent` or `reorder` refusal → a REFUSED run.
     assert_eq!(rej("out_of_bounds", "permanent"), Decision::Refused);
     assert_eq!(rej("not_registered", "reorder"), Decision::Refused);
+    // A burst typed against an older state of its document, `permanent` → a
+    // MOVED document, never a refused run.
+    assert_eq!(rej("arrangement_moved", "permanent"), Decision::Moved);
     // Any other retry-class rejection on a burst → faced, not held.
     assert_eq!(rej("history_busy", "retry"), Decision::Neither);
 }
@@ -207,12 +214,12 @@ impl<T: Clone> Armed<T> {
 /// and at or under its `under`, or a refusal armed in the page's place; the
 /// draft's text, of which a `retrieve_v` answers the positions it names — or
 /// no answer, the death signal, or one position more than it names, where the
-/// site is armed so; the frames POSTed to `/op` recorded, the n-th one's answer
-/// lost on the way where one is armed lost, and the death signal, a scripted
-/// rejection or a non-200 answered where one is armed — to every send, or to
-/// the next few alone, the death first and the non-200 next; and the `/health`
-/// reads counted, one armed to panic once, and each held at a gate while it is
-/// shut.
+/// site is armed so; the frames POSTed to `/op` recorded, a look the cell
+/// takes as each is recorded, the n-th one's answer lost on the way where one
+/// is armed lost, and the death signal, a scripted rejection or a non-200
+/// answered where one is armed — to every send, or to the next few alone, the
+/// death first and the non-200 next; and the `/health` reads counted, one
+/// armed to panic once, and each held at a gate while it is shut.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -231,6 +238,11 @@ struct Fake {
     site_closed: AtomicBool,
     over_deliver: AtomicBool,
     sends: Mutex<Vec<Value>>,
+    /// A look the cell takes as `/op` records a send, before it answers.
+    ///
+    /// It reads the held file as the dial leaves, or moves the file out of
+    /// the way of what follows the answer.
+    at_send: Mutex<Option<Box<dyn Fn() + Send>>>,
     op_closed: AtomicBool,
     /// Every `/op` dial fails at the connect: the board is not answering,
     /// and no request leaves.
@@ -273,6 +285,7 @@ impl Fake {
             site_closed: AtomicBool::new(false),
             over_deliver: AtomicBool::new(false),
             sends: Mutex::new(Vec::new()),
+            at_send: Mutex::new(None),
             op_closed: AtomicBool::new(false),
             op_unreachable: AtomicBool::new(false),
             op_lost_at: AtomicUsize::new(0),
@@ -419,6 +432,9 @@ impl Dialer for Fake {
                 sends.push(body.clone());
                 sends.len()
             };
+            if let Some(look) = self.at_send.lock().unwrap().as_ref() {
+                look();
+            }
             if sent == self.op_lost_at.load(Ordering::SeqCst) {
                 return Err(DialError::Io("the answer was lost on the way".into()));
             }
@@ -606,6 +622,14 @@ fn insert(doc: &str, values: Value, as_of: u64) -> Value {
 /// confirms — typed against `as_of` as [`insert`]'s is.
 fn delete(doc: &str, as_of: u64) -> Value {
     json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": "1"}, "width": "1", "as_of": as_of})
+}
+
+/// The board's refusal of a burst typed against an older state (wire.md
+/// §Rejection codes, `arrangement_moved`): `as_of` the state it was typed
+/// against, echoed, and `current` the position the document's arrangement
+/// last changed at.
+fn arrangement_moved(as_of: u64, current: u64) -> Value {
+    json!({"resp": "rejected", "op": "insert", "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": as_of, "current": current}})
 }
 
 /// A `/changes` row whose testimony the board lost (wire.md §`/changes`):

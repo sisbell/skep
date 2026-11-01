@@ -6,7 +6,11 @@
 //! a later one lowering it never; the refused run's `resolve(drop)`
 //! dropping it and every line held behind it on its own document alone,
 //! and a drop's `held` event saying the state of the line that stands
-//! first after it; a held line under the board's own directory;
+//! first after it; a burst the board refuses as typed against an older
+//! state held moved at its first dial, the board's verdict on its line and
+//! the hand that moved the document named, and a moved line with the
+//! verdict reading `moved` and taking a moved document's acts; a held line
+//! under the board's own directory;
 //! a refusal the table holds nowhere faced at the first dial, a
 //! `write_busy` and a first and second `durability` reissued within the
 //! first dial's call and a third holding the burst; a burst answered
@@ -238,19 +242,22 @@ fn a_refused_run_drops_its_behind_lines() {
 
 /// Checks that a drop says the state of the line that stands first.
 ///
-/// On a moved document (§4b.1's `resolve`, §4b.2's `held`) the person drops
-/// a later line of a document the read faced `moved`, and the line held
+/// On a moved document (§4b.1's `resolve`, §4b.2's `held`) — the board
+/// refusing its head's resend as typed against an older state, every line of
+/// it faced `moved` — the person drops a later line, and the line held
 /// before it stands moved still — the `held` event says `moved` with the one
 /// line left, never `kept` over text still held (the mutant that says
 /// `kept` at every drop lifts the page's marks); the drop of the last line
 /// says `kept` with none.
 #[test]
 fn a_drop_says_the_state_of_the_line_that_stands_first() {
-    let g = ground();
+    let g = writer_at(80);
+    g.fake.next_at.store(81, Ordering::SeqCst);
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
-    let ks: Vec<u64> = ["a", "b", "c"].iter().map(|v| g.hold(&insert(DOC, json!([v]), g.fake.head()), "unreachable", false)["held"].as_u64().unwrap()).collect();
+    let ks: Vec<u64> = ["a", "b", "c"].iter().map(|v| g.hold(&insert(DOC, json!([v]), 70), "unreachable", false)["held"].as_u64().unwrap()).collect();
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
     g.holds.probe("b-1");
-    assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the read faces every line moved: {:?}", g.lines());
+    assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the board's verdict faces every line moved: {:?}", g.lines());
     let _ = g.rx.try_iter().count();
     assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
@@ -262,6 +269,71 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
+}
+
+/// Checks that a burst refused as typed against an older state is held moved.
+///
+/// At its first dial the board refuses it `arrangement_moved` (wire.md
+/// §Arrangement, the typed state): it is answered `held`, cause `moved`, its
+/// line carrying the board's verdict as its refusal, `sent: false`; the
+/// `held` event says `moved`, naming the hand whose row moved the document
+/// since the burst's typed state — the rows under it alone — and no cause;
+/// and no probe sends it again, the line awaiting the person's act (the
+/// mutant that holds it a refused run faces an act whose resend meets the
+/// same refusal; the one that names no hand draws the moved face with none).
+#[test]
+fn a_burst_refused_as_typed_against_an_older_state_is_held_moved_at_its_first_dial() {
+    let g = ground();
+    let typed = g.fake.head();
+    let foreign = |at: u64, doc: &str| json!({"at": at, "op": "delete", "key": "ff".repeat(32), "docs": [doc]});
+    *g.fake.rows.lock().unwrap() = vec![foreign(77, DOC), foreign(78, OTHER)];
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed)) else { panic!("held, not faced") };
+    crate::shapes::assert_declared("HeldAnswer", &held);
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str(), g.fake.sends()), (Some("held"), Some("moved"), 1), "{held}");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("moved"), Some(false)), "{lines:?}");
+    assert_eq!(lines[0]["refusal"], arrangement_moved(typed, 77), "the board's verdict rides the line");
+    let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    let [moved] = &said[..] else { panic!("one `held` event: {said:?}") };
+    assert_held_event_declared(moved);
+    assert_eq!((moved["state"].as_str(), moved.get("cause")), (Some("moved"), None), "{moved}");
+    assert_eq!(moved["hands"], json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "the hand of the row under the document since its typed state: {moved}");
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line awaits the person's act: no probe sends it");
+}
+
+/// Checks that a moved line keeps the board's verdict and takes a moved
+/// document's acts.
+///
+/// A line held `moved` with the board's verdict as its refusal reads `moved`
+/// — its state, the `held` event's — never `refused` for the refusal beside
+/// it (the mutant that reads the refusal first faces it a refused run);
+/// `resolve(send)` hands it back `behind`, the probe then sending and keeping
+/// it and the burst held behind it; and `resolve(drop)` drops a second such
+/// line, its document then `kept`.
+#[test]
+fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
+    let verdict = arrangement_moved(40, 45);
+    let moved = Reason { cause: "moved".to_string(), refusal: Some(verdict.clone()), sent: false };
+    assert_eq!(line_state(&moved), HeldState::Moved, "the verdict beside it, the line is moved");
+    let g = ground();
+    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]), 40)), moved.clone()).unwrap()["held"].as_u64().unwrap();
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head())) else { panic!("held behind the moved line") };
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), &lines[0]["refusal"]), (Some("moved"), &verdict), "{lines:?}");
+    assert_eq!(g.states(), ["moved", "holding"], "the moved line says `moved`, the burst behind it `holding`");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    let causes: Vec<String> = g.lines().iter().map(|l| l["cause"].as_str().unwrap_or("?").to_string()).collect();
+    assert_eq!(causes, ["behind", "behind"], "handed back");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 2, "both sent");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
+    let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["c"]), 40)), moved).unwrap()["held"].as_u64().unwrap();
+    assert_eq!(g.states(), ["moved"]);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    assert_eq!((g.states(), g.lines().len()), (vec!["kept".to_string()], 0), "the drop of the document's one line says `kept`");
 }
 
 /// Checks that a held line lands under the board's own directory.

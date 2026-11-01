@@ -58,7 +58,10 @@ pub enum EventName {
     ///
     /// The state (`client.md` §4b.2; §3c) is `holding`, `sending`, `kept`,
     /// `refused` or `moved`, with the count of lines still held — the moved
-    /// state carrying the hands whose rows moved the document (§3c.5).
+    /// state carrying the hands whose rows moved the document, read off the
+    /// rows since the burst's typed state where the board refused it as
+    /// typed against an older state, and since the line's `base` where the
+    /// resend's read found the move (§3c.5).
     /// Emitted at a hold's start, at each line's resolution or drop, and at
     /// each state the resend moves a document through — never when a
     /// principal's file is read at its session's open, whose lines

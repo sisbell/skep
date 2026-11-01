@@ -7,11 +7,13 @@
 //! committed and then panicked — answered `500 internal_panic` — held and
 //! kept off the read, sent once, the signed session's own attested row kept
 //! by the resend, a refused run with its `behind` lines and `resolve`'s two
-//! acts, the close order and the relaunch listing its held line, a second
-//! principal's file untouched and unlisted, a burst on a draft just minted
-//! kept across a restart, a relaunch with its board down listing its held
-//! line — the bare mode's resending none of it, the signed mode's keeping it
-//! — and the probe keeping its cadence while the board keeps committing.
+//! acts, a burst typed against an older state held moved with the board's
+//! verdict and nothing of it landing, the close order and the relaunch
+//! listing its held line, a second principal's file untouched and unlisted,
+//! a burst on a draft just minted kept across a restart, a relaunch with its
+//! board down listing its held line — the bare mode's resending none of it,
+//! the signed mode's keeping it — and the probe keeping its cadence while
+//! the board keeps committing.
 
 use super::*;
 use crate::held::Opened;
@@ -664,21 +666,24 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     sd.shutdown();
 }
 
-/// Checks the interim for a burst typed against an older state (skep #442).
+/// Checks that a burst typed against an older state is held moved, and
+/// nothing of it lands (skep #442).
 ///
-/// Until the shell's shift lands, the board's `arrangement_moved` — a
-/// `permanent` refusal — meets the shell as any permanent refusal does: a
-/// REFUSED run, faced with the board's verdict. Another write lands on the
-/// draft after the ground's insert; a burst typed against the ground's
-/// state is refused `arrangement_moved`, its line listed with the board's
-/// verdict naming the typed state and the current one, and nothing of it
+/// The board's `arrangement_moved` — a `permanent` refusal — holds the burst
+/// as a MOVED document, never a refused run whose resend meets the same
+/// refusal. Another write lands on the draft after the ground's insert; a
+/// burst typed against the ground's state is refused, answered `held` with
+/// cause `moved`, its line listed with the board's verdict naming the typed
+/// state and the current one, and the `held` event says `moved`, naming the
+/// hand of the write that moved the draft — this store's own; nothing of it
 /// lands — the draft reads what the other write left, and no row stands
-/// above that write. The same text typed against the current state lands,
-/// once the refused run is dropped (the mutant that lands the stale burst
-/// writes the text a position off; the one that holds it `behind` or
-/// resends it faces no verdict).
+/// above that write. The same text typed against the current state lands
+/// once the moved line is discarded (the mutant that lands the stale burst
+/// writes the text a position off; the one that holds it a refused run
+/// faces an act that can never succeed; the one that names no hand draws
+/// the moved face with none).
 #[test]
-fn a_burst_typed_against_an_older_state_is_a_refused_run_and_nothing_lands() {
+fn a_burst_typed_against_an_older_state_is_held_moved_and_nothing_lands() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let HeldGround { shell, seen, session, draft, at, .. } = held_ground(&dir, &sd);
@@ -686,15 +691,18 @@ fn a_burst_typed_against_an_older_state_is_a_refused_run_and_nothing_lands() {
     let moved = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
     let current = moved["at"].as_u64().unwrap_or_else(|| panic!("the second insert is acked: {moved}"));
     assert!(current > at);
-    // The stale burst: typed against `at`, refused `arrangement_moved` — a
-    // refused run naming the code, the line listing the board's verdict.
+    // The stale burst: typed against `at`, refused `arrangement_moved` — held
+    // as a moved document, the line listing the board's verdict.
     let stale = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["x"], "as_of": at}})).unwrap();
-    assert_eq!(stale["resp"], "held", "a permanent refusal is a refused run: {stale}");
-    assert!(stale["cause"].as_str().unwrap().starts_with("arrangement_moved"), "{stale}");
+    assert_eq!((stale["resp"].as_str(), stale["cause"].as_str()), (Some("held"), Some("moved")), "a burst typed against an older state is held moved: {stale}");
     let k = stale["held"].as_u64().unwrap();
-    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "refused");
+    let faced = wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "moved");
+    let SessionKind::Signed { fingerprint, .. } = shell.sessions.get(&session).unwrap().facts.kind.clone() else { panic!("a signed session holds a key") };
+    assert_eq!(faced.data["hands"], json!([{"key": "own", "fingerprint": fingerprint.to_hex()}]), "the hand of the second insert, this store's own: {}", faced.data);
+    assert!(!seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["state"] == "refused"), "never a refused run");
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
+    assert_eq!(rows[0]["cause"], "moved", "{rows}");
     let verdict = &rows[0]["refusal"];
     assert_eq!(verdict["code"], "arrangement_moved", "the board's verdict rides the line: {rows}");
     assert_eq!(verdict["disposition"], "permanent", "{rows}");
@@ -705,7 +713,7 @@ fn a_burst_typed_against_an_older_state_is_a_refused_run_and_nothing_lands() {
     assert_eq!(text_of(&read), "ab", "{read}");
     let token = shell.sessions.get(&session).unwrap().token.clone();
     assert!(changes_under(&shell.boards[0].board, &token, &draft, current).is_empty(), "a refusal commits nothing");
-    // Typed against the current state, the text lands.
+    // Discarded, then typed against the current state, the text lands.
     shell.call("resolve", &json!({"session": session, "held": k, "act": "drop"})).unwrap();
     let landed = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["x"], "as_of": current}})).unwrap();
     assert_eq!(landed["resp"], "ack_addr", "{landed}");

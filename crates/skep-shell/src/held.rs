@@ -157,8 +157,9 @@ pub const MAX_HELD_LINES: usize = 4096;
 /// answering each probe with another hold-class cause would grow the file
 /// by a synced line at every probe for as long as it answers so, for a few
 /// hundred bytes of answer each. An honest outage re-marks a document's head
-/// a handful of times as the board's state and the person's acts move it,
-/// and its text is kilobytes (§3c.3), so one line bound holds its re-marks
+/// a handful of times as the board's state and the person's acts move it —
+/// its first resend marking it `sent` once before the dial among them — and
+/// its text is kilobytes (§3c.3), so one line bound holds its re-marks
 /// many times over — a head of kilobytes re-marked thousands of times, the
 /// largest line the writer copies re-marked once. Past it a re-mark is
 /// taken in the queue alone, its copy refused as a copy the device refused
@@ -182,9 +183,9 @@ fn now_ms() -> u64 {
 
 /// Why a line is held (§3c.2).
 ///
-/// It holds the line's `cause`, the verdict beside a refused run's, and
-/// whether the burst may have landed — the three members a hold writes and
-/// a re-mark rewrites together.
+/// It holds the line's `cause`, the verdict beside a refused run's or a
+/// moved line's the board refused, and whether the burst may have landed —
+/// the three members a hold writes and a re-mark rewrites together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reason {
     /// A token of §3c.4's table, the shell's `head_unreadable`, or a refused
@@ -199,20 +200,29 @@ pub struct Reason {
     ///
     /// It is the board's verbatim, or the shell's `answers_lost` refusal
     /// where it handed the line to the person (§3c.4; skep #608); at a line
-    /// held `head_unreadable`, the shell's refusal naming why the signature
-    /// could not be made, the line holding all the same.
+    /// the board refused as typed against an older state of its document,
+    /// held `moved`, the board's `arrangement_moved` verbatim, naming the
+    /// state the burst was typed against and the document's current one; at
+    /// a line held `head_unreadable`, the shell's refusal naming why the
+    /// signature could not be made, the line holding all the same.
     pub refusal: Option<Value>,
     /// Whether the burst may have landed.
     ///
-    /// It may where a dial was made whose answer was lost (`Timeout`, `Io`,
-    /// `Truncated`, `Response`, `TooLarge` or a later transport error, or
-    /// the board's `500 internal_panic`), or on a `poisoned` answer, whose
-    /// frames the board's journal keeps for its restart; `false` where no
-    /// dial of the burst reached the board. A resend's re-mark keeps it,
-    /// whatever that resend answers: one that never left, or one the board
-    /// refused, says nothing of an earlier dial's write. A line handed to the
-    /// person keeps it too, and `resolve(send)` keeps every line's own, so a
-    /// line that may have landed reads before it is sent again (§3c.5).
+    /// It is whether a dial of this line was attempted since the last read,
+    /// so it may have landed: a first dial whose answer was lost (`Timeout`,
+    /// `Io`, `Truncated`, `Response`, `TooLarge` or a later transport error,
+    /// or the board's `500 internal_panic`), or met a `poisoned` answer,
+    /// whose frames the board's journal keeps for its restart; and every
+    /// resend, which marks its line before it dials, synced, so a crash or a
+    /// refused write between the dial and its answer leaves the line read as
+    /// one that may have landed. It is `false` for a line held before any
+    /// dial, or whose first dial reached no board or met its refusal, until
+    /// a resend of it is attempted. A re-mark keeps it, whatever that resend
+    /// answers: one that never left, or one the board refused, says nothing
+    /// of an earlier dial's write. A moved document's lines keep theirs, a
+    /// line handed to the person keeps it too, and `resolve(send)` keeps
+    /// every line's own, so a line that may have landed reads before it is
+    /// sent again (§3c.5).
     pub sent: bool,
 }
 
@@ -713,7 +723,8 @@ pub struct Settled {
     /// The `done` did not reach the disk.
     ///
     /// A reopen reads the line as held again, and the resend's read decides
-    /// it (§3c.5).
+    /// it (§3c.5): a line a resend settled was marked `sent` before its dial,
+    /// so the read takes the landing it finds as the line's own.
     pub unwritten: Option<io::Error>,
     /// The queue emptied and its file could not be removed.
     ///
@@ -969,8 +980,10 @@ impl Disk {
     /// APFS's `F_FULLFSYNC` — the barrier the kernel's own durability assumes,
     /// not measured here. The write-ahead variant (every burst appended before
     /// its dial, tombstoned at its ack, so even the burst in flight survives a
-    /// crash) is named and not taken (§3c.6): R14's bound does not ask it, and
-    /// the typing cadence would pay a synced append and tombstone churn.
+    /// crash) is named and not taken for a burst's first dial (§3c.6): R14's
+    /// bound does not ask it, and the typing cadence would pay a synced append
+    /// and tombstone churn. A held line's resend marks the line `sent` before
+    /// it dials: its one write ahead of a dial, a re-mark of a line on disk.
     ///
     /// # Errors
     ///

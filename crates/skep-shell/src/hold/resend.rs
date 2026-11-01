@@ -24,9 +24,15 @@
 //! "which keeps each document's order"), so a `copy` held between two
 //! bursts on its source transcludes the source as it stood when the person
 //! wrote it. Each line goes out through the hold's one reader of a write's
-//! answer, as a first dial does. A line that may have landed stays so through
-//! every resend short of its ack, so its next read still takes a landing it
-//! finds as the line's own (§3c.2's `sent`).
+//! answer, as a first dial does, and the board's verdict is a second route to
+//! (iii): a line it refuses as typed against an older state of its document
+//! (`arrangement_moved`) faces the document `moved` as the read's move does,
+//! the verdict kept on the line and the hands read once since the line's
+//! typed state. A resend marks its line as one that may have landed before it
+//! dials, synced, and the line stays so through every resend short of its ack
+//! and through a move, so its next read takes a landing it finds as the
+//! line's own — after a crash or a refused write between a dial and its
+//! answer too (§3c.2's `sent`).
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -190,7 +196,7 @@ impl Holds {
         match self.read_outcome(session, doc, &head) {
             ReadOutcome::Unread => false,
             ReadOutcome::Moved(hands) => {
-                self.mark_moved(board_reference, principal, doc);
+                self.mark_moved(board_reference, principal, doc, None);
                 self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None, &hands);
                 false
             }
@@ -351,11 +357,15 @@ impl Holds {
 
     /// Sends one held line as the `op` it is, under the session that stands.
     ///
-    /// Its attest is composed now (§3c.2), and the line settled by what the
-    /// dial answered: an ack `done kept`; a hold-class answer or a refused
-    /// run re-marked and faced, the line keeping its `sent` — a resend that
-    /// never left, or one the board refused, says nothing of an earlier
-    /// dial's write (§3c.2) — and a lost answer counted against the line
+    /// Its attest is composed now (§3c.2), the line marked as one that may
+    /// have landed before the dial leaves, and the line settled by what the
+    /// dial answered: an ack `done kept`; the line refused as typed against
+    /// an older state of its document, the document faced `moved`
+    /// ([`Holds::mark_moved`]), the board's verdict kept on the line and the
+    /// hands whose rows moved it named; a hold-class answer or a refused run
+    /// re-marked and faced, the line keeping its `sent` — a resend that never
+    /// left, or one the board refused, says nothing of an earlier dial's write
+    /// (§3c.2) — and a lost answer counted against the line
     /// ([`MAX_LOST_ANSWERS`]); a reissue-class answer counted against the
     /// line and reissued at the next probe, so its third `durability` holds
     /// it; a refusal the table holds nowhere left standing for the next
@@ -366,9 +376,20 @@ impl Holds {
     fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> ControlFlow<()> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
-        let dialed = match self.attest_where_owed(session, &line.frame) {
-            Ok(frame) => self.dial(session, &frame, given),
-            Err(why) => Dialed::from(why),
+        // The line is marked as one that may have landed before its dial
+        // leaves (§3c.2's `sent`), synced, so a crash or a refused write
+        // between the dial and its answer never leaves a write that may have
+        // landed read as one never sent; a line marked so already writes
+        // nothing. The mark stands whatever the dial answers, a connection
+        // never made among them, and a copy the device refuses is said and
+        // the dial made all the same. An attest that could not be composed
+        // dials nothing and marks nothing: the line keeps its own `sent`.
+        let (dialed, sent) = match self.attest_where_owed(session, &line.frame) {
+            Ok(frame) => {
+                self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, Reason { sent: true, ..line.reason.clone() }));
+                (self.dial(session, &frame, given), true)
+            }
+            Err(why) => (Dialed::from(why), line.reason.sent),
         };
         match dialed {
             Dialed::Acked(ack) => {
@@ -378,6 +399,17 @@ impl Holds {
                 self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
                 ControlFlow::Continue(())
             }
+            Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
+                // The board refused the line as typed against an older state
+                // of its document: the document is faced moved, as the read's
+                // move faces it — each line keeping its own `sent`, the line
+                // refused keeping the board's verdict — and named by the hands
+                // whose rows moved it since the line's typed state (§3c.5).
+                let hands = self.hands_since_typed_state(session, &line.doc, &reason);
+                self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
+                self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
+                ControlFlow::Break(())
+            }
             Dialed::Held { reason, .. } => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
@@ -385,9 +417,10 @@ impl Holds {
                 // (MAX_LOST_ANSWERS), read off this dial's own answer; the
                 // read decides at the next probe whether it landed.
                 let lost = is_lost_answer(&reason);
-                // The line keeps its `sent`: a resend that never left, or one
-                // the board refused, says nothing of an earlier dial's write.
-                let reason = Reason { sent: reason.sent || line.reason.sent, ..reason };
+                // The line keeps its `sent`, the mark made before the dial
+                // included: a resend that never left, or one the board
+                // refused, says nothing of an earlier dial's write.
+                let reason = Reason { sent: reason.sent || sent, ..reason };
                 self.with_principal(board_reference, principal, |ph| {
                     if lost {
                         ph.reissues.entry(line.k).or_default().lost += 1;
@@ -434,7 +467,12 @@ impl Holds {
 
     /// Marks every line of a moved document: `cause: moved`, never rebased.
     ///
-    /// No line is sent. The exact rebase by identity — the burst's anchor
+    /// No line is sent. Each keeps its own `sent`, so a line that may have
+    /// landed reads before it is sent again (§3c.2). `judged` is the line the
+    /// board refused as typed against an older state of the document, with
+    /// the board's verdict, kept as its refusal — the state the line was typed
+    /// against and the document's current one; none where the resend's read
+    /// found the move. The exact rebase by identity — the burst's anchor
     /// re-found and the delta placed after it — stays named as open (§3c.5,
     /// the record §5 Q3): it needs an anchor the page's frame does not carry
     /// today, and a silent inexact rebase could put words where the person
@@ -444,11 +482,12 @@ impl Holds {
     /// re-projects the held frames at a launch, the moved document's face —
     /// is the frontend's and in neither repository at this pin (unverified
     /// here, the record §7 item 4; stated from assisted-frontend §7b).
-    fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str) {
+    fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str, judged: Option<(u64, Value)>) {
         self.with_principal(board_reference, principal, |ph| {
-            let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| l.k).collect();
-            for k in ks {
-                self.remark_line(ph, k, Reason::of(cause::MOVED, false));
+            let marks: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| (l.k, l.reason.sent)).collect();
+            for (k, sent) in marks {
+                let refusal = judged.as_ref().filter(|(judged, _)| *judged == k).map(|(_, verdict)| verdict.clone());
+                self.remark_line(ph, k, Reason { refusal, ..Reason::of(cause::MOVED, sent) });
             }
         });
     }

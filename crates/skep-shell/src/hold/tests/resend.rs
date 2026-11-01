@@ -16,12 +16,16 @@
 //! record that cannot be read or a connection never made, its landing kept
 //! by the read; a second window's burst resent from memory; every
 //! principal's lines resent by one probe, a bare session's line resent by
-//! none until a session of its
-//! principal's that may write stands, and a probe with no line standing
-//! dialing nothing; one drain per board at a time, and a drain that unwinds
-//! leaving the board free to drain again; a move facing its own document
-//! alone; the own node stopped, `writes.halted` and a third `durability`
-//! holding a burst over time, a reused ordinal's reissues counted afresh;
+//! none until a session of its principal's that may write stands, and a
+//! probe with no line standing dialing nothing; one drain per board at a
+//! time, and a drain that unwinds leaving the board free to drain again; the
+//! board's refusal of a resend as typed against an older state facing its
+//! own document alone, moved, the verdict on the line it refused, each line
+//! keeping its own `sent` and the hands named as the read names them; a
+//! resend marking its line `sent` on disk before it dials, and a line acked
+//! whose `done` the device refused relaunching so and kept by the read; the
+//! own node stopped, `writes.halted` and a third `durability` holding a
+//! burst over time, a reused ordinal's reissues counted afresh;
 //! every line's read starting past the person's own write — a line held
 //! behind a landing or an ack read from its position, and a line held after
 //! a landing the read found reading past it; and a line whose resends keep
@@ -392,33 +396,67 @@ fn another_processs_lock_leaves_the_directory_not_yet_this_shells() {
 
 /// Returns the hands a moved document's `held` event names, over `rows` —
 /// built from this store's own fingerprint and a second, labelled key's.
+///
+/// They are the board's verdict's — a burst refused as typed against an older
+/// state at its first dial, its hands read off the rows since its typed state
+/// — held to the read's: a line held from the session's open, its hands read
+/// off the rows since its `base` on the page the read holds. Both name the
+/// same hands off the same rows, each ground's two keys spelled by their part
+/// where the two are compared.
 fn moved_hands(rows: impl Fn(&str, &str) -> Vec<Value>) -> Vec<Value> {
-    let store = TempDir::new().unwrap();
-    let facts = writer_facts(&store);
-    let KeyId(other) = FileStore::open(store.path().join("store")).generate(Some(skep_client::sheet::Label::new("phone").unwrap())).unwrap();
-    let g = ground_in(store, facts, 0);
-    *g.fake.rows.lock().unwrap() = rows(&g.own_key(), &other.to_hex());
-    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
-    g.holds.probe("b-1");
-    let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document moved");
-    assert_held_event_declared(&moved);
-    let hands = moved["hands"].as_array().cloned().unwrap_or_default();
-    for hand in &hands {
-        crate::shapes::assert_declared("Hand", hand);
-    }
+    let named = |by_the_verdict: bool| -> (Vec<Value>, Vec<Value>) {
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let KeyId(other) = FileStore::open(store.path().join("store")).generate(Some(skep_client::sheet::Label::new("phone").unwrap())).unwrap();
+        let g = ground_in(store, facts, 0);
+        let (own, other) = (g.own_key(), other.to_hex());
+        *g.fake.rows.lock().unwrap() = rows(&own, &other);
+        let frame = insert(DOC, json!(["hello"]), g.fake.head());
+        if by_the_verdict {
+            g.fake.op_rejected.next(1, arrangement_moved(g.fake.head(), 78));
+            let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, frame) else { panic!("held, not faced") };
+            assert_eq!(held["cause"], "moved", "the board's verdict holds the burst moved: {held}");
+        } else {
+            g.hold(&frame, "unreachable", false);
+            g.holds.probe("b-1");
+        }
+        let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document moved");
+        assert_held_event_declared(&moved);
+        let hands = moved["hands"].as_array().cloned().unwrap_or_default();
+        for hand in &hands {
+            crate::shapes::assert_declared("Hand", hand);
+        }
+        let parts = hands
+            .iter()
+            .map(|hand| {
+                let mut hand = hand.clone();
+                for (key, part) in [(&own, "own"), (&other, "other")] {
+                    if hand["fingerprint"] == key.as_str() {
+                        hand["fingerprint"] = json!(part);
+                    }
+                }
+                hand
+            })
+            .collect();
+        (hands, parts)
+    };
+    let (hands, parts) = named(true);
+    assert_eq!(named(false).1, parts, "the read names the hands the board's verdict names, off the same rows");
     hands
 }
 
 /// Checks that a moved document names its hands, each once (§3c.5; §4b.2).
 ///
-/// The rows since `base` the read holds — its page of two — give the hands
-/// the `held` event's `moved` state carries: this store's own key by its
+/// The rows that moved it — read since the burst's typed state where the
+/// board refused it as typed against an older state, and since `base` on the
+/// read's page of two where the read found the move — give the hands the
+/// `held` event's `moved` state carries: this store's own key by its
 /// fingerprint, another key the shell's key store holds with its label,
 /// another key it does not hold by its fingerprint alone, `bare`, a row
 /// whose testimony the board lost, and a signed row — the own hand, as the
 /// read reads it; a hand twice on the page is named once (the mutants that
 /// name no hand, one per row, or a label for a key the store does not
-/// hold).
+/// hold; the one that reads no row at the board's verdict).
 #[test]
 fn a_moved_documents_hands_are_named_each_once() {
     let row = |at: u64, key: Value| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
@@ -658,23 +696,34 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
 
 /// Checks that a moved document faces its own lines alone (§3c.5).
 ///
-/// A foreign row on one document moves it, while a burst held `behind` it
-/// on a second document, whose read finds no row under it, is sent and
-/// kept (the mutant that faces every line moved at one document's foreign
-/// row strands the person's text on the other).
+/// The board refusing one document's resend as typed against an older state
+/// of it — the row that moved it below the session's open, so no read from
+/// the line's `base` finds it — moves that document alone: its line stands
+/// `moved`, carrying the board's verdict, the `held` event naming the hand
+/// whose row moved it since the line's typed state, while a burst held
+/// `behind` it on a second document is sent after it and kept (the mutant
+/// that faces every line moved at one document's verdict strands the
+/// person's text on the other; the ones that read the hands from the line's
+/// `base`, or not at all, draw the moved face with no hand).
 #[test]
 fn a_moved_document_faces_its_own_lines_alone() {
-    let g = ground();
+    let g = writer_at(80);
+    g.fake.next_at.store(81, Ordering::SeqCst);
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
-    g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    g.hold(&insert(DOC, json!(["a"]), 70), "unreachable", false);
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]), g.fake.head())) else { panic!("held behind the line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
     g.holds.probe("b-1");
     let lines = g.lines();
     let standing: Vec<(&str, &str)> = lines.iter().map(|l| (l["doc"].as_str().unwrap_or("?"), l["cause"].as_str().unwrap_or("?"))).collect();
     assert_eq!(standing, [(DOC, "moved")], "the moved document's line alone stands");
+    assert_eq!(lines[0]["refusal"], arrangement_moved(70, 77), "the board's verdict rides the line it refused");
+    let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document faced moved");
+    assert_held_event_declared(&moved);
+    assert_eq!((moved["doc"].as_str(), &moved["hands"]), (Some(DOC), &json!([{"key": "other", "fingerprint": "ff".repeat(32)}])), "the hand whose row moved it since its typed state: {moved}");
     let sent_docs: Vec<Value> = g.fake.sends.lock().unwrap().iter().map(|f| f["doc"].clone()).collect();
-    assert_eq!(sent_docs, [json!(OTHER)], "the other document's line is sent");
+    assert_eq!(sent_docs, [json!(DOC), json!(OTHER)], "the moved document's line was refused, the other document's line sent");
 }
 
 /// Checks that a stopped node holds every burst until it runs (§3c.4).
@@ -1058,4 +1107,117 @@ fn a_line_that_may_have_landed_stays_so_through_resends_that_never_left() {
 fn the_hand_over_comes_within_a_minute_or_two_of_probes() {
     let wall = u64::from(MAX_LOST_ANSWERS) * PROBE_CADENCE.as_secs();
     assert!((60..=120).contains(&wall), "{MAX_LOST_ANSWERS} tries at {PROBE_CADENCE:?} take {wall} s");
+}
+
+/// The principal's held file under the ground's store, at the fake's chain.
+fn held_file(g: &Ground) -> std::path::PathBuf {
+    g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held")
+}
+
+/// Checks that a resend marks its line `sent` on disk before it dials.
+///
+/// The mark is written ahead of the dial, synced (§3c.2's `sent`): the held
+/// file read as the resend's dial leaves holds the line re-marked `sent:
+/// true`, so a crash at the dial leaves a line that may have landed read as
+/// one; a line marked so already is written no line more. A resend whose
+/// attest cannot be composed — over a head record that cannot be read —
+/// dials nothing and marks nothing, the line `sent: false` still (the
+/// mutants that mark the line after its answer, or never; the one that marks
+/// it before the attest reads a write that never left as one that may have
+/// landed).
+#[test]
+fn a_resend_marks_its_line_sent_on_disk_before_it_dials() {
+    for sent in [false, true] {
+        let g = ground();
+        g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", sent);
+        let (file, at_the_dial) = (held_file(&g), Arc::new(Mutex::new(Vec::new())));
+        let seen = Arc::clone(&at_the_dial);
+        *g.fake.at_send.lock().unwrap() = Some(Box::new(move || seen.lock().unwrap().push(std::fs::read_to_string(&file).unwrap_or_default())));
+        g.holds.probe("b-1");
+        let files: Vec<String> = at_the_dial.lock().unwrap().clone();
+        let [text] = &files[..] else { panic!("sent {sent}: one dial: {files:?}") };
+        let marks: Vec<Value> = text.lines().skip(1).map(|line| serde_json::from_str::<Value>(line).unwrap()).filter(|line| line["held"] == 1).collect();
+        assert_eq!(marks.last().map(|line| &line["sent"]), Some(&json!(true)), "sent {sent}: the line is marked before its dial: {text}");
+        assert_eq!(marks.len(), if sent { 1 } else { 2 }, "sent {sent}: a line marked so already is written no line more: {text}");
+        assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "sent {sent}: acked and kept");
+    }
+    let fake = Fake::new();
+    *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (0, Some("head_unreadable"), Some(false)), "no dial, no mark: {lines:?}");
+}
+
+/// Checks that a line acked whose `done` was refused relaunches `sent` and is
+/// kept (skep #710).
+///
+/// A resend's ack comes and its `done` is refused by the device — the held
+/// file moved aside under the dial and a directory left at its name — so the
+/// line stands on disk as held; the relaunch over the same store reads it
+/// `sent: true`, the mark its resend wrote before the dial, and the read
+/// finds the line's own landing and keeps it, never faced `moved` and never
+/// sent twice (the mutant that marks no line before its dial relaunches it
+/// `sent: false`, and the read faces the person's own text `moved`).
+#[test]
+fn a_line_acked_whose_done_was_refused_relaunches_sent_and_is_kept() {
+    let g = ground();
+    let own = g.own_key();
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
+    let file = held_file(&g);
+    let aside = file.with_extension("aside");
+    let (from, to) = (file.clone(), aside.clone());
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        std::fs::rename(&from, &to).unwrap();
+        std::fs::create_dir(&from).unwrap();
+    }));
+    g.holds.probe("b-1");
+    *g.fake.at_send.lock().unwrap() = None;
+    assert!(g.lines().is_empty() && g.fake.sends() == 1, "the line is resent and acked");
+    let said = g.said.lock().unwrap().clone();
+    assert!(said.iter().any(|line| line.starts_with("held: line 1 is settled, and its `done` could not be written")), "the refused `done` is said: {said:?}");
+    // The relaunch: this run's holds gone, the file standing as the refused
+    // `done` left it, the board serving the line's own landing at its ack.
+    let Ground { holds, fake, session, store, .. } = g;
+    drop(holds);
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::rename(&aside, &file).unwrap();
+    *fake.rows.lock().unwrap() = vec![json!({"at": 50, "op": "insert", "key": own, "docs": [DOC]})];
+    *fake.text.lock().unwrap() = "hello".into();
+    let g = ground_over(fake, store, session.facts.clone(), 0);
+    let lines = g.lines();
+    assert_eq!((lines.len(), lines[0]["sent"].as_bool()), (1, Some(true)), "the relaunch reads the line as one that may have landed: {lines:?}");
+    g.holds.probe("b-1");
+    let states = g.states();
+    assert_eq!(g.fake.sends(), 1, "never sent twice");
+    assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// Checks that a moved document's lines keep each its own `sent` (§3c.2).
+///
+/// Two lines on a document — the first `sent: true`, an earlier answer of it
+/// lost, the second held `behind` it, `sent: false` — and the board refusing
+/// the first's resend as typed against an older state: the document is faced
+/// moved, the first line `sent: true` still and carrying the board's verdict,
+/// the second `sent: false` and carrying none; the person's `send` hands both
+/// back, each keeping its own (the mutant that clears `sent` at a move
+/// forgets the first may have landed, and a resend lands it twice; the one
+/// that marks every moved line `sent` reads the second's write, which never
+/// left, as one that may have landed).
+#[test]
+fn a_moved_documents_lines_keep_each_its_own_sent() {
+    let g = writer_at(80);
+    g.fake.next_at.store(81, Ordering::SeqCst);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let k = g.hold(&insert(DOC, json!(["a"]), 70), "unreachable", true)["held"].as_u64().unwrap();
+    g.hold(&insert(DOC, json!(["b"]), 70), "behind", false);
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    g.holds.probe("b-1");
+    let marks = || -> Vec<(String, Option<bool>, bool)> { g.lines().iter().map(|l| (l["cause"].as_str().unwrap_or("?").to_string(), l["sent"].as_bool(), l.get("refusal").is_some())).collect() };
+    assert_eq!(marks(), [("moved".to_string(), Some(true), true), ("moved".to_string(), Some(false), false)], "each line keeps its own, the verdict on the line refused");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    assert_eq!(marks(), [("behind".to_string(), Some(true), false), ("behind".to_string(), Some(false), false)], "and through the person's send");
 }

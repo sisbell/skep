@@ -34,8 +34,13 @@
 //! resend as typed against an older state — the one route to the moved face
 //! — facing its own document alone, moved, the verdict on the line it
 //! refused, each line keeping its own `sent` and the hands named off the
-//! rows since the typed state; a resend marking its line `sent` on disk
-//! before it dials, and a line acked whose `done` the device refused
+//! rows since the typed state; THE SHIFT at a resend (skep #442): a `sent`
+//! head whose own row stands and whose site confirms kept by the read and
+//! shifted never; a resent line refused stale shifted through the change by
+//! one image read, the shifted frame on the line before the shifted dial,
+//! and kept; and the lost answers and the shifts meeting the one bound, the
+//! person's send counting both afresh; a resend marking its line `sent` on
+//! disk before it dials, and a line acked whose `done` the device refused
 //! relaunching so and kept by the read; the own node stopped,
 //! `writes.halted` and a third `durability` holding a burst over time, a
 //! reused ordinal's reissues counted afresh; every line's read starting past
@@ -434,7 +439,7 @@ fn moved_hands(rows: impl Fn(&str, &str) -> Vec<Value>) -> Vec<Value> {
     let g = ground_in(store, facts, 0);
     *g.fake.rows.lock().unwrap() = rows(&g.own_key(), &other.to_hex());
     g.fake.op_rejected.next(1, arrangement_moved(g.fake.head(), 78));
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head())) else { panic!("held, not faced") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("held, not faced") };
     assert_eq!(held["cause"], "moved", "the board's verdict holds the burst moved: {held}");
     let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document moved");
     assert_held_event_declared(&moved);
@@ -589,7 +594,7 @@ fn a_siblings_ack_during_the_dial_does_not_raise_the_base_the_line_is_held_at() 
     g.fake.op_lost_at.store(1, Ordering::SeqCst);
     *g.fake.text.lock().unwrap() = "hello".into();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": own, "docs": [DOC]}), json!({"at": 78, "op": "insert", "key": own, "docs": [DOC]})];
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head())) else { panic!("held, not faced") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("held, not faced") };
     assert_eq!((held["cause"].as_str(), g.fake.sends()), (Some("unreachable"), 1), "the answer lost, the line held: {held}");
     let lines = g.lines();
     assert_eq!((lines[0]["base"].as_u64(), lines[0]["sent"].as_bool()), (Some(0), Some(true)), "held at the base read before the dial, not at the sibling's ack: {lines:?}");
@@ -655,7 +660,7 @@ fn the_persons_own_later_write_on_the_document_leaves_the_line_holding() {
         let row = match writer {
             LaterWriter::ThisSession | LaterWriter::Sibling => {
                 let session = if matches!(writer, LaterWriter::Sibling) { sibling_of(&g) } else { Arc::clone(&g.session) };
-                let OpAnswer::Answered(Ok(ack)) = g.holds.send(&session, link) else { panic!("{writer:?}: the link is acked") };
+                let OpAnswer::Answered(Ok(ack)) = g.holds.send(&session, link, None) else { panic!("{writer:?}: the link is acked") };
                 json!({"at": ack["at"], "op": "make_link", "key": g.own_key(), "docs": [DOC]})
             }
             LaterWriter::NotThroughTheShell => json!({"at": 77, "op": "delete", "key": g.own_key(), "docs": [DOC]}),
@@ -963,7 +968,7 @@ fn a_moved_document_faces_its_own_lines_alone() {
     g.fake.next_at.store(81, Ordering::SeqCst);
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 85, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["a"]), 70), "unreachable", true);
-    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]), g.fake.head())) else { panic!("held behind the line") };
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]), g.fake.head()), None) else { panic!("held behind the line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     g.fake.op_rejected.next(1, arrangement_moved(70, 85));
     g.holds.probe("b-1");
@@ -988,7 +993,7 @@ fn a_moved_document_faces_its_own_lines_alone() {
 fn a_stopped_node_holds_every_burst_until_it_runs() {
     let g = ground();
     g.holds.set_node_stopped("b-1", true);
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head())) else { panic!("held before the dial") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("held before the dial") };
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "{held}");
     assert_eq!(g.lines()[0]["sent"], false);
     g.holds.probe("b-1");
@@ -1011,7 +1016,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     let g = ground();
     g.fake.writes_halted.store(true, Ordering::SeqCst);
     g.holds.note_health("b-1", &g.session.board.health().unwrap());
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head())) else { panic!("held before the dial") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("held before the dial") };
     assert_eq!(held["cause"], "halted", "{held}");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "a board whose writes are halted is sent nothing");
@@ -1019,7 +1024,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the read that says writes go ends the hold");
     assert!(g.lines().is_empty());
-    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]), g.fake.head())) else { panic!("the burst was answered") };
+    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]), g.fake.head()), None) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "the hold has ended: {next}");
 }
 
@@ -1220,7 +1225,7 @@ fn a_line_whose_resends_lose_their_answer_is_handed_to_the_person() {
     let said = g.said.lock().unwrap().clone();
     let line = format!("held: line {k} on {DOC}: {MAX_LOST_ANSWERS} resends lost their answer");
     assert_eq!(said.iter().filter(|l| l.starts_with(&line)).count(), 1, "said once: {said:?}");
-    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head())) else { panic!("held behind the line handed over") };
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the line handed over") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), tries, "the lines wait for the person's act");
@@ -1361,11 +1366,6 @@ fn the_hand_over_comes_within_a_minute_or_two_of_probes() {
     assert!((60..=120).contains(&wall), "{MAX_LOST_ANSWERS} tries at {PROBE_CADENCE:?} take {wall} s");
 }
 
-/// The principal's held file under the ground's store, at the fake's chain.
-fn held_file(g: &Ground) -> std::path::PathBuf {
-    g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held")
-}
-
 /// Checks that a resend marks its line `sent` on disk before it dials.
 ///
 /// The mark is written ahead of the dial, synced (§3c.2's `sent`): the held
@@ -1446,6 +1446,120 @@ fn a_line_acked_whose_done_was_refused_relaunches_sent_and_is_kept() {
     let states = g.states();
     assert_eq!(g.fake.sends(), 1, "never sent twice");
     assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// Checks that a `sent` head whose own row stands and whose site confirms
+/// is kept and never shifted (skep #442; the landed test first).
+///
+/// The line — `hello` typed between `a` and `b`, carrying both as its
+/// anchors — had its first dial's answer lost, and landed at 77: the row of
+/// the own hand stands since `base`, the text at its site. The document's
+/// arrangement has moved past the line's typed state, so a dial would be
+/// refused and shifted; but the read comes first, finds the landing and
+/// keeps the line: nothing dialed, no image read, never faced moved (the
+/// mutant that shifts before the read sends the person's words a second
+/// time — or, the span between the anchors holding the words that landed,
+/// faces them moved).
+#[test]
+fn a_sent_head_whose_own_row_stands_and_whose_site_confirms_is_kept_and_never_shifted() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold_anchored(&insert_at(DOC, 2, json!(["hello"]), typed), anchors(Some(&i(1)), Some(&i(2))), "unreachable", true);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+    *g.fake.text.lock().unwrap() = "ahellob".into();
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(10), 5), run(&i(2), 1)];
+    g.fake.move_arrangement(DOC, 77);
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst), g.fake.changes_reads.load(Ordering::SeqCst)), (0, 0, 1), "the landed head is read once, never dialed and never shifted");
+    assert!(g.lines().is_empty(), "kept");
+    assert_eq!(g.states(), ["holding", "kept"], "never faced moved");
+}
+
+/// Checks that a resent line refused as typed against an older state is
+/// shifted through the change and kept (skep #442).
+///
+/// A held delete of `b` and `c` — `abc` as the page read it, the `before`
+/// anchor `a` and no `after` — held before any dial; another writer put
+/// `XY` before the text and the arrangement moved to 77. The probe reads
+/// nothing of a head never sent, dials it, meets the refusal, shifts it by
+/// one image read — `a` two positions later, the two positions after it
+/// whole to the document's end — writes the shifted frame to the line
+/// before the shifted dial, marked `sent` under the cause it had, and dials
+/// it again: `p` moved by two, the width kept, typed at the read's state;
+/// acked and kept, the file gone, never faced moved (the mutant that
+/// re-faces the resend moved holds text the shell could place; the one
+/// that dials before the rewrite leaves a relaunch the page's positions).
+#[test]
+fn a_resent_line_refused_stale_is_shifted_through_the_change_and_kept() {
+    let g = ground();
+    let typed = g.fake.head();
+    g.hold_anchored(&delete_at(DOC, 2, 2, typed), anchors(Some(&i(1)), None), "unreachable", false);
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    let (file, at_the_dial) = (held_file(&g), Arc::new(Mutex::new(Vec::new())));
+    let seen = Arc::clone(&at_the_dial);
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || seen.lock().unwrap().push(std::fs::read_to_string(&file).unwrap_or_default())));
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    let reads = (g.fake.image_reads.load(Ordering::SeqCst), g.fake.changes_reads.load(Ordering::SeqCst));
+    assert_eq!((sent.len(), reads), (2, (1, 0)), "refused once, shifted by one image read, no history read, sent again");
+    assert_eq!((sent[0]["p"]["ordinal"].as_str(), sent[0]["as_of"].as_u64()), (Some("2"), Some(typed)), "the line as held: {sent:?}");
+    assert_eq!((sent[1]["p"]["ordinal"].as_str(), sent[1]["width"].as_str(), sent[1]["as_of"].as_u64()), (Some("4"), Some("2"), Some(77)), "the delete's `p` moved by two, its width kept, typed at the read's state: {sent:?}");
+    let files = at_the_dial.lock().unwrap().clone();
+    let last = file_lines(&files[1]);
+    let last = last.last().expect("the line on disk at the shifted dial");
+    assert_eq!((last["frame"]["p"]["ordinal"].as_str(), last["sent"].as_bool(), last["cause"].as_str()), (Some("4"), Some(true), Some("unreachable")), "the shifted frame on the line before the shifted dial, its cause kept: {}", files[1]);
+    assert!(g.lines().is_empty() && !held_file(&g).exists(), "kept, the file gone");
+    assert_eq!(g.states(), ["holding", "sending", "kept"], "shifted and kept, never moved");
+}
+
+/// Checks that the lost answers and the shifts meet the one bound (skep
+/// #442; the resend's bound).
+///
+/// A line that may have landed loses its answer at one probe; then another
+/// writer's change lands as each dial reaches the board: the next probe's
+/// read finds no landing, the dial is refused, and the line is shifted and
+/// refused again until its one lost answer and its shifts together reach
+/// the bound — `MAX_LOST_ANSWERS − 1` shifts — and the shift is not made
+/// again: the line is held moved, the bound said once. The person's `send`
+/// counts both afresh: the other writer's change landing once more, the
+/// next probe sends, shifts twice and keeps it (the mutant that counts the
+/// shifts apart from the lost answers shifts a line thirty more times past
+/// a lost answer; the one whose `send` keeps the shift count holds the line
+/// moved again at its second shift).
+#[test]
+fn the_lost_answers_and_the_shifts_meet_the_one_bound() {
+    let g = ground();
+    let typed = g.fake.head();
+    let k = g.hold_anchored(&insert_at(DOC, 2, json!(["x"]), typed), anchors(Some(&i(1)), Some(&i(2))), "unreachable", true)["held"].as_u64().unwrap();
+    lose_the_next_answer(&g, 0);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "one answer lost");
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+    // The other writer's change lands as each dial reaches the board, for
+    // as many dials as are left to it.
+    let changes_left = Arc::new(AtomicUsize::new(usize::MAX));
+    let (fake, left) = (Arc::clone(&g.fake), Arc::clone(&changes_left));
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        if left.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok() {
+            let at = fake.next_at.fetch_add(1, Ordering::SeqCst);
+            fake.move_arrangement(DOC, at);
+        }
+    }));
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let shifts = (MAX_LOST_ANSWERS - 1) as usize;
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (1 + 1 + shifts, shifts), "refused, shifted and refused again to the bound, the lost answer counted with the shifts: then held");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0]["refusal"]["code"].as_str()), (Some("moved"), Some(true), Some("arrangement_moved")), "{lines:?}");
+    assert_eq!(g.states(), ["sending", "moved"]);
+    let talk = g.said.lock().unwrap().clone();
+    assert_eq!(talk.iter().filter(|l| l.contains(&format!("its {MAX_LOST_ANSWERS} tries stand at the bound"))).count(), 1, "{talk:?}");
+    changes_left.store(2, Ordering::SeqCst);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (1 + 1 + shifts + 3, shifts + 2), "the person's send counts afresh: refused, shifted and refused once more, shifted again and kept");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
 /// Checks that a moved document's lines keep each its own `sent` (§3c.2).

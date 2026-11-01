@@ -122,8 +122,17 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "RefusedByBoard",
         open: false,
-        doc: "a refusal: the board's own verdict, verbatim; `site` the address and the entry the code names (`already_published`'s member, `kept_place_moved`'s `runs` entry, a deposit's entry in its own list), each absent where the code carries none",
-        fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("site", "{ addr?: string; index?: number }"), req("body", "unknown")],
+        doc: "a refusal: the board's own verdict, verbatim; `site` the fault's place as the wire names it (wire.md §Rejections), each member absent where the code carries none — `addr` the address the code names (`already_published`'s member, `not_owner`'s document, `withheld`'s origin), `index` the entry (`kept_place_moved`'s `runs` entry, a deposit's entry in its own list) and `fault` the span fault beside it, `operand` and `region` a compare input's, `slot` an `edit_link` successor's slot, `as_of` and `current` an `arrangement_moved`'s two states — the one the refused burst was typed against, echoed, and the position the document's arrangement last changed at",
+        fields: &[
+            req("kind", "'refused'"),
+            req("name", "string"),
+            req("status", "number"),
+            req("code", "string"),
+            req("detail", "string | null"),
+            req("op", "string | null"),
+            req("site", "{ addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number }"),
+            req("body", "unknown"),
+        ],
     },
     Shape { name: "HaltFace", open: false, doc: "a refusal: a halt's face under the armed name", fields: &[req("kind", "'halt'"), req("name", "string"), req("state", "string"), req("cause", "string"), req("act", "string")] },
     Shape { name: "BlockedFace", open: false, doc: "a refusal: the block", fields: &[req("kind", "'blocked'"), req("name", "'blocked'"), req("record", "string"), req("named_by", "string"), req("ground", "string | null")] },
@@ -149,13 +158,19 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldRow",
         open: false,
-        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal, `doc` the draft, `base` the resend's read start, `frame` the page's frame as composed (no attest), `sent` whether a dial of the line was attempted since the last read, so it may have landed — a first dial whose answer was lost (the board's `internal_panic` among them), a `poisoned` answer, or any resend, which marks its line before it dials (§3c.2) — kept through a move, `refusal` the verdict for a refused run — the board's, or the shell's `answers_lost` where it handed the person a line whose resends kept losing their answer (§3c.4), its `sent` kept; at a line held `moved` because the board refused it as typed against an older state, the board's `arrangement_moved` (`site.as_of` the state it was typed against, `site.current` the document's); at a line held `head_unreadable`, the shell's refusal naming why its signature could not be made, the line holding all the same (SP-14)",
-        fields: &[req("held", "number"), req("doc", "string"), req("base", "number"), req("frame", "unknown"), req("cause", "string"), req("sent", "boolean"), req("time", "number"), opt("refusal", "unknown")],
+        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal, `doc` the draft, `base` the resend's read start, `frame` the wire frame (no attest) — the page's as composed, or as the shell last shifted it through another writer's change, every position it names moved by one displacement and its `as_of` the state they are true of — `anchors` the page's, where the burst carried them (the `op` row's member): the identities on either side of the span the frame edits, by which the shell shifts it, `sent` whether a dial of the line was attempted since the last read, so it may have landed — a first dial whose answer was lost (the board's `internal_panic` among them), a `poisoned` answer, or any resend, which marks its line before it dials (§3c.2) — kept through a move, `refusal` the verdict for a refused run — the board's, or the shell's `answers_lost` where it handed the person a line whose resends kept losing their answer (§3c.4), its `sent` kept; at a line held `moved` because the board refused it as typed against an older state and the shift could not move it through the change exactly, the board's `arrangement_moved` (`site.as_of` the state it was typed against, `site.current` the document's); at a line held `head_unreadable`, the shell's refusal naming why its signature could not be made, the line holding all the same (SP-14)",
+        fields: &[req("held", "number"), req("doc", "string"), req("base", "number"), req("frame", "unknown"), opt("anchors", "Anchors"), req("cause", "string"), req("sent", "boolean"), req("time", "number"), opt("refusal", "unknown")],
+    },
+    Shape {
+        name: "Anchors",
+        open: false,
+        doc: "the identities on either side of the span a burst edits (skep #442), sent beside the frame on the `op` row and kept with the held line, never on the wire: `before` the I-address of the unit just before the span, `after` the I-address of the unit just after it — in the tumbler-string form `image` answers an `i_start` in, the run's position added — each `null` at the document's edge; an insert, a copy or a reinstate names the units on either side of its `at`, a delete those on either side of its `width` positions from `p`, a rearrange those on either side of its first cut to its last; where the board refuses the burst as typed against an older state, the shell finds both in the document's current image and, where the span between them is whole — as many positions as when the burst was typed — moves every position the frame names by their one displacement and sends it again; else the document is held as moved; a burst sent without them is held as moved there",
+        fields: &[req("before", "string | null"), req("after", "string | null")],
     },
     Shape {
         name: "HeldEvent",
         open: false,
-        doc: "`held(board, session, {doc, held, state, cause?, hands?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`; `hands` with the `moved` state, EACH HAND ONCE, read off the `under=` rows since the burst's typed state — the board's refusal of it as typed against an older state (`arrangement_moved`), at its first dial or at a resend, is the one route to `moved`; the resend's read judges only whether the line's own write landed (§3c.5); emitted at a hold's start, at each line's resolution or drop, and at each state the resend moves the document through — never when a principal's file is read at its session's open, whose lines `held(session)` lists",
+        doc: "`held(board, session, {doc, held, state, cause?, hands?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`; `hands` with the `moved` state, EACH HAND ONCE, read off the `under=` rows since the burst's typed state — the board's refusal of it as typed against an older state (`arrangement_moved`), at its first dial or at a resend, where the shell could not shift the burst through the change exactly (no anchors, an anchor lost, the span between them cut), is the one route to `moved`; a burst it shifts is sent again and lands, no `moved` said; the resend's read judges only whether the line's own write landed (§3c.5); emitted at a hold's start, at each line's resolution or drop, and at each state the resend moves the document through — never when a principal's file is read at its session's open, whose lines `held(session)` lists, nor for a line a call enters, shifts and settles within itself",
         fields: &[req("board", "string"), req("session", "string"), req("doc", "string"), req("held", "number"), req("state", "'holding' | 'sending' | 'kept' | 'refused' | 'moved'"), opt("cause", "string"), opt("hands", "Hand[]")],
     },
     Shape {
@@ -313,7 +328,7 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "probe", forms: &[&[]], result: "Probe" },
     CallRow {
         name: "op",
-        forms: &[&[req("session", "string"), req("frame", "unknown")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("frame", "unknown")]],
+        forms: &[&[req("session", "string"), req("frame", "unknown"), opt("anchors", "Anchors")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("frame", "unknown")]],
         result: "unknown",
     },
     CallRow {

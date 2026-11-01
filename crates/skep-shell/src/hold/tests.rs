@@ -10,7 +10,11 @@
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, and whether it names a claimant; its `/changes` rows and
-//! the reads of them counted, a draft's text, the frames POSTed to `/op`
+//! the reads of them counted, a draft's text, its content image and the
+//! reads of it counted, the position its arrangement last changed at as a
+//! cell sets it — a burst typed below it refused `arrangement_moved`, the
+//! fake's own acks moving nothing, so every frame typed at the fake's head
+//! meets no refusal — the frames POSTed to `/op`
 //! recorded, a look taken as each is recorded, and a refusal or the death
 //! signal armed for a send — the holds over it with a session opened as the
 //! shell opens one and every line the hold says on `Talk` recorded (`Ground`),
@@ -23,6 +27,7 @@
 //! burst's door and its hold, and a write the hold never holds; `resend` the
 //! probe and the resend walk.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
@@ -217,12 +222,18 @@ impl<T: Clone> Armed<T> {
 /// counted; the draft's text, of which a `retrieve_v`
 /// answers the positions it names — or
 /// no answer, the death signal, or one position more than it names, where the
-/// site is armed so; the frames POSTed to `/op` recorded, a look the cell
-/// takes as each is recorded, the n-th one's answer lost on the way where one
-/// is armed lost, and the death signal, a scripted rejection or a non-200
-/// answered where one is armed — to every send, or to the next few alone, the
-/// death first and the non-200 next; and the `/health` reads counted, one
-/// armed to panic once, and each held at a gate while it is shut.
+/// site is armed so; the draft's content image, of which an `image` answers
+/// the runs its region covers, clipped as the board clips them — or no
+/// answer where the read is armed unanswered — the reads of it counted and
+/// each answered at the board's position; the position each document's
+/// arrangement last changed at, as a cell sets it, a burst typed below it
+/// refused `arrangement_moved` naming both; the frames POSTed to `/op`
+/// recorded, a look the cell takes as each is recorded, the n-th one's
+/// answer lost on the way where one is armed lost, and the death signal, a
+/// scripted rejection or a non-200 answered where one is armed — to every
+/// send, or to the next few alone, the death first and the non-200 next;
+/// and the `/health` reads counted, one armed to panic once, and each held
+/// at a gate while it is shut.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -246,6 +257,18 @@ struct Fake {
     site_unread: AtomicBool,
     site_closed: AtomicBool,
     over_deliver: AtomicBool,
+    /// The draft's content image: its runs in V-order from the first
+    /// position, each `{i_start, width}` as the board answers one.
+    image: Mutex<Vec<Value>>,
+    /// Every `image` read fails at the connect: no image is read.
+    image_unread: AtomicBool,
+    /// The `image` reads made.
+    image_reads: AtomicUsize,
+    /// The position each document's arrangement last changed at, as a cell
+    /// sets it (`move_arrangement`): a burst typed below it is refused
+    /// `arrangement_moved`. The fake's own acks move nothing, so every frame
+    /// typed at the fake's head meets no refusal.
+    arrangement: Mutex<HashMap<String, u64>>,
     sends: Mutex<Vec<Value>>,
     /// A look the cell takes as `/op` records a send, before it answers.
     ///
@@ -295,6 +318,10 @@ impl Fake {
             site_unread: AtomicBool::new(false),
             site_closed: AtomicBool::new(false),
             over_deliver: AtomicBool::new(false),
+            image: Mutex::new(Vec::new()),
+            image_unread: AtomicBool::new(false),
+            image_reads: AtomicUsize::new(0),
+            arrangement: Mutex::new(HashMap::new()),
             sends: Mutex::new(Vec::new()),
             at_send: Mutex::new(None),
             op_closed: AtomicBool::new(false),
@@ -317,11 +344,45 @@ impl Fake {
 
     /// The board's head as the fake stands: the `at` of its last ack, the
     /// state a burst built now is typed against (`as_of`, wire.md
-    /// §Arrangement; skep #442). The fake judges nothing of it yet — the
-    /// shell's shift lane teaches it the refusal — but every frame the
-    /// suites build is the wire's frame, member and all.
+    /// §Arrangement; skep #442). The fake judges a burst's `as_of` against
+    /// the position a cell set its document's arrangement at
+    /// (`move_arrangement`) alone — never against its own acks — so every
+    /// frame the suites build at the head is the wire's frame, member and
+    /// all, and meets no refusal.
     fn head(&self) -> u64 {
         self.next_at.load(Ordering::SeqCst) - 1
+    }
+
+    /// Sets the position `doc`'s arrangement last changed at: a burst on it
+    /// typed against an older state is refused `arrangement_moved` from now.
+    fn move_arrangement(&self, doc: &str, at: u64) {
+        self.arrangement.lock().unwrap().insert(doc.to_string(), at);
+    }
+
+    /// The position a read answers in its `as_of`: the board's head, past
+    /// every arrangement change a cell set.
+    fn read_as_of(&self) -> u64 {
+        self.arrangement.lock().unwrap().values().copied().fold(self.head(), u64::max)
+    }
+
+    /// The image's runs clipped to the region `width` positions from `from`,
+    /// as the board clips an `image` to the arrangement: a run the window
+    /// cuts answered from its first position inside, a window past the
+    /// arrangement answering what the arrangement holds.
+    fn image_runs(&self, from: u64, width: u64) -> Vec<Value> {
+        let (lo, hi) = (from, from.saturating_add(width));
+        let mut v = 1u64;
+        let mut runs = Vec::new();
+        for run in self.image.lock().unwrap().iter() {
+            let (prefix, first) = run["i_start"].as_str().and_then(|s| s.rsplit_once('.')).map(|(p, n)| (p.to_string(), n.parse::<u64>().unwrap())).unwrap();
+            let w: u64 = run["width"].as_str().unwrap().parse().unwrap();
+            let (run_lo, run_hi) = (v.max(lo), (v + w).min(hi));
+            if run_lo < run_hi {
+                runs.push(json!({"i_start": format!("{prefix}.{}", first + (run_lo - v)), "width": (run_hi - run_lo).to_string()}));
+            }
+            v += w;
+        }
+        runs
     }
 
     /// The `/health` gate shut: each read waits there until it opens.
@@ -408,6 +469,16 @@ impl Dialer for Fake {
         }
         if req.method == Method::Post && req.path == "/op" {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            if body["op"].as_str() == Some("image") {
+                self.image_reads.fetch_add(1, Ordering::SeqCst);
+                if self.image_unread.load(Ordering::SeqCst) {
+                    return Err(DialError::Connect("the image read is not answered".into()));
+                }
+                let region = &body["region"][0];
+                let from = region["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|s| s.parse().ok()).unwrap_or(1);
+                let width = region["width"].as_str().and_then(|s| s.strip_prefix("0.")).and_then(|s| s.parse().ok()).unwrap_or(0);
+                return Ok(ok(json!({"resp": "runs", "runs": self.image_runs(from, width), "as_of": self.read_as_of()})));
+            }
             if body["op"].as_str() == Some("retrieve_v") {
                 if body["specs"][0]["doc"].as_str() == Some(HEAD_MEMBER_1) {
                     if self.head_closed.load(Ordering::SeqCst) {
@@ -467,6 +538,14 @@ impl Dialer for Fake {
             }
             if let Some(r) = self.op_rejected.take() {
                 return Ok(ok(r));
+            }
+            // The typed state (wire.md §Arrangement): a burst typed below
+            // the position its document's arrangement last changed at — as a
+            // cell set it — is refused, naming both.
+            if let (Some(op), Some(doc), Some(typed)) = (body["op"].as_str().filter(|op| BURST_KINDS.contains(op)), body["doc"].as_str(), body["as_of"].as_u64()) {
+                if let Some(current) = self.arrangement.lock().unwrap().get(doc).copied().filter(|current| typed < *current) {
+                    return Ok(ok(arrangement_moved_on(op, typed, current)));
+                }
             }
             let at = self.next_at.fetch_add(1, Ordering::SeqCst);
             return Ok(ok(json!({"resp": "ack", "at": at})));
@@ -552,6 +631,17 @@ impl Ground {
         let burst = self.burst(frame);
         let base = self.base_of(&burst.doc);
         self.holds.hold(&self.session, burst, reason, base)
+    }
+
+    /// A burst carrying `anchors` held for `cause`, `sent` as a lost answer's
+    /// would be — the page's burst, which the shift can move: the `held`
+    /// answer, held to its declaration.
+    fn hold_anchored(&self, frame: &Value, anchors: Anchors, cause: &str, sent: bool) -> Value {
+        let burst = self.burst(frame).with_anchors(Some(anchors));
+        let base = self.base_of(&burst.doc);
+        let answer = self.holds.hold(&self.session, burst, Reason::of(cause, sent), base).unwrap();
+        crate::shapes::assert_declared("HeldAnswer", &answer);
+        answer
     }
 
     /// The base a line held on `doc` under the ground's session takes now
@@ -661,7 +751,69 @@ fn delete(doc: &str, as_of: u64) -> Value {
 /// against, echoed, and `current` the position the document's arrangement
 /// last changed at.
 fn arrangement_moved(as_of: u64, current: u64) -> Value {
-    json!({"resp": "rejected", "op": "insert", "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": as_of, "current": current}})
+    arrangement_moved_on("insert", as_of, current)
+}
+
+/// The board's `arrangement_moved` on a burst of kind `op`.
+fn arrangement_moved_on(op: &str, as_of: u64, current: u64) -> Value {
+    json!({"resp": "rejected", "op": op, "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": as_of, "current": current}})
+}
+
+/// An `insert` of `values` at the document's position `at`, typed against
+/// `as_of`.
+fn insert_at(doc: &str, at: u64, values: Value, as_of: u64) -> Value {
+    json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "values": values, "as_of": as_of})
+}
+
+/// A `delete` of `width` positions from the document's position `p`, typed
+/// against `as_of`.
+fn delete_at(doc: &str, p: u64, width: u64, as_of: u64) -> Value {
+    json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": p.to_string()}, "width": width.to_string(), "as_of": as_of})
+}
+
+/// A `copy` of the other document's first position into `doc` at `at`,
+/// typed against `as_of`.
+fn copy_at(doc: &str, at: u64, as_of: u64) -> Value {
+    json!({"op": "copy", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "specs": [{"source": OTHER, "span": {"start": "1.1", "width": "0.1"}}], "as_of": as_of})
+}
+
+/// A `reinstate` of one run of `doc`'s own ninth I-position into `doc` at
+/// `at`, typed against `as_of`.
+fn reinstate_at(doc: &str, at: u64, as_of: u64) -> Value {
+    json!({"op": "reinstate", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "runs": [{"origin": doc, "i_start": i(9), "width": "1"}], "as_of": as_of})
+}
+
+/// A `rearrange` of `doc` about `cuts`, typed against `as_of`.
+fn rearrange_at(doc: &str, cuts: &[u64], as_of: u64) -> Value {
+    let cuts: Vec<Value> = cuts.iter().map(|c| json!({"subspace": "1", "ordinal": c.to_string()})).collect();
+    json!({"op": "rearrange", "doc": doc, "cuts": cuts, "as_of": as_of})
+}
+
+/// The I-address of `DOC`'s content position `n`, as the board spells one.
+fn i(n: u64) -> String {
+    format!("{DOC}.0.1.{n}")
+}
+
+/// One run of a content image: `width` positions from the I-address
+/// `i_start`, as the board answers it.
+fn run(i_start: &str, width: u64) -> Value {
+    json!({"i_start": i_start, "width": width.to_string()})
+}
+
+/// The anchors a page sends: `before` and `after`, each an I-address or none
+/// at the document's edge.
+fn anchors(before: Option<&str>, after: Option<&str>) -> Anchors {
+    Anchors::of(&json!({"before": before, "after": after})).expect("the anchors' form")
+}
+
+/// The principal's held file under the ground's store, at the fake's chain.
+fn held_file(g: &Ground) -> std::path::PathBuf {
+    g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held")
+}
+
+/// The `held` lines a held file's text holds, each parsed, in file order.
+fn file_lines(text: &str) -> Vec<Value> {
+    text.lines().skip(1).filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter(|line| line.get("held").is_some()).collect()
 }
 
 /// A `/changes` row whose testimony the board lost (wire.md §`/changes`):

@@ -108,30 +108,38 @@ fn ks(queue: &HeldQueue) -> Vec<u64> {
 /// `v: 2` header with a valid body answers the NEWER face and reads no line; an
 /// unknown header member refuses the file; a torn last line is ignored and the
 /// lines before it read; a middle line that does not parse HALTS the file; the
-/// members' order and spelling of a written line are byte-equal to §3c.2.
+/// members' order and spelling of a written line are byte-equal to §3c.2 —
+/// a line without anchors, and one carrying the page's anchors after its
+/// frame, an edge spelled `null`.
 #[test]
 fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(7, "1.0.7").unwrap());
     assert!(!queue.on_disk(), "no file until the first append");
-    let held = queue.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+    let held = queue.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
     assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
     assert_eq!(held.k, 1);
     assert!(queue.on_disk(), "the first hold writes the header and the line");
+    let anchored = queue.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), Some(anchors(Some("1.0.7.0.1.0.1.4"), None)), Reason::of("behind", false)).unwrap();
+    assert!(anchored.unwritten.is_none(), "{:?}", anchored.unwritten);
 
-    // The exact byte forms (§3c.2), the one line's `time` apart.
+    // The exact byte forms (§3c.2), the lines' `time` apart.
     let raw = fs::read_to_string(tmp.path().join("held").join(chain().to_string()).join("principal-7.held")).unwrap();
     let mut lines = raw.lines();
     assert_eq!(lines.next().unwrap(), format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":7,\"account\":\"1.0.7\"}}", chain()));
     let held = lines.next().unwrap();
     assert!(held.starts_with("{\"held\":1,\"doc\":\"1.0.7.0.1\",\"base\":5,\"frame\":{\"op\":\"insert\"},\"cause\":\"unreachable\","), "{held}");
     assert!(held.contains(",\"sent\":false,\"time\":") && held.ends_with('}'), "{held}");
+    let held = lines.next().unwrap();
+    assert!(held.starts_with("{\"held\":2,\"doc\":\"1.0.7.0.1\",\"base\":5,\"frame\":{\"op\":\"insert\"},\"anchors\":{\"before\":\"1.0.7.0.1.0.1.4\",\"after\":null},\"cause\":\"behind\","), "{held}");
 
-    // A second open reads the header and the standing line.
+    // A second open reads the header and the standing lines, the anchors
+    // with theirs.
     let reopened = live(d.open_file(7, "1.0.7").unwrap());
-    assert_eq!(reopened.lines().len(), 1);
+    assert_eq!(reopened.lines().len(), 2);
     assert_eq!(reopened.lines()[0].doc, "1.0.7.0.1");
+    assert_eq!((reopened.lines()[0].anchors.clone(), reopened.lines()[1].anchors.clone()), (None, Some(anchors(Some("1.0.7.0.1.0.1.4"), None))));
 
     // `v: 2` with a valid body → the NEWER face, no line read (v FIRST).
     let d2 = {
@@ -218,7 +226,7 @@ fn a_file_with_no_whole_header_line_is_read_as_fresh_and_headed_by_the_next_line
         let mut queue = live(d.open_file(1, "1.0.1").unwrap());
         assert!(queue.lines().is_empty(), "{cell}: opened fresh");
         assert_eq!(queue.torn(), Some(Torn::Header { bytes: body.len() as u64 }), "{cell}: the open answers what it found");
-        let held = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+        let held = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
         assert!(held.unwritten.is_none(), "{cell}: {:?}", held.unwritten);
         assert_eq!(held.k, 1);
         let raw = fs::read_to_string(file_path(&tmp)).unwrap();
@@ -299,9 +307,9 @@ fn the_file_compacts_once_every_line_is_done() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().k;
-    let k2 = queue.hold("1.0.1.0.2", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).unwrap().k;
-    let k3 = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k;
+    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)).unwrap().k;
+    let k2 = queue.hold("1.0.1.0.2", None, 0, json!({"op": "delete"}), None, Reason::of("behind", false)).unwrap().k;
+    let k3 = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k;
     assert!(matches!(queue.done(99, Done::Kept { at: None }), Err(DoneError::NoSuchLine)), "a done for no line is refused");
     queue.done(k1, Done::Kept { at: Some(42) }).unwrap();
     queue.done(k2, Done::Dropped).unwrap();
@@ -343,20 +351,20 @@ fn an_appends_line_is_on_disk_before_its_answer() {
             *probe.lock().unwrap() = on_disk;
         }))
     });
-    let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap();
+    let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)).unwrap();
     assert!(first.unwritten.is_none(), "{:?}", first.unwritten);
     assert!(*seen.lock().unwrap(), "the line is on disk when the append's seam runs, before the answer");
     AFTER_SYNC.with(|s| *s.borrow_mut() = None);
 
     // The forced sync failure: the device's refusal beside a line that stands.
     FAIL_SYNC.with(|f| f.set(true));
-    let refused = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap();
+    let refused = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)).unwrap();
     FAIL_SYNC.with(|f| f.set(false));
     assert_eq!(refused.unwritten.expect("the device refused the copy").kind(), std::io::ErrorKind::StorageFull, "store_unwritable, answered `unwritable`");
     assert_eq!(refused.k, 2);
     assert_eq!(ks(&queue), [1, 2], "the refused line stands in the queue");
     assert!(!fs::read_to_string(file_path(&tmp)).unwrap().contains("\"doc\":\"1.0.1.0.2\""), "its bytes cut back off the file");
-    let next = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    let next = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     assert!(next.unwritten.is_none());
     assert_eq!((next.k, ks(&queue)), (3, vec![1, 2, 3]), "the next line takes the ordinal after it");
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 3], "a reopen reads the lines the disk took");
@@ -367,8 +375,8 @@ fn an_appends_line_is_on_disk_before_its_answer() {
 #[test]
 fn a_queue_in_memory_alone_keeps_its_lines_and_writes_nothing() {
     let mut queue = HeldQueue::in_memory();
-    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", true)).unwrap();
-    let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", true)).unwrap();
+    let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     assert!(k1.unwritten.is_none() && k2.unwritten.is_none());
     assert_eq!((k1.k, k2.k), (1, 2));
     queue.remark(1, Reason::refused("out_of_bounds", json!({"code": "out_of_bounds"}))).unwrap();
@@ -387,8 +395,8 @@ fn a_remarked_line_reads_back_once_with_its_new_cause() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("1.0.1.0.1", None, 4, json!({"op": "insert"}), Reason::of("unreachable", true)).unwrap().k;
-    queue.hold("1.0.1.0.2", None, 4, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    let k = queue.hold("1.0.1.0.1", None, 4, json!({"op": "insert"}), None, Reason::of("unreachable", true)).unwrap().k;
+    queue.hold("1.0.1.0.2", None, 4, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     queue.remark(k, Reason::of("moved", false)).unwrap();
     queue.remark(k, Reason::of("moved", false)).unwrap();
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
@@ -408,8 +416,8 @@ fn a_done_the_device_refused_still_settles_its_line() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
-    let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k;
+    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k;
     FAIL_SYNC.with(|f| f.set(true));
     let settled = queue.done(k1, Done::Kept { at: Some(9) }).unwrap();
     FAIL_SYNC.with(|f| f.set(false));
@@ -435,21 +443,21 @@ fn a_held_file_the_compaction_cannot_remove_is_kept_and_appended_on() {
     let d = dir(&tmp);
     let board_dir = tmp.path().join("held").join(chain().to_string());
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
     fs::set_permissions(&board_dir, fs::Permissions::from_mode(0o500)).unwrap();
     let settled = queue.done(k, Done::Kept { at: Some(3) }).unwrap();
     assert!(settled.unwritten.is_none(), "{settled:?}");
     let (path, _) = settled.unremoved.expect("the removal's failure is answered");
     assert_eq!(path, file_path(&tmp));
     assert!(queue.on_disk() && queue.lines().is_empty(), "the file stands, every line done");
-    let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     assert!(next.unwritten.is_none(), "the next hold appends to the standing file: {:?}", next.unwritten);
     assert_eq!(next.k, 2, "an ordinal past the file's");
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [2], "a reopen reads the line");
     fs::set_permissions(&board_dir, fs::Permissions::from_mode(0o700)).unwrap();
     let settled = queue.done(2, Done::Dropped).unwrap();
     assert!(settled.unremoved.is_none() && !queue.on_disk(), "writable again, the compaction removes the file");
-    assert_eq!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k, 1, "the ordinals start over once the file is gone");
+    assert_eq!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k, 1, "the ordinals start over once the file is gone");
 }
 
 /// A TORN LAST LINE is cut before the next line is written (R14; P38): a
@@ -470,7 +478,7 @@ fn a_torn_last_line_is_cut_before_the_next_line_is_written() {
         if done {
             queue.done(1, Done::Kept { at: Some(9) }).unwrap();
         } else {
-            let held = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+            let held = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
             assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
         }
         let want: &[u64] = if done { &[2] } else { &[1, 2, 3] };
@@ -489,14 +497,14 @@ fn a_copy_cut_short_leaves_the_file_as_it_was() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     let before = fs::read(file_path(&tmp)).unwrap();
     TORN_WRITE.with(|t| t.set(Some(20)));
-    let cut = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+    let cut = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
     assert_eq!(cut.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::StorageFull), "the device cut the copy short");
     assert_eq!(fs::read(file_path(&tmp)).unwrap(), before, "its bytes cut back off the file");
     assert_eq!(ks(&queue), [1, 2], "and the line stands in the queue");
-    assert!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().unwritten.is_none());
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 3], "a reopen reads every line the disk took");
 }
 
@@ -518,12 +526,12 @@ fn a_header_the_device_did_not_take_whole_leaves_no_file() {
         } else {
             FAIL_SYNC.with(|f| f.set(true));
         }
-        let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+        let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
         FAIL_SYNC.with(|f| f.set(false));
         assert_eq!(first.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::StorageFull), "torn {torn}: the device refused the header");
         assert!(!queue.on_disk(), "torn {torn}: the half-made file is removed");
         assert_eq!(ks(&queue), [1], "torn {torn}: the line stands in the queue");
-        let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+        let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
         assert!(next.unwritten.is_none(), "torn {torn}: {:?}", next.unwritten);
         assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [2], "torn {torn}: a reopen reads the line the file took");
     }
@@ -540,10 +548,10 @@ fn after_compaction_the_next_line_recreates_the_file_header_first() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().k;
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)).unwrap().k;
     queue.done(k, Done::Dropped).unwrap();
     assert!(!queue.on_disk(), "the file compacted away");
-    let again = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    let again = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     assert!(again.unwritten.is_none(), "{:?}", again.unwritten);
     assert_eq!(again.k, 1, "the ordinals start again");
     let raw = fs::read_to_string(tmp.path().join("held").join(chain().to_string()).join("principal-1.held")).unwrap();
@@ -567,13 +575,13 @@ fn a_reopened_queue_takes_an_ordinal_past_every_one_its_file_names() {
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     for doc in ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.0.3"] {
-        queue.hold(doc, None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+        queue.hold(doc, None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
     }
     queue.done(2, Done::Dropped).unwrap();
     queue.done(3, Done::Kept { at: Some(9) }).unwrap();
     let mut reopened = live(d.open_file(1, "1.0.1").unwrap());
     assert_eq!(ks(&reopened), [1]);
-    let next = reopened.hold("1.0.1.0.4", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    let next = reopened.hold("1.0.1.0.4", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     assert_eq!(next.k, 4, "past every ordinal the file names");
     let read: Vec<(u64, String)> = live(d.open_file(1, "1.0.1").unwrap()).lines().iter().map(|l| (l.k, l.doc.clone())).collect();
     assert_eq!(read, [(1, "1.0.1.0.1".to_string()), (4, "1.0.1.0.4".to_string())], "both lines read back");
@@ -594,7 +602,7 @@ fn a_line_kept_at_a_position_is_the_base_of_the_lines_behind_it() {
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     let held: Vec<u64> = [("1.0.1.0.1", 0), ("1.0.1.0.1", 0), ("1.0.1.0.1", 0), ("1.0.1.0.2", 0), ("1.0.1.0.1", 99)]
         .into_iter()
-        .map(|(doc, base)| queue.hold(doc, None, base, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k)
+        .map(|(doc, base)| queue.hold(doc, None, base, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k)
         .collect();
     queue.done(held[1], Done::Kept { at: Some(42) }).unwrap();
     let bases = |queue: &HeldQueue| queue.lines().iter().map(|l| (l.k, l.base)).collect::<Vec<_>>();
@@ -608,9 +616,11 @@ fn a_line_kept_at_a_position_is_the_base_of_the_lines_behind_it() {
 /// holding a quote, a newline and a backslash — the page's string this file
 /// keeps — each under a hold `sent: false`, one that MAY have landed, and a
 /// REFUSED run's with the board's verdict beside it, over a frame of a
-/// multi-byte value; reopened, the queue is the queue that was held (the
-/// mutant reader that drops `refusal` reads a refused run back as holding,
-/// and the resend then sends what awaits the person's act).
+/// multi-byte value, each without anchors, with both, and with an edge on
+/// either side; reopened, the queue is the queue that was held (the mutant
+/// reader that drops `refusal` reads a refused run back as holding, and the
+/// resend then sends what awaits the person's act; the one that drops the
+/// anchors holds a burst the shift can no longer move).
 #[test]
 fn every_line_form_reads_back_as_it_was_held() {
     let tmp = TempDir::new().unwrap();
@@ -618,15 +628,72 @@ fn every_line_form_reads_back_as_it_was_held() {
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "detail": "past \"the\" end"});
     let reasons = [Reason::of("unreachable", false), Reason::of("poisoned", true), Reason::refused("out_of_bounds", verdict)];
+    let anchored = [None, Some(anchors(Some("1.0.1.0.1.0.1.2"), Some("1.0.1.0.2.0.1.9"))), Some(anchors(None, Some("1.0.1.0.1.0.1.1"))), Some(anchors(Some("1.0.1.0.1.0.1.5"), None))];
     for id in [None, Some("plain"), Some("a \"quote\", a\nnewline, a \\ backslash")] {
         for reason in &reasons {
-            let held = queue.hold("1.0.1.0.1", id, 7, json!({"op": "insert", "values": ["é\"x"]}), reason.clone()).unwrap();
-            assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
+            for anchors in &anchored {
+                let held = queue.hold("1.0.1.0.1", id, 7, json!({"op": "insert", "values": ["é\"x"]}), anchors.clone(), reason.clone()).unwrap();
+                assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
+            }
         }
     }
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
-    assert_eq!(reopened.lines().len(), 9);
+    assert_eq!(reopened.lines().len(), 36);
     assert_eq!(reopened.lines(), queue.lines(), "the reopened queue is the queue that was held");
+}
+
+/// The anchors a line carries: `before` and `after`, each an I-address or
+/// none.
+fn anchors(before: Option<&str>, after: Option<&str>) -> Anchors {
+    Anchors { before: before.map(str::to_string), after: after.map(str::to_string) }
+}
+
+/// A REWRITTEN FRAME reads back under its ordinal (skep #442): a line held
+/// with anchors, its frame rewritten — the shift's act — and the file opened
+/// again holds ONE line of that ordinal carrying the new frame, its reason,
+/// `sent`, `base`, `id` and anchors as they were, the queue's frame bytes
+/// recounted; a frame the line already carries writes nothing; a line not
+/// standing is left alone; and the rewrite spends the re-mark budget a whole
+/// frame at a time — past it the copy is refused, the queue taking the frame
+/// all the same, and a reopen reads the frame copied last (the mutant reader
+/// that takes a rewritten line as a new one lists the burst twice; the
+/// writer that keeps the frame off the disk relaunches the page's positions
+/// after a shifted answer is lost, and the landed test reads the wrong site).
+#[test]
+fn a_rewritten_frame_reads_back_under_its_ordinal_and_spends_the_remark_budget() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let typed = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "2"}, "values": ["x"], "as_of": 4});
+    let shifted = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "7"}, "values": ["x"], "as_of": 9});
+    let held = anchors(Some("1.0.1.0.1.0.1.1"), Some("1.0.1.0.1.0.1.2"));
+    let k = queue.hold("1.0.1.0.1", Some("id-1"), 4, typed.clone(), Some(held.clone()), Reason::of("unreachable", true)).unwrap().k;
+    queue.hold("1.0.1.0.1", None, 4, json!({"op": "delete"}), None, Reason::of("behind", false)).unwrap();
+    let written = file_len(&tmp);
+    queue.rewrite(k, shifted.clone()).unwrap();
+    assert!(file_len(&tmp) > written, "the rewritten line is on disk");
+    let written = file_len(&tmp);
+    queue.rewrite(k, shifted.clone()).unwrap();
+    queue.rewrite(99, json!({"op": "delete"})).unwrap();
+    assert_eq!(file_len(&tmp), written, "the frame the line carries, and a line not standing, write nothing");
+    assert_eq!(queue.held_bytes, json_len(&shifted) + json_len(&json!({"op": "delete"})), "the frame bytes are recounted");
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert_eq!(ks(&reopened), [k, k + 1], "one line per ordinal");
+    let line = &reopened.lines()[0];
+    assert_eq!((&line.frame, line.id.as_deref(), line.base, &line.reason, &line.anchors), (&shifted, Some("id-1"), 4, &Reason::of("unreachable", true), &Some(held)), "the frame rewritten, the rest as held");
+    assert_eq!(reopened.lines(), queue.lines(), "the reopened queue is the queue that was rewritten");
+
+    // The budget: a large frame rewritten until the file's re-marks pass it.
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let k = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4), None, Reason::of("unreachable", false)).unwrap().k;
+    let frames: Vec<Value> = (1..=8).map(|n| json!({"op": "insert", "values": ["x".repeat(MAX_HELD_REMARK_BYTES / 4 - 40 + n)]})).collect();
+    let copied = frames.iter().filter(|frame| queue.rewrite(k, (*frame).clone()).is_ok()).count();
+    assert!((1..8).contains(&copied), "some rewrites are copied and the rest refused: {copied} of 8");
+    assert_eq!(queue.lines()[0].frame, frames[7], "the queue takes the last frame given");
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert!(frames.contains(&reopened.lines()[0].frame), "a reopen reads a frame the file copied: {}", reopened.lines()[0].frame);
 }
 
 /// THE STORE IS ITS OWNER's ALONE (§3c.1): `held/` and `held/<chain>/` made
@@ -642,7 +709,7 @@ fn the_store_is_its_owners_alone() {
     let d = dir(&tmp);
     let _lock = d.try_lock().unwrap().expect("the lock is free");
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)).unwrap().unwritten.is_none());
     let held = tmp.path().join("held");
     let board = held.join(chain().to_string());
     let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
@@ -671,14 +738,14 @@ fn the_queue_holds_its_frames_within_its_budget_and_writes_nothing_past_it() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_FRAME_BYTES - 100), Reason::of("stopped", false)).unwrap().k;
+    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_FRAME_BYTES - 100), None, Reason::of("stopped", false)).unwrap().k;
     let written = file_len(&tmp);
-    let refused = queue.hold("1.0.1.0.1", None, 0, sized_frame(200), Reason::of("behind", false));
+    let refused = queue.hold("1.0.1.0.1", None, 0, sized_frame(200), None, Reason::of("behind", false));
     assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_FRAME_BYTES - 100, frame_bytes: 200, held_lines: 1 });
     assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first]), "nothing of the refused line is kept");
-    assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(100), Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
+    assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(100), None, Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
     queue.done(first, Done::Kept { at: Some(3) }).unwrap();
-    assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(200), Reason::of("behind", false)).is_ok(), "a done makes room");
+    assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(200), None, Reason::of("behind", false)).is_ok(), "a done makes room");
 }
 
 /// THE QUEUE's LINE BUDGET: [`MAX_HELD_LINES`] lines of empty bursts held —
@@ -691,13 +758,13 @@ fn the_queue_holds_its_frames_within_its_budget_and_writes_nothing_past_it() {
 fn the_queue_holds_no_line_past_its_line_budget() {
     let mut queue = HeldQueue::in_memory();
     for _ in 0..MAX_HELD_LINES {
-        assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok());
+        assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), None, Reason::of("behind", false)).is_ok());
     }
-    let refused = queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false));
+    let refused = queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), None, Reason::of("behind", false));
     assert!(matches!(refused, Err(Unheld::Full { held_lines: MAX_HELD_LINES, .. })), "{refused:?}");
     assert_eq!(queue.lines().len(), MAX_HELD_LINES, "the queue stands at the budget");
     queue.done(1, Done::Dropped).unwrap();
-    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok(), "a done makes room");
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), None, Reason::of("behind", false)).is_ok(), "a done makes room");
 }
 
 /// A REOPENED QUEUE PAST ITS LINE BUDGET is read whole and holds nothing
@@ -715,11 +782,11 @@ fn a_reopened_queue_past_its_line_budget_reads_whole_and_holds_nothing_more() {
         .collect();
     let mut queue = live(opened_over(&tmp, body.as_bytes()));
     assert_eq!(queue.lines().len(), MAX_HELD_LINES + 1, "the queue is read whole");
-    let refused = queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false));
+    let refused = queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), None, Reason::of("behind", false));
     assert!(matches!(refused, Err(Unheld::Full { held_lines, .. }) if held_lines == MAX_HELD_LINES + 1), "{refused:?}");
     queue.done(1, Done::Dropped).unwrap();
     queue.done(2, Done::Dropped).unwrap();
-    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok(), "below the budget a hold is taken again");
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), None, Reason::of("behind", false)).is_ok(), "below the budget a hold is taken again");
 }
 
 /// The ordinals are held to the page's ([`MAX_ORDINAL`]): the last one
@@ -728,8 +795,8 @@ fn a_reopened_queue_past_its_line_budget_reads_whole_and_holds_nothing_more() {
 fn the_queue_holds_no_ordinal_past_the_pages() {
     let mut queue = HeldQueue::in_memory();
     queue.next_k = MAX_ORDINAL;
-    assert_eq!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().k, MAX_ORDINAL);
-    assert!(matches!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)), Err(Unheld::Full { .. })));
+    assert_eq!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)).unwrap().k, MAX_ORDINAL);
+    assert!(matches!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("stopped", false)), Err(Unheld::Full { .. })));
 }
 
 /// THE WRITER holds no line its reader would halt on: a `doc` that is no
@@ -741,7 +808,7 @@ fn the_writer_holds_no_line_its_reader_refuses() {
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     for (doc, frame) in [("d1", json!({"op": "insert"})), ("01.0.1.0.1", json!({"op": "insert"})), ("1.0.1", json!({"op": "insert"})), ("1.0.1.0.1", json!(["insert"]))] {
-        assert_eq!(queue.hold(doc, None, 0, frame, Reason::of("stopped", false)).unwrap_err(), Unheld::Unreadable, "{doc}");
+        assert_eq!(queue.hold(doc, None, 0, frame, None, Reason::of("stopped", false)).unwrap_err(), Unheld::Unreadable, "{doc}");
     }
     assert!(queue.lines().is_empty() && !queue.on_disk());
 }
@@ -755,7 +822,7 @@ fn an_unchanged_remark_writes_nothing() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", true)).unwrap().k;
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", true)).unwrap().k;
     let written = file_len(&tmp);
     for _ in 0..3 {
         queue.remark(k, Reason::of("unreachable", true)).unwrap();
@@ -780,7 +847,7 @@ fn a_board_flapping_between_two_causes_grows_no_file_past_its_remark_budget() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4), Reason::of("unreachable", false)).unwrap().k;
+    let k = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4), None, Reason::of("unreachable", false)).unwrap().k;
     let written = file_len(&tmp);
     let flaps = [Reason::of("poisoned", true), Reason::of("durability", false)];
     let copied = (0..8).filter(|i| queue.remark(k, flaps[i % 2].clone()).is_ok()).count();
@@ -797,7 +864,7 @@ fn a_board_flapping_between_two_causes_grows_no_file_past_its_remark_budget() {
     drop(reopened);
     queue.done(k, Done::Dropped).unwrap();
     assert!(!queue.on_disk(), "the file compacted away");
-    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
     let written = file_len(&tmp);
     queue.remark(k, Reason::of("durability", false)).unwrap();
     assert!(file_len(&tmp) > written, "the file that replaces it copies its re-marks afresh");
@@ -829,17 +896,23 @@ fn line_with(member: &str, value: Option<Value>) -> Vec<u8> {
 /// THE READER reads every line WHOLE or halts the file as damaged (P38): a
 /// line that is no UTF-8 or no JSON object, a `held` line missing a member
 /// or holding one of another type — a `doc` that is no document address, a
-/// frame that is no object, a `sent` that is no boolean — an ordinal past
-/// the page's (the largest a `u64` holds among them, whose successor no
-/// longer panics), and a `done` line of another form; the same file with
-/// the line whole reads live (the mutants that default a missing member,
-/// read text lossily, or take any ordinal, rebuild the person's text out
-/// of a file no writer of this format wrote).
+/// frame that is no object, a `sent` that is no boolean, anchors of no
+/// object, naming one anchor, a member beside the two, or an anchor that is
+/// no I-address — an ordinal past the page's (the largest a `u64` holds
+/// among them, whose successor no longer panics), and a `done` line of
+/// another form; the same file with the line whole reads live, its anchors
+/// of their form read (the mutants that default a missing member, read text
+/// lossily, or take any ordinal, rebuild the person's text out of a file no
+/// writer of this format wrote; the one that reads anchors of another form
+/// as none shifts nothing a relaunch should).
 #[test]
 fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let valid = line_with("sent", Some(json!(false)));
     let tmp = TempDir::new().unwrap();
     assert_eq!(live(opened_over(&tmp, &valid)).lines().len(), 1, "the line whole reads live");
+    let tmp = TempDir::new().unwrap();
+    let anchored = live(opened_over(&tmp, &line_with("anchors", Some(json!({"before": null, "after": "1.0.1.0.1.0.1.3"})))));
+    assert_eq!(anchored.lines()[0].anchors, Some(anchors(None, Some("1.0.1.0.1.0.1.3"))), "anchors of their form read");
     // The bytes no UTF-8 holds sit inside a string member, so a lossy read
     // would make a whole line of them.
     let mut not_utf8 = valid.clone();
@@ -854,6 +927,12 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         ("a frame of no object", line_with("frame", Some(json!("insert")))),
         ("no frame", line_with("frame", None)),
         ("a sent of no boolean", line_with("sent", Some(json!("no")))),
+        ("anchors of no object", line_with("anchors", Some(json!("1.0.1.0.1.0.1.3")))),
+        ("anchors naming one anchor", line_with("anchors", Some(json!({"before": null})))),
+        ("anchors with a member beside the two", line_with("anchors", Some(json!({"before": null, "after": null, "span": 2})))),
+        ("an anchor of no I-address", line_with("anchors", Some(json!({"before": "x.1", "after": null})))),
+        ("an anchor with a leading zero", line_with("anchors", Some(json!({"before": null, "after": "1.0.1.0.1.0.1.03"})))),
+        ("an anchor of one component", line_with("anchors", Some(json!({"before": "7", "after": null})))),
         ("no cause", line_with("cause", None)),
         ("no time", line_with("time", None)),
         ("an id of no string", line_with("id", Some(json!(7)))),
@@ -904,7 +983,7 @@ fn a_line_past_the_line_bound_halts_the_reader_and_is_never_written() {
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "detail": "x".repeat(MAX_HELD_LINE_BYTES)});
-    let held = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::refused("out_of_bounds", verdict)).unwrap();
+    let held = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::refused("out_of_bounds", verdict)).unwrap();
     assert_eq!(held.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::InvalidInput), "the line is answered unwritten");
     assert_eq!(ks(&queue), [held.k], "and stands in the queue");
     assert!(!queue.on_disk(), "and is copied nowhere");

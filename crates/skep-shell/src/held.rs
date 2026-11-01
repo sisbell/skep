@@ -48,7 +48,11 @@
 //! raises to it the `base` of every line held after it on its document
 //! ([`HeldQueue::done`]), in the queue as the `done` is written and again at
 //! a reopen from that `done` line, so no line is rewritten to carry it
-//! (§3c.2).
+//! (§3c.2). A line's frame is rewritten by one act alone, the shift of a
+//! burst the board refused as typed against an older state of its document
+//! ([`HeldQueue::rewrite`], skep #442): a `held` line of its ordinal
+//! carrying the shifted frame, synced before the shifted frame is dialed,
+//! so a relaunch reads the positions the shell last sent, never the page's.
 //!
 //! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
 //! header member, or a middle line that is not a whole line of the two
@@ -101,11 +105,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use skep_search::{aside_name, Chain};
 use skep_util::file::{self, Appender, LineReader, Next, OnTail};
 
-use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
+use crate::wire::{document_address, json_len, within_components, MAX_FRAME_BYTES};
 
 /// The lock file's name, the key store's idiom (`search.md` §5.6).
 const LOCK_NAME: &str = "lock";
@@ -161,10 +165,13 @@ pub const MAX_HELD_LINES: usize = 4096;
 /// its first resend marking it `sent` once before the dial among them — and
 /// its text is kilobytes (§3c.3), so one line bound holds its re-marks
 /// many times over — a head of kilobytes re-marked thousands of times, the
-/// largest line the writer copies re-marked once. Past it a re-mark is
-/// taken in the queue alone, its copy refused as a copy the device refused
-/// is ([`HeldQueue::remark`]): a reopen reads the reason copied last, and
-/// the resend's read decides the line from there.
+/// largest line the writer copies re-marked once. A shift of the line's
+/// frame ([`HeldQueue::rewrite`]) spends the budget a whole frame too, as a
+/// re-mark does, and the hold bounds the shifts a line takes. Past it a
+/// re-mark is taken in the queue alone, its copy refused as a copy the
+/// device refused is ([`HeldQueue::remark`]): a reopen reads the reason —
+/// and the frame — copied last, and the resend's read decides the line
+/// from there.
 const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 
 /// The largest ordinal a line may carry: `2^53 − 1`.
@@ -243,6 +250,70 @@ impl Reason {
     }
 }
 
+/// The identities on either side of the span a burst edits (skep #442).
+///
+/// They are the page's, sent over the bridge beside the frame and kept with
+/// the held line, never on the wire: `before` the I-address of the unit just
+/// before the span, `after` the I-address of the unit just after it, each
+/// `None` at the document's edge — an insert at the first position has no
+/// unit before it, one at the end none after. Where the board refuses the
+/// burst as typed against an older state of its document, the shell finds
+/// the two in the document's current image and, where the span between
+/// them is whole, moves every position the burst names by their one
+/// displacement and sends it again (`hold::resend`); a burst that carries
+/// none — an agent's through the MCP tools — is held as a moved document.
+/// Made by [`Anchors::of`] alone, from the bridge's argument and from the
+/// held file's member alike, so every anchor kept is an I-address in the
+/// tumbler-string form the shift splits ([`i_address`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchors {
+    /// The I-address of the unit just before the span; `None` at the start.
+    pub before: Option<String>,
+    /// The I-address of the unit just after the span; `None` at the end.
+    pub after: Option<String>,
+}
+
+impl Anchors {
+    /// Returns the anchors `v` spells, where it is of their form.
+    ///
+    /// The form is `{before, after}`, both present and nothing beside them,
+    /// each `null` or an I-address ([`i_address`]); any other value is of
+    /// no form, which the bridge refuses `malformed_args` naming `anchors`
+    /// and the held file's reader halts on.
+    pub fn of(v: &Value) -> Option<Anchors> {
+        let m = v.as_object().filter(|m| m.len() == 2)?;
+        let anchor = |name: &str| match m.get(name)? {
+            Value::Null => Some(None),
+            Value::String(text) if i_address(text).is_some() => Some(Some(text.clone())),
+            _ => None,
+        };
+        Some(Anchors { before: anchor("before")?, after: anchor("after")? })
+    }
+
+    /// Returns the anchors as the bridge and the held file spell them.
+    pub fn json(&self) -> Value {
+        json!({"before": self.before, "after": self.after})
+    }
+}
+
+/// Splits an I-address at its last component: the prefix, and the last
+/// component as the number a run's positions advance along.
+///
+/// The text is a tumbler in its dotted-decimal spelling within the
+/// component budget, of two components at least, every component a
+/// natural with no leading zero, the last one fitting a `u64`; any other
+/// text is no I-address, and `None`. It is the split the shift finds an
+/// anchor in a run by: a run `image` answers is `i_start` and a width, its
+/// positions `prefix.(last + n)` for `n` below the width.
+pub fn i_address(text: &str) -> Option<(&str, u64)> {
+    let natural = |c: &str| !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()) && (c == "0" || !c.starts_with('0'));
+    if !within_components(text) || !text.split('.').all(natural) {
+        return None;
+    }
+    let (prefix, last) = text.rsplit_once('.')?;
+    Some((prefix, last.parse().ok()?))
+}
+
 /// One `held` line, parsed: the burst the board could not take.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldLine {
@@ -265,8 +336,15 @@ pub struct HeldLine {
     /// never: the read takes no row for a move, and a row of the shell's
     /// own that is not the line's landing is no verdict.
     pub base: u64,
-    /// The page's wire frame as composed, with no `attest` (§3c.2).
+    /// The wire frame, with no `attest` (§3c.2): the page's as composed, or
+    /// as the shell last shifted it ([`HeldQueue::rewrite`]).
     pub frame: Value,
+    /// The page's anchors, where the burst carried them (skep #442).
+    ///
+    /// They bound the span the frame edits by identity, for the shift; a
+    /// burst that carried none is held as a moved document where the board
+    /// refuses it as typed against an older state.
+    pub anchors: Option<Anchors>,
     /// Why the line is held.
     pub reason: Reason,
     /// The append's wall-clock unix milliseconds.
@@ -366,7 +444,9 @@ fn ordinal(v: &Value) -> Option<u64> {
 /// Returns a `held` line's members, every one of its type, or `None`.
 ///
 /// `doc` is a document address, `id` a string where present, `frame` an
-/// object, `refusal` any value where present, a `null` one read as none.
+/// object, `anchors` of their form ([`Anchors::of`]) where present — a line
+/// written before the anchors existed carries none, and reads as before —
+/// `refusal` any value where present, a `null` one read as none.
 fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
     let doc = m.get("doc")?.as_str().filter(|d| document_address(d).is_some())?.to_string();
     let id = match m.remove("id") {
@@ -375,12 +455,16 @@ fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
         Some(_) => return None,
     };
     let frame = m.remove("frame").filter(Value::is_object)?;
+    let anchors = match m.remove("anchors") {
+        None => None,
+        Some(v) => Some(Anchors::of(&v)?),
+    };
     let reason = Reason {
         cause: m.get("cause")?.as_str()?.to_string(),
         refusal: m.remove("refusal").filter(|r| !r.is_null()),
         sent: m.get("sent")?.as_bool()?,
     };
-    Some(HeldLine { k, doc, id, base: m.get("base")?.as_u64()?, frame, reason, time: m.get("time")?.as_u64()? })
+    Some(HeldLine { k, doc, id, base: m.get("base")?.as_u64()?, frame, anchors, reason, time: m.get("time")?.as_u64()? })
 }
 
 /// Returns whether a `done` line's members are each of its type.
@@ -772,8 +856,10 @@ impl HeldQueue {
     ///
     /// Where the queue has a file, the line is copied to it — one `write`
     /// then `sync_data` (persist-first), the header written once first where
-    /// the file is new. It answers the ordinal the line took, and why its
-    /// copy failed where it did, for the caller's answer to say (§3c.3).
+    /// the file is new. `anchors` are the page's, kept with the line for the
+    /// shift (skep #442), none where the burst carried none. It answers the
+    /// ordinal the line took, and why its copy failed where it did, for the
+    /// caller's answer to say (§3c.3).
     ///
     /// # Errors
     ///
@@ -783,7 +869,7 @@ impl HeldQueue {
     /// queue at [`MAX_HELD_LINES`] lines, or its frame carrying the queue's
     /// past [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`]) — and the line kept
     /// nowhere: the writer holds no line the file's reader would halt on.
-    pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, reason: Reason) -> Result<Entered, Unheld> {
+    pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, anchors: Option<Anchors>, reason: Reason) -> Result<Entered, Unheld> {
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
         }
@@ -791,7 +877,7 @@ impl HeldQueue {
         if self.next_k > MAX_ORDINAL || self.lines.len() >= MAX_HELD_LINES || self.held_bytes.saturating_add(frame_bytes) > MAX_HELD_FRAME_BYTES {
             return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, held_lines: self.lines.len() });
         }
-        let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, reason, time: now_ms() };
+        let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
         self.next_k += 1;
         self.held_bytes += frame_bytes;
         let unwritten = self.disk.as_mut().and_then(|d| d.write_line(&held_line_bytes(&line)).err());
@@ -819,6 +905,46 @@ impl HeldQueue {
         }
         line.reason = reason;
         line.time = now_ms();
+        let bytes = held_line_bytes(line);
+        match self.disk.as_mut() {
+            Some(d) => d.write_remark(&bytes),
+            None => Ok(()),
+        }
+    }
+
+    /// Rewrites a standing line's frame: the shift's one act on a line
+    /// (skep #442).
+    ///
+    /// It appends a `held` line of its ordinal carrying `frame` — the
+    /// burst's positions moved through another writer's change, typed
+    /// against the state they are true of — which the reader takes in the
+    /// earlier line's place as it takes a re-mark; the reason, its `sent`,
+    /// the `base`, the `id` and the anchors are kept. The copy is synced
+    /// before this returns, so the shifted frame is on disk before it is
+    /// dialed: a relaunch after the dial's answer is lost reads the landed
+    /// test against the positions the shell sent, never the page's. A frame
+    /// the line already carries changes nothing and writes nothing. The
+    /// queue's frame bytes are recounted by the new frame — a shift changes
+    /// digits, never what the queue's budget bounds, which is what a hold
+    /// ADDS — and the queue takes the frame whatever the disk did. A line
+    /// not standing is left alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a copy refused — by the device, or past the file's
+    /// [`MAX_HELD_REMARK_BYTES`], which a shift spends a whole frame of as a
+    /// re-mark does — for the caller to say: a reopen then reads the frame
+    /// copied last, and the resend's read decides the line from there, the
+    /// board judging the frame it sends as it judges every send.
+    pub fn rewrite(&mut self, k: u64, frame: Value) -> io::Result<()> {
+        let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
+        if line.frame == frame {
+            return Ok(());
+        }
+        let was = json_len(&line.frame);
+        line.frame = frame;
+        line.time = now_ms();
+        self.held_bytes = self.held_bytes.saturating_sub(was).saturating_add(json_len(&line.frame));
         let bytes = held_line_bytes(line);
         match self.disk.as_mut() {
             Some(d) => d.write_remark(&bytes),
@@ -1064,14 +1190,20 @@ fn header_bytes(chain: &Chain, principal: u64, account: &str) -> Vec<u8> {
 
 /// Returns a `held` line's exact bytes (§3c.2).
 ///
-/// Its members are `held, doc, id?, base, frame, cause, refusal?, sent,
-/// time`, in that order.
+/// Its members are `held, doc, id?, base, frame, anchors?, cause,
+/// refusal?, sent, time`, in that order — `anchors` as
+/// `{"before":<I-address or null>,"after":<I-address or null>}`, on a line
+/// whose burst carried them alone.
 fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
         let _ = write!(s, ",\"id\":{}", json_str(id));
     }
     let _ = write!(s, ",\"base\":{},\"frame\":{}", l.base, l.frame);
+    if let Some(anchors) = &l.anchors {
+        let anchor = |a: &Option<String>| a.as_deref().map_or_else(|| "null".to_string(), json_str);
+        let _ = write!(s, ",\"anchors\":{{\"before\":{},\"after\":{}}}", anchor(&anchors.before), anchor(&anchors.after));
+    }
     let _ = write!(s, ",\"cause\":{}", json_str(&l.reason.cause));
     if let Some(r) = &l.reason.refusal {
         let _ = write!(s, ",\"refusal\":{r}");

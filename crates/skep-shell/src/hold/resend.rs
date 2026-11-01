@@ -25,14 +25,25 @@
 //! Whether the DOCUMENT MOVED is the board's to say, (iii), by one route:
 //! a line it refuses as typed against an older state of its document
 //! (`arrangement_moved`, the frame's `as_of` below the arrangement's last
-//! change) faces the document `moved`, never rebased, the verdict kept on
-//! the line and the hands read once since the line's typed state; the read
-//! judges no move. Every document is read first, and the lines of those its
-//! reads let go then go out in `k` order across the documents (§3c.5's
-//! order, "which keeps each document's order"), so a `copy` held between
-//! two bursts on its source transcludes the source as it stood when the
-//! person wrote it. Each line goes out through the hold's one reader of a
-//! write's answer, as a first dial does. A resend marks its line as one
+//! change). Such a line is SHIFTED where it can be, by identity (skep #442;
+//! [`Holds::shift_and_send`], the one function the first dial takes too):
+//! the page's anchors — the I-addresses on either side of the span the
+//! burst edits, kept with the line — are found in the document's current
+//! image by ONE live read, and where both stand with the span between them
+//! whole, every position the burst names moves by their one displacement,
+//! the shifted frame is written to the line before it is dialed, and the
+//! line is sent again, each shift one try toward the resend's bound; where
+//! the shift is not exact — no anchors, an anchor lost, the span cut, the
+//! read refused, the bound reached — the document is faced `moved`, never
+//! rebased inexactly, the verdict kept on the line and the hands read once
+//! since the line's typed state. The read judges no move, and no line is
+//! shifted before it: the shift lives in the send, which runs for a line
+//! the read let go alone. Every document is read first, and the lines of
+//! those its reads let go then go out in `k` order across the documents
+//! (§3c.5's order, "which keeps each document's order"), so a `copy` held
+//! between two bursts on its source transcludes the source as it stood when
+//! the person wrote it. Each line goes out through the hold's one reader of
+//! a write's answer, as a first dial does. A resend marks its line as one
 //! that may have landed before it dials, synced, and the line stays so
 //! through every resend short of its ack and through a move, so its next
 //! read takes a landing it finds as the line's own — after a crash or a
@@ -40,17 +51,230 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, is_lost_answer, line_state, BoardSlot, Dialed, HeldState, Holds, MAX_LOST_ANSWERS};
-use crate::held::{Done, HeldLine, Reason};
+use super::{awaits_act, cause, is_lost_answer, line_state, AttestedWhereOwed, BoardSlot, Dialed, HeldState, Holds, MAX_LOST_ANSWERS};
+use crate::held::{i_address, Anchors, Done, HeldLine, Reason};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind};
 use crate::wire::{delivered_values, values_of};
+
+/// The window the shift's one read images: every arranged content position
+/// from the first.
+///
+/// The board clips an `image` region to the arrangement (M5's resolution
+/// clips silently, and a natural rides the wire unbounded), so one read over
+/// this window answers the document's whole content image — the runs tiling
+/// its positions in V-order — whatever its extent, and the anchors are found
+/// wherever they now stand; a document past the board's run budget answers
+/// `image_too_large`, and the shift is not made.
+const IMAGE_WINDOW: u64 = u64::MAX;
+
+/// Why a line was not shifted ([`Holds::shift_and_send`]): the document is
+/// held as moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Unshiftable {
+    /// The burst carried no anchors: an agent's through the MCP tools.
+    NoAnchors,
+    /// No line of the ordinal stands.
+    NoLine,
+    /// The line's lost answers and shifts stand at [`MAX_LOST_ANSWERS`].
+    PastTheBound { tries: u32 },
+    /// The image read answered no image: refused, the death signal, no
+    /// answer, or runs that are no I-extents.
+    Unread(String),
+    /// An anchor is in the document no longer: `before` or `after`.
+    AnchorLost(&'static str),
+    /// The span between the anchors holds other positions than it held
+    /// when the burst was typed: another write cut it, or filled it.
+    SpanCut { between: u64, were: u64 },
+    /// The frame names positions the anchors cannot bound.
+    Malformed(String),
+}
+
+impl fmt::Display for Unshiftable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Unshiftable::NoAnchors => write!(f, "the burst carries no anchors"),
+            Unshiftable::NoLine => write!(f, "the line stands no longer"),
+            Unshiftable::PastTheBound { tries } => write!(f, "its {tries} tries stand at the bound of {MAX_LOST_ANSWERS}"),
+            Unshiftable::Unread(why) => write!(f, "the document's image could not be read: {why}"),
+            Unshiftable::AnchorLost(which) => write!(f, "its {which} anchor is in the document no longer"),
+            Unshiftable::SpanCut { between, were } => write!(f, "the span its anchors bound holds {between} positions now, not the {were} it held when the burst was typed"),
+            Unshiftable::Malformed(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+/// A line shifted and dialed ([`Holds::shift_and_send`]).
+#[derive(Debug)]
+pub(super) struct Shifted {
+    /// What the dial answered.
+    pub(super) dialed: Dialed,
+    /// The frame as shifted: the one on the line, and the one dialed.
+    pub(super) frame: Value,
+    /// Whether the dial left — its attest composed, the mark made before
+    /// it; false where the attest could not be composed, nothing dialed and
+    /// the line left as it was.
+    pub(super) left: bool,
+}
+
+/// The span a burst's frame edits, in the V-positions it names.
+///
+/// It is what the anchors bound: `first`, the first position the burst
+/// names, the unit before which is the `before` anchor; and `interior`, how
+/// many positions lay between the two anchors when the burst was typed —
+/// none for an insert, a copy or a reinstate, which place at a point; a
+/// delete's `width`; a rearrange's cut span, its first cut to its last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EditedSpan {
+    first: u64,
+    interior: u64,
+}
+
+impl EditedSpan {
+    /// Returns the span `frame` edits, where its positions read.
+    ///
+    /// Every position is a content V-position (`subspace` 1) with an
+    /// ordinal; a rearrange's cuts ascend.
+    fn of(frame: &Value) -> Option<EditedSpan> {
+        match frame["op"].as_str()? {
+            // A placement at a point: the anchors are the units on either
+            // side of `at`, nothing between them.
+            "insert" | "copy" | "reinstate" => Some(EditedSpan { first: ordinal(&frame["at"])?, interior: 0 }),
+            // A removal: the anchors are the units on either side of the
+            // `width` positions from `p`.
+            "delete" => Some(EditedSpan { first: ordinal(&frame["p"])?, interior: nat(&frame["width"])? }),
+            // A rearrangement about its cuts: the anchors are the units on
+            // either side of the span from the first cut to the last, every
+            // cut moving with it.
+            "rearrange" => {
+                let cuts: Vec<u64> = frame["cuts"].as_array()?.iter().map(ordinal).collect::<Option<_>>()?;
+                let (first, last) = (*cuts.first()?, *cuts.last()?);
+                (cuts.windows(2).all(|w| w[0] < w[1])).then_some(EditedSpan { first, interior: last - first })
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns `frame` with every position it names moved by `displacement`,
+    /// typed against `as_of`.
+    ///
+    /// An insert's, a copy's or a reinstate's `at` moves; a delete's `p`; a
+    /// rearrange's every cut — each re-spelled as the wire's natural. `None`
+    /// where a moved ordinal is no position.
+    fn displaced(self, frame: &Value, displacement: i128, as_of: u64) -> Option<Value> {
+        let mut moved = frame.clone();
+        let shift = |position: &mut Value| -> Option<()> {
+            let ordinal = u64::try_from(i128::from(nat(&position["ordinal"])?).checked_add(displacement)?).ok().filter(|o| *o >= 1)?;
+            position["ordinal"] = Value::from(ordinal.to_string());
+            Some(())
+        };
+        match moved["op"].as_str()? {
+            "insert" | "copy" | "reinstate" => shift(&mut moved["at"])?,
+            "delete" => shift(&mut moved["p"])?,
+            "rearrange" => {
+                for cut in moved["cuts"].as_array_mut()? {
+                    shift(cut)?;
+                }
+            }
+            _ => return None,
+        }
+        moved["as_of"] = Value::from(as_of);
+        Some(moved)
+    }
+}
+
+/// Returns a natural as the wire spells it: a decimal string, or a number.
+fn nat(v: &Value) -> Option<u64> {
+    v.as_str().map_or_else(|| v.as_u64(), |text| text.parse().ok())
+}
+
+/// Returns a content V-position's ordinal: `{subspace: 1, ordinal}`.
+fn ordinal(position: &Value) -> Option<u64> {
+    (nat(&position["subspace"])? == 1).then(|| nat(&position["ordinal"])).flatten()
+}
+
+/// Returns the runs an `image` answered, each its I-prefix, its first
+/// position and its width.
+///
+/// They tile the content positions the window covers, in V-order, the
+/// board's run decomposition (M5's runs tile the content prefix
+/// contiguously); an answer naming no runs, or a run that is no I-extent,
+/// is no image.
+fn image_runs(image: &Value) -> Result<Vec<(&str, u64, u64)>, Unshiftable> {
+    let runs = image["runs"].as_array().ok_or_else(|| Unshiftable::Unread("the image read answered no runs".into()))?;
+    runs.iter()
+        .map(|run| {
+            let (prefix, first) = run["i_start"].as_str().and_then(i_address)?;
+            let width = nat(&run["width"]).filter(|w| *w >= 1)?;
+            Some((prefix, first, width))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| Unshiftable::Unread("a run the image read answered is no I-extent".into()))
+}
+
+/// Returns `frame` shifted through the document's current image, by its
+/// anchors, typed against `as_of` (skep #442).
+///
+/// The search: each anchor's I-address is found in `image`'s runs — a run
+/// of the anchor's prefix holding its position — at the V-position the run
+/// gives it; an anchor found nowhere is lost. The wholeness test: the
+/// positions between the two anchors now — `before`'s V-position standing
+/// for 0 where the span began at the document's start, `after`'s for the
+/// extent plus one where it reached the end — must be as many as lay
+/// between them when the burst was typed ([`EditedSpan`]): none for a
+/// placement at a point, so the anchors stand adjacent still; a delete's
+/// width; a rearrange's cut span. A span another write cut, or filled, is
+/// not whole, and the shift is not made. What the test cannot tell, named:
+/// a write that removed positions between the anchors and placed as many
+/// back passes it — the anchors name the span's edges, not its interior —
+/// and a document arranging one I-address at two places names it twice,
+/// the search finding the first, a document the board images as fewer runs
+/// than it arranges (an I-run placed twice, identical in start and width,
+/// images once) counting short. The displacement is one for every position:
+/// the `before` anchor's V-position plus one, less the first position the
+/// burst named — so a change that sat wholly before the span moves it by
+/// its width, one wholly after by nothing — applied to every position the
+/// frame names ([`EditedSpan::displaced`]).
+fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) -> Result<Value, Unshiftable> {
+    let span = EditedSpan::of(frame).ok_or_else(|| Unshiftable::Malformed("the frame names no content positions the anchors could bound".into()))?;
+    if anchors.before.is_none() != (span.first == 1) {
+        return Err(Unshiftable::Malformed("the anchors do not bound the span the frame names: a span at the document's start alone has no unit before it".into()));
+    }
+    let runs = image_runs(image)?;
+    let extent = runs.iter().try_fold(0u64, |extent, (_, _, width)| extent.checked_add(*width)).ok_or_else(|| Unshiftable::Unread("the image's runs pass every position".into()))?;
+    let position_of = |anchor: &str, which: &'static str| -> Result<u64, Unshiftable> {
+        let (prefix, n) = i_address(anchor).ok_or_else(|| Unshiftable::Malformed(format!("the {which} anchor is no I-address")))?;
+        let mut v = 1u64;
+        for (run_prefix, first, width) in &runs {
+            if *run_prefix == prefix && n >= *first && n - *first < *width {
+                return Ok(v + (n - *first));
+            }
+            v += width;
+        }
+        Err(Unshiftable::AnchorLost(which))
+    };
+    let before = match &anchors.before {
+        None => 0,
+        Some(anchor) => position_of(anchor, "before")?,
+    };
+    let after = match &anchors.after {
+        None => extent + 1,
+        Some(anchor) => position_of(anchor, "after")?,
+    };
+    let between = after.checked_sub(before).and_then(|n| n.checked_sub(1)).ok_or(Unshiftable::SpanCut { between: 0, were: span.interior })?;
+    if between != span.interior {
+        return Err(Unshiftable::SpanCut { between, were: span.interior });
+    }
+    let displacement = i128::from(before) + 1 - i128::from(span.first);
+    span.displaced(frame, displacement, as_of).ok_or_else(|| Unshiftable::Malformed("a position the frame names moves to no position".into()))
+}
 
 /// The outcome of the resend's one read per document (§3c.5).
 ///
@@ -397,23 +621,31 @@ impl Holds {
     /// Its attest is composed now (§3c.2), the line marked as one that may
     /// have landed before the dial leaves, and the line settled by what the
     /// dial answered: an ack `done kept`; the line refused as typed against
-    /// an older state of its document, the document faced `moved`
-    /// ([`Holds::mark_moved`]) — the one route to that face — the board's
-    /// verdict kept on the line and the hands whose rows moved it named; a
-    /// hold-class answer or a refused run
-    /// re-marked and faced, the line keeping its `sent` — a resend that never
-    /// left, or one the board refused, says nothing of an earlier dial's write
-    /// (§3c.2) — and a lost answer counted against the line
-    /// ([`MAX_LOST_ANSWERS`]); a reissue-class answer counted against the
-    /// line and reissued at the next probe, so its third `durability` holds
-    /// it; a refusal the table holds nowhere left standing for the next
-    /// probe, never `done`; the death signal left to the caller that ends the
-    /// session — the session that stands resends after its read. `Continue`
-    /// where the line is settled and sending goes on, `Break` where the
-    /// line's document stops at it.
+    /// an older state of its document shifted through the change and dialed
+    /// again ([`Holds::shift_and_send`]) — its answer settled here as any
+    /// dial's is, the verdict again shifting it again as far as the bound
+    /// lets it — or, where the shift is not exact, the document faced
+    /// `moved` ([`Holds::mark_moved`]) — the one route to that face — the
+    /// board's verdict kept on the line and the hands whose rows moved it
+    /// named; a hold-class answer or a refused run re-marked and faced, the
+    /// line keeping its `sent` — a resend that never left, or one the board
+    /// refused, says nothing of an earlier dial's write (§3c.2) — and a lost
+    /// answer counted against the line ([`MAX_LOST_ANSWERS`]); a
+    /// reissue-class answer counted against the line and reissued at the
+    /// next probe, so its third `durability` holds it; a refusal the table
+    /// holds nowhere left standing for the next probe, never `done`; the
+    /// death signal left to the caller that ends the session — the session
+    /// that stands resends after its read. `Continue` where the line is
+    /// settled and sending goes on, `Break` where the line's document stops
+    /// at it.
+    ///
+    /// THE LANDED TEST COMES FIRST: this runs for a line
+    /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
+    /// landing and found unlanded — so no line is shifted before its read,
+    /// and a landing the read keeps is shifted never.
     fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> ControlFlow<()> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
+        let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
         // The line is marked as one that may have landed before its dial
         // leaves (§3c.2's `sent`), synced, so a crash or a refused write
         // between the dial and its answer never leaves a write that may have
@@ -422,66 +654,146 @@ impl Holds {
         // never made among them, and a copy the device refuses is said and
         // the dial made all the same. An attest that could not be composed
         // dials nothing and marks nothing: the line keeps its own `sent`.
-        let (dialed, sent) = match self.attest_where_owed(session, &line.frame) {
+        let (mut dialed, mut sent) = match self.attest_where_owed(session, &line.frame) {
             Ok(frame) => {
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, Reason { sent: true, ..line.reason.clone() }));
-                (self.dial(session, &frame, given), true)
+                (self.dial(session, &frame, given()), true)
             }
             Err(why) => (Dialed::from(why), line.reason.sent),
         };
-        match dialed {
-            Dialed::Acked(ack) => {
-                self.note_ack(session, &line.frame, &ack);
-                self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
-                let rest = self.count(board_reference, principal, &line.doc);
-                self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
-                ControlFlow::Continue(())
-            }
-            Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
-                // The board refused the line as typed against an older state
-                // of its document: the document is faced moved — the board's
-                // verdict the one judge of a move — each line keeping its own
-                // `sent`, the line refused keeping the verdict, and named by
-                // the hands whose rows moved it since the line's typed state
-                // (§3c.5).
-                let hands = self.hands_since_typed_state(session, &line.doc, &reason);
-                self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
-                self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
-                ControlFlow::Break(())
-            }
-            Dialed::Held { reason, .. } => {
-                let state = line_state(&reason);
-                let said = reason.cause.clone();
-                // A lost answer counts one try against the line
-                // (MAX_LOST_ANSWERS), read off this dial's own answer; the
-                // read decides at the next probe whether it landed.
-                let lost = is_lost_answer(&reason);
-                // The line keeps its `sent`, the mark made before the dial
-                // included: a resend that never left, or one the board
-                // refused, says nothing of an earlier dial's write.
-                let reason = Reason { sent: reason.sent || sent, ..reason };
-                self.with_principal(board_reference, principal, |ph| {
-                    if lost {
-                        ph.reissues.entry(line.k).or_default().lost += 1;
+        // The frame the dial sent, for its ack's noting: the line's, or the
+        // shifted one.
+        let mut frame = Cow::Borrowed(&line.frame);
+        loop {
+            match dialed {
+                Dialed::Acked(ack) => {
+                    self.note_ack(session, &frame, &ack);
+                    self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
+                    let rest = self.count(board_reference, principal, &line.doc);
+                    self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None, &[]);
+                    return ControlFlow::Continue(());
+                }
+                Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
+                    // The board refused the line as typed against an older
+                    // state of its document: shifted through the change where
+                    // the shift is exact, and dialed again; else the document
+                    // is faced moved — the board's verdict the one judge of a
+                    // move — each line keeping its own `sent`, the line
+                    // refused keeping the verdict, and named by the hands
+                    // whose rows moved it since the line's typed state
+                    // (§3c.5).
+                    let verdict = reason.refusal.clone().unwrap_or(Value::Null);
+                    match self.shift_and_send(session, line.k, &verdict, |shifted| self.dial(session, shifted, given())) {
+                        Ok(shifted) => {
+                            sent |= shifted.left;
+                            frame = Cow::Owned(shifted.frame);
+                            dialed = shifted.dialed;
+                        }
+                        Err(why) => {
+                            self.say(format_args!("line {} on {} was not shifted ({why}); the document is held as moved", line.k, line.doc));
+                            let hands = self.hands_since_typed_state(session, &line.doc, &reason);
+                            self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
+                            self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
+                            return ControlFlow::Break(());
+                        }
                     }
-                    self.remark_line(ph, line.k, reason);
-                });
-                self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
-                ControlFlow::Break(())
+                }
+                Dialed::Held { reason, .. } => {
+                    let state = line_state(&reason);
+                    let said = reason.cause.clone();
+                    // A lost answer counts one try against the line
+                    // (MAX_LOST_ANSWERS), read off this dial's own answer; the
+                    // read decides at the next probe whether it landed.
+                    let lost = is_lost_answer(&reason);
+                    // The line keeps its `sent`, the mark made before the dial
+                    // included: a resend that never left, or one the board
+                    // refused, says nothing of an earlier dial's write.
+                    let reason = Reason { sent: reason.sent || sent, ..reason };
+                    self.with_principal(board_reference, principal, |ph| {
+                        if lost {
+                            ph.reissues.entry(line.k).or_default().lost += 1;
+                        }
+                        self.remark_line(ph, line.k, reason);
+                    });
+                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
+                    return ControlFlow::Break(());
+                }
+                Dialed::Reissue { kind, refusal } => {
+                    // The rider's count (§3c.4), per line across its probes:
+                    // the third `durability` holds it.
+                    self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
+                    self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    return ControlFlow::Break(());
+                }
+                Dialed::Faced(refusal) => {
+                    self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    return ControlFlow::Break(());
+                }
+                Dialed::Died => return ControlFlow::Break(()),
             }
-            Dialed::Reissue { kind, refusal } => {
-                // The rider's count (§3c.4), per line across its probes: the
-                // third `durability` holds it.
-                self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
-                self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
-                ControlFlow::Break(())
-            }
-            Dialed::Faced(refusal) => {
-                self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
-                ControlFlow::Break(())
-            }
-            Dialed::Died => ControlFlow::Break(()),
         }
+    }
+
+    /// Shifts a line the board refused as typed against an older state of
+    /// its document, and sends it again (skep #442): the one function the
+    /// first dial ([`Holds::shift_at_first_dial`]) and the resend
+    /// ([`Holds::send_line`]) call, each dialing as it dials.
+    ///
+    /// `verdict` is the board's `arrangement_moved`, its `site.current` the
+    /// floor the shifted frame is typed against. In this order, the first
+    /// that holds answering why the shift was not made ([`Unshiftable`]): a
+    /// line of ordinal `k` stands; it carries anchors; its lost answers and
+    /// shifts together stand below [`MAX_LOST_ANSWERS`] — then the shift is
+    /// counted, one try, so a document another writer keeps moving stops the
+    /// shell at the bound — and ONE live read is made, `image` over the whole
+    /// content window ([`IMAGE_WINDOW`]) under the session, the one read of
+    /// the shift (no `/changes`, no history: the anchors are found at any
+    /// age); the anchors found in it and the span between them whole, every
+    /// position the frame names moved by the one displacement
+    /// ([`shifted_frame`]), the frame typed against the read's own `as_of`,
+    /// the state its positions are true of, never below the verdict's
+    /// `site.current`. Then the frame is attested (an attest that cannot be
+    /// composed dials nothing and writes nothing: the dial that never left,
+    /// `left` false, the line as it was), WRITTEN TO THE LINE before it is
+    /// dialed — `HeldQueue::rewrite`, synced, a copy refused said on `Talk`
+    /// — and the line marked as one that may have landed where it is not so
+    /// marked yet, so a relaunch after the shifted answer is lost reads the
+    /// landed test at the shifted positions; then dialed by `dial`.
+    pub(super) fn shift_and_send(&self, session: &SessionEntry, k: u64, verdict: &Value, dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed) -> Result<Shifted, Unshiftable> {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
+        let anchors = line.anchors.as_ref().ok_or(Unshiftable::NoAnchors)?;
+        // The bound (MAX_LOST_ANSWERS): the lost answers and the shifts meet
+        // it as one count of tries; the shift is counted before its read, so
+        // a read that fails is a try too.
+        let tries = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&k).copied().unwrap_or_default().tries()).unwrap_or(0);
+        if tries >= MAX_LOST_ANSWERS {
+            return Err(Unshiftable::PastTheBound { tries });
+        }
+        self.with_principal(board_reference, principal, |ph| ph.reissues.entry(k).or_default().shifted += 1);
+        // The one live read, outside every lock as every dial is.
+        let image = match session.board.op(Some(&session.token), &frames::image(&line.doc, 1, IMAGE_WINDOW)) {
+            Ok(Answer::Document(v)) => match Rejection::of(&v) {
+                None => v,
+                Some(r) => return Err(Unshiftable::Unread(format!("the image read was refused {}", r.token()))),
+            },
+            Ok(Answer::Closed) => return Err(Unshiftable::Unread("the image read met the death signal".into())),
+            Err(h) => return Err(Unshiftable::Unread(h.to_string())),
+        };
+        let as_of = image["as_of"].as_u64().unwrap_or(0).max(verdict["site"]["current"].as_u64().unwrap_or(0));
+        let shifted = shifted_frame(&line.frame, anchors, &image, as_of)?;
+        let attested = match self.attest_where_owed(session, &shifted) {
+            Ok(frame) => frame,
+            Err(why) => return Ok(Shifted { dialed: Dialed::from(why), frame: line.frame, left: false }),
+        };
+        self.with_principal(board_reference, principal, |ph| {
+            if let Err(e) = ph.queue.rewrite(k, shifted.clone()) {
+                self.say(format_args!("line {k}'s shifted frame could not be written ({e}); a reopen reads the frame copied last, which the board judges as it judges every send"));
+            }
+            self.remark_line(ph, k, Reason { sent: true, ..line.reason.clone() });
+        });
+        let dialed = dial(&attested);
+        Ok(Shifted { dialed, frame: shifted, left: true })
     }
 
     /// Hands a line whose resends lost their answer to the person (§3c.4).
@@ -504,27 +816,31 @@ impl Holds {
         self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), &[]);
     }
 
-    /// Marks every line of a moved document: `cause: moved`, never rebased.
+    /// Marks every line of a moved document: `cause: moved`, never rebased
+    /// inexactly.
     ///
-    /// It is reached from the board's verdict alone — a resend refused as
-    /// typed against an older state of its document ([`Holds::send_line`]);
-    /// a first dial so refused is held `moved` by `Holds::hold` — never from
-    /// the read, which judges no move. No line is sent. Each keeps its own
-    /// `sent`, so a line that may have landed reads before it is sent again
-    /// (§3c.2). `judged` is the line the board refused, with the board's
-    /// verdict, kept as its refusal — the state the line was typed against
-    /// and the document's current one; a moved reason carries one
-    /// (`Dialed::refused`). The exact rebase by identity — the burst's anchor
-    /// re-found and the delta placed after it — stays named as open (§3c.5,
-    /// the record §5 Q3): it needs an anchor the page's frame does not carry
-    /// today, and a silent inexact rebase could put words where the person
-    /// did not. The hands whose rows moved it ride the `held` event's
-    /// `moved` state (§3c.5; §4b.2), the data of the face's three forms. The
-    /// page's half — what the burst machine does at a `held` answer, how it
-    /// re-projects the held frames at a launch, the moved document's face —
-    /// is the frontend's and in neither repository at this pin (unverified
-    /// here, the record §7 item 4; stated from assisted-frontend §7b).
-    fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str, judged: Option<(u64, Value)>) {
+    /// It is reached from the board's verdict alone — a resend or a first
+    /// dial refused as typed against an older state of its document that
+    /// the shift could not move through the change exactly
+    /// ([`Holds::shift_and_send`]: no anchors, an anchor lost, the span
+    /// between them cut, the read refused, the shifts at their bound) —
+    /// never from the read, which judges no move. A moved document is one
+    /// the shift could not move through exactly: the exact rebase by
+    /// identity is the shift, made where the page's anchors stand with the
+    /// span between them whole, and a burst it cannot carry so is held here,
+    /// since a silent inexact rebase could put words where the person did
+    /// not. No line is sent. Each keeps its own `sent`, so a line that may
+    /// have landed reads before it is sent again (§3c.2). `judged` is the
+    /// line the board refused, with the board's verdict, kept as its refusal
+    /// — the state the line was typed against and the document's current
+    /// one; a moved reason carries one (`Dialed::refused`). The hands whose
+    /// rows moved it ride the `held` event's `moved` state (§3c.5; §4b.2),
+    /// the data of the face's three forms. The page's half — what the burst
+    /// machine does at a `held` answer, how it re-projects the held frames
+    /// at a launch, the moved document's face — is the frontend's and in
+    /// neither repository at this pin (unverified here, the record §7 item
+    /// 4; stated from assisted-frontend §7b).
+    pub(super) fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str, judged: Option<(u64, Value)>) {
         self.with_principal(board_reference, principal, |ph| {
             let marks: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| (l.k, l.reason.sent)).collect();
             for (k, sent) in marks {

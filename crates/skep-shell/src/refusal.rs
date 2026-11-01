@@ -351,20 +351,27 @@ impl Refusal {
 
     /// Returns the value the page renders.
     ///
-    /// A board's verdict carries its `site` beside the body — `addr` and
-    /// `index` where the code names them (wire.md §Rejections), each absent
-    /// where it does not — so the page reads a refusal's site off the value
-    /// and never off the body.
+    /// A board's verdict carries its `site` beside the body — every member
+    /// the wire names (wire.md §Rejections), each as the board fills it and
+    /// absent where the code carries none: `addr`, `operand` and `fault` as
+    /// strings, `index`, `region`, `slot`, `as_of` and `current` as numbers
+    /// — so the page reads a refusal's site off the value, typed as the
+    /// shell declares it (`shapes`' `RefusedByBoard`), and never off the
+    /// body (skep #713).
     pub fn to_value(&self) -> Value {
         let name = self.name();
         match self {
             Refusal::Board(r) => {
                 let mut site = Map::new();
-                if let Some(addr) = r.body["site"]["addr"].as_str() {
-                    site.insert("addr".into(), Value::from(addr));
+                for member in ["addr", "operand", "fault"] {
+                    if let Some(text) = r.body["site"][member].as_str() {
+                        site.insert(member.into(), Value::from(text));
+                    }
                 }
-                if let Some(index) = r.body["site"]["index"].as_u64() {
-                    site.insert("index".into(), Value::from(index));
+                for member in ["index", "region", "slot", "as_of", "current"] {
+                    if let Some(n) = r.body["site"][member].as_u64() {
+                        site.insert(member.into(), Value::from(n));
+                    }
                 }
                 json!({
                     "kind": "refused",

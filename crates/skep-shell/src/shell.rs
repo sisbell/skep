@@ -83,6 +83,7 @@ use skep_client::Origin;
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, changes_since, places_without_index, query_too_long, BridgeSearchOpts, ChangesRead, Feed, FeedThreads, Searcher, Shared};
+use crate::held::Anchors;
 use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::{Answerer, Pending};
@@ -1083,17 +1084,24 @@ impl Shell {
     /// then the form's (`guest_form`). In the guest form, the target's
     /// (`unknown_board`, `not_canonical`, `malformed_args`), then a write
     /// refused without a dial (`write_in_guest_form`), then the board's
-    /// verdict or `unreachable`. In the session form, `malformed_args` naming
-    /// `session`, then `session_ended`; a write under a bare session refused
-    /// `write_in_bare_session`; a `publish` frame refused
-    /// `publish_is_a_call` without a dial — a publication crosses as
+    /// verdict or `unreachable`. In the session form, `malformed_args`
+    /// naming `anchors` where the member is present and not of its declared
+    /// form — `{before, after}`, each an I-address or `null` — never read as
+    /// absent, then naming `session`, then `session_ended`; a write under a
+    /// bare session refused `write_in_bare_session`; a `publish` frame
+    /// refused `publish_is_a_call` without a dial — a publication crosses as
     /// `publication.confirm`, composed by the shell from the panel it holds,
     /// never as a frame the page composed (§4b.1's `op` row, decision 1
-    /// (b)); then the hold's answer ([`Holds::send`]) — an unholdable write
-    /// under a standing hold refused `stopped`, `poisoned` or `halted`
-    /// (§3c.4) — or for an `/op-at` frame the board's verdict or
-    /// `unreachable`; and `session_died` where a death signal met at the
-    /// dial or at a read the attest needed ends the session.
+    /// (b)); then the hold's answer ([`Holds::send`]), the anchors handed to
+    /// it for a burst's line — the identities on either side of the span the
+    /// burst edits, by which the shell shifts the burst where the board
+    /// refuses it as typed against an older state (skep #442); absent, the
+    /// burst is admitted as one the shell cannot shift, held as a moved
+    /// document there — an unholdable write under a standing hold refused
+    /// `stopped`, `poisoned` or `halted` (§3c.4) — or for an `/op-at` frame
+    /// the board's verdict or `unreachable`; and `session_died` where a death
+    /// signal met at the dial or at a read the attest needed ends the
+    /// session.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");
@@ -1110,6 +1118,7 @@ impl Shell {
                 None => Self::document_answer(board.guest(&frame)?),
             };
         }
+        let anchors = optional(args, "anchors", Anchors::of)?;
         let session = self.session(&args["session"])?;
         if WRITE_KINDS.contains(&op) && !session.may_write() {
             return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"op": op})));
@@ -1118,7 +1127,7 @@ impl Shell {
             return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
         }
         let Some(at) = at else {
-            return match self.holds.send(&session, frame) {
+            return match self.holds.send(&session, frame, anchors) {
                 OpAnswer::Answered(answer) => answer,
                 OpAnswer::Died => Err(self.died(&session)),
             };

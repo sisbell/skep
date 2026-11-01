@@ -60,13 +60,16 @@ pub enum EventName {
     /// `refused` or `moved`, with the count of lines still held — the moved
     /// state the board's verdict alone, a burst refused as typed against an
     /// older state of its document (`arrangement_moved`), at its first dial
-    /// or at a resend, carrying the hands whose rows moved the document,
-    /// read off the rows since the burst's typed state; the resend's read
-    /// judges only whether a line's own write landed (§3c.5).
-    /// Emitted at a hold's start, at each line's resolution or drop, and at
-    /// each state the resend moves a document through — never when a
-    /// principal's file is read at its session's open, whose lines
-    /// `held(session)` lists.
+    /// or at a resend, that the shell could not shift through the change
+    /// exactly by the page's anchors (skep #442) — a burst it shifts is sent
+    /// again and lands, no `moved` said — carrying the hands whose rows
+    /// moved the document, read off the rows since the burst's typed state;
+    /// the resend's read judges only whether a line's own write landed
+    /// (§3c.5). Emitted at a hold's start, at each line's resolution or
+    /// drop, and at each state the resend moves a document through — never
+    /// when a principal's file is read at its session's open, whose lines
+    /// `held(session)` lists, nor for a line a call enters, shifts and
+    /// settles within itself.
     Held,
     /// The state of a publication's one request as it moves: `publication`.
     ///

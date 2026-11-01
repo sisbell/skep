@@ -125,8 +125,12 @@ pub(super) fn nowhere() -> String {
 /// never the row's default: a principal spelled as a string or past
 /// 2^53 − 1, a label, a select, a paper flag, a lost fingerprint, a search
 /// limit of another type, a listing's `opts` of no object and its `under` of
-/// no address or of another spelling, and an `op` naming neither form or
-/// both — each before any dial, the shell's board one nothing answers at,
+/// no address or of another spelling, an `op` naming neither form or
+/// both, and an `op`'s `anchors` of no object, naming one anchor, carrying a
+/// member beside the two, or an anchor that is no I-address — the session
+/// form's one optional member, read in its form before the session is
+/// looked up, which the single-form cell below does not reach — each before
+/// any dial, the shell's board one nothing answers at,
 /// where a dial would answer `unreachable`, and the guest origin a listener
 /// counting every dial (the mutants that read such a member as absent act as
 /// the mode's principal, open the label box, list every key or the whole
@@ -154,6 +158,13 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("places", json!({"guest": true, "board": board, "opts": {"under": "01.0.1"}}), "opts.under"),
         ("op", json!({"origin": listener, "frame": read}), "session"),
         ("op", json!({"guest": true, "session": "s-x", "origin": listener, "frame": read}), "session"),
+        // The session form's `anchors`, read in its form before the session
+        // is looked up: no object, one anchor, a member beside the two, an
+        // anchor that is no I-address.
+        ("op", json!({"session": "s-x", "frame": read, "anchors": 7}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": 1}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": "x", "after": null}}), "anchors"),
     ];
     for (call, args, member) in cases {
         let refused = shell.call(call, &args).unwrap_err();

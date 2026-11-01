@@ -69,7 +69,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Answer", json!({"id": "m-0", "value": "phone"})),
         ("Cancel", json!({"id": "m-0"})),
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable"})),
-        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "insert"}, "cause": "unreachable", "sent": false, "time": 1})),
+        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "insert"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null}, "cause": "unreachable", "sent": false, "time": 1})),
+        ("Anchors", crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": null})).expect("the anchors' form").json()),
         ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}]})),
         ("Hand", json!({"key": "other", "fingerprint": "ab", "label": "phone"})),
         ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
@@ -149,7 +150,7 @@ fn the_file_names_every_shape_call_and_event() {
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
-        "  op(args: { session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
+        "  op(args: { session: string; frame: unknown; anchors?: Anchors } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
         "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price }>>;\n",
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
@@ -162,7 +163,9 @@ fn the_file_names_every_shape_call_and_event() {
         "  writes: boolean;\n",
         "  entries: FeedUpdate[];\n",
         "  hands?: Hand[];\n",
-        "  site: { addr?: string; index?: number };\n",
+        "  anchors?: Anchors;\n",
+        "  before: string | null;\n",
+        "  site: { addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number };\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }
@@ -180,4 +183,27 @@ fn the_file_names_every_shape_call_and_event() {
     assert_eq!(open, 5, "the shell refusal, the death's reason, the index state, the publication's refusal and its event carry their own members");
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
+}
+
+/// The board's `site` crosses with every member the wire names (skep #713).
+///
+/// A verdict whose `site` carries the wire's eight — `addr`, `index`,
+/// `operand`, `region`, `slot`, `fault`, and an `arrangement_moved`'s
+/// `as_of` and `current` — reaches the page's value with each, typed as the
+/// board fills it and as the declaration spells it; a member the board
+/// fills in another type, or the page could not read, crosses not at all
+/// (the mutant that copies `addr` and `index` alone leaves the page reading
+/// untyped members off the body, which the contract never promised).
+#[test]
+fn the_boards_site_crosses_with_every_member_the_wire_names() {
+    let site = json!({"addr": "1.0.1.0.1", "index": 2, "operand": "first", "region": 1, "slot": 3, "fault": "not_ordinal_level", "as_of": 7, "current": 9, "other": true, "region_text": "x"});
+    let body = json!({"resp": "rejected", "code": "arrangement_moved", "disposition": "permanent", "op": "insert", "site": site});
+    let refused = Refusal::Board(Refused { status: 200, code: "arrangement_moved".into(), detail: None, op: Some("insert".into()), body }).to_value();
+    assert_eq!(refused["site"], json!({"addr": "1.0.1.0.1", "index": 2, "operand": "first", "region": 1, "slot": 3, "fault": "not_ordinal_level", "as_of": 7, "current": 9}), "{refused}");
+    let declared = shape("RefusedByBoard").unwrap().fields.iter().find(|f| f.name == "site").unwrap().ty;
+    for member in ["addr?: string", "index?: number", "operand?: 'first' | 'second'", "region?: number", "slot?: number", "fault?: string", "as_of?: number", "current?: number"] {
+        assert!(declared.contains(member), "the declaration spells `{member}`: {declared}");
+    }
+    let mistyped = Refusal::Board(Refused { status: 200, code: "x".into(), detail: None, op: None, body: json!({"site": {"addr": 7, "index": "2", "as_of": "7"}}) }).to_value();
+    assert_eq!(mistyped["site"], json!({}), "a member of another type crosses not at all: {mistyped}");
 }

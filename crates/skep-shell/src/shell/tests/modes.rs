@@ -381,7 +381,7 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     let entry = signed.sessions.get(&signed_session).unwrap();
     let shot = |frame: Value| -> Value {
         let attested = entry.attest(&signed.store, &frame).unwrap_or_else(|e| panic!("{e}\n{}", talk())).into_owned();
-        match signed.holds.send(&entry, attested) {
+        match signed.holds.send(&entry, attested, None) {
             crate::hold::OpAnswer::Answered(Ok(v)) => v,
             other => panic!("the shot: {other:?}\n{}", talk()),
         }

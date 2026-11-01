@@ -8,7 +8,9 @@
 //! kept off the read, sent once, the signed session's own attested row kept
 //! by the resend, a refused run with its `behind` lines and `resolve`'s two
 //! acts, a burst typed against an older state held moved with the board's
-//! verdict and nothing of it landing, the close order and the relaunch
+//! verdict and nothing of it landing where it carries no anchors, and one
+//! carrying them shifted through another writer's change and landing once
+//! at the displaced place, the close order and the relaunch
 //! listing its held line, a second principal's file untouched and unlisted,
 //! a burst on a draft just minted kept across a restart, a relaunch with its
 //! board down listing its held line — the bare mode's resending none of it,
@@ -477,7 +479,7 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     held_dir.ensure().unwrap();
     let Opened::Live { mut queue, .. } = held_dir.open_file(2, "1.0.2").unwrap() else { panic!("a fresh file") };
     let two = json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["two"], "as_of": 0});
-    assert!(queue.hold("1.0.2.0.1", None, 0, two, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    assert!(queue.hold("1.0.2.0.1", None, 0, two, None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
     drop(queue);
     // One shell (so one lock on `held/<chain>/`) holding a session for each of
     // two principals: principal 1's signed, owning the draft; principal 2's
@@ -673,7 +675,8 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
 /// The board's `arrangement_moved` — a `permanent` refusal — holds the burst
 /// as a MOVED document, never a refused run whose resend meets the same
 /// refusal. Another write lands on the draft after the ground's insert; a
-/// burst typed against the ground's state is refused, answered `held` with
+/// burst typed against the ground's state, sent without anchors as an
+/// agent's is, is refused, answered `held` with
 /// cause `moved`, its line listed with the board's verdict naming the typed
 /// state and the current one, and the `held` event says `moved`, naming the
 /// hand of the write that moved the draft — this store's own; nothing of it
@@ -720,6 +723,46 @@ fn a_burst_typed_against_an_older_state_is_held_moved_and_nothing_lands() {
     assert_eq!(landed["resp"], "ack_addr", "{landed}");
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
     assert_eq!(text_of(&read), "axb", "{read}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a stale burst carrying its anchors is shifted through another
+/// writer's change and lands once, at the displaced place (skep #442).
+///
+/// The draft reads `a`; another write puts `b` before it — the ground's
+/// state is older now, and `a` stands one position later. A burst typed
+/// against the ground's state to put `x` after `a`, carrying `a`'s identity
+/// as its `before` anchor and no `after` (the draft ended at `a`), is refused
+/// `arrangement_moved` at its first dial and shifted within the call: one
+/// image read, `a` found one position later with nothing after it, the
+/// insert moved by one and typed at the read's state, sent again and acked
+/// — the page's one answer the ack, its position above the other write's,
+/// the draft reading `bax`, one row above the other write, no line held, the
+/// held file gone and no `held` event said (the mutant that holds the burst
+/// moved asks the person to place text the shell could place; the one that
+/// sends the stale frame again meets the same refusal; the one that moves
+/// by nothing lands `x` before `a`).
+#[test]
+fn a_stale_burst_carrying_its_anchors_is_shifted_through_another_writers_change_and_lands_once() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, seen, session, draft, at, .. } = held_ground(&dir, &sd);
+    let image = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::image(&draft, 1, 1)})).unwrap();
+    let a = image["runs"][0]["i_start"].as_str().unwrap_or_else(|| panic!("the identity of `a`: {image}")).to_string();
+    let moved = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["b"], "as_of": at}})).unwrap();
+    let current = moved["at"].as_u64().unwrap_or_else(|| panic!("the other write is acked: {moved}"));
+    let stale = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["x"], "as_of": at});
+    let landed = shell.call("op", &json!({"session": session, "frame": stale, "anchors": {"before": a, "after": null}})).unwrap();
+    assert_eq!(landed["resp"], "ack_addr", "the shifted burst is acked within the call: {landed}");
+    assert!(landed["at"].as_u64().is_some_and(|l| l > current), "{landed}");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "bax", "the text lands after `a`, one position later than typed: {read}");
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    assert_eq!(changes_under(&shell.boards[0].board, &token, &draft, current).len(), 1, "the shifted burst's row once");
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    assert!(!seen.lock().unwrap().iter().any(|e| e.name == EventName::Held), "no held event for a line entered, shifted and settled within one call");
+    assert!(held_path(&dir.path().join("store")).is_none(), "the held file is gone");
     shell.shutdown();
     sd.shutdown();
 }

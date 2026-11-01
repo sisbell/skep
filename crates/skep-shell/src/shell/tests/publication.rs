@@ -5,13 +5,20 @@
 //! the six unholdable writes refused under a stopped node and `unreachable`
 //! not of the set, `count` and `confirm` with no panel `no_panel`, `cancel`
 //! idempotent, a bare session refused at `open`, and the row's own members
-//! read before the session — and, against the real daemon, the family end
-//! to end: the panel over a draft with a notes link and a read-with set, the
-//! count as a row flips, the confirm acknowledged with its two events and
-//! the feed row naming the member and the homes, the second open inert,
-//! the stopped node refusing the confirm before it composes, the mint form
-//! with its claim, and `claim_refused` crossing as answered with the board
-//! unmoved.
+//! read before the session, a `base` among them read by nothing — and,
+//! against the real daemon, the family end to end: the panel over a draft
+//! with a notes link and a read-with set, the count as a row flips, the
+//! confirm acknowledged with its two events and the feed row naming the
+//! member and the homes, the second open inert, the stopped node refusing
+//! the confirm before it composes, the mint form with its claim, and
+//! `claim_refused` crossing as answered with the board unmoved; the family's
+//! other drafts re-minted as the document's own; and the draft's base, read
+//! off the board on any device (B3-S10) — a draft behind the head landing
+//! its daughter from a second shell, a draft nothing names a base for
+//! refused `base_unrecorded`, and a publication that only removes words
+//! leaving the next landing after the version it made. Every draft a cell
+//! publishes into a document is staged with its fork record, as the act
+//! that makes a draft writes it.
 
 use super::*;
 use crate::sessions::{Facts, Open};
@@ -156,9 +163,16 @@ struct Ground {
 }
 
 fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
+    claim_board(&format!("http://127.0.0.1:{}", sd.port()), &dir.path().join("store"));
+    open_ground(dir, sd)
+}
+
+/// A fresh signed shell over the board `ground` claimed, its key store the
+/// same: a second device's shell, holding no index and no panel of the
+/// first's.
+fn open_ground(dir: &TempDir, sd: &Skepd) -> Ground {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
-    claim_board(&origin, &store);
     let (talk, _) = talk();
     let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store, SessionMode::Signed { principal: 1 }, talk);
     opts.own_node = Some(Origin::parse(&origin).unwrap());
@@ -179,12 +193,27 @@ impl Ground {
         self.op(frame)["addr"].as_str().expect("an ack_addr").to_string()
     }
 
-    /// A draft of the claimant's holding `text`.
+    /// A draft of the claimant's holding `text`, with no fork record.
     fn draft(&self, text: &str) -> String {
         let minted = self.op(json!({"op": "create_new_document", "account": "1.0.1"}));
         let d = minted["addr"].as_str().expect("an ack_addr").to_string();
         self.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}));
         d
+    }
+
+    /// A draft of the claimant's holding `text`, staged from `from` — a
+    /// version, or the bare document while its chain is empty — its fork
+    /// record written as the staging act writes it (B3-S10).
+    fn staged(&self, from: &str, text: &str) -> String {
+        let d = self.draft(text);
+        self.fork_record(&d, &[from]);
+        d
+    }
+
+    /// The fork record homed in `draft`: `from` empty, `to` where it was
+    /// begun — the version, then an alternative's source draft.
+    fn fork_record(&self, draft: &str, begun_from: &[&str]) -> String {
+        self.addr(json!({"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": begun_from}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}))
     }
 
     fn call(&self, name: &str, args: Value) -> Result<Value, Refusal> {
@@ -196,6 +225,21 @@ impl Ground {
         self.seen.lock().unwrap().iter().filter(|e| e.name == EventName::Publication).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect()
     }
 
+    /// The `publication` events' states once `n` of them are seen: the
+    /// events are copied on the answerer's thread, so a check of the ones a
+    /// call said waits for them to arrive.
+    fn states_once(&self, n: usize) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let states = self.states();
+            if states.len() >= n {
+                return states;
+            }
+            assert!(Instant::now() < deadline, "{n} publication events never arrived: {states:?}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn position(&self) -> u64 {
         self.shell.call("health", &json!({"board": self.board})).unwrap()["health"]["log_position"].as_u64().unwrap()
     }
@@ -203,9 +247,10 @@ impl Ground {
 
 /// Checks the family end to end against the daemon.
 ///
-/// A draft with text, a citation of the person's in a notes draft on those
-/// words, a published set the edition is read with: `publication.open`
-/// answers the panel — the notes row OFF with its one link, the counts at
+/// A draft with text staged from the memberless edition, its fork record
+/// beside it, a citation of the person's in a notes draft on those words, a
+/// published set the edition is read with: `publication.open` answers the
+/// panel — the notes row OFF with its one link, the fork record no row's, the counts at
 /// the default, `windows` empty, `read_with` naming the set, the price under
 /// its caps, every member declared; `publication.count` with the row ON
 /// counts ⟨l⟩ one up, pure local; `publication.confirm` is acknowledged —
@@ -225,7 +270,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
     let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
-    let draft = g.draft("the quick brown fox");
+    let draft = g.staged(&edition, "the quick brown fox");
     let notes = g.draft("notes here");
     let set = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
     let citation = "1.1.0.1.0.1.0.3.13";
@@ -243,7 +288,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     crate::shapes::assert_declared("Count", &panel["count"]);
     crate::shapes::assert_declared("Price", &panel["price"]);
     let rows = panel["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 1, "the notes row alone — the draft's own set holds no link: {panel}");
+    assert_eq!(rows.len(), 1, "the notes row alone — the draft's own set holds its fork record, which no row offers: {panel}");
     assert_eq!((rows[0]["home"].as_str(), rows[0]["kind"].as_str(), rows[0]["label"].as_str()), (Some(notes.as_str()), Some("notes"), Some("notes here")));
     assert_eq!(rows[0]["links"], json!([link]));
     assert_eq!(rows[0]["types"][0]["ty"], citation);
@@ -271,7 +316,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str(), acked["claim"].as_bool(), acked["edition"].is_null()), (Some("acknowledged"), Some(member.as_str()), Some("answer"), Some(false), true), "{acked}");
     let at = acked["at"].as_u64().unwrap();
     assert!(at > before);
-    assert_eq!(g.states(), ["sent", "acknowledged"], "the event at the send and at the outcome");
+    assert_eq!(g.states_once(2), ["sent", "acknowledged"], "the event at the send and at the outcome");
     let events: Vec<Event> = g.seen.lock().unwrap().iter().filter(|e| e.name == EventName::Publication).cloned().collect();
     assert_events_declared(&events);
     assert_eq!((events[1].data["member"].as_str(), events[1].data["at"].as_u64(), events[1].data["draft"].as_str()), (Some(member.as_str()), Some(at), Some(draft.as_str())), "{:?}", events[1]);
@@ -290,10 +335,10 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     let inert = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("PublicationRefused", &inert);
     assert_eq!(inert, json!({"outcome": "refused", "arm": "inert", "inert": "unchanged"}));
-    assert_eq!(g.states().last().map(String::as_str), Some("refused"));
+    assert_eq!(g.states_once(3).last().map(String::as_str), Some("refused"));
     // The cancel, twice.
     assert_eq!(g.call("publication.cancel", json!({"session": g.session})).unwrap(), json!({}));
-    assert_eq!(g.states().last().map(String::as_str), Some("cancelled"));
+    assert_eq!(g.states_once(4).last().map(String::as_str), Some("cancelled"));
     let said = g.states().len();
     assert_eq!(g.call("publication.cancel", json!({"session": g.session})).unwrap(), json!({}));
     assert_eq!(g.states().len(), said, "the second cancel says nothing");
@@ -303,7 +348,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!(through_op.name(), "publish_is_a_call", "{through_op}");
     // The node stopped: the confirm refused before it composes, a make_link
     // before any dial.
-    let fresh = g.draft("more words");
+    let fresh = g.staged(&member, "more words");
     g.call("publication.open", json!({"session": g.session, "draft": fresh, "doc": edition, "readable_drafts": [fresh], "published": [edition, set]})).unwrap_or_else(|r| panic!("{r}"));
     g.shell.set_node_state(NodeState::Stopped);
     let dials = g.shell.log().entries().iter().filter(|e| e["kind"] == "dial").count();
@@ -312,7 +357,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     let link_stopped = g.call("op", json!({"session": g.session, "frame": {"op": "make_link", "home": notes, "from": {"addrs": [notes]}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}})).unwrap_err();
     assert_eq!((link_stopped.name(), link_stopped.to_value()["op"].as_str()), ("stopped", Some("make_link")), "{link_stopped}");
     assert_eq!(g.shell.log().entries().iter().filter(|e| e["kind"] == "dial").count(), dials, "nothing dialed under the stop");
-    assert_eq!(g.states().last().map(String::as_str), Some("refused"), "the event names the refusal's arm");
+    assert_eq!(g.states_once(5).last().map(String::as_str), Some("refused"), "the event names the refusal's arm");
     g.shell.set_node_state(NodeState::Running);
     g.call("publication.cancel", json!({"session": g.session})).unwrap();
     // The mint form: the edition minted with its first member and the claim.
@@ -324,24 +369,25 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!((minted["outcome"].as_str(), minted["member"].as_str(), minted["claim"].as_bool()), (Some("acknowledged"), Some(format!("{new_edition}.1").as_str()), Some(true)), "{minted}");
     // A second claim into that edition: refused by the board, crossing as
     // answered, nothing re-sent, the board unmoved.
-    let another = g.draft("another draft");
+    let another = g.staged(&format!("{new_edition}.1"), "another draft");
     g.call("publication.open", json!({"session": g.session, "draft": another, "doc": new_edition, "claim": true, "readable_drafts": [another], "published": [edition, set, new_edition]})).unwrap_or_else(|r| panic!("{r}"));
     let before = g.position();
     let refused = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(refused, json!({"outcome": "refused", "arm": "claim_refused", "edition": new_edition}), "{refused}");
     assert_eq!(g.position(), before, "a refusal commits nothing, and nothing is re-sent");
-    assert!(g.states().ends_with(&["sent".to_string(), "refused".to_string()]), "{:?}", g.states());
+    let states = g.states_once(10);
+    assert!(states.ends_with(&["sent".to_string(), "refused".to_string()]), "{states:?}");
     g.shell.shutdown();
     sd.shutdown();
 }
 
 /// Checks the family's members are read in their form before the session
 /// (the Nelson way, `client.md` §4b.1 item 60): `also` a list of addresses,
-/// a repeat or the `draft` among them `malformed_args` naming `also`; `base`
-/// an address that is a member of `doc`'s chain, else `malformed_args`
-/// naming `base` — no address, the document itself, another document's
-/// member, or any `base` at the mint form, which has no chain; in their form
-/// the two pass to the session, which is gone.
+/// a repeat or the `draft` among them `malformed_args` naming `also`; in its
+/// form it passes to the session, which is gone. A `base` is no member of
+/// the row (the shell reads the draft's base itself, B3-S10): in any form,
+/// at either form of the row, it is read by nothing and the call goes on to
+/// the session.
 #[test]
 fn the_familys_members_are_read_in_their_form_before_the_session() {
     let dir = TempDir::new().unwrap();
@@ -362,49 +408,55 @@ fn the_familys_members_are_read_in_their_form_before_the_session() {
     assert_eq!(what(with("also", json!(["1.0.2.0.3", 7]))), "also", "no address");
     assert_eq!(what(with("also", json!(["1.0.2.0.3", "1.0.2.0.3"]))), "also", "a repeat");
     assert_eq!(what(with("also", json!(["1.0.2.0.2"]))), "also", "the draft itself");
-    assert_eq!(what(with("base", json!(7))), "base", "no address");
-    assert_eq!(what(with("base", json!("1.0.2.0.1"))), "base", "the document itself is no member");
-    assert_eq!(what(with("base", json!("1.0.2.0.9.1"))), "base", "another document's member");
-    assert_eq!(what(json!({"session": "s-gone", "draft": "1.0.2.0.2", "mint": "1.0.2", "base": "1.0.2.0.1.1"})), "base", "the mint form has no chain");
-    for in_form in [with("also", json!(["1.0.2.0.3", "1.0.2.0.4"])), with("base", json!("1.0.2.0.1.1")), with("base", json!("1.0.2.0.1.1.1"))] {
-        assert_eq!(shell.call("publication.open", &in_form).unwrap_err().name(), "session_ended", "{in_form}: in its form, the member passes to the session");
+    let in_form = with("also", json!(["1.0.2.0.3", "1.0.2.0.4"]));
+    assert_eq!(shell.call("publication.open", &in_form).unwrap_err().name(), "session_ended", "{in_form}: in its form, the member passes to the session");
+    for unread in [with("base", json!(7)), with("base", json!("1.0.2.0.9.1")), json!({"session": "s-gone", "draft": "1.0.2.0.2", "mint": "1.0.2", "base": "1.0.2.0.1.1"})] {
+        assert_eq!(shell.call("publication.open", &unread).unwrap_err().name(), "session_ended", "{unread}: a `base` is read by nothing");
     }
 }
 
-/// Checks the family end to end against the daemon (the Nelson way, B3-S10;
-/// `client.md` §4b.1 item 60).
+/// Checks the family end to end against the daemon, and a draft's base read
+/// on another device (the Nelson way, B3-S10; `client.md` §4b.1 items 60
+/// and 61).
 ///
-/// D stages E.1 and is re-windowed onto it; D goes on with six words of its
-/// own; A, an alternative of D's, holds D's whole arrangement by identity
-/// and five words of its own. A's `publication.open` naming D among `also`
-/// answers no window for D's words and `inherited` counting D's one
-/// passage, every member declared; its `confirm` is acknowledged E.2 —
-/// the member reads A's whole text as E's own words — with one record homed
-/// in D for its six words and one in A for its five, each `to` the member's
-/// fresh identity, and the feed row's `docs` `[E.2, A, D]`. Then D, a draft
-/// BEHIND the head, opens with the page's `base` E.1 — its words published
-/// through A re-composed by reference, their stray place beside — and its
-/// `confirm` lands the DAUGHTER E.1.1 under its own base, never a trunk
-/// member that drops A's words; a `base` the board holds no member for is
-/// `malformed_args` naming `base`.
+/// D, staged from the memberless edition — its fork record naming the bare
+/// document — stages E.1 and is re-windowed onto it; D goes on with six
+/// words of its own; A, an alternative of D's — its fork record naming E.1
+/// and D — holds D's whole arrangement by identity and five words of its
+/// own. A's `publication.open` naming D among `also` answers no window for
+/// D's words and `inherited` counting D's one passage, every member
+/// declared; its `confirm` is acknowledged E.2 — the member reads A's whole
+/// text as E's own words — with one record homed in D for its six words and
+/// one in A for its five, each `to` the member's fresh identity, and the
+/// feed row's `docs` `[E.2, A, D]`. Then a SECOND DEVICE's shell — a fresh
+/// shell over the same board and store, holding no index and no panel of
+/// the first's — opens D, a draft BEHIND the head, the page sending `base:
+/// E.2`, which nothing reads: the shell reads D's base off its newest
+/// publication row, E.1, and the `confirm` lands the DAUGHTER E.1.1 under
+/// it, never a trunk member that drops A's words. A draft that neither a
+/// fork record nor a publication names a base for is refused
+/// `base_unrecorded` naming it and the edition at the document form, and
+/// opens at the mint form, which has no chain.
 #[test]
-fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_behind_the_head_lands_a_daughter() {
+fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_behind_the_head_lands_a_daughter_on_any_device() {
     use skep_client::board::frames::{find_links_four, read_link, retrieve_v, unit_span, Slot, T_CORRESPONDENCE};
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let g = ground(&dir, &sd);
     let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
-    // D stages E.1.
-    let d = g.draft("the quick brown fox");
+    // D stages E.1, begun from the bare document.
+    let d = g.staged(&edition, "the quick brown fox");
     g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
     let first = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     let e1 = format!("{edition}.1");
     assert_eq!(first["member"].as_str(), Some(e1.as_str()), "{first}");
-    // D goes on; A inherits D's whole arrangement by identity and adds its own.
+    // D goes on; A inherits D's whole arrangement by identity and adds its
+    // own, its record naming the version D stood at and D.
     g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"], "as_of": g.position()}));
     let a_draft = g.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
     g.op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}], "as_of": g.position()}));
     g.op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"], "as_of": g.position()}));
+    g.fork_record(&a_draft, &[&e1, &d]);
     // A's panel naming D among `also`.
     let panel = g
         .call("publication.open", json!({"session": g.session, "draft": a_draft, "doc": edition, "also": [d], "readable_drafts": [a_draft, d], "published": [edition]}))
@@ -436,17 +488,76 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
     let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
     assert_eq!(row["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {row}");
-    // D behind the head: the page's base, the daughter landing.
-    let bogus = g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": format!("{edition}.7"), "readable_drafts": [d], "published": [edition]})).unwrap_err();
-    assert_eq!((bogus.name(), bogus.to_value()["what"].as_str()), ("malformed_args", Some("base")), "a member the board holds none of: {bogus}");
-    let behind = g
-        .call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": e1, "readable_drafts": [d], "published": [edition]}))
-        .unwrap_or_else(|r| panic!("{r}"));
+    // A SECOND DEVICE: a fresh shell over the same board and store, D behind
+    // the head, the page's `base` read by nothing — the daughter landing.
+    g.shell.shutdown();
+    let g = open_ground(&dir, &sd);
+    let behind = g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": e2, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((behind["windows"].clone(), behind["inherited"].clone()), (json!([]), json!([])), "{behind}");
     let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
-    assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()), (Some("acknowledged"), Some(format!("{edition}.1.1").as_str()), Some("answer")), "the daughter under D's own base: {daughter}");
+    assert_eq!(
+        (daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()),
+        (Some("acknowledged"), Some(format!("{edition}.1.1").as_str()), Some("answer")),
+        "the daughter under D's own base, read off its newest publication: {daughter}"
+    );
     let read = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&format!("{edition}.1.1"), 1, 25)})).unwrap();
     assert_eq!(read["items"][0]["content"], "the quick brown fox again");
+    // A draft no record and no publication names a base for: refused by
+    // name at the document form, never given the head; the mint form opens.
+    let free = g.draft("unrecorded words");
+    let unrecorded = g.call("publication.open", json!({"session": g.session, "draft": free, "doc": edition, "readable_drafts": [free], "published": [edition]})).unwrap_err();
+    let v = unrecorded.to_value();
+    assert_eq!((unrecorded.name(), v["kind"].as_str(), v["draft"].as_str(), v["doc"].as_str()), ("base_unrecorded", Some("shell"), Some(free.as_str()), Some(edition.as_str())), "{v}");
+    let minted = g
+        .call("publication.open", json!({"session": g.session, "draft": free, "mint": "1.0.1", "readable_drafts": [free], "published": [edition]}))
+        .unwrap_or_else(|r| panic!("the mint form has no chain: {r}"));
+    crate::shapes::assert_declared("PublicationPanel", &minted);
+    assert_eq!(g.call("publication.cancel", json!({"session": g.session})).unwrap(), json!({}));
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a publication that only removes published words leaves the
+/// draft's next publication landing after the version it made (B3-S10).
+///
+/// D is staged from E.1 — E.1's words copied by identity, its fork record
+/// naming E.1 — and takes a passage out: its shot re-mints nothing and
+/// re-windows nothing, so the commit writes nothing in D, and it lands E.2,
+/// the row naming D beside the member all the same. D takes a second
+/// passage out, and its shot lands E.3, after the version the first made —
+/// its base read off that row — never the daughter E.1.1 its record alone
+/// would place it under.
+#[test]
+fn a_publication_that_only_removes_words_leaves_the_next_landing_after_the_version_it_made() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let first = g.staged(&edition, "the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": first, "doc": edition, "readable_drafts": [first], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"))["member"].as_str().expect("E.1").to_string();
+    // D, staged from E.1: its words by identity, its record naming E.1.
+    let d = g.addr(json!({"op": "create_new_document", "account": "1.0.1"}));
+    g.op(json!({"op": "copy", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": e1, "span": {"start": "1.1", "width": "0.19"}}], "as_of": g.position()}));
+    g.fork_record(&d, &[&e1]);
+    let open = json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]});
+    let mut landed = Vec::new();
+    for text in ["the brown fox", "the fox"] {
+        // A passage out — "quick ", then "brown " — at the fifth position.
+        g.op(json!({"op": "delete", "doc": d, "p": {"subspace": "1", "ordinal": "5"}, "width": "6", "as_of": g.position()}));
+        g.call("publication.open", open.clone()).unwrap_or_else(|r| panic!("{r}"));
+        let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+        let member = acked["member"].as_str().unwrap_or_else(|| panic!("{acked}")).to_string();
+        let read = g.call("op", json!({"guest": true, "board": g.board, "frame": skep_client::board::frames::retrieve_v(&member, 1, text.len() as u64)})).unwrap();
+        assert_eq!(read["items"][0]["content"], text, "{member}");
+        let at = acked["at"].as_u64().unwrap();
+        let entry = g.shell.sessions.get(&g.session).unwrap();
+        let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
+        let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}, naming D: {rows:?}"));
+        assert_eq!(row["docs"], json!([member, d]), "the commit wrote nothing in D, and the row names it: {row}");
+        landed.push(member);
+    }
+    assert_eq!(landed, [format!("{edition}.2"), format!("{edition}.3")], "after the version the first shot made, never the daughter E.1.1");
     g.shell.shutdown();
     sd.shutdown();
 }

@@ -137,11 +137,16 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 /// and an empty class is served to every class, which is exactly the answer
 /// a recorded `[P]` earns (P is readable by all); the two-document ops
 /// (`nullify`, `edit_link`) name link homes, which witness 2 enumerates in
-/// full. So the mask a bare entry gets from this set equals the mask its
-/// lost record would have given it, for every op the wire carries. The
-/// record whose mask this reproduces is [`crate::commits::write_meta`]'s,
-/// and the agreement is exactly two inclusions, stated there: every draft
-/// that table names appears here, and this answer names nothing it does not.
+/// full. Nor can it name a publication's rendering draft the commit wrote
+/// nothing in, which the recorded row names all the same (B3-S10): the
+/// member beside it is published, so the entry is masked from no class with
+/// it or without it. So the mask a bare entry gets from this set equals the
+/// mask its lost record would have given it, for every op the wire carries.
+/// The record whose mask this reproduces is
+/// [`crate::commits::write_meta`]'s, and the agreement is exactly two
+/// inclusions, stated there: every draft that table names appears here, an
+/// unwritten rendering draft the one exception, and this answer names
+/// nothing it does not.
 /// Neither is checked in the process — the two read different inputs, and
 /// `write_meta` states what checking them per write would cost — so a new
 /// `Op` the compiler routes through that table reaches this one only if

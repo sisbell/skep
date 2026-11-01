@@ -1043,9 +1043,10 @@ impl<'b> Consumer<'b> {
                     // A member names an edition's version, never a draft: on
                     // the published face it moves the edition's head; on the
                     // drafts face it is passed over — a `publish` row reaches
-                    // that face naming the member first and, beside it, the
-                    // staging draft its records are homed in (wire.md §The
-                    // change feed), and the draft alone is that face's.
+                    // that face naming the member first and, beside it, its
+                    // rendering draft and any draft its records are homed in
+                    // (wire.md §The change feed), and the drafts alone are
+                    // that face's.
                     if face != Face::Published {
                         continue;
                     }

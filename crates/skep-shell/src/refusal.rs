@@ -118,6 +118,16 @@ impl Name {
     /// cancelled, or it went with its session: the act is `publication.open`
     /// (§4b.1's `count` row); the detail names the `session`.
     pub const NO_PANEL: Name = Name("no_panel");
+    /// A `publication.open` at the document form for a draft with no base.
+    ///
+    /// No publish row into `doc`'s chain names the draft as its rendering
+    /// draft, and no fork record of the draft's names a version of `doc`
+    /// (`skep_client::publication::draft_base`; B3-S10): the shell never
+    /// takes the chain's head in its place, since a draft begun from an
+    /// older version would publish over the newer words. The detail names
+    /// the `draft` and the `doc`; the act is the draft's fork record, written
+    /// by the act that made it.
+    pub const BASE_UNRECORDED: Name = Name("base_unrecorded");
     /// A publication read met `withheld` on a document it needs.
     ///
     /// Brief 1's `Fault::Unreadable`; the detail names the `doc`.

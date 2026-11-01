@@ -150,7 +150,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
         "  op(args: { session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
-        "  'publication.open'(args: { session: string; draft: string; also?: string[]; base?: string; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
+        "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price }>>;\n",
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
         "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",

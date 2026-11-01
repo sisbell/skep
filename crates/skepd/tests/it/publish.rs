@@ -738,8 +738,9 @@ fn the_pointwise_pair_floats_to_the_trunk_head_and_delete_orphans_reads_the_addr
 /// (the exemption: the preimage names no member the reduction withholds).
 /// A second shot re-inserting a run the record names is refused
 /// `already_published`, permanent, `site.addr` the member, nothing
-/// committed; one re-inserting nothing names the member alone on every
-/// page and mints no record.
+/// committed; one re-inserting nothing mints no record and names its
+/// rendering draft all the same — the member and the draft to the owner, the
+/// member alone to the guest (B3-S10: the row is where a draft's base reads).
 #[test]
 fn a_drafted_shots_row_names_the_draft_beside_the_member_for_its_owner_and_keeps_its_attest() {
     const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
@@ -792,11 +793,15 @@ fn a_drafted_shots_row_names_the_draft_beside_the_member_for_its_owner_and_keeps
     assert_eq!(head(port), before, "nothing committed");
     assert!(changes_since(port, before).is_empty());
 
-    // A shot re-inserting nothing: the member alone on every page, no record.
+    // A shot re-inserting nothing: no record, and the draft on the row all
+    // the same — its owner's page names it beside the member, a guest's the
+    // member alone.
     let m2 = acked_addr(&op(port, Some(&signed), &publish(&e, Some((&member, 3)), Some(&d), &[run(&e, &image(port, &member, 1, 3)[0].0, 3)])));
     assert_eq!(m2, format!("{e}.2"));
     let owners = changes_since_as(port, Some(&signed), before);
-    assert_eq!(owners[0]["docs"], serde_json::json!([m2]), "nothing re-inserted: no draft on the row: {}", owners[0]);
+    assert_eq!(owners[0]["docs"], serde_json::json!([m2, d]), "nothing re-inserted: the rendering draft named all the same: {}", owners[0]);
+    let guests = changes_since(port, before);
+    assert_eq!(guests[0]["docs"], serde_json::json!([m2]), "reduced to the member for a guest: {}", guests[0]);
     assert!(read_link(port, Some(&bare), &format!("{d}.0.2.2")).is_null(), "no second record");
     sd.shutdown();
 }
@@ -817,7 +822,8 @@ fn a_drafted_shots_row_names_the_draft_beside_the_member_for_its_owner_and_keeps
 /// a draft the caller does not own is `not_owner`, `site.addr` that draft;
 /// each commits nothing. And the shape is the codec's: `also` without
 /// `draft`, and a place beside a run of a draft `also` names, are
-/// `malformed`.
+/// `malformed`. Last, a family shot whose commit writes the `also` draft
+/// alone names the rendering draft first all the same: `[E.3, A, D]`.
 #[test]
 fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_and_names_every_draft_on_the_row() {
     const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
@@ -909,6 +915,21 @@ fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_an
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["site"].clone()), (Some("malformed"), serde_json::json!({"index": 0})), "a place beside a run of a draft `also` names: {v}");
     assert_eq!(head(port), before, "nothing committed");
+    // A family shot whose commit writes the `also` draft alone — A's own
+    // words none, E's by reference and D's new `zz` re-minted: the row names
+    // A, the rendering draft, first all the same, then D, the one draft
+    // written, so D written alone never stands where A does.
+    let d_zz = acked_addr(&op(port, Some(&bare), &insert(&d, 6, "zz", false)));
+    let before = head(port);
+    let shot = publish_family(&e, Some((&e2, 7)), &a_draft, &[&d], &[run(&e, &format!("{e}.0.1.1"), 7), run(&d, &d_zz, 2)]);
+    let e3 = acked_addr(&op(port, Some(&signed), &shot));
+    assert_eq!(e3, format!("{e}.3"));
+    assert_eq!(text(port, &e3, 1, 9), "abcxypqzz");
+    assert!(read_link(port, Some(&bare), &format!("{a_draft}.0.2.2")).is_null(), "nothing written in A");
+    let owners = changes_since_as(port, Some(&signed), before);
+    assert_eq!(owners[0]["docs"], serde_json::json!([e3, a_draft, d]), "the member, the rendering draft unwritten, then the `also` draft written: {}", owners[0]);
+    let guests = changes_since(port, before);
+    assert_eq!(guests[0]["docs"], serde_json::json!([e3]), "reduced to the member for a guest: {}", guests[0]);
     sd.shutdown();
 }
 

@@ -71,8 +71,10 @@ back — is this crate:
   `replaces` `3.12`, the designations `3.22`, `3.27` and `3.28`, the
   meta-type `defines` `3.50`, the registry's twelve rows named as `rows`
   names them, the rail record `3.60`, the steward's classification `3.61`,
-  the two media cell kinds `3.88` and `3.89`, the grant `3.90` and the
-  consumption marker `3.91`; nothing at an ordinal nobody allocated. The
+  the two media cell kinds `3.88` and `3.89`, the grant `3.90`, the
+  consumption marker `3.91`, and the fork record `3.9.4` under
+  alternative, where a draft was begun; nothing at an ordinal nobody
+  allocated. The
   daemon writes one section (`Definition::section`: the name alone on the
   first line, then the address, the purpose and the endset shape) and one
   `defines` link per row into the registry document `1.1.0.1.0.1` at every

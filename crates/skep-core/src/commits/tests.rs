@@ -70,13 +70,13 @@ fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
 }
 
 /// THE PUBLISH ROW's DRAFTS (the Nelson way, B3-S10; wire.md §The change
-/// feed): the named drafts the commit writes, in the request's order — the
-/// rendering draft where a run of its identity is re-inserted or a kept
-/// place is sent (a stray re-window's among them), each `also` draft where
-/// a run of its identity is re-inserted — and none where no draft is
-/// written; request arithmetic off the shot.
+/// feed): the rendering draft ALWAYS, first, whether or not the commit
+/// writes it — a run of its identity re-inserted, a kept place sent (a stray
+/// re-window's among them), or nothing written in it — then each `also`
+/// draft where a run of its identity is re-inserted, in the request's order;
+/// none where the request names no draft; request arithmetic off the shot.
 #[test]
-fn a_publish_rows_drafts_are_the_named_drafts_the_commit_writes_in_the_requests_order() {
+fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_written() {
     use skep_address::Nat;
     use skep_febe::{PublishDeposits, PublishTarget, Run, Shot, ShotRun, VPos};
 
@@ -107,10 +107,11 @@ fn a_publish_rows_drafts_are_the_named_drafts_the_commit_writes_in_the_requests_
         ),
         vec![d.clone(), a1.clone()]
     );
-    // A's run alone: A named, the rendering draft not — nothing is written in it.
+    // A's run alone: the rendering draft first all the same, though nothing
+    // is written in it, then A — never A where the rendering draft stands.
     assert_eq!(
         drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.6", 1)] }, vec![]),
-        vec![a1.clone()]
+        vec![d.clone(), a1.clone()]
     );
     // A kept place beside a trunk run — a stray re-window — names the
     // rendering draft, and never an `also` draft.
@@ -119,6 +120,13 @@ fn a_publish_rows_drafts_are_the_named_drafts_the_commit_writes_in_the_requests_
             Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.1", 1)] },
             vec![Some(VPos::content(Nat::from(1u32)))]
         ),
+        vec![d.clone()]
+    );
+    // A shot that writes nothing in any draft — the trunk's own words by
+    // reference, no kept place, as a publication that only removes words
+    // sends — names the rendering draft alone.
+    assert_eq!(
+        drafts_of(Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone()], runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]),
         vec![d.clone()]
     );
     // No draft named: none.

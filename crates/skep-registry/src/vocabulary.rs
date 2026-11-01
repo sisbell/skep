@@ -27,7 +27,9 @@
 //! seeding round pinned (the owner, 2026-10-27) — `3.23` inline, the
 //! emphasis family's parent, with its seven sub-types `3.23.1` to `3.23.7`,
 //! `3.24` the held removal, `3.71` read-with beside layout, and `3.102.1`
-//! the correspondence record, a subtype under counterpart. WHAT IT DOES
+//! the correspondence record, a subtype under counterpart; and `3.9.4`
+//! fork, a subtype under alternative, the record the act that makes a draft
+//! writes of where it was begun (B3-S10). WHAT IT DOES
 //! NOT: the reserved ordinals of `3.22` to
 //! `3.29` and `3.46` to `3.49` beyond the built ones, `3.51` to `3.54` (the
 //! registry-machinery reserve, unallocated), `3.87` (reserved for the proxy
@@ -121,7 +123,7 @@ struct Spelling {
 }
 
 /// The rows, in path order.
-const SPELLINGS: [Spelling; 119] = [
+const SPELLINGS: [Spelling; 120] = [
     // ── the credential kinds (AUTH-7.1 horn B) ───────────────────────────
     Spelling {
         ordinals: &[1],
@@ -277,6 +279,17 @@ const SPELLINGS: [Spelling; 119] = [
         name: "branch",
         purpose: "An alternative that branches from the passage.",
         endsets: "from: the branch's text; to: the passage branched from.",
+    },
+    // The fork record (B3-S10): written by the act that makes a draft, and
+    // read by the publication's base read (`skep-client`'s
+    // `publication::base`), never a link a person picks.
+    Spelling {
+        ordinals: &[9, 4],
+        name: "fork",
+        purpose: "Where a draft was begun: the record the act that made the draft writes, \
+                  homed in the draft; no picker lists it.",
+        endsets: "from: empty; to: the version the draft was begun from, the bare document \
+                  while its chain is empty, and, for an alternative, the draft it was made from.",
     },
     Spelling {
         ordinals: &[10],

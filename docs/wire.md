@@ -5404,11 +5404,14 @@ Each entry:
   `create_new_document`/`fork`/`version`,
   and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
   trunk is the document it advances) FIRST, then, at the mint form, the
-  EDITION it was minted under, then the RENDERING draft where
-  the shot minted a correspondence record in it or re-windowed it at a
-  kept place the request sent — a stray-only re-window names it too,
-  though it mints none — then each other draft `also` named where the
-  shot minted a correspondence record in it, in the request's order:
+  EDITION it was minted under, then the RENDERING draft, ALWAYS, whether
+  the shot minted a correspondence record in it, re-windowed it at a kept
+  place the request sent, or wrote nothing in it — a shot that only removes
+  or reorders published words names it too, so a draft's newest
+  publication row names the member it made (B3-S10) — then each other
+  draft `also` named where the shot minted a correspondence record in it,
+  in the request's order, so an `also` draft written alone never stands
+  where the rendering draft does:
   "the drafts the shot named, the rendering draft first among them"
   (B3-S10), `[member, D, A, …]`, the
   member first by rule, the order a mirror reads the member by (§The
@@ -5613,13 +5616,16 @@ byte-identically, across repeats and restarts.
 a dotted-decimal tumbler, an account prefix or a document — narrows the
 feed to the entries whose REDUCED `docs` name a document at or under it,
 masked exactly as the plain feed is: for a draft you cannot read the
-page is empty, `last` your fence. One residue of lost testimony
-(PUB-7.21): a bare entry re-derived from the journal for an arrangement
-write or a mint into a PUBLISHED document names no document — the
-journal enumerates the drafts and link homes a commit touched, never a
-published document an arrangement write or a mint touched — and so is
-absent from the plain `under=` narrowing: silent incompleteness, never a
-wrong answer; the drafts-only form and the plain feed stay complete.
+page is empty, `last` your fence. Two residues of lost testimony
+(PUB-7.21), each silent incompleteness, never a wrong answer: a bare
+entry re-derived from the journal for an arrangement write or a mint
+into a PUBLISHED document names no document — the journal enumerates
+the drafts and link homes a commit touched, never a published document
+an arrangement write or a mint touched — and so is absent from the
+plain `under=` narrowing; and a bare `publish` entry whose shot wrote
+nothing in its rendering draft is absent from that draft's `under=` and
+`drafts=true` pages, the journal witnessing no write there. The plain
+feed stays complete.
 `drafts=true` narrows to the entries
 whose reduced `docs` name a DRAFT you may read — your supplement alone,
 empty for a guest by construction, the live universally-granted history
@@ -5650,39 +5656,39 @@ member that holds the sections into `1.1.0.1.0.1` at 11 (seven records:
 the shot's four and its correspondence record's three, the record homed
 in the staging draft — the row's `docs` the member alone to every class
 but the system's, which sees the draft beside it) and one `defines`
-link per type, three records apart, to 368, each a public entry with
-`key: "system"`, so a fresh board stands at 368 before any client writes.
-The claim ceremony's five commits follow (§A first board): positions 370,
-371, 374, 377, 380 — the delegate, the home mint, the record insert, the
+link per type, three records apart, to 371, each a public entry with
+`key: "system"`, so a fresh board stands at 371 before any client writes.
+The claim ceremony's five commits follow (§A first board): positions 373,
+374, 377, 380, 383 — the delegate, the home mint, the record insert, the
 genesis link, the claim link — and the claim's own step then writes the
 board's first head `H.1` (§The other endpoints, the published head
-document): the head record's insert into the staging draft at 383 — the
+document): the head record's insert into the staging draft at 386 — the
 draft stands from the seed, so the claim's head mints none — and the
-publish into `H` at 390, seven records with its correspondence record,
+publish into `H` at 393, seven records with its correspondence record,
 the publish a public entry with `key: "system"`,
 the insert masked at every class but the system's. The flow behind the
 examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
 so every `key` reads `"bare"`, and no entry is signed, so no row carries
-`attest`): `delegate` commits at position 392 — its row carrying the
-minted pair —, the home mint at 393, a second — private — document at 394
+`attest`): `delegate` commits at position 395 — its row carrying the
+minted pair —, the home mint at 396, a second — private — document at 397
 (the account's doc 1 is born published, where bare writes are gated by
 design, so the flow's content goes to a draft document), a two-byte
-`insert` at 397 (one range mint, one stretch, one placement), `make_link`
-at 400 — its row carrying the minted link's address. The feed past the
-seed, the ceremony and its head, `GET /changes?since=390`, read AS
+`insert` at 400 (one range mint, one stretch, one placement), `make_link`
+at 403 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=393`, read AS
 PRINCIPAL 1 — the owner of the private document, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":394,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":397,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":400,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":400,"more":false}
+{"changes":[{"at":395,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":396,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":397,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":400,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":403,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":403,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=390&limit=2`:
+The first page of the same feed, `GET /changes?since=393&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":true}
+{"changes":[{"at":395,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":396,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":396,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -5691,7 +5697,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":false}
+{"changes":[{"at":395,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":396,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":396,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the

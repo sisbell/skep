@@ -290,6 +290,11 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     let minted = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
     let draft = minted["addr"].as_str().unwrap().to_string();
     signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": minted["at"]}})).unwrap();
+    // The draft's fork record, naming the memberless edition it is staged
+    // for: the shell reads the draft's base off it (B3-S10).
+    signed
+        .call("op", &json!({"session": session, "frame": {"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": [doc]}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}}))
+        .unwrap();
     let through_op = signed.call("op", &json!({"session": session, "frame": {"op": "publish", "doc": doc, "draft": draft, "runs": []}})).unwrap_err();
     assert_eq!(through_op.name(), "publish_is_a_call", "{through_op}");
     signed

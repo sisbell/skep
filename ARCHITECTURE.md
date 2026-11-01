@@ -719,7 +719,8 @@ each ceremony:
 - Under `acting`, beside `merge` and naming no ceremony — THE PUBLICATION
   COMPOSITION, a draft's one `publish` request as one composition family
   (P28): `publication.rs` the module, the reading door and the shared
-  types; `publication/enumerate.rs` the enumeration; `publication/panel.rs`
+  types; `publication/base.rs` the draft's base, read off the board;
+  `publication/enumerate.rs` the enumeration; `publication/panel.rs`
   the panel's data, the count and the own-origin windows with their
   counterparts; `publication/price.rs` the price against the caps;
   `publication/request.rs` the re-read and the request, the windows taken

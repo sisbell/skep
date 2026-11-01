@@ -932,6 +932,12 @@ fn f5_the_signed_mode_acks_a_publish_class_write() {
     let minted = signed.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
     let draft = minted["addr"].as_str().unwrap().to_string();
     signed.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": minted["at"]}}));
+    // The draft's fork record, naming the memberless edition it is staged
+    // for, which the shell reads its base off (B3-S10).
+    signed.result(
+        "op",
+        json!({"session": session, "frame": {"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": [edition["addr"]]}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}}),
+    );
     // The shot crosses as `publication.confirm`, composed and attested by
     // the provider's shell; a `publish` frame through `op` is refused as a
     // call (client.md §4b.1, decision 1 (b)).
@@ -1006,8 +1012,14 @@ fn f5b_the_publication_family_over_the_bridge() {
         op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}));
         d
     };
+    // A draft staged from `from`, its fork record beside it (B3-S10).
+    let staged = |from: &str, text: &str| {
+        let d = draft_of(text);
+        addr(json!({"op": "make_link", "home": d, "from": {"addrs": []}, "to": {"addrs": [from]}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}));
+        d
+    };
     let edition = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
-    let draft = draft_of("the quick brown fox");
+    let draft = staged(&edition, "the quick brown fox");
     let notes = draft_of("notes here");
     let set = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
     let citation = "1.1.0.1.0.1.0.3.13";
@@ -1067,7 +1079,7 @@ fn f5b_the_publication_family_over_the_bridge() {
     assert_eq!((minted["outcome"].as_str(), minted["member"].as_str(), minted["claim"].as_bool()), (Some("acknowledged"), Some(format!("{new_edition}.1").as_str()), Some(true)), "{minted}");
     // A second claim into that edition: refused by the board, nothing
     // re-sent, the board unmoved.
-    let another = draft_of("another draft");
+    let another = staged(&format!("{new_edition}.1"), "another draft");
     signed.result("publication.open", json!({"session": session, "draft": another, "doc": new_edition, "claim": true, "readable_drafts": [another], "published": [edition, set, new_edition]}));
     let before = position();
     let refused = signed.result("publication.confirm", json!({"session": session}));
@@ -1086,10 +1098,11 @@ fn f5b_the_publication_family_over_the_bridge() {
 /// words of its own, opens with `also: [D]` — the panel declares no window
 /// for D's words and `inherited` counts D's one passage — and publishes
 /// E.2, the member reading A's whole text, the feed row naming `[E.2, A, D]`;
-/// D's panel opens with the page's `base` E.1 and its confirm lands the
-/// daughter E.1.1 — the face is the page's; the shell answers the ack with
-/// the daughter's address. A `base` of no member, and a repeated `also`,
-/// are `malformed_args` naming the member.
+/// D's panel opens with no base from the page — the shell reads D's off its
+/// newest publication row, E.1 — and its confirm lands the daughter E.1.1 —
+/// the face is the page's; the shell answers the ack with the daughter's
+/// address. Each draft is staged with its fork record, D's naming the bare
+/// edition, A's E.1 and D. A repeated `also` is `malformed_args` naming it.
 #[test]
 fn f5d_the_family_and_the_daughter_over_the_bridge() {
     let dir = tempfile::tempdir().unwrap();
@@ -1106,8 +1119,11 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     // as the session reads it, the state its positions are true of.
     let position = || signed.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
     let edition = addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let fork_record =
+        |draft: &str, begun_from: &[&str]| addr(json!({"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": begun_from}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}));
     let d = addr(json!({"op": "create_new_document", "account": "1.0.1"}));
     op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": ["the quick brown fox"], "as_of": position()}));
+    fork_record(&d, &[&edition]);
     signed.result("publication.open", json!({"session": session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]}));
     let first = signed.result("publication.confirm", json!({"session": session}));
     let e1 = format!("{edition}.1");
@@ -1116,6 +1132,7 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     let a_draft = addr(json!({"op": "create_new_document", "account": "1.0.1"}));
     op(json!({"op": "copy", "doc": a_draft, "at": {"subspace": "1", "ordinal": "1"}, "specs": [{"source": d, "span": {"start": "1.1", "width": "0.25"}}], "as_of": position()}));
     op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"], "as_of": position()}));
+    fork_record(&a_draft, &[&e1, &d]);
     // THE FAMILY's PANEL AND CONFIRM.
     let repeated = signed.refused("publication.open", json!({"session": session, "draft": a_draft, "doc": edition, "also": [d, d]}));
     assert_eq!((repeated["name"].as_str(), repeated["what"].as_str()), (Some("malformed_args"), Some("also")), "{repeated}");
@@ -1129,10 +1146,8 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     assert_eq!(read["items"][0]["content"], "the quick brown fox again more");
     let page = signed.result("changes", json!({"session": session, "since": at - 1, "limit": 1}));
     assert_eq!(page["entries"][0]["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {page}");
-    // D BEHIND THE HEAD: the page's base, the daughter.
-    let bogus = signed.refused("publication.open", json!({"session": session, "draft": d, "doc": edition, "base": format!("{edition}.7"), "readable_drafts": [d], "published": [edition]}));
-    assert_eq!((bogus["name"].as_str(), bogus["what"].as_str()), (Some("malformed_args"), Some("base")), "{bogus}");
-    signed.result("publication.open", json!({"session": session, "draft": d, "doc": edition, "base": e1, "readable_drafts": [d], "published": [edition]}));
+    // D BEHIND THE HEAD: its base the shell's own read, the daughter.
+    signed.result("publication.open", json!({"session": session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]}));
     let daughter = signed.result("publication.confirm", json!({"session": session}));
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()), (Some("acknowledged"), Some(format!("{edition}.1.1").as_str()), Some("answer")), "{daughter}");
     signed.result("close", json!({"session": session}));

@@ -1456,8 +1456,8 @@ impl Commits {
                 minted.cloned().map(|a| vec![a]).unwrap_or_default()
             }
             // The publication's row: the member first, then the edition
-            // where the commit minted one, then the drafts the shot wrote —
-            // the rendering draft first, then each other named draft, in
+            // where the commit minted one, then the drafts — the rendering
+            // draft always, then each other named draft the shot wrote, in
             // the request's order (B3-S10: "the drafts the shot named, the
             // rendering draft first among them") — the order the mirror
             // reads the member by; a draft is reduced away for a reader who
@@ -2107,26 +2107,28 @@ enum AffectedDocs {
     Minted,
     /// A publication's documents: the member the shot mints, known only
     /// from its ack, FIRST; then the edition it was minted under, where the
-    /// commit minted one; then the drafts the commit wrote — the rendering
-    /// draft where it homed a correspondence record in it or re-windowed it
-    /// at a kept place, then each other named draft where it homed a record
-    /// in it, in the request's order; then every other home the deposits
-    /// touched, in address order, each once (the link-sets design §5.7's
-    /// feed row — "`docs` the UNION of every home the commit touched,
+    /// commit minted one; then the rendering draft, whether or not the
+    /// commit wrote it, then each other named draft where the commit homed
+    /// a record in it, in the request's order; then every other home the
+    /// deposits touched, in address order, each once (the link-sets design
+    /// §5.7's feed row — "`docs` the UNION of every home the commit touched,
     /// `[member, D, …]`", the member first, a pinned order the mirror reads
     /// the member by; B3-S10: "the drafts the shot named, the rendering draft
     /// first among them", `[member, D, A, …]`).
     ///
-    /// `drafts` are the named drafts the commit writes, each the document
-    /// the request's address projects to, in the request's order: the
-    /// rendering draft where a run of its identity is re-inserted — the case
-    /// the commit mints a record there, since the shot mints each draft
+    /// `drafts` are the named drafts the row names, each the document the
+    /// request's address projects to, in the request's order: the rendering
+    /// draft always — the draft whose newest publication row is where a
+    /// reader reads its base (B3-S10), whether the commit minted a record in
+    /// it (a run of its identity re-inserted: the shot mints each draft
     /// identity it meets the first time it meets it, and the twin fence
-    /// refuses one a record already names — or a kept place is sent beside
-    /// a run, a stray run's among them, where the commit re-windows it and
-    /// mints nothing (the design's F4); each `also` draft where a run of its
-    /// identity is re-inserted, the one write the commit makes in it (it is
-    /// never re-windowed); empty where no draft is written. `mints` is the request's
+    /// refuses one a record already names), re-windowed it at a kept place
+    /// (a stray run's among them, minting nothing; the design's F4), or
+    /// wrote nothing in it, a shot that only removes or reorders published
+    /// words; each `also` draft where a run of its identity is re-inserted,
+    /// the one write the commit makes in it (it is never re-windowed), so an
+    /// `also` draft written alone never stands where the rendering draft
+    /// does; empty where the request names no draft. `mints` is the request's
     /// mint form, the edition then the member's own trunk. `homes` are the
     /// homes the request's `links` entries name by address, and the private
     /// homes of the originals they name, each of which the commit writes
@@ -2241,15 +2243,21 @@ impl RowTerms {
 /// `classify::derived_docs` answers this same question — which documents a
 /// commit touched — from the journal, for a position whose record was lost,
 /// and the two must agree on the mask. Precisely: every draft this table
-/// names must appear in that one's answer, and that one's answer must name
-/// nothing this table does not. An op whose effect no witness of
-/// `derived_docs` catches derives an empty class, and an empty class is
-/// never masked, so its draft writes are served to every requester from the
-/// restart that reconstructs them. The compiler forces a new `Op` through
-/// this table and through nothing there. The equivalence is about the mask
-/// alone, so the narrowings inherit whatever difference remains: a bare
-/// position whose derived class is empty is excluded from an `under=` page
-/// where its recorded twin would match. And a check is possible but not
+/// names must appear in that one's answer — save one, a publication's
+/// rendering draft the commit wrote nothing in, which no witness of the
+/// journal can see: the row names it so a draft's base reads off its newest
+/// publication (B3-S10), and the mask does not move without it, the row's
+/// member being published and so visible to every class — and that one's
+/// answer must name nothing this table does not. An op whose effect no
+/// witness of `derived_docs` catches derives an empty class, and an empty
+/// class is never masked, so its draft writes are served to every requester
+/// from the restart that reconstructs them. The compiler forces a new `Op`
+/// through this table and through nothing there. The equivalence is about
+/// the mask alone, so the narrowings inherit whatever difference remains: a
+/// bare position whose derived class is empty is excluded from an `under=`
+/// page where its recorded twin would match, and a bare publication whose
+/// commit wrote nothing in its rendering draft is excluded from that draft's
+/// `under=` and `drafts=true` pages. And a check is possible but not
 /// worth its cost here — [`Commits::commit_under`] would have to run
 /// `derived_docs` per write against the pre-commit snapshot its door holds,
 /// a full link enumeration of two worlds on the write path even in a debug
@@ -2323,22 +2331,21 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // re-inserts, homed in the draft whose identity the piece was (the
         // link-sets design §5.7), and re-windows the rendering draft at
         // every kept place the request sends beside its runs (the design's
-        // F4): the row names each draft beside the member exactly when the
-        // commit writes it — the rendering draft where a run of its identity
-        // is re-inserted or a kept place sent, a stray-only re-window's among
-        // them; each `also` draft where a run of its identity is re-inserted
-        // — in the request's order, all of it request arithmetic
-        // (`Shot::named_drafts`, `Shot::reinserted_runs_of`), so the row
-        // agrees with the journal's own witness of each draft's write.
-        Op::Publish { target, shot, places, deposits } => {
+        // F4): the row names the rendering draft beside the member ALWAYS,
+        // first among the drafts, whether or not the commit writes it — so
+        // a reader that reads a draft's base off its newest publication
+        // finds the member this one minted, a shot that only removes or
+        // reorders published words among them (B3-S10) — then each `also`
+        // draft where a run of its identity is re-inserted, the one write
+        // the commit makes in it, in the request's order; all of it request
+        // arithmetic (`Shot::named_drafts`, the rendering draft first, and
+        // `Shot::reinserted_runs_of`).
+        Op::Publish { target, shot, deposits, .. } => {
             let reinserted = shot.reinserted_values();
-            let rewindowed = places.iter().any(Option::is_some);
             let drafts: Vec<Address> = shot
                 .named_drafts()
                 .enumerate()
-                .filter(|(k, draft)| {
-                    shot.reinserted_runs_of(draft).next().is_some() || (*k == 0 && rewindowed)
-                })
+                .filter(|(k, draft)| *k == 0 || shot.reinserted_runs_of(draft).next().is_some())
                 .map(|(_, draft)| draft)
                 .collect();
             // The homes the deposits name by address (the link-sets design

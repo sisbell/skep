@@ -12,7 +12,11 @@
 //! input is typed, every output is DATA with a code or a kind — the words a
 //! person reads are the copy's and the UI lane's, never this module's — and
 //! the composition holds its frames, its reads, its armed refusals and its
-//! order in one place. The order:
+//! order in one place. Ahead of the steps, [`base`](mod@base) — THE DRAFT'S
+//! BASE (B3-S10): the member the draft's newest publication made, else the
+//! version its fork record names, read off the board by [`draft_base`] for
+//! the caller's [`Inputs::base`] and never taken from the caller's own
+//! index. The order:
 //!
 //! 1. [`enumerate`](mod@enumerate) — THE ENUMERATION (§5.1): one `image` of the draft
 //!    inverted over the held selection, one `find_links_v` over the
@@ -79,6 +83,7 @@ use crate::board::{frames, Answer, Board, Rejection, Token};
 use crate::halt::Halt;
 use crate::sign::Signer;
 
+pub mod base;
 pub mod enumerate;
 pub mod landed;
 pub mod panel;
@@ -89,6 +94,7 @@ pub mod send;
 #[cfg(test)]
 mod tests;
 
+pub use base::draft_base;
 pub use enumerate::{enumerate, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
@@ -274,11 +280,11 @@ pub struct Inputs {
     /// library, judges the edition's members — `claim_refused` where one
     /// stands (`send`'s arm).
     pub claim: bool,
-    /// The base member and `base_extent` — `None` the birth shape: the
-    /// trunk's head member and its extent for the draft that stages the
-    /// head, the member a draft behind the head was staged from or last
-    /// re-windowed to (the client index's per-draft base, Q2 (a)), so the
-    /// shot lands a daughter under its own base.
+    /// The base and `base_extent` — `None` the birth shape: the draft's own
+    /// base as [`draft_base`] reads it off the board, the member its newest
+    /// publication made, else the version its fork record names (the bare
+    /// document while the chain is empty), so the shot lands after it, or as
+    /// its daughter where the trunk has moved past it (PUB-2.44; B3-S10).
     pub base: Option<(Address, u64)>,
     /// `D`, the RENDERING draft — the draft whose arrangement the selection
     /// renders, the home of the kept places and of the records for its own

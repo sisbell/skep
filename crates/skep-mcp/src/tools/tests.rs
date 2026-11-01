@@ -182,7 +182,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     assert_eq!(Tool::named("search").and_then(Tool::members), Some(&["query", "opts"][..]));
     assert_eq!(Tool::named("session_info").and_then(Tool::members), Some(&[][..]));
     assert_eq!(Tool::named("fetch"), Some(Tool::Fetch));
-    assert_eq!(Tool::named("publication_open").and_then(Tool::members), Some(&["draft", "also", "base", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"][..]));
+    assert_eq!(Tool::named("publication_open").and_then(Tool::members), Some(&["draft", "also", "doc", "mint", "claim", "selection", "notes", "readable_drafts", "published"][..]));
     assert_eq!(Tool::named("publication_cancel").and_then(Tool::members), Some(&[][..]));
     for not_a_tool in ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "frobnicate"] {
         assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool");
@@ -198,9 +198,10 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
 /// shape skep-shell's `op` row reads as its `/op-at` form, a numeric `at`
 /// beside an object `frame`, which alone is refused; a name it does not
 /// answer is refused before its arguments are read; a member an adapter
-/// tool's row does not take is refused naming the row's own, and a member of
-/// its `opts` naming the options — `search`'s withheld `reindex` among them —
-/// the row's stranger speaking first.
+/// tool's row does not take is refused naming the row's own — a
+/// `publication_open`'s `base`, which the shell reads itself, among them —
+/// and a member of its `opts` naming the options — `search`'s withheld
+/// `reindex` among them — the row's stranger speaking first.
 #[test]
 fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     let args = |v: Value| -> Map<String, Value> {
@@ -215,6 +216,9 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert!(err.contains("session_info takes no arguments") && err.contains("'principal'"), "{err}");
     let err = Tool::admit("changes_since", &args(json!({"since": 0, "under": "1"}))).expect_err("a stranger");
     assert!(err.contains("'since', 'limit'") && err.contains("'under'"), "{err}");
+    let err = Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.2", "doc": "1.0.1.0.3", "base": "1.0.1.0.3.1"}))).expect_err("a base the shell reads itself");
+    assert!(err.contains("publication_open takes") && err.contains("'base'"), "{err}");
+    assert_eq!(Tool::admit("publication_open", &args(json!({"draft": "1.0.1.0.2", "doc": "1.0.1.0.3"}))), Ok(Tool::PublicationOpen));
     let err = Tool::admit("doc_metadata", &args(json!({"at": 5, "frame": {"op": "retrieve_v"}}))).expect_err("the /op-at shape");
     assert!(err.contains("'at'") && err.contains("'frame'"), "{err}");
     for plain in [json!({"at": {"subspace": "1", "ordinal": "1"}, "frame": {}}), json!({"at": "5", "frame": {}}), json!({"at": -1, "frame": {}}), json!({"at": 5, "frame": "f"}), json!({"at": 5})] {
@@ -266,10 +270,13 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
 /// its naming note names each of them; its `fetch` card and fetch paragraph
 /// name the cap `media` enforces, and the card the fetch's deadline in words;
 /// the `search` card and its query's schema name skep-client's query bound,
-/// and `changes_since`'s limit the change feed's default page: a fact changed
-/// in one place alone tells every agent what the adapter then does otherwise.
+/// `changes_since`'s limit the change feed's default page, and the
+/// publishing paragraph the fork record's type as skep-client spells it,
+/// the record the shell reads a draft's base off (SP-25): a fact changed in
+/// one place alone tells every agent what the adapter then does otherwise.
 #[test]
 fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
+    use skep_client::board::frames::T_FORK;
     use skep_client::board::DEFAULT_CHANGES_LIMIT;
     use skep_client::search::QUERY_BOUND;
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -292,6 +299,9 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     assert!(query.contains(&format!("at most {QUERY_BOUND} bytes")), "the query's schema names its bound: {query}");
     let limit = entry("changes_since")["inputSchema"]["properties"]["limit"]["description"].as_str().expect("the limit's description");
     assert!(limit.contains(&format!("the board's default, {DEFAULT_CHANGES_LIMIT}, when absent")), "the limit names the default page: {limit}");
+    let publishing = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("PUBLISHING. ")).expect("the publishing paragraph");
+    assert!(publishing.contains(&format!("ty {{\"addrs\": [\"{T_FORK}\"]}}, the fork type")), "the fork record's type is skep-client's: {publishing}");
+    assert!(publishing.contains("refused base_unrecorded"), "the refusal a draft with no record meets: {publishing}");
 }
 
 /// A catalog's drift from another counts what an agent is told otherwise.

@@ -31,8 +31,8 @@ use skep_identity::{unit_span, DepositHome, DepositKind, DepositSlot, PublicKey,
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
-use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_HELD_REMOVAL, T_READ_WITH};
-use crate::board::{Board, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
+use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_FORK, T_HELD_REMOVAL, T_READ_WITH};
+use crate::board::{Board, LinkSpan, LinkValue, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
 use crate::dial::{DialError, Dialer, Headers, Request as DialRequest, RequestHead, Response, StreamedResponse};
 use crate::origin::Origin;
 use crate::sign::Signer;
@@ -133,6 +133,9 @@ struct FeedRow {
     op: &'static str,
     docs: Vec<String>,
     key: Option<&'static str>,
+    /// The row's testimony lost: served with `docs`, `op` and `key` null,
+    /// placed under its `docs` as a bare entry is under its derived class.
+    lost: bool,
 }
 
 /// The board as the test writes it.
@@ -165,6 +168,8 @@ struct World {
     head: bool,
     /// `H.1` answers a record that stands and cannot be read.
     damaged_head: bool,
+    /// `/changes` answers this status and body in the page's place.
+    changes_refused: Option<(u16, Value)>,
     key: Option<PublicKey>,
 }
 
@@ -188,7 +193,7 @@ impl World {
         let addr = format!("{home}.0.2.{n}");
         self.position += 1;
         self.links.push(LinkRow { addr: addr.clone(), home: home.to_string(), from, to, ty, at: self.position, retracted: false });
-        self.rows.push(FeedRow { at: self.position, op: "make_link", docs: vec![home.to_string()], key: Some("bare") });
+        self.rows.push(FeedRow { at: self.position, op: "make_link", docs: vec![home.to_string()], key: Some("bare"), lost: false });
         addr
     }
 
@@ -219,7 +224,7 @@ impl World {
         w.doc(&format!("{E}.1"), true, ACCOUNT, vec![run(E, 1, 19)]);
         w.docs.get_mut(&format!("{E}.1")).unwrap().placed = Some(19);
         w.trunk_head.insert(E.to_string(), format!("{E}.1"));
-        w.rows.push(FeedRow { at: w.position, op: "publish", docs: vec![format!("{E}.1")], key: None });
+        w.rows.push(FeedRow { at: w.position, op: "publish", docs: vec![format!("{E}.1")], key: None, lost: false });
         w.text(S, 1, "set one");
         w.doc(S, true, ACCOUNT, vec![run(S, 1, 7)]);
         w.text(S2, 1, "set two");
@@ -679,16 +684,14 @@ impl World {
             addr
         };
         // The records, each homed in the draft whose identity the piece was;
-        // the row names the rendering draft where the commit wrote it, then
-        // each `also` draft where a record landed in it, in the request's
-        // order.
+        // the row names the rendering draft always, whether or not the
+        // commit wrote it, then each `also` draft where a record landed in
+        // it, in the request's order.
         for (home, ds, fs, w) in &records {
             push_link(self, home, vec![ispan(home, *ds, *w)], vec![ispan(&trunk, *fs, *w)], vec![unit(T_CORRESPONDENCE)]);
         }
         if let Some(d) = &draft {
-            if records.iter().any(|(home, ..)| home == d) || places.iter().any(Option::is_some) {
-                homes.push(d.clone());
-            }
+            homes.push(d.clone());
         }
         for other in &also {
             if records.iter().any(|(home, ..)| home == other) {
@@ -789,11 +792,14 @@ impl World {
                 ds.runs = Self::coalesce(positions);
             }
         }
-        self.rows.push(FeedRow { at, op: "publish", docs: homes, key: None });
+        self.rows.push(FeedRow { at, op: "publish", docs: homes, key: None, lost: false });
         json!({"resp": "ack_addr", "addr": member, "at": at})
     }
 
     fn changes(&self, path: &str) -> Response {
+        if let Some((status, body)) = self.changes_refused.clone() {
+            return reply(status, body);
+        }
         let query = path.split_once('?').map_or("", |x| x.1);
         let (mut since, mut under, mut limit) = (0u64, None::<String>, 256usize);
         for pair in query.split('&') {
@@ -806,7 +812,11 @@ impl World {
             }
         }
         let visible: Vec<&FeedRow> = self.rows.iter().filter(|r| r.at > since).filter(|r| under.as_ref().is_none_or(|u| r.docs.iter().any(|d| d == u || d.starts_with(&format!("{u}."))))).collect();
-        let page: Vec<Value> = visible.iter().take(limit).map(|r| json!({"at": r.at, "op": r.op, "docs": r.docs, "key": r.key, "time": null})).collect();
+        let page: Vec<Value> = visible
+            .iter()
+            .take(limit)
+            .map(|r| if r.lost { json!({"at": r.at, "op": null, "docs": null, "key": null, "time": null}) } else { json!({"at": r.at, "op": r.op, "docs": r.docs, "key": r.key, "time": null}) })
+            .collect();
         let last = page.last().and_then(|r| r["at"].as_u64()).unwrap_or(since);
         reply(200, json!({"changes": page, "last": last, "more": visible.len() > page.len()}))
     }
@@ -1640,7 +1650,7 @@ fn every_refusal_arm_carries_its_face_data() {
         }
         dialer.world().refuse_next = Some(rej);
     };
-    dialer.world().rows.push(FeedRow { at: 999, op: "insert", docs: vec![D.to_string()], key: Some("ab".repeat(32).leak()) });
+    dialer.world().rows.push(FeedRow { at: 999, op: "insert", docs: vec![D.to_string()], key: Some("ab".repeat(32).leak()), lost: false });
     refuse("kept_place_moved", json!({"site": {"index": 1}}));
     let sent = send(&p, &inputs(), &mut request).unwrap();
     let Sent::Refused(Refusal::KeptPlaceMoved { index, race }) = sent else { panic!("{sent:?}") };
@@ -1992,4 +2002,135 @@ fn an_unowned_also_draft_is_the_unowned_draft_arm() {
     let before = dialer.world().position;
     assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::UnownedDraft { draft: a(A) }));
     assert_eq!(dialer.world().position, before, "nothing committed");
+}
+
+// ── THE DRAFT'S BASE ─────────────────────────────────────────────────────
+
+/// `X` a memberless edition of the person's.
+const X: &str = "1.0.1.0.30";
+
+/// What `draft_base` answers.
+type BaseRead = Result<Option<(Address, u64)>, Fault>;
+
+/// `draft_base` over `world`, `doc` and `draft`.
+fn base_of(world: World, doc: &str, draft: &str) -> (Arc<Scripted>, BaseRead) {
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let base = draft_base(&p, &a(doc), &a(draft));
+    (dialer, base)
+}
+
+/// The fork record homed in `draft`, its `to` the addresses `to` names, at
+/// the next position.
+fn fork_record(w: &mut World, draft: &str, to: &[&str]) -> String {
+    w.typed(draft, vec![], to.iter().map(|addr| unit(addr)).collect(), T_FORK)
+}
+
+/// A publish row at the next position: the member `docs` lead with
+/// registered, holding `width` positions of `E`'s identity.
+fn publish_row(w: &mut World, docs: &[&str], width: u64) {
+    w.doc(docs[0], true, ACCOUNT, vec![run(E, 1, width)]);
+    w.position += 1;
+    w.rows.push(FeedRow { at: w.position, op: "publish", docs: docs.iter().map(|d| d.to_string()).collect(), key: None, lost: false });
+}
+
+/// THE BASE READ OFF THE RECORD (B3-S10): a draft with neither a fork
+/// record nor a publication row has no base — `None`, never the trunk's
+/// head; its record names the version it was begun from, read with its
+/// extent — the first record of the EXACT type naming `doc`'s chain, in
+/// address order, a link whose type slot is not `3.9.4` alone (the parent
+/// `3.9` beside it) and a record naming another document passed over; a
+/// record naming the bare edition while its chain is
+/// empty is the document itself, its extent nothing. The reads: the trunk
+/// and the draft, the feed under the trunk from the draft's mint, the one
+/// four-set read of the draft's records, each read once, and the extent.
+#[test]
+fn a_drafts_base_is_its_fork_records_version_and_none_where_no_record_names_one() {
+    let (world, _) = World::base();
+    let (_, none) = base_of(world, E, D);
+    assert_eq!(none, Ok(None), "no record and no row: no base, never the head");
+    let (mut world, _) = World::base();
+    let e1 = format!("{E}.1");
+    world.link(D, vec![], vec![unit(&e1)], vec![unit("1.1.0.1.0.1.0.3.9"), unit(T_FORK)]);
+    fork_record(&mut world, D, &[S]);
+    let record = fork_record(&mut world, D, &[&e1]);
+    fork_record(&mut world, D, &[&e1]);
+    let (dialer, base) = base_of(world, E, D);
+    assert_eq!(base, Ok(Some((a(&e1), 19))), "the first record of the exact type naming E's chain, its extent");
+    let since = dialer.world().docs[D].at;
+    assert_eq!(
+        dialer.ops(),
+        ["doc_metadata", "doc_metadata", &format!("GET /changes?since={since}&under={E}"), "find_links_ftt", "read_link", "read_link", "read_link", "retrieve_doc_v_span_set"],
+        "every record read up to {record}, and no further"
+    );
+    // A record naming another document alone: no base for this chain.
+    let (mut world, _) = World::base();
+    fork_record(&mut world, D, &[S]);
+    assert_eq!(base_of(world, E, D).1, Ok(None));
+    // The memberless edition: the bare document is its own base.
+    let (mut world, _) = World::base();
+    world.doc(X, true, ACCOUNT, Vec::new());
+    let d2 = "1.0.1.0.31";
+    world.doc(d2, false, ACCOUNT, vec![run(d2, 1, 3)]);
+    fork_record(&mut world, d2, &[X]);
+    assert_eq!(base_of(world, X, d2).1, Ok(Some((a(X), 0))), "doc itself while the chain is empty");
+    // A trunk the board holds no record of is that fault, ahead of the rest.
+    let (world, _) = World::base();
+    assert_eq!(base_of(world, "1.0.1.0.40", D).1, Err(Fault::NoSuchDocument(a("1.0.1.0.40"))));
+}
+
+/// THE BASE READ OFF THE NEWEST RENDERING ROW: the member of the last
+/// `publish` row under the trunk that names the draft as its rendering
+/// draft — the first document after the member that is not the trunk —
+/// beats the fork record and an older such row, read across the feed's
+/// pages; a row naming the
+/// draft after another rendering draft (an `also` mention), a row of
+/// another chain naming the trunk among its homes, and a row whose
+/// testimony was lost each name no base; at the mint form the edition
+/// between the member and the draft is passed over. A feed that refuses the
+/// read is a fault, never a history holding no row (SP-14).
+#[test]
+fn a_drafts_base_is_its_newest_rendering_rows_member() {
+    let (mut world, _) = World::base();
+    let e1 = format!("{E}.1");
+    fork_record(&mut world, D, &[&e1]);
+    let (e2, e3, e4, e5) = (format!("{E}.2"), format!("{E}.3"), format!("{E}.4"), format!("{E}.5"));
+    publish_row(&mut world, &[&e2, D], 7);
+    for _ in 0..300 {
+        world.position += 1;
+        let at = world.position;
+        world.rows.push(FeedRow { at, op: "make_link", docs: vec![E.to_string()], key: Some("bare"), lost: false });
+    }
+    publish_row(&mut world, &[&e3, D], 8);
+    publish_row(&mut world, &[&e4, A, D], 9);
+    publish_row(&mut world, &[&format!("{S}.1"), D, E], 10);
+    publish_row(&mut world, &[&e5], 11);
+    world.rows.last_mut().unwrap().lost = true;
+    let (dialer, base) = base_of(world, E, D);
+    assert_eq!(base, Ok(Some((a(&e3), 8))), "the newest row D rendered, on the second page, over the first page's older one");
+    assert_eq!(dialer.frames("find_links_ftt").len(), 0, "the row beats the record, which is never read");
+    assert_eq!(dialer.ops().iter().filter(|op| op.starts_with("GET /changes")).count(), 2, "two pages");
+    // The mint form: the edition stands between the member and the draft.
+    let (mut world, _) = World::base();
+    world.doc(X, true, ACCOUNT, Vec::new());
+    let x1 = format!("{X}.1");
+    publish_row(&mut world, &[&x1, X, D], 4);
+    assert_eq!(base_of(world, X, D).1, Ok(Some((a(&x1), 4))));
+    // The feed refusing the read.
+    for refusal in [(410, json!({"error": "history_reclaimed", "floor": 99})), (500, json!({"error": "history_io", "detail": "the files will not read"}))] {
+        let (mut world, _) = World::base();
+        fork_record(&mut world, D, &[&e1]);
+        world.changes_refused = Some(refusal.clone());
+        assert!(matches!(base_of(world, E, D).1, Err(Fault::Halt(_))), "{refusal:?}: a fault, never the record's base");
+    }
+}
+
+/// THE FORK RECORD IS A RECORD CLASS: no enumeration offers it, whatever its
+/// ends touch.
+#[test]
+fn the_fork_record_is_a_record_class() {
+    let typed = |ty: &str| LinkValue { from: vec![], to: vec![], ty: vec![LinkSpan { start: ty.to_string(), width: format!("{}1", "0.".repeat(ty.split('.').count() - 1)) }], at: None };
+    assert!(enumerate::is_record_class(&typed(T_FORK)));
+    assert!(!enumerate::is_record_class(&typed("1.1.0.1.0.1.0.3.9")), "the parent, alternative, is a person's link");
 }

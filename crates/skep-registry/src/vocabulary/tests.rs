@@ -8,9 +8,9 @@ use crate::rows;
 /// Every type the brief's table names, by path, in the order the table
 /// holds them — the table transcribed once more, so a row dropped or
 /// renumbered in `vocabulary.rs` fails here by name.
-const PATHS: [&str; 119] = [
+const PATHS: [&str; 120] = [
     "1", "2", "3", "4", "5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10",
-    "6", "6.1", "6.2", "6.3", "7", "8", "9", "9.1", "9.2", "9.3", "10", "10.1", "10.2", "10.3",
+    "6", "6.1", "6.2", "6.3", "7", "8", "9", "9.1", "9.2", "9.3", "9.4", "10", "10.1", "10.2", "10.3",
     "10.4", "11", "12", "13", "14", "14.1", "14.2", "14.3", "14.4", "14.5", "15", "15.1", "15.2",
     "15.3", "15.4", "16", "17", "18", "18.1", "18.2", "18.3", "19", "20", "21", "21.1", "21.2",
     "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "22", "23", "23.1", "23.2", "23.3", "23.4", "23.5", "23.6", "23.7", "24", "27", "27.1", "27.2", "27.2.1", "27.2.2", "27.3", "28", "30", "40", "41", "42",
@@ -211,6 +211,25 @@ fn the_link_sets_rows_stand_at_their_pinned_addresses() {
     assert_eq!(
         definition_at(&commons_type(&[102])).expect("counterpart").endsets,
         "from: the one passage; to: its counterpart."
+    );
+}
+
+/// THE FORK RECORD (B3-S10) stands at `3.9.4`, a subtype under alternative
+/// beside draft, revision and branch, named `fork`; it brings nothing of its
+/// own, so its `from` is empty, and its `to` names where the draft was begun
+/// — the version, the bare document while the chain is empty — with an
+/// alternative's source draft beside it.
+#[test]
+fn the_fork_record_stands_under_alternative_its_from_empty() {
+    let name = |ordinals: &[u32]| definition_at(&commons_type(ordinals)).map(|d| d.name);
+    assert_eq!(name(&[9, 4]), Some("fork"));
+    assert_eq!(name(&[9]), Some("alternative"), "the parent keeps its own row");
+    assert_eq!((name(&[9, 1]), name(&[9, 2]), name(&[9, 3])), (Some("draft"), Some("revision"), Some("branch")));
+    let fork = definition_at(&commons_type(&[9, 4])).expect("the fork record's row");
+    assert_eq!(
+        fork.endsets,
+        "from: empty; to: the version the draft was begun from, the bare document while its chain is \
+         empty, and, for an alternative, the draft it was made from."
     );
 }
 

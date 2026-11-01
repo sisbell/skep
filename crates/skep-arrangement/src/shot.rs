@@ -325,8 +325,9 @@ impl Shot {
     /// each ahead of the runs), whose identity the shot re-mints
     /// ([`is_draft_native`](Shot::is_draft_native)), in which it homes its
     /// correspondence records (each piece's in the draft its identity was),
-    /// and which the feed row names after the member where the commit wrote
-    /// them. Empty with no `draft` — `also` rides only beside one. Request
+    /// and which the feed row names after the member — the rendering draft
+    /// always, each `also` draft where the commit wrote it. Empty with no
+    /// `draft` — `also` rides only beside one. Request
     /// arithmetic, reading nothing.
     pub fn named_drafts(&self) -> impl Iterator<Item = Address> + '_ {
         self.draft.iter().chain(&self.also).map(trunk_of)

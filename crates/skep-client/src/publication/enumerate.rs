@@ -54,7 +54,7 @@ use skep_address::Address;
 
 use crate::address::parse_address;
 use crate::board::answers::{self, IRun, LinkValue};
-use crate::board::frames::{self, Slot, T_CORRESPONDENCE, T_EDITION, T_GRANT, T_HELD_REMOVAL, T_REPLACES};
+use crate::board::frames::{self, Slot, T_CORRESPONDENCE, T_EDITION, T_FORK, T_GRANT, T_HELD_REMOVAL, T_REPLACES};
 use crate::board::{T_CLAIM, T_ENROLL, T_RETIRE, T_RETRACTION, T_SUPERSEDES};
 
 use super::{home_of_link, owned_by, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
@@ -274,7 +274,7 @@ pub fn region_of(placed: &[Placement], selection: &[Run]) -> Vec<(u64, u64)> {
 /// Returns whether `ty` is a record class no enumeration offers: the exact
 /// test over the stored type slot, the edition class with its subtypes.
 pub fn is_record_class(value: &LinkValue) -> bool {
-    let exact = [T_CORRESPONDENCE, T_HELD_REMOVAL, T_GRANT, T_ENROLL, T_RETIRE, T_CLAIM, T_SUPERSEDES, T_RETRACTION, T_REPLACES, T_JOURNAL_DESIGNATION, T_CONSUMPTION_MARKER];
+    let exact = [T_CORRESPONDENCE, T_HELD_REMOVAL, T_FORK, T_GRANT, T_ENROLL, T_RETIRE, T_CLAIM, T_SUPERSEDES, T_RETRACTION, T_REPLACES, T_JOURNAL_DESIGNATION, T_CONSUMPTION_MARKER];
     if exact.iter().any(|t| value.typed_exactly(t)) {
         return true;
     }

@@ -394,6 +394,38 @@ fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
     assert!(mcp.finish().success());
 }
 
+/// `stage` IS DISPATCHED (the staging act, B3-S10): its `from_` is the
+/// wire's `from`, mapped back by the adapter, and the one call mints the
+/// agent's private draft of the claimant's published doc 1 in its own
+/// account, holding the document's text by identity, with the base recorded
+/// — `doc_metadata` of the draft answers `base`, `base_copied` and `source`
+/// — so an agent reads where a draft began off the board and writes no
+/// record of its own; a stage of a document the agent may not read is the
+/// daemon's `withheld`, as data.
+#[test]
+fn stage_is_dispatched_and_doc_metadata_serves_the_base_it_recorded() {
+    let fixture = Fixture::new("stage");
+    let agent = fixture.agent_principal();
+    let mut mcp = Launch::over(&fixture, agent).spawn();
+    mcp.initialize();
+    let staged = mcp.call_json("stage", json!({"from_": CLAIMANT_DOC1}));
+    assert_eq!(staged["resp"], "ack_addr", "the draft minted: {staged}");
+    let draft = staged["addr"].as_str().expect("the draft's address").to_string();
+    assert!(draft.starts_with(&format!("{AGENT_SPACE}.0.")), "a document of the agent space's own: {draft}");
+    let meta = mcp.call_json("doc_metadata", json!({"doc": draft}));
+    assert_eq!(meta["resp"], "doc_metadata", "{meta}");
+    assert_eq!(meta["published"], json!(false), "born private: {meta}");
+    assert_eq!(meta["owner"], json!(AGENT_SPACE), "{meta}");
+    assert_eq!(meta["source"], json!(CLAIMANT_DOC1), "copied from the document: {meta}");
+    assert_eq!(meta["base"], json!(CLAIMANT_DOC1), "the memberless document is its own base: {meta}");
+    assert!(meta["base_copied"].as_str().is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n >= 1)), "the atoms the copy took, counted: {meta}");
+    let text = mcp.call_json("retrieve_v", json!({"specs": [{"doc": draft, "span": {"start": "1.1", "width": "0.1"}}]}));
+    assert_eq!(text["resp"], "delivery", "the draft reads: {text}");
+    let v = mcp.call_json("stage", json!({"from_": "1.0.1.0.9"}));
+    assert_eq!((v["kind"].as_str(), v["body"]["code"].as_str(), v["body"]["op"].as_str()), (Some("refused"), Some("source_not_registered"), Some("stage")), "the daemon's own rejection, verbatim: {v}");
+    assert!(mcp.finish().success());
+}
+
 /// No session token and no key seed reaches a tool result or a log line.
 ///
 /// Not in a tool result — an answer, a refusal, or `session_info` — and not

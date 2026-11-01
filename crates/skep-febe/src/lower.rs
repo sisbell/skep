@@ -22,7 +22,7 @@
 
 use skep_arrangement::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
-    VersionError,
+    StageError, VersionError,
 };
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
@@ -361,6 +361,20 @@ impl Lower for VersionError {
                 (RejectCode::PrivateVersionOfPublished, None)
             }
             VersionError::Mint(m) => m.lower(),
+        }
+    }
+}
+
+impl Lower for StageError {
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        match self {
+            // The three pre-transaction refusals `version`'s cross-owner arm
+            // answers, lowered to the same codes; the source's readability
+            // is the door's `withheld`, ahead of the store.
+            StageError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
+            StageError::NotAPrincipal => (RejectCode::NotAPrincipal, None),
+            StageError::NodeTierCrossOwner => (RejectCode::NodeTierCrossOwner, None),
+            StageError::Mint(m) => m.lower(),
         }
     }
 }

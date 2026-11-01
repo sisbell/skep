@@ -192,16 +192,18 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// What each entry carries is that slice's checkpoint form and nothing else:
 /// M3's four serde fields (the node registry, the principals, the
 /// per-namespace frontier counts and the publication map), M4's content map,
-/// M5's six — its arrangements, whose resident form is the canonical
+/// M5's seven — its arrangements, whose resident form is the canonical
 /// maximally-merged decomposition maintained by M5's fold; its provenance R;
 /// its birth memo, each birth member's content count at its mint, frozen
 /// there and checkpointed because nothing else M5 holds can recompute it,
 /// which the per-class filter keeps whole; its shot terms, kept whole on the
-/// same ground; its fork sources, each `version`-minted document's source,
-/// kept so the reclaim floor cannot lose it and reduced by the fork's
-/// readability; and its arranged-at positions, each document's last
-/// arrangement change, reduced by the document's readability — and M7's link
-/// store. M7's `#[serde(skip)]` hints are thereby
+/// same ground; its fork sources, each `version`- or `stage`-minted
+/// document's source, kept so the reclaim floor cannot lose it and reduced
+/// by the fork's readability; its arranged-at positions, each document's
+/// last arrangement change, reduced by the document's readability; and its
+/// draft bases, each staged draft's base with the extent its copy took and
+/// its source, reduced by the draft's readability — and M7's link store.
+/// M7's `#[serde(skip)]` hints are thereby
 /// excluded, exactly as this section demands: they are the [`hints_tree`]
 /// section's subject, and rendering them here would compare a derived
 /// structure against itself.

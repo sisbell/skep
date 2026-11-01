@@ -77,7 +77,10 @@ where
     /// and the fork of another's draft all stand (PUB-2.18, PUB-2.21).
     /// Applying the refusals to that arm would forbid every private working
     /// copy of every published document to every principal, which PUB-2.14
-    /// forbids.
+    /// forbids. The sibling draft the two refusals point an owner to is the
+    /// staging act's, [`stage`](Vstream::stage): the same snapshot into a
+    /// document minted private whatever the source's state, with the draft's
+    /// base recorded beside it.
     ///
     /// **Ungated, deliberately**: this op takes no [`Caller`](crate::Caller)
     /// and applies no ω check, because forking a document one may not write

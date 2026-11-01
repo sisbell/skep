@@ -748,3 +748,91 @@ fn refusals_arrive_typed_classified_and_localized() {
     assert_eq!(rej.code, RejectCode::NotAuthorized);
     assert_eq!(rej.disposition, Disposition::Permanent);
 }
+
+/// THE STAGING ACT (B3-S10): where `version` refuses a private member of
+/// the owner's published edition and any version of the owner's draft, a
+/// `stage` of either lands — a PRIVATE document of the owner's account
+/// sharing the source's surface, its base recorded. `doc_metadata` serves
+/// the draft's `base` and `base_copied` (the member or bare document copied
+/// and the count the copy took) with `source` the surface copied, as for a
+/// version; the bare edition stages its head; an alternative of the staged
+/// draft inherits the base, one hop; an alternative of an unrecorded draft
+/// records none; the source itself answers no base; and the base MOVES to
+/// the member the draft renders at its shot, the source kept.
+#[test]
+fn a_stage_lands_private_where_version_refuses_and_doc_metadata_serves_its_base() {
+    let fx = setup();
+    let edition = create_edition(&fx);
+    let (start, _) = deposit3(&fx, &edition);
+    let draft = create_doc(&fx);
+    insert3(&fx, &draft);
+    let (member, _) =
+        ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: None }));
+    let (of_edition, _) = ack_addr(ex(&fx.febe, fx.user, Op::Stage { from: edition.clone() }));
+    let (of_member, _) = ack_addr(ex(&fx.febe, fx.user, Op::Stage { from: member.clone() }));
+    let (of_draft, _) = ack_addr(ex(&fx.febe, fx.user, Op::Stage { from: draft.clone() }));
+    let (of_alternative, _) = ack_addr(ex(&fx.febe, fx.user, Op::Stage { from: of_member.clone() }));
+    let meta = |doc: &skep_address::Address| match ex(&fx.febe, fx.user, Op::DocMetadata { doc: doc.clone() }) {
+        skep_febe::Response::DocMetadata { doc, published, source, base, base_copied, .. } => {
+            (doc, published, source, base, base_copied)
+        }
+        other => panic!("doc_metadata answers: {other:?}"),
+    };
+    let (d, published, source, base, copied) = meta(&of_member);
+    assert_eq!(d, of_member, "its own trunk");
+    assert!(!published, "born private");
+    assert_eq!(
+        (source, base, copied),
+        (Some(member.clone()), Some(member.clone()), Some(nat(3))),
+        "the member copied, the base, the three positions the copy took"
+    );
+    let (_, published, source, base, copied) = meta(&of_edition);
+    assert!(!published);
+    assert_eq!(
+        (source, base, copied),
+        (Some(member.clone()), Some(member.clone()), Some(nat(3))),
+        "the bare edition stages its head"
+    );
+    let (_, _, source, base, copied) = meta(&of_draft);
+    assert_eq!(
+        (source, base, copied),
+        (Some(draft.clone()), None, None),
+        "an alternative of an unrecorded draft: its source noted, no base"
+    );
+    let (_, _, source, base, copied) = meta(&of_alternative);
+    assert_eq!(
+        (source, base, copied),
+        (Some(of_member.clone()), Some(member.clone()), Some(nat(3))),
+        "inherited, one hop: the source the draft, the base the member"
+    );
+    let (_, _, source, base, copied) = meta(&member);
+    assert_eq!((source, base, copied), (Some(edition.clone()), None, None), "the source answers no base");
+    let (set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: of_member.clone() }));
+    assert_ne!(set, SpanSet::empty(), "the surface, shared");
+    // The base moves at the shot the draft renders.
+    let shot = skep_febe::Shot {
+        base: Some(skep_febe::Base { member: member.clone(), extent: nat(3) }),
+        draft: Some(of_member.clone()),
+        also: vec![],
+        runs: vec![skep_febe::ShotRun {
+            origin: edition.clone(),
+            run: skep_febe::Run::new(start, nat(3)).expect("a content run"),
+        }],
+    };
+    let (next, _) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Publish {
+            target: skep_febe::PublishTarget::Document(edition),
+            shot,
+            places: Vec::new(),
+            deposits: skep_febe::PublishDeposits::default(),
+        },
+    ));
+    let (_, _, source, base, copied) = meta(&of_member);
+    assert_eq!(
+        (source, base, copied),
+        (Some(member), Some(next), Some(nat(3))),
+        "moved to the member rendered, the source kept"
+    );
+}

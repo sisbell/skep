@@ -2,7 +2,7 @@
 //!
 //! The suite checks the rules the shell alone keeps, with no daemon behind
 //! it — a `publish` frame through `op` refused as a call before any dial,
-//! the six unholdable writes refused under a stopped node and `unreachable`
+//! the seven unholdable writes refused under a stopped node and `unreachable`
 //! not of the set, `count` and `confirm` with no panel `no_panel`, `cancel`
 //! idempotent, a bare session refused at `open`, and the row's own members
 //! read before the session, a `base` among them read by nothing — and,
@@ -66,15 +66,15 @@ fn a_publish_frame_through_op_is_refused_as_a_call_before_any_dial() {
     assert!(recorded.iter().all(|f| f["op"] != "publish") && recorded.contains(&read), "no publish reached the board: {recorded:?}");
 }
 
-/// Checks that the six unholdable writes are refused under a stopped node.
+/// Checks that the seven unholdable writes are refused under a stopped node.
 ///
-/// With the own node stopped, each of `fork`, `version`, `make_link`,
-/// `nullify` and `edit_link` through `op` is refused `stopped` naming its op
-/// and dialed never (`publish` is refused as a call ahead of it); a write
-/// outside the six — a draft's mint — is dialed as it dials; and with the
-/// node running, the same writes at a board that does not answer meet the
-/// dial's own `unreachable`, never a hold's cause (§3c.4: "`unreachable`
-/// not of this set").
+/// With the own node stopped, each of `fork`, `version`, `stage`,
+/// `make_link`, `nullify` and `edit_link` through `op` is refused `stopped`
+/// naming its op and dialed never (`publish` is refused as a call ahead of
+/// it); a write outside the seven — a draft's mint — is dialed as it dials;
+/// and with the node running, the same writes at a board that does not
+/// answer meet the dial's own `unreachable`, never a hold's cause (§3c.4:
+/// "`unreachable` not of this set").
 #[test]
 fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not_of_the_set() {
     let dir = TempDir::new().unwrap();
@@ -87,6 +87,7 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
     let writes = [
         json!({"op": "fork", "published": true}),
         json!({"op": "version", "d_src": "1.0.2.0.1"}),
+        json!({"op": "stage", "from": "1.0.2.0.1"}),
         json!({"op": "make_link", "home": "1.0.2.0.1", "from": {"addrs": ["1.0.2.0.1"]}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}),
         json!({"op": "nullify", "home": "1.0.2.0.1", "target": "1.0.2.0.1.0.2.1"}),
         json!({"op": "edit_link", "original": "1.0.2.0.1.0.2.1", "d_s": "1.0.2.0.1", "d_a": "1.0.2.0.1", "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}}),
@@ -97,9 +98,9 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
         let v = refused.to_value();
         assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("stopped", Some("shell"), frame["op"].as_str()), "{v}");
     }
-    assert!(frames.lock().unwrap().is_empty(), "nothing of the six is dialed under the stop");
+    assert!(frames.lock().unwrap().is_empty(), "nothing of the seven is dialed under the stop");
     let mint = json!({"op": "create_new_document", "account": "1.0.2"});
-    assert_eq!(shell.call("op", &json!({"session": session, "frame": mint})).unwrap_err().name(), "unreachable", "a write outside the six dials as it dials");
+    assert_eq!(shell.call("op", &json!({"session": session, "frame": mint})).unwrap_err().name(), "unreachable", "a write outside the seven dials as it dials");
     shell.set_node_state(NodeState::Running);
     for frame in &writes {
         let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
@@ -109,7 +110,7 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
     // reads the board's `H.1` for its attest, which is what the listener
     // records of a write it never answers.
     let recorded = frames.lock().unwrap().clone();
-    assert!(recorded.len() >= 6, "the mint and the five writes under the running node reached the listener: {recorded:?}");
+    assert!(recorded.len() >= 7, "the mint and the six writes under the running node reached the listener: {recorded:?}");
 }
 
 /// Checks the family's answers where no panel stands, and the row's members.

@@ -81,6 +81,7 @@ impl fmt::Debug for Op {
                 .field("d_src", d_src)
                 .field("published", published)
                 .finish(),
+            Op::Stage { from } => f.debug_struct("Stage").field("from", from).finish(),
             Op::Publish { target, shot, places, deposits } => f
                 .debug_struct("Publish")
                 .field("target", target)

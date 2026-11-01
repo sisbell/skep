@@ -16,7 +16,10 @@
 //!   honored bare, the explicit-`false` one `mint_home_public`) and the
 //!   session-kind axis: `auth_wire/gates.rs`; `version(doc 1, published:false)`
 //!   → `private_version_of_published` and a flagless `version` of a draft →
-//!   `private_source_versionless`: `version_chain.rs`; the bare owner's
+//!   `private_source_versionless`: `version_chain.rs`; a bare `stage` of
+//!   doc 1 admitted private — the staging act is never publish-class —
+//!   and a stage into an empty account `mint_home_first`:
+//!   `auth_wire/gates.rs`, `stage.rs`; the bare owner's
 //!   `nullify` of a doc-1-homed record (an empty address, a grant) →
 //!   `signed_session_required`, the signed owner's reaching the store:
 //!   `nullify_class.rs`.

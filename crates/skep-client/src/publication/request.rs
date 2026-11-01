@@ -426,6 +426,7 @@ impl Request {
         price::price(&Shape {
             runs: &self.runs,
             drafts: &drafts,
+            draft: self.draft.as_ref(),
             term: &term,
             mint: self.mint.is_some(),
             claim: self.claim,

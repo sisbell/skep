@@ -208,7 +208,7 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let names = mcp.tool_names();
-    for tool in ADDED_OPS.iter().chain(ADAPTER_TOOLS.iter()).chain(["insert", "make_link", "retrieve_v", "image", "doc_metadata", "window_ftt", "out_claims"].iter()) {
+    for tool in ADDED_OPS.iter().chain(ADAPTER_TOOLS.iter()).chain(["insert", "make_link", "retrieve_v", "image", "doc_metadata", "window_ftt", "out_claims", "stage"].iter()) {
         assert!(names.iter().any(|n| n == tool), "`{tool}` is listed: {names:?}");
     }
     // The shell's calls answer.

@@ -152,7 +152,7 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
         let Value::Object(args) = args else { panic!("arguments are an object") };
         wire_frame(op, args)
     };
-    for op in ["make_link", "emit"] {
+    for op in ["make_link", "emit", "stage"] {
         assert_eq!(frame(op, json!({"from_": "1.1", "to": [{"from_": "x"}]})), json!({"op": op, "from": "1.1", "to": [{"from_": "x"}]}), "{op} renames its top-level from_");
         assert_eq!(frame(op, json!({"from": "1.1", "from_": "2.2"})), json!({"op": op, "from": "1.1", "from_": "2.2"}), "{op}: both spellings ride — the collision is the daemon's to refuse");
     }
@@ -173,8 +173,8 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
     let names: Vec<&str> = Tool::names().collect();
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
-    assert_eq!(DISPATCH_OPS.len(), 48);
-    assert_eq!(names.len(), 62);
+    assert_eq!(DISPATCH_OPS.len(), 49);
+    assert_eq!(names.len(), 63);
     for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history"] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }

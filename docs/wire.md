@@ -1413,21 +1413,44 @@ derived from the member's address — a trunk member `D.k+1` was minted
 against `D.k`, a daughter `X.m` against `X`, `D.1` against the memberless
 document or, with `base_extent` `null`, against nothing.
 
-`source` is THE FORK SOURCE OF THE ADDRESS NAMED: the address whose
+`source` is THE SOURCE OF THE ADDRESS NAMED: the address whose
 arrangement a `version` snapshotted into it at the mint — the version
 member where `d_src` had a chain (its head, pinned then, or the member
-`d_src` named), the bare document where it had none — and `null` where
-no `version` minted the address named: the trunk document itself, a
-member a `publish` shot minted, a document `create_new_document` or
-`fork` minted. It is answered for an owned version and a cross-owner
-fork alike, ONE HOP — a fork of a fork names the fork it was taken from
-— and the same at every position from the mint on. It is kept in the
-board's state, so it outlives the journal entry that recorded it, and it
-is served to every reader who may read the address named, whether or not
+`d_src` named), the bare document where it had none — or a `stage`
+copied into it (§Namespace): the member or memberless document staged
+from, or the draft an alternative was made from; and `null` where
+neither minted the address named: the trunk document itself, a member a
+`publish` shot minted, a document `create_new_document` or `fork`
+minted. It is answered for an owned version, a cross-owner fork and a
+staged draft alike, ONE HOP — a fork of a fork names the fork it was
+taken from, an alternative of an alternative the alternative — and the
+same at every position from the mint on. It is kept in the board's
+state, so it outlives the journal entry that recorded it, and it is
+served to every reader who may read the address named, whether or not
 they may read the source: an address is not secret, and a reader who
 wants more of the source asks the source under its own gate. A merge of
 a cross-account fork takes it as the fork's base (the merge record's
 case (j)) where it names a member of the trunk being merged.
+
+`base` and `base_copied` are THE DRAFT BASE OF THE ADDRESS NAMED (the
+staging act, `stage` in §Namespace): `base` the member — or the
+memberless document — the draft's next publication lands after, as the
+board records it, and `base_copied` the number of content positions the
+copy took of it, a decimal string. Recorded by the `stage` that minted
+the draft — the surface copied at its count, measured at the commit, or
+an alternative's inherited base — and MOVED by every `publish` naming the
+draft as its rendering `draft`: `base` to the member the shot minted and
+`base_copied` to that member's whole count, so the next publication
+lands after it and `base_copied` is the `base_extent` a shot off that
+base carries. Both `null` where the board records no base: a document
+`create_new_document` or `fork` minted and never published as a draft,
+an alternative of a draft the board held no base for, a version member,
+the trunk itself; a draft whose own first publication minted its edition
+gains that edition's first member as its base at the shot. Kept in the
+board's state, carried by every checkpoint, the same at every position
+from the stage on, and served to every reader who may read the draft, as
+`source` is — never read off a record the client wrote and never the
+trunk's head where the board records none.
 
 `at`, `time` and `time_from` are THE AGE OF THE ADDRESS NAMED, exactly as
 `link_value` carries a link's: `at` the position of the commit that
@@ -1447,31 +1470,33 @@ answer `at: 0`, the genesis coordinate, with no time.
 
 This example is asked of the birth version `1.0.1.0.1.1`, which a shot
 placing five positions minted from the memberless document taken at
-three — a shot member, so `source` is `null` — the shot at 7, its row
-still in the feed:
+three — a shot member, so `source` is `null` and the board records no
+base for it — the shot at 7, its row still in the feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"at":7,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047,"time_from":"feed"}
+{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047,"time_from":"feed"}
 ```
 
-A private draft minted at 8 whose feed line is gone, dated by the
-hour's anchor:
+A private draft the staging act minted at 8 off that birth version —
+`source` the member copied, `base` that member and `base_copied` the
+five positions the copy took, so a `publish` off it carries
+`base_extent` 5 — whose feed line is gone, dated by the hour's anchor:
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"at":8,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":null,"time":1786838400052,"time_from":"anchor"}
+{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
 `version` off `1.0.1.0.1` while `1.0.1.0.1.1` headed its chain, so born
-sharing that member, which is its `source`; its own chain has no member
-and no shot minted it — and minted by a build before the position map,
-so its age is unknown:
+sharing that member, which is its `source`; its own chain has no member,
+no shot minted it and no staging act recorded a base for it — and minted
+by a build before the position map, so its age is unknown:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"as_of":9,"at":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":null,"time_from":null}
+{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":null,"time_from":null}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -1896,6 +1921,14 @@ wire carries the token. ⟨D⟩ is the document named.
   "⟨D⟩ is private — publishing means minting a separate edition: select
   what to publish and it is minted published-born, your draft
   re-windowing it; private documents are versionless."
+
+The sibling draft both faces name — the one that holds a private copy
+of ⟨D⟩, the one the change is staged in — is `stage`'s (§Namespace): one
+frame mints it in your own account holding ⟨D⟩'s words by identity and
+records where it began, so neither refusal leaves you to assemble the
+draft from a mint and a copy. `private_version_of_published` stands:
+`version` keeps refusing the private member, and `stage` is the second
+op, never a private arm of the first.
 
 Neither `version` refusal reaches a document you do NOT own: the
 cross-owner `version` mints a fresh document in YOUR account (the
@@ -2898,6 +2931,57 @@ published (`published:true`) carries the optional top-level `attest`
 member exactly as a mint born published does (`create_new_document`
 above): `doc` the principal's own account, `op` `fork`, `body` EMPTY.
 
+**`stage`** — THE STAGING ACT, one board operation: mint a fresh
+**private** account-tier document in your own account that holds
+`from`'s whole content by identity, and record in the board's own state
+where the draft began — its BASE, its SOURCE and the extent the copy
+took — all in ONE commit. The draft stands whole or not at all: there is
+no stop state between the mint and the copy, no resume at a later open,
+and no record the client writes to say where the draft began. It is the
+act of staging a change to a published document in a draft — `from` the
+version member you stage the change to, or the document itself while
+its chain is empty — and the act of starting an alternative of a draft
+of yours from where it stands — `from` that draft. → `ack_addr` (the new
+draft's address).
+
+<!-- wire: request stage -->
+```json
+{"from":"1.0.1.0.1.1","op":"stage"}
+```
+
+`stage` mints as `fork` mints — a document of your own account, refused
+`mint_home_first` into an empty one — and copies as `version` snapshots
+(§Arrangement): `from`'s READING SURFACE, so a bare published document
+with members stages its head, a version member itself, a draft itself;
+the link subspace is not shared. `from` is a source argument, consulted
+as `version`'s `d_src` is (§The read predicate): a document you may not
+read is `withheld` naming it, an address naming no document
+`source_not_registered`, and no ownership gate stands on it — a version
+of another's published document, the bare document while its chain is
+empty, and another draft of yours all pass. The draft is ALWAYS private,
+whatever `from`'s state: a stage is never publish-class, takes no
+`attest` (the member is an unknown field on it, as `published` is), is
+admitted from a bare session on a claimed board as a private `fork` is,
+and is the sibling draft the version-chain refusals point you to (§The
+version-chain refusals).
+
+THE RECORD is `doc_metadata`'s `base`, `base_copied` and `source` for the
+draft (§The response envelope): for a member or a memberless published
+document, `base` that surface itself and `base_copied` its whole content
+count at the commit — what the copy took, measured, a memberless home's
+genesis atom counted where it stands; for a draft of yours, `base` and
+`base_copied` that draft's own recorded base and extent, inherited by
+identity, with that draft as the `source` — a draft the board records no
+base for leaves the alternative unrecorded, a free-standing draft of its
+own. THE BASE MOVES: at each `publish` naming the draft as its rendering
+`draft`, the board moves the draft's base to the member the shot minted
+and `base_copied` to that member's whole count, keeping the source, so a
+draft staged from version 3 that publishes version 4 publishes version 5
+next, never a daughter of version 3. The record is the board's own fact,
+read on every device and by every reader of the draft; the shot's own
+`base` is still the request's statement (§Arrangement, `publish`), and
+nothing compares the two.
+
 **`next_account_prefix`** — the next delegable prefix under `parent`
 (what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
 next slot past the 64-component depth cap).
@@ -2961,11 +3045,16 @@ the edition was BORN with: a deposit the edition took while its birth
 version was still the head lies past it and is no part of what a claim
 is compared against, so a deposited edition still matches. `source` is
 the address the document named was born sharing — the member or bare
-document a `version` snapshotted into it — and `null` where no `version`
-minted it, served to whoever may read the address named; `at`, `time`
-and `time_from` are the age of the address named — the position of the
-commit that minted it, kept in the board's state, and the daemon's
-testimony of when it committed (§The response envelope, `doc_metadata`).
+document a `version` snapshotted into it, or a `stage` copied into it —
+and `null` where neither minted it, served to whoever may read the
+address named; `base` and `base_copied` are the draft base the board
+records for it — the member its next publication lands after and the
+positions the copy took of it, recorded by `stage` and moved by every
+`publish` naming the draft — `null` together where it records none;
+`at`, `time` and `time_from` are the age of the address named — the
+position of the commit that minted it, kept in the board's state, and
+the daemon's testimony of when it committed (§The response envelope,
+`doc_metadata`).
 `doc` is a document argument (unreadable → `withheld`; unregistered →
 `doc_not_registered`); a version member answers its DOCUMENT's state,
 and its OWN age.
@@ -3245,16 +3334,24 @@ member's own bit (PUB-2.15): a write homed in `1.0.1.0.1.1` is judged
 exactly as a write into `1.0.1.0.1`. The version chain is publication's
 own (§The version-chain refusals): where you own `d_src` and it is
 PRIVATE, `version` refuses `private_source_versionless` whatever the flag
-— private documents are versionless; mint a sibling draft (`fork`,
-`create_new_document`) to hold the alternative, or publish by minting a
-separate edition. Where you own `d_src` and it is PUBLISHED, an explicit
-`published:false` refuses `private_version_of_published` — every member
-of a published chain is published, so no member's journaled bit ever
-differs from its document's, and the dump's `publication.drafts` never
-lists one. Where you do not own `d_src`, `version` is refused by neither
-rule: it mints a fresh document in your own account — the source's state
-where the flag is absent, your flag where it is not — gated and judged
-by its own bit.
+— private documents are versionless; mint a sibling draft (`stage`,
+`fork`, `create_new_document`) to hold the alternative, or publish by
+minting a separate edition. Where you own `d_src` and it is PUBLISHED,
+an explicit `published:false` refuses `private_version_of_published` —
+every member of a published chain is published, so no member's journaled
+bit ever differs from its document's, and the dump's `publication.drafts`
+never lists one. Where you do not own `d_src`, `version` is refused by
+neither rule: it mints a fresh document in your own account — the
+source's state where the flag is absent, your flag where it is not —
+gated and judged by its own bit.
+
+`stage` (§Namespace) takes the same snapshot of `from`'s reading surface
+as `version` takes — the whole content subspace by identity, the link
+subspace not shared, a bare published document's head — into a document
+minted PRIVATE in your own account whatever `from`'s state, so it is
+refused by neither version-chain rule and lands in no chain; what it
+adds is the board's record of the draft's base, which `version` keeps
+none of.
 
 **`publish`** — the SHOT: append the next member of `doc`'s
 version chain, born published, in one commit, its arrangement the

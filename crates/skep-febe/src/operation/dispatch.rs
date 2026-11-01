@@ -221,6 +221,21 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
+            // The staging act (B3-S10): M5 mints the private draft in the
+            // caller's own account, shares `from`'s surface into it and
+            // records its base, in one commit. `from` was consulted at the
+            // door above (`Op::source_arguments`, `withheld`); the draft is
+            // never publish-class, so the PLAIN driver — the handle takes no
+            // attestation, as `delegate`'s and `register_node`'s take none.
+            // The ack is the draft's address.
+            Op::Stage { from } => {
+                let (addr, at) = self
+                    .stores
+                    .vstream()
+                    .stage(wc.principal, &from)
+                    .map_err(|e| lower_txn(kind, e))?;
+                Ok(Response::AckAddr { addr, at })
+            }
             // The shot (PUB-2.33, PUB-8.1), as THE PUBLICATION (the
             // link-sets design §5.7): M7's composite stages M5's shot — which
             // decides the destination, places the runs by origin, each draft
@@ -684,22 +699,29 @@ where
             // could describe it. The argument projects to its trunk (PUB-2.15)
             // and every document field is read off that one address: M5's own
             // `published_target` (the bit every gate keys on), M3's ω, and the
-            // birth version. The shot terms and the fork source are read off
-            // the address named (signed-ops D25, and the fork-source record,
-            // each served as a member read): a version member the shot minted
-            // answers its own terms, a document a `version` minted answers its
-            // own source, and everything else — a trunk no `version` minted
-            // included — answers none. The source takes no gate of its own:
-            // whoever may read the fork reads the address it was born sharing
-            // (the record's decision 2), and nothing else of the source rides
-            // with it. The mint position is read off the address named too
-            // (M3's position map; D6): a member answers its own mint, the
-            // document its own, and the time is the transport's to add.
+            // birth version. The shot terms, the fork source and the draft
+            // base are read off the address named (signed-ops D25, the
+            // fork-source record and the staging act, B3-S10, each served as
+            // a member read): a version member the shot minted answers its
+            // own terms, a document a `version` or a `stage` minted answers
+            // its own source, a draft the board records a base for answers
+            // that base with the extent its copy took, and everything else —
+            // a trunk no `version` minted included — answers none. The
+            // source and the base take no gate of their own: whoever may
+            // read the draft reads the addresses it was born sharing and
+            // stands on (the record's decision 2), and nothing else of
+            // either rides with them. The mint position is read off the
+            // address named too (M3's position map; D6): a member answers
+            // its own mint, the document its own, and the time is the
+            // transport's to add.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
                 let terms = world.m5().shot_terms(&doc).cloned();
                 let source = world.m5().fork_source(&doc).cloned();
+                let standing = world.m5().draft_base(&doc);
+                let base = standing.map(|b| b.base.clone());
+                let base_copied = standing.map(|b| b.extent.clone());
                 let at = m3.minted_at(&doc);
                 let trunk = trunk_of(&doc);
                 let published = published_target(m3, &trunk);
@@ -712,6 +734,8 @@ where
                     birth,
                     terms,
                     source,
+                    base,
+                    base_copied,
                     at,
                     time: None,
                     as_of,
@@ -756,6 +780,7 @@ where
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Stage { .. }
             | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }

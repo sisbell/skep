@@ -1188,3 +1188,29 @@ fn an_edit_typed_against_an_older_arrangement_is_refused_with_both_positions_and
     let rej = stale(Op::Delete { doc: d, p: vp(1, 1), width: nat(1), as_of: linked_at });
     assert_eq!(rej.site.and_then(|s| s.current), Some(landed_at), "the draft's position is the insert's, never the link's");
 }
+
+/// PUB-6.23 on `stage` (the staging act, B3-S10): a stage of a source the
+/// caller may not read is WITHHELD naming it, nothing minted; the same stage
+/// of a readable source lands in the caller's own account, sharing the
+/// source's surface — the one gate the act takes, `version`'s, with no
+/// ownership gate on the source.
+#[test]
+fn a_stage_of_an_unreadable_source_is_withheld_and_of_a_readable_one_lands() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    let readable_doc = create_doc(&fx);
+    insert3(&fx, &readable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let (other, _their_draft) = stranger(&fx);
+    let before = fx.febe.log_position();
+    assert_withheld(
+        ex(&fx.febe, other, Op::Stage { from: unreadable_doc.clone() }),
+        OpKind::Stage,
+        &unreadable_doc,
+    );
+    assert_eq!(fx.febe.log_position(), before, "a withheld stage commits nothing");
+    let (staged, _) = ack_addr(ex(&fx.febe, other, Op::Stage { from: readable_doc }));
+    let (set, _) = spanset(ex(&fx.febe, other, Op::RetrieveDocVSpanSet { doc: staged }));
+    assert_ne!(set, skep_address::SpanSet::empty(), "the readable source's surface, shared");
+}

@@ -172,6 +172,10 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)], as_of: Seq(7) }),
         rq(None, Op::Version { d_src: d1(), published: None }),
         rq(None, Op::Version { d_src: d1(), published: Some(false) }),
+        // The staging act (B3-S10): one argument, the source staged from —
+        // a member, the bare document, or a draft — and no flag.
+        rq(None, Op::Stage { from: a(&[1, 0, 1, 0, 1, 1]) }),
+        rq(Some("req-stage"), Op::Stage { from: d2() }),
         // The publish shot (wire v7.3): the ordinary shot off a member with
         // a draft-native run and a window, carrying the draft-native run's
         // kept place beside the runs (the link-sets design §5.7) — `null` at
@@ -512,6 +516,7 @@ const OP_NAMES: &[&str] = &[
     "reinstate",
     "rearrange",
     "version",
+    "stage",
     "publish",
     "make_link",
     "emit",
@@ -569,41 +574,42 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::Reinstate => 10,
         OpKind::Rearrange => 11,
         OpKind::Version => 12,
-        OpKind::Publish => 13,
-        OpKind::MakeLink => 14,
-        OpKind::Emit => 15,
-        OpKind::Nullify => 16,
-        OpKind::AssertSup => 17,
-        OpKind::EditLink => 18,
-        OpKind::ReadLink => 19,
-        OpKind::FollowLink => 20,
-        OpKind::RetrieveV => 21,
-        OpKind::RetrieveI => 22,
-        OpKind::ContentFrontier => 23,
-        OpKind::RetrieveDocVSpan => 24,
-        OpKind::RetrieveDocVSpanSet => 25,
-        OpKind::ShowOrigin => 26,
-        OpKind::ShowDeletions => 27,
-        OpKind::Compare => 28,
-        OpKind::FindDocsContaining => 29,
-        OpKind::Image => 30,
-        OpKind::FindLinksV => 31,
-        OpKind::FindLinksFtt => 32,
-        OpKind::CountV => 33,
-        OpKind::CountFtt => 34,
-        OpKind::WindowV => 35,
-        OpKind::WindowFtt => 36,
-        OpKind::CountVByHome => 37,
-        OpKind::FindLinksVHistory => 38,
-        OpKind::RetrieveEndsets => 39,
-        OpKind::Project => 40,
-        OpKind::DiscoverableFrom => 41,
-        OpKind::DeleteOrphans => 42,
-        OpKind::InClaims => 43,
-        OpKind::OutClaims => 44,
-        OpKind::DocMetadata => 45,
-        OpKind::EditionClaims => 46,
-        OpKind::UniversalGrants => 47,
+        OpKind::Stage => 13,
+        OpKind::Publish => 14,
+        OpKind::MakeLink => 15,
+        OpKind::Emit => 16,
+        OpKind::Nullify => 17,
+        OpKind::AssertSup => 18,
+        OpKind::EditLink => 19,
+        OpKind::ReadLink => 20,
+        OpKind::FollowLink => 21,
+        OpKind::RetrieveV => 22,
+        OpKind::RetrieveI => 23,
+        OpKind::ContentFrontier => 24,
+        OpKind::RetrieveDocVSpan => 25,
+        OpKind::RetrieveDocVSpanSet => 26,
+        OpKind::ShowOrigin => 27,
+        OpKind::ShowDeletions => 28,
+        OpKind::Compare => 29,
+        OpKind::FindDocsContaining => 30,
+        OpKind::Image => 31,
+        OpKind::FindLinksV => 32,
+        OpKind::FindLinksFtt => 33,
+        OpKind::CountV => 34,
+        OpKind::CountFtt => 35,
+        OpKind::WindowV => 36,
+        OpKind::WindowFtt => 37,
+        OpKind::CountVByHome => 38,
+        OpKind::FindLinksVHistory => 39,
+        OpKind::RetrieveEndsets => 40,
+        OpKind::Project => 41,
+        OpKind::DiscoverableFrom => 42,
+        OpKind::DeleteOrphans => 43,
+        OpKind::InClaims => 44,
+        OpKind::OutClaims => 45,
+        OpKind::DocMetadata => 46,
+        OpKind::EditionClaims => 47,
+        OpKind::UniversalGrants => 48,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -1466,11 +1472,17 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
                 terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
                 source: None,
+                base: None,
+                base_copied: None,
                 at: Some(Seq(7)),
                 time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
                 as_of: Seq(9),
             },
         ),
+        // A private draft the staging act minted off the member above: its
+        // `source` the member copied, its `base` the member and
+        // `base_copied` the five positions the copy took (the staging act,
+        // B3-S10).
         (
             "doc_metadata_unborn",
             Response::DocMetadata {
@@ -1479,14 +1491,17 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 owner: Some(a(&[1, 0, 1])),
                 birth: None,
                 terms: None,
-                source: None,
+                source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                base: Some(a(&[1, 0, 1, 0, 1, 1])),
+                base_copied: Some(n(5)),
                 at: Some(Seq(8)),
                 time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(9),
             },
         ),
         // A cross-owner fork: a fresh private document in another account,
-        // born sharing the member `1.0.1.0.1.1` — its `source`.
+        // born sharing the member `1.0.1.0.1.1` — its `source` — with no
+        // base: a `version` records none.
         (
             "doc_metadata_fork",
             Response::DocMetadata {
@@ -1496,6 +1511,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: None,
                 terms: None,
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                base: None,
+                base_copied: None,
                 at: None,
                 time: None,
                 as_of: Seq(9),
@@ -1563,11 +1580,14 @@ fn all_responses() -> Vec<(&'static str, Response)> {
 }
 
 /// The doc-metadata answer's `source` member (the fork-source design record's
-/// arm A): a payload option, always present — the address a `version` minted
-/// the document sharing, in the wire's dotted spelling, and `null` where no
-/// `version` minted it. Pinned here as a member beside `placed` and
-/// `base_extent`, which the same fixtures carry, so a marshal that dropped
-/// or renamed it fails by name rather than only in wire.md's examples.
+/// arm A) and, beside it, the draft base's two (the staging act, B3-S10):
+/// payload options, always present — `source` the address a `version` minted
+/// the document sharing or a `stage` copied into it, `base` the member the
+/// draft's next publication lands after and `base_copied` the positions the
+/// copy took, each in the wire's spelling, and `null` where the board holds
+/// none. Pinned here as members beside `placed` and `base_extent`, which the
+/// same fixtures carry, so a marshal that dropped or renamed one fails by
+/// name rather than only in wire.md's examples.
 #[test]
 fn doc_metadata_marshals_its_source_as_an_address_or_null() {
     let codec = JsonCodec;
@@ -1580,10 +1600,15 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
     assert_eq!(fork["source"], Value::String("1.0.1.0.1.1".into()), "{fork}");
     assert_eq!(fork["doc"], Value::String("1.0.2.0.1".into()), "the fork's own document: {fork}");
     assert!(fork["placed"].is_null() && fork["base_extent"].is_null(), "no shot terms: {fork}");
-    for name in ["doc_metadata", "doc_metadata_unborn"] {
-        let v = marshaled(name);
-        assert!(v.get("source").is_some(), "{name}: the member is present");
-        assert!(v["source"].is_null(), "{name}: null where no `version` minted it: {v}");
+    assert!(fork["base"].is_null() && fork["base_copied"].is_null(), "a `version` records no base: {fork}");
+    let staged = marshaled("doc_metadata_unborn");
+    assert_eq!(staged["source"], Value::String("1.0.1.0.1.1".into()), "the member the stage copied: {staged}");
+    assert_eq!(staged["base"], Value::String("1.0.1.0.1.1".into()), "the base the stage recorded: {staged}");
+    assert_eq!(staged["base_copied"], Value::String("5".into()), "the extent the copy took, a decimal string: {staged}");
+    let member = marshaled("doc_metadata");
+    for name in ["source", "base", "base_copied"] {
+        assert!(member.get(name).is_some(), "{name}: the member is present");
+        assert!(member[name].is_null(), "{name}: null where neither a `version` nor a `stage` minted it: {member}");
     }
 }
 
@@ -2430,4 +2455,36 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
         let detail = refused(frame);
         assert!(detail.contains("unknown field 'as_of'"), "{frame}: {detail}");
     }
+}
+
+/// The staging act's frame (wire.md §Namespace, `stage`): one argument, the
+/// source staged from, parsed and marshaled canonically; and no flag and no
+/// attest — the draft is always private and the op outside the checked set,
+/// so `published` and `attest` on it are unknown fields, refused as any
+/// member an op does not take (never-silent).
+#[test]
+fn a_stage_takes_its_source_alone_and_refuses_a_flag_and_an_attest() {
+    let codec = JsonCodec;
+    let frame = r#"{"from":"1.0.1.0.1.1","op":"stage"}"#;
+    let req = parse_ok(&codec, frame.as_bytes());
+    assert_eq!(req.op, Op::Stage { from: a(&[1, 0, 1, 0, 1, 1]) });
+    assert_eq!(req.attest, None, "no attest rides a stage");
+    assert_eq!(
+        String::from_utf8(codec.marshal_request(&req)).expect("utf-8"),
+        frame,
+        "the canonical form: the one argument, then the op"
+    );
+    for (member, extra) in [
+        ("published", r#""published":false"#),
+        ("published", r#""published":true"#),
+        ("attest", r#""attest":{"alg":"x","sig":"00"}"#),
+    ] {
+        let with = format!(r#"{{"from":"1.0.1.0.1.1","op":"stage",{extra}}}"#);
+        let e = codec.parse(with.as_bytes()).expect_err("an unknown member is refused");
+        let detail = e.detail.expect("a parse failure names what failed");
+        assert!(detail.contains(&format!("'{member}'")), "{with}: {detail}");
+    }
+    let e = codec.parse(br#"{"op":"stage"}"#).expect_err("the source is required");
+    let detail = e.detail.expect("a parse failure names what failed");
+    assert!(detail.contains("missing field 'from'"), "{detail}");
 }

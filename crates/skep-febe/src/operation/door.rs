@@ -376,6 +376,10 @@ impl Op {
             // consulted exactly as `copy` is, behind the destination's gate.
             Op::Reinstate { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
             Op::Version { .. } => WriteConsult::AfterOwnershipOf(Vec::new()),
+            // The staging act reads `from` as `version` reads `d_src`, and
+            // its draft lands in the caller's own account: consulted, with
+            // no destination to defer on.
+            Op::Stage { .. } => WriteConsult::AfterOwnershipOf(Vec::new()),
             Op::MakeLink { home, .. } => WriteConsult::AfterOwnershipOf(vec![home]),
             Op::AssertSup { home, .. } => WriteConsult::AfterOwnershipOf(vec![home]),
             Op::EditLink { d_s, d_a, .. } => WriteConsult::AfterOwnershipOf(vec![d_s, d_a]),
@@ -459,6 +463,7 @@ impl Op {
             | Op::RegisterNode { .. }
             | Op::Fork { .. }
             | Op::Version { .. }
+            | Op::Stage { .. }
             | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
@@ -540,6 +545,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Stage { .. }
             | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
@@ -608,23 +614,23 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// `judgment`).
     ///
     /// **Staleness.** The predicate and the registry are read off `world` — a
-    /// prior snapshot, not the base the write commits on. For five of the six
-    /// source-reading writes — `copy`, `reinstate`, `version`,
+    /// prior snapshot, not the base the write commits on. For six of the
+    /// seven source-reading writes — `copy`, `reinstate`, `version`, `stage`,
     /// `make_link`, `edit_link` — this door is the sole enforcement of
     /// PUB-6.23: their stores carry no `withheld` verdict (M5 states the gate
-    /// as COPY's, REINSTATE's and VERSION's precondition, which this consult
-    /// discharges), so what is decided here is what is enforced, and it is
-    /// decided at that snapshot rather than at the operation's linearization
-    /// point. The gap opens only where a write commits between the two —
-    /// another `execute` in flight, which §8 invites, or a writer outside the
-    /// surface — and three of the door's readings can then admit what the
-    /// commit base would refuse. Registration grows, and the door reads it
-    /// permissively twice: the deferral judges nothing where a destination is
-    /// not yet registered, so a destination registered in the window — the
-    /// caller's own pipelined `create` is enough — turns a write the door left
-    /// to the store's gate into one that store admits with its sources never
-    /// consulted and its link-address arguments never judged, COPY's
-    /// precondition undischarged; and the predicate's fail-open reads a
+    /// as COPY's, REINSTATE's, VERSION's and STAGE's precondition, which this
+    /// consult discharges), so what is decided here is what is enforced, and
+    /// it is decided at that snapshot rather than at the operation's
+    /// linearization point. The gap opens only where a write commits between
+    /// the two — another `execute` in flight, which §8 invites, or a writer
+    /// outside the surface — and three of the door's readings can then admit
+    /// what the commit base would refuse. Registration grows, and the door
+    /// reads it permissively twice: the deferral judges nothing where a
+    /// destination is not yet registered, so a destination registered in the
+    /// window — the caller's own pipelined `create` is enough — turns a write
+    /// the door left to the store's gate into one that store admits with its
+    /// sources never consulted and its link-address arguments never judged,
+    /// COPY's precondition undischarged; and the predicate's fail-open reads a
     /// document not yet registered as readable, though a write in the window
     /// may register it private and fill it. A grant is revocable, so a source
     /// readable here may be unreadable when the write commits. What cannot go

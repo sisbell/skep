@@ -134,6 +134,10 @@ fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
         json!({"op": "create_new_document", "account": "1.0.1"}),
         json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"], "as_of": before}),
         json!({"op": "create_new_document", "account": "1.0.1", "published": true}),
+        // The staging act: a private mint the board would admit bare,
+        // refused by the shell all the same — the keyless session writes
+        // nothing.
+        json!({"op": "stage", "from": draft}),
     ];
     let refused: Vec<Refusal> = writes.iter().map(|frame| shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err()).collect();
     for (frame, refused) in writes.iter().zip(&refused) {

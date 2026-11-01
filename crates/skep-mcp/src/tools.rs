@@ -60,6 +60,7 @@ const DISPATCH_OPS: &[&str] = &[
     "reinstate",
     "rearrange",
     "version",
+    "stage",
     // Links (writes).
     "make_link",
     "emit",
@@ -289,8 +290,9 @@ fn listed(members: &[&str]) -> String {
 /// argument names are affected — a `from` nested inside an object value is
 /// wire shape, untouched. `Catalog::load` refuses a schema that spells
 /// `from_` on any other tool, an adapter tool's among them; on another op,
-/// its agents' `from_` would reach the wire unmapped.
-const RENAMES_FROM: &[&str] = &["make_link", "emit"];
+/// its agents' `from_` would reach the wire unmapped. `stage`'s one
+/// argument, the source staged from, is the wire's `from` too.
+const RENAMES_FROM: &[&str] = &["make_link", "emit", "stage"];
 
 /// Returns a wire op's frame (*every tool is one call of the shell*).
 ///

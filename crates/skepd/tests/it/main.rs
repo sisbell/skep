@@ -67,6 +67,7 @@ mod runbook_doc;
 mod scan_bound;
 mod signed_ops;
 mod source_gate;
+mod stage;
 mod standing;
 mod threads;
 mod tidy;

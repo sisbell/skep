@@ -341,7 +341,17 @@ pub enum Response {
     /// before the map minted it; `time` is the transport's testimony of when
     /// that position committed ([`MintTime`]), filled through
     /// [`Response::mint_mut`]. Both are served to whoever may read the
-    /// address named, as `source` is.
+    /// address named, as `source` is. `base` and `base_copied` are the draft
+    /// base of the address named (the staging act, B3-S10; M5's
+    /// `draft_base`): the member or bare document the draft's next
+    /// publication lands after — recorded by the `stage` that minted it and
+    /// moved by every shot the draft renders — and the extent the copy took
+    /// of it, both absent where the board records no base: a document minted
+    /// by `create_new_document` or `fork` and never published, an alternative
+    /// of a draft the board held no base for, a member, a trunk. `source` is
+    /// answered for a `stage`d draft as for a `version`'s: the surface it
+    /// was copied from. Both served to every reader of the draft, as `source`
+    /// is.
     DocMetadata {
         /// The trunk document the argument projects to.
         doc: Address,
@@ -353,8 +363,14 @@ pub enum Response {
         birth: Option<BirthVersion>,
         /// The shot terms of the address named, where a shot minted it.
         terms: Option<ShotTerms>,
-        /// Where a `version` minted the address named, its fork source.
+        /// Where a `version` or a `stage` minted the address named, its
+        /// source.
         source: Option<Address>,
+        /// Where the board records the address named as a staged draft, the
+        /// member or bare document its next publication lands after.
+        base: Option<Address>,
+        /// Beside `base`, the extent the draft's copy took of it.
+        base_copied: Option<Nat>,
         /// The position of the commit that minted the address named.
         at: Option<Seq>,
         /// The transport's testimony of when `at` committed.

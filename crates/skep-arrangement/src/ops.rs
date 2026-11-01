@@ -8,13 +8,13 @@
 //! transaction that is M2's guarantee rather than an ordering these ops keep:
 //! `transact` returns `TxnError::Rejected(E)` straight out of the closure
 //! phase, discarding the staging, drawing no `Seq` and appending nothing.
-//! Five of the seven ops do reject before staging anything; INSERT and the
+//! Six of the eight ops do reject before staging anything; INSERT and the
 //! publish shot cannot, since each stages a mint and a content record per
 //! fresh atom or maximal run of single-byte values as it goes
 //! ([`allocate_for_placement`] and [`allocate_stretch_for_placement`], J0's
 //! two steps) and may reject after them — on a later value, and for the shot
-//! on its run budget or its own version mint as well. VERSION's three
-//! pre-transaction refusals (`SourceNotRegistered`, `NotAPrincipal`,
+//! on its run budget or its own version mint as well. VERSION's and STAGE's
+//! three pre-transaction refusals (`SourceNotRegistered`, `NotAPrincipal`,
 //! `NodeTierCrossOwner`) are answered off an M2 snapshot before any
 //! transaction opens, and so reach M2 not at all. M10 surfaces the rejection
 //! as a typed one and acknowledges only after commit.
@@ -23,7 +23,8 @@
 //! [`gate_write`](crate::ownership::gate_write) — the in-txn ownership gate,
 //! registration then the ω gate — on the address the caller names: the five
 //! edits and the shot (COPY and REINSTATE: their destination only; VERSION
-//! is ungated, non-owner versioning being denial-as-fork, O10). The address
+//! and STAGE are ungated, non-owner versioning being denial-as-fork, O10,
+//! and a staging draft landing in the caller's own account). The address
 //! named is not always the arrangement written. A declared deposit into a
 //! published chain that has a head lands on that head
 //! ([`deposit_surface`](crate::deposit_surface)) rather than in the named
@@ -52,8 +53,8 @@
 //! ([`arrangement_moved`]). Each operation is a child module
 //! holding one `impl` block — `ops/insert.rs`, `ops/publish.rs`,
 //! `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
-//! `ops/version.rs` — and sees this file's private items and none of its
-//! siblings'. `ops/publish.rs` holds as well the shot's admission, the checks
+//! `ops/version.rs`, `ops/stage.rs` — and sees this file's private items and
+//! none of its siblings'. `ops/publish.rs` holds as well the shot's admission, the checks
 //! `publish` opens with, offered as a pure query ([`shot_admission`]); and
 //! three of the modules hold their op's body as a function over a
 //! caller-opened staging — [`stage_publish`], [`stage_reinstate_at`],
@@ -104,6 +105,9 @@ mod rearrange;
 // REINSTATE (the replacement act): the write by identity — client-named
 // I-runs placed at a position, allocating nothing.
 mod reinstate;
+// STAGE (B3-S10): the staging act — a private draft of a source, its base
+// recorded.
+mod stage;
 // CREATENEWVERSION (ASN-0123): the fork.
 mod version;
 
@@ -305,10 +309,10 @@ pub enum AsOf {
 ///
 /// It is a thin borrow of the engine's kernel and, on an attested handle, of
 /// an attestation. The pure reads live on [`M5State`]
-/// (reached through [`HasM5`](crate::HasM5)); this type owns only the seven
+/// (reached through [`HasM5`](crate::HasM5)); this type owns only the eight
 /// editing/versioning operations — INSERT, DELETE, COPY, REINSTATE,
-/// REARRANGE, VERSION and the publish shot — that M10 (and, for `insert`, M9)
-/// dispatches.
+/// REARRANGE, VERSION, STAGE and the publish shot — that M10 (and, for
+/// `insert`, M9) dispatches.
 ///
 /// **The edition is append-only** (PUB-2.43) — the invariant the shot's
 /// carried tail rests on ([`Vstream::publish`]), kept by these operations and
@@ -342,11 +346,12 @@ pub struct Vstream<'k, W: WorldState> {
     /// plain handle every other constructor site builds — leaves the slot
     /// empty. A borrow, so the handle stays `Copy` and the value cannot
     /// outlive the caller that owns it; how many commits it signs is the
-    /// producer's to hold, as [`Vstream::attested`] states. The handle's four
-    /// other writes — `delete`, `copy`, `reinstate`, `rearrange` — lie outside
-    /// the checked set and take the plain arm whatever this field holds: the
-    /// store refuses each into a published document (`PublishedTarget`), so
-    /// no entry of their kind exists for a frame to cover. Link seating is no
+    /// producer's to hold, as [`Vstream::attested`] states. The handle's five
+    /// other writes — `delete`, `copy`, `reinstate`, `rearrange`, `stage` —
+    /// lie outside the checked set and take the plain arm whatever this field
+    /// holds: the store refuses each of the four edits into a published
+    /// document (`PublishedTarget`), and a stage mints private, so no entry
+    /// of their kind exists for a frame to cover. Link seating is no
     /// write of this handle: `stage_seat_link` is a step of M7's MAKELINK,
     /// whose own handle carries that op's attestation.
     attest: Option<&'k Attestation>,

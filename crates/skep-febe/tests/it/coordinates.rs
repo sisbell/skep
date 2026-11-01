@@ -33,7 +33,7 @@ fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpK
 }
 
 /// A1/A7/V1: `committed_at` on EVERY write is the operation's own
-/// linearization point. A sequential chain over all fifteen writes
+/// linearization point. A sequential chain over all sixteen writes
 /// ([`commit_every_write`]), each checked against the committed head the
 /// moment it returns — the coordinate is what a client waits at, so a stale
 /// or invented one breaks read-your-writes while every answer still looks
@@ -43,7 +43,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let fx = setup();
     let mut seen: Vec<OpKind> = Vec::new();
     commit_every_write(&fx, None, |kind, _, r| assert_committed(&fx, kind, r, &mut seen));
-    assert_eq!(seen.len(), 15, "the write half of the partition is 15 operations: {seen:?}");
+    assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the write half's 17 operations: {seen:?}");
 }
 
 /// A1 on the zero-step write (`Response::AckAddr`): one answered with an

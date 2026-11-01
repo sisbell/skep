@@ -122,7 +122,8 @@ pub(super) fn parse_dotted(s: &str) -> Option<Address> {
 ///    moves no mask, and it is named so a bare `publish` row whose records
 ///    put the draft in its class still leads with the member;
 /// 1. the drafts the commit minted — every draft of `after` absent from
-///    `before` (`create_new_document`/`fork`/`version` resolving private);
+///    `before` (`create_new_document`/`fork`/`version` resolving private,
+///    and `stage`, whose draft is always private);
 /// 2. the links the commit deposited — every link of `after` absent from
 ///    `before`, each one's home, and for a retraction (the shipped `[R]`
 ///    class) its targets' homes too, which is `nullify`'s own `docs` rule
@@ -266,7 +267,7 @@ fn derived_docs_over(
 /// and ω composing the wrong `account`. The terms are the op's own members
 /// as the recorded row would have carried them, read off the two worlds
 /// through the engine's public surface alone, and the op itself where the
-/// facts name one op and no other. One commit is one op, so the three
+/// facts name one op and no other. One commit is one op, so the four
 /// witnesses are exclusive and are read in this order:
 ///
 /// 1. A principal seated ([`seated_principal`]) — `delegate` alone seats
@@ -278,7 +279,15 @@ fn derived_docs_over(
 ///    row is a `publish`'s, with `placed` and `base_extent` exactly as
 ///    `doc_metadata` serves them for that member; without one it is a
 ///    `version`'s, which carries no term.
-/// 3. Links deposited — exactly one: a retraction-typed link is `nullify`'s
+/// 3. A draft minted with its base recorded ([`staged_draft`]) — a document
+///    `after` registers and `before` does not whose draft base
+///    ([`skep_arrangement::M5State::draft_base`]) `after` holds and `before`
+///    does not — so the row is a `stage`'s (the staging act, B3-S10), which
+///    carries no term: the base is M5 state, served by `doc_metadata` and
+///    never by the row. A `stage` of a draft the board held no base for
+///    records none, and its commit shows the world nothing a cross-owner
+///    `version`'s does not; its row stays unnamed, as a `fork`'s does.
+/// 4. Links deposited — exactly one: a retraction-typed link is `nullify`'s
 ///    (no op but `nullify` deposits the shipped `[R]` class), carrying no
 ///    term; any other one link is the `link` the commit minted, the op
 ///    unnamed — `make_link`, `emit` and `assert_sup` each deposit one and
@@ -294,21 +303,23 @@ fn derived_docs_over(
 ///
 /// What this cannot name, and says so by `None`: the op of an arrangement
 /// write, into a draft or a published document, of a `register_node`, of a
-/// `create_new_document` or `fork` (one new document, three ops), of a plain
-/// `make_link` against an `emit` or `assert_sup`, of an `edit_link`; a
-/// `delegate` under a node that `register_node` admitted and that no
-/// enumeration from the bootstrap and system nodes reaches (that enumeration
-/// follows account frontiers, and M3 enumerates no nodes). Every member a
-/// witness rules out is absent on the row, as on the recorded one; every
-/// member no witness decides stays `null`.
+/// `create_new_document`, a `fork`, a cross-owner `version` or a `stage`
+/// recording no base (one new document, four ops), of a plain `make_link`
+/// against an `emit` or `assert_sup`, of an `edit_link`; a `delegate` under
+/// a node that `register_node` admitted and that no enumeration from the
+/// bootstrap and system nodes reaches (that enumeration follows account
+/// frontiers, and M3 enumerates no nodes). Every member a witness rules out
+/// is absent on the row, as on the recorded one; every member no witness
+/// decides stays `null`.
 ///
 /// **Cost.** Beside [`derived_docs`]'s, one walk of the board's principal
-/// list at `after` with a frontier read at `before` per account or node; the
-/// member minted arrives enumerated, the documents' pass being
-/// [`derived_docs`]'s. Paid once per bare boundary — by the walk that
-/// reconstructs it, or at the commit whose unwind left it bare — never at
-/// serve. Reached through [`derived_journal`] alone, over the links and the
-/// member it enumerated.
+/// list at `after` with a frontier read at `before` per account or node, and
+/// one pass over M3's registered documents at `after` with a registration
+/// probe at `before` and a base read at both per document; the member minted
+/// arrives enumerated, the documents' pass being [`derived_docs`]'s. Paid
+/// once per bare boundary — by the walk that reconstructs it, or at the
+/// commit whose unwind left it bare — never at serve. Reached through
+/// [`derived_journal`] alone, over the links and the member it enumerated.
 fn derived_terms_over(
     before: &World,
     after: &World,
@@ -332,6 +343,9 @@ fn derived_terms_over(
             },
             _ => JournalTerms { op: Some("version".into()), terms: None },
         };
+    }
+    if staged_draft(before, after).is_some() {
+        return JournalTerms { op: Some("stage".into()), terms: None };
     }
     let typed = |link: &Address, test: &dyn Fn(&skep_links::Endset) -> bool| {
         after.links().readlink(link).is_some_and(|value| test(value.type_slot()))
@@ -462,6 +476,31 @@ fn minted_member(before: &World, after: &World) -> Option<Address> {
             !b.is_registered_document(doc)
                 && a.is_registered_document(doc)
                 && trunk_of(doc) != **doc
+        })
+        .cloned()
+}
+
+/// Returns the draft the commit staged with its base recorded, if one.
+///
+/// It is the document `after` registers and `before` does not — a trunk,
+/// not a member, the staging act minting a fresh document in the caller's
+/// account — whose draft base `after`'s arrangement slice holds and
+/// `before`'s does not ([`skep_arrangement::M5State::draft_base`]): the
+/// record the staging operation journals beside its snapshot (the staging
+/// act, B3-S10), which no other op writes for a document it mints. Read off
+/// M3's own enumeration of every registered document, as [`minted_member`]
+/// reads it. A `stage` that recorded no base — an alternative of a draft the
+/// board held no base for — answers `None`, as a `fork` does.
+fn staged_draft(before: &World, after: &World) -> Option<Address> {
+    let (b, a) = (before.m3(), after.m3());
+    a.documents()
+        .map(|(doc, _)| doc)
+        .find(|doc| {
+            !b.is_registered_document(doc)
+                && a.is_registered_document(doc)
+                && trunk_of(doc) == **doc
+                && after.m5().draft_base(doc).is_some()
+                && before.m5().draft_base(doc).is_none()
         })
         .cloned()
 }

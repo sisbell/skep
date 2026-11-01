@@ -122,6 +122,19 @@ pub fn create_document(account: &str, published: bool, id: Option<&str>) -> Valu
     with_id(json!({"op": "create_new_document", "account": account, "published": published}), id)
 }
 
+/// Builds `{"op":"stage","from":…}` (wire.md §Namespace; B3-S10).
+///
+/// It is the staging act as one board operation: the board mints a private
+/// draft in the caller's own account holding `from`'s whole content by
+/// identity — the member staged from, the bare document while its chain is
+/// empty, or another draft of the caller's for an alternative of it — and
+/// records the draft's base, its source and the extent the copy took, in
+/// one commit; `doc_metadata` of the draft answers them as `base`,
+/// `source` and `base_copied`.
+pub fn stage(from: &str, id: Option<&str>) -> Value {
+    with_id(json!({"op": "stage", "from": from}), id)
+}
+
 /// Builds `{"op":"retrieve_doc_v_span_set","doc":…}`.
 ///
 /// It reads the extents a deposit's next free content ordinal is read off,

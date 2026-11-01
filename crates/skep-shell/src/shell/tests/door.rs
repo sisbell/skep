@@ -561,7 +561,7 @@ fn a_bare_sessions_write_is_refused_before_any_dial() {
 
 /// Checks that the guest form refuses every write kind without a dial.
 ///
-/// `WRITE_KINDS` is the wire's sixteen write kinds (`docs/wire.md`
+/// `WRITE_KINDS` is the wire's seventeen write kinds (`docs/wire.md`
 /// §Operations; `skep-core`'s `parse_op`), each refused `write_in_guest_form`
 /// naming its op while a listener at the named origin counts no connection —
 /// the target the form names read first, so a write at a board this shell
@@ -583,6 +583,7 @@ fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
         "reinstate",
         "rearrange",
         "version",
+        "stage",
         "publish",
         "make_link",
         "emit",

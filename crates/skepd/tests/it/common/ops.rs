@@ -347,6 +347,16 @@ pub fn version_of(port: u16, session: &str, d_src: &str, published: Option<bool>
     op(port, Some(session), &version_frame(d_src, published))
 }
 
+/// The staging act's frame (wire.md §Namespace, `stage`): the source alone.
+pub fn stage_frame(from: &str) -> String {
+    format!(r#"{{"op":"stage","from":"{from}"}}"#)
+}
+
+/// A stage of `from` by `session`: the new draft's address.
+pub fn stage_of(port: u16, session: &str, from: &str) -> String {
+    acked_addr(&op(port, Some(session), &stage_frame(from)))
+}
+
 // ── the publish shot ─────────────────────────────────────────────────────
 
 /// One run of a shot, as the client renders it.

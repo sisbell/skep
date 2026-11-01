@@ -105,6 +105,10 @@ enum PlanOp {
     Reinstate { p: u8, d: u8, at: u16, sd: u8, f: u16, w: u8 },
     Rearrange { p: u8, d: u8, a: u16, b: u16, c: u16 },
     Version { p: u8, sd: u8 },
+    /// The staging act: a readable document's private copy, by identity,
+    /// in the caller's own account — a cross-owner version's effect on the
+    /// shadow, the base the board's own and read by nothing here.
+    Stage { p: u8, sd: u8 },
     CreateDoc { p: u8 },
     MakeLink { p: u8, d: u8, resolve_from: bool, resolve_ty: bool, f: u16, w: u8 },
     Emit { p: u8, d: u8, root: u8 },
@@ -119,8 +123,8 @@ fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
     // Grouped (prop_oneof's TupleUnion caps at 10 arms); outer weights are
     // each group's summed inner weights, so the flat distribution is:
     // insert 6, delete 3, copy 3, reinstate 2, rearrange 2, version 2,
-    // create 1, make_link 4, emit 2, assert_sup 2, nullify 2, edit_link 2,
-    // idem-retry 2, forbidden 2.
+    // stage 1, create 1, make_link 4, emit 2, assert_sup 2, nullify 2,
+    // edit_link 2, idem-retry 2, forbidden 2.
     let arrangement = prop_oneof![
         6 => (0..3u8, any::<u8>(), any::<u16>(), any::<u8>(), prop::bool::weighted(0.2))
             .prop_map(|(p, d, at, s, atom)| PlanOp::Insert { p, d, at, s, atom }),
@@ -133,6 +137,7 @@ fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
         2 => (0..3u8, any::<u8>(), any::<u16>(), any::<u16>(), any::<u16>())
             .prop_map(|(p, d, a, b, c)| PlanOp::Rearrange { p, d, a, b, c }),
         2 => (0..3u8, any::<u8>()).prop_map(|(p, sd)| PlanOp::Version { p, sd }),
+        1 => (0..3u8, any::<u8>()).prop_map(|(p, sd)| PlanOp::Stage { p, sd }),
         1 => (0..3u8).prop_map(|p| PlanOp::CreateDoc { p }),
     ];
     let links = prop_oneof![
@@ -151,7 +156,7 @@ fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
         2 => Just(PlanOp::IdemRetry),
         2 => (0..3u8, any::<u8>()).prop_map(|(p, kind)| PlanOp::Forbidden { p, kind }),
     ];
-    let op = prop_oneof![19 => arrangement, 12 => links, 4 => meta];
+    let op = prop_oneof![20 => arrangement, 12 => links, 4 => meta];
     prop::collection::vec(op, ops_len())
 }
 
@@ -696,6 +701,32 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let addr = v["addr"].as_str().expect("version acks the new address").to_string();
             // Content-sharing fork: the content subspace is snapshotted,
             // the link subspace is not.
+            let content = shadow.docs[si].content.clone();
+            shadow.docs.push(DocShadow { addr, content, seats: 0, owner: pi });
+            let di = shadow.docs.len() - 1;
+            shadow.principals[pi].docs.push(di);
+        }
+        PlanOp::Stage { p, sd } => {
+            let pi = *p as usize % 3;
+            if shadow.principals[pi].docs.len() >= 6 {
+                return fallback_insert(shadow, state, pi, op_index);
+            }
+            // The staging act (B3-S10): any readable document — the caller's
+            // own draft or a foreign one — copied by identity into a PRIVATE
+            // draft of the caller's own account, the base the board records
+            // read by nothing here; the source consult is the door's, so a
+            // readable source is the valid-by-construction write.
+            let readable = readable_by(shadow, pi);
+            if readable.is_empty() {
+                return fallback_insert(shadow, state, pi, op_index);
+            }
+            let si = readable[*sd as usize % readable.len()];
+            let id = state.next_id();
+            let frame = format!(r#"{{"op":"stage","id":"{id}","from":"{}"}}"#, shadow.docs[si].addr);
+            let v = commit(shadow, state, pi, frame, op_index);
+            let addr = v["addr"].as_str().expect("stage acks the new address").to_string();
+            // The whole surface by identity: the content subspace, not the
+            // link subspace.
             let content = shadow.docs[si].content.clone();
             shadow.docs.push(DocShadow { addr, content, seats: 0, owner: pi });
             let di = shadow.docs.len() - 1;

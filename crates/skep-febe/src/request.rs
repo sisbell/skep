@@ -292,6 +292,21 @@ pub enum Op {
     /// inheritance off its own working state and passes the resolved bit
     /// down (PUB-8.18); M10 hands the flag through unresolved.
     Version { d_src: Address, published: Option<bool> },
+    /// STAGE, the staging act (B3-S10): a private draft of `from`, its base
+    /// recorded.
+    ///
+    /// One commit mints a fresh document in the caller's own account — as
+    /// [`Op::Fork`] mints one, private whatever `from`'s state — shares
+    /// `from`'s reading surface into it as [`Op::Version`] shares, and
+    /// records in M5's own state where the draft began: its base (`from`'s
+    /// surface, or an alternative's inherited base), the extent the copy
+    /// took and its source, which `doc_metadata` serves as `base`,
+    /// `base_copied` and `source` and the shot moves to each member the draft
+    /// renders. `from` is a source argument, consulted at the write door
+    /// ([`Op::source_arguments`]); the draft lands in the caller's account,
+    /// so no destination gate precedes it. Never publish-class: no `attest`
+    /// rides it, and the codec refuses the member as it refuses `published`.
+    Stage { from: Address },
     /// PUBLISH, the shot (PUB-2.33, PUB-8.1).
     ///
     /// It appends the next member of `doc`'s chain, born published, in one
@@ -805,6 +820,8 @@ pub enum OpKind {
     Rearrange,
     /// The kind of [`Op::Version`].
     Version,
+    /// The kind of [`Op::Stage`].
+    Stage,
     /// The kind of [`Op::Publish`].
     Publish,
     /// The kind of [`Op::MakeLink`].
@@ -949,6 +966,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Stage { .. }
             | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
@@ -983,6 +1001,7 @@ impl Op {
             Op::Reinstate { .. } => OpKind::Reinstate,
             Op::Rearrange { .. } => OpKind::Rearrange,
             Op::Version { .. } => OpKind::Version,
+            Op::Stage { .. } => OpKind::Stage,
             Op::Publish { .. } => OpKind::Publish,
             Op::MakeLink { .. } => OpKind::MakeLink,
             Op::Emit { .. } => OpKind::Emit,
@@ -1108,6 +1127,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Stage { .. }
             | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
@@ -1206,6 +1226,7 @@ impl Op {
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Stage { .. }
             | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
@@ -1224,7 +1245,8 @@ impl Op {
     /// `specs[].source` by index; `reinstate` each distinct `runs[].origin`
     /// in run order, the destination's own I-space excepted (the shot's rule:
     /// the document's own needs no consult — address arithmetic on the stated
-    /// origin, PUB-2.15); `version` its `d_src`; `make_link` and `edit_link`
+    /// origin, PUB-2.15); `version` its `d_src`; `stage` its `from`, the
+    /// surface it copies; `make_link` and `edit_link`
     /// the document of every `Resolve`-form slot's V-spec — slots in the
     /// wire's declared order `from`, `to`, `ty`, specs by index within a slot.
     /// An address-form or I-span slot names no source: an address is not
@@ -1270,6 +1292,7 @@ impl Op {
                 out
             }
             Op::Version { d_src, .. } => vec![d_src],
+            Op::Stage { from } => vec![from],
             Op::MakeLink { from, to, ty, .. } => {
                 let mut out = Vec::new();
                 push_resolve_sources(from, &mut out);

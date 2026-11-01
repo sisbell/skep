@@ -1142,8 +1142,9 @@ Its rules of mechanism: SP-21, SP-28.
 `skep-arrangement` owns what a document holds: per document a content and a
 link run-list (its arrangement), the provenance relation R (every content
 address a document has ever held), three per-member facts — the birth
-extent, the shot terms and the fork source — and per document the position
-its content arrangement last changed at, all in one slice, `M5State`.
+extent, the shot terms and the fork source — per document the position
+its content arrangement last changed at, and per staged draft its base,
+all in one slice, `M5State`.
 It is the one place in the workspace where state is destroyed: `delete`
 removes positions and `rearrange` reorders them, in place, and R keeps
 every address a delete removed. Its modules are declared in `src/lib.rs`
@@ -1155,8 +1156,9 @@ beside it, `run_union.rs` holds the union of a run set's I-extents, in
 tumbler order, and `run_list.rs` the run-list, in V-order — two modules
 that share no private item. `ops.rs` is the `Vstream` handle and what its
 operations share; beneath it, `ops/insert.rs`, `ops/publish.rs`,
-`ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs` and
-`ops/version.rs` each hold one operation's `impl` block. Its `test-hooks`
+`ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
+`ops/version.rs` and `ops/stage.rs` each hold one operation's `impl` block.
+Its `test-hooks`
 feature (default off) compiles in `seat_link`, the test-only twin of the
 link seat; `scripts/gate-full.sh` checks the library and its docs without
 it, and runs its doctests — the `compile_fail` pairs on `Run` and `M5Rec`
@@ -1166,7 +1168,7 @@ Rules that hold across its files:
 
 - **One fold.** A committed `M5State` comes only from `apply_m5` over an
   `M5Rec`, and inside this crate only `state.rs` builds one: four of its
-  six fields are private there, the arrangement map among them, so every
+  seven fields are private there, the arrangement map among them, so every
   other module reaches an arrangement through `state.rs`'s `arrangement_of`
   and the absent-⇒-empty convention it applies. The fold reaches one the
   same way and calls nothing defined in `reads.rs` or `shot.rs`, the other

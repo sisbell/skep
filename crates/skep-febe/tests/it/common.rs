@@ -757,10 +757,10 @@ pub fn at_of(kind: OpKind, r: &Response) -> Seq {
     }
 }
 
-/// All fifteen writes, once each, as one sequential chain over `fx`, every
-/// one of the fifteen carrying `attest`; the fixtures the chain needs in
+/// All sixteen writes, once each, as one sequential chain over `fx`, every
+/// one of the sixteen carrying `attest`; the fixtures the chain needs in
 /// between are built through the plain helpers, which carry none. `each` is
-/// handed each of the fifteen as it returns: its kind, the committed head
+/// handed each of the sixteen as it returns: its kind, the committed head
 /// just before it was sent, and its answer.
 pub fn commit_every_write(
     fx: &Fixture,
@@ -799,6 +799,9 @@ pub fn commit_every_write(
     let (edition_start, _) = deposit3(fx, &edition);
     let (member, _) =
         ack_addr(write(fx.user, Op::Version { d_src: edition.clone(), published: None }));
+    // The staging act (B3-S10): a private draft of the member, its base
+    // recorded — outside the checked set, whatever it is sent with.
+    ack_addr(write(fx.user, Op::Stage { from: member.clone() }));
 
     // The shot (lane 3.2): the next member off the head just minted, the
     // edition's own three positions supplied by reference.

@@ -669,6 +669,11 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
             as_of: fields.seq("as_of")?,
         },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
+        // The staging act (wire.md §Namespace, `stage`): one argument, the
+        // source staged from, and no `published` — the draft is always
+        // private, so the flag on this op is an unknown field `finish`
+        // refuses, as `attest` is: a stage is outside the checked set.
+        "stage" => Op::Stage { from: fields.addr("from")? },
         // The target, the claim's flag, the shot, then its kept places and
         // its deposits beside it (the link-sets design §5.7): the places
         // parallel to the runs the shot just took, so they are read against

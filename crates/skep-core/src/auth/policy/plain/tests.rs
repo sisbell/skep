@@ -67,7 +67,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     use skep_arrangement::HasM5;
     use skep_febe::{EndArg, LinkEntry, MemberSpan, NamedAddress, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
     use skep_kernel::MAX_TXN_BYTES;
-    use skep_links::{MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, SHOT_BYTES};
+    use skep_links::{stored_tumbler_bytes, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, SHOT_BYTES};
 
     use crate::auth::policy::{publication_read_refusal, PublicationReadRefusal};
 
@@ -99,9 +99,10 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     assert_eq!(publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id), None, "16 × 4096 is the budget");
     fragment(1);
     let snap = board.engine.kernel().snapshot();
-    // The staged bytes beside the reads: the shot and 4096 by-reference
-    // placements, inside the transaction budget.
-    let staged = SHOT_BYTES + 4096 * PLACED_RUN_BYTES;
+    // The staged bytes beside the reads: the shot, the rendering draft's
+    // address in its slot and 4096 by-reference placements, inside the
+    // transaction budget.
+    let staged = SHOT_BYTES + stored_tumbler_bytes(draft.tumbler()) + 4096 * PLACED_RUN_BYTES;
     assert_eq!(
         publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id),
         Some(PublicationReadRefusal { homes: 0, entries: 0, draft_runs: 17, runs: 4096, total: 17 * 4096, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),

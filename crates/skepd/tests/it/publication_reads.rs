@@ -335,6 +335,50 @@ fn doc_metadata_serves_the_source_a_fork_was_born_sharing() {
     sd.shutdown();
 }
 
+/// THE STAGED DRAFT's SOURCE (the staging act, B3-S10): `source` is widened
+/// from a `version`'s snapshot to a `stage`'s copy — a draft staged off a
+/// member answers the member, one staged off the memberless home the home,
+/// an alternative staged off a draft that draft — one hop, kept past the
+/// source's own moves, answered to whoever may read the draft; and beside it
+/// the draft's `base` and `base_copied`, which a `fork`-minted document, a
+/// shot member and a `version`'s fork answer `null`.
+#[test]
+fn doc_metadata_serves_the_source_a_staged_draft_was_copied_from() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let read = |token: &str, doc: &str| -> (Value, Value, Value) {
+        let v = doc_metadata(port, Some(token), doc);
+        let m = expect_resp(&v, "doc_metadata");
+        (m["source"].clone(), m["base"].clone(), m["base_copied"].clone())
+    };
+    // Off the memberless home: the home, its atom counted.
+    let of_home = stage_of(port, &owner, CLAIMANT_DOC1);
+    let atoms = content_extent(port, &owner, CLAIMANT_DOC1).to_string();
+    assert_eq!(read(&owner, &of_home), (json!(CLAIMANT_DOC1), json!(CLAIMANT_DOC1), json!(atoms)));
+    // Off a member: the member.
+    let d1 = acked_addr(&op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#)));
+    let of_member = stage_of(port, &owner, &d1);
+    assert_eq!(read(&owner, &of_member), (json!(d1), json!(d1), json!(atoms)));
+    // Off the bare home once it has a member: its head, as a version takes it.
+    let of_bare = stage_of(port, &owner, CLAIMANT_DOC1);
+    assert_eq!(read(&owner, &of_bare), (json!(d1), json!(d1), json!(atoms)), "the head, pinned at the stage");
+    // An alternative: the source draft, the base inherited.
+    let of_draft = stage_of(port, &owner, &of_member);
+    assert_eq!(read(&owner, &of_draft), (json!(of_member), json!(d1), json!(atoms)));
+    // The others answer no base: a `fork`-minted document, the member, the
+    // trunk.
+    let forked = acked_addr(&op(port, Some(&owner), r#"{"op":"fork"}"#));
+    assert_eq!(read(&owner, &forked), (Value::Null, Value::Null, Value::Null));
+    assert_eq!(read(&signed, &d1), (json!(CLAIMANT_DOC1), Value::Null, Value::Null));
+    assert_eq!(read(&signed, CLAIMANT_DOC1), (Value::Null, Value::Null, Value::Null));
+    // The guest is withheld the private draft, base and all.
+    assert_withheld(&doc_metadata(port, None, &of_member), &of_member);
+    sd.shutdown();
+}
+
 /// The content extent `doc` answers — `retrieve_doc_v_span_set`'s content
 /// span width, `0` when the set carries none.
 fn content_extent(port: u16, token: &str, doc: &str) -> u64 {

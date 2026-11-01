@@ -1420,7 +1420,10 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
     // chain; `to` and `ty` one unit span each.
     let content_span = stored_span_bytes(&run(&pca(1), 1).iextent());
     let unit = |a: &Address| stored_span_bytes(&skep_address::subtree_of(a.tumbler()));
+    // The rendering draft's address rides the placing record's own slot.
+    let rendering_draft = skep_links::stored_tumbler_bytes(doc1().tumbler());
     let staged = SHOT_BYTES
+        + rendering_draft
         + PLACED_RUN_BYTES
         + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES)
         + 3 * REINSERTED_VALUE_BYTES
@@ -1436,7 +1439,7 @@ fn the_price_of_a_publications_reads_is_its_four_terms_against_the_one_budget() 
         ReadPrice { homes: 3, entries: 3, draft_runs: 1, runs: 2, staged_bytes: staged },
         "three link-holding homes under the account; one links entry and two read-withs; one run in doc1; two runs in the shot; the staged bytes from the table"
     );
-    assert_eq!(staged, 7_145, "the figure, at the shallow depth");
+    assert_eq!(staged, 7_206, "the figure, at the shallow depth");
     assert_eq!(price.total(), 3 * 3 + 2, "homes × entries + draft runs × runs");
     assert!(!price.over_budget());
     assert_eq!(ReadPrice::BUDGET, MAX_PUBLICATION_READS);
@@ -1479,27 +1482,30 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     let target = PublishTarget::Document(pdoc());
     let none = PublishDeposits::default();
     let birth = |runs: Vec<ShotRun>| Shot { base: None, draft: Some(doc1()), also: vec![], runs };
+    // Every shot here names doc1 as its rendering draft, whose address the
+    // placing record carries in its own slot.
+    let drafted = SHOT_BYTES + skep_links::stored_tumbler_bytes(doc1().tumbler());
     // Draft-native: `a b c` whole and `b` inside it — the first cut at `b`'s
     // two endpoints into three pieces, the second one piece; both placed.
     let nested = birth(vec![shot_run(&doc1(), &ca(1), 3), shot_run(&doc1(), &ca(2), 1)]);
     let per_piece = PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES;
     assert_eq!(
         price_staged_bytes(world, &target, &nested, &[], &none),
-        SHOT_BYTES + (3 + 1) * per_piece + 3 * REINSERTED_VALUE_BYTES,
+        drafted + (3 + 1) * per_piece + 3 * REINSERTED_VALUE_BYTES,
         "three pieces and one, the values the distinct positions"
     );
     assert_eq!(
         price_staged_bytes(world, &target, &nested, &places(2, &[(0, 1), (1, 2)]), &none),
-        SHOT_BYTES + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + 3 * REINSERTED_VALUE_BYTES,
+        drafted + (3 + 1) * (per_piece + KEPT_PLACE_BYTES) + 3 * REINSERTED_VALUE_BYTES,
         "a kept place per piece"
     );
     // Stray: the head's identity, which the board's one record names, with
     // a place — one record; identity no record names — priced as one piece,
     // the arm refusing it.
     let stray = birth(vec![shot_run(&pdoc(), &pca(1), 3)]);
-    assert_eq!(price_staged_bytes(world, &target, &stray, &places(1, &[(0, 1)]), &none), SHOT_BYTES + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    assert_eq!(price_staged_bytes(world, &target, &stray, &places(1, &[(0, 1)]), &none), drafted + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     let unrecorded = birth(vec![shot_run(&pdoc(), &pca(9), 1)]);
-    assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &none), SHOT_BYTES + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
+    assert_eq!(price_staged_bytes(world, &target, &unrecorded, &places(1, &[(0, 1)]), &none), drafted + PLACED_RUN_BYTES + KEPT_PLACE_BYTES);
     // The mint form's two, and a copy in the I-span form at its own spans.
     let mint = PublishTarget::Mint { account: a(&[1, 0, 1]) };
     let spans = EndArg::Spans(vec![run(&pca(1), 2).iextent(), run(&pca(5), 1).iextent()]);
@@ -1507,9 +1513,12 @@ fn the_staged_bytes_are_priced_per_piece_per_record_and_per_span_the_request_spe
     let span_bytes: u64 = [run(&pca(1), 2), run(&pca(5), 1)].iter().map(|r| stored_span_bytes(&r.iextent())).sum();
     assert_eq!(
         price_staged_bytes(world, &mint, &birth(vec![]), &[], &copy),
-        SHOT_BYTES + EDITION_MINT_BYTES + EDITION_CLAIM_BYTES + COPY_FIXED_BYTES + 2 * span_bytes + stored_span_bytes(&skep_address::subtree_of(citation().tumbler())),
+        drafted + EDITION_MINT_BYTES + EDITION_CLAIM_BYTES + COPY_FIXED_BYTES + 2 * span_bytes + stored_span_bytes(&skep_address::subtree_of(citation().tumbler())),
         "the mint and the claim, the copy at its four spans and its type, no claim without an original"
     );
+    // A shot naming no draft prices the fixed records alone.
+    let undrafted = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    assert_eq!(price_staged_bytes(world, &target, &undrafted, &[], &none), SHOT_BYTES, "no draft named, no address priced");
     assert!(CLAIM_BYTES > 0);
     // The member-position form's amplification.
     let wide = |count: usize| PublishDeposits {
@@ -1585,9 +1594,13 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     };
     let into_e = PublishTarget::Document(pdoc());
     let none = PublishDeposits::default();
+    // A shot with fresh runs names doc1 as its rendering draft, whose address
+    // the placing record carries in its own slot — taken off every figure
+    // measured against a shot that names none, as the price takes it.
+    let drafted = skep_links::stored_tumbler_bytes(doc1().tumbler());
     let shot_bytes = measure(&|| commit(&into_e, &base_shot(vec![]), &[], &none));
     let window = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&pdoc(), &pca(1), 3)]), &[], &none));
-    let placed_run = window - shot_bytes;
+    let placed_run = window - shot_bytes - drafted;
     // The copy at every slot's budget: `from` and `to` at `MAX_SLOT_SPANS`
     // content I-spans of the shallow depth, the type at as many unit spans.
     let full = LinkEntry {
@@ -1632,9 +1645,9 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     vs.insert(P1, &doc1(), vp(1, 4), vec![Val::new([b'x', b'y'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("an atom at ca(4)");
     vs.insert(P1, &doc1(), vp(1, 5), vec![Val::new([b'd'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("d at ca(5)");
     vs.insert(P1, &doc1(), vp(1, 6), vec![Val::new([b'e'])], Deposit::Undeclared, AsOf::Typed(k.current_seq())).expect("e at ca(6)");
-    let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes - placed_run - record;
-    let byte = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(5), 1)]), &[], &none)) - shot_bytes - placed_run - record;
-    let byte_placed = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(6), 1)]), &places(1, &[(0, 6)]), &none)) - shot_bytes - placed_run - record;
+    let atom = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(4), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
+    let byte = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(5), 1)]), &[], &none)) - shot_bytes - drafted - placed_run - record;
+    let byte_placed = measure(&|| commit(&into_e, &base_shot(vec![shot_run(&doc1(), &ca(6), 1)]), &places(1, &[(0, 6)]), &none)) - shot_bytes - drafted - placed_run - record;
     let kept_place = byte_placed - byte;
     assert_eq!(bytes_of(&k, &doc1()), "abcxyde", "doc1 reads as it did, its last byte re-windowed");
     // The mint form: the edition's mint over a birth shot into `S`, the
@@ -1644,10 +1657,10 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     let account = a(&[1, 0, 1]);
     let minted = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &birth, &[], &none));
     let edition_mint = minted - birth_s;
-    let drafted = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![] };
+    let drafted_birth = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![] };
     let claimed_deposits = PublishDeposits { claim: true, ..PublishDeposits::default() };
-    let claimed = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &drafted, &[], &claimed_deposits));
-    let edition_claim = claimed - minted;
+    let claimed = measure(&|| commit(&PublishTarget::Mint { account: account.clone() }, &drafted_birth, &[], &claimed_deposits));
+    let edition_claim = claimed - minted - drafted;
     // The claim at the document form (skep #692): a drafted birth claiming
     // into an empty edition `doc` names, against the plain birth into
     // another — two editions minted under the account for it, at the depth
@@ -1664,8 +1677,8 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     };
     let (plain_edition, claimed_edition) = (fresh_edition(), fresh_edition());
     let birth_plain = measure(&|| commit(&PublishTarget::Document(plain_edition.clone()), &birth, &[], &none));
-    let birth_claimed = measure(&|| commit(&PublishTarget::Document(claimed_edition.clone()), &drafted, &[], &claimed_deposits));
-    let document_claim = birth_claimed - birth_plain;
+    let birth_claimed = measure(&|| commit(&PublishTarget::Document(claimed_edition.clone()), &drafted_birth, &[], &claimed_deposits));
+    let document_claim = birth_claimed - birth_plain - drafted;
 
     let table = [
         ("CORRESPONDENCE_RECORD_BYTES", record, CORRESPONDENCE_RECORD_BYTES),
@@ -1697,7 +1710,7 @@ fn the_worst_case_table_is_the_bytes_the_kernel_prices_each_kind_at() {
     // and the one-span copy the arithmetic's second verdict reads — the
     // copy's fixed part and its three spans at their depths.
     let one_span_copy = small_alone - shot_bytes_at_an_empty_head;
-    assert_eq!((marker, birth_s, byte, one_span_copy), (109, 258, 301, 1_029), "the quoted figures");
+    assert_eq!((marker, birth_s, byte, one_span_copy), (109, 259, 301, 1_029), "the quoted figures");
     assert_eq!(
         one_span_copy,
         COPY_FIXED_BYTES + stored_span_bytes(&run(&pca(1), 3).iextent()) + stored_span_bytes(&subtree_of(doc2().tumbler())) + stored_span_bytes(&subtree_of(citation().tumbler())),

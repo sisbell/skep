@@ -457,9 +457,12 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
 ///
 /// They are the publication bit, the owner account, the shot terms a
 /// member carries — `placed`, the positions the client's runs cover, and
-/// `base_extent` — and `source`, the address a `version`-minted document
-/// was born sharing (the member or bare document its snapshot took), each
-/// `None` where the address carries none.
+/// `base_extent` — `source`, the address a `version`- or `stage`-minted
+/// document was born sharing (the member or bare document its snapshot
+/// took), and a staged draft's recorded base — `base`, the member or bare
+/// document its next publication lands after, and `base_copied`, the
+/// extent the copy took of it (the staging act, B3-S10) — each `None` where
+/// the address carries none.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
@@ -468,6 +471,12 @@ pub(crate) struct Metadata {
     pub(crate) placed: Option<u64>,
     pub(crate) base_extent: Option<u64>,
     pub(crate) source: Option<String>,
+    /// The draft base the board records for the address named: the member
+    /// or bare document its next publication lands after, moved by each
+    /// publication the draft renders; `None` where the board records none.
+    pub(crate) base: Option<String>,
+    /// Beside `base`, the extent the draft's copy took of it.
+    pub(crate) base_copied: Option<u64>,
     /// The position of the commit that minted the address named — a version
     /// member its own mint (wire.md §The response envelope, `doc_metadata`,
     /// "the age of the address named"); `None` where the board serves
@@ -478,9 +487,9 @@ pub(crate) struct Metadata {
 /// Decodes a `doc_metadata` answer.
 ///
 /// `None` for a document that is no such answer — a rejection among them —
-/// or one without its owner or its `published` bit. A `source` that is
-/// neither a string nor absent reads as absent: the merge checks the address
-/// it names itself.
+/// or one without its owner or its `published` bit. A `source` or a `base`
+/// that is neither a string nor absent reads as absent: the merge checks the
+/// address it names itself.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
@@ -493,6 +502,8 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         placed: count("placed"),
         base_extent: count("base_extent"),
         source: v["source"].as_str().map(str::to_string),
+        base: v["base"].as_str().map(str::to_string),
+        base_copied: count("base_copied"),
         at: v["at"].as_u64(),
     })
 }
@@ -682,8 +693,13 @@ mod tests {
         assert_eq!(claims, vec![EditionClaim { claim: "1.0.1.0.5.0.2.1".into(), home: "1.0.1.0.5".into(), to: vec![LinkSpan { start: "1.0.1.0.1".into(), width: "0.0.0.0.1".into() }], active: true }]);
         assert!(claims[0].to[0].is_unit(), "a unit span at the document");
         // `<!-- wire: response doc_metadata -->`: the member's own mint at 7.
-        let meta = metadata(&json!({"as_of":9,"at":7,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
+        let meta = metadata(&json!({"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047u64,"time_from":"feed"})).expect("a doc_metadata answer");
         assert_eq!((meta.at, meta.placed, meta.base_extent, meta.published, meta.owner.as_str()), (Some(7), Some(5), Some(3), true, "1.0.1"));
+        assert_eq!((meta.base, meta.base_copied, meta.source), (None, None, None), "a member records no base");
+        // `<!-- wire: response doc_metadata_unborn -->`: a staged draft, its
+        // base the member copied and `base_copied` what the copy took.
+        let staged = metadata(&json!({"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052u64,"time_from":"anchor"})).expect("a doc_metadata answer");
+        assert_eq!((staged.base.as_deref(), staged.base_copied, staged.source.as_deref(), staged.placed), (Some("1.0.1.0.1.1"), Some(5), Some("1.0.1.0.1.1"), None));
     }
 
     /// A record's value is a delivery's composite item, `atom` or `atom_hex`.

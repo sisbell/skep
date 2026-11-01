@@ -41,6 +41,7 @@ mod rewindow;
 mod seat;
 mod shot;
 mod shot_refusals;
+mod stage;
 mod tidy;
 mod traits;
 mod version;

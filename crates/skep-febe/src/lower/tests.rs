@@ -142,6 +142,7 @@ fn every_wrapper_lowers_as_the_leaf_it_wraps_for_every_leaf() {
             ("CreateDocumentError::Mint", CreateDocumentError::Mint(leaf).lower()),
             ("InsertError::Mint", InsertError::Mint(leaf).lower()),
             ("VersionError::Mint", VersionError::Mint(leaf).lower()),
+            ("StageError::Mint", StageError::Mint(leaf).lower()),
             ("PublishError::Mint", PublishError::Mint(leaf).lower()),
             ("MakeLinkError::Mint", MakeLinkError::Mint(leaf).lower()),
             ("EmitError::Mint", EmitError::Mint(leaf).lower()),
@@ -432,6 +433,10 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(VersionError::NodeTierCrossOwner);
     same_name(VersionError::PrivateSourceVersionless);
     same_name(VersionError::PrivateVersionOfPublished);
+    // The staging act's three pre-transaction refusals, `version`'s codes.
+    same_name(StageError::SourceNotRegistered);
+    same_name(StageError::NotAPrincipal);
+    same_name(StageError::NodeTierCrossOwner);
     // The publish shot (lane 3.2): every flat verdict same-named, the
     // withheld one threading its document through the site.
     same_name(PublishError::DocNotRegistered);

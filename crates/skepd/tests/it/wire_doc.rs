@@ -65,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 48] = [
+const OP_NAMES: [&str; 49] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -80,6 +80,7 @@ const OP_NAMES: [&str; 48] = [
     "reinstate",
     "rearrange",
     "version",
+    "stage",
     "publish",
     "make_link",
     "emit",
@@ -117,7 +118,7 @@ const OP_NAMES: [&str; 48] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 48 ops appear.
+/// value), is tagged with the marker's own op name — and all 49 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -331,19 +332,25 @@ fn fixture(name: &str) -> Response {
             birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
             terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
             source: None,
+            base: None,
+            base_copied: None,
             at: Some(Seq(7)),
             time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
             as_of: Seq(9),
         },
-        // A private draft with no chain member yet: birth/birth_extent null,
-        // and no shot terms either.
+        // A private draft the staging act minted off the birth version above
+        // (B3-S10): no chain member and no shot terms, its `source` the member
+        // copied, its `base` that member and `base_copied` the five positions
+        // the copy took.
         "doc_metadata_unborn" => Response::DocMetadata {
             doc: a(&[1, 0, 1, 0, 2]),
             published: false,
             owner: Some(a(&[1, 0, 1])),
             birth: None,
             terms: None,
-            source: None,
+            source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            base: Some(a(&[1, 0, 1, 0, 1, 1])),
+            base_copied: Some(n(5)),
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(9),
@@ -352,7 +359,8 @@ fn fixture(name: &str) -> Response {
         // private document of another account, minted by `version` off the
         // member `1.0.1.0.1.1`, which it was born sharing — its `source`. Its
         // own chain has no member and no shot minted it, so the other
-        // per-member facts are null.
+        // per-member facts are null — the base among them: a `version`
+        // records none.
         "doc_metadata_fork" => Response::DocMetadata {
             doc: a(&[1, 0, 2, 0, 1]),
             published: false,
@@ -360,6 +368,8 @@ fn fixture(name: &str) -> Response {
             birth: None,
             terms: None,
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            base: None,
+            base_copied: None,
             at: None,
             time: None,
             as_of: Seq(9),

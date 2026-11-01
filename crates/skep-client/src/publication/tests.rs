@@ -1288,27 +1288,33 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     let draft = a(D);
     let term = a(E);
     let one = vec![run(D, 1, 1)];
-    let within = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[Some(1)], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 });
+    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[Some(1)], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 };
+    let within = price::price(&shape);
     assert!(within.admits(), "{within:?}");
     assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0], 1, 2));
     assert_eq!(within.bytes, price::SHOT_BYTES + price::PLACED_RUN_BYTES + price::CORRESPONDENCE_RECORD_BYTES + price::KEPT_PLACE_BYTES + price::REINSERTED_VALUE_BYTES);
+    // Naming the rendering draft stores its address in the placing record's
+    // own slot: the daemon's term, `stored_tumbler_bytes` of it.
+    let named = price::price(&price::Shape { draft: Some(&draft), ..shape });
+    let comps: Vec<u64> = D.split('.').map(|c| c.parse().expect("a component")).collect();
+    assert_eq!(named.bytes, within.bytes + price::stored_tumbler_bytes(&comps), "{named:?}");
     let over = |shape: &price::Shape<'_>| price::price(shape).over.iter().map(|(t, _)| *t).collect::<Vec<_>>();
     let many: Vec<Run> = (0..4097).map(|k| run(E, 1 + k, 1)).collect();
-    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
+    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
     let wide = vec![run(D, 1, price::MAX_REINSERTED_VALUES + 1)];
-    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
+    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
     assert!(values.over.iter().any(|(t, by)| *t == price::Term::Values && *by == 1), "{values:?}");
-    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
+    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
     assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 - price::MAX_PUBLICATION_READS) as u64)]);
     let entry = price::EntryShape { from: price::EndShape::Member(vec![(1, 4096)]), to: price::EndShape::Addrs(vec![]), ty: price::EndShape::Addrs(vec![T_CITATION.into()]), old: false };
     let runs4096: Vec<Run> = (0..4096).map(|k| run(D, 1 + k, 1)).collect();
     let entries = vec![entry; 100];
-    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
+    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
     assert_eq!(bytes.over.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [price::Term::Bytes], "a hundred member-position slots over 4096 runs stage past the budget: {bytes:?}");
     let entries = vec![entries[0].clone()];
-    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
+    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
 }
 
 // ── THE RE-READ ──────────────────────────────────────────────────────────

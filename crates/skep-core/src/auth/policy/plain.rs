@@ -503,14 +503,15 @@ fn old_is_the_makers_own(world: &World, claim: &Link, at: &Address) -> bool {
 
 /// Answers the mint class's refusal, `mint_home_first`.
 ///
-/// `Some(MintHomeFirst)` iff `op` is a `fork` or a `version` — a
-/// document-minting op other than `create_new_document` — and the subject
-/// account's chain is empty — AUTH-3.68's `has_documents(account)`, which is
-/// M3's own read of its document chain. The subject is `principal_prefix(p)`
-/// *then* an account-hood test — never `key_subject` (AUTH-3.11); a subject
-/// that is not an account answers `None` and no arm fires. Reads the op's
-/// kind and the principal and nothing else — never a fork/version source
-/// (AUTH-3.13).
+/// `Some(MintHomeFirst)` iff `op` is a `fork`, a `version` or a `stage` — a
+/// document-minting op other than `create_new_document`, the staging act
+/// minting its draft in the caller's own account as `fork` does — and the
+/// subject account's chain is empty — AUTH-3.68's `has_documents(account)`,
+/// which is M3's own read of its document chain. The subject is
+/// `principal_prefix(p)` *then* an account-hood test — never `key_subject`
+/// (AUTH-3.11); a subject that is not an account answers `None` and no arm
+/// fires. Reads the op's kind and the principal and nothing else — never a
+/// fork/version/stage source (AUTH-3.13).
 ///
 /// **Precondition.** `world` must be the snapshot taken under the read guard
 /// for this request; the guard argument is that contract's cheap half.
@@ -520,7 +521,7 @@ fn mint_home_refusal(
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
-    if !matches!(op, Op::Fork { .. } | Op::Version { .. }) {
+    if !matches!(op, Op::Fork { .. } | Op::Version { .. } | Op::Stage { .. }) {
         return None;
     }
     let subject = world.m3().principal_prefix(principal)?;
@@ -994,6 +995,14 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId, signed: bool) -
                         .as_ref()
                         .is_some_and(|d| m3.is_registered_document(d) && published(world, d)))
         }
+        // The staging act (B3-S10) mints PRIVATE whatever `from`'s state —
+        // the sibling draft the version-chain refusals point to — so it
+        // never lands in the published world and is never this gate's
+        // input: admitted from a bare session on a claimed-permissive board
+        // as a private `fork` is, and refused `mint_home_first` ahead of
+        // this gate into an empty account as a `fork` is. Spelled out rather
+        // than left to the wildcard, so the decision is read here.
+        Op::Stage { .. } => false,
         // `fork` with a non-`true` flag — a draft — and every op with no
         // input form here.
         _ => false,

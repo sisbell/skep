@@ -170,16 +170,22 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     assert!(
         matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty())
     );
-    // A `copy`, a `reinstate` and a `version` share identity: each arm
-    // states no cell.
+    // A `copy`, a `reinstate`, a `version` and a `stage` share identity:
+    // each arm states no cell.
     let copy =
         Op::Copy { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), specs: Vec::new(), as_of: Seq(7) };
     let reinstate =
         Op::Reinstate { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), runs: Vec::new(), as_of: Seq(7) };
     let version = Op::Version { d_src: doc.clone(), published: None };
-    for op in [copy, reinstate, version] {
+    let stage = Op::Stage { from: doc.clone() };
+    for op in [copy, reinstate, version, stage] {
         assert!(matches!(write_meta(&op).expect("a write").minting, Minting::None));
     }
+    // A stage's row names the draft it minted — known only from the ack —
+    // and never the source it copied.
+    let stage = write_meta(&Op::Stage { from: doc.clone() }).expect("a write");
+    assert_eq!(stage.kind, OpKind::Stage);
+    assert!(matches!(stage.docs, AffectedDocs::Minted), "the minted draft, off the ack");
     let publish = Op::Publish {
         target: PublishTarget::Document(doc),
         shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },

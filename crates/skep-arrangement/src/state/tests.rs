@@ -1,7 +1,7 @@
 use num_traits::Zero;
 
 use super::*;
-use crate::testutil::{a, ca, doc1, doc2, la, n, pca, run, vca, vdoc};
+use crate::testutil::{a, ca, doc1, doc2, la, n, pca, pdoc, run, vca, vdoc};
 use crate::vspace::VPos;
 
 fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
@@ -347,6 +347,7 @@ fn only_placement_and_version_append_to_r() {
             placed: n(1),
             base_extent: None,
         },
+        draft: None,
     });
     assert_ne!(shot.provenance, s.provenance);
     let forked = s.apply_m5(Seq(1), &M5Rec::VersionSnapshot {
@@ -382,6 +383,7 @@ fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it()
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
         terms: ShotTerms { placed: n(3), base_extent: None },
+        draft: None,
     });
     assert_eq!(born.birth_extent(&vdoc()), Some(&n(3)));
     // An I-ADJACENT deposit, which is why the extent is noted at the mint
@@ -415,6 +417,7 @@ fn only_a_trunk_s_birth_version_has_its_extent_noted() {
         doc: doc.clone(),
         runs: vec![run(&ca(1), 2)],
         terms: ShotTerms { placed: n(2), base_extent: None },
+        draft: None,
     };
     let mut s = M5State::genesis();
     for doc in [
@@ -485,6 +488,7 @@ fn a_member_the_shot_minted_empty_is_noted_at_zero_by_its_own_record() {
         doc: vdoc(),
         runs: vec![],
         terms: ShotTerms { placed: n(0), base_extent: None },
+        draft: None,
     });
     assert_eq!(minted_empty.birth_extent(&vdoc()), Some(&n(0)), "noted at zero by the mint");
     assert!(minted_empty.arrangements.get(&vdoc()).is_none(), "the lazy empty arrangement");
@@ -516,6 +520,7 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
         doc: vdoc(),
         runs: runs.clone(),
         terms: terms.clone(),
+        draft: None,
     };
     let by_shot = M5State::genesis().apply_m5(Seq(1), &shot);
     assert_eq!(
@@ -548,8 +553,9 @@ fn shot_place_folds_as_a_placement_at_one_and_notes_the_terms() {
     );
     assert_eq!(
         bincode::serialize(&shot).expect("encodes"),
-        bincode::serialize(&(5u32, vdoc(), &runs, n(4), Some(n(2)))).expect("encodes"),
-        "`ShotPlace` is index 5, then its fields in order, the terms' two flat in place"
+        bincode::serialize(&(5u32, vdoc(), &runs, n(4), Some(n(2)), None::<Address>)).expect("encodes"),
+        "`ShotPlace` is index 5, then its fields in order, the terms' two flat in place, the \
+         rendering draft last"
     );
 }
 
@@ -686,6 +692,7 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
         doc: vdoc(),
         runs: vec![run(&ca(1), 3)],
         terms: ShotTerms { placed: n(3), base_extent: None },
+        draft: None,
     };
     let born = M5State::genesis().apply_m5(Seq(1), &mint);
     let grown = place(&born, &vdoc(), 4, vec![run(&ca(4), 1)]);
@@ -741,6 +748,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
             placed: n(2),
             base_extent: Some(n(1)),
         },
+        draft: None,
     });
     let s = s.apply_m5(Seq(1), &M5Rec::ShotPlace {
         doc: a(&[1, 0, 1, 0, 2, 1]),
@@ -749,6 +757,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
             placed: n(1),
             base_extent: None,
         },
+        draft: None,
     });
     // The premise: every collection the slice decodes holds an entry, so the
     // sweep writes over each one's count and over the counts within it.
@@ -756,12 +765,19 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
         source: doc1(),
         new: doc2(),
     });
+    let s = s.apply_m5(Seq(1), &M5Rec::DraftBase {
+        draft: doc2(),
+        base: doc1(),
+        extent: n(3),
+        source: doc1(),
+    });
     assert_eq!(s.arrangements.len(), 4);
     assert_eq!(s.link_run_count(&doc1()), 1);
     assert_eq!(s.recorded_span_count(&doc1()), 1);
     assert_eq!(s.birth_extents.len(), 2);
     assert_eq!(s.shot_terms.len(), 2);
     assert_eq!(s.fork_sources.len(), 1);
+    assert_eq!(s.draft_bases.len(), 1);
     let bytes = bincode::serialize(&s).expect("state serializes");
     assert_eq!(
         bincode::deserialize::<M5State>(&bytes).expect("state deserializes"),
@@ -858,6 +874,7 @@ fn only_a_version_record_notes_a_fork_source() {
         doc: vdoc(),
         runs: vec![run(&ca(1), 2)],
         terms: ShotTerms { placed: n(2), base_extent: None },
+        draft: None,
     });
     assert_eq!(shot.fork_source(&vdoc()), None, "a shot member");
     assert_eq!(shot.birth_extent(&vdoc()), Some(&n(2)), "…minted all the same");
@@ -928,6 +945,7 @@ fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
         &live.shot_terms,
         &live.fork_sources,
         &live.arranged_at,
+        &live.draft_bases,
     ))
     .expect("the fields serialize");
     assert_eq!(fields, bytes, "`fork_sources` is written after `shot_terms`, before `arranged_at`");
@@ -967,12 +985,15 @@ fn m5rec_survives_a_bincode_round_trip() {
             doc: vdoc(),
             runs: vec![run(&ca(1), 2), run(&pca(1), 1)],
             terms: ShotTerms { placed: n(3), base_extent: Some(n(1)) },
+            draft: None,
         },
         M5Rec::ShotPlace {
             doc: a(&[1, 0, 1, 0, 2, 1]),
             runs: vec![],
             terms: ShotTerms { placed: n(0), base_extent: None },
+            draft: Some(doc2()),
         },
+        M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(5), source: doc1() },
     ] {
         let bytes = bincode::serialize(&rec).expect("record serializes");
         let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
@@ -1024,11 +1045,11 @@ fn every_arm_that_changes_a_content_arrangement_notes_its_position_and_the_link_
     let terms = ShotTerms { placed: n(1), base_extent: None };
     let s = s.apply_m5(
         Seq(17),
-        &M5Rec::ShotPlace { doc: pca_member(), runs: vec![run(&pca(1), 1)], terms: terms.clone() },
+        &M5Rec::ShotPlace { doc: pca_member(), runs: vec![run(&pca(1), 1)], terms: terms.clone(), draft: None },
     );
     assert_eq!(s.arranged_at(&pca_member()), Some(Seq(17)), "the shot's member");
     let empty_member = a(&[1, 0, 1, 0, 2, 1]);
-    let s = s.apply_m5(Seq(19), &M5Rec::ShotPlace { doc: empty_member.clone(), runs: vec![], terms });
+    let s = s.apply_m5(Seq(19), &M5Rec::ShotPlace { doc: empty_member.clone(), runs: vec![], terms, draft: None });
     assert_eq!(s.content_count(&empty_member), n(0));
     assert_eq!(s.arranged_at(&empty_member), Some(Seq(19)), "an empty placement is noted too");
 }
@@ -1038,12 +1059,13 @@ fn pca_member() -> Address {
     a(&[1, 0, 1, 0, 3, 1])
 }
 
-/// The arranged-at map rides the checkpoint as its five siblings do, is
-/// re-derived by replay to the same bytes, and is the slice's LAST field —
-/// after `fork_sources`, under the same no-default rule — so a checkpoint
-/// written before it ends where it would begin and decodes no default.
+/// The arranged-at map rides the checkpoint as its siblings do, is
+/// re-derived by replay to the same bytes, and is the slice's sixth field —
+/// after `fork_sources`, before `draft_bases`, under the same no-default rule
+/// — so a checkpoint written before it ends where it would begin and
+/// decodes no default.
 #[test]
-fn the_arranged_at_positions_ride_the_checkpoint_last_and_replay_re_derives_them() {
+fn the_arranged_at_positions_ride_the_checkpoint_sixth_and_replay_re_derives_them() {
     let build = || {
         let s = M5State::genesis().apply_m5(
             Seq(4),
@@ -1067,9 +1089,10 @@ fn the_arranged_at_positions_ride_the_checkpoint_last_and_replay_re_derives_them
         &live.shot_terms,
         &live.fork_sources,
         &live.arranged_at,
+        &live.draft_bases,
     ))
     .expect("the fields serialize");
-    assert_eq!(fields, bytes, "`arranged_at` is written after `fork_sources`, last");
+    assert_eq!(fields, bytes, "`arranged_at` is written after `fork_sources`, before `draft_bases`");
     // A body cut short of the map — a checkpoint written before it — does
     // not decode: the no-default rule.
     let without: Vec<u8> = bincode::serialize(&(
@@ -1083,5 +1106,183 @@ fn the_arranged_at_positions_ride_the_checkpoint_last_and_replay_re_derives_them
     assert!(
         bincode::deserialize::<M5State>(&without).is_err(),
         "a checkpoint body without the map must fail to decode, never read as never arranged"
+    );
+}
+
+/// BASE★ (the staging act, B3-S10), the noting half: the staging record
+/// installs the draft's base, extent and source as it carries them,
+/// touching no arrangement and no arranged-at entry; the read answers the
+/// address named — the draft, never its source or its base — and a draft no
+/// record names answers none.
+#[test]
+fn a_staging_record_notes_the_drafts_base_extent_and_source_and_moves_nothing_else() {
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+    let shared = s.apply_m5(Seq(5), &M5Rec::VersionSnapshot { source: doc1(), new: doc2() });
+    let staged = shared.apply_m5(
+        Seq(5),
+        &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1() },
+    );
+    assert_eq!(
+        staged.draft_base(&doc2()),
+        Some(&DraftBase { base: doc1(), extent: n(3), source: doc1() }),
+        "the record as it was carried"
+    );
+    assert_eq!(staged.draft_base(&doc1()), None, "the source answers none: the address named");
+    assert_eq!(staged.arrangements, shared.arrangements, "no arrangement moves");
+    assert_eq!(staged.provenance, shared.provenance, "no R-append");
+    assert_eq!(staged.arranged_at, shared.arranged_at, "no arranged-at entry moves");
+    assert_eq!(staged.fork_sources, shared.fork_sources, "the snapshot noted the source already");
+    // An alternative's record names the source draft and its inherited base.
+    let alternative = staged.apply_m5(
+        Seq(7),
+        &M5Rec::DraftBase { draft: pdoc(), base: doc1(), extent: n(3), source: doc2() },
+    );
+    assert_eq!(
+        alternative.draft_base(&pdoc()),
+        Some(&DraftBase { base: doc1(), extent: n(3), source: doc2() })
+    );
+    // Purity: the receiver was untouched.
+    assert_eq!(shared.draft_base(&doc2()), None);
+}
+
+/// BASE★, the moving half: a shot naming its rendering draft moves that
+/// draft's base to the member minted and its extent to the member's whole
+/// count — the carried tail counted, the source kept — on both of the arm's
+/// branches, an empty placement included; a shot naming no draft moves
+/// nothing; and a shot naming a draft the map holds no entry for makes one,
+/// the member its source too.
+#[test]
+fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+    let s = s.apply_m5(
+        Seq(5),
+        &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc() },
+    );
+    let terms = ShotTerms { placed: n(2), base_extent: Some(n(2)) };
+    // The shot that renders doc2 into pdoc's first member, placing two runs
+    // of three positions in all.
+    let rendered = s.apply_m5(
+        Seq(8),
+        &M5Rec::ShotPlace {
+            doc: vdoc(),
+            runs: vec![run(&ca(1), 2), run(&pca(1), 1)],
+            terms: terms.clone(),
+            draft: Some(doc2()),
+        },
+    );
+    assert_eq!(
+        rendered.draft_base(&doc2()),
+        Some(&DraftBase { base: vdoc(), extent: n(3), source: pdoc() }),
+        "the base moved to the member, the extent its whole count, the source kept"
+    );
+    // A shot naming no draft moves nothing.
+    let unnamed = s.apply_m5(
+        Seq(8),
+        &M5Rec::ShotPlace {
+            doc: vdoc(),
+            runs: vec![run(&ca(1), 2)],
+            terms: terms.clone(),
+            draft: None,
+        },
+    );
+    assert_eq!(unnamed.draft_bases, s.draft_bases, "no draft named, no base moved");
+    // An empty placement moves the base all the same, the extent zero.
+    let empty = s.apply_m5(
+        Seq(9),
+        &M5Rec::ShotPlace {
+            doc: vdoc(),
+            runs: vec![],
+            terms: ShotTerms { placed: n(0), base_extent: Some(n(2)) },
+            draft: Some(doc2()),
+        },
+    );
+    assert_eq!(
+        empty.draft_base(&doc2()),
+        Some(&DraftBase { base: vdoc(), extent: n(0), source: pdoc() })
+    );
+    // A draft the map holds no entry for gains one: the member it rendered
+    // as its base and its source, its extent the member's count.
+    let first = s.apply_m5(
+        Seq(10),
+        &M5Rec::ShotPlace {
+            doc: vdoc(),
+            runs: vec![run(&ca(1), 3)],
+            terms: ShotTerms { placed: n(3), base_extent: None },
+            draft: Some(pdoc()),
+        },
+    );
+    assert_eq!(
+        first.draft_base(&pdoc()),
+        Some(&DraftBase { base: vdoc(), extent: n(3), source: vdoc() })
+    );
+    assert_eq!(first.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc() }), "another draft's entry stands");
+    // Purity: the receiver was untouched.
+    assert_eq!(s.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc() }));
+}
+
+/// The draft bases ride the checkpoint as their six siblings do, are
+/// re-derived by replay to the same bytes, and are the slice's LAST field —
+/// after `arranged_at`, under the same no-default rule — so a checkpoint
+/// written before the map ends where it would begin and decodes no default.
+#[test]
+fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
+    let build = || {
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+        let s = s.apply_m5(Seq(6), &M5Rec::VersionSnapshot { source: doc1(), new: doc2() });
+        let s = s.apply_m5(
+            Seq(6),
+            &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1() },
+        );
+        s.apply_m5(
+            Seq(9),
+            &M5Rec::ShotPlace {
+                doc: vdoc(),
+                runs: vec![run(&ca(1), 3)],
+                terms: ShotTerms { placed: n(3), base_extent: Some(n(3)) },
+                draft: Some(doc2()),
+            },
+        )
+    };
+    let live = build();
+    assert_eq!(live.draft_base(&doc2()), Some(&DraftBase { base: vdoc(), extent: n(3), source: doc1() }));
+    let bytes = bincode::serialize(&live).expect("state serializes");
+    let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
+    assert_eq!(back, live);
+    assert_eq!(back.draft_base(&doc2()), live.draft_base(&doc2()), "the checkpoint carries it");
+    assert_eq!(back.clone().rebuild_derived(), back);
+    assert_eq!(bincode::serialize(&build()).expect("serializes"), bytes, "replay equals live");
+    let fields = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+        &live.arranged_at,
+        &live.draft_bases,
+    ))
+    .expect("the fields serialize");
+    assert_eq!(fields, bytes, "`draft_bases` is written after `arranged_at`, last");
+    // A body cut short of the map — a checkpoint written before it — does
+    // not decode: the no-default rule.
+    let without: Vec<u8> = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+        &live.arranged_at,
+    ))
+    .expect("the six fields serialize");
+    assert!(
+        bincode::deserialize::<M5State>(&without).is_err(),
+        "a checkpoint body without the map must fail to decode, never read as no base"
+    );
+    // The staging record's index: appended after the shot's, its fields in
+    // order, as every variant encodes (`M5Rec`'s card).
+    let rec = M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1() };
+    assert_eq!(
+        bincode::serialize(&rec).expect("encodes"),
+        bincode::serialize(&(6u32, doc2(), doc1(), n(3), doc1())).expect("encodes"),
+        "`DraftBase` is index 6, then its four fields in order"
     );
 }

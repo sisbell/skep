@@ -24,7 +24,7 @@
 //! (`resend`'s shift, skep #442), else held as a moved document, the board's
 //! verdict kept on its line. A write the hold never
 //! holds is faced where a burst's would be held (§3c.4: "a non-burst write
-//! that fails … is faced at its act") — and the six of them §3c.4 names
+//! that fails … is faced at its act") — and the seven of them §3c.4 names
 //! ([`UNHOLDABLE_WRITES`], `publication.confirm`'s send beside them) meeting
 //! a hold that stands at the board before any dial — the own node stopped,
 //! the write path poisoned, the writes halted — are REFUSED at once with
@@ -145,14 +145,15 @@ const WRITE_BUSY_WAIT: Duration = Duration::from_millis(50);
 /// The burst machine's five kinds (§3c.4) — the ops the held store holds.
 const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
 
-/// The six non-burst writes §3c.4 names, which a standing hold refuses.
+/// The seven non-burst writes §3c.4 names, which a standing hold refuses.
 ///
 /// Each arriving while the board is stopped, poisoned or its writes halted
 /// is refused at once with the hold's cause as its token, never held and
 /// never dialed ([`Holds::unholdable_refusal`]); `publication.confirm`'s
 /// send, the shot's one carrier, takes the same door with `publish` as its
-/// op. Every other write outside the five bursts dials as it dials.
-pub const UNHOLDABLE_WRITES: [&str; 6] = ["fork", "version", "make_link", "nullify", "edit_link", "publish"];
+/// op; `stage`, the staging act's mint (B3-S10), takes it as `fork` does.
+/// Every other write outside the five bursts dials as it dials.
+pub const UNHOLDABLE_WRITES: [&str; 7] = ["fork", "version", "stage", "make_link", "nullify", "edit_link", "publish"];
 
 /// Returns whether `frame` is a burst: one of the five kinds.
 ///
@@ -1165,7 +1166,7 @@ impl Holds {
     /// stands at. A burst ([`is_burst`]) enters by the burst's door and may be
     /// held (`send_burst`), `anchors` — the page's, read at the row's door —
     /// riding its line for the shift (skep #442) and read by no other frame;
-    /// one of the six unholdable writes
+    /// one of the seven unholdable writes
     /// ([`UNHOLDABLE_WRITES`]) meeting a hold that stands at the board is
     /// refused at once with the hold's cause, never dialed
     /// ([`Holds::unholdable_refusal`]); any other frame — a write the hold
@@ -1195,13 +1196,13 @@ impl Holds {
 
     /// Returns the refusal an unholdable write meets at a standing hold (§3c.4).
     ///
-    /// `op` is the write's kind. Where it is one of the six
+    /// `op` is the write's kind. Where it is one of the seven
     /// ([`UNHOLDABLE_WRITES`]) and a hold stands at the board — the own node
     /// stopped, the write path poisoned, the writes halted, in that order —
     /// the write is refused at once under the cause's own name
     /// (`Name::STOPPED`, `Name::POISONED`, `Name::HALTED`), its detail the
     /// `op`, never held and never dialed; `None` where no hold stands or the
-    /// kind is not of the six, the write then dialing as it dials — a board
+    /// kind is not of the seven, the write then dialing as it dials — a board
     /// that is unreachable is no hold of this kind. The `op` row's session
     /// form asks it through [`Holds::send`]; `publication.confirm` asks it
     /// with `publish` before it composes.
@@ -1845,7 +1846,7 @@ fn line_json(l: &HeldLine) -> Value {
 /// from its frame and its ack.
 fn written_docs<'a>(frame: &'a Value, ack: &'a Value) -> Vec<&'a str> {
     let members: &[&str] = match frame["op"].as_str() {
-        Some("create_new_document" | "fork" | "version" | "publish") => return ack["addr"].as_str().into_iter().collect(),
+        Some("create_new_document" | "fork" | "version" | "stage" | "publish") => return ack["addr"].as_str().into_iter().collect(),
         Some("make_link" | "emit" | "nullify" | "assert_sup") => &["home"],
         Some("edit_link") => &["d_s", "d_a"],
         _ => &["doc"],

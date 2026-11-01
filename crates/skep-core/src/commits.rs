@@ -2324,6 +2324,11 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::Reinstate { doc, .. } => meta(OpKind::Reinstate, one(doc), absent, no_cell),
         Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent, no_cell),
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
+        // The staging act (B3-S10) shares identity as a `version` does and
+        // mints no cell; its row names the draft it minted, known only from
+        // the ack — never the source it copied, so no standing line on the
+        // source moves for it.
+        Op::Stage { .. } => meta(OpKind::Stage, AffectedDocs::Minted, absent, no_cell),
         // The shot mints the chain's next member, known only from its ack —
         // the document it advances is the member's own trunk — and
         // re-inserts the named drafts' values as fresh identity under it,

@@ -3,8 +3,9 @@
 //! The arrangement reads (resolve/iter_resolve/point, the run decompositions
 //! and their counts, project/arranges_any, the content past an extent), the
 //! admission predicates the ops ask, the provenance reads
-//! (recorded_span_count/deletions/docs_ever_containing) and the fork-source
-//! read (fork_source) are pure over any M2 snapshot (§2, §9).
+//! (recorded_span_count/deletions/docs_ever_containing), the fork-source
+//! read (fork_source) and the draft-base read (draft_base) are pure over any
+//! M2 snapshot (§2, §9).
 //!
 //! **Level-class discipline** (§2): a SpanSet aggregated across runs — a
 //! region image, an endset's coverage, the internal `content_image`, a
@@ -30,7 +31,7 @@ use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
 use crate::run_list::Runs;
-use crate::state::M5State;
+use crate::state::{DraftBase, M5State};
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 
 impl M5State {
@@ -503,6 +504,34 @@ impl M5State {
     /// caller keeping it clones it.
     pub fn fork_source(&self, doc: &Address) -> Option<&Address> {
         self.fork_sources.get(doc)
+    }
+
+    /// Returns the recorded base of `draft`: where its next publication lands.
+    ///
+    /// It is the [`DraftBase`] the staging operation
+    /// ([`Vstream::stage`](crate::Vstream::stage)) recorded when it minted
+    /// `draft` — the member or memberless document copied from with the
+    /// extent the copy took, or an alternative's inherited base with its
+    /// source draft — as the shots the draft has rendered since moved it:
+    /// `base` the member the draft last rendered and `extent` that member's
+    /// whole count at the shot (B3-S10), which the doc-metadata read serves as
+    /// `base` and `base_copied` to every reader of the draft.
+    ///
+    /// **The invariant** it answers under is BASE★, stated on [`M5State`]:
+    /// the entry is written by the staging record and moved by the placing
+    /// record of every shot naming the draft, and by nothing else. So `Some`
+    /// for every draft the operation made with a base to record, and for a
+    /// draft whose own publication the board recorded; `None` for every
+    /// other address: a `create_new_document` or `fork` draft never staged
+    /// and never published, an alternative of a draft the board held no base
+    /// for, a version member, a trunk, an address never minted.
+    ///
+    /// Answers the address named, as every read here does; one map lookup,
+    /// reading no run. The record is lent, as
+    /// [`fork_source`](M5State::fork_source) lends the address, and a caller
+    /// keeping it clones it.
+    pub fn draft_base(&self, draft: &Address) -> Option<&DraftBase> {
+        self.draft_bases.get(draft)
     }
 
     /// Returns the R⁻¹ candidate documents for `coverage` (§9; Conflicts #6).

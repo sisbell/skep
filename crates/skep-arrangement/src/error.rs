@@ -291,6 +291,32 @@ pub enum VersionError {
     Mint(MintError),
 }
 
+/// STAGE rejection (the staging act, B3-S10; §7): the three pre-transaction
+/// refusals `version`'s cross-owner arm answers, and the mint's.
+///
+/// `SourceNotRegistered`: `from` names no registered document, answered
+/// ahead of everything else so a stage aimed at an address naming no
+/// document discloses nothing about it. `NotAPrincipal`: the caller id
+/// names no registered principal. `NodeTierCrossOwner`: the caller's prefix
+/// is no registered account — the staging draft is minted in the caller's
+/// own account, as `version`'s cross-owner arm mints, and the P-tier
+/// excludes a node-tier stager (ASN-0123) — rejected explicitly before any
+/// mint rather than obliquely as `Mint(NotAnAccount)`. The source's
+/// readability is the caller's gate (PUB-6.23; M10's consult), as it is
+/// `version`'s, and the version-chain refusals never read: the draft is
+/// always private, the sibling draft those refusals point to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StageError {
+    /// `from` is not a registered document.
+    SourceNotRegistered,
+    /// `principal` names no registered principal.
+    NotAPrincipal,
+    /// The caller's prefix is not a registered account.
+    NodeTierCrossOwner,
+    /// The draft's identity mint was refused.
+    Mint(MintError),
+}
+
 /// PUBLISH rejection (PUB-2.33, PUB-8.1): the shot's verdicts.
 ///
 /// Which one wins when several apply is stated on
@@ -445,6 +471,12 @@ impl From<ContentError> for InsertError {
 impl From<MintError> for VersionError {
     fn from(e: MintError) -> Self {
         VersionError::Mint(e)
+    }
+}
+
+impl From<MintError> for StageError {
+    fn from(e: MintError) -> Self {
+        StageError::Mint(e)
     }
 }
 
@@ -706,6 +738,30 @@ impl Error for VersionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             VersionError::Mint(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for StageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StageError::SourceNotRegistered => {
+                f.write_str("stage: the source is not a registered document")
+            }
+            StageError::NotAPrincipal => f.write_str("stage: the caller id names no principal"),
+            StageError::NodeTierCrossOwner => f.write_str(
+                "stage: the staging draft is minted in an account, so an account-tier stager is required (P-tier, ASN-0123)",
+            ),
+            // This layer only — the mint's own message is the `source`.
+            StageError::Mint(_) => f.write_str("stage: identity mint failed"),
+        }
+    }
+}
+impl Error for StageError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            StageError::Mint(e) => Some(e),
             _ => None,
         }
     }

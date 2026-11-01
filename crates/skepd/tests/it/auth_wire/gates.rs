@@ -72,6 +72,14 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     // Refuse: a bare flagless version of the published doc 1.
     let v = op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
     assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
+    // Accept: a bare STAGE of the published doc 1 — the staging act mints
+    // PRIVATE whatever its source's state, so it is never publish-class and
+    // takes the gate no more than a private fork does (B3-S10).
+    let v = op(port, Some(&bare), &format!(r#"{{"op":"stage","from":"{CLAIMANT_DOC1}"}}"#));
+    let staged = acked_addr(&v);
+    let meta = op(port, Some(&bare), &format!(r#"{{"op":"doc_metadata","doc":"{staged}"}}"#));
+    assert_eq!(expect_resp(&meta, "doc_metadata")["published"], serde_json::json!(false), "born private: {meta}");
+    assert_eq!(meta["base"].as_str(), Some(CLAIMANT_DOC1), "staged from the memberless home, its base: {meta}");
     // Accept: a bare DRAFT mint and a write homed in it.
     let v = op(
         port,
@@ -130,6 +138,10 @@ fn mint_home_first_refuses_until_the_home_exists() {
     let v =
         op(port, Some(&account_token), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
     assert_eq!(rejected_detail(&v), "credential_refused:mint_home_first");
+    // …and a stage into the empty account the same way: the staging act
+    // mints its draft in the caller's account as a fork does (B3-S10).
+    let v = op(port, Some(&account_token), &format!(r#"{{"op":"stage","from":"{CLAIMANT_DOC1}"}}"#));
+    assert_eq!(rejected_detail(&v), "credential_refused:mint_home_first");
     let v = op(
         port,
         Some(&account_token),
@@ -137,6 +149,8 @@ fn mint_home_first_refuses_until_the_home_exists() {
     );
     expect_resp(&v, "ack_addr");
     let v = op(port, Some(&account_token), r#"{"op":"fork"}"#);
+    expect_resp(&v, "ack_addr");
+    let v = op(port, Some(&account_token), &format!(r#"{{"op":"stage","from":"{CLAIMANT_DOC1}"}}"#));
     expect_resp(&v, "ack_addr");
     sd.shutdown();
 }

@@ -51,7 +51,7 @@
 //! `content_session` beneath the shell. Every other `/op` under a session,
 //! `/op-at`'s aside, goes by the hold's one path (`Holds::send`): what a
 //! burst is refused at the act for (`Burst::admit`), what is held and what
-//! is reissued within the call are the hold's to say — and the six
+//! is reissued within the call are the hold's to say — and the seven
 //! non-burst writes §3c.4 names, meeting a hold that stands at the board,
 //! are refused at once with its cause (`stopped`, `poisoned`, `halted`),
 //! never held and never dialed — and what a signed
@@ -234,12 +234,13 @@ pub enum NodeState {
 ///
 /// A frame of one of these in the guest form, or under a bare session, is
 /// refused by the shell without a dial.
-pub const WRITE_KINDS: [&str; 16] = [
+pub const WRITE_KINDS: [&str; 17] = [
     "delegate",
     "register_node",
     "create_new_document",
     "fork",
     "version",
+    "stage",
     "insert",
     "delete",
     "copy",

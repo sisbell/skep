@@ -70,8 +70,10 @@ pub const PLACED_RUN_BYTES: u64 = 104;
 /// The bytes the re-insert stages per value at the worst case
 /// (`REINSERTED_VALUE_BYTES`).
 pub const REINSERTED_VALUE_BYTES: u64 = 287;
-/// The bytes the shot stages whatever it places (`SHOT_BYTES`).
-pub const SHOT_BYTES: u64 = 270;
+/// The bytes the shot stages whatever it places (`SHOT_BYTES`), its
+/// rendering-draft slot empty; a shot naming its draft stores the draft's
+/// address in that slot beside them, `stored_tumbler_bytes` of it.
+pub const SHOT_BYTES: u64 = 271;
 /// The bytes the mint form adds (`EDITION_MINT_BYTES`).
 pub const EDITION_MINT_BYTES: u64 = 109;
 /// The bytes the edition claim stages (`EDITION_CLAIM_BYTES`).
@@ -133,6 +135,10 @@ pub struct Shape<'a> {
     /// — whose runs the shot re-inserts, priced as values and records; empty
     /// at a bare shot naming none.
     pub drafts: &'a [Address],
+    /// The rendering draft the shot names, whose address the placing record
+    /// stores in its own slot — priced at `stored_tumbler_bytes` of it; `None`
+    /// at a shot naming none.
+    pub draft: Option<&'a Address>,
     /// The term the request's addresses are minted under — the trunk at the
     /// document form, the account at the mint form.
     pub term: &'a Address,
@@ -294,6 +300,9 @@ pub fn price(shape: &Shape<'_>) -> Price {
 
     // The staged bytes, the daemon's `price_staged_bytes` term by term.
     let mut bytes = SHOT_BYTES;
+    if let Some(draft) = shape.draft {
+        bytes = bytes.saturating_add(stored_tumbler_bytes(&comps(&draft.to_string())));
+    }
     if shape.mint {
         bytes += EDITION_MINT_BYTES;
     }

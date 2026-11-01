@@ -5,19 +5,23 @@
 //! content-provenance relation R**, each trunk's **birth extent** — the
 //! content count its birth version `D.1` was minted with (PUB-3.19) — each
 //! shot-minted member's **shot terms** — the count the client placed and
-//! the base extent its copy took (signed-ops D25) — and each
-//! `version`-minted document's **fork source** — the member or bare document
-//! it was born sharing (the fork-source design record) — and it is the
-//! *only* place in the system where destructive change lives (ASN-0047 P3).
-//! It provides the editing/versioning operations (INSERT [ASN-0116], DELETE
-//! [ASN-0117], COPY [ASN-0118], REINSTATE [the write by identity, the
-//! replacement act's record], REARRANGE [ASN-0119/0084], CREATENEWVERSION
-//! [ASN-0123], and the publish shot [PUB-2.33]), a semantics-blind
-//! link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I resolution and
-//! reverse I→V projection for readers, the R reads for provenance queries,
-//! the birth-extent, shot-terms and fork-source reads the doc-metadata read
-//! serves ([`M5State::birth_extent`], [`M5State::shot_terms`],
-//! [`M5State::fork_source`]), and the address form a shot's entry signature
+//! the base extent its copy took (signed-ops D25) — each
+//! `version`- or `stage`-minted document's **fork source** — the member or
+//! bare document it was born sharing (the fork-source design record) — and
+//! each staged draft's **base** — where its next publication lands, the
+//! extent the copy took and its source, moved by each publication it renders
+//! (the staging act, B3-S10) — and it is the *only* place in the system
+//! where destructive change lives (ASN-0047 P3). It provides the
+//! editing/versioning operations (INSERT [ASN-0116], DELETE [ASN-0117], COPY
+//! [ASN-0118], REINSTATE [the write by identity, the replacement act's
+//! record], REARRANGE [ASN-0119/0084], CREATENEWVERSION [ASN-0123], STAGE
+//! [the staging act, B3-S10], and the publish shot [PUB-2.33]), a
+//! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
+//! resolution and reverse I→V projection for readers, the R reads for
+//! provenance queries, the birth-extent, shot-terms, fork-source and
+//! draft-base reads the doc-metadata read serves ([`M5State::birth_extent`],
+//! [`M5State::shot_terms`], [`M5State::fork_source`],
+//! [`M5State::draft_base`]), and the address form a shot's entry signature
 //! is made over, on both of its sides ([`Shot::address_form`] for the
 //! request, [`M5State::address_form_of`] for the member it minted). Every
 //! mutation funnels through one M2 composite, where the J-couplings (J0:
@@ -37,9 +41,10 @@
 //! derived by the fold from the records that mint a member — the shot's for
 //! every member it mints, an empty placement included, and an owned
 //! version's snapshot — the shot terms are journaled in the shot's own
-//! record, and the fork sources are noted off the snapshot's `source`; all
-//! three are carried by the checkpoint, never rebuilt, and [`M5State`]
-//! states why.
+//! record, the fork sources are noted off the snapshot's `source`, and the
+//! draft bases are journaled in the staging record and moved by the shot's
+//! record naming its draft; all four are carried by the checkpoint, never
+//! rebuilt, and [`M5State`] states why.
 //!
 //! ## Failure channels
 //!
@@ -79,9 +84,9 @@
 //! * content/link *queries* (M6/M8) — M5 exposes the read primitives;
 //!   RETRIEVEV/SHOWDELETIONS/FINDDOCSCONTAINING are M6's compositions;
 //! * read permission — M5 knows no principal's read rights: `copy`,
-//!   `reinstate` and `version` read any registered source and owe their
-//!   source gate (PUB-6.23) to the caller, M10's pre-dispatch consult on the
-//!   wire route; `publish` alone takes the gate's predicate as an argument —
+//!   `reinstate`, `version` and `stage` read any registered source and owe
+//!   their source gate (PUB-6.23) to the caller, M10's pre-dispatch consult
+//!   on the wire route; `publish` alone takes the gate's predicate as an argument —
 //!   the caller's `readable`, which the composite asks per origin document
 //!   inside its transaction (PUB-8.1) — and so does [`shot_admission`],
 //!   `publish`'s checks through that gate, which asks it of the world it is
@@ -163,7 +168,8 @@
 //! M5 contributes **no `Space` lock-key tag of its own**: every M5 mutation
 //! serializes under an **M3** lock key for the touched document's allocation
 //! domain — content edits under `M3State::content_lock_key(doc)`, VERSION
-//! under `version_lock_key`/`document_lock_key`, link seating under M7's held
+//! under `version_lock_key`/`document_lock_key`, STAGE under the caller's
+//! account's `document_lock_key`, link seating under M7's held
 //! `link_lock_key(doc)` — so a document's arrangement edits and their
 //! R-appends are co-serialized under that one key.
 //!
@@ -174,10 +180,10 @@
 //! holds it — a declared deposit, which lands in that arrangement and reads
 //! the frontier to find it (PUB-2.66), and the shot, which reads the frontier
 //! to judge its base, advances it unless the member it mints is the base's
-//! daughter, and carries its base's tail into that member — and so does
-//! `version`, whose snapshot takes its source's reading surface off that
-//! frontier. Each holds the key by arithmetic on its own request, never by a
-//! read of the world. The shot also takes its document's `content_lock_key`
+//! daughter, and carries its base's tail into that member — and so do
+//! `version` and `stage`, whose snapshots take their source's reading
+//! surface off that frontier. Each holds the key by arithmetic on its own
+//! request, never by a read of the world. The shot also takes its document's `content_lock_key`
 //! for the fresh-identity mints and, for a base that is a member, that
 //! member's `version_lock_key`, the daughter chain's frontier; it writes only
 //! the arrangement of the member it mints, which no other transaction can
@@ -254,7 +260,7 @@ pub use chain::{
 pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
-    VersionError,
+    StageError, VersionError,
 };
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
@@ -268,7 +274,7 @@ pub use run_list::Runs;
 pub use seat::seat_link;
 pub use seat::stage_seat_link;
 pub use shot::{Base, SegmentRun, Shot, ShotRun};
-pub use state::{M5Rec, M5State, ShotTerms};
+pub use state::{DraftBase, M5Rec, M5State, ShotTerms};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 
 /// The engine's **read accessor** for M5's slice.

@@ -138,6 +138,22 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// state the checkpoint must carry: a journal replay re-derives it, but
 /// below the reclaim floor nothing else holds the position.
 ///
+/// **The draft bases** (`draft_bases`; the staging act, B3-S10) are the
+/// seventh field, and the one a publication moves: for every draft the
+/// staging operation made ([`Vstream::stage`](crate::Vstream::stage)), the
+/// member or bare document its next publication lands after (`base`), the
+/// content count the copy took of it (`extent`) and the surface the draft
+/// was copied from (`source`) — a [`DraftBase`]. The op journals the record
+/// ([`DraftBase`](M5Rec::DraftBase)) beside the snapshot that shares the
+/// source, and the shot's placing record names the draft it rendered
+/// ([`ShotPlace`](M5Rec::ShotPlace)'s `draft`), at which the fold moves the
+/// draft's base to the member the shot minted and its extent to that
+/// member's whole count — so a draft staged from version 3 that publishes
+/// version 4 publishes version 5 next, never a daughter of version 3. It is
+/// what the doc-metadata read serves as `base` and `base_copied` to every
+/// reader of the draft, and state the checkpoint must carry under the
+/// no-default rule, as the two fields before it are.
+///
 /// **Class invariants**, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
 ///
@@ -244,6 +260,23 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   checkpoint written without the field fails to decode rather than
 ///   answering `None` — which would admit every stale edit — the map
 ///   carrying no default.
+/// * **BASE★ — a draft's recorded base is the surface it was staged from,
+///   moved to each member it renders.** `draft_bases` gains `draft`'s entry
+///   at the [`DraftBase`](M5Rec::DraftBase) record the staging operation
+///   journals beside the snapshot that shares the source — the record's own
+///   `base`, `extent` and `source`, which the op measured at the commit —
+///   and moves it at every [`ShotPlace`](M5Rec::ShotPlace) whose `draft`
+///   names it: `base` to the member the record mints, `extent` to the count
+///   the record leaves that member holding, `source` kept. A shot naming a
+///   draft the map holds no entry for makes one — the member it rendered as
+///   its base and its source — so a draft whose own first publication minted
+///   its edition stands on that edition's first member. No other record
+///   touches the map: a `version`'s snapshot notes a source and no base, a
+///   placement and a removal mint nothing, a `fork` reaches this slice with
+///   no record. On the decode path, as SOURCE★: carried whole,
+///   re-established by no door, and a checkpoint written without the field
+///   fails to decode rather than answering `None` for every staged draft,
+///   the map carrying no default.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -293,10 +326,10 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
     // Private but for `provenance`, which the reads R answers reach, and
-    // `fork_sources` (below): only this module builds an `M5State` — a
-    // default, a decoded checkpoint, or the fold's output — and every other
-    // module reaches the arrangement map through `arrangement_of`
-    // (ARCHITECTURE.md §The arrangement, "One fold").
+    // `fork_sources` and `draft_bases` (below): only this module builds an
+    // `M5State` — a default, a decoded checkpoint, or the fold's output —
+    // and every other module reaches the arrangement map through
+    // `arrangement_of` (ARCHITECTURE.md §The arrangement, "One fold").
     // Each map decodes entry by entry (`decode`), never through `im`'s own
     // visitor, which reserves room for the count a checkpoint body declares;
     // `provenance` and each document's run-lists decode the same way, behind
@@ -319,12 +352,56 @@ pub struct M5State {
     // Each document whose content arrangement a record has changed → the
     // position of the last such record (MOVED★); written by the fold alone,
     // read by `arranged_at` for the five in-place edits' check. Appended
-    // last, after `fork_sources`, under the same no-default rule: a
-    // checkpoint written without this field must fail to decode and hand the
-    // open to the journal, which recomputes the map — never decode as "never
+    // after `fork_sources`, under the same no-default rule: a checkpoint
+    // written without this field must fail to decode and hand the open to
+    // the journal, which recomputes the map — never decode as "never
     // arranged" and admit every stale edit.
     #[serde(deserialize_with = "entry_by_entry")]
     arranged_at: im::OrdMap<Address, Seq>,
+    // Each draft the staging operation made → its base, the extent the copy
+    // took and its source (BASE★). `pub(crate)` for the one read `reads.rs`
+    // holds; written by the fold alone. Appended last, after `arranged_at`,
+    // under the same no-default rule: a checkpoint written without this
+    // field must fail to decode and hand the open to the journal, which
+    // recomputes the map — never decode as "no base" for every staged draft.
+    #[serde(deserialize_with = "entry_by_entry")]
+    pub(crate) draft_bases: im::OrdMap<Address, DraftBase>,
+}
+
+/// Where a staged draft began and where its next publication lands (B3-S10).
+///
+/// It is the record the staging operation keeps per draft it makes, kept
+/// in [`M5State`]'s `draft_bases` under BASE★ and read by
+/// [`M5State::draft_base`]: `base` the member — or the memberless document
+/// — the draft's next publication lands after, `extent` the content count
+/// the copy took of it, `source` the surface the draft was copied from.
+/// Journaled by the op's own record ([`M5Rec::DraftBase`]) at the staging
+/// and moved by the shot's placing record ([`M5Rec::ShotPlace`]) at each
+/// publication the draft renders, as [`M5State`] states.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DraftBase {
+    /// The member or memberless document the draft's next publication lands
+    /// after.
+    ///
+    /// At the staging it is the surface copied from — a version member, the
+    /// trunk head of a bare published document, or the memberless document
+    /// itself — or, for an alternative of another draft, that draft's own
+    /// base, inherited; at each publication the draft renders it moves to
+    /// the member the shot minted.
+    pub base: Address,
+    /// How many content positions of `base` the copy took.
+    ///
+    /// It is `base`'s whole content count at the commit that set it — the
+    /// staging's copy, measured, or the member's count at the shot that
+    /// minted it — and so the `base_extent` a shot off this base carries.
+    pub extent: Nat,
+    /// The surface the draft was copied from.
+    ///
+    /// It is the member or memberless document staged from, or the draft an
+    /// alternative was made from; kept where a publication moves the base.
+    /// A draft the board first recorded at its own publication — one whose
+    /// first publication minted its edition — names the member it rendered.
+    pub source: Address,
 }
 
 /// The shot's two client terms, per member the shot minted (signed-ops D25).
@@ -477,16 +554,36 @@ pub enum M5Rec {
     /// mints, an empty placement included: the terms exist whatever the
     /// placement holds, and a birth version born empty is noted at its birth,
     /// zero, by this record (BIRTH★).
+    ///
+    /// `draft` is the rendering draft the shot named, where it named one
+    /// (B3-S10): the fold moves that draft's recorded base to the member
+    /// this record mints and its extent to the count the record leaves the
+    /// member holding, or makes the entry where the draft had none (BASE★),
+    /// so the draft's next publication lands after the member it just made.
+    /// `None` is a shot naming no draft, which moves no base.
     #[non_exhaustive]
-    ShotPlace { doc: Address, runs: Vec<Run>, terms: ShotTerms },
+    ShotPlace { doc: Address, runs: Vec<Run>, terms: ShotTerms, draft: Option<Address> },
+    /// The staging operation's record of where a draft began (B3-S10).
+    ///
+    /// `draft` is the document the operation minted; `base`, `extent` and
+    /// `source` are the [`DraftBase`] the fold installs for it (BASE★): the
+    /// surface copied from with its content count at the commit, measured by
+    /// the op — or, for an alternative of another draft, that draft's own
+    /// base and extent with the draft as `source`. Pushed after the
+    /// [`VersionSnapshot`](M5Rec::VersionSnapshot) that shares the source,
+    /// in the one commit the operation makes, and only where there is a base
+    /// to record: an alternative of a draft the board holds no base for
+    /// stages its snapshot alone and stays a free-standing draft.
+    #[non_exhaustive]
+    DraftBase { draft: Address, base: Address, extent: Nat, source: Address },
 }
 
 impl M5State {
     /// Returns Σ₀ for M5, every field empty.
     ///
     /// That is `{}` arrangements, `{}` provenance, `{}` birth extents, `{}`
-    /// shot terms, `{}` fork sources, `{}` arranged-at positions.
-    /// Deterministic, per M2's byte-identical-genesis caller contract.
+    /// shot terms, `{}` fork sources, `{}` arranged-at positions, `{}` draft
+    /// bases. Deterministic, per M2's byte-identical-genesis caller contract.
     pub fn genesis() -> M5State {
         M5State::default()
     }
@@ -701,6 +798,7 @@ impl M5State {
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: moved(doc),
+                draft_bases: self.draft_bases.clone(),
             },
             // The shot's placement (signed-ops D25): `ContentPlace` at
             // ordinal 1 — the same splice, the same R-append — and the
@@ -717,10 +815,30 @@ impl M5State {
             // the lazy convention (≡ empty), as the snapshot arm leaves an
             // empty source's `new`, and appends no provenance. No fork source
             // is noted: the shot mints its member off no source (SOURCE★).
-            M5Rec::ShotPlace { doc, runs, terms } => {
+            //
+            // The rendering draft's base moves to the member (BASE★): the
+            // draft the record names now stands on the member it just made,
+            // its extent that member's whole count — the spliced list's, the
+            // same count the birth extent reads — and its source kept; a
+            // draft the map holds no entry for gains one naming the member as
+            // its source too. A record naming no draft moves nothing.
+            M5Rec::ShotPlace { doc, runs, terms, draft } => {
                 let content = self.content_list(doc).splice_in(&Nat::one(), runs.iter().cloned());
                 let birth_extents = self.birth_extents_noting(doc, || content.total_width());
                 let shot_terms = self.shot_terms.update(doc.clone(), terms.clone());
+                let draft_bases = match draft {
+                    Some(draft) => {
+                        let source = self
+                            .draft_bases
+                            .get(draft)
+                            .map_or_else(|| doc.clone(), |standing| standing.source.clone());
+                        self.draft_bases.update(
+                            draft.clone(),
+                            DraftBase { base: doc.clone(), extent: content.total_width(), source },
+                        )
+                    }
+                    None => self.draft_bases.clone(),
+                };
                 // The member's arranged-at entry is noted on both branches
                 // (MOVED★): the mint is the arrangement's first change, an
                 // empty placement included.
@@ -733,6 +851,7 @@ impl M5State {
                         shot_terms,
                         fork_sources: self.fork_sources.clone(),
                         arranged_at,
+                        draft_bases,
                     }
                 } else {
                     M5State {
@@ -742,6 +861,7 @@ impl M5State {
                         shot_terms,
                         fork_sources: self.fork_sources.clone(),
                         arranged_at,
+                        draft_bases,
                     }
                 }
             }
@@ -756,6 +876,7 @@ impl M5State {
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: moved(doc),
+                draft_bases: self.draft_bases.clone(),
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
@@ -766,6 +887,7 @@ impl M5State {
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: moved(doc),
+                draft_bases: self.draft_bases.clone(),
             },
             // §8 fold: append `link` after the link subspace's arranged
             // positions, coalescing with the prior link run if I-adjacent
@@ -796,6 +918,7 @@ impl M5State {
                 shot_terms: self.shot_terms.clone(),
                 fork_sources: self.fork_sources.clone(),
                 arranged_at: self.arranged_at.clone(),
+                draft_bases: self.draft_bases.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
@@ -862,6 +985,7 @@ impl M5State {
                         shot_terms: self.shot_terms.clone(),
                         fork_sources,
                         arranged_at,
+                        draft_bases: self.draft_bases.clone(),
                     }
                 } else {
                     let provenance = self.provenance.append(new, content.iter());
@@ -876,9 +1000,29 @@ impl M5State {
                         shot_terms: self.shot_terms.clone(),
                         fork_sources,
                         arranged_at,
+                        draft_bases: self.draft_bases.clone(),
                     }
                 }
             }
+            // The staging operation's record (BASE★): the draft's entry
+            // installed as the record carries it — the base and the extent
+            // the op measured at the commit, the source it copied from. It
+            // touches no arrangement: the snapshot pushed before it shared
+            // the source, and this record says where the draft began. No
+            // arranged-at entry moves, the fact being no change to any
+            // content arrangement (MOVED★).
+            M5Rec::DraftBase { draft, base, extent, source } => M5State {
+                arrangements: self.arrangements.clone(),
+                provenance: self.provenance.clone(),
+                birth_extents: self.birth_extents.clone(),
+                shot_terms: self.shot_terms.clone(),
+                fork_sources: self.fork_sources.clone(),
+                arranged_at: self.arranged_at.clone(),
+                draft_bases: self.draft_bases.update(
+                    draft.clone(),
+                    DraftBase { base: base.clone(), extent: extent.clone(), source: source.clone() },
+                ),
+            },
         }
     }
 

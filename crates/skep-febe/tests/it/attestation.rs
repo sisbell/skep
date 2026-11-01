@@ -24,9 +24,11 @@ use tempfile::tempdir;
 /// `rearrange`, `delegate`, `register_node`) committing an empty signature
 /// slot. Over a journaled kernel, since an in-memory one keeps no marker;
 /// and each write must commit a transaction of its own, or the marker read
-/// at its `at` would be another write's. Fifteen run as the fixture's one
-/// chain (`commit_every_write`); the sixteenth, the write by identity, is
-/// committed beside it over a draft of its own.
+/// at its `at` would be another write's. Sixteen run as the fixture's one
+/// chain (`commit_every_write`), the staging act among them — a stage's
+/// draft is never publish-class, so its slot stays empty whatever the
+/// request carried; the seventeenth, the write by identity, is committed
+/// beside it over a draft of its own.
 #[test]
 fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
     let dir = tempdir().expect("a temporary directory");
@@ -89,14 +91,14 @@ fn an_attestation_lands_in_the_marker_of_the_ten_publish_class_kinds_alone() {
         );
         seen.push(kind);
     });
-    assert_eq!(seen.len(), 15, "the fixture's chain is 15 of the partition's 16 writes: {seen:?}");
+    assert_eq!(seen.len(), 16, "the fixture's chain is 16 of the partition's 17 writes: {seen:?}");
     let empty: Vec<&OpKind> = seen
         .iter()
-        .filter(|k| matches!(k, OpKind::Delete | OpKind::Copy | OpKind::Reinstate | OpKind::Rearrange | OpKind::Delegate | OpKind::RegisterNode))
+        .filter(|k| matches!(k, OpKind::Delete | OpKind::Copy | OpKind::Reinstate | OpKind::Rearrange | OpKind::Delegate | OpKind::RegisterNode | OpKind::Stage))
         .collect();
     assert_eq!(
         empty.len(),
-        5,
-        "the chain's five unsigned kinds each committed once (the sixth, reinstate, above): {seen:?}"
+        6,
+        "the chain's six unsigned kinds each committed once (the seventh, reinstate, above): {seen:?}"
     );
 }

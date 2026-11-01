@@ -621,11 +621,13 @@ fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
 /// THE ATTESTATION'S PATH (`Request::attest`): the value a request carries
 /// reaches every M3, M5 and M7 driver its write acquires, once — the two
 /// document mints' attested namespace driver among them — and neither
-/// `delegate` nor `register_node`, whose driver takes none. M10 keeps no
-/// copy of which transactions it signs — each store states that on its
-/// handle — and `tests/it/attestation.rs` pins which commits it lands in.
-/// EDITLINK goes with an empty successor: the partition's own fixture is
-/// refused by M10's successor guard before any driver is acquired.
+/// `delegate` nor `register_node`, whose driver takes none, nor `stage`,
+/// whose draft is never publish-class and whose driver is the plain one.
+/// M10 keeps no copy of which transactions it signs — each store states
+/// that on its handle — and `tests/it/attestation.rs` pins which commits it
+/// lands in. EDITLINK goes with an empty successor: the partition's own
+/// fixture is refused by M10's successor guard before any driver is
+/// acquired.
 #[test]
 fn an_attestation_reaches_every_store_driver_a_write_acquires() {
     let carried = Arc::new(Mutex::new(Vec::new()));
@@ -657,12 +659,12 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         let kind = op.kind();
         let _ = febe.execute(s, Request { attest: Some(attestation.clone()), ..Request::from(op) });
         let reached = std::mem::take(&mut *carried.lock());
-        let plain_driver = matches!(kind, OpKind::Delegate | OpKind::RegisterNode);
+        let plain_driver = matches!(kind, OpKind::Delegate | OpKind::RegisterNode | OpKind::Stage);
         let expected = if plain_driver { Vec::new() } else { vec![attestation.clone()] };
         assert_eq!(reached, expected, "{kind:?}");
         seen += 1;
     }
-    assert_eq!(seen, 16, "every write, EDITLINK once");
+    assert_eq!(seen, 17, "every write, EDITLINK once");
 }
 
 // ── the store-backed tests of `successor` and `publication` ──

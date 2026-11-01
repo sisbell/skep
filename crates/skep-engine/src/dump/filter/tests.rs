@@ -68,6 +68,7 @@ fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
         (vec!["authoritative", "arrangement", "provenance"], Shape::Map),
         (vec!["authoritative", "arrangement", "fork_sources"], Shape::Map),
         (vec!["authoritative", "arrangement", "arranged_at"], Shape::Map),
+        (vec!["authoritative", "arrangement", "draft_bases"], Shape::Map),
         (vec!["authoritative", "links", "links"], Shape::Map),
         (vec!["publication"], Shape::Seq),
     ];
@@ -240,13 +241,13 @@ fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
             &["frontiers", "minted_at", "nodes", "principals", "publication"][..],
         ),
         ("content", &["map"]),
-        // M5's four keyed fields reduced — the fork sources by the fork,
-        // the key, the arranged-at positions by the document — and its
-        // birth memo and shot terms kept WHOLE with the reason in
-        // `filter_tree`'s statement.
+        // M5's five keyed fields reduced — the fork sources by the fork,
+        // the key, the arranged-at positions by the document, the draft
+        // bases by the draft — and its birth memo and shot terms kept WHOLE
+        // with the reason in `filter_tree`'s statement.
         (
             "arrangement",
-            &["arranged_at", "arrangements", "birth_extents", "fork_sources", "provenance", "shot_terms"],
+            &["arranged_at", "arrangements", "birth_extents", "draft_bases", "fork_sources", "provenance", "shot_terms"],
         ),
         // M7's skip-serialized hints occupy no bytes and so no key.
         ("links", &["links"]),
@@ -451,14 +452,17 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
 /// Built on [`populated_world`]'s account, draft, content, arrangement and
 /// link, which cover the authoritative maps and the two publication
 /// families; this adds the link population the shipped classes and the
-/// predicate projections need, and the one record that populates M5's fork
-/// sources. The links carry ADDRESS-form slots under never-minted types in
-/// the draft's own subspace 3, so each lands in an unregistered coverage
-/// class and the shipped slices hold exactly the tuples deposited under
-/// them. The fork is [`FORKER`]'s cross-owner `version` of the draft — the
-/// one version a draft admits (PUB-2.9, PUB-2.18) — a PRIVATE document of
-/// the forker's account, so the entry it writes is keyed by a document a
-/// guest cannot read, as everything else here is homed in one it cannot.
+/// predicate projections need, the one record that populates M5's fork
+/// sources, and the one that populates its draft bases. The links carry
+/// ADDRESS-form slots under never-minted types in the draft's own subspace
+/// 3, so each lands in an unregistered coverage class and the shipped
+/// slices hold exactly the tuples deposited under them. The fork is
+/// [`FORKER`]'s cross-owner `version` of the draft — the one version a
+/// draft admits (PUB-2.9, PUB-2.18) — a PRIVATE document of the forker's
+/// account, so the entry it writes is keyed by a document a guest cannot
+/// read, as everything else here is homed in one it cannot; the staged
+/// draft is the owner's stage off a published edition of its own, a PRIVATE
+/// document keyed the same way.
 fn every_reduced_family_in_a_draft() -> World {
     let (engine, world) = populated_world();
     let draft = the_one_draft(&world);
@@ -469,6 +473,15 @@ fn every_reduced_family_in_a_draft() -> World {
         .vstream()
         .version(FORKER, &draft, None)
         .expect("the forker's cross-owner version of the draft, a private fork of its own");
+    let account = parent(&draft).expect("a document's parent is its account");
+    let (edition, _) = engine
+        .namespace()
+        .create_new_document(USER, &account, Some(true))
+        .expect("a published edition of the owner's, memberless");
+    engine
+        .vstream()
+        .stage(USER, &edition)
+        .expect("the owner's staged draft of its edition, a private document with a recorded base");
     let writer = engine.linkstore(&visibility);
     let ordinary_link = |n: u32| {
         writer

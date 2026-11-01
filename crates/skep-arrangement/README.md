@@ -20,6 +20,19 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   ancestry is carried by the identity itself, readable by truncation;
   a cross-owner fork's identity is severed from the source's, and what
   records the relationship is provenance.
+- **The staging act** — `stage` mints a PRIVATE draft of a source in
+  the caller's own account, sharing the source's reading surface as
+  `version` shares it, and records in the slice's own state where the
+  draft began — its base (the member or memberless document copied
+  from, or an alternative's inherited base), the extent the copy took,
+  measured at the commit, and its source — in ONE commit, so the draft
+  stands whole or not at all and no client-written record says where
+  it began. The base moves at every shot the draft renders: the shot's
+  placing record names its rendering draft, and the fold moves the
+  draft's base to the member minted (`M5State::draft_base`, which the
+  doc-metadata read serves as `base` and `base_copied`). Always
+  private, never publish-class, admitted whatever the source's state:
+  the sibling draft the version-chain refusals point to.
 - **The publish shot** — `publish` appends the next member of a
   published document's version chain, born published, in ONE commit,
   from CLIENT-SUPPLIED I-address runs and never from any draft's

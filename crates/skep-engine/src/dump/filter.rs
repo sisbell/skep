@@ -24,9 +24,10 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A trailing component inside an authoritative slice is that
 //!   store's own serde field, and a private one: `map` is M4's,
-//!   `arrangements`, `provenance`, `fork_sources` and `arranged_at` are M5's
-//!   (its third and fourth, `birth_extents` and `shot_terms`, are kept whole
-//!   by name and end no path), `links` is M7's. So a store author renaming a
+//!   `arrangements`, `provenance`, `fork_sources`, `arranged_at` and
+//!   `draft_bases` are M5's (its third and fourth, `birth_extents` and
+//!   `shot_terms`, are kept whole by name and end no path), `links` is M7's.
+//!   So a store author renaming a
 //!   field it never
 //!   published has no reason to look here, and the rename would leave the
 //!   filter silently filtering nothing — which is why every path is asserted
@@ -152,6 +153,15 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   moved, which is the document's own readers' to know and no one else's.
 ///   An entry stays exactly where the reader class reads the document — the
 ///   same test its arrangement stays under.
+/// * `authoritative.arrangement.draft_bases` — the entries keyed by an
+///   unreadable document leave, as the fork sources' do: the map is keyed by
+///   the draft the staging operation made (the staging act, B3-S10), a
+///   private document whose existence is its owner's to keep (PUB-1.33), so
+///   an entry stays exactly where the reader class reads the draft — the
+///   test `doc_metadata` serves `base` and `base_copied` under. The value —
+///   the base's address, the count the copy took and the source's address —
+///   takes no test of its own: an address is not secret (PUB-1.13), and the
+///   draft's readers already hold the base's I-addresses through `image`.
 /// * `authoritative.links.links` — a link homed in an unreadable document
 ///   leaves.
 /// * `publication` — the section reduced per entry to the readable drafts:
@@ -262,6 +272,7 @@ pub(super) fn filter_tree(
     retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "fork_sources"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "arranged_at"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "draft_bases"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "links", "links"], &keep_serde_form);
 
     retain_seq(&mut root, &["publication"], &keep_dotted);

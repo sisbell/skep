@@ -65,7 +65,14 @@
 //! stale-edit check, skep #442) — under the same ruling renewed once more:
 //! the checkpoint's body and every dump moved, the segment and the fixture's
 //! ops did not; the pre-stretch artifacts stand, their reader pin taking the
-//! new map's line out of each dump as it takes the two before it.
+//! new map's line out of each dump as it takes the two before it. And
+//! 2026-11-01, when M5's slice gained its draft bases — each staged draft's
+//! base, the extent its copy took and its source (the staging act, B3-S10),
+//! a map the fixture leaves empty, staging nothing — under the same ruling
+//! renewed once more: the checkpoint's body and every dump moved, the
+//! segment and the fixture's ops did not; the pre-stretch artifacts stand,
+//! their reader pin taking the empty map's entry out of each dump as it
+//! takes the three before it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -343,7 +350,7 @@ fn pre_stretch_dumps() -> BTreeMap<u64, String> {
 }
 
 /// A dump of this build over the pre-stretch board, as the pre-stretch build
-/// rendered it. Four differences between the two, and nothing else moves:
+/// rendered it. Five differences between the two, and nothing else moves:
 /// M4's entry form — a bare value then, `Value([..])` now, every entry of an
 /// opened old board being a one-byte value — so the `Value(` … `)` wrapper
 /// is taken off each content entry; M5's fifth map, `fork_sources`, which
@@ -353,10 +360,12 @@ fn pre_stretch_dumps() -> BTreeMap<u64, String> {
 /// ([`without_the_fork_sources`]); M3's fifth map, `minted_at`, likewise
 /// unheld then and rendered now — the seed's two documents at genesis, and
 /// every document, member and link the fixture mints at its position — taken
-/// out of M3's rendering whole ([`without_the_minted_at`]); and M5's sixth
-/// map, `arranged_at`, likewise — every document the fixture's edits arrange,
-/// at the position of its last change — taken out of M5's rendering whole
-/// ([`without_the_arranged_at`]).
+/// out of M3's rendering whole ([`without_the_minted_at`]); M5's sixth map,
+/// `arranged_at`, likewise — every document the fixture's edits arrange, at
+/// the position of its last change — taken out of M5's rendering whole
+/// ([`without_the_arranged_at`]); and M5's seventh map, `draft_bases`,
+/// likewise — empty in every dump, the fixture staging nothing — taken out
+/// whole ([`without_the_draft_bases`]).
 fn without_the_value_wrapper(dump: &str) -> String {
     let mut out = String::with_capacity(dump.len());
     let mut rest = dump;
@@ -368,9 +377,27 @@ fn without_the_value_wrapper(dump: &str) -> String {
         assert!(inner[close..].starts_with(')'), "the wrapper closes after the list");
         rest = &inner[close + 1..];
     }
-    without_the_minted_at(&without_the_fork_sources(&without_the_arranged_at(&format!(
-        "{out}{rest}"
-    ))))
+    without_the_minted_at(&without_the_fork_sources(&without_the_arranged_at(
+        &without_the_draft_bases(&format!("{out}{rest}")),
+    )))
+}
+
+/// `dump` with M5's `draft_bases` entry taken out of the arrangement slice,
+/// as [`without_the_fork_sources`] takes its fifth map: the key, its map and
+/// the separator that follows, since the entry is never the slice's last
+/// (`fork_sources`, `provenance` and `shot_terms` sort after it). The map
+/// is asserted EMPTY as well as present: a value of it renders as a struct
+/// with braces of its own, which the first `}` would not close, and the
+/// fixture stages nothing — a dump rendering an entry would be a fixture
+/// that grew a stage, which this comparison must not quietly admit.
+fn without_the_draft_bases(dump: &str) -> String {
+    const ENTRY: &str = "\"draft_bases\": {}, ";
+    let at = dump.find(ENTRY).expect(
+        "this build renders M5's draft bases in every dump, empty: the fixture stages nothing",
+    );
+    let rest = &dump[at + ENTRY.len()..];
+    assert!(!rest.contains("\"draft_bases\""), "M5's draft bases render once");
+    format!("{}{rest}", &dump[..at])
 }
 
 /// `dump` with M5's `arranged_at` entry taken out of the arrangement slice,

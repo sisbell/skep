@@ -294,6 +294,7 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             pairs.extend(published_pair(published));
             (op_name(OpKind::Version), pairs)
         }
+        Op::Stage { from } => (op_name(OpKind::Stage), vec![("from", j_addr(from))]),
         // Canonical: `base`/`base_extent` and `draft` ride only when present,
         // so an absent one marshals to no field and `parse ∘ marshal` is a
         // fixpoint — and so do the kept places: `places` rides only where
@@ -623,12 +624,30 @@ pub(super) fn j_response(r: &Response) -> Value {
         // minted — the null *is* the birth bit there; both carried otherwise.
         // `source` (the fork-source design record) is a payload option over
         // the fork source of the address named: the member or bare document a
-        // `version` snapshotted into it, null where no `version` minted it.
-        // `at`, `time` and `time_from` are the age of the address named, as
-        // `link_value` carries a link's: the mint position off the world's
-        // map, null for an address a build before it minted; the time and
-        // its source null together where no testimony holds a reading.
-        Response::DocMetadata { doc, published, owner, birth, terms, source, at, time, as_of } => (
+        // `version` snapshotted or a `stage` copied into it, null where
+        // neither minted it. `base` and `base_copied` (the staging act,
+        // B3-S10) are two payload options over the draft base of the address
+        // named: the member or bare document the draft's next publication
+        // lands after, moved by each publication it renders, and the extent
+        // the copy took of it — both null where the board records no base,
+        // every address that is no staged draft among them. `at`, `time` and
+        // `time_from` are the age of the address named, as `link_value`
+        // carries a link's: the mint position off the world's map, null for
+        // an address a build before it minted; the time and its source null
+        // together where no testimony holds a reading.
+        Response::DocMetadata {
+            doc,
+            published,
+            owner,
+            birth,
+            terms,
+            source,
+            base,
+            base_copied,
+            at,
+            time,
+            as_of,
+        } => (
             "doc_metadata",
             vec![
                 ("doc", j_addr(doc)),
@@ -646,6 +665,8 @@ pub(super) fn j_response(r: &Response) -> Value {
                         .unwrap_or(Value::Null),
                 ),
                 ("source", source.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("base", base.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("base_copied", base_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
                 ("at", at.map(j_seq).unwrap_or(Value::Null)),
                 ("time", time.map(j_mint_time).unwrap_or(Value::Null)),
                 ("time_from", time.map(j_time_from).unwrap_or(Value::Null)),
@@ -1337,6 +1358,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::Reinstate => "reinstate",
         OpKind::Rearrange => "rearrange",
         OpKind::Version => "version",
+        OpKind::Stage => "stage",
         OpKind::Publish => "publish",
         OpKind::MakeLink => "make_link",
         OpKind::Emit => "emit",

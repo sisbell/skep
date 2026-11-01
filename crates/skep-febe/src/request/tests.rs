@@ -74,6 +74,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         ),
         (Op::Rearrange { doc: doc(), cuts: vec![vpos()], as_of: Seq(7) }, false),
         (Op::Version { d_src: doc(), published: None }, false),
+        (Op::Stage { from: doc() }, false),
         (
             Op::Publish {
                 target: PublishTarget::Document(doc()),
@@ -152,9 +153,10 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 32 reads and 16 writes (the publish
+/// (`is_write == !is_read`), with 32 reads and 17 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the write by
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
+/// the staging act, `stage`, the seventeenth — B3-S10;
 /// the doc-metadata read and the edition-claim lookup joining the
 /// twenty-four reads, lane 3.4; the owner-of-address read the
 /// twenty-seventh, AUTH-6.37; the any-principal discovery read the
@@ -165,7 +167,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 48);
+    assert_eq!(ops.len(), 49);
     let reads = ops.iter().filter(|(_, r)| *r).count();
     assert_eq!(reads, 32);
     for (op, expect_read) in &ops {
@@ -189,7 +191,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 48);
+    assert_eq!(seen.len(), 49);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -376,10 +378,10 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
 /// runs in DECLARATION order — `copy`'s specs by index, `reinstate`'s
 /// DISTINCT run origins in run order with the destination's own I-space
 /// left out (the shot's rule, the replacement act's record), `version`'s
-/// `d_src`, and the two link writes' RESOLVE-form slots in the wire's
-/// declared order `from`, `to`, `ty` with specs by index inside a slot —
-/// while an ADDRESS-FORM or an I-SPAN slot is ungated and names nothing
-/// (the read check's door channel, W6 (a)). Exactly the five
+/// `d_src`, `stage`'s `from`, and the two link writes' RESOLVE-form slots
+/// in the wire's declared order `from`, `to`, `ty` with specs by index
+/// inside a slot — while an ADDRESS-FORM or an I-SPAN slot is ungated and
+/// names nothing (the read check's door channel, W6 (a)). Exactly the six
 /// source-reading writes answer a non-empty list; `fork`, every other write
 /// and every read answer the empty one.
 #[test]
@@ -485,6 +487,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
                 Op::Copy { .. }
                     | Op::Reinstate { .. }
                     | Op::Version { .. }
+                    | Op::Stage { .. }
                     | Op::MakeLink { .. }
                     | Op::EditLink { .. }
             );

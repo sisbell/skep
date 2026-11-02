@@ -66,19 +66,19 @@
 //!
 //! **The base** is the shell's own read off the board, never the page's
 //! (B3-S10; `client.md` §4b.1 item 61): at the document form the library's
-//! `draft_base` reads the member the draft's newest publication into `doc`'s
-//! chain made, else the version the draft's fork record names — the record
-//! the act that made the draft writes, `doc` itself while the chain is
-//! empty — and its content extent. So a draft publishes against the same
-//! base on every device and after any index is rebuilt: after the version
-//! it was made from, or as that version's DAUGHTER where the trunk has moved
-//! past it (PUB-2.44), never over the newer words. Where neither names a
-//! version of `doc`, `open` refuses `base_unrecorded` naming the draft and
-//! `doc`, and never takes the chain's head in its place. The read runs
-//! once the session stands and before the index or the draft is read, so
-//! the refusal waits on neither; the mint form has no chain and is the
-//! birth shape. A `base` the page sends is no member of the row and is read
-//! by nothing.
+//! `draft_base` reads the base the board records for the draft — the
+//! version its `stage` copied, `doc` itself while the chain is empty, moved
+//! to the member each publication of the draft makes — and the extent the
+//! copy took, off one `doc_metadata` of the draft. So a draft publishes
+//! against the same base on every device and after any index is rebuilt:
+//! after the version it was made from, or as that version's DAUGHTER where
+//! the trunk has moved past it (PUB-2.44), never over the newer words.
+//! Where the board records no base in `doc`'s chain, `open` refuses
+//! `base_unrecorded` naming the draft and `doc`, and never takes the
+//! chain's head in its place. The read runs once the session stands and
+//! before the index or the draft is read, so the refusal waits on neither;
+//! the mint form has no chain and is the birth shape. A `base` the page
+//! sends is no member of the row and is read by nothing.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -454,9 +454,9 @@ impl Shell {
     ///    as the reads' below;
     /// 4. at the document form, the base read's: `no_such_document` or
     ///    `unreadable` naming `doc` or the draft, `busy`, `session_died`,
-    ///    the feed's halts — a `history_reclaimed` past the draft's mint
-    ///    among them — then `base_unrecorded` naming the draft and `doc`
-    ///    where no publication row and no fork record names its base;
+    ///    `shape`, the board's own verdicts verbatim, `unreachable` — then
+    ///    `base_unrecorded` naming the draft and `doc` where the board
+    ///    records no base for the draft in `doc`'s chain;
     /// 5. `feed_stopped` where the shell's own lists are owed and the
     ///    board's feed thread has stopped;
     /// 6. the reads': `unreadable`, `no_such_document`, `busy`,

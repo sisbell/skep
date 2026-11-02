@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{base64_decode, draft_of, fork_record_of, seeded_bytes, stamped, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
+use crate::common::{base64_decode, draft_of, seeded_bytes, stage_of, stamped, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
 /// The names no tool of the adapter's answers.
 ///
@@ -192,11 +192,12 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
 /// `tools/list` names every wire op but `publish` — the six the first catalog
 /// lacked among them — the shell's calls, the publication family's four among
 /// them, and the three apparatus tools; and the publication: a published
-/// document minted, a draft written — its `publication_open` refused
-/// `base_unrecorded` naming it until its fork record, naming the bare
-/// edition, is written, as the instructions' PUBLISHING says — then
-/// `publication_open` holding its panel — no row, the record none of them,
-/// no window, under every cap — `publication_count` its four numbers
+/// document minted, a draft minted and written but never staged — its
+/// `publication_open` refused `base_unrecorded` naming it, the board
+/// recording no base for it — then a draft staged from the bare edition
+/// through `stage`, as the instructions' PUBLISHING says, and written:
+/// `publication_open` holding its panel — no row, no window, under every
+/// cap — `publication_count` its four numbers
 /// with nothing switched on, and `publication_confirm` acknowledging the
 /// member `E.1`, reached by its own answer; the member read back, its
 /// metadata naming the shot, and the panel gone with the acknowledgment —
@@ -229,15 +230,17 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     assert_eq!(grants["resp"], "universal_grants", "{grants}");
     // THE PUBLICATION: the shell composes the shot from the panel it holds.
     let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
-    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let free = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let typed = mcp.position();
+    mcp.acked("insert", json!({"as_of": typed, "doc": free, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
+    let unrecorded = mcp.call_error("publication_open", json!({"draft": free, "doc": edition}));
+    assert_eq!((&unrecorded["name"], &unrecorded["draft"], &unrecorded["doc"]), (&json!("base_unrecorded"), &json!(free), &json!(edition)), "the board records no base for a draft never staged: {unrecorded}");
+    let draft = stage_of(&mut mcp, &edition);
     let typed = mcp.position();
     mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
     let image = mcp.call_json("image", json!({"d": draft, "region": [{"start": "1.1", "width": "0.3"}]}));
     assert_eq!(image["resp"], "runs", "{image}");
     let run = &image["runs"][0];
-    let unrecorded = mcp.call_error("publication_open", json!({"draft": draft, "doc": edition}));
-    assert_eq!((&unrecorded["name"], &unrecorded["draft"], &unrecorded["doc"]), (&json!("base_unrecorded"), &json!(draft), &json!(edition)), "no record names the draft's base: {unrecorded}");
-    fork_record_of(&mut mcp, &draft, &[&edition]);
     let panel = mcp.call_json("publication_open", json!({"draft": draft, "doc": edition}));
     assert_eq!((&panel["rows"], &panel["windows"], &panel["price"]["over"]), (&json!([]), &json!([]), &json!([])), "no link, no window, under every cap: {panel}");
     let counted = mcp.call_json("publication_count", json!({}));
@@ -275,10 +278,9 @@ fn a3_a_publications_panel_dies_with_the_session_and_nothing_is_sent_twice() {
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
-    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let draft = stage_of(&mut mcp, &edition);
     let typed = mcp.position();
     mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
-    fork_record_of(&mut mcp, &draft, &[&edition]);
     let open = json!({"draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]});
     let panel = mcp.call_json("publication_open", open.clone());
     assert_eq!(panel["rows"], json!([]), "premise: a panel stands: {panel}");

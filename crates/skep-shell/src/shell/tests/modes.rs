@@ -288,17 +288,13 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
         panic!("a page of the guest feed")
     };
     assert_eq!(page.changes.first(), Some(&row), "the update is the guest feed's row, verbatim: {update}");
-    // A draft, filled, then the shot into the edition through the
-    // publication family — a `publish` frame through `op` is refused as a
-    // call (§4b.1) — the body read back.
-    let minted = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
-    let draft = minted["addr"].as_str().unwrap().to_string();
-    signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": minted["at"]}})).unwrap();
-    // The draft's fork record, naming the memberless edition it is staged
-    // for: the shell reads the draft's base off it (B3-S10).
-    signed
-        .call("op", &json!({"session": session, "frame": {"op": "make_link", "home": draft, "from": {"addrs": []}, "to": {"addrs": [doc]}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}}))
-        .unwrap();
+    // A draft staged for the memberless edition — the one `stage` frame,
+    // the board recording its base (B3-S10) — filled, then the shot into
+    // the edition through the publication family — a `publish` frame
+    // through `op` is refused as a call (§4b.1) — the body read back.
+    let staged = signed.call("op", &json!({"session": session, "frame": {"op": "stage", "from": doc}})).unwrap();
+    let draft = staged["addr"].as_str().unwrap().to_string();
+    signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"], "as_of": staged["at"]}})).unwrap();
     let through_op = signed.call("op", &json!({"session": session, "frame": {"op": "publish", "doc": doc, "draft": draft, "runs": []}})).unwrap_err();
     assert_eq!(through_op.name(), "publish_is_a_call", "{through_op}");
     signed

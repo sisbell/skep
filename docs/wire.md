@@ -5753,39 +5753,39 @@ member that holds the sections into `1.1.0.1.0.1` at 11 (seven records:
 the shot's four and its correspondence record's three, the record homed
 in the staging draft — the row's `docs` the member alone to every class
 but the system's, which sees the draft beside it) and one `defines`
-link per type, three records apart, to 371, each a public entry with
-`key: "system"`, so a fresh board stands at 371 before any client writes.
-The claim ceremony's five commits follow (§A first board): positions 373,
-374, 377, 380, 383 — the delegate, the home mint, the record insert, the
+link per type, three records apart, to 368, each a public entry with
+`key: "system"`, so a fresh board stands at 368 before any client writes.
+The claim ceremony's five commits follow (§A first board): positions 370,
+371, 374, 377, 380 — the delegate, the home mint, the record insert, the
 genesis link, the claim link — and the claim's own step then writes the
 board's first head `H.1` (§The other endpoints, the published head
-document): the head record's insert into the staging draft at 386 — the
+document): the head record's insert into the staging draft at 383 — the
 draft stands from the seed, so the claim's head mints none — and the
-publish into `H` at 393, seven records with its correspondence record,
+publish into `H` at 390, seven records with its correspondence record,
 the publish a public entry with `key: "system"`,
 the insert masked at every class but the system's. The flow behind the
 examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
 so every `key` reads `"bare"`, and no entry is signed, so no row carries
-`attest`): `delegate` commits at position 395 — its row carrying the
-minted pair —, the home mint at 396, a second — private — document at 397
+`attest`): `delegate` commits at position 392 — its row carrying the
+minted pair —, the home mint at 393, a second — private — document at 394
 (the account's doc 1 is born published, where bare writes are gated by
 design, so the flow's content goes to a draft document), a two-byte
-`insert` at 400 (one range mint, one stretch, one placement), `make_link`
-at 403 — its row carrying the minted link's address. The feed past the
-seed, the ceremony and its head, `GET /changes?since=393`, read AS
+`insert` at 397 (one range mint, one stretch, one placement), `make_link`
+at 400 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=390`, read AS
 PRINCIPAL 1 — the owner of the private document, whose class sees every
 one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":395,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":396,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":397,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":400,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":403,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":403,"more":false}
+{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":394,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":397,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":400,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":400,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=393&limit=2`:
+The first page of the same feed, `GET /changes?since=390&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":395,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":396,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":396,"more":true}
+{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -5794,7 +5794,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":395,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":396,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":396,"more":false}
+{"changes":[{"at":392,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":393,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":393,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the

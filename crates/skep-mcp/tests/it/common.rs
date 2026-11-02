@@ -879,11 +879,11 @@ pub fn draft_of(mcp: &mut Mcp, account: &str) -> String {
     mcp.acked("create_new_document", json!({"account": account}))["addr"].as_str().expect("doc addr").to_string()
 }
 
-/// Writes `draft`'s fork record through the adapter, as the instructions'
-/// PUBLISHING tells an agent staging a draft to: `from_` empty, `to` where
-/// the draft was begun, typed the fork type. Returns the ack.
-pub fn fork_record_of(mcp: &mut Mcp, draft: &str, begun_from: &[&str]) -> Value {
-    mcp.acked("make_link", json!({"home": draft, "from_": {"addrs": []}, "to": {"addrs": begun_from}, "ty": {"addrs": [skep_client::board::frames::T_FORK]}}))
+/// Returns a draft staged from `from` through the adapter's `stage` tool, as
+/// the instructions' PUBLISHING tells an agent staging a draft to: the board
+/// mints it holding `from`'s words and records its base.
+pub fn stage_of(mcp: &mut Mcp, from: &str) -> String {
+    mcp.acked("stage", json!({"from_": from}))["addr"].as_str().expect("the draft's address").to_string()
 }
 
 /// The catalog the binary embeds — the expected tools/list and the base

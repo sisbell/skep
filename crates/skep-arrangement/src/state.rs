@@ -941,9 +941,10 @@ impl M5State {
             // by this same mechanism, carries its runs and is bounded by
             // that ceiling and, as COPY and REINSTATE stage it, by
             // `MAX_PLACED_RUNS` too. Replay re-pays it: the journal record
-            // stays two addresses, so `k` fork records cost
-            // `Σ #runs(sourceᵢ)` spans at every `Kernel::open` that replays
-            // them, and a checkpoint carries the result. What would put this
+            // stays two addresses, so `k` snapshot records — a `version`'s
+            // or a `stage`'s — cost `Σ #runs(sourceᵢ)` spans at every
+            // `Kernel::open` that replays them, and a checkpoint carries the
+            // result. What would put this
             // append under the transaction budget where `ContentPlace`'s
             // already sits is the explicit-runs form of this record (Open
             // decision #4) — a second reason for that migration beside the

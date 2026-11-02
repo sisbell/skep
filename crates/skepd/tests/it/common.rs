@@ -75,12 +75,12 @@ pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
 /// publication's one correspondence record homed in the staging draft, the
 /// link-sets design §5.7: its link mint, its deposit and its seat — 3),
 /// then one `defines` link per type of `skep-registry`'s vocabulary (3
-/// each): `11 + 3 × the vocabulary's size`, 120 types. The ONE constant
+/// each): `11 + 3 × the vocabulary's size`, 119 types. The ONE constant
 /// every position pin of a fresh board derives from — the ceremony's five
 /// commits land at `SEED_HEAD + 2`, `+ 3`, `+ 6`, `+ 9`, `+ 12` — held equal
 /// to what a fresh board counts by `vocabulary.rs`'s own test; a type the
-/// table gains moves it by three.
-pub const SEED_HEAD: u64 = 371;
+/// table gains or loses moves it by three.
+pub const SEED_HEAD: u64 = 368;
 
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key

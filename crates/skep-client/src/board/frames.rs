@@ -58,19 +58,6 @@ pub const T_READ_WITH: &str = "1.1.0.1.0.1.0.3.71";
 /// edition, `to` the `draft`) homed in it".
 pub const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
 
-/// The fork record's type (the registry's vocabulary, `3.9.4`, a subtype
-/// under alternative; B3-S10).
-///
-/// The vocabulary's row: "Where a draft was begun: the record the act that
-/// made the draft writes, homed in the draft" — `from` empty, `to` the
-/// version the draft was begun from, the bare document while its chain is
-/// empty, and, for an alternative, the draft it was made from. The
-/// publication's base read takes a draft's base off it where no publish row
-/// names the draft as its rendering draft (`publication::base`), keeping a
-/// record only where the STORED type slot is this address exactly (a query
-/// by type answers the parent `3.9` too).
-pub const T_FORK: &str = "1.1.0.1.0.1.0.3.9.4";
-
 /// The registry document the commons types are defined in (wire.md §Link
 /// discovery reads, "The name of a type").
 ///

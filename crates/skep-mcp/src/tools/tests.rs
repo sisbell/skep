@@ -271,12 +271,13 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
 /// name the cap `media` enforces, and the card the fetch's deadline in words;
 /// the `search` card and its query's schema name skep-client's query bound,
 /// `changes_since`'s limit the change feed's default page, and the
-/// publishing paragraph the fork record's type as skep-client spells it,
-/// the record the shell reads a draft's base off (SP-25): a fact changed in
-/// one place alone tells every agent what the adapter then does otherwise.
+/// publishing paragraph the staging act as the adapter dispatches it — the
+/// `stage` tool, its `from_` — the act whose record the shell reads a
+/// draft's base off, with no record of the agent's to write (SP-25): a fact
+/// changed in one place alone tells every agent what the adapter then does
+/// otherwise.
 #[test]
 fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
-    use skep_client::board::frames::T_FORK;
     use skep_client::board::DEFAULT_CHANGES_LIMIT;
     use skep_client::search::QUERY_BOUND;
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -300,8 +301,10 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     let limit = entry("changes_since")["inputSchema"]["properties"]["limit"]["description"].as_str().expect("the limit's description");
     assert!(limit.contains(&format!("the board's default, {DEFAULT_CHANGES_LIMIT}, when absent")), "the limit names the default page: {limit}");
     let publishing = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("PUBLISHING. ")).expect("the publishing paragraph");
-    assert!(publishing.contains(&format!("ty {{\"addrs\": [\"{T_FORK}\"]}}, the fork type")), "the fork record's type is skep-client's: {publishing}");
-    assert!(publishing.contains("refused base_unrecorded"), "the refusal a draft with no record meets: {publishing}");
+    assert!(DISPATCH_OPS.contains(&"stage") && RENAMES_FROM.contains(&"stage"), "the staging act is a tool the adapter dispatches, its from_ renamed");
+    assert!(publishing.contains("with stage(from_)"), "the act that records a draft's base is the stage tool: {publishing}");
+    assert!(publishing.contains("doc_metadata(draft) answers it as base") && publishing.contains("no record for you to write"), "the board's record, read back, none written: {publishing}");
+    assert!(publishing.contains("refused base_unrecorded"), "the refusal a draft with no base meets: {publishing}");
 }
 
 /// A catalog's drift from another counts what an agent is told otherwise.

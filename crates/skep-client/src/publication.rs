@@ -13,10 +13,10 @@
 //! person reads are the copy's and the UI lane's, never this module's — and
 //! the composition holds its frames, its reads, its armed refusals and its
 //! order in one place. Ahead of the steps, [`base`](mod@base) — THE DRAFT'S
-//! BASE (B3-S10): the member the draft's newest publication made, else the
-//! version its fork record names, read off the board by [`draft_base`] for
-//! the caller's [`Inputs::base`] and never taken from the caller's own
-//! index. The order:
+//! BASE (B3-S10): the base the board records for the draft at its `stage`
+//! and moves to the member each publication of it makes, read off the board
+//! by [`draft_base`] for the caller's [`Inputs::base`] and never taken from
+//! the caller's own index. The order:
 //!
 //! 1. [`enumerate`](mod@enumerate) — THE ENUMERATION (§5.1): one `image` of the draft
 //!    inverted over the held selection, one `find_links_v` over the
@@ -281,10 +281,11 @@ pub struct Inputs {
     /// stands (`send`'s arm).
     pub claim: bool,
     /// The base and `base_extent` — `None` the birth shape: the draft's own
-    /// base as [`draft_base`] reads it off the board, the member its newest
-    /// publication made, else the version its fork record names (the bare
-    /// document while the chain is empty), so the shot lands after it, or as
-    /// its daughter where the trunk has moved past it (PUB-2.44; B3-S10).
+    /// base as [`draft_base`] reads it off the board, the version its `stage`
+    /// recorded (the bare document while the chain is empty) or the member
+    /// its newest publication made, with the extent the board records, so
+    /// the shot lands after it, or as its daughter where the trunk has moved
+    /// past it (PUB-2.44; B3-S10).
     pub base: Option<(Address, u64)>,
     /// `D`, the RENDERING draft — the draft whose arrangement the selection
     /// renders, the home of the kept places and of the records for its own

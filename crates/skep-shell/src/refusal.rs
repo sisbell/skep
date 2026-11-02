@@ -120,13 +120,13 @@ impl Name {
     pub const NO_PANEL: Name = Name("no_panel");
     /// A `publication.open` at the document form for a draft with no base.
     ///
-    /// No publish row into `doc`'s chain names the draft as its rendering
-    /// draft, and no fork record of the draft's names a version of `doc`
+    /// The board records no base for the draft in `doc`'s chain — its
+    /// `doc_metadata` answers none, or one in another document's chain
     /// (`skep_client::publication::draft_base`; B3-S10): the shell never
     /// takes the chain's head in its place, since a draft begun from an
     /// older version would publish over the newer words. The detail names
-    /// the `draft` and the `doc`; the act is the draft's fork record, written
-    /// by the act that made it.
+    /// the `draft` and the `doc`; the act is staging the draft with `stage`
+    /// from the version it is to publish after, which records its base.
     pub const BASE_UNRECORDED: Name = Name("base_unrecorded");
     /// A publication read met `withheld` on a document it needs.
     ///

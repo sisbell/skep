@@ -1,13 +1,14 @@
 //! The publication composition's unit suite over a SCRIPTED BOARD: a
 //! `Dialer` whose answers come from a `World` the test writes — the
 //! documents' arrangements and bytes, every link with its slots and age, the
-//! claims as supersession links, the feed's rows — which APPLIES a
-//! publication as the daemon does (the twin fence, the kept places, one
-//! fresh identity per draft identity, the records, the copies resolved from
-//! the member's positions, the claims, the retractions, the read-withs, the
-//! re-window, the memo) and keeps every frame it served, so a test pins what
-//! each step reads, in what order and how many frames, and what the
-//! composition makes of each answer, with no daemon. The suites that need
+//! claims as supersession links, the feed's rows, the drafts' recorded bases
+//! — which APPLIES a publication as the daemon does (the twin fence, the
+//! kept places, one fresh identity per draft identity, the records, the
+//! copies resolved from the member's positions, the claims, the retractions,
+//! the read-withs, the re-window, the base's move, the memo) and keeps every
+//! frame it served, so a test pins what each step reads, in what order and
+//! how many frames, and what the composition makes of each answer, with no
+//! daemon. The suites that need
 //! the daemon itself are `tests/it/publication.rs`.
 //!
 //! THE FIXTURE (`World::base`): the claimant `1.0.1` on a claimed board; `E`
@@ -31,8 +32,8 @@ use skep_identity::{unit_span, DepositHome, DepositKind, DepositSlot, PublicKey,
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
-use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_FORK, T_HELD_REMOVAL, T_READ_WITH};
-use crate::board::{Board, LinkSpan, LinkValue, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
+use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_HELD_REMOVAL, T_READ_WITH};
+use crate::board::{Board, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
 use crate::dial::{DialError, Dialer, Headers, Request as DialRequest, RequestHead, Response, StreamedResponse};
 use crate::origin::Origin;
 use crate::sign::Signer;
@@ -124,6 +125,12 @@ struct DocState {
     owner: String,
     placed: Option<u64>,
     base_extent: Option<u64>,
+    /// The surface a `stage` copied into it — `doc_metadata`'s `source`.
+    source: Option<String>,
+    /// The draft base the board records — `doc_metadata`'s `base`, and
+    /// beside it `base_copied`, each answered as it stands.
+    base: Option<String>,
+    base_copied: Option<u64>,
     at: u64,
 }
 
@@ -133,9 +140,6 @@ struct FeedRow {
     op: &'static str,
     docs: Vec<String>,
     key: Option<&'static str>,
-    /// The row's testimony lost: served with `docs`, `op` and `key` null,
-    /// placed under its `docs` as a bare entry is under its derived class.
-    lost: bool,
 }
 
 /// The board as the test writes it.
@@ -168,15 +172,13 @@ struct World {
     head: bool,
     /// `H.1` answers a record that stands and cannot be read.
     damaged_head: bool,
-    /// `/changes` answers this status and body in the page's place.
-    changes_refused: Option<(u16, Value)>,
     key: Option<PublicKey>,
 }
 
 impl World {
     fn doc(&mut self, text: &str, published: bool, owner: &str, runs: Vec<Run>) {
         self.position += 1;
-        self.docs.insert(text.to_string(), DocState { runs, published, owner: owner.to_string(), placed: None, base_extent: None, at: self.position });
+        self.docs.insert(text.to_string(), DocState { runs, published, owner: owner.to_string(), placed: None, base_extent: None, source: None, base: None, base_copied: None, at: self.position });
     }
 
     fn text(&mut self, origin: &str, from: u64, text: &str) {
@@ -193,7 +195,7 @@ impl World {
         let addr = format!("{home}.0.2.{n}");
         self.position += 1;
         self.links.push(LinkRow { addr: addr.clone(), home: home.to_string(), from, to, ty, at: self.position, retracted: false });
-        self.rows.push(FeedRow { at: self.position, op: "make_link", docs: vec![home.to_string()], key: Some("bare"), lost: false });
+        self.rows.push(FeedRow { at: self.position, op: "make_link", docs: vec![home.to_string()], key: Some("bare") });
         addr
     }
 
@@ -215,6 +217,21 @@ impl World {
         r
     }
 
+    /// Records `draft` as staged from `from`, as the board's `stage` does
+    /// (wire.md §Namespace): `from`'s reading surface — a trunk's head where
+    /// it has members — the draft's source; a published surface its base,
+    /// at its whole count; a draft's own recorded base inherited, and none
+    /// where it holds none. The draft's arrangement is the cell's.
+    fn stage(&mut self, draft: &str, from: &str) {
+        let surface = self.trunk_head.get(from).cloned().unwrap_or_else(|| from.to_string());
+        let source = self.docs[&surface].clone();
+        let (base, copied) = if source.published { (Some(surface.clone()), Some(source.runs.iter().map(|r| r.width).sum())) } else { (source.base, source.base_copied) };
+        let d = self.docs.get_mut(draft).expect("the draft");
+        d.source = Some(surface);
+        d.base = base;
+        d.base_copied = copied;
+    }
+
     /// The fixture (the module doc). Returns the addresses the cells name.
     fn base() -> (World, Named) {
         let mut w = World { position: 10, next_doc: 20, image_cap: 1 << 12, claimed: true, head: true, ..World::default() };
@@ -224,7 +241,7 @@ impl World {
         w.doc(&format!("{E}.1"), true, ACCOUNT, vec![run(E, 1, 19)]);
         w.docs.get_mut(&format!("{E}.1")).unwrap().placed = Some(19);
         w.trunk_head.insert(E.to_string(), format!("{E}.1"));
-        w.rows.push(FeedRow { at: w.position, op: "publish", docs: vec![format!("{E}.1")], key: None, lost: false });
+        w.rows.push(FeedRow { at: w.position, op: "publish", docs: vec![format!("{E}.1")], key: None });
         w.text(S, 1, "set one");
         w.doc(S, true, ACCOUNT, vec![run(S, 1, 7)]);
         w.text(S2, 1, "set two");
@@ -380,7 +397,7 @@ impl World {
                 if !self.readable(doc) {
                     return Ok(rejected("withheld", json!({"site": {"addr": doc}})));
                 }
-                Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": trunk_of(doc), "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": null, "at": d.at})))
+                Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": trunk_of(doc), "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": d.base, "base_copied": d.base_copied.map(|c| c.to_string()), "at": d.at})))
             }
             "retrieve_doc_v_span_set" => {
                 let doc = frame["doc"].as_str().unwrap();
@@ -532,7 +549,7 @@ impl World {
             let e = format!("{account}.0.{}", self.next_doc);
             self.next_doc += 1;
             self.position += 1;
-            self.docs.insert(e.clone(), DocState { runs: Vec::new(), published: true, owner: account.to_string(), placed: None, base_extent: None, at: self.position });
+            self.docs.insert(e.clone(), DocState { runs: Vec::new(), published: true, owner: account.to_string(), placed: None, base_extent: None, source: None, base: None, base_copied: None, at: self.position });
             (e.clone(), Some(e))
         } else {
             (frame["doc"].as_str().unwrap().to_string(), None)
@@ -666,7 +683,14 @@ impl World {
         }
         let member_runs = Self::coalesce(positions);
         let placed: u64 = member_runs.iter().map(|r| r.width).sum();
-        self.docs.insert(member.clone(), DocState { runs: member_runs.clone(), published: true, owner: ACCOUNT.to_string(), placed: Some(placed), base_extent: frame["base_extent"].as_str().and_then(|e| e.parse().ok()), at });
+        self.docs.insert(member.clone(), DocState { runs: member_runs.clone(), published: true, owner: ACCOUNT.to_string(), placed: Some(placed), base_extent: frame["base_extent"].as_str().and_then(|e| e.parse().ok()), source: None, base: None, base_copied: None, at });
+        // The rendering draft's base moves to the member, at its whole
+        // count, its source kept (wire.md §Namespace, THE BASE MOVES): a
+        // draft with none, its first publication's member.
+        if let Some(d) = draft.as_ref().and_then(|d| self.docs.get_mut(d)) {
+            d.base = Some(member.clone());
+            d.base_copied = Some(placed);
+        }
         if !member.strip_prefix(&format!("{trunk}.")).unwrap().contains('.') {
             self.trunk_head.insert(trunk.clone(), member.clone());
             if let Some(t) = self.docs.get_mut(&trunk) {
@@ -792,14 +816,11 @@ impl World {
                 ds.runs = Self::coalesce(positions);
             }
         }
-        self.rows.push(FeedRow { at, op: "publish", docs: homes, key: None, lost: false });
+        self.rows.push(FeedRow { at, op: "publish", docs: homes, key: None });
         json!({"resp": "ack_addr", "addr": member, "at": at})
     }
 
     fn changes(&self, path: &str) -> Response {
-        if let Some((status, body)) = self.changes_refused.clone() {
-            return reply(status, body);
-        }
         let query = path.split_once('?').map_or("", |x| x.1);
         let (mut since, mut under, mut limit) = (0u64, None::<String>, 256usize);
         for pair in query.split('&') {
@@ -812,11 +833,7 @@ impl World {
             }
         }
         let visible: Vec<&FeedRow> = self.rows.iter().filter(|r| r.at > since).filter(|r| under.as_ref().is_none_or(|u| r.docs.iter().any(|d| d == u || d.starts_with(&format!("{u}."))))).collect();
-        let page: Vec<Value> = visible
-            .iter()
-            .take(limit)
-            .map(|r| if r.lost { json!({"at": r.at, "op": null, "docs": null, "key": null, "time": null}) } else { json!({"at": r.at, "op": r.op, "docs": r.docs, "key": r.key, "time": null}) })
-            .collect();
+        let page: Vec<Value> = visible.iter().take(limit).map(|r| json!({"at": r.at, "op": r.op, "docs": r.docs, "key": r.key, "time": null})).collect();
         let last = page.last().and_then(|r| r["at"].as_u64()).unwrap_or(since);
         reply(200, json!({"changes": page, "last": last, "more": visible.len() > page.len()}))
     }
@@ -1656,7 +1673,7 @@ fn every_refusal_arm_carries_its_face_data() {
         }
         dialer.world().refuse_next = Some(rej);
     };
-    dialer.world().rows.push(FeedRow { at: 999, op: "insert", docs: vec![D.to_string()], key: Some("ab".repeat(32).leak()), lost: false });
+    dialer.world().rows.push(FeedRow { at: 999, op: "insert", docs: vec![D.to_string()], key: Some("ab".repeat(32).leak()) });
     refuse("kept_place_moved", json!({"site": {"index": 1}}));
     let sent = send(&p, &inputs(), &mut request).unwrap();
     let Sent::Refused(Refusal::KeptPlaceMoved { index, race }) = sent else { panic!("{sent:?}") };
@@ -2027,116 +2044,108 @@ fn base_of(world: World, doc: &str, draft: &str) -> (Arc<Scripted>, BaseRead) {
     (dialer, base)
 }
 
-/// The fork record homed in `draft`, its `to` the addresses `to` names, at
-/// the next position.
-fn fork_record(w: &mut World, draft: &str, to: &[&str]) -> String {
-    w.typed(draft, vec![], to.iter().map(|addr| unit(addr)).collect(), T_FORK)
-}
-
-/// A publish row at the next position: the member `docs` lead with
-/// registered, holding `width` positions of `E`'s identity.
-fn publish_row(w: &mut World, docs: &[&str], width: u64) {
-    w.doc(docs[0], true, ACCOUNT, vec![run(E, 1, width)]);
-    w.position += 1;
-    w.rows.push(FeedRow { at: w.position, op: "publish", docs: docs.iter().map(|d| d.to_string()).collect(), key: None, lost: false });
-}
-
-/// THE BASE READ OFF THE RECORD (B3-S10): a draft with neither a fork
-/// record nor a publication row has no base — `None`, never the trunk's
-/// head; its record names the version it was begun from, read with its
-/// extent — the first record of the EXACT type naming `doc`'s chain, in
-/// address order, a link whose type slot is not `3.9.4` alone (the parent
-/// `3.9` beside it) and a record naming another document passed over; a
-/// record naming the bare edition while its chain is
-/// empty is the document itself, its extent nothing. The reads: the trunk
-/// and the draft, the feed under the trunk from the draft's mint, the one
-/// four-set read of the draft's records, each read once, and the extent.
+/// THE BASE IS THE BOARD'S RECORD (B3-S10): a draft staged from `E.1`
+/// answers the base its `stage` recorded and the count the copy took, off
+/// ONE read of the draft after the trunk's — no feed, no link and no extent
+/// read; staged from the memberless edition, the bare document at the count
+/// it held, nothing. A trunk the board holds no record of is that fault,
+/// ahead of the draft's.
 #[test]
-fn a_drafts_base_is_its_fork_records_version_and_none_where_no_record_names_one() {
-    let (world, _) = World::base();
-    let (_, none) = base_of(world, E, D);
-    assert_eq!(none, Ok(None), "no record and no row: no base, never the head");
+fn a_staged_drafts_base_is_the_boards_record_read_once() {
     let (mut world, _) = World::base();
     let e1 = format!("{E}.1");
-    world.link(D, vec![], vec![unit(&e1)], vec![unit("1.1.0.1.0.1.0.3.9"), unit(T_FORK)]);
-    fork_record(&mut world, D, &[S]);
-    let record = fork_record(&mut world, D, &[&e1]);
-    fork_record(&mut world, D, &[&e1]);
+    world.stage(D, &e1);
     let (dialer, base) = base_of(world, E, D);
-    assert_eq!(base, Ok(Some((a(&e1), 19))), "the first record of the exact type naming E's chain, its extent");
-    let since = dialer.world().docs[D].at;
-    assert_eq!(
-        dialer.ops(),
-        ["doc_metadata", "doc_metadata", &format!("GET /changes?since={since}&under={E}"), "find_links_ftt", "read_link", "read_link", "read_link", "retrieve_doc_v_span_set"],
-        "every record read up to {record}, and no further"
-    );
-    // A record naming another document alone: no base for this chain.
-    let (mut world, _) = World::base();
-    fork_record(&mut world, D, &[S]);
-    assert_eq!(base_of(world, E, D).1, Ok(None));
+    assert_eq!(base, Ok(Some((a(&e1), 19))), "the recorded base and the count the copy took");
+    assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "two reads: no feed, no link, no extent");
+    let asked: Vec<Value> = dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
+    assert_eq!(asked, [json!(E), json!(D)], "the trunk, then the draft");
     // The memberless edition: the bare document is its own base.
     let (mut world, _) = World::base();
     world.doc(X, true, ACCOUNT, Vec::new());
     let d2 = "1.0.1.0.31";
     world.doc(d2, false, ACCOUNT, vec![run(d2, 1, 3)]);
-    fork_record(&mut world, d2, &[X]);
+    world.stage(d2, X);
     assert_eq!(base_of(world, X, d2).1, Ok(Some((a(X), 0))), "doc itself while the chain is empty");
     // A trunk the board holds no record of is that fault, ahead of the rest.
-    let (world, _) = World::base();
+    let (mut world, _) = World::base();
+    world.stage(D, &e1);
     assert_eq!(base_of(world, "1.0.1.0.40", D).1, Err(Fault::NoSuchDocument(a("1.0.1.0.40"))));
 }
 
-/// THE BASE READ OFF THE NEWEST RENDERING ROW: the member of the last
-/// `publish` row under the trunk that names the draft as its rendering
-/// draft — the first document after the member that is not the trunk —
-/// beats the fork record and an older such row, read across the feed's
-/// pages; a row naming the
-/// draft after another rendering draft (an `also` mention), a row of
-/// another chain naming the trunk among its homes, and a row whose
-/// testimony was lost each name no base; at the mint form the edition
-/// between the member and the draft is passed over. A feed that refuses the
-/// read is a fault, never a history holding no row (SP-14).
+/// NO RECORD, NO BASE: a draft the board records no base for — `D` as the
+/// fixture holds it, never staged — answers `None`, never the trunk's head,
+/// and so does an alternative staged from it, which inherits none. A base
+/// the board names without its count is an answer the client cannot read,
+/// never no base (SP-14).
 #[test]
-fn a_drafts_base_is_its_newest_rendering_rows_member() {
+fn a_draft_the_board_records_no_base_for_answers_none() {
+    let (world, _) = World::base();
+    let (dialer, none) = base_of(world, E, D);
+    assert_eq!(none, Ok(None), "no record: no base, never the head");
+    assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "the draft read once, nothing after it");
     let (mut world, _) = World::base();
-    let e1 = format!("{E}.1");
-    fork_record(&mut world, D, &[&e1]);
-    let (e2, e3, e4, e5) = (format!("{E}.2"), format!("{E}.3"), format!("{E}.4"), format!("{E}.5"));
-    publish_row(&mut world, &[&e2, D], 7);
-    for _ in 0..300 {
-        world.position += 1;
-        let at = world.position;
-        world.rows.push(FeedRow { at, op: "make_link", docs: vec![E.to_string()], key: Some("bare"), lost: false });
-    }
-    publish_row(&mut world, &[&e3, D], 8);
-    publish_row(&mut world, &[&e4, A, D], 9);
-    publish_row(&mut world, &[&format!("{S}.1"), D, E], 10);
-    publish_row(&mut world, &[&e5], 11);
-    world.rows.last_mut().unwrap().lost = true;
-    let (dialer, base) = base_of(world, E, D);
-    assert_eq!(base, Ok(Some((a(&e3), 8))), "the newest row D rendered, on the second page, over the first page's older one");
-    assert_eq!(dialer.frames("find_links_ftt").len(), 0, "the row beats the record, which is never read");
-    assert_eq!(dialer.ops().iter().filter(|op| op.starts_with("GET /changes")).count(), 2, "two pages");
-    // The mint form: the edition stands between the member and the draft.
+    let alternative = "1.0.1.0.31";
+    world.doc(alternative, false, ACCOUNT, vec![run(D, 1, 10)]);
+    world.stage(alternative, D);
+    assert_eq!(base_of(world, E, alternative).1, Ok(None), "an alternative of an unrecorded draft stands free");
     let (mut world, _) = World::base();
-    world.doc(X, true, ACCOUNT, Vec::new());
-    let x1 = format!("{X}.1");
-    publish_row(&mut world, &[&x1, X, D], 4);
-    assert_eq!(base_of(world, X, D).1, Ok(Some((a(&x1), 4))));
-    // The feed refusing the read.
-    for refusal in [(410, json!({"error": "history_reclaimed", "floor": 99})), (500, json!({"error": "history_io", "detail": "the files will not read"}))] {
-        let (mut world, _) = World::base();
-        fork_record(&mut world, D, &[&e1]);
-        world.changes_refused = Some(refusal.clone());
-        assert!(matches!(base_of(world, E, D).1, Err(Fault::Halt(_))), "{refusal:?}: a fault, never the record's base");
-    }
+    world.docs.get_mut(D).unwrap().base = Some(format!("{E}.1"));
+    let unread = base_of(world, E, D).1;
+    assert!(matches!(unread, Err(Fault::Shape { ref op, .. }) if op == "doc_metadata"), "a base without its count: {unread:?}");
 }
 
-/// THE FORK RECORD IS A RECORD CLASS: no enumeration offers it, whatever its
-/// ends touch.
+/// A BASE IN ANOTHER CHAIN IS NONE OF THIS ONE: a draft staged from the
+/// public set `S` answers `S` asked of `S`'s chain and `None` asked of
+/// `E`'s, and so does one staged from a document whose address only begins
+/// with `E`'s text — never a member of `E`'s chain.
 #[test]
-fn the_fork_record_is_a_record_class() {
-    let typed = |ty: &str| LinkValue { from: vec![], to: vec![], ty: vec![LinkSpan { start: ty.to_string(), width: format!("{}1", "0.".repeat(ty.split('.').count() - 1)) }], at: None };
-    assert!(enumerate::is_record_class(&typed(T_FORK)));
-    assert!(!enumerate::is_record_class(&typed("1.1.0.1.0.1.0.3.9")), "the parent, alternative, is a person's link");
+fn a_recorded_base_outside_the_docs_chain_answers_none() {
+    let (mut world, _) = World::base();
+    world.stage(D, S);
+    assert_eq!(base_of(world, E, D).1, Ok(None), "S is no version of E");
+    let (mut world, _) = World::base();
+    world.stage(D, S);
+    assert_eq!(base_of(world, S, D).1, Ok(Some((a(S), 7))), "S's own chain: the bare document at its count");
+    let (mut world, _) = World::base();
+    let near = format!("{E}1");
+    world.doc(&near, true, ACCOUNT, Vec::new());
+    world.stage(D, &near);
+    assert_eq!(base_of(world, E, D).1, Ok(None), "{near} is no member of {E}'s chain");
+}
+
+/// THE BASE MOVES WITH EACH PUBLICATION (B3-S10): `D` staged from `E.1`
+/// reads the base the fixture's request carries, publishes `E.2` off it,
+/// and read again stands on `E.2` at the member's whole count — the board's
+/// move read, never the source its stage copied, which stays `E.1`. A draft
+/// with no base whose first publication mints its edition stands on that
+/// edition's first member.
+#[test]
+fn a_drafts_base_moves_to_the_member_each_publication_makes() {
+    let (mut world, _) = World::base();
+    let e1 = format!("{E}.1");
+    world.stage(D, &e1);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    assert_eq!(draft_base(&p, &a(E), &a(D)), Ok(inputs().base), "the stage's record is the request's base");
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(Some(S2)));
+    let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!("acknowledged") };
+    let e2 = format!("{E}.2");
+    assert_eq!(ack.member.to_string(), e2);
+    let whole: u64 = dialer.world().docs[&e2].runs.iter().map(|r| r.width).sum();
+    assert_eq!(draft_base(&p, &a(E), &a(D)), Ok(Some((a(&e2), whole))), "the member the publication made, at its whole count");
+    assert_eq!(dialer.world().docs[D].source.as_deref(), Some(e1.as_str()), "the source the stage copied stays");
+    // The mint form: a draft with no base stands on its edition's first member.
+    let (mut world, _) = World::base();
+    world.docs.get_mut(D).unwrap().runs = vec![run(D, 1, 10)];
+    let (_, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let minting = Inputs { doc: None, mint: Some(a(ACCOUNT)), base: None, selection: vec![run(D, 1, 10)], published: vec![a(S), a(S2)], ..inputs() };
+    let e = enumerate(&p, &minting).unwrap();
+    let panel = panel(&p, &minting, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &minting, &e, &panel, &Confirmed::default()).unwrap() else { panic!("inert") };
+    let Sent::Acknowledged(ack) = send(&p, &minting, &mut request).unwrap() else { panic!("acknowledged") };
+    let edition = ack.edition.clone().expect("the edition minted");
+    assert_eq!(draft_base(&p, &edition, &a(D)), Ok(Some((ack.member.clone(), 10))), "its first publication's member");
 }

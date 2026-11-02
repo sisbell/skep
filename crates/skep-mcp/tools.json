@@ -2635,7 +2635,7 @@
     },
     {
       "name": "changes_since",
-      "description": "The shell's changes call as a pull: what changed on the board since the log position since, at your reader class — {entries, next, head}. Each entry is a /changes row with its position and class (published, or drafts for a draft you may read): {position, at, op, docs, class, key? (on an unsigned entry, the board's testimony: the fingerprint of the key whose session committed it, \"bare\" or \"system\"), time, attest? (on a signed entry, its signature), link?, new_prefix?, new_id?, placed?, base_extent?}, oldest first. next is the position to ask from next time — keep it; head the board's latest position. Bounded by limit and the board's page budget; a since below the board's memory is refused history_reclaimed naming the floor. Start from session_info's health.log_position, or from 0.",
+      "description": "The shell's changes call as a pull: what changed on the board since the log position since, at your reader class — {entries, next, head}. Each entry is a /changes row with its position and class (published, or drafts for a draft you may read): {position, at, op, docs, class, key? (on an unsigned entry, the board's testimony: the fingerprint of the key whose session committed it, \"bare\" or \"system\"), time, attest? (on a signed entry, its signature), link?, new_prefix?, new_id?, placed?, base_extent?}, oldest first. next is the position to ask from next time — keep it; head the board's latest position. Bounded by limit and the board's page budget; a since below the board's memory is refused history_reclaimed naming the floor. Start from session_info's health.log_position, or from 0. With class \"drafts\" the page is the drafts rows alone — the entries naming a draft you may read, nothing published — read from since under your session; any other class is refused malformed_args naming class.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2649,6 +2649,11 @@
             "minimum": 1,
             "maximum": 4096,
             "description": "At most this many entries (the board's default, 256, when absent)."
+          },
+          "class": {
+            "type": "string",
+            "enum": ["drafts"],
+            "description": "Narrow the page to the drafts rows alone: the entries naming a draft you may read, nothing published. Absent, both classes are merged by position."
           }
         },
         "required": ["since"],

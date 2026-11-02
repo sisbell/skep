@@ -184,12 +184,14 @@ fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     assert!(!too_long.to_value().to_string().contains("xxxxxxxx"), "the refusal holds no query text: {too_long}");
     let elsewhere = shell.call("search", &json!({"session": session, "board": "b-elsewhere", "query": "hello"})).unwrap_err();
     assert_eq!((elsewhere.name(), elsewhere.to_value()["what"].as_str()), ("malformed_args", Some("board")), "a session searches its own board");
-    // Close: `{}`, the event, then the stale reference.
+    // Close: `{}`, the event, then the closed reference answered with its
+    // arm at a later call, and a second close the pin's stale refusal.
     assert_eq!(shell.call("close", &json!({"session": session})).unwrap(), json!({}));
     let died = wait_for(&seen, |e| e.name == EventName::SessionDied);
     assert_eq!(died.data["session"], session);
     assert_eq!(died.data["reason"]["arm"], "closed");
-    assert_eq!(shell.call("op", &json!({"session": session, "frame": {"op": "doc_metadata", "doc": draft}})).unwrap_err().name(), "session_ended");
+    let gone = shell.call("op", &json!({"session": session, "frame": {"op": "doc_metadata", "doc": draft}})).unwrap_err().to_value();
+    assert_eq!((gone["name"].as_str(), gone["reason"]["arm"].as_str()), (Some("session_died"), Some("closed")), "a later call on the closed reference learns the close: {gone}");
     assert_eq!(shell.call("close", &json!({"session": session})).unwrap_err().name(), "session_ended");
     // The token's text, a seed the walk made, a path under the store: in no
     // answer, no refusal, no event and no log entry — the page holds
@@ -483,7 +485,12 @@ fn a_sessions_open_position_is_the_boards_position_read_before_it_opened() {
 /// any call — and ended once: one `session-died` on the restart arm,
 /// re-opened under a fresh reference the arm names and registered, its
 /// supplement widened (an `index` event names it), and a publish-class write
-/// acked under it; the old reference names nothing.
+/// acked under it; every event naming the re-opened session follows the
+/// death on the stream (skep #703); and a call on the old reference is
+/// answered `session_died` with the reason kept, `reason.session` the
+/// re-opened reference, never a bare `session_ended` (skep #532; the mutant
+/// that drops an ended reference with its reason answers `session_ended`,
+/// and every client has to watch the stream to learn the new reference).
 #[test]
 fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     let dir = TempDir::new().unwrap();
@@ -511,8 +518,18 @@ fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
         .call("op", &json!({"session": reopened, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}}))
         .unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
     assert_eq!(edition["resp"], "ack_addr", "{edition}");
-    assert_eq!(signed.call("op", &json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap_err().name(), "session_ended");
-    assert_eq!(seen.lock().unwrap().iter().filter(|e| e.name == EventName::SessionDied).count(), 1, "the session ended once");
+    let stale = signed.call("op", &json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap_err().to_value();
+    assert_eq!(
+        (stale["name"].as_str(), stale["session"].as_str(), stale["reason"]["arm"].as_str(), stale["reason"]["reopened"].as_bool(), stale["reason"]["session"].as_str()),
+        (Some("session_died"), Some(session.as_str()), Some("restart"), Some(true), Some(reopened.as_str())),
+        "a call on the old reference learns the re-opened one from its answer: {stale}"
+    );
+    let events = seen.lock().unwrap();
+    assert_eq!(events.iter().filter(|e| e.name == EventName::SessionDied).count(), 1, "the session ended once");
+    let death = events.iter().position(|e| e.name == EventName::SessionDied && e.data["session"] == session).expect("the death on the stream");
+    let first_of_reopened = events.iter().position(|e| e.data["session"] == reopened || e.data["update"]["session"] == reopened).expect("an event names the re-opened session");
+    assert!(death < first_of_reopened, "every event naming the re-opened session follows its death on the stream: {:?}", events.iter().map(|e| (e.name, e.data["session"].clone())).collect::<Vec<_>>());
+    drop(events);
     signed.shutdown();
     drop(signed);
     answerer.join().unwrap();
@@ -632,9 +649,12 @@ fn a_write_busy_is_reissued_once_within_the_call() {
 /// composer's: a signed session's token closed at the board while its feed
 /// stands quiet, then a `make_link` whose V-spec slot the composer resolves
 /// through `image` under that token — the call answers `session_died` with
-/// the restart's re-open, and the old reference names nothing (the mutant
-/// that reads the death as the composer's halt tells the page the shell
-/// could not sign).
+/// the restart's re-open; the death, met on the call's thread, is said on
+/// the stream before any event naming the re-opened session, both run on
+/// the board's feed thread (skep #703, #748); and a later call on the old
+/// reference is answered the reason kept, the re-opened reference in it
+/// (skep #532) (the mutant that reads the death as the composer's halt tells
+/// the page the shell could not sign).
 #[test]
 fn a_death_met_at_a_read_the_attest_needs_ends_the_session() {
     let dir = TempDir::new().unwrap();
@@ -666,7 +686,22 @@ fn a_death_met_at_a_read_the_attest_needs_ends_the_session() {
     let refused = signed.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
     let v = refused.to_value();
     assert_eq!((refused.name(), v["reason"]["arm"].as_str()), ("session_died", Some("restart")), "{v}\n{}", lines.lock().unwrap().join("\n"));
-    assert_eq!(signed.call("held", &json!({"session": session})).unwrap_err().name(), "session_ended");
+    let reopened = v["reason"]["session"].as_str().expect("the restart arm re-opened the session").to_string();
+    // The death precedes every event naming the re-opened session on the
+    // stream: the swap and the `session-died` ran on the feed thread, the
+    // re-opened session's face after them.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut stream: Vec<Event> = Vec::new();
+    while !stream.iter().any(|e| e.data["session"] == reopened || e.data["update"]["session"] == reopened) {
+        assert!(Instant::now() < deadline, "no event named the re-opened session: {:?}", stream.iter().map(|e| e.name).collect::<Vec<_>>());
+        stream.extend(rx.try_iter());
+        thread::sleep(Duration::from_millis(20));
+    }
+    let death = stream.iter().position(|e| e.name == EventName::SessionDied && e.data["session"] == session).expect("the death on the stream");
+    let first_of_reopened = stream.iter().position(|e| e.data["session"] == reopened || e.data["update"]["session"] == reopened).unwrap();
+    assert!(death < first_of_reopened, "the death is said before any event of the re-opened session: {:?}", stream.iter().map(|e| (e.name, e.data["session"].clone())).collect::<Vec<_>>());
+    let later = signed.call("held", &json!({"session": session})).unwrap_err().to_value();
+    assert_eq!((later["name"].as_str(), later["reason"]["arm"].as_str(), later["reason"]["session"].as_str()), (Some("session_died"), Some("restart"), Some(reopened.as_str())), "a later call on the old reference is answered the reason kept: {later}");
     signed.shutdown();
     sd.shutdown();
 }
@@ -831,9 +866,10 @@ fn a_scripted_claim_places_its_anchors_where_its_script_says() {
 /// `/blob`: three sessions as principals the board seats no account for, so
 /// no supplement presents their tokens, the board quiet and each token
 /// closed at it; each call answers `session_died` with the reason its end
-/// derived, its reference then names nothing, and one `session-died` goes
-/// out per session (the mutants that drop a call's death arm leave the
-/// session standing behind a refusal the page cannot read as the restart).
+/// derived, a later call on its reference is answered that reason again,
+/// and one `session-died` goes out per session (the mutants that drop a
+/// call's death arm leave the session standing behind a refusal the page
+/// cannot read as the restart).
 #[test]
 fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
     let dir = TempDir::new().unwrap();
@@ -869,7 +905,8 @@ fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
     for (session, answer) in sessions.iter().zip(answers) {
         let v = answer.expect_err("the death is the call's answer").to_value();
         assert_eq!((v["name"].as_str(), v["reason"]["arm"].as_str()), (Some("session_died"), Some("restart")), "{v}\n{}", lines.lock().unwrap().join("\n"));
-        assert_eq!(shell.call("held", &json!({"session": session})).unwrap_err().name(), "session_ended", "{session} names nothing");
+        let later = shell.call("held", &json!({"session": session})).unwrap_err().to_value();
+        assert_eq!((later["name"].as_str(), later["reason"].clone()), (Some("session_died"), v["reason"].clone()), "{session}: a later call is answered the reason kept: {later}");
     }
     let died: Vec<String> = rx.try_iter().filter(|e| e.name == EventName::SessionDied).map(|e| e.data["session"].as_str().unwrap_or("?").to_string()).collect();
     assert_eq!(died, sessions, "one `session-died` per session");

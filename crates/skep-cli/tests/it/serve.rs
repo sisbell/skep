@@ -562,9 +562,11 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     assert_eq!(status, 200);
     let fetch: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(fetch["refused"]["kind"], "refused", "the daemon's own refusal of a cell that is none: {fetch}");
-    // A stale session reference, a foreign board reference.
+    // The closed reference answered with its arm at a later call, a second
+    // close the stale refusal, a foreign board reference.
     assert_eq!(keep(provider.result("close", json!({"session": session}))), json!({}));
-    assert_eq!(keep(provider.refused("op", json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})))["name"], "session_ended");
+    let after_close = keep(provider.refused("op", json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})));
+    assert_eq!((after_close["name"].as_str(), after_close["reason"]["arm"].as_str()), (Some("session_died"), Some("closed")), "a call on the closed reference learns the close: {after_close}");
     assert_eq!(keep(provider.refused("close", json!({"session": session})))["name"], "session_ended");
     assert_eq!(keep(provider.refused("health", json!({"board": "b-000000000000000000000000"})))["name"], "unknown_board");
     assert_eq!(keep(provider.refused("session", json!({"board": session, "principal": 1})))["name"], "unknown_board", "a session reference is no board reference");
@@ -658,7 +660,8 @@ fn f2_the_events_arrive_on_the_stream() {
     assert_eq!(refused["reason"]["arm"], "restart");
     let died = next_event(&rx, "session-died", |v| v["session"] == session2);
     assert_eq!(died["reason"]["arm"], "restart");
-    assert_eq!(provider.refused("op", json!({"session": session2, "frame": {"op": "key_set", "account": "1.0.1"}}))["name"], "session_ended");
+    let later = provider.refused("op", json!({"session": session2, "frame": {"op": "key_set", "account": "1.0.1"}}));
+    assert_eq!((later["name"].as_str(), later["reason"]["arm"].as_str()), (Some("session_died"), Some("restart")), "a later call on the ended reference is answered its reason: {later}");
     // `mode` at a claim's landing: a second, unclaimed daemon served by a
     // second provider, claimed through the library while the suite listens.
     let sd2 = spawn(&dir.path().join("board2"), true);

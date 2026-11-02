@@ -14,9 +14,12 @@
 //! drafts cursor the retention floor passed resumed at the floor, its rows
 //! still fed; a drafts row named under every session of its principal, a
 //! closing session's last read among them; a principal's drafts read on
-//! through the restart's re-open, one cursor per principal; and a read that
+//! through the restart's re-open, one cursor per principal; a read that
 //! dies between two pages sending none of their rows again, while a
-//! principal's last session dying mid-read leaves no cursor behind.
+//! principal's last session dying mid-read leaves no cursor behind; a
+//! death a call thread meets swapped by the feed thread after the rows of
+//! the tick it fell in; and a death met once the feed thread has stopped
+//! still leaving the table and said once.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -831,6 +834,112 @@ fn a_read_that_dies_between_two_pages_sends_no_row_again() {
         owed.sort();
         assert_eq!(drafts_named(&rx), owed, "left the table {left_the_table}");
     }
+}
+
+/// A board whose published feed holds rows at 11 and 12, served one per
+/// page, each page `delay` long; its stream serves one commit once; every
+/// drafts read answers the empty page, `/health` a head at 10, and every
+/// other read an empty delivery.
+struct SlowPages {
+    events: Mutex<Option<Vec<u8>>>,
+    delay: Duration,
+}
+
+impl Dialer for SlowPages {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if req.method == Method::Get && req.path.starts_with("/health") {
+            return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+        }
+        if req.method == Method::Get && req.path.starts_with("/changes") {
+            let since = since_of(&req.path);
+            if req.path.contains("drafts=true") {
+                return Ok(page(&[], since, false));
+            }
+            std::thread::sleep(self.delay);
+            return Ok(match since {
+                10 => page(&[11], 11, true),
+                11 => page(&[12], 12, false),
+                _ => page(&[], since, false),
+            });
+        }
+        Ok(ok(json!({"resp": "delivery", "items": []})))
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        match self.events.lock().unwrap().take() {
+            Some(body) => Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(io::Cursor::new(body)) }),
+            None => Err(DialError::Connect("the stream is served once".into())),
+        }
+    }
+}
+
+/// Checks that a death a call thread meets is swapped by the feed thread
+/// after the rows of the tick it fell in (skep #748, #703).
+///
+/// A tick reads two pages of the published feed, each slow; the call
+/// thread ends the session as `Shell::died` does — through the board's
+/// feed handle — once the first page's row is on the bus, its reason
+/// derived at once: the swap and the `session-died` are handed to the feed
+/// thread as one command, queued behind the tick, so the death reaches the
+/// bus after the second page's row, never between the two, and the call
+/// answers once the swap ran — the entry gone from the table, its reason
+/// kept (the mutant that runs the swap on the call thread says the death
+/// mid-tick, ahead of a row the page then takes under a session it was
+/// told is dead).
+#[test]
+fn a_death_met_on_a_call_thread_is_swapped_by_the_feed_thread_after_its_rows() {
+    let fake = Arc::new(SlowPages { events: Mutex::new(Some(b"event: commit\ndata: {\"log_position\": 12}\n\n".to_vec())), delay: Duration::from_millis(400) });
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let session = session_of(&sessions, &entry, 1, "9f", 0);
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &sessions, &bus, &store));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seen: Vec<Event> = Vec::new();
+    while !seen.iter().any(|e| e.name == EventName::Feed && e.data["update"]["at"] == 11) {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(event) => seen.push(event),
+            Err(_) => panic!("the first page's row never reached the bus: {:?}", seen.iter().map(|e| e.name).collect::<Vec<_>>()),
+        }
+    }
+    let feed = threads.feed();
+    let reason = sessions.end(&session, &mut &feed, &bus);
+    assert_eq!(reason, json!({"arm": "restart", "reopened": false}), "{reason}");
+    seen.extend(rx.try_iter());
+    let order: Vec<String> = seen.iter().filter(|e| e.name == EventName::Feed || e.name == EventName::SessionDied).map(|e| if e.name == EventName::Feed { format!("feed {}", e.data["update"]["at"]) } else { e.name.to_string() }).collect();
+    assert_eq!(order, ["feed 11", "feed 12", "session-died"], "the death follows the tick's rows");
+    assert!(sessions.get(&session.reference).is_none(), "the call answered after the swap: the entry is gone");
+    assert_eq!(sessions.ended_reason(&session.reference), Some(reason), "and its reason kept");
+    threads.stop();
+}
+
+/// Checks that a death met once the feed thread has stopped still leaves the
+/// table and is said once.
+///
+/// The threads stopped, the call thread's end finds no feed thread to hand
+/// the swap to and runs it itself, with supplements that mount nothing: the
+/// call answers the reason at once, the entry is gone, its reason kept, and
+/// one `session-died` is on the bus (the mutant that returns from a failed
+/// hand-over leaves the dead session in the table, its death unsaid).
+#[test]
+fn a_death_met_once_the_feed_thread_has_stopped_still_leaves_the_table_and_is_said_once() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let (sessions, bus) = (Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))), Arc::new(EventBus::new()));
+    let rx = bus.subscribe();
+    let session = session_of(&sessions, &entry, 1, "9f", 0);
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &sessions, &bus, &store));
+    let feed = threads.feed();
+    threads.stop();
+    let started = Instant::now();
+    let reason = sessions.end(&session, &mut &feed, &bus);
+    assert!(started.elapsed() < Duration::from_secs(5), "answered at once, not after {:?}", started.elapsed());
+    assert_eq!(reason, json!({"arm": "restart", "reopened": false}), "{reason}");
+    assert!(sessions.get(&session.reference).is_none(), "the entry left the table");
+    assert_eq!(sessions.ended_reason(&session.reference), Some(reason), "its reason kept");
+    assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1, "the death is said once");
 }
 
 /// Checks that a principal's last session dying mid-read leaves no cursor.

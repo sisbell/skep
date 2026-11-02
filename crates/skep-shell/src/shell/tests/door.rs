@@ -171,6 +171,15 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": 1}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "x", "width": "1"}]}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "1.0.1.0.1.0.1.2", "width": 2}]}}), "anchors"),
+        // `changes`' two forms: `class` of another value or form, read before
+        // the session is looked up; `class` in the guest form and a guest
+        // `limit` of another form, each before the target is dialed; the
+        // guest form's `board` of another form.
+        ("changes", json!({"session": "s-x", "since": 0, "class": "published"}), "class"),
+        ("changes", json!({"session": "s-x", "since": 0, "class": 7}), "class"),
+        ("changes", json!({"guest": true, "origin": listener, "since": 0, "class": "drafts"}), "class"),
+        ("changes", json!({"guest": true, "origin": listener, "since": 0, "limit": "5"}), "limit"),
+        ("changes", json!({"guest": true, "board": 7, "since": 0}), "board"),
     ];
     for (call, args, member) in cases {
         let refused = shell.call(call, &args).unwrap_err();
@@ -224,7 +233,51 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 34, "the optional members of the fourteen rows of one form that declare any: the publication family's twelve among them, `publication.open`'s `also` included");
+    assert_eq!(asked, 33, "the optional members of the thirteen rows of one form that declare any: the publication family's twelve among them, `publication.open`'s `also` included");
+}
+
+/// Checks that an ended or another run's reference is answered its reason,
+/// and one never issued `session_ended`.
+///
+/// Two shells are two runs. A reference the first shell issued and closed
+/// is answered, at a later call, `session_died` with the `closed` arm (skep
+/// #532); a reference the first shell issued, standing or closed, is
+/// answered by the second `session_died` with the restart arm, not
+/// re-opened — a page that survived the shell's restart learns the cause
+/// (skep #625); a well-formed reference of the second shell's own run it
+/// never issued, one of the old form and plain text are each
+/// `session_ended`, the pin's stale-reference refusal; and a second close of
+/// a closed session is `session_ended` too, the close's own row unchanged
+/// (the mutants that answer every unknown reference `session_ended` leave
+/// the page unable to tell a restart from a typo; the one that reads any
+/// `s-` as another run's answers a typo with a restart).
+#[test]
+fn an_ended_or_another_runs_reference_is_answered_its_reason_and_one_never_issued_session_ended() {
+    let (dir, other) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (first, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let (second, _) = open_shell(&nowhere(), &other.path().join("store"), SessionMode::Bare { principal: 1 });
+    assert_ne!(first.sessions.run(), second.sessions.run(), "two shells are two runs");
+    let register = |shell: &Shell| -> String {
+        let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare };
+        let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 7 };
+        let board = shell.board_references().remove(0);
+        shell.sessions.register(&shell.boards[0], open, &mut shell.feed(&board)).reference.clone()
+    };
+    let (standing, closed) = (register(&first), register(&first));
+    assert_eq!(first.call("close", &json!({"session": closed})).unwrap(), json!({}));
+    let later = first.call("held", &json!({"session": closed})).unwrap_err().to_value();
+    assert_eq!((later["name"].as_str(), later["session"].as_str(), later["reason"].clone()), (Some("session_died"), Some(closed.as_str()), json!({"arm": "closed"})), "a later call on the closed reference learns the close: {later}");
+    for reference in [&standing, &closed] {
+        let restart = second.call("held", &json!({"session": reference})).unwrap_err().to_value();
+        assert_eq!((restart["name"].as_str(), restart["session"].as_str(), restart["reason"].clone()), (Some("session_died"), Some(reference.as_str()), json!({"arm": "restart", "reopened": false})), "another run's reference: {restart}");
+    }
+    let own_never_issued = format!("s-{}-{}", second.sessions.run(), "0".repeat(24));
+    for reference in [own_never_issued, format!("s-{}", "0".repeat(24)), "s-gone".to_string()] {
+        let refused = second.call("held", &json!({"session": reference})).unwrap_err();
+        assert_eq!(refused.name(), "session_ended", "{reference}: {refused}");
+    }
+    assert_eq!(first.call("close", &json!({"session": closed})).unwrap_err().name(), "session_ended", "a second close is the close's own refusal");
+    assert!(first.call("held", &json!({"session": standing})).is_ok(), "the standing session stands");
 }
 
 /// Checks that a guest search reads the board its reference or origin names.

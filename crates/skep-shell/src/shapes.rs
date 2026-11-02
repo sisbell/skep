@@ -84,8 +84,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "SessionOpened",
         open: false,
-        doc: "`session(board, principal)` — the session's opaque reference in the token's place; `writes` whether a write may go out under it: the signed mode's session writes, the bare mode's keyless one reads alone and has every write refused `write_in_bare_session`",
-        fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null"), req("writes", "boolean")],
+        doc: "`session(board, principal)` — the session's opaque reference in the token's place; `writes` whether a write may go out under it: the signed mode's session writes, the bare mode's keyless one reads alone and has every write refused `write_in_bare_session`; `opened_at` the board's position read before the session opened, where its drafts feed starts — the position a page keeps as its last drafts row's (`draftsAt`) until a row moves it, and reads `changes(session, since, class: 'drafts')` from after the session's end",
+        fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null"), req("writes", "boolean"), opt("opened_at", "number")],
     },
     Shape { name: "Keygen", open: false, doc: "`keygen({label?})` — the device key's fingerprint, its enrollment record, and the outstanding act", fields: &[req("fingerprint", "string"), req("payload", "string"), req("outstanding", "string")] },
     Shape { name: "FingerprintRow", open: false, doc: "`fingerprint({select?, payload?})` — one key of the store, its bindings, the pending state", fields: &[req("fingerprint", "string"), req("label", "string | null"), req("bindings", "string[]"), req("unbound", "boolean"), req("payload", "string | null")] },
@@ -116,7 +116,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "ChangesAnswer",
         open: false,
-        doc: "`changes(session, since, limit?)` — what changed since the position `since` at the session's class: the entries in the `feed` update's shape, oldest first, each `published` or `drafts` by the read that answered it (two reads, the published feed as a guest and the session's drafts supplement under its token, merged by position); `next` the position to ask from next time, past every entry answered and never past one withheld; `head` the board's latest position, read before the page",
+        doc: "`changes(session, since, limit?, class?)` and its guest form — what changed since the position `since`: the entries in the `feed` update's shape, oldest first, each `published` or `drafts` by the read that answered it — under a session two reads, the published feed as a guest and the session's drafts supplement under its token, merged by position; with `class: 'drafts'`, the one value the member takes, the drafts supplement's page alone (a page's read, from the session's `opened_at`, of the drafts rows an end cut off before it regained a session); as a guest, `{guest: true, board?, origin?, since, limit?}`, the published feed alone, token-free (no `class`); `next` the position to ask from next time, past every entry answered and never past one withheld; `head` the board's latest position, read before the page; the shell keeps no position — every form reads from `since`",
         fields: &[req("entries", "FeedUpdate[]"), req("next", "number"), req("head", "number")],
     },
     Shape {
@@ -140,7 +140,29 @@ const SHAPES: &[Shape] = &[
     Shape { name: "ShellRefusal", open: true, doc: "a refusal: the shell's own, its detail beside the name", fields: &[req("kind", "'shell'"), req("name", "string")] },
     Shape { name: "ModeEvent", open: false, doc: "`mode(board, …)` — the pair moved", fields: &[req("board", "string"), req("mode", "Mode"), req("claimant", "string | null"), req("local_trust", "boolean")] },
     Shape { name: "SessionDiedEvent", open: false, doc: "`session-died(session, reason)`", fields: &[req("session", "string"), req("reason", "DeathReason")] },
-    Shape { name: "DeathReason", open: true, doc: "the reason a death carries: its `arm`, the trigger it names, and the arm's own members beside it — the `retired` arm's `own` null where the fork on whose key retired it cannot be taken (no record read, a hand the read could not name, or the shell's key store unlisted beside another hand), its `position` the one read whatever the hand (AUTH-5.77's no-hand form)", fields: &[req("arm", "'closed' | 'mode' | 'retired' | 'seeded' | 'blocked' | 'restart' | 'unreachable'")] },
+    Shape {
+        name: "DeathReason",
+        open: true,
+        doc: "the reason a death carries: its `arm`, the trigger it names, and the arm's own members beside it, each declared here and present on its arm alone — the `restart` arm's `reopened`, with `session` the reference the shell re-opened silently in the dead one's place where it did, and `refused` the name of the re-open's refusal where one was tried and refused; the `mode` arm's `mode`, the pair the bare session died at the flip to; the `unreachable` arm's `text`; the `retired` arm's `fingerprint`, `own`, `hand`, `position` and `label` — `own` null where the fork on whose key retired it cannot be taken (no record read, a hand the read could not name, or the shell's key store unlisted beside another hand), its `position` the one read whatever the hand (AUTH-5.77's no-hand form); the `seeded` arm's `account`, `as_of` and `writer`; the `blocked` arm's `record` and `ground`; the `closed` arm carries nothing beside",
+        fields: &[
+            req("arm", "'closed' | 'mode' | 'retired' | 'seeded' | 'blocked' | 'restart' | 'unreachable'"),
+            opt("reopened", "boolean"),
+            opt("session", "string"),
+            opt("refused", "string"),
+            opt("mode", "Mode"),
+            opt("text", "string"),
+            opt("fingerprint", "string"),
+            opt("own", "boolean | null"),
+            opt("hand", "string | null"),
+            opt("position", "number | null"),
+            opt("label", "string | null"),
+            opt("account", "string"),
+            opt("as_of", "number"),
+            opt("writer", "string | null"),
+            opt("record", "string"),
+            opt("ground", "string | null"),
+        ],
+    },
     Shape { name: "DaemonEvent", open: false, doc: "`daemon(board, state)`", fields: &[req("board", "string"), req("state", "'running' | 'stopped' | 'unreachable'")] },
     Shape { name: "FeedEvent", open: false, doc: "`feed(board, update)`", fields: &[req("board", "string"), req("update", "FeedUpdate")] },
     Shape { name: "FeedUpdate", open: false, doc: "the `/changes` row verbatim, with `position` and `class` — THIS CRATE's definition of the update's shape, a `feed` event's `update` and a `changes` entry alike; a `drafts` row goes out once per session of its principal at the board, each event naming its own `session`", fields: &[req("position", "number"), req("at", "number"), req("op", "string | null"), req("docs", "string[] | null"), req("class", "'published' | 'drafts'"), opt("session", "string"), opt("key", "string | null"), opt("time", "number | null"), opt("attest", "{ alg: string; sig: string } | null"), opt("new_prefix", "string"), opt("new_id", "number"), opt("link", "string"), opt("placed", "string"), opt("base_extent", "string | null")] },
@@ -372,7 +394,14 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     },
     CallRow { name: "held", forms: &[&[req("session", "string")]], result: "HeldRow[]" },
     CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
-    CallRow { name: "changes", forms: &[&[req("session", "string"), req("since", "number"), opt("limit", "number")]], result: "ChangesAnswer" },
+    CallRow {
+        name: "changes",
+        forms: &[
+            &[req("session", "string"), req("since", "number"), opt("limit", "number"), opt("class", "'drafts'")],
+            &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("since", "number"), opt("limit", "number")],
+        ],
+        result: "ChangesAnswer",
+    },
 ];
 
 /// The publication family's closed unions, each a type alias the file

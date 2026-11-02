@@ -29,7 +29,7 @@ fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
         ("BoardRow", json!({"board": "b-0", "name": "http://127.0.0.1:8642", "origin": "http://127.0.0.1:8642"})),
-        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true})),
+        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true, "opened_at": 5})),
         ("Keygen", json!({"fingerprint": "ab", "payload": "{}", "outstanding": "x"})),
         ("FingerprintRow", json!({"fingerprint": "ab", "label": "phone", "bindings": [], "unbound": true, "payload": null})),
         ("Claimed", json!({"account": "1.0.1", "principal": 1, "fingerprint": "ab", "agent_space": "1.0.1.1", "display_name": null, "warnings": []})),
@@ -156,7 +156,9 @@ fn the_file_names_every_shape_call_and_event() {
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
         "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",
         "  places(args: { session: string; board?: string; opts?: PlacesOpts } | { guest: true; board?: string; origin?: string; opts?: PlacesOpts }): Promise<Outcome<PlacesAnswer>>;\n",
-        "  changes(args: { session: string; since: number; limit?: number }): Promise<Outcome<ChangesAnswer>>;\n",
+        "  changes(args: { session: string; since: number; limit?: number; class?: 'drafts' } | { guest: true; board?: string; origin?: string; since: number; limit?: number }): Promise<Outcome<ChangesAnswer>>;\n",
+        "  opened_at?: number;\n",
+        "  reopened?: boolean;\n",
         "export interface PlacesOpts { under?: string }\n",
         "export type OriginAnswer = 'publish_first' | 'drop' | 'keep_private' | 'counterpart';\n",
         "export type RowKind = 'own' | 'notes' | 'private' | { public: { read_with: boolean } };\n",
@@ -187,6 +189,50 @@ fn the_file_names_every_shape_call_and_event() {
     assert_eq!(open, 5, "the shell refusal, the death's reason, the index state, the publication's refusal and its event carry their own members");
     assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
+}
+
+/// The death's members are declared (skep #571): `session_died`'s `session`
+/// and `reason`, required; and every member each arm of the reason is built
+/// with — the restart arm's `reopened`, `session` and `refused` among them
+/// — a declared optional member of `DeathReason`, every declared member
+/// built by some arm, so a rename or a removal in the code alone, or in the
+/// table alone, fails here. And the `session` answer's `opened_at` is
+/// declared optional, a number.
+#[test]
+fn the_deaths_members_and_the_sessions_open_position_are_declared() {
+    let event = shape("SessionDiedEvent").unwrap();
+    assert_eq!(event.fields.iter().map(|f| (f.name, f.required)).collect::<Vec<_>>(), [("session", true), ("reason", true)]);
+    let reason = shape("DeathReason").unwrap();
+    assert_eq!(reason.fields.iter().filter(|f| f.required).map(|f| f.name).collect::<Vec<_>>(), ["arm"], "the arm alone is required");
+    let declared: BTreeSet<&str> = reason.fields.iter().filter(|f| !f.required).map(|f| f.name).collect();
+    let fp = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let arms = [
+        sessions::closed(),
+        sessions::unreachable_reason("connect: refused"),
+        sessions::mode_reason(skep_client::derive::Mode::Enforcing),
+        sessions::restart_reason(None, None),
+        sessions::restart_reason(Some("s-1"), None),
+        sessions::restart_reason(None, Some("busy")),
+        sessions::retired_reason(&fp, None, None),
+        sessions::seeded_reason("1.0.1.1", 9, Some("ab")),
+        sessions::blocked_reason("1.0.1.0.7.1", None),
+    ];
+    let mut built: BTreeSet<String> = BTreeSet::new();
+    for arm in &arms {
+        assert_declared("DeathReason", arm);
+        built.extend(keys(arm).into_iter().filter(|member| member != "arm"));
+    }
+    let built: BTreeSet<&str> = built.iter().map(String::as_str).collect();
+    assert_eq!(built, declared, "every member an arm is built with is declared, and none is declared that no arm builds");
+    for member in ["reopened", "session", "refused"] {
+        assert!(declared.contains(member), "the restart arm's `{member}` is declared");
+    }
+    let reopened = sessions::restart_reason(Some("s-1"), None);
+    assert_eq!((reopened["reopened"].as_bool(), reopened["session"].as_str(), reopened.get("refused")), (Some(true), Some("s-1"), None), "{reopened}");
+    let refused = sessions::restart_reason(None, Some("busy"));
+    assert_eq!((refused["reopened"].as_bool(), refused.get("session"), refused["refused"].as_str()), (Some(false), None, Some("busy")), "{refused}");
+    let opened_at = shape("SessionOpened").unwrap().fields.iter().find(|f| f.name == "opened_at").expect("`opened_at` is declared");
+    assert_eq!((opened_at.required, opened_at.ty), (false, "number"));
 }
 
 /// The board's `site` crosses with every member the wire names (skep #713).

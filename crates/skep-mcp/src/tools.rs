@@ -142,7 +142,7 @@ pub enum Tool {
     PublicationCancel,
     /// The apparatus: who this adapter acts as, and its session's facts.
     SessionInfo,
-    /// `changes(session, since, limit?)`, the shell's, as a pull tool.
+    /// `changes(session, since, limit?, class?)`, the shell's, as a pull tool.
     ChangesSince,
     /// `fetch(session, i)`, the shell's streamed call, as a content block.
     Fetch,
@@ -167,7 +167,7 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("publication_confirm", Tool::PublicationConfirm, &["switches", "answers"]),
     ("publication_cancel", Tool::PublicationCancel, &[]),
     ("session_info", Tool::SessionInfo, &[]),
-    ("changes_since", Tool::ChangesSince, &["since", "limit"]),
+    ("changes_since", Tool::ChangesSince, &["since", "limit", "class"]),
     ("fetch", Tool::Fetch, &["i"]),
 ];
 

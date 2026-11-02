@@ -22,7 +22,7 @@ only those above it (held by `tests/it/tidy.rs`):
 
 | module | holds |
 |---|---|
-| `refs` | the reference registry's NAMES: a board reference (`b-…`) and a session reference (`s-…`) minted from OS entropy per process, never a credential, never derived from an origin or a token (§4b.1, THE PIN); and `BoardEntry`, one board under the reference minted for it — the pair the shell, a board's feed thread, its holds and every session at it read whole |
+| `refs` | the reference registry's NAMES: a board reference (`b-…`) minted from OS entropy per process, and a session reference (`s-<run>-…`) minted under the RUN ID each shell opened mints (eight hex, held by its session table), so a shell restarted under a page tells a reference of its earlier run from one it never issued; never a credential, never derived from an origin or a token (§4b.1, THE PIN); and `BoardEntry`, one board under the reference minted for it — the pair the shell, a board's feed thread, its holds and every session at it read whole |
 | `log` | `Log`, the call log and the dial log the page's gate reads — sizes, routes and timing, never a token or a body, the latest `MAX_LOG_ENTRIES` kept — and `ShellDialer`, the one `PlainHttp` every board dials through, which dials nothing once the shell's stop stands |
 | `events` | `EventBus`: the seven events of §4b.2 as values, each named by an `EventName`, fanned out to every subscriber in order |
 | `refusal` | `Refusal`, the one refusal shape the page renders — the board's verdict verbatim, a halt's face, the block, the unreachable board, the shell's own — each named by a constant of `Name`, the one closed list |
@@ -32,10 +32,10 @@ only those above it (held by `tests/it/tidy.rs`):
 | `script` | the dev arm's SCRIPT: the grammar a script file's answers are parsed by, one per line in order |
 | `dev_arm` | `DevArm`, the answerer of the SECRET and CONSENT moments (§4b.3): a script's answers in order, or the auto arm, every answer said on TALK and never sent to the page, the NATIVE statements — those naming where key material rests — said there too |
 | `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones, and the NATIVE statements (`NATIVE_RULES`), sent to the dev arm — or, where the shell was opened with none (`ArmConfig::Refuse`, a client with no person present), the SECRET and CONSENT moments refused here, `person_required` naming the walk, the moment and its class, answered by no arm and no page, and the NATIVE statements said on TALK in the arm's place |
-| `sessions` | `Sessions`, the session table: each session's token beside the board it stands at, the two openings — bare, which reads alone (`SessionEntry::may_write`), and signed, which writes too — the attest a session's key signs, a session's end run once whichever caller met the death signal, under the key store the table holds, and a leaving session's drafts supplement released to another of its principal |
+| `sessions` | `Sessions`, the session table: each session's token beside the board it stands at, the two openings — bare, which reads alone (`SessionEntry::may_write`), and signed, which writes too — the attest a session's key signs; a session's END run once whichever caller met the death signal, under the key store the table holds: the reason derived with the entry standing and marked ENDING, so a call that arrives meanwhile waits and is answered `session_died`, never `session_ended`, and no drafts read, resend or release picks the dying token (`Sessions::on_board` leaves it out); then THE SWAP (`Sessions::swap`, one sequence) — the dying entry out of the table and the re-opened one in, the reference kept with its reason, `session-died`, the re-opened token widened or the supplement released to another session of the principal — run on the board's feed thread for a death a call met and inline for one the feed thread met; and a bounded ring of this run's ENDED references with their reasons (`ENDED_KEPT`), so a later call on an ended reference is answered its reason |
 | `hold` | `Holds`: the one path of every `/op` under a session that may write (`Holds::send`) — a burst's door (`Burst::admit`) and its hold among it — each answer read through the classification table (`classify`), and the per-(board, principal) queue over `held`'s file; `hold/resend.rs`, the probe and the resend walk — each document read once for its head's own landing alone, a move the board's verdict — its lines sent in `k` order across the documents under a session of the principal's that may write, never a bare one; and the SHIFT (skep #442), the one function the first dial and the resend call for a burst the board refuses as typed against an older state of its document: the page's anchors (`op`'s `anchors`, the identities on either side of the span the burst edits and, for a delete or a rearrange, of the units it holds, kept with the line) found in the document's current image by one live read, and where each anchor stands at one place with the span's own units between them every position the burst names moved by one displacement, the shifted frame written to the line before it is dialed and the burst sent again, each refusal a failed send of the line; a burst it cannot carry exactly — no anchors (an agent's), a delete or a rearrange without its span, an anchor lost or at two places, the span cut or refilled, the line's deadline passed — held as a moved document, the person's `send` on which (`Holds::resolve`) first raises its lines' bases to the position the board's verdict read through, written to the held file, so the read for each line's own landing starts past the rows the person acknowledged and a document moved again names only the hands since; and THE DEADLINE (`HAND_OVER_DEADLINE`), one per line, run on the wall clock from its first failed send, whatever the failure, a connection never made starting nothing: at it the next read that finds no landing hands the line to the person as a refused run under `answers_lost`, naming the last failure and the time elapsed, a code the table holds nowhere is handed over at once under the board's token, and the resend's "sent again" is said once per change of the failure; and THE HEAD THAT WILL NOT READ (skep #725–#728): one read of the board's head per probe, before any document (`sessions::board_head`, the one classifier the attest reads too — a garbled answer `head_unreadable`, never `unreachable`), its answer establishing the directory — the pending one while it fails, the board's own through the join once it reads — and skipping every document whose head line is held `head_unreadable` while it fails, no read and nothing said; the `held` event emitted once per change of a document's state and again where the join renumbered its lines; one `Talk` line at each change of the head's state; and `resolve(drop)` admitted on a line held `head_unreadable`, the write given up for good, `send` on it refused |
-| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call and the document index's listing `places`, the held-burst probe on its cadence; and `changes_since`, the one read behind the `changes` call, on the caller's thread |
-| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row — per `places`, the document index's listing at the call's class (A-255), and per `changes`, the change feed's page from a position at the session's class — behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; a write under a bare session, and its `resolve(send)`, refused before any dial (`write_in_bare_session`), and the `session` answer's `writes` saying so ahead of any write; `shell/ceremony.rs`, the ten ceremonial rows |
+| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call and the document index's listing `places`, the held-burst probe on its cadence, and the swap of a session a call thread ended, run between the thread's rows as one command (`Cmd::Ended`) so the death is said after the rows of the tick it fell in and before any row or face of the re-opened session, the call running it itself once the thread has stopped; and `changes_since`, the one read behind the `changes` call, on the caller's thread, in its three forms |
+| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row — per `places`, the document index's listing at the call's class (A-255), and per `changes`, the change feed's page from a position at the session's class, narrowed to its drafts, or as a guest — behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; a write under a bare session, and its `resolve(send)`, refused before any dial (`write_in_bare_session`), and the `session` answer's `writes` saying so ahead of any write, its `opened_at` the position its drafts feed starts at; a reference no live session stands under answered `session_died` with the reason kept, or with the restart arm where it names an earlier run of the shell, and `session_ended` where it names nothing; `shell/ceremony.rs`, the ten ceremonial rows |
 | `shapes` | `declarations()`, the TypeScript declaration file for every value that crosses the bridge, pinned by a round-trip of each type's sample |
 
 ## The `feed` update's shape
@@ -59,26 +59,40 @@ there.
 
 ## The `changes` call
 
-`changes(session, since, limit?)` → `{entries, next, head}`: what changed
-since the position `since`, at the session's class — the catch-up of a
-client that comes back to a board, whose `feed` events began at its
-connection. It is the board's change feed read TWICE from `since` and
+`changes(session, since, limit?, class?)` → `{entries, next, head}`, and
+its guest form `changes({guest: true, board?, origin?, since, limit?})`:
+what changed since the position `since` — the catch-up of a client that
+comes back to a board, whose `feed` events began at its connection. Under
+a session it is the board's change feed read TWICE from `since` and
 merged by position: the published feed as a guest, token-free, and the
 session's drafts supplement under its token (`drafts=true`), so each entry
 is a `FeedUpdate` with the `class` the `feed` event gives a row —
 `published` or `drafts`, the latter naming the `session` — which one plain
 read under the token could not tell apart; a position both reads answer (a
-straddle) is answered once, by the rendering naming more documents. The
-board's head is read first (`/health`), each read is one page bounded by
-`limit` and the wire's page budget (a page past it re-asked at the limit
-that fits), and the merged page is cut where either read's `more` stands,
-then to `limit`, so no position is skipped: `next` is the position to ask
-from next time — past every entry answered, never past one withheld, and
-at the head where both reads were complete, so a quiet board's next ask is
-the empty page at once. A draft the session may not read never appears:
-the gating is the board's. Its refusals: `malformed_args` naming `since`
-or `limit`, `session_ended`, the board's own (`history_reclaimed` with its
-floor, `malformed_changes`, `feed_rebuilding`), and `session_died`.
+straddle) is answered once, by the rendering naming more documents. With
+`class: "drafts"`, the member's one value, the session's drafts supplement
+is read ALONE under its token: the page's read, from the position its
+session opened at (`opened_at` on the `session` answer), of the drafts rows
+a session's end cut off before the page regained one — the published rows
+it took meanwhile are not read again. The guest form reads the published
+feed ALONE, token-free, at the board its reference or its canonical origin
+names (as `search` and `places` take it), so a page with no session reads
+the rows its event stream missed. The board's head is read first
+(`/health`), each read is one page bounded by `limit` and the wire's page
+budget (a page past it re-asked at the limit that fits), and the page is
+cut where a read's `more` stands, then to `limit`, so no position is
+skipped: `next` is the position to ask from next time — past every entry
+answered, never past one withheld, and at the head where every read was
+complete, so a quiet board's next ask is the empty page at once. The shell
+keeps no position: every form reads from the caller's `since`. A draft the
+session may not read never appears: the gating is the board's. Its
+refusals: `malformed_args` naming `since`, `limit` or `class` — another
+value, another form, or any `class` in the guest form — then the form's
+and the target's; `session_died` with the reason where the reference's
+session ended or names an earlier run of the shell, `session_ended` where
+it names nothing; the board's own (`history_reclaimed` with its floor,
+`malformed_changes`, `feed_rebuilding`); and `session_died` where the read
+met the death signal.
 
 ## The refusing arm
 

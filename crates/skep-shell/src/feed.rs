@@ -19,10 +19,21 @@
 //! thread: two threads per board, the `/events` stream's reader and the
 //! feed thread, each borrowing the board from the `Arc` it holds. A death
 //! signal this thread's reads meet ends the session by the one sequence the
-//! shell runs too (`Sessions::end`). A session the page closes is read once
-//! more here, to the board's head under its still-standing token, before
-//! its close answers ([`Feed::closing`]): every `feed` row of a session
-//! precedes its `session-died`, however far this thread trails the commits.
+//! shell runs too (`Sessions::end`), the swap it owes run inline, between
+//! this thread's rows. A death a CALL thread meets is derived there, and
+//! its swap — the table's two moves, the reason kept, `session-died`, the
+//! widen or the release — comes to this thread as one command
+//! ([`Cmd::Ended`]) through the board's handle ([`Feed`]'s `Supplements`)
+//! and runs between the rows it is queued behind, the call waiting for it:
+//! so the death is said after every row of the tick it fell in and before
+//! any row or face of the re-opened session, and no row goes out under a
+//! reference the page has not been told (skep #748, #703). Once this
+//! thread has stopped the call runs the swap itself, with supplements that
+//! mount nothing: a death still leaves the table and is still said, once. A
+//! session the page closes is read once more here, to the board's head
+//! under its still-standing token, before its close answers
+//! ([`Feed::closing`]): every `feed` row of a session precedes its
+//! `session-died`, however far this thread trails the commits.
 //! The board's held bursts are watched here too: each tick's `/health` read
 //! handed to the hold, which reads its `writes.halted`
 //! (`Holds::note_health`), and the probe (`Holds::probe`) on this thread
@@ -75,6 +86,12 @@
 //! caller's thread and not this one, each entry in the update's shape above
 //! with its class, bounded by the call's `limit` and the wire's page budget,
 //! and answered with the position to ask from next and the board's head.
+//! Three forms: under a session the two classes merged by position; under a
+//! session narrowed to the `drafts` class, the supplement's page alone — a
+//! page's read of the drafts rows a session's end cut off, from the position
+//! the session opened at (skep #740); and the guest form, the published feed
+//! alone, token-free (skep #749). The shell keeps no position: every form
+//! reads from the caller's `since`.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -98,7 +115,7 @@ use crate::events::{EventBus, EventName};
 use crate::hold::{Holds, PROBE_CADENCE};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{SessionEntry, Sessions, Supplements};
+use crate::sessions::{Ended, SessionEntry, Sessions, Supplements};
 use crate::Talk;
 
 /// Who reads a board's index, as it crosses to the feed thread.
@@ -150,6 +167,13 @@ enum Cmd {
     /// it and under every other session of its principal, then its
     /// supplement released; answered.
     Closing(Arc<SessionEntry>, Sender<()>),
+    /// A session a call thread ended: the swap its end owes.
+    ///
+    /// The swap (`Sessions::swap`) runs here, between the rows the command
+    /// is queued behind, with the feeder as the supplements — the dying entry
+    /// out of the table and the re-opened one in, the reason kept,
+    /// `session-died`, the widen or the release — and is answered.
+    Ended { ended: Ended, reply: Sender<()> },
     /// The probe handed over: run at the feed thread's next turn, unanswered.
     Probe,
     /// The bridge's search call.
@@ -248,7 +272,8 @@ impl Feed {
 /// The supplements as the shell reaches them, through a board's handle.
 ///
 /// Each widen and narrow is a command the board's feed thread runs — a
-/// shared handle, as `&File` is a `Write`.
+/// shared handle, as `&File` is a `Write` — and so is the swap a session's
+/// end owes, the call waiting for it.
 impl Supplements for &Feed {
     fn widen(&mut self, session: &Arc<SessionEntry>) {
         let _ = self.cmds.send(Cmd::Widen(Arc::clone(session)));
@@ -257,6 +282,35 @@ impl Supplements for &Feed {
     fn narrow(&mut self, principal: u64) {
         let _ = self.cmds.send(Cmd::Narrow(principal));
     }
+
+    /// Hands the swap to the board's feed thread as one command and waits.
+    ///
+    /// The feed thread runs it between its rows ([`Cmd::Ended`]), so the
+    /// death is said in order against them and the call answers after the
+    /// table moved. Where the thread has stopped — the send meets no
+    /// receiver, or the command is dropped unrun as the thread ends — the
+    /// swap runs here, with supplements that mount nothing: the death still
+    /// leaves the table and is still said, once.
+    fn ended(&mut self, sessions: &Sessions, ended: Ended, bus: &EventBus) {
+        let (reply, rx) = channel();
+        if self.cmds.send(Cmd::Ended { ended: ended.clone(), reply }).is_ok() && rx.recv().is_ok() {
+            return;
+        }
+        sessions.swap(ended, &mut Stopped, bus);
+    }
+}
+
+/// The supplements of a feed thread that has stopped: none to mount.
+///
+/// A swap run on a call thread after the thread stopped widens and narrows
+/// nothing — the consumer is closed — and still moves the table and says
+/// the death.
+struct Stopped;
+
+impl Supplements for Stopped {
+    fn widen(&mut self, _: &Arc<SessionEntry>) {}
+
+    fn narrow(&mut self, _: u64) {}
 }
 
 /// The commits not yet read.
@@ -473,6 +527,14 @@ impl<'b> Feeder<'b> {
                     sessions.release(&session.board_reference, session.facts.principal, &mut feeder);
                     let _ = reply.send(());
                 }
+                Ok(Cmd::Ended { ended, reply }) => {
+                    // The swap a call thread's end owes, run here between
+                    // the rows with the feeder as the supplements — the one
+                    // path the feed thread's own deaths take.
+                    let (sessions, bus) = (Arc::clone(&feeder.sessions), Arc::clone(&feeder.bus));
+                    feeder.ended(&sessions, ended, &bus);
+                    let _ = reply.send(());
+                }
                 Ok(Cmd::Probe) => {
                     feeder.holds.probe(&feeder.entry.reference);
                     next_probe = Instant::now() + PROBE_CADENCE;
@@ -588,7 +650,9 @@ impl<'b> Feeder<'b> {
 
     /// Ends `session` at a death signal met at this board on its token.
     ///
-    /// It runs the one sequence the shell runs too.
+    /// It runs the one sequence the shell runs too, the swap it owes inline
+    /// with this feeder as the supplements (`Supplements::ended`'s default):
+    /// this thread never sends itself a command.
     fn end(&mut self, session: &SessionEntry) {
         let (sessions, bus) = (Arc::clone(&self.sessions), Arc::clone(&self.bus));
         sessions.end(session, self, &bus);
@@ -816,10 +880,10 @@ fn update_of(row: &Value, class: UpdateClass<'_>) -> Value {
     update
 }
 
-/// What `changes(session, since, limit?)` answers: a page or the death signal.
+/// What a `changes` read answers: a page or the death signal.
 ///
 /// The death signal is met on the session's token, whose end is the
-/// caller's to run.
+/// caller's to run; the guest form, token-free, never meets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangesRead {
     /// The page.
@@ -841,27 +905,32 @@ pub struct CaughtUp {
     pub head: u64,
 }
 
-/// Reads what changed since `since` at `session`'s class: a `changes` page.
+/// Reads what changed since `since` at `board`: a `changes` page.
 ///
 /// It is the `changes` call's page (`CaughtUp`), the entries bounded by
-/// `limit`. Two reads, merged by position: the published feed as a guest,
-/// token-free, and the session's drafts supplement under its token, the
-/// `drafts=true` page — so each entry carries the `class` the `feed` event
-/// gives a row, `published` or `drafts`, which one plain read under the
-/// token could not tell apart; a position both reads answer (a straddle,
-/// PUB-6.47: a guest's `[T]` beside the supplement's `[D, T]`) is answered
-/// once, by the rendering naming more documents, the token's where they
-/// name as many (wire.md §The change feed, Narrowings: "deduplicating by
-/// position with the wider rendering winning"). The board's head is read
-/// first (`/health`, as the feed thread takes it); each read is one page
-/// from `since`, re-asked at the limit that `fits` where it passes the page
-/// budget; and the merged page is cut at the lower `last` of a read whose
-/// `more` stands, then to `limit` entries, so no position is skipped —
-/// `next` is that cut, or the last entry kept, or, both reads read to the
-/// head, the greater of their `last`s and the head read first, which a
-/// quiet board's next ask meets with the empty page at once (`since ≥
-/// head`). A draft the session may not read never appears: the gating is
-/// the board's, at the token's class.
+/// `limit`, in one of three forms (the module doc). Under a session, two
+/// reads merged by position: the published feed as a guest, token-free, and
+/// the session's drafts supplement under its token, the `drafts=true` page
+/// — so each entry carries the `class` the `feed` event gives a row,
+/// `published` or `drafts`, which one plain read under the token could not
+/// tell apart; a position both reads answer (a straddle, PUB-6.47: a
+/// guest's `[T]` beside the supplement's `[D, T]`) is answered once, by the
+/// rendering naming more documents, the token's where they name as many
+/// (wire.md §The change feed, Narrowings: "deduplicating by position with
+/// the wider rendering winning"). Under a session with `drafts_alone`, the
+/// supplement's page alone, under its token. With no session, the
+/// published feed alone, token-free — the guest form; `drafts_alone` names
+/// no page then, there being no token to read one under, and the shell
+/// refuses the pair before it is asked here. The board's head is read first
+/// (`/health`, as the feed thread takes it); each read is one page from
+/// `since`, re-asked at the limit that `fits` where it passes the page
+/// budget; and the page is cut at the lower `last` of a read whose `more`
+/// stands, then to `limit` entries, so no position is skipped — `next` is
+/// that cut, or the last entry kept, or, every read read to the head, the
+/// greater of their `last`s and the head read first, which a quiet board's
+/// next ask meets with the empty page at once (`since ≥ head`). A draft the
+/// session may not read never appears: the gating is the board's, at the
+/// token's class.
 ///
 /// # Errors
 ///
@@ -870,26 +939,30 @@ pub struct CaughtUp {
 /// (`malformed_changes` for a `limit` off the route's range,
 /// `feed_rebuilding`) and the unreachable board, as every read carries
 /// them; and a `/changes` answer the shell does not read, as a halt.
-pub fn changes_since(session: &SessionEntry, since: u64, limit: Option<u64>) -> Result<ChangesRead, Refusal> {
-    let board: &Board = &session.board;
+pub fn changes_since(board: &Board, session: Option<&SessionEntry>, drafts_alone: bool, since: u64, limit: Option<u64>) -> Result<ChangesRead, Refusal> {
     let head = board.health()?.log_position();
-    let published = match page_from(board, UpdateClass::Published, since, limit)? {
-        PageRead::Page(page) => page,
-        PageRead::Died => return Ok(ChangesRead::Died),
-    };
-    let drafts = match page_from(board, UpdateClass::Drafts(session), since, limit)? {
-        PageRead::Page(page) => page,
-        PageRead::Died => return Ok(ChangesRead::Died),
-    };
+    let mut pages: Vec<(ChangesPage, UpdateClass<'_>)> = Vec::new();
+    if session.is_none() || !drafts_alone {
+        match page_from(board, UpdateClass::Published, since, limit)? {
+            PageRead::Page(page) => pages.push((page, UpdateClass::Published)),
+            PageRead::Died => return Ok(ChangesRead::Died),
+        }
+    }
+    if let Some(session) = session {
+        match page_from(board, UpdateClass::Drafts(session), since, limit)? {
+            PageRead::Page(page) => pages.push((page, UpdateClass::Drafts(session))),
+            PageRead::Died => return Ok(ChangesRead::Died),
+        }
+    }
     // Merged by position, the wider rendering winning — the token's on a
     // tie, read second.
     let docs_named = |update: &Value| update["docs"].as_array().map_or(0, Vec::len);
     let mut by_position: BTreeMap<u64, Value> = BTreeMap::new();
-    for (page, class) in [(&published, UpdateClass::Published), (&drafts, UpdateClass::Drafts(session))] {
+    for (page, class) in &pages {
         for row in &page.changes {
             // A row with no `at` is no row of the wire's: nothing places it.
             let Some(at) = row["at"].as_u64() else { continue };
-            let update = update_of(row, class);
+            let update = update_of(row, *class);
             match by_position.entry(at) {
                 Entry::Vacant(v) => {
                     v.insert(update);
@@ -903,9 +976,9 @@ pub fn changes_since(session: &SessionEntry, since: u64, limit: Option<u64>) -> 
         }
     }
     // The cut: where a read's `more` stands, nothing past its `last` is
-    // answered, since the other read may hold a position between.
+    // answered, since another read may hold a position between.
     let covered = |page: &ChangesPage| if page.more { page.last } else { u64::MAX };
-    let cut = covered(&published).min(covered(&drafts));
+    let cut = pages.iter().map(|(page, _)| covered(page)).min().unwrap_or(u64::MAX);
     let mut entries: Vec<Value> = by_position.into_iter().filter(|(at, _)| *at <= cut).map(|(_, update)| update).collect();
     let cap = limit.map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
     let next = if entries.len() > cap {
@@ -914,7 +987,7 @@ pub fn changes_since(session: &SessionEntry, since: u64, limit: Option<u64>) -> 
     } else if cut < u64::MAX {
         cut
     } else {
-        published.last.max(drafts.last).max(head)
+        pages.iter().map(|(page, _)| page.last).max().unwrap_or(since).max(head)
     };
     Ok(ChangesRead::Page(CaughtUp { entries, next, head }))
 }

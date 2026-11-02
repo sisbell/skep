@@ -11,8 +11,9 @@
 //! `search` (A-255) — each taking the row's input as a value and answering
 //! the row's output or a [`Refusal`] under the row's armed name, the board's
 //! own refusals carried verbatim — and of `changes`, the change feed's page
-//! from a position at the session's class, read for a client that comes back
-//! to a board. The row methods are this module's alone behind one door,
+//! from a position at the session's class, or narrowed to its drafts, or as
+//! a guest the published feed's, read for a client that comes back to a
+//! board. The row methods are this module's alone behind one door,
 //! [`Shell::call`], which dispatches on the bridge's spelling — one arm per
 //! call, the compiler holding the match exhaustive — and logs every call, so
 //! no call reaches a row past the log; [`Shell::fetch`] alone is public
@@ -25,8 +26,12 @@
 //! arm the run named ([`ArmConfig`]) — or, under [`ArmConfig::Refuse`], the
 //! setting of a client with no person present, are refused `person_required`
 //! and answered by nothing. A death signal a call meets ends the session by
-//! the one sequence the board's feed thread runs too (`Sessions::end`), and
-//! the call answers `session_died` with the reason that sequence derived.
+//! the one sequence the board's feed thread runs too (`Sessions::end`) — the
+//! reason derived on the call's thread, the swap and the `session-died` run
+//! on the board's feed thread — and the call answers `session_died` with the
+//! reason that sequence derived; a later call on the ended reference, or on
+//! one of an earlier run of the shell, is answered `session_died` too, with
+//! the reason kept or the restart arm ([`Shell::session`]).
 //! The four `publication` rows — the panel, the four numbers, the one
 //! request composed, signed and sent, the cancel — are the child module
 //! `publication`'s, `pub(super)` to the door, with the panels they stand on.
@@ -87,7 +92,7 @@ use crate::held::Anchors;
 use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::{Answerer, Pending};
-use crate::refs::BoardEntry;
+use crate::refs::{session_run, BoardEntry};
 use crate::refusal::{Name, Refusal};
 use crate::script;
 use crate::sessions::{self, SessionEntry, Sessions};
@@ -812,21 +817,49 @@ impl Shell {
 
     /// Returns the session a reference names.
     ///
+    /// A session whose end is under way is found too: the call dials under
+    /// it, meets the death and waits on its end, answered the reason.
+    ///
     /// # Errors
     ///
-    /// Returns `malformed_args` naming `session` where the reference is no
-    /// string, and the pin's "session ended", `session_ended`, where this
-    /// shell holds no session under it.
+    /// In this order: `malformed_args` naming `session` where the reference
+    /// is no string; then, where this shell holds no live session under it,
+    /// `session_died` `{session, reason}` where this run ended it — the
+    /// death's reason as derived, `reason.session` the re-opened reference
+    /// where the restart arm re-opened one, or the `closed` arm for the
+    /// page's own close (skep #532); `session_died` with the restart arm, not
+    /// re-opened, for a well-formed reference of another run of the shell —
+    /// one from before its restart (skep #625); and the pin's "session
+    /// ended", `session_ended`, for any other: a reference this run dropped
+    /// from its ring of ended ones, or never issued.
     fn session(&self, session_reference: &Value) -> Result<Arc<SessionEntry>, Refusal> {
         let Some(session_reference) = session_reference.as_str() else { return Err(Refusal::malformed("session")) };
-        self.sessions.get(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))
+        self.sessions.get(session_reference).ok_or_else(|| self.session_gone(session_reference))
+    }
+
+    /// Returns the refusal of a reference no live session stands under.
+    ///
+    /// It is [`Shell::session`]'s three arms, in its order: the reason this
+    /// run kept, the restart arm for another run's reference, `session_ended`
+    /// for the rest.
+    fn session_gone(&self, session_reference: &str) -> Refusal {
+        if let Some(reason) = self.sessions.ended_reason(session_reference) {
+            return Refusal::shell(Name::SESSION_DIED, json!({"session": session_reference, "reason": reason}));
+        }
+        if session_run(session_reference).is_some_and(|run| run != self.sessions.run()) {
+            return Refusal::shell(Name::SESSION_DIED, json!({"session": session_reference, "reason": sessions::restart_reason(None, None)}));
+        }
+        Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference}))
     }
 
     /// Ends `session`, whose token met the death signal at a call.
     ///
     /// The signal was met at one of the shell's calls; the session is ended
     /// by the one sequence the board's feed thread runs too, whichever caller
-    /// came first, and the call's refusal, carrying the reason, is returned.
+    /// came first — the reason derived here, the swap and the `session-died`
+    /// handed to the board's feed thread through its handle and waited for
+    /// (`feed`'s `Cmd::Ended`) — and the call's refusal, carrying the reason,
+    /// is returned.
     fn died(&self, session: &SessionEntry) -> Refusal {
         let reason = self.sessions.end(session, &mut self.feed(&session.board_reference), &self.bus);
         Refusal::shell(Name::SESSION_DIED, json!({"session": session.reference, "reason": reason}))
@@ -901,12 +934,15 @@ impl Shell {
 
     /// Answers `session(board, principal)`: the mode's opening as `principal`.
     ///
-    /// It answers `{session, principal, account, writes}`: the reference
-    /// issued in the token's place, and `writes` — whether a write may go out
-    /// under it ([`SessionEntry::may_write`]): the signed mode's session
-    /// writes, the bare mode's keyless one reads alone and has every write
-    /// refused `write_in_bare_session`, which the page learns here, before it
-    /// offers one.
+    /// It answers `{session, principal, account, writes, opened_at}`: the
+    /// reference issued in the token's place; `writes` — whether a write may
+    /// go out under it ([`SessionEntry::may_write`]): the signed mode's
+    /// session writes, the bare mode's keyless one reads alone and has every
+    /// write refused `write_in_bare_session`, which the page learns here,
+    /// before it offers one; and `opened_at`, the board's position read
+    /// before the session opened ([`SessionEntry::opened_at`]), where the
+    /// session's drafts feed starts — the position a page's drafts-only
+    /// `changes` read starts from after the session's end (skep #740).
     ///
     /// # Errors
     ///
@@ -929,7 +965,7 @@ impl Shell {
         // and its daemon-running tick drive it once a session that may write
         // stands (§3c.5).
         self.holds.open_session(&session);
-        Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write()}))
+        Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write(), "opened_at": session.opened_at}))
     }
 
     /// Answers `close(session)` with `{}`: the session out of the table.
@@ -1371,38 +1407,71 @@ impl Shell {
         Ok(json!({}))
     }
 
-    /// Answers `changes(session, since, limit?)` with `{entries, next, head}`.
+    /// Answers `changes(session, since, limit?, class?)`, and its guest form,
+    /// with `{entries, next, head}`.
     ///
-    /// It is the board's change feed from the position `since`, read at the
-    /// session's class — the published feed token-free, the drafts
-    /// supplement under its token (`feed::changes_since`) — what a client
-    /// that comes back to a board missed: each entry in the `feed`
-    /// event's update shape, `published` or `drafts` by the read that
-    /// answered it, oldest first, bounded by `limit` and the wire's page
-    /// budget; `next` the position to ask from next time, past every entry
-    /// answered and never past one withheld; `head` the board's latest
-    /// position, its own `/health` read, taken before the page. A draft the
-    /// session may not read never appears: the gating is the board's, at the
-    /// token's class. The read is one call's, on the caller's thread: the
-    /// board's feed thread keeps its own cursors and is not asked.
+    /// It is the board's change feed from the position `since`
+    /// (`feed::changes_since`) — what a client that comes back to a board
+    /// missed: each entry in the `feed` event's update shape, oldest first,
+    /// bounded by `limit` and the wire's page budget; `next` the position to
+    /// ask from next time, past every entry answered and never past one
+    /// withheld; `head` the board's latest position, its own `/health` read,
+    /// taken before the page. The session form reads at the session's class
+    /// — the published feed token-free and the drafts supplement under its
+    /// token, merged by position, each entry `published` or `drafts` by the
+    /// read that answered it — or, with `class: "drafts"`, the one value the
+    /// member takes, the drafts supplement alone: the page's read, from the
+    /// position its session opened at (`opened_at` on the `session` answer),
+    /// of the drafts rows a session's end cut off before it regained one
+    /// (skep #740). The guest form `{guest: true, board?, origin?, since,
+    /// limit?}` reads the published feed alone, token-free, at the board its
+    /// reference or its canonical origin names ([`Shell::guest_target`], as
+    /// `search` and `places` take it; skep #749). A draft the session may
+    /// not read never appears: the gating is the board's, at the token's
+    /// class. The read is one call's, on the caller's thread: the board's
+    /// feed thread keeps its own cursors and is not asked, and the shell
+    /// keeps no position of the page's — every form reads from `since`.
     ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `since` where it is no
     /// non-negative integer, then `limit` where one is given in another
-    /// form; `malformed_args` naming `session`, then `session_ended`; the
-    /// board's own — `history_reclaimed` with its floor where `since` lies
-    /// below the feed's memory, `malformed_changes` for a `limit` off the
-    /// route's range, `feed_rebuilding` — and `unreachable`; `session_died`
-    /// where the read met the death signal, the session ended by the one
-    /// sequence.
+    /// form, then `class` where one is given and is not the string
+    /// `"drafts"`; the form's (`guest_form`); in the guest form,
+    /// `malformed_args` naming `class` where one is given — no token to read
+    /// a drafts page under — then the target's (`unknown_board`,
+    /// `not_canonical`, `malformed_args`); in the session form
+    /// `malformed_args` naming `session`, then `session_died` or
+    /// `session_ended` ([`Shell::session`]); the board's own —
+    /// `history_reclaimed` with its floor where `since` lies below the feed's
+    /// memory, `malformed_changes` for a `limit` off the route's range,
+    /// `feed_rebuilding` — and `unreachable`; `session_died` where the read
+    /// met the death signal, the session ended by the one sequence.
     fn changes(&self, args: &Value) -> Result<Value, Refusal> {
         let since = args["since"].as_u64().ok_or_else(|| Refusal::malformed("since"))?;
         let limit = optional(args, "limit", Value::as_u64)?;
-        let session = self.session(&args["session"])?;
-        match changes_since(&session, since, limit)? {
+        let drafts_alone = optional(args, "class", |v| v.as_str().filter(|class| *class == "drafts"))?.is_some();
+        let (board, session) = if guest_form(args)? {
+            if drafts_alone {
+                return Err(Refusal::malformed("class"));
+            }
+            (self.guest_board(args)?, None)
+        } else {
+            let session = self.session(&args["session"])?;
+            (Arc::clone(&session.board), Some(session))
+        };
+        match changes_since(&board, session.as_deref(), drafts_alone, since, limit)? {
             ChangesRead::Page(page) => Ok(json!({"entries": page.entries, "next": page.next, "head": page.head})),
-            ChangesRead::Died => Err(self.died(&session)),
+            ChangesRead::Died => Err(match &session {
+                Some(session) => self.died(session),
+                // A token-free read meets no death signal: an answer the
+                // shell does not read, faced as `feed::page_from` faces one.
+                None => Refusal::from(Halt::face(
+                    "the board answered a guest's `/changes` with the death signal, which no token-free read meets".to_string(),
+                    "`skep-client` read a `/changes` answer this shell does not carry for the guest form",
+                    "report it: the shell's `changes` row is behind the library",
+                )),
+            }),
         }
     }
 

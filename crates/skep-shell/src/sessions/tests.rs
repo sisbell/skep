@@ -1,9 +1,13 @@
 //! The session table, a session's end and the reason its end carries.
 //!
-//! The suite checks a session registered under a fresh reference, beside the
-//! board it stands at; its end run once whichever caller meets the death — a
-//! second caller answering the first's reason, two callers at once one
-//! derivation, a caller that panics mid-end leaving the end to the next — and a
+//! The suite checks a session registered under a fresh reference naming the
+//! table's run, beside the board it stands at; its end run once whichever
+//! caller meets the death — a second caller answering the first's reason,
+//! two callers at once one derivation, a call racing the end finding the
+//! entry standing and marked ending and answering the reason, a caller that
+//! panics mid-end leaving the end to the next — the swap's order, the table
+//! moved and the reason kept before the death is said, and the ended
+//! references kept with their reasons, the newest `ENDED_KEPT`; and a
 //! signed session's death read off its set and its account, the retirement
 //! ahead of the genesis, its hand this store's own only where that can be said,
 //! and a retirement read naming the position it read whatever its hand; a
@@ -108,12 +112,15 @@ fn the_table_registers_sessions_under_fresh_references() {
     assert!(!Facts { principal: 3, account: Some("1.0.1.1".into()), kind: SessionKind::Bare }.by_reference());
 }
 
-/// THE END, ONCE: the first `end` takes the session out of the table,
-/// derives the reason (the arm of the board that does not answer), emits
-/// one `session-died` and narrows; a second `end` of the same death
-/// answers the same reason and does nothing else; nothing is left to
-/// `close`. A session closed first is closed once, and a death met after
-/// the close answers the reason the page's own close carries.
+/// THE END, ONCE: the first `end` derives the reason (the arm of the board
+/// that does not answer) with the entry standing, then — the fake's
+/// supplements running the swap inline, as the feed thread's own do — takes
+/// the session out of the table, keeps its reason, emits one
+/// `session-died` and narrows; a second `end` of the same death answers the
+/// same reason and does nothing else; nothing is left to `close`. A session
+/// closed first is closed once, its reason the `closed` arm kept, and a
+/// death met after the close answers the reason the page's own close
+/// carries.
 #[test]
 fn a_session_ends_once_and_a_second_caller_answers_the_first_reason() {
     let (board, sessions, bus) = (nowhere(), Sessions::new(None, Arc::new(|_: &str| {})), EventBus::new());
@@ -122,7 +129,8 @@ fn a_session_ends_once_and_a_second_caller_answers_the_first_reason() {
     let entry = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     let reason = sessions.end(&entry, &mut supplements, &bus);
     assert_eq!(reason["arm"], "unreachable", "{reason}");
-    assert!(sessions.get(&entry.reference).is_none());
+    assert!(sessions.get(&entry.reference).is_none(), "the entry left the table at the swap");
+    assert_eq!(sessions.ended_reason(&entry.reference), Some(reason.clone()), "its reason is kept");
     let died: Vec<_> = rx.try_iter().collect();
     assert_eq!(died.len(), 1);
     assert_eq!((died[0].name, died[0].data["session"].as_str()), (EventName::SessionDied, Some(entry.reference.as_str())));
@@ -136,8 +144,157 @@ fn a_session_ends_once_and_a_second_caller_answers_the_first_reason() {
     let closed_first = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     assert!(sessions.close(&closed_first.reference).is_some());
     assert!(sessions.close(&closed_first.reference).is_none(), "closed once");
+    assert_eq!(sessions.ended_reason(&closed_first.reference), Some(closed()), "a close is kept with its own arm");
     assert_eq!(sessions.end(&closed_first, &mut supplements, &bus), closed(), "a death met after the close answers its reason");
     assert!(rx.try_recv().is_err());
+}
+
+/// A call racing an end finds the ENDING entry and answers its reason.
+///
+/// The first caller derives the reason on a dial the test holds at its
+/// gate: while it runs the entry stands in the table, found by reference —
+/// so a call that arrives dials under it, meets the death and is answered
+/// `session_died` with the reason, never `session_ended` (skep #626) —
+/// marked ending, and listed at its board by nothing, so no drafts read,
+/// no resend and no release picks the dying token (skep #530); a second
+/// caller, as that call's `died` runs, waits on the lock and answers the
+/// same reason. The gate let go, the reason was derived once, one
+/// `session-died` went out, the entry has left the table and its reason is
+/// kept for a later call (the mutant that removes the entry before deriving
+/// answers the racing call `session_ended`; the one that lists an ending
+/// entry hands its dead token to the resend).
+#[test]
+fn a_call_racing_an_end_finds_the_ending_entry_and_answers_its_reason() {
+    let (entered, at_the_dial) = channel();
+    let gated = Arc::new(Gated { calls: AtomicUsize::new(0), entered: Mutex::new(entered), gate: (Mutex::new(false), Condvar::new()) });
+    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&gated)));
+    let (sessions, bus) = (Sessions::new(None, Arc::new(|_: &str| {})), EventBus::new());
+    let rx = bus.subscribe();
+    let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+    let standing = sessions.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+    assert!(!entry.is_ending());
+    // Every fact is gathered while the dial is held, and the gate is let go
+    // before any of them is judged, so a mutant fails here rather than
+    // hanging the scope on a thread the gate never frees.
+    let (first, found, listed, kept, racing) = thread::scope(|s| {
+        let first = s.spawn(|| sessions.end(&entry, &mut Recorded::default(), &bus));
+        at_the_dial.recv().unwrap();
+        let found = sessions.get(&entry.reference);
+        let listed: Vec<String> = sessions.on_board("b-1").iter().map(|s| s.reference.clone()).collect();
+        let kept = sessions.ended_reason(&entry.reference);
+        let (table, stream) = (&sessions, &bus);
+        let racing = found.clone().map(|found| s.spawn(move || table.end(&found, &mut Recorded::default(), stream)));
+        thread::sleep(Duration::from_millis(50));
+        *gated.gate.0.lock().unwrap() = true;
+        gated.gate.1.notify_all();
+        (first.join().unwrap(), found, listed, kept, racing.map(|r| r.join().unwrap()))
+    });
+    let found = found.expect("a call finds the ending entry");
+    assert!(Arc::ptr_eq(&found, &entry) && found.is_ending(), "the entry stands, marked ending");
+    assert_eq!(listed, [standing.reference.clone()], "the ending entry is listed at its board by nothing");
+    assert_eq!(kept, None, "not ended while the reason is derived");
+    assert_eq!(first["arm"], "unreachable", "{first}");
+    assert_eq!(racing, Some(first.clone()), "the racing call answers the reason, never `session_ended`");
+    assert_eq!(gated.calls.load(Ordering::SeqCst), 1, "the reason was derived once");
+    assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
+    assert!(sessions.get(&entry.reference).is_none(), "the entry left the table at the swap");
+    assert_eq!(sessions.ended_reason(&entry.reference), Some(first), "its reason is kept");
+}
+
+/// The supplements a test shares with a watcher on the bus: each widen and
+/// narrow logged beside what the watcher saw at the emit.
+struct Logged(Arc<Mutex<Vec<String>>>);
+
+impl Supplements for Logged {
+    fn widen(&mut self, session: &Arc<SessionEntry>) {
+        self.0.lock().unwrap().push(format!("widen {}", session.reference));
+    }
+
+    fn narrow(&mut self, principal: u64) {
+        self.0.lock().unwrap().push(format!("narrow {principal}"));
+    }
+}
+
+/// THE SWAP's ORDER: the dying entry leaves and the re-opened one enters,
+/// the dying reference is kept with its reason, `session-died` goes out,
+/// then the re-opened token is widened — or, with no re-open, the
+/// supplement released: narrowed where no session of the principal stands.
+/// A watcher on the bus reads the table at the emit — the dying entry gone,
+/// the re-opened one found, the reason kept, all before the death is said
+/// — and the widen or the narrow is logged after it (the mutant that emits
+/// before entering lets a feed thread's row go out under a reference the
+/// page was not told; the one that keeps the reason after the emit answers
+/// a call between them `session_ended`; the one that widens first mounts
+/// the token before the page knows the reference).
+#[test]
+fn the_swap_moves_the_table_and_keeps_the_reason_before_the_death_is_said_then_widens_or_releases() {
+    let (board, sessions) = (nowhere(), Arc::new(Sessions::new(None, Arc::new(|_: &str| {}))));
+    for reopens in [true, false] {
+        let bus = EventBus::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let dying = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut Logged(Arc::clone(&log)));
+        let reopened = reopens.then(|| sessions.fresh("b-1", Arc::clone(&board), signed_open(1, "1.0.1", "1.0.1")));
+        assert!(reopened.as_ref().is_none_or(|r| sessions.get(&r.reference).is_none()), "built, not entered");
+        log.lock().unwrap().clear();
+        let reason = restart_reason(reopened.as_ref().map(|r| r.reference.as_str()), None);
+        let (seen, watched) = (Arc::clone(&log), Arc::clone(&sessions));
+        let at_emit = (dying.reference.clone(), reopened.as_ref().map(|r| r.reference.clone()), reason.clone());
+        bus.watch(move |_, event| {
+            let (dying, reopened, reason) = &at_emit;
+            let entered = reopened.as_ref().is_none_or(|r| watched.get(r).is_some());
+            let kept = watched.ended_reason(dying).as_ref() == Some(reason);
+            seen.lock().unwrap().push(format!("emit {} {} dying_gone={} entered={} kept={}", event.name, event.data["session"].as_str().unwrap_or("?"), watched.get(dying).is_none(), entered, kept));
+        });
+        sessions.swap(Ended { dying: Arc::clone(&dying), reopened: reopened.clone(), reason }, &mut Logged(Arc::clone(&log)), &bus);
+        let after = match &reopened {
+            Some(r) => format!("widen {}", r.reference),
+            None => "narrow 1".to_string(),
+        };
+        assert_eq!(*log.lock().unwrap(), [format!("emit session-died {} dying_gone=true entered=true kept=true", dying.reference), after], "reopens {reopens}");
+        if let Some(r) = &reopened {
+            assert!(sessions.close(&r.reference).is_some(), "the re-opened session stands after the swap");
+        }
+        assert_eq!(sessions.len(), 0, "reopens {reopens}");
+    }
+}
+
+/// THE ENDED RING is bounded: the newest `ENDED_KEPT` ended references keep
+/// their reasons and the oldest is dropped — a close's kept with the
+/// `closed` arm, a reference dropped or never issued answered none (the
+/// mutant that keeps every ended reference grows a desktop shell's table
+/// for days; the one that drops the newest forgets the reference a call
+/// is about to name).
+#[test]
+fn the_ended_ring_keeps_the_newest_references_with_their_reasons() {
+    let (board, sessions) = (nowhere(), Sessions::new(None, Arc::new(|_: &str| {})));
+    let references: Vec<String> = (0..=ENDED_KEPT)
+        .map(|_| {
+            let entry = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+            assert!(sessions.close(&entry.reference).is_some());
+            entry.reference.clone()
+        })
+        .collect();
+    assert_eq!((references.len(), sessions.len()), (ENDED_KEPT + 1, 0));
+    assert_eq!(sessions.ended_reason(&references[0]), None, "the oldest is dropped");
+    for reference in &references[1..] {
+        assert_eq!(sessions.ended_reason(reference), Some(closed()), "{reference}");
+    }
+    assert_eq!(sessions.ended_reason("s-never"), None);
+}
+
+/// Every reference a table mints names the table's run: `s-`, the run's
+/// eight hex, `-`, twenty-four of its own; two tables are two runs (the
+/// mutant that mints the old form leaves a restarted shell unable to tell
+/// an earlier run's reference from one it never issued).
+#[test]
+fn every_reference_names_the_tables_run() {
+    let (one, two) = (Sessions::new(None, Arc::new(|_: &str| {})), Sessions::new(None, Arc::new(|_: &str| {})));
+    assert_ne!(one.run(), two.run());
+    for table in [&one, &two] {
+        let entry = table.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+        assert!(entry.reference.starts_with(&format!("s-{}-", table.run())), "{}", entry.reference);
+        assert_eq!(crate::refs::session_run(&entry.reference), Some(table.run()), "{}", entry.reference);
+    }
 }
 
 /// ONE SUPPLEMENT PER PRINCIPAL: a session that ends hands its

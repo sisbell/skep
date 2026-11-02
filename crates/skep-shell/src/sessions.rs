@@ -29,16 +29,50 @@
 //! the shell, when a call's token answers `Skepd-Session: closed`, and the
 //! board's feed thread, when its consumer's read or a drafts page does — and
 //! both run the one sequence here, so the reason is derived once, the
-//! restart arm's re-open is registered whichever caller met it — at the
-//! dying session's board, under the key store the table holds for it — and
-//! one `session-died` goes out. The entry's `OnceLock` is the gate: the
-//! caller whose initializer runs ends the session, a caller that comes while
-//! it runs waits and answers that reason, and a caller that panics mid-end
-//! leaves the cell unset for the next to take the end over. A caller here is
-//! the code that meets the death; a hand is the corpus's, the writer of a
-//! record or a row (§3c.5, §4b.2), as the arm below names a retirement's. An
-//! entry leaves the table by that sequence or by a close — the page's own,
-//! or the shell's stop ([`Sessions::close`]) — and no other way.
+//! restart arm's re-open is made whichever caller met it — at the dying
+//! session's board, under the key store the table holds for it — and one
+//! `session-died` goes out. The entry's `OnceLock` is the gate: the caller
+//! whose initializer runs ends the session, a caller that comes while it
+//! runs waits and answers that reason, and a caller that panics mid-end
+//! leaves the cell unset for the next to take the end over. In that
+//! initializer the entry STANDS IN THE TABLE, marked ENDING first
+//! ([`SessionEntry::is_ending`]), while its reason is derived from public
+//! reads: a call that arrives meanwhile finds it ([`Sessions::get`]), dials,
+//! meets the death and waits on the lock, answered `session_died` with the
+//! reason and never `session_ended` (skep #626); and no read, resend or
+//! release picks it, since [`Sessions::on_board`] leaves an ending entry out
+//! — a resend under a dead token (skep #530) and a drafts read under one are
+//! never made. On the restart arm the re-opened session is built there —
+//! its reference minted, named in the reason as `session` — and NOT
+//! entered. What the initializer leaves is the swap it owes ([`Ended`]).
+//!
+//! **The swap, on the feed thread** ([`Supplements::ended`],
+//! [`Sessions::swap`]). The caller that ended the session hands the swap to
+//! its supplements: the dying entry leaves the table, the re-opened one
+//! enters, the dying reference's reason is kept, `session-died` goes out
+//! with it, and the re-opened token is widened or the supplement released
+//! ([`Sessions::release`]) — one sequence, in that order, the table's two
+//! moves and the keep under one lock. A call thread's supplements are the
+//! board's feed handle, which sends the swap to the board's FEED THREAD as
+//! one command ordered against its rows and waits for it, so the death is
+//! said after every row of the tick it fell in and before any row or face of
+//! the re-opened session (skep #748, #703); the feed thread's own path runs
+//! it inline, between its rows; and where the feed thread has stopped the
+//! caller runs it itself, so every death leaves the table and is said once.
+//! A caller is the code that meets the death; a hand is the corpus's, the
+//! writer of a record or a row (§3c.5, §4b.2), as the arm below names a
+//! retirement's. An entry leaves the table by that swap or by a close — the
+//! page's own, or the shell's stop ([`Sessions::close`]) — and no other way.
+//!
+//! **The ended references and the run** ([`Sessions::ended_reason`]). The
+//! table keeps a bounded ring of this run's ended references with their
+//! reasons — the swap's dying reference with the reason derived, a close's
+//! with its own arm — the newest [`ENDED_KEPT`] of them, so a call that
+//! names a reference after its end is answered `session_died` with the
+//! reason, the re-opened reference among its members where one was (skep
+//! #532). Each table mints one run id at its birth and every session
+//! reference under it (`refs`), so a shell that restarted under a page can
+//! tell a reference of its earlier run from one it never issued (skep #625).
 //!
 //! **One supplement per principal** ([`Sessions::release`]). The consumer
 //! holds one drafts supplement per (board, principal), and two tabs open two
@@ -68,9 +102,10 @@
 //! not answer is said so. The page's own `close` is its own arm.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -88,7 +123,7 @@ use skep_identity::{BoardTerm, Fingerprint, PublicKey};
 
 use crate::attest::{in_checked_set, wants_attest, Composer, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::refs::{session_reference, BoardEntry};
+use crate::refs::{run_id, session_reference, BoardEntry};
 use crate::refusal::{Name, Refusal};
 use crate::Talk;
 
@@ -144,6 +179,13 @@ pub struct SessionEntry {
     /// resend's read found (§3c.2) — so the resend's read, from that base,
     /// meets every row that could be the line's own landing (§3c.5).
     pub opened_at: u64,
+    /// Whether the session's end is under way or done.
+    ///
+    /// It is set first by the caller that ends the session, before the
+    /// reason is derived, and never cleared: from then on the entry stands
+    /// in the table for a call to find and wait on, and for nothing else
+    /// (the module doc).
+    ending: AtomicBool,
     /// The reason its end carried, set once by the caller that ended it.
     ///
     /// A second caller waits while the first derives it, then answers it.
@@ -151,6 +193,15 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
+    /// Returns whether the session's end is under way or done.
+    ///
+    /// An ending session stands in the table for a call to find and wait on
+    /// (the module doc): [`Sessions::on_board`] leaves it out, so no drafts
+    /// read, no resend and no release of a supplement picks it.
+    pub fn is_ending(&self) -> bool {
+        self.ending.load(Ordering::SeqCst)
+    }
+
     /// Returns whether a write may go out under this session: a signed one's.
     ///
     /// A bare session is the keyless session for reading alone (foundations
@@ -333,6 +384,52 @@ pub trait Supplements {
     fn widen(&mut self, session: &Arc<SessionEntry>);
     /// Saves and unmounts `principal`'s supplement.
     fn narrow(&mut self, principal: u64);
+    /// Runs the swap a session's end owes ([`Sessions::swap`]) with these
+    /// supplements.
+    ///
+    /// It runs the swap here, inline, with `self` as the supplements: the
+    /// feed thread's own path and every fake take it so. The call threads'
+    /// supplements, a board's feed handle, override it to hand the swap to
+    /// the feed thread as one command and wait (`feed`'s `Cmd::Ended`).
+    fn ended(&mut self, sessions: &Sessions, ended: Ended, bus: &EventBus) {
+        sessions.swap(ended, self, bus);
+    }
+}
+
+/// A session's end, derived, and the swap it owes ([`Sessions::swap`]).
+///
+/// It is what [`Sessions::end`]'s initializer leaves for the supplements to
+/// run: the dying entry, still in the table; the session re-opened in its
+/// place on the restart arm, built and not yet entered; and the reason,
+/// which names the re-opened reference as `session` where one is.
+#[derive(Debug, Clone)]
+pub struct Ended {
+    pub dying: Arc<SessionEntry>,
+    pub reopened: Option<Arc<SessionEntry>>,
+    pub reason: Value,
+}
+
+/// How many of this run's ended references the table keeps with their
+/// reasons: the newest, the oldest dropped.
+pub const ENDED_KEPT: usize = 1024;
+
+/// The table's two parts, under one lock.
+struct Table {
+    /// Every session that stands — an ending one among them, until its swap.
+    live: HashMap<String, Arc<SessionEntry>>,
+    /// This run's ended references with their reasons, the newest last.
+    ended: VecDeque<(String, Value)>,
+}
+
+impl Table {
+    /// Keeps `reference` as ended with `reason`, the oldest dropped past
+    /// [`ENDED_KEPT`].
+    fn keep(&mut self, reference: &str, reason: Value) {
+        if self.ended.len() >= ENDED_KEPT {
+            self.ended.pop_front();
+        }
+        self.ended.push_back((reference.to_string(), reason));
+    }
 }
 
 /// The table, by reference, and the key store a death's derivation reads.
@@ -341,17 +438,22 @@ pub trait Supplements {
 /// signed mode's, none under the bare mode, whose sessions no end re-opens
 /// silently — and whose own keys name a retirement's own hand. Where a
 /// death's derivation cannot list that store, it says so on the table's
-/// `Talk` sink, the shell's own window and never the page (SP-12). Its
-/// `Debug` leaves out the sink, a closure.
+/// `Talk` sink, the shell's own window and never the page (SP-12). The
+/// table mints one run id at its birth and every session reference under it
+/// (the module doc). Its `Debug` leaves out the sink, a closure, and counts
+/// the ended references it keeps.
 pub struct Sessions {
-    entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    table: Mutex<Table>,
+    /// This run's id: eight hex every session reference carries (`refs`).
+    run: String,
     reopen_store: Option<Arc<FileStore>>,
     talk: Talk,
 }
 
 impl fmt::Debug for Sessions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sessions").field("entries", &self.entries).field("reopen_store", &self.reopen_store).finish_non_exhaustive()
+        let table = self.table.lock().expect("the sessions' lock");
+        f.debug_struct("Sessions").field("run", &self.run).field("live", &table.live).field("ended", &table.ended.len()).field("reopen_store", &self.reopen_store).finish_non_exhaustive()
     }
 }
 
@@ -359,44 +461,77 @@ impl Sessions {
     /// Returns a table of no session, every end derived under `reopen_store`.
     ///
     /// What a death's derivation cannot read of that store is said on `talk`.
+    /// The table mints its run id here: each shell opened is one run.
     pub fn new(reopen_store: Option<Arc<FileStore>>, talk: Talk) -> Sessions {
-        Sessions { entries: Mutex::new(HashMap::new()), reopen_store, talk }
+        Sessions { table: Mutex::new(Table { live: HashMap::new(), ended: VecDeque::new() }), run: run_id(), reopen_store, talk }
+    }
+
+    /// Returns this run's id, the eight hex every session reference of this
+    /// table carries.
+    pub fn run(&self) -> &str {
+        &self.run
     }
 
     /// Returns the session `reference` names, where this shell holds one.
+    ///
+    /// An ending session is found here (the module doc): a call that finds
+    /// one dials, meets the death and waits on its end.
     ///
     /// # Panics
     ///
     /// Panics where the sessions' lock is poisoned.
     pub fn get(&self, reference: &str) -> Option<Arc<SessionEntry>> {
-        self.entries.lock().expect("the sessions' lock").get(reference).cloned()
+        self.table.lock().expect("the sessions' lock").live.get(reference).cloned()
     }
 
-    /// Returns every session at the board `board_reference` names, in no order.
+    /// Returns the reason `reference`'s end carried, where this run ended it.
+    ///
+    /// It is the newest [`ENDED_KEPT`] ended references' (the module doc): a
+    /// death's reason as derived, the re-opened reference named in it where
+    /// one was, or a close's own arm; `None` for a reference still standing,
+    /// one this run dropped from the ring, or one it never issued.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the sessions' lock is poisoned.
+    pub fn ended_reason(&self, reference: &str) -> Option<Value> {
+        self.table.lock().expect("the sessions' lock").ended.iter().rev().find(|(r, _)| r == reference).map(|(_, reason)| reason.clone())
+    }
+
+    /// Returns every session standing at the board `board_reference` names,
+    /// in no order.
+    ///
+    /// A session whose end is under way is left out (the module doc): the
+    /// drafts reads, the resend, a re-emit and a supplement's release each
+    /// serve a live session, and none goes out under a dying token.
     ///
     /// # Panics
     ///
     /// Panics where the sessions' lock is poisoned.
     pub fn on_board(&self, board_reference: &str) -> Vec<Arc<SessionEntry>> {
-        self.entries.lock().expect("the sessions' lock").values().filter(|e| e.board_reference == board_reference).cloned().collect()
+        self.table.lock().expect("the sessions' lock").live.values().filter(|e| e.board_reference == board_reference && !e.is_ending()).cloned().collect()
     }
 
-    /// Returns every session, in no order.
+    /// Returns every session in the table, in no order, an ending one among
+    /// them.
+    ///
+    /// Its one caller is the shell's stop, which closes each; a close does
+    /// nothing to an entry whose end is set.
     ///
     /// # Panics
     ///
     /// Panics where the sessions' lock is poisoned.
     pub fn all(&self) -> Vec<Arc<SessionEntry>> {
-        self.entries.lock().expect("the sessions' lock").values().cloned().collect()
+        self.table.lock().expect("the sessions' lock").live.values().cloned().collect()
     }
 
-    /// Returns how many sessions stand.
+    /// Returns how many sessions stand in the table.
     ///
     /// # Panics
     ///
     /// Panics where the sessions' lock is poisoned.
     pub fn len(&self) -> usize {
-        self.entries.lock().expect("the sessions' lock").len()
+        self.table.lock().expect("the sessions' lock").live.len()
     }
 
     /// Registers a session opened at `board` and returns its entry.
@@ -414,40 +549,66 @@ impl Sessions {
     /// Ends a session whose token met the death signal and returns the reason.
     ///
     /// It is run by whichever caller met it (the module doc). In the entry's
-    /// `OnceLock` the session leaves the table and its reason is derived from
-    /// public reads at its board; on the restart arm the re-opened session
-    /// enters under a fresh reference at the same board, named in the reason
-    /// as `session`. Then `session-died` goes out and the drafts supplement is
-    /// widened under the re-opened token, or released ([`Sessions::release`])
-    /// — narrow "at `session-died` in every arm but the shell's own restart"
+    /// `OnceLock`, the entry still in the table and marked ending first, its
+    /// reason is derived from public reads at its board; on the restart arm
+    /// the re-opened session is built under a fresh reference at the same
+    /// board, named in the reason as `session`, and not yet entered. Then the
+    /// swap is handed to `supplements` ([`Supplements::ended`]): the table's
+    /// two moves, the reason kept, `session-died`, and the re-opened token
+    /// widened or the supplement released ([`Sessions::release`]) — narrow
+    /// "at `session-died` in every arm but the shell's own restart"
     /// (`client.md` §4e.3) where no other session of the principal stands at
     /// the board, the supplement handed to one that does. A caller that finds
     /// the reason already derived answers it and does nothing else.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `entry` is not in the table while its end is unset: an
+    /// entry leaves the table by its swap or its close alone, each after its
+    /// end is set.
     pub fn end(&self, entry: &SessionEntry, supplements: &mut dyn Supplements, bus: &EventBus) -> Value {
-        let (mut ended_here, mut reopened) = (false, None);
+        let mut owed = None;
         let reason = entry
             .end
             .get_or_init(|| {
-                ended_here = true;
-                self.remove(&entry.reference);
-                let death = derive_death(self.reopen_store.as_deref(), &self.talk, entry);
-                let mut reason = death.reason;
-                reopened = death.reopened.map(|open| self.enter(&entry.board_reference, Arc::clone(&entry.board), open));
-                if let Some(r) = &reopened {
-                    reason["session"] = Value::from(r.reference.as_str());
-                }
+                entry.ending.store(true, Ordering::SeqCst);
+                let dying = self.get(&entry.reference).expect("a session whose end is not yet derived stands in the table");
+                let (reason, reopened) = match derive_death(self.reopen_store.as_deref(), &self.talk, entry) {
+                    Death::Reason(reason) => (reason, None),
+                    Death::Reopened(open) => {
+                        let reopened = self.fresh(&entry.board_reference, Arc::clone(&entry.board), open);
+                        (restart_reason(Some(&reopened.reference), None), Some(reopened))
+                    }
+                };
+                owed = Some(Ended { dying, reopened, reason: reason.clone() });
                 reason
             })
             .clone();
-        if !ended_here {
-            return reason;
-        }
-        bus.emit(EventName::SessionDied, json!({"session": entry.reference, "reason": reason}));
-        match &reopened {
-            Some(r) => supplements.widen(r),
-            None => self.release(&entry.board_reference, entry.facts.principal, supplements),
+        if let Some(ended) = owed {
+            supplements.ended(self, ended, bus);
         }
         reason
+    }
+
+    /// Runs the swap a session's end owes, with `supplements`.
+    ///
+    /// It is the one sequence every [`Supplements::ended`] reaches, in this
+    /// order: the dying entry leaves the table and the re-opened one enters,
+    /// the dying reference kept with its reason ([`Sessions::ended_reason`])
+    /// — the three under one lock, so no read of the table falls between
+    /// them; `session-died` `{session, reason}` goes out; then the re-opened
+    /// token is widened, or the dying session's supplement released
+    /// ([`Sessions::release`]). It runs on the board's feed thread for a
+    /// death a call met, between the thread's rows, and inline for one the
+    /// feed thread met (the module doc).
+    pub fn swap<S: Supplements + ?Sized>(&self, ended: Ended, supplements: &mut S, bus: &EventBus) {
+        let Ended { dying, reopened, reason } = ended;
+        self.leave(&dying.reference, reopened.as_ref(), reason.clone());
+        bus.emit(EventName::SessionDied, json!({"session": dying.reference, "reason": reason}));
+        match &reopened {
+            Some(r) => supplements.widen(r),
+            None => self.release(&dying.board_reference, dying.facts.principal, supplements),
+        }
     }
 
     /// Releases a principal's supplement at the board `board_reference` names.
@@ -455,8 +616,9 @@ impl Sessions {
     /// It is given up by a session that has left the table: the consumer
     /// holds one supplement per principal, so it is handed to another session
     /// of the principal standing there — that session's token widened in —
-    /// and narrowed (`client.md` §4e.3's narrow) where none stands.
-    pub fn release(&self, board_reference: &str, principal: u64, supplements: &mut dyn Supplements) {
+    /// and narrowed (`client.md` §4e.3's narrow) where none stands; an ending
+    /// session never takes it ([`Sessions::on_board`]).
+    pub fn release<S: Supplements + ?Sized>(&self, board_reference: &str, principal: u64, supplements: &mut S) {
         match self.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal) {
             Some(standing) => supplements.widen(&standing),
             None => supplements.narrow(principal),
@@ -467,42 +629,64 @@ impl Sessions {
     ///
     /// The session's end is settled as the `closed` arm — waiting, as a
     /// second caller's `end` does, for a caller deriving another — and the
-    /// session is out of the table. It returns the entry, or `None` where
+    /// session is out of the table, its reference kept with that arm
+    /// ([`Sessions::ended_reason`]). It returns the entry, or `None` where
     /// this shell holds no session under `reference` any more — a death met
     /// first, or a close before.
     pub fn close(&self, reference: &str) -> Option<Arc<SessionEntry>> {
         let entry = self.get(reference)?;
         entry.end.set(closed()).ok()?;
-        self.remove(reference);
+        self.leave(reference, None, closed());
         Some(entry)
+    }
+
+    /// Takes `dying` out of the table, enters `reopened` where one is, and
+    /// keeps `dying` as ended with `reason` — under one lock.
+    ///
+    /// It is the table's half of the swap, and a close's leave.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the sessions' lock is poisoned.
+    fn leave(&self, dying: &str, reopened: Option<&Arc<SessionEntry>>, reason: Value) {
+        let mut table = self.table.lock().expect("the sessions' lock");
+        table.live.remove(dying);
+        if let Some(r) = reopened {
+            table.live.insert(r.reference.clone(), Arc::clone(r));
+        }
+        table.keep(dying, reason);
     }
 
     /// Enters a session under a fresh reference, `board` beside its token.
     ///
     /// The session stands at the board `board_reference` names. It is the
-    /// one place a token is paired with a board, its two callers each passing
-    /// a pair read whole — `register` off a board's entry, `end`'s re-open
-    /// off the session it replaces.
+    /// one place a registered session is paired with a board: `register`
+    /// passes the pair read whole off a board's entry; the restart arm's
+    /// re-open is built by [`Sessions::fresh`] off the session it replaces
+    /// and entered at the swap.
     ///
     /// # Panics
     ///
     /// Panics where the sessions' lock is poisoned.
     fn enter(&self, board_reference: &str, board: Arc<Board>, open: Open) -> Arc<SessionEntry> {
-        let entry = Arc::new(SessionEntry {
-            reference: session_reference(),
+        let entry = self.fresh(board_reference, board, open);
+        self.table.lock().expect("the sessions' lock").live.insert(entry.reference.clone(), Arc::clone(&entry));
+        entry
+    }
+
+    /// Builds a session's entry under a fresh reference of this run, at the
+    /// board `board_reference` names, entering nothing.
+    fn fresh(&self, board_reference: &str, board: Arc<Board>, open: Open) -> Arc<SessionEntry> {
+        Arc::new(SessionEntry {
+            reference: session_reference(&self.run),
             board_reference: board_reference.to_string(),
             board,
             token: open.token,
             facts: open.facts,
             opened_at: open.opened_at,
+            ending: AtomicBool::new(false),
             end: OnceLock::new(),
-        });
-        self.entries.lock().expect("the sessions' lock").insert(entry.reference.clone(), Arc::clone(&entry));
-        entry
-    }
-
-    fn remove(&self, reference: &str) -> Option<Arc<SessionEntry>> {
-        self.entries.lock().expect("the sessions' lock").remove(reference)
+        })
     }
 }
 
@@ -623,19 +807,57 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
     Ok(Open { token: session.into_token(), facts, opened_at: health.log_position() })
 }
 
-/// Why a session died, and the session re-opened in its place, where one is.
+/// Why a session died: its reason, or the session re-opened in its place.
 ///
 /// A session is re-opened silently on the restart arm, under a key this
-/// store holds.
+/// store holds; its reason, the restart arm naming it, is composed where its
+/// reference is minted ([`Sessions::end`]).
 #[derive(Debug)]
-struct Death {
-    reason: Value,
-    reopened: Option<Open>,
+enum Death {
+    Reason(Value),
+    Reopened(Open),
 }
 
 /// Returns the reason the page's own `close` carries: its own arm, `closed`.
 pub fn closed() -> Value {
     json!({"arm": "closed"})
+}
+
+/// Returns the `unreachable` arm: the board did not answer, `text` the halt.
+pub(crate) fn unreachable_reason(text: &str) -> Value {
+    json!({"arm": "unreachable", "text": text})
+}
+
+/// Returns the `mode` arm: a bare session died at the flip to `mode`.
+pub(crate) fn mode_reason(mode: Mode) -> Value {
+    json!({"arm": "mode", "mode": mode.name()})
+}
+
+/// Returns the `restart` arm: `reopened` where `session` names the session
+/// re-opened silently in the dying one's place, and `refused` the name of
+/// the re-open's refusal where one was tried and refused.
+pub(crate) fn restart_reason(session: Option<&str>, refused: Option<&str>) -> Value {
+    let mut reason = json!({"arm": "restart", "reopened": session.is_some()});
+    if let Some(session) = session {
+        reason["session"] = Value::from(session);
+    }
+    if let Some(refused) = refused {
+        reason["refused"] = Value::from(refused);
+    }
+    reason
+}
+
+/// Returns the `seeded` arm: a session by reference whose acted-as
+/// `account` now holds a set of its own, `as_of` the set's position and
+/// `writer` its first enrolled key.
+pub(crate) fn seeded_reason(account: &str, as_of: u64, writer: Option<&str>) -> Value {
+    json!({"arm": "seeded", "account": account, "as_of": as_of, "writer": writer})
+}
+
+/// Returns the `blocked` arm: the re-open met `403 prefix_blocked`, `record`
+/// the block's record and `ground` its ground where read.
+pub(crate) fn blocked_reason(record: &str, ground: Option<&str>) -> Value {
+    json!({"arm": "blocked", "record": record, "ground": ground})
 }
 
 /// Derives the death of `entry`, whose token met the death signal.
@@ -649,18 +871,17 @@ pub fn closed() -> Value {
 /// and what it says is said once per death.
 fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) -> Death {
     let board: &Board = &entry.board;
-    let not_reopened = |reason: Value| Death { reason, reopened: None };
     let health = match board.health() {
         Ok(h) => h,
-        Err(h) => return not_reopened(json!({"arm": "unreachable", "text": h.to_string()})),
+        Err(h) => return Death::Reason(unreachable_reason(&h.to_string())),
     };
     let mode = Mode::of(&health);
     let facts = &entry.facts;
     let SessionKind::Signed { fingerprint: fp, set_account } = &facts.kind else {
         if mode == Mode::Enforcing {
-            return not_reopened(json!({"arm": "mode", "mode": mode.name()}));
+            return Death::Reason(mode_reason(mode));
         }
-        return not_reopened(json!({"arm": "restart", "reopened": false}));
+        return Death::Reason(restart_reason(None, None));
     };
     // A signed session: the retirement, read off the set it authenticated
     // against and the admitted record read.
@@ -679,7 +900,7 @@ fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) ->
                 }
             };
             let records = credential_records(board, set_account, own_keys.as_deref().unwrap_or_default()).ok();
-            return not_reopened(retired_reason(fp, records.as_ref(), own_keys.as_deref()));
+            return Death::Reason(retired_reason(fp, records.as_ref(), own_keys.as_deref()));
         }
     }
     // The seeded arm: a session by reference whose acted-as account now
@@ -689,17 +910,17 @@ fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) ->
             if let Ok(KeySetAnswer::Set(set)) = board.key_set(account) {
                 if !set.is_empty() {
                     let writer = set.enrolled.first().map(|e| e.fingerprint.to_string());
-                    return not_reopened(json!({"arm": "seeded", "account": account, "as_of": set.as_of, "writer": writer}));
+                    return Death::Reason(seeded_reason(account, set.as_of, writer.as_deref()));
                 }
             }
         }
     }
     // The restart arm, or the block met at the re-open.
-    let Some(store) = store else { return not_reopened(json!({"arm": "restart", "reopened": false})) };
+    let Some(store) = store else { return Death::Reason(restart_reason(None, None)) };
     match open_signed(board, store, facts.principal) {
-        Ok(open) => Death { reason: json!({"arm": "restart", "reopened": true}), reopened: Some(open) },
-        Err(Refusal::Blocked(b)) => not_reopened(json!({"arm": "blocked", "record": b.record, "ground": b.ground})),
-        Err(other) => not_reopened(json!({"arm": "restart", "reopened": false, "refused": other.name()})),
+        Ok(open) => Death::Reopened(open),
+        Err(Refusal::Blocked(b)) => Death::Reason(blocked_reason(&b.record, b.ground.as_deref())),
+        Err(other) => Death::Reason(restart_reason(None, Some(other.name()))),
     }
 }
 
@@ -711,7 +932,7 @@ fn derive_death(store: Option<&FileStore>, talk: &Talk, entry: &SessionEntry) ->
 /// read keeps its position whatever its hand: where the hand could not be
 /// named it names the position it read and no hand (AUTH-5.77's no-hand
 /// form), and where no record was read, no position.
-fn retired_reason(fp: &Fingerprint, records: Option<&Records>, own_keys: Option<&[(Fingerprint, PublicKey)]>) -> Value {
+pub(crate) fn retired_reason(fp: &Fingerprint, records: Option<&Records>, own_keys: Option<&[(Fingerprint, PublicKey)]>) -> Value {
     let retirement = records.and_then(|r| r.retirement_of(fp));
     let own = hand_is_own(retirement.map(|rec| &rec.hand), fp, own_keys);
     let (hand, position, label) = match retirement.map(|rec| (&rec.hand, rec.position)) {

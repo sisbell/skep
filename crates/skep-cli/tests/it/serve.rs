@@ -1094,14 +1094,16 @@ fn f5b_the_publication_family_over_the_bridge() {
 ///
 /// D publishes E.1; A, an alternative holding D's arrangement by identity and
 /// words of its own, opens with `also: [D]` — the panel declares no window
-/// for D's words and `inherited` counts D's one passage — and publishes
-/// E.2, the member reading A's whole text, the feed row naming `[E.2, A, D]`;
-/// D's panel opens with no base from the page — the shell reads D's off the
-/// board's record, E.1, where D's own publication moved it — and its
-/// confirm lands the daughter E.1.1 — the face is the page's; the shell
-/// answers the ack with the daughter's address. Each draft is staged by one
-/// `stage` frame, D from the bare edition, A from D, whose base the board
-/// records as A's. A repeated `also` is `malformed_args` naming it.
+/// for D's words, `inherited` counts D's one passage, `standing` is
+/// `at_head` and D stands in `left_behind` — and publishes E.2, the member
+/// reading A's whole text, the feed row naming `[E.2, A, D]`; D's panel
+/// opens with no base from the page — the shell reads D's off the board's
+/// record, E.1, where D's own publication moved it, and tells it `standing:
+/// behind` — and its confirm lands the daughter E.1.1 — the face is the
+/// page's; the shell answers the ack with the daughter's address. Each draft
+/// is staged by one `stage` frame, D from the bare edition, A from D, whose
+/// base the board records as A's. A repeated `also` is `malformed_args`
+/// naming it.
 #[test]
 fn f5d_the_family_and_the_daughter_over_the_bridge() {
     let dir = tempfile::tempdir().unwrap();
@@ -1132,6 +1134,7 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     assert_eq!((repeated["name"].as_str(), repeated["what"].as_str()), (Some("malformed_args"), Some("also")), "{repeated}");
     let panel = signed.result("publication.open", json!({"session": session, "draft": a_draft, "doc": edition, "also": [d], "readable_drafts": [a_draft, d], "published": [edition]}));
     assert_eq!((panel["windows"].clone(), panel["inherited"].clone()), (json!([]), json!([{"draft": d, "passages": 1}])), "{panel}");
+    assert_eq!((panel["standing"].clone(), panel["left_behind"].clone()), (json!("at_head"), json!([d])), "A's base heads the chain, and D stands behind A's version: {panel}");
     let acked = signed.result("publication.confirm", json!({"session": session}));
     let e2 = format!("{edition}.2");
     assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e2.as_str())), "{acked}");
@@ -1140,8 +1143,9 @@ fn f5d_the_family_and_the_daughter_over_the_bridge() {
     assert_eq!(read["items"][0]["content"], "the quick brown fox again more");
     let page = signed.result("changes", json!({"session": session, "since": at - 1, "limit": 1}));
     assert_eq!(page["entries"][0]["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {page}");
-    // D BEHIND THE HEAD: its base the shell's own read, the daughter.
-    signed.result("publication.open", json!({"session": session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]}));
+    // D BEHIND THE HEAD: its base the shell's own read, told, the daughter.
+    let behind = signed.result("publication.open", json!({"session": session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]}));
+    assert_eq!(behind["standing"], "behind", "told before the act, never refused: {behind}");
     let daughter = signed.result("publication.confirm", json!({"session": session}));
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()), (Some("acknowledged"), Some(format!("{edition}.1.1").as_str()), Some("answer")), "{daughter}");
     signed.result("close", json!({"session": session}));

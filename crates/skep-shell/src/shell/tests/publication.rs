@@ -15,12 +15,16 @@
 //! other drafts re-minted as the document's own; and the draft's base, the
 //! board's record read on any device (B3-S10) — a draft staged through
 //! `stage` publishing from the base the board recorded, a draft minted by
-//! `fork` alone refused `base_unrecorded`, a draft behind the head landing
-//! its daughter from a second shell, a draft the board records no base for
-//! refused `base_unrecorded`, and a publication that only removes words
-//! leaving the next landing after the version it made. Every draft a cell
-//! publishes into a document is staged through `stage`, the one frame that
-//! copies its source and records its base.
+//! `fork` alone refused `base_unrecorded` with its reason, a draft behind
+//! the head told `behind` and landing its daughter from a second shell, a
+//! draft the board records no base for refused `base_unrecorded`, and a
+//! publication that only removes words leaving the next landing after the
+//! version it made; and the base's standing (D4 (a)+(b′)) — the family
+//! left behind off the shell's own list, a first draft refused
+//! `base_superseded` once version 1 stands, and a sibling's shot landing
+//! while a panel stands re-stated at the confirm, nothing sent. Every
+//! draft a cell publishes into a document is staged through `stage`, the
+//! one frame that copies its source and records its base.
 
 use super::*;
 use crate::sessions::{Facts, Open};
@@ -243,6 +247,22 @@ impl Ground {
     fn position(&self) -> u64 {
         self.shell.call("health", &json!({"board": self.board})).unwrap()["health"]["log_position"].as_u64().unwrap()
     }
+
+    /// Waits for the document index to list each of `docs` among the
+    /// session's places: the shell's own list, which an open reads for the
+    /// family it leaves behind.
+    fn listed(&self, docs: &[&str]) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let places = self.call("places", json!({"session": self.session})).unwrap_or_else(|r| panic!("{r}"));
+            let listed: Vec<&str> = places["docs"].as_array().into_iter().flatten().filter_map(|place| place["doc"].as_str()).collect();
+            if docs.iter().all(|d| listed.contains(d)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the index never listed {docs:?}: {places}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 /// Checks the family end to end against the daemon.
@@ -425,18 +445,20 @@ fn the_familys_members_are_read_in_their_form_before_the_session() {
 /// recording D's base, E.1, as A's — holds D's whole arrangement by identity
 /// and five words of its own. A's `publication.open` naming D among `also`
 /// answers no window for D's words and `inherited` counting D's one passage,
-/// every member declared; its `confirm` is acknowledged E.2 — the member
-/// reads A's whole text as E's own words — with one record homed in D for
-/// its six words and one in A for its five, each `to` the member's fresh
-/// identity, and the feed row's `docs` `[E.2, A, D]`. Then a SECOND
+/// `standing: at_head` and D in `left_behind` — the family it leaves behind
+/// (skep #744) — every member declared; its `confirm` is acknowledged E.2 —
+/// the member reads A's whole text as E's own words — with one record homed
+/// in D for its six words and one in A for its five, each `to` the member's
+/// fresh identity, and the feed row's `docs` `[E.2, A, D]`. Then a SECOND
 /// DEVICE's shell — a fresh shell over the same board and store, holding no
 /// index and no panel of the first's — opens D, a draft BEHIND the head, the
 /// page sending `base: E.2`, which nothing reads: the shell reads D's base
 /// off the board's record, E.1 — A's publication moved A's base, never D's
-/// — and the `confirm` lands the DAUGHTER E.1.1 under it, never a trunk
-/// member that drops A's words. A draft the board records no base for is
-/// refused `base_unrecorded` naming it and the edition at the document
-/// form, and opens at the mint form, which has no chain.
+/// — tells it `standing: behind`, and the `confirm` lands the DAUGHTER E.1.1
+/// under it, never a trunk member that drops A's words. A draft the board
+/// records no base for is refused `base_unrecorded` naming it, the edition
+/// and the reason, `no_record`, at the document form, and opens at the mint
+/// form, which has no chain and no standing.
 #[test]
 fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_behind_the_head_lands_a_daughter_on_any_device() {
     use skep_client::board::frames::{find_links_four, read_link, retrieve_v, unit_span, Slot, T_CORRESPONDENCE};
@@ -463,6 +485,7 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     crate::shapes::assert_declared("PublicationPanel", &panel);
     assert_eq!(panel["windows"], json!([]), "D's words are re-minted, not windowed: {panel}");
     assert_eq!(panel["inherited"], json!([{"draft": d, "passages": 1}]), "{panel}");
+    assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("at_head"), &json!([d])), "A's base E.1 heads the chain, and D stands behind A's version: {panel}");
     crate::shapes::assert_declared("Inherited", &panel["inherited"][0]);
     assert_eq!(panel["price"]["over"], json!([]), "{}", panel["price"]);
     let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
@@ -493,6 +516,7 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     let g = open_ground(&dir, &sd);
     let behind = g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": e2, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((behind["windows"].clone(), behind["inherited"].clone()), (json!([]), json!([])), "{behind}");
+    assert_eq!((&behind["standing"], &behind["left_behind"]), (&json!("behind"), &json!([])), "told, never refused; a daughter leaves no draft behind: {behind}");
     let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(
         (daughter["outcome"].as_str(), daughter["member"].as_str(), daughter["via"].as_str()),
@@ -506,11 +530,16 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     let free = g.draft("unrecorded words");
     let unrecorded = g.call("publication.open", json!({"session": g.session, "draft": free, "doc": edition, "readable_drafts": [free], "published": [edition]})).unwrap_err();
     let v = unrecorded.to_value();
-    assert_eq!((unrecorded.name(), v["kind"].as_str(), v["draft"].as_str(), v["doc"].as_str()), ("base_unrecorded", Some("shell"), Some(free.as_str()), Some(edition.as_str())), "{v}");
+    assert_eq!(
+        (unrecorded.name(), v["kind"].as_str(), v["draft"].as_str(), v["doc"].as_str(), v["reason"].as_str()),
+        ("base_unrecorded", Some("shell"), Some(free.as_str()), Some(edition.as_str()), Some("no_record")),
+        "{v}"
+    );
     let minted = g
         .call("publication.open", json!({"session": g.session, "draft": free, "mint": "1.0.1", "readable_drafts": [free], "published": [edition]}))
         .unwrap_or_else(|r| panic!("the mint form has no chain: {r}"));
     crate::shapes::assert_declared("PublicationPanel", &minted);
+    assert_eq!((minted.get("standing"), &minted["left_behind"]), (None, &json!([])), "no chain, no standing: {minted}");
     assert_eq!(g.call("publication.cancel", json!({"session": g.session})).unwrap(), json!({}));
     g.shell.shutdown();
     sd.shutdown();
@@ -567,10 +596,11 @@ fn a_publication_that_only_removes_words_leaves_the_next_landing_after_the_versi
 /// own as E.2 — the board moving its base at each shot. S, staged from E.1
 /// by the one `stage` frame, holds E.1's nineteen positions by identity and
 /// no link of its own, and its `doc_metadata` answers E.1 as its `base` and
-/// its `source` and nineteen as `base_copied`; its panel opens, and its
-/// confirm lands the DAUGHTER E.1.1 under that base, behind the head E.2,
-/// never after it. F, minted by `fork` and written, is refused
-/// `base_unrecorded` naming it and the edition, never handed the head.
+/// its `source` and nineteen as `base_copied`; its panel opens told
+/// `standing: behind`, and its confirm lands the DAUGHTER E.1.1 under that
+/// base, behind the head E.2, never after it. F, minted by `fork` and
+/// written, is refused `base_unrecorded` naming it, the edition and the
+/// reason, `no_record`, never handed the head.
 #[test]
 fn a_staged_draft_publishes_from_the_base_the_board_recorded_and_a_fork_alone_is_unrecorded() {
     use skep_client::board::frames::{doc_metadata, find_links_four, retrieve_v, stage, unit_span, Slot};
@@ -596,7 +626,8 @@ fn a_staged_draft_publishes_from_the_base_the_board_recorded_and_a_fork_alone_is
     let home = unit_span(&s).as_array().cloned().unwrap_or_default();
     assert_eq!(g.op(find_links_four(Slot::Spans(&home), Slot::Any, Slot::Any, Slot::Any))["addrs"], json!([]), "no record written in the draft");
     g.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "20"}, "values": [" today"], "as_of": staged["at"]}));
-    open(&s).unwrap_or_else(|r| panic!("the board records S's base: {r}"));
+    let panel = open(&s).unwrap_or_else(|r| panic!("the board records S's base: {r}"));
+    assert_eq!(panel["standing"], "behind", "E.2 stands past S's base, told before the act: {panel}");
     let daughter = confirm();
     let e11 = format!("{edition}.1.1");
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str()), (Some("acknowledged"), Some(e11.as_str())), "the daughter under the recorded base, behind the head: {daughter}");
@@ -608,7 +639,92 @@ fn a_staged_draft_publishes_from_the_base_the_board_recorded_and_a_fork_alone_is
     g.op(json!({"op": "insert", "doc": f, "at": {"subspace": "1", "ordinal": "1"}, "values": ["forked words"], "as_of": forked["at"]}));
     let unrecorded = open(&f).unwrap_err();
     let v = unrecorded.to_value();
-    assert_eq!((unrecorded.name(), v["draft"].as_str(), v["doc"].as_str()), ("base_unrecorded", Some(f.as_str()), Some(edition.as_str())), "{v}");
+    assert_eq!((unrecorded.name(), v["draft"].as_str(), v["doc"].as_str(), v["reason"].as_str()), ("base_unrecorded", Some(f.as_str()), Some(edition.as_str()), Some("no_record")), "{v}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks a first draft's standing and the family it leaves behind (D4 (a);
+/// skep #744).
+///
+/// B, C and D are staged from the memberless edition, the bare document
+/// their base. B's panel opens `standing: first` — the page passing its own
+/// `readable_drafts` — and names C and D, staged from the same bare
+/// document, in `left_behind`: the shell reads its own list for the family
+/// wherever the publication becomes the head. D publishes E.1; then B's
+/// held panel re-opened as it stands, and C opened afresh, are each refused
+/// `base_superseded` naming the draft, the edition and `first`, E.1 — the
+/// board would refuse their shots — and no panel is answered.
+#[test]
+fn a_first_drafts_standing_is_typed_and_once_version_one_stands_it_is_refused_by_name() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let open = |draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]}));
+    let b = g.staged(&edition, "an early start");
+    let c = g.staged(&edition, "another early start");
+    let d = g.staged(&edition, "the quick brown fox");
+    g.listed(&[b.as_str(), c.as_str(), d.as_str()]);
+    let panel = open(&b).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("first"), &json!([c, d])), "the bare document's chain is empty, and its other drafts stand behind the first version: {panel}");
+    open(&d).unwrap_or_else(|r| panic!("{r}"));
+    let e1 = format!("{edition}.1");
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(acked["member"].as_str(), Some(e1.as_str()), "{acked}");
+    for draft in [&b, &c] {
+        let refused = g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition})).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!(
+            (refused.name(), v["kind"].as_str(), v["draft"].as_str(), v["doc"].as_str(), v["first"].as_str()),
+            ("base_superseded", Some("shell"), Some(draft.as_str()), Some(edition.as_str()), Some(e1.as_str())),
+            "{v}"
+        );
+    }
+    assert_eq!(g.call("publication.count", json!({"session": g.session})).unwrap_err().name(), "no_panel", "no panel answered, none standing");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a sibling's shot landing while a panel stands is re-stated at
+/// the confirm, nothing sent (D4 (b′)), and that a draft behind publishes.
+///
+/// D publishes E.1; S and T are staged from it. S's panel opens `standing:
+/// at_head`; while it stands a SECOND DEVICE's shell — a fresh shell over
+/// the same board and store — publishes T as E.2. S's confirm reads the base
+/// again and answers `restated` with `standing: behind` and every other
+/// difference empty, its event `restated`, nothing sent — the board's
+/// position unmoved; S's next confirm lands the daughter E.1.1: `behind` is
+/// told, never refused.
+#[test]
+fn a_siblings_shot_between_the_open_and_the_confirm_is_restated_and_nothing_lands() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let open = |g: &Ground, draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let d = g.staged(&edition, "the quick brown fox");
+    open(&g, &d);
+    let e1 = format!("{edition}.1");
+    assert_eq!(g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"))["member"].as_str(), Some(e1.as_str()));
+    let s = g.staged(&e1, "one sibling ");
+    let t = g.staged(&e1, "another sibling ");
+    assert_eq!(open(&g, &s)["standing"], "at_head", "S's base E.1 heads the chain");
+    // The second device publishes T while S's panel stands here.
+    let second = open_ground(&dir, &sd);
+    open(&second, &t);
+    let sibling = second.call("publication.confirm", json!({"session": second.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(sibling["member"].as_str(), Some(format!("{edition}.2").as_str()), "{sibling}");
+    second.shell.shutdown();
+    let before = g.position();
+    let restated = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Restated", &restated);
+    assert_eq!(restated, json!({"outcome": "restated", "left": [], "superseded": [], "came": [], "removals_undone": [], "removals_came": [], "selection": [], "standing": "behind"}), "the standing moved alone");
+    assert_eq!(g.position(), before, "nothing sent");
+    assert_eq!(g.states_once(3), ["sent", "acknowledged", "restated"], "{:?}", g.states());
+    let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str()), (Some("acknowledged"), Some(format!("{e1}.1").as_str())), "behind is told, never refused: {daughter}");
     g.shell.shutdown();
     sd.shutdown();
 }

@@ -446,11 +446,15 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
 /// declares for its row (`shapes::declarations`) — a shape as `{a, b, c?}`, a
 /// field typed by one string literal with its value and an open shape ending
 /// `, …`, the empty answer as `{}` — and the open and count cards the shapes
-/// of the panel's members; the selection's runs, the switches, a destination
-/// and an answer are schema'd as the shell's `Run`, `Switches`, `Destination`
-/// and `OriginAnswer` spell them (SP-24). A shape the shell changes in one
-/// place alone would tell every agent of an answer the shell no longer gives,
-/// or ask an argument it no longer takes.
+/// of the panel's members; the open card names each standing the shell's
+/// `BaseStanding` spells and its two refusals of a base by the shell's names
+/// — `base_unrecorded` with its members and reasons, `base_superseded` with
+/// its members — and the confirm card the shot's `base_superseded` arm; the
+/// selection's runs, the switches, a destination and an answer are schema'd
+/// as the shell's `Run`, `Switches`, `Destination` and `OriginAnswer` spell
+/// them (SP-24). A shape the shell changes in one place alone would tell
+/// every agent of an answer the shell no longer gives, or ask an argument it
+/// no longer takes.
 #[test]
 fn the_publication_cards_state_the_shells_shapes() {
     /// Returns a shape's fields as a card spells them.
@@ -516,6 +520,16 @@ fn the_publication_cards_state_the_shells_shapes() {
             assert!(card.contains(&said), "the {name} card spells {shape} as {said}: {card}");
         }
     }
+    let open = entry("publication_open")["description"].as_str().expect("the open card");
+    for standing in alias("BaseStanding") {
+        let standing = standing.trim_matches('\'');
+        assert!(open.contains(standing), "the open card names the standing {standing}: {open}");
+    }
+    let (unrecorded, superseded) = (skep_shell::Name::BASE_UNRECORDED.as_str(), skep_shell::Name::BASE_SUPERSEDED.as_str());
+    assert!(open.contains(&format!("{unrecorded} {{draft, doc, reason}}")) && ["no_record", "other_chain", "free_standing"].iter().all(|reason| open.contains(reason)), "the open card names base_unrecorded's members and reasons: {open}");
+    assert!(open.contains(&format!("{superseded} {{draft, doc, first}}")), "the open card names base_superseded's members: {open}");
+    let confirm = entry("publication_confirm")["description"].as_str().expect("the confirm card");
+    assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm card names the shot's base_superseded arm: {confirm}");
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
     let answers: BTreeSet<String> = alias("OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();

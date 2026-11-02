@@ -193,11 +193,12 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
 /// lacked among them — the shell's calls, the publication family's four among
 /// them, and the three apparatus tools; and the publication: a published
 /// document minted, a draft minted and written but never staged — its
-/// `publication_open` refused `base_unrecorded` naming it, the board
-/// recording no base for it — then a draft staged from the bare edition
-/// through `stage`, as the instructions' PUBLISHING says, and written:
-/// `publication_open` holding its panel — no row, no window, under every
-/// cap — `publication_count` its four numbers
+/// `publication_open` refused `base_unrecorded` naming it and the reason
+/// `no_record`, the board recording no base for it — then a draft staged
+/// from the bare edition through `stage`, as the instructions' PUBLISHING
+/// says, and written: `publication_open` holding its panel — no row, no
+/// window, under every cap, `standing: first` and no draft left behind —
+/// `publication_count` its four numbers
 /// with nothing switched on, and `publication_confirm` acknowledging the
 /// member `E.1`, reached by its own answer; the member read back, its
 /// metadata naming the shot, and the panel gone with the acknowledgment —
@@ -234,7 +235,11 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let typed = mcp.position();
     mcp.acked("insert", json!({"as_of": typed, "doc": free, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
     let unrecorded = mcp.call_error("publication_open", json!({"draft": free, "doc": edition}));
-    assert_eq!((&unrecorded["name"], &unrecorded["draft"], &unrecorded["doc"]), (&json!("base_unrecorded"), &json!(free), &json!(edition)), "the board records no base for a draft never staged: {unrecorded}");
+    assert_eq!(
+        (&unrecorded["name"], &unrecorded["draft"], &unrecorded["doc"], &unrecorded["reason"]),
+        (&json!("base_unrecorded"), &json!(free), &json!(edition), &json!("no_record")),
+        "the board records no base for a draft never staged: {unrecorded}"
+    );
     let draft = stage_of(&mut mcp, &edition);
     let typed = mcp.position();
     mcp.acked("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
@@ -243,6 +248,7 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let run = &image["runs"][0];
     let panel = mcp.call_json("publication_open", json!({"draft": draft, "doc": edition}));
     assert_eq!((&panel["rows"], &panel["windows"], &panel["price"]["over"]), (&json!([]), &json!([]), &json!([])), "no link, no window, under every cap: {panel}");
+    assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("first"), &json!([])), "the bare edition's chain is empty, and no other draft stands on it: {panel}");
     let counted = mcp.call_json("publication_count", json!({}));
     assert_eq!(counted["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "{counted}");
     let acked = mcp.call_json("publication_confirm", json!({}));

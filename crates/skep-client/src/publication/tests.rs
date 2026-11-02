@@ -38,6 +38,7 @@ use crate::dial::{DialError, Dialer, Headers, Request as DialRequest, RequestHea
 use crate::origin::Origin;
 use crate::sign::Signer;
 
+use super::base::Base as DraftBase;
 use super::panel::Destination;
 use super::request::{Answer as OriginAnswer, Confirmed, Inert, OwnedRow, Piece};
 use super::send::{AckVia, OwnFault, Refusal, Sent};
@@ -1656,9 +1657,10 @@ fn a_damaged_head_record_sends_nothing_claimed_or_not() {
 /// race where this price admitted; `not_owner` naming the draft;
 /// `claim_refused` naming the edition; the six
 /// deposit tokens with their entry and detail; `unparseable` on a request
-/// carrying members the older-board arm; the shot's table the library's
-/// own; `withheld` the window's origin; `signed_session_required`; and the
-/// board's other refusals verbatim.
+/// carrying members the older-board arm; `base_superseded` its own arm
+/// naming the trunk's first member, out of the shot's table, whose other
+/// codes are the library's own; `withheld` the window's origin;
+/// `signed_session_required`; and the board's other refusals verbatim.
 #[test]
 fn every_refusal_arm_carries_its_face_data() {
     let (world, _) = World::base();
@@ -1696,7 +1698,9 @@ fn every_refusal_arm_carries_its_face_data() {
     dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "malformed", "detail": "unknown field `links`", "disposition": "permanent", "op": "unparseable"}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OlderBoard { detail: Some("unknown field `links`".into()) }));
     refuse("base_superseded", json!({}));
-    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Shot { code: "base_superseded".into() })));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::BaseSuperseded { first: a(&format!("{E}.1")) }), "its own arm, never the library's fault");
+    refuse("base_not_in_chain", json!({}));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Shot { code: "base_not_in_chain".into() })));
     refuse("withheld", json!({"site": {"addr": O}}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::WindowWithheld { origin: Some(a(O)) }));
     refuse("signed_session_required", json!({}));
@@ -2033,7 +2037,17 @@ fn an_unowned_also_draft_is_the_unowned_draft_arm() {
 const X: &str = "1.0.1.0.30";
 
 /// What `draft_base` answers.
-type BaseRead = Result<Option<(Address, u64)>, Fault>;
+type BaseRead = Result<DraftBase, Fault>;
+
+/// The answer naming `base` as recorded, at the count `copied`.
+fn recorded(base: &str, copied: u64) -> BaseRead {
+    Ok(DraftBase::Recorded { base: a(base), copied })
+}
+
+/// The answer naming no base in the chain, and why.
+fn unrecorded(why: Unrecorded) -> BaseRead {
+    Ok(DraftBase::Unrecorded(why))
+}
 
 /// `draft_base` over `world`, `doc` and `draft`.
 fn base_of(world: World, doc: &str, draft: &str) -> (Arc<Scripted>, BaseRead) {
@@ -2056,7 +2070,7 @@ fn a_staged_drafts_base_is_the_boards_record_read_once() {
     let e1 = format!("{E}.1");
     world.stage(D, &e1);
     let (dialer, base) = base_of(world, E, D);
-    assert_eq!(base, Ok(Some((a(&e1), 19))), "the recorded base and the count the copy took");
+    assert_eq!(base, recorded(&e1, 19), "the recorded base and the count the copy took");
     assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "two reads: no feed, no link, no extent");
     let asked: Vec<Value> = dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
     assert_eq!(asked, [json!(E), json!(D)], "the trunk, then the draft");
@@ -2066,29 +2080,35 @@ fn a_staged_drafts_base_is_the_boards_record_read_once() {
     let d2 = "1.0.1.0.31";
     world.doc(d2, false, ACCOUNT, vec![run(d2, 1, 3)]);
     world.stage(d2, X);
-    assert_eq!(base_of(world, X, d2).1, Ok(Some((a(X), 0))), "doc itself while the chain is empty");
+    assert_eq!(base_of(world, X, d2).1, recorded(X, 0), "doc itself while the chain is empty");
     // A trunk the board holds no record of is that fault, ahead of the rest.
     let (mut world, _) = World::base();
     world.stage(D, &e1);
     assert_eq!(base_of(world, "1.0.1.0.40", D).1, Err(Fault::NoSuchDocument(a("1.0.1.0.40"))));
 }
 
-/// NO RECORD, NO BASE: a draft the board records no base for — `D` as the
-/// fixture holds it, never staged — answers `None`, never the trunk's head,
-/// and so does an alternative staged from it, which inherits none. A base
-/// the board names without its count is an answer the client cannot read,
-/// never no base (SP-14).
+/// NO RECORD, NO BASE — AND WHY: a draft the board records no base for is
+/// unrecorded with the reason its one answer gives, never the trunk's head:
+/// `D` as the fixture holds it, never staged, naming no source, is
+/// `NoRecord`, and so is a draft whose source lies in `E`'s own chain with
+/// no base beside it; an alternative staged from `D`, which inherits none
+/// and names `D` its source, is `FreeStanding`. A base the board names
+/// without its count is an answer the client cannot read, never no base
+/// (SP-14).
 #[test]
-fn a_draft_the_board_records_no_base_for_answers_none() {
+fn a_draft_the_board_records_no_base_for_is_unrecorded_with_its_reason() {
     let (world, _) = World::base();
     let (dialer, none) = base_of(world, E, D);
-    assert_eq!(none, Ok(None), "no record: no base, never the head");
+    assert_eq!(none, unrecorded(Unrecorded::NoRecord), "no record: no base, never the head");
     assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "the draft read once, nothing after it");
+    let (mut world, _) = World::base();
+    world.docs.get_mut(D).unwrap().source = Some(format!("{E}.1"));
+    assert_eq!(base_of(world, E, D).1, unrecorded(Unrecorded::NoRecord), "a source in E's own chain and no base: never staged");
     let (mut world, _) = World::base();
     let alternative = "1.0.1.0.31";
     world.doc(alternative, false, ACCOUNT, vec![run(D, 1, 10)]);
     world.stage(alternative, D);
-    assert_eq!(base_of(world, E, alternative).1, Ok(None), "an alternative of an unrecorded draft stands free");
+    assert_eq!(base_of(world, E, alternative).1, unrecorded(Unrecorded::FreeStanding), "an alternative of an unrecorded draft stands free");
     let (mut world, _) = World::base();
     world.docs.get_mut(D).unwrap().base = Some(format!("{E}.1"));
     let unread = base_of(world, E, D).1;
@@ -2096,22 +2116,22 @@ fn a_draft_the_board_records_no_base_for_answers_none() {
 }
 
 /// A BASE IN ANOTHER CHAIN IS NONE OF THIS ONE: a draft staged from the
-/// public set `S` answers `S` asked of `S`'s chain and `None` asked of
+/// public set `S` answers `S` asked of `S`'s chain and `OtherChain` asked of
 /// `E`'s, and so does one staged from a document whose address only begins
 /// with `E`'s text — never a member of `E`'s chain.
 #[test]
-fn a_recorded_base_outside_the_docs_chain_answers_none() {
+fn a_recorded_base_outside_the_docs_chain_is_another_chains() {
     let (mut world, _) = World::base();
     world.stage(D, S);
-    assert_eq!(base_of(world, E, D).1, Ok(None), "S is no version of E");
+    assert_eq!(base_of(world, E, D).1, unrecorded(Unrecorded::OtherChain), "S is no version of E");
     let (mut world, _) = World::base();
     world.stage(D, S);
-    assert_eq!(base_of(world, S, D).1, Ok(Some((a(S), 7))), "S's own chain: the bare document at its count");
+    assert_eq!(base_of(world, S, D).1, recorded(S, 7), "S's own chain: the bare document at its count");
     let (mut world, _) = World::base();
     let near = format!("{E}1");
     world.doc(&near, true, ACCOUNT, Vec::new());
     world.stage(D, &near);
-    assert_eq!(base_of(world, E, D).1, Ok(None), "{near} is no member of {E}'s chain");
+    assert_eq!(base_of(world, E, D).1, unrecorded(Unrecorded::OtherChain), "{near} is no member of {E}'s chain");
 }
 
 /// THE BASE MOVES WITH EACH PUBLICATION (B3-S10): `D` staged from `E.1`
@@ -2128,13 +2148,14 @@ fn a_drafts_base_moves_to_the_member_each_publication_makes() {
     let (dialer, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
-    assert_eq!(draft_base(&p, &a(E), &a(D)), Ok(inputs().base), "the stage's record is the request's base");
+    let (base, copied) = inputs().base.expect("the fixture's base");
+    assert_eq!(draft_base(&p, &a(E), &a(D)), Ok(DraftBase::Recorded { base, copied }), "the stage's record is the request's base");
     let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(Some(S2)));
     let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!("acknowledged") };
     let e2 = format!("{E}.2");
     assert_eq!(ack.member.to_string(), e2);
     let whole: u64 = dialer.world().docs[&e2].runs.iter().map(|r| r.width).sum();
-    assert_eq!(draft_base(&p, &a(E), &a(D)), Ok(Some((a(&e2), whole))), "the member the publication made, at its whole count");
+    assert_eq!(draft_base(&p, &a(E), &a(D)), recorded(&e2, whole), "the member the publication made, at its whole count");
     assert_eq!(dialer.world().docs[D].source.as_deref(), Some(e1.as_str()), "the source the stage copied stays");
     // The mint form: a draft with no base stands on its edition's first member.
     let (mut world, _) = World::base();
@@ -2147,5 +2168,103 @@ fn a_drafts_base_moves_to_the_member_each_publication_makes() {
     let Built::Request(mut request) = build(&p, &minting, &e, &panel, &Confirmed::default()).unwrap() else { panic!("inert") };
     let Sent::Acknowledged(ack) = send(&p, &minting, &mut request).unwrap() else { panic!("acknowledged") };
     let edition = ack.edition.clone().expect("the edition minted");
-    assert_eq!(draft_base(&p, &edition, &a(D)), Ok(Some((ack.member.clone(), 10))), "its first publication's member");
+    assert_eq!(draft_base(&p, &edition, &a(D)), Ok(DraftBase::Recorded { base: ack.member.clone(), copied: 10 }), "its first publication's member");
+}
+
+// ── THE BASE's STANDING AND THE FAMILY LEFT BEHIND ───────────────────────
+
+/// THE STANDING (D4 (a)+(b′)), off ONE PROBE — `doc_metadata` of the trunk
+/// member after the base's, and no `/changes` read: a draft staged from the
+/// head `E.1` stands `AtHead`, `E.2` absent; once a later publication lands
+/// `E.2` it stands `Behind`, and so does a daughter base `E.1.1`, probed at
+/// `E.2` and never at `E.1.2`; a draft staged from the memberless `X` stands
+/// `First`, its probe `X.1`, and once `X.1` stands `SupersededFirst` naming
+/// it. A probe refused otherwise is that fault, never the member's absence
+/// (SP-14).
+#[test]
+fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
+    let (e1, e2, e11) = (format!("{E}.1"), format!("{E}.2"), format!("{E}.1.1"));
+    let (mut world, _) = World::base();
+    world.stage(D, &e1);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let probed = |dialer: &Arc<Scripted>| -> Vec<Value> { dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect() };
+    assert_eq!(standing(&p, &a(E), &a(&e1)), Ok(Standing::AtHead), "E.2 is not registered: E.1 is the head");
+    assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string()], vec![json!(e2)]), "ONE probe, the trunk member after the base's, and no feed read");
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(Some(S2)));
+    let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!("acknowledged") };
+    assert_eq!(ack.member.to_string(), e2, "a later publication lands E.2");
+    dialer.clear();
+    assert_eq!(standing(&p, &a(E), &a(&e1)), Ok(Standing::Behind), "a trunk member follows E.1");
+    assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string()], vec![json!(e2)]));
+    dialer.world().doc(&e11, true, ACCOUNT, vec![run(E, 1, 19)]);
+    dialer.clear();
+    assert_eq!(standing(&p, &a(E), &a(&e11)), Ok(Standing::Behind), "a daughter of E.1, and E.2 stands");
+    assert_eq!(probed(&dialer), [json!(e2)], "the member after the daughter's trunk member, never E.1.2");
+    // The bare document: the first while its chain is empty, superseded
+    // once its first member stands.
+    let (mut world, _) = World::base();
+    world.doc(X, true, ACCOUNT, Vec::new());
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let x1 = format!("{X}.1");
+    assert_eq!(standing(&p, &a(X), &a(X)), Ok(Standing::First), "X's chain is empty");
+    assert_eq!(probed(&dialer), [json!(x1)], "the bare document's probe is its first member");
+    dialer.world().doc(&x1, true, ACCOUNT, Vec::new());
+    assert_eq!(standing(&p, &a(X), &a(X)), Ok(Standing::SupersededFirst { first: a(&x1) }), "version 1 published since");
+    assert!(dialer.ops().iter().all(|op| op == "doc_metadata"), "no feed read: {:?}", dialer.ops());
+    dialer.world().history_busy = SCAN_BUSY_REISSUES as usize + 1;
+    assert_eq!(standing(&p, &a(X), &a(X)), Err(Fault::Busy), "a refused probe is that fault, never an absent member");
+}
+
+/// THE FAMILY LEFT BEHIND (skep #744): every draft `also` names, in its
+/// order, then — where the publication becomes the head — every other
+/// draft of the person's own list whose recorded base is the rendering
+/// draft's, in the list's order, off one `doc_metadata` each: at `E.1`,
+/// `AtHead`, `Q` staged from `E.1` is left behind, `N` with no base and `R`
+/// on another chain's base are not, `G` the board does not hold is passed
+/// over, and the rendering draft and `A`, which `also` names, are never
+/// read; at `Behind` the publication lands a daughter and `also` alone is
+/// answered, nothing read; at the bare document, `First`, a draft staged
+/// from it is left behind; at the mint form nothing is. A read refused
+/// otherwise is that fault.
+#[test]
+fn the_family_left_behind_is_also_then_the_drafts_on_this_base_where_the_publication_heads() {
+    let e1 = format!("{E}.1");
+    let (q, r, g) = ("1.0.1.0.32", "1.0.1.0.33", "1.0.1.0.34");
+    let (mut world, _) = family_world();
+    world.stage(D, &e1);
+    world.stage(A, &e1);
+    world.doc(q, false, ACCOUNT, vec![run(E, 1, 19)]);
+    world.stage(q, &e1);
+    world.doc(r, false, ACCOUNT, vec![run(S, 1, 7)]);
+    world.stage(r, S);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let own = [a(D), a(N), a(q), a(A), a(r), a(g)];
+    assert_eq!(left_behind(&p, &inputs, &Standing::AtHead, &own), Ok(vec![a(A), a(q)]), "`also` first, then the drafts on E.1 in the list's order");
+    let asked: Vec<Value> = dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect();
+    assert_eq!(asked, [json!(N), json!(q), json!(r), json!(g)], "one read per other draft, never the rendering draft's or one `also` names");
+    assert_eq!(dialer.ops().len(), 4, "the reads alone: {:?}", dialer.ops());
+    dialer.clear();
+    assert_eq!(left_behind(&p, &inputs, &Standing::Behind, &own), Ok(vec![a(A)]), "the head does not move: `also` alone");
+    assert!(dialer.ops().is_empty(), "nothing read at Behind: {:?}", dialer.ops());
+    let minting = Inputs { doc: None, mint: Some(a(ACCOUNT)), base: None, ..family_inputs() };
+    assert_eq!(left_behind(&p, &minting, &Standing::AtHead, &own), Ok(Vec::new()), "the mint form has no base to leave a draft on");
+    assert_eq!(left_behind(&p, &inputs, &Standing::AtHead, &[a(OTHER)]), Err(Fault::Unreadable(a(OTHER))), "a refused read is that fault, never a draft passed over");
+    // The bare document: its first member leaves the drafts staged from it.
+    let (first, second) = ("1.0.1.0.35", "1.0.1.0.36");
+    let (mut world, _) = World::base();
+    world.doc(X, true, ACCOUNT, Vec::new());
+    for d in [first, second] {
+        world.doc(d, false, ACCOUNT, vec![run(d, 1, 3)]);
+        world.stage(d, X);
+    }
+    let (_, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let bare = Inputs { doc: Some(a(X)), base: Some((a(X), 0)), draft: a(first), also: Vec::new(), ..inputs };
+    assert_eq!(left_behind(&p, &bare, &Standing::First, &[a(first), a(second)]), Ok(vec![a(second)]), "the first version leaves the bare document's other drafts behind");
 }

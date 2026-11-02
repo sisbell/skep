@@ -16,7 +16,10 @@
 //! BASE (B3-S10): the base the board records for the draft at its `stage`
 //! and moves to the member each publication of it makes, read off the board
 //! by [`draft_base`] for the caller's [`Inputs::base`] and never taken from
-//! the caller's own index. The order:
+//! the caller's own index, or why the board records none; its STANDING
+//! against the document's newest version, typed by [`standing`] off one
+//! probe; and the drafts of the family the publication leaves behind,
+//! [`left_behind`]. The order:
 //!
 //! 1. [`enumerate`](mod@enumerate) — THE ENUMERATION (§5.1): one `image` of the draft
 //!    inverted over the held selection, one `find_links_v` over the
@@ -94,7 +97,7 @@ pub mod send;
 #[cfg(test)]
 mod tests;
 
-pub use base::draft_base;
+pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
 pub use enumerate::{enumerate, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
@@ -281,11 +284,11 @@ pub struct Inputs {
     /// stands (`send`'s arm).
     pub claim: bool,
     /// The base and `base_extent` — `None` the birth shape: the draft's own
-    /// base as [`draft_base`] reads it off the board, the version its `stage`
-    /// recorded (the bare document while the chain is empty) or the member
-    /// its newest publication made, with the extent the board records, so
-    /// the shot lands after it, or as its daughter where the trunk has moved
-    /// past it (PUB-2.44; B3-S10).
+    /// base as [`draft_base`] reads it off the board (`base::Base::Recorded`),
+    /// the version its `stage` recorded (the bare document while the chain
+    /// is empty) or the member its newest publication made, with the extent
+    /// the board records, so the shot lands after it, or as its daughter
+    /// where the trunk has moved past it (PUB-2.44; B3-S10).
     pub base: Option<(Address, u64)>,
     /// `D`, the RENDERING draft — the draft whose arrangement the selection
     /// renders, the home of the kept places and of the records for its own

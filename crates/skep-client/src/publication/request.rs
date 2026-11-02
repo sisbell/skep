@@ -10,7 +10,9 @@
 //! re-ordered since the panel's reads is a DIFFERENCE. Any difference is
 //! answered as a [`Restatement`], data for the caller to confirm again over
 //! what is left; nothing is sent on it. The image's places are the kept
-//! places the request then carries per draft-native run.
+//! places the request then carries per draft-native run. The base's
+//! standing is the caller's to read again beside it ([`super::standing`]),
+//! a moved one riding the same re-statement.
 //!
 //! **The request.** From the confirmed rows: the runs from the held
 //! selection as the re-read placed them — a split run as its pieces in the
@@ -56,6 +58,7 @@ use crate::board::answers::LinkSpan;
 use crate::board::frames::{self, PublishFrame, T_EDITION, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
+use super::base::Standing;
 use super::enumerate::{enumerate_with, Enumeration, Placement, Record};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, RowKind};
@@ -117,11 +120,16 @@ pub struct Restatement {
     /// Held runs whose placement changed: the run's index and where it
     /// stands now.
     pub selection: Vec<(usize, Placement)>,
+    /// The base's standing where it moved since the panel — a sibling's shot
+    /// landing while the panel stood — as the caller typed it again; `None`
+    /// where it stands as it stood, and from [`restate`], which diffs the
+    /// enumeration and the panel alone.
+    pub standing: Option<Standing>,
 }
 
 impl Restatement {
     fn is_empty(&self) -> bool {
-        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty()
+        self.left.is_empty() && self.superseded.is_empty() && self.came.is_empty() && self.removals_undone.is_empty() && self.removals_came.is_empty() && self.selection.is_empty() && self.standing.is_none()
     }
 }
 

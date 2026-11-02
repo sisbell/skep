@@ -7,11 +7,12 @@
 //! enumerates, holds the panel, counts, composes, signs and sends inside
 //! `confirm`, and hands back DATA — every member a code, a kind or an
 //! address, never a string a person reads (the strings `ux/copy.md`'s and
-//! the UI lane's). `open` reads the draft's base (**The base**), runs the
-//! library's `enumerate` → `panel` and prices the request as it would stand
-//! with every private row OFF and every window kept private — the widest
-//! request the default switches make — and answers the panel `{rows,
-//! formatting, read_with, count, price, windows, inherited, hold?}`;
+//! the UI lane's). `open` reads the draft's base and types its standing
+//! (**The base**), runs the library's `enumerate` → `panel` and prices the
+//! request as it would stand with every private row OFF and every window
+//! kept private — the widest request the default switches make — and
+//! answers the panel `{rows, formatting, read_with, count, price, windows,
+//! inherited, standing?, left_behind, hold?}`;
 //! `count` answers the four numbers and the price over the rows as
 //! switched, off the held panel, PURE LOCAL — no frame sent, the price the
 //! open's request re-priced with the entries the switches add, each end
@@ -19,7 +20,8 @@
 //! member-position form for a span on the draft's own words); `confirm`
 //! runs the re-read, the build, the price's verdict, the send and the
 //! landed test, and answers ONCE with the acknowledgment, the re-statement
-//! or a typed refusal; `cancel` drops the standing panel, idempotent.
+//! — a moved standing among what it states — or a typed refusal; `cancel`
+//! drops the standing panel, idempotent.
 //!
 //! **The panels** ([`Publications`]). One family per (board, principal): the
 //! STANDING panel — the ceremony that stands, the one `count`, `confirm` and
@@ -28,13 +30,14 @@
 //! behind it, held with the moment it was put there; an `open` on a held
 //! draft with no selection, or the held one, re-opens it as it stands — the
 //! switches and answers the page last sent it, the base its first open
-//! read, `hold: {since}`, the windows re-read and never from the read's
-//! cache — while a differing selection ends the hold, the held answers
-//! lost, a fresh panel answered (item 1 (a)). Every panel records the
-//! session it was opened or last touched under and dies with it: the bus's
-//! watcher ([`Publications::ended`]) drops a dead session's panels and says
-//! `ended` for each, whichever thread met the death (§4b.1's one session
-//! rule; §4b.2).
+//! read and the family it left behind, `hold: {since}`, the base's standing
+//! typed again and the windows re-read, never from the read's cache — while
+//! a differing selection ends the hold, the held answers lost, a fresh
+//! panel answered (item 1 (a)). Every panel records the session it was
+//! opened or last touched under and dies with it: the bus's watcher
+//! ([`Publications::ended`]) drops a dead session's panels and says `ended`
+//! for each, whichever thread met the death (§4b.1's one session rule;
+//! §4b.2).
 //!
 //! **Before any frame.** A bare session is refused `write_in_bare_session`
 //! at `open` and at `confirm`, since a publication is a write and the
@@ -74,11 +77,33 @@
 //! after the version it was made from, or as that version's DAUGHTER where
 //! the trunk has moved past it (PUB-2.44), never over the newer words.
 //! Where the board records no base in `doc`'s chain, `open` refuses
-//! `base_unrecorded` naming the draft and `doc`, and never takes the
-//! chain's head in its place. The read runs once the session stands and
-//! before the index or the draft is read, so the refusal waits on neither;
-//! the mint form has no chain and is the birth shape. A `base` the page
-//! sends is no member of the row and is read by nothing.
+//! `base_unrecorded` naming the draft, `doc` and the `reason` — `no_record`
+//! (a draft minted and never staged), `other_chain` (a base in another
+//! document's chain) or `free_standing` (an alternative of a draft the board
+//! records no base for) — and never takes the chain's head in its place.
+//! THE STANDING (D4 (a)+(b′)) is that base typed against the chain's head
+//! by the library's `standing`, one probe of the trunk member after it, and
+//! told before any act: `at_head`; `behind`, told and never refused, the
+//! shot landing the daughter; or `first`. A draft staged from the bare
+//! document whose first member now stands is refused `base_superseded`
+//! naming the draft, `doc` and that member, `first`, since the board would
+//! refuse its shot. `confirm` reads the base and types the standing again
+//! beside its re-read: a standing moved since the panel — a sibling's shot
+//! landing while it stood — is re-stated with the new `standing`, nothing
+//! sent, and one that now refuses is refused as at `open`. The reads run
+//! once the session stands and before the index or the draft is read, so a
+//! refusal waits on neither; the mint form has no chain and is the birth
+//! shape, with no standing. A `base` the page sends is no member of the row
+//! and is read by nothing.
+//!
+//! **The family left behind** (skep #744): every draft `also` names, then —
+//! where the publication becomes the head, its standing `at_head` or
+//! `first` — every other draft of the person's own whose recorded base is
+//! this draft's, by the library's `left_behind`, one `doc_metadata` per
+//! draft of the shell's own list (the document index's drafts under the
+//! session's account, read for it even where the page passes
+//! `readable_drafts`). It is read at a fresh open alone: a re-opened panel
+//! keeps the family it first left behind, and `confirm` reads it never.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -89,7 +114,7 @@ use skep_address::Address;
 use skep_client::address::is_address_text;
 use skep_client::board::{frames, Answer, LinkSpan, LinkValue, Rejection};
 use skep_client::halt::Halt;
-use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, Missing, OriginAnswer, OwnFault, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Switches, Term, Verdict};
+use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, Missing, OriginAnswer, OwnFault, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, Switches, Term, Unrecorded, Verdict};
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 
@@ -123,6 +148,12 @@ struct PanelState {
     /// When the panel was put behind another, in unix milliseconds; `None`
     /// while it stands.
     since: Option<u64>,
+    /// The base's standing as last typed — at the open, at a re-open, at a
+    /// confirm that re-stated it; `None` at the mint form.
+    standing: Option<Standing>,
+    /// The drafts of the family this publication leaves behind, as the open
+    /// read them.
+    left_behind: Vec<Address>,
 }
 
 impl PanelState {
@@ -333,6 +364,29 @@ impl Shell {
         }
     }
 
+    /// Returns `draft`'s base in `doc`'s chain with its extent, read off the
+    /// board, and its standing against the chain's head (**The base**).
+    ///
+    /// # Errors
+    ///
+    /// In this order: the base's reads' faults, as `fault` maps them for
+    /// `call`; `base_unrecorded` naming the draft, `doc` and the `reason`
+    /// where the board records no base for the draft in `doc`'s chain; the
+    /// standing's probe's faults; then `base_superseded` naming the draft,
+    /// `doc` and `first` where the base is the bare document and its first
+    /// member stands.
+    fn typed_base(&self, session: &SessionEntry, p: &Publisher<'_>, call: &str, doc: &Address, draft: &Address) -> Result<((Address, u64), Standing), Refusal> {
+        let fault = |f: Fault| self.fault(session, call, f);
+        let (base, copied) = match lib::draft_base(p, doc, draft).map_err(fault)? {
+            lib::base::Base::Recorded { base, copied } => (base, copied),
+            lib::base::Base::Unrecorded(why) => return Err(Refusal::shell(Name::BASE_UNRECORDED, json!({"draft": draft.to_string(), "doc": doc.to_string(), "reason": unrecorded_json(why)}))),
+        };
+        match lib::standing(p, doc, &base).map_err(fault)? {
+            Standing::SupersededFirst { first } => Err(Refusal::shell(Name::BASE_SUPERSEDED, json!({"draft": draft.to_string(), "doc": doc.to_string(), "first": first.to_string()}))),
+            standing => Ok(((base, copied), standing)),
+        }
+    }
+
     /// Returns the draft's whole arrangement as I-runs: the selection where
     /// the page passes none (P1's select-all).
     ///
@@ -429,13 +483,17 @@ impl Shell {
     /// selection?, notes?, readable_drafts?, published?})` with the panel.
     ///
     /// The panel is `{rows, formatting, read_with, count, price, windows,
-    /// inherited, hold?}` (the module doc): a held or standing panel of the
-    /// draft re-opened as it stands where the selection is none or the same,
-    /// its windows re-read (`also` and the base as it held them); else the
-    /// draft's base read off the board (**The base**) and the composition's
-    /// first steps run afresh over the session's board, the shell's own lists
-    /// where the page passes none, the family's other drafts `also` names
-    /// re-minted beside the rendering draft (**The family**).
+    /// inherited, standing?, left_behind, hold?}` (the module doc): a held or
+    /// standing panel of the draft re-opened as it stands where the selection
+    /// is none or the same, its base's standing typed again and its windows
+    /// re-read (`also`, the base and the family left behind as it held
+    /// them); else the draft's base read off the board and its standing
+    /// typed (**The base**), the family it leaves behind read (**The family
+    /// left behind**) and the composition's first steps run afresh over the
+    /// session's board, the shell's own lists where the page passes none,
+    /// the family's other drafts `also` names re-minted beside the rendering
+    /// draft (**The family**). `standing` is absent at the mint form, and
+    /// `left_behind` empty there.
     ///
     /// # Errors
     ///
@@ -450,19 +508,25 @@ impl Shell {
     /// 2. `malformed_args` naming `session`, then `session_ended`;
     ///    `write_in_bare_session` naming the call; `store_unreadable`,
     ///    `no_account`;
-    /// 3. a held or standing panel re-opened: its windows read's faults,
-    ///    as the reads' below;
+    /// 3. a held or standing panel re-opened: at the document form its base
+    ///    read and its standing typed again, refused as at step 4; then its
+    ///    windows read's faults, as the reads' below;
     /// 4. at the document form, the base read's: `no_such_document` or
     ///    `unreadable` naming `doc` or the draft, `busy`, `session_died`,
     ///    `shape`, the board's own verdicts verbatim, `unreachable` — then
-    ///    `base_unrecorded` naming the draft and `doc` where the board
-    ///    records no base for the draft in `doc`'s chain;
-    /// 5. `feed_stopped` where the shell's own lists are owed and the
-    ///    board's feed thread has stopped;
-    /// 6. the reads': `unreadable`, `no_such_document`, `busy`,
-    ///    `selection_not_arranged`, `shape`, the board's own verdicts
-    ///    verbatim, `unreachable`, and `session_died` where a read met the
-    ///    death signal.
+    ///    `base_unrecorded` naming the draft, `doc` and the `reason` where
+    ///    the board records no base for the draft in `doc`'s chain; then the
+    ///    standing's probe's, as the base read's — then `base_superseded`
+    ///    naming the draft, `doc` and `first` where the draft's base is the
+    ///    bare document and its first member stands;
+    /// 5. `feed_stopped` where the shell's own lists are owed — the page
+    ///    passing no `readable_drafts` or no `published`, or the standing
+    ///    `at_head` or `first` — and the board's feed thread has stopped;
+    /// 6. the reads' — the draft's arrangement where no selection is passed,
+    ///    the family left behind, the enumeration, the panel: `unreadable`,
+    ///    `no_such_document`, `busy`, `selection_not_arranged`, `shape`, the
+    ///    board's own verdicts verbatim, `unreachable`, and `session_died`
+    ///    where a read met the death signal.
     pub(super) fn publication_open(&self, args: &Value) -> Result<Value, Refusal> {
         // The row's own members first, each refused in another form before
         // the session is looked up — the order every row keeps.
@@ -491,9 +555,13 @@ impl Shell {
         let p = signed.publisher(&session);
         let fault = |f: Fault| self.fault(&session, "publication.open", f);
         // A panel of this draft standing or held: re-opened as it stands
-        // where the selection is none or the one it holds (item 1 (a)).
+        // where the selection is none or the one it holds (item 1 (a)), its
+        // base's standing typed again.
         if let Some(mut state) = self.publications.of_draft(&key, &draft) {
             if selection.as_ref().is_none_or(|s| *s == state.inputs.selection) {
+                if let Some(trunk) = &state.inputs.doc {
+                    state.standing = Some(self.typed_base(&session, &p, "publication.open", trunk, &draft)?.1);
+                }
                 state.panel.windows = lib::windows(&p, &state.inputs).map_err(fault)?;
                 let hold = state.since.map(|since| json!({"since": since}));
                 state.session = session.reference.clone();
@@ -505,32 +573,40 @@ impl Shell {
             // A differing selection ends the hold: the held answers lost.
             self.publications.drop_draft(&key, &draft);
         }
-        // The base: the draft's own, read off the board — never the chain's
-        // head where nothing names it; the birth shape at the mint form.
-        let base = match &doc {
+        // The base: the draft's own, read off the board and typed against
+        // the chain's head — never the head where nothing names it; the
+        // birth shape at the mint form, which has no chain to stand in.
+        let (base, standing) = match &doc {
             Some(trunk) => {
-                let unrecorded = || Refusal::shell(Name::BASE_UNRECORDED, json!({"draft": draft.to_string(), "doc": trunk.to_string()}));
-                Some(lib::draft_base(&p, trunk, &draft).map_err(fault)?.ok_or_else(unrecorded)?)
+                let (base, standing) = self.typed_base(&session, &p, "publication.open", trunk, &draft)?;
+                (Some(base), Some(standing))
             }
-            None => None,
+            None => (None, None),
         };
-        let (own_drafts, own_published) = if readable_drafts.is_none() || published.is_none() { self.own_lists(&session)? } else { (Vec::new(), Vec::new()) };
+        // The shell's own lists: where the page passes none, and for the
+        // family this publication leaves behind where it becomes the head.
+        let heads = matches!(standing, Some(Standing::AtHead | Standing::First));
+        let (own_drafts, own_published) = if readable_drafts.is_none() || published.is_none() || heads { self.own_lists(&session)? } else { (Vec::new(), Vec::new()) };
         let selection = match selection {
             Some(s) => s,
             None => self.whole_draft(&session, &draft)?,
         };
-        let mut readable_drafts = readable_drafts.unwrap_or(own_drafts);
-        if !readable_drafts.contains(&draft) {
-            readable_drafts.push(draft.clone());
+        let mut readable = readable_drafts.unwrap_or_else(|| own_drafts.clone());
+        if !readable.contains(&draft) {
+            readable.push(draft.clone());
         }
-        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts, published: published.unwrap_or(own_published) };
+        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts: readable, published: published.unwrap_or(own_published) };
+        let left_behind = match &standing {
+            Some(standing) => lib::left_behind(&p, &inputs, standing, &own_drafts).map_err(fault)?,
+            None => Vec::new(),
+        };
         let enumeration = lib::enumerate(&p, &inputs).map_err(fault)?;
         let panel = lib::panel(&p, &inputs, &enumeration).map_err(fault)?;
         let base = match lib::build(&p, &inputs, &enumeration, &panel, &pricing_confirmed(&panel)).map_err(fault)? {
             Built::Request(request) => Some(*request),
             Built::Inert(_) => None,
         };
-        let state = PanelState { board: session.board_reference.clone(), session: session.reference.clone(), inputs, enumeration, panel, base, switches: Switches::default(), answers: BTreeMap::new(), since: None };
+        let state = PanelState { board: session.board_reference.clone(), session: session.reference.clone(), inputs, enumeration, panel, base, switches: Switches::default(), answers: BTreeMap::new(), since: None, standing, left_behind };
         let answer = panel_json(&state, None);
         self.publications.stand(key, state);
         Ok(answer)
@@ -657,20 +733,22 @@ impl Shell {
     /// acknowledgment, the re-statement or a typed refusal (the module doc).
     ///
     /// Inside the one call: the standing hold asked before anything is
-    /// composed; the re-read, a difference answered as the re-statement with
-    /// nothing sent and the panel re-stated for the next confirm; the build,
-    /// an inert request refused `inert`; the price's verdict, `over_cap`; a
-    /// head record that stands and cannot be read, or a claimed board that
-    /// serves none, `head_unreadable` with the refusal that says why (SP-14);
-    /// then `sent`, the library's send with its one re-ask, its re-sign and
-    /// its landed test, a lost answer the board holds nothing of re-sent
-    /// once; the outcome's event; and at the board's `kept_place_moved` the
-    /// re-read run again in this call, its difference answered as the
-    /// re-statement with the race's key, the refusal crossing only where it
-    /// finds none. A death at the write ends the session: where the restart
-    /// arm re-opens it the landed test runs under the new session before
-    /// any re-send, else the `session_ended` arm, the panels gone with the
-    /// session.
+    /// composed; at the document form the draft's base read again and its
+    /// standing typed again (**The base**); the re-read, a difference — a
+    /// moved standing among them, beside the enumeration's or alone —
+    /// answered as the re-statement with nothing sent and the panel
+    /// re-stated for the next confirm; the build, an inert request refused
+    /// `inert`; the price's verdict, `over_cap`; a head record that stands
+    /// and cannot be read, or a claimed board that serves none,
+    /// `head_unreadable` with the refusal that says why (SP-14); then
+    /// `sent`, the library's send with its one re-ask, its re-sign and its
+    /// landed test, a lost answer the board holds nothing of re-sent once;
+    /// the outcome's event; and at the board's `kept_place_moved` the re-read
+    /// run again in this call, its difference answered as the re-statement
+    /// with the race's key, the refusal crossing only where it finds none. A
+    /// death at the write ends the session: where the restart arm re-opens
+    /// it the landed test runs under the new session before any re-send,
+    /// else the `session_ended` arm, the panels gone with the session.
     ///
     /// # Errors
     ///
@@ -678,11 +756,14 @@ impl Shell {
     /// `malformed_args` naming `session`, then `session_ended`; `no_panel`;
     /// the arguments against the panel (`confirmed_args`);
     /// `write_in_bare_session`; `stopped`, `poisoned` or `halted` where a
-    /// hold stands at the board; `store_unreadable`, `no_account`; then the
-    /// reads' and the send's faults as `publication.open` names them, the
-    /// board term's read among them (`SessionEntry::signing_term`). A
-    /// refusal of the composition or the board is the RESULT's third shape,
-    /// never an error here.
+    /// hold stands at the board; `store_unreadable`, `no_account`; at the
+    /// document form the base's re-read and the standing's, refused as
+    /// `publication.open`'s step 4 — `base_unrecorded` or `base_superseded`
+    /// with the `publication` event's `refused` naming it; then the reads'
+    /// and the send's faults as `publication.open` names them, the board
+    /// term's read among them (`SessionEntry::signing_term`). A refusal of
+    /// the composition or the board is the RESULT's third shape, never an
+    /// error here.
     pub(super) fn publication_confirm(&self, args: &Value) -> Result<Value, Refusal> {
         let (on, destinations, raw_answers) = Self::confirmed_form(args)?;
         let session = self.session(&args["session"])?;
@@ -706,12 +787,33 @@ impl Shell {
         let inputs = &state.inputs;
         let p = signed.publisher(&session);
         let fault = |f: Fault| self.fault(&session, "publication.confirm", f);
+        // The base read again and its standing typed again (D4 (b′)): one
+        // that now refuses is refused as at the open, by name.
+        let standing = match &inputs.doc {
+            Some(trunk) => match self.typed_base(&session, &p, "publication.confirm", trunk, &draft) {
+                Ok((_, standing)) => Some(standing),
+                Err(refusal) => {
+                    if matches!(&refusal, Refusal::Shell { name, .. } if *name == Name::BASE_UNRECORDED || *name == Name::BASE_SUPERSEDED) {
+                        self.publication_event(&session, &draft, "refused", json!({"arm": refusal.name()}));
+                    }
+                    return Err(refusal);
+                }
+            },
+            None => None,
+        };
         let rr = lib::reread(&p, inputs, &state.enumeration, &state.panel).map_err(fault)?;
-        if let Some(restatement) = rr.restatement {
+        // A standing moved since the panel rides the enumeration's
+        // re-statement where one stands, or is re-stated alone.
+        let mut restatement = rr.restatement;
+        if standing != state.standing {
+            restatement.get_or_insert_with(Restatement::default).standing = standing.clone();
+        }
+        if let Some(restatement) = restatement {
             let (enumeration, panel) = (rr.enumeration, rr.panel);
             self.publications.update(&key, |s| {
                 s.enumeration = enumeration;
                 s.panel = panel;
+                s.standing = standing;
             });
             self.publication_event(&session, &draft, "restated", json!({}));
             return Ok(restated_json(&restatement, None));
@@ -991,6 +1093,25 @@ fn inherited_json(i: &lib::Inherited) -> Value {
     json!({"draft": i.draft.to_string(), "passages": i.passages})
 }
 
+/// Returns a base's standing as the panel and the re-statement spell it.
+fn standing_json(s: &Standing) -> &'static str {
+    match s {
+        Standing::AtHead => "at_head",
+        Standing::Behind => "behind",
+        Standing::First => "first",
+        Standing::SupersededFirst { .. } => "superseded_first",
+    }
+}
+
+/// Returns why the board records no base as `base_unrecorded` names it.
+fn unrecorded_json(why: Unrecorded) -> &'static str {
+    match why {
+        Unrecorded::NoRecord => "no_record",
+        Unrecorded::OtherChain => "other_chain",
+        Unrecorded::FreeStanding => "free_standing",
+    }
+}
+
 /// Returns the panel as `publication.open` answers it.
 fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
     let e = &state.enumeration;
@@ -1005,7 +1126,11 @@ fn panel_json(state: &PanelState, hold: Option<Value>) -> Value {
         "price": price_json(&local_price(state)),
         "windows": panel.windows.iter().map(window_json).collect::<Vec<_>>(),
         "inherited": panel.inherited.iter().map(inherited_json).collect::<Vec<_>>(),
+        "left_behind": addresses_json(&state.left_behind),
     });
+    if let Some(standing) = &state.standing {
+        v["standing"] = json!(standing_json(standing));
+    }
     if let Some(hold) = hold {
         v["hold"] = hold;
     }
@@ -1053,6 +1178,9 @@ fn restated_json(r: &Restatement, race: Option<&RaceKey>) -> Value {
     if let Some(race) = race {
         v["race"] = race_json(race);
     }
+    if let Some(standing) = &r.standing {
+        v["standing"] = json!(standing_json(standing));
+    }
     v
 }
 
@@ -1097,6 +1225,7 @@ fn refusal_arm(refusal: &PubRefusal) -> (&'static str, Value) {
         PubRefusal::SessionEnded => ("session_ended", json!({})),
         PubRefusal::BudgetRace { detail } => ("budget_race", json!({"detail": detail})),
         PubRefusal::MayAlreadyStand => ("may_already_stand", json!({})),
+        PubRefusal::BaseSuperseded { first } => ("base_superseded", json!({"first": first.to_string()})),
         PubRefusal::OwnFault(fault) => ("own_fault", json!({"fault": own_fault_json(fault)})),
         PubRefusal::Other(halt) => ("other", json!({"refusal": Refusal::from(halt.clone()).to_value()})),
     }

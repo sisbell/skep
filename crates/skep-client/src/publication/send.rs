@@ -36,10 +36,13 @@
 //! → own-bug arms with their entry and detail; `attestation_invalid:signature`
 //! → one re-sign with the skipped deposits dropped — presence re-read for
 //! every `retract` and `read_with` entry — under a fresh `id`; `unparseable`
-//! on a request carrying an optional member → the older-board arm; the shot's
-//! own table's codes → the library's own fault; `withheld`,
-//! `signed_session_required`, `doc_not_registered` as the merge names them;
-//! everything else the board's refusal verbatim.
+//! on a request carrying an optional member → the older-board arm;
+//! `base_superseded` → the bare document's base met at the board where its
+//! first member stands, past a race the caller's re-read of the base did not
+//! see, naming that member; the shot's own table's other codes → the
+//! library's own fault; `withheld`, `signed_session_required`,
+//! `doc_not_registered` as the merge names them; everything else the board's
+//! refusal verbatim.
 
 use serde_json::Value;
 use skep_address::Address;
@@ -120,7 +123,8 @@ pub enum OwnFault {
         /// The cause, where the code carries one.
         detail: Option<String>,
     },
-    /// The shot's own table refused the frame's substance.
+    /// The shot's own table refused the frame's substance — `base_superseded`
+    /// aside, [`Refusal::BaseSuperseded`].
     Shot {
         /// The code.
         code: String,
@@ -208,6 +212,13 @@ pub enum Refusal {
     /// A minting records-less request whose answer was lost and whose
     /// edition claim no read finds: the publication may already stand.
     MayAlreadyStand,
+    /// `base_superseded`: the request's base is the bare document and the
+    /// board holds its first member — published past a race the caller's
+    /// re-read of the base did not see; nothing was published.
+    BaseSuperseded {
+        /// The first member of the request's `doc`, `⟨doc⟩.1`.
+        first: Address,
+    },
     /// This library's own fault.
     OwnFault(OwnFault),
     /// The board's refusal, verbatim.
@@ -226,8 +237,9 @@ pub enum Sent {
     NotLanded,
 }
 
-/// The shot's own table's codes, each the library's own fault.
-const SHOT_CODES: [&str; 9] = ["base_superseded", "base_not_in_chain", "base_extent_too_large", "bad_run", "dangling_source", "source_not_registered", "too_many_runs", "too_many_values", "private_source_versionless"];
+/// The shot's own table's codes, each the library's own fault —
+/// `base_superseded` aside, its own arm ([`Refusal::BaseSuperseded`]).
+const SHOT_CODES: [&str; 8] = ["base_not_in_chain", "base_extent_too_large", "bad_run", "dangling_source", "source_not_registered", "too_many_runs", "too_many_values", "private_source_versionless"];
 
 /// The six deposit tokens.
 const DEPOSIT_CODES: [&str; 6] = ["link_home_refused", "old_refused", "duplicate_original", "read_with_in_links", "retract_refused", "read_with_refused"];
@@ -327,6 +339,10 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
             "withheld" => Refusal::WindowWithheld { origin: site.addr.as_deref().and_then(parse_address) },
             "signed_session_required" => Refusal::NeedsSignedSession,
             "doc_not_registered" => Refusal::NoSuchDocument,
+            "base_superseded" => match request.doc.as_ref().and_then(|doc| parse_address(&format!("{doc}.1"))) {
+                Some(first) => Refusal::BaseSuperseded { first },
+                None => Refusal::Other(r.refused(&v)),
+            },
             code if DEPOSIT_CODES.contains(&code) => Refusal::OwnFault(OwnFault::Deposit { code: code.to_string(), index: site.index, detail }),
             code if SHOT_CODES.contains(&code) || code == "malformed" => Refusal::OwnFault(OwnFault::Shot { code: code.to_string() }),
             k if k.starts_with("attestation_") => Refusal::OwnFault(OwnFault::Attest { detail }),

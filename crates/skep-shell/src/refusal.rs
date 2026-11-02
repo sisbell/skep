@@ -125,9 +125,27 @@ impl Name {
     /// (`skep_client::publication::draft_base`; B3-S10): the shell never
     /// takes the chain's head in its place, since a draft begun from an
     /// older version would publish over the newer words. The detail names
-    /// the `draft` and the `doc`; the act is staging the draft with `stage`
-    /// from the version it is to publish after, which records its base.
+    /// the `draft`, the `doc` and the `reason`: `no_record`, a draft minted
+    /// by `create_new_document` or `fork` and never staged; `other_chain`,
+    /// a base in another document's chain; `free_standing`, an alternative
+    /// of a draft the board records no base for. The act is staging the
+    /// draft with `stage` from the version it is to publish after, which
+    /// records its base. A `publication.confirm` whose re-read finds the base
+    /// gone answers it too.
     pub const BASE_UNRECORDED: Name = Name("base_unrecorded");
+    /// A `publication.open` at the document form for a draft whose first
+    /// version another publication made.
+    ///
+    /// The draft was staged from the bare document while its chain was
+    /// empty, and the chain's first member now stands
+    /// (`skep_client::publication::standing`, `SupersededFirst`; D4 (a)): the
+    /// board refuses the draft's shot, so the shell refuses it first, before
+    /// any panel. The detail names the `draft`, the `doc` and `first`, the
+    /// document's first member; the act is a draft staged from a version,
+    /// the draft's words pasted into it by identity. A `publication.confirm`
+    /// whose re-read finds the first member landed since the panel answers
+    /// it too.
+    pub const BASE_SUPERSEDED: Name = Name("base_superseded");
     /// A publication read met `withheld` on a document it needs.
     ///
     /// Brief 1's `Fault::Unreadable`; the detail names the `doc`.

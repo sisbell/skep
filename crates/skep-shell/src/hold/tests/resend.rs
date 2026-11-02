@@ -1475,25 +1475,25 @@ fn a_sent_head_whose_own_row_stands_and_whose_site_confirms_is_kept_and_never_sh
     assert_eq!(g.states(), ["holding", "kept"], "never faced moved");
 }
 
-/// Checks that a resent line refused as typed against an older state is
-/// shifted through the change and kept (skep #442).
+/// Checks that a resent line refused stale is shifted and kept (skep #442).
 ///
-/// A held delete of `b` and `c` — `abc` as the page read it, the `before`
-/// anchor `a` and no `after` — held before any dial; another writer put
-/// `XY` before the text and the arrangement moved to 77. The probe reads
-/// nothing of a head never sent, dials it, meets the refusal, shifts it by
-/// one image read — `a` two positions later, the two positions after it
-/// whole to the document's end — writes the shifted frame to the line
-/// before the shifted dial, marked `sent` under the cause it had, and dials
-/// it again: `p` moved by two, the width kept, typed at the read's state;
-/// acked and kept, the file gone, never faced moved (the mutant that
-/// re-faces the resend moved holds text the shell could place; the one
-/// that dials before the rewrite leaves a relaunch the page's positions).
+/// The line is refused as typed against an older state of its document, and
+/// shifted through the change. A held delete of `b` and `c` — `abc` as the page
+/// read it, the `before` anchor `a`, no `after`, and its span the I-run of `b`
+/// and `c` — held before any dial; another writer put `XY` before the text and
+/// the arrangement moved to 77. The probe reads nothing of a head never sent,
+/// dials it, meets the refusal, shifts it by one image read — `a` two positions
+/// later, the two positions after it whole to the document's end — writes the
+/// shifted frame to the line before the shifted dial, marked `sent` under the
+/// cause it had, and dials it again: `p` moved by two, the width kept, typed at
+/// the read's state; acked and kept, the file gone, never faced moved (the
+/// mutant that re-faces the resend moved holds text the shell could place; the
+/// one that dials before the rewrite leaves a relaunch the page's positions).
 #[test]
 fn a_resent_line_refused_stale_is_shifted_through_the_change_and_kept() {
     let g = ground();
     let typed = g.fake.head();
-    g.hold_anchored(&delete_at(DOC, 2, 2, typed), anchors(Some(&i(1)), None), "unreachable", false);
+    g.hold_anchored(&delete_at(DOC, 2, 2, typed), spanned(Some(&i(1)), None, &[(&i(2), 2)]), "unreachable", false);
     *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
     g.fake.move_arrangement(DOC, 77);
     let (file, at_the_dial) = (held_file(&g), Arc::new(Mutex::new(Vec::new())));
@@ -1511,6 +1511,46 @@ fn a_resent_line_refused_stale_is_shifted_through_the_change_and_kept() {
     assert_eq!((last["frame"]["p"]["ordinal"].as_str(), last["sent"].as_bool(), last["cause"].as_str()), (Some("4"), Some(true), Some("unreachable")), "the shifted frame on the line before the shifted dial, its cause kept: {}", files[1]);
     assert!(g.lines().is_empty() && !held_file(&g).exists(), "kept, the file gone");
     assert_eq!(g.states(), ["holding", "sending", "kept"], "shifted and kept, never moved");
+}
+
+/// Checks that a rearrange landed unseen is held moved, never applied twice.
+///
+/// The read cannot see the landing (skep #751). A rearrange of `abcd` swapping
+/// `b` and `c` — cuts 2, 3 and 4, its anchors `a` and `d`, its span the I-run
+/// of `b` and `c` — met a `poisoned` answer, its line `sent`, and landed at the
+/// board's restart: the document reads `acbd`, its arrangement moved to 77, and
+/// the read finds no landing it can take — the row the restart replayed has
+/// lost its testimony, or the feed's history is reclaimed, and no read confirms
+/// a rearrange's site. The resend dials the line, the board refuses it as typed
+/// against the older state, and the shift finds the span's own units between
+/// the anchors in another order: the line is held moved, `sent` kept, one dial
+/// made and one image read, the swap applied once (the mutant that judges the
+/// span by its count alone shifts by nothing and dials the swap again, putting
+/// `b` and `c` back where they stood before the person moved them).
+#[test]
+fn a_rearrange_that_landed_unseen_is_held_moved_and_never_applied_twice() {
+    for reclaimed in [false, true] {
+        let g = ground();
+        let typed = g.fake.head();
+        let swap = rearrange_at(DOC, &[2, 3, 4], typed);
+        g.hold_anchored(&swap, spanned(Some(&i(1)), Some(&i(4)), &[(&i(2), 2)]), "poisoned", true);
+        if reclaimed {
+            *g.fake.changes_refused.lock().unwrap() = Some((410, json!({"error": "history_reclaimed", "floor": 90})));
+        } else {
+            *g.fake.rows.lock().unwrap() = vec![lost_row()];
+        }
+        *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(3), 1), run(&i(2), 1), run(&i(4), 1)];
+        g.fake.move_arrangement(DOC, 77);
+        g.holds.probe("b-1");
+        assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (1, 1), "reclaimed {reclaimed}: refused once and not shifted: the swap is dialed no second time");
+        let lines = g.lines();
+        assert_eq!((lines.len(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (1, Some("moved"), Some(true)), "reclaimed {reclaimed}: {lines:?}");
+        assert_eq!(lines[0]["frame"], swap, "reclaimed {reclaimed}: the frame as the page composed it");
+        assert_eq!(g.states(), ["holding", "sending", "moved"], "reclaimed {reclaimed}");
+        let talk = g.said.lock().unwrap().clone();
+        let why = "was not shifted (the span its anchors bound no longer holds the units the burst names";
+        assert_eq!(talk.iter().filter(|l| l.contains(why)).count(), 1, "reclaimed {reclaimed}: said why, once: {talk:?}");
+    }
 }
 
 /// Checks that the lost answers and the shifts meet the one bound (skep

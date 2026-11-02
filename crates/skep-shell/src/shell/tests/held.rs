@@ -10,7 +10,9 @@
 //! acts, a burst typed against an older state held moved with the board's
 //! verdict and nothing of it landing where it carries no anchors, and one
 //! carrying them shifted through another writer's change and landing once
-//! at the displaced place, the close order and the relaunch
+//! at the displaced place — a delete and a rearrange by their span's own
+//! units, and a delete whose span another writer refilled held moved, the
+//! other writer's words untouched — the close order and the relaunch
 //! listing its held line, a second principal's file untouched and unlisted,
 //! a burst on a draft just minted kept across a restart, a relaunch with its
 //! board down listing its held line — the bare mode's resending none of it,
@@ -763,6 +765,74 @@ fn a_stale_burst_carrying_its_anchors_is_shifted_through_another_writers_change_
     assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
     assert!(!seen.lock().unwrap().iter().any(|e| e.name == EventName::Held), "no held event for a line entered, shifted and settled within one call");
     assert!(held_path(&dir.path().join("store")).is_none(), "the held file is gone");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a stale delete or rearrange is shifted by its span's units.
+///
+/// It lands once, and one whose span another writer refilled is held moved
+/// (skep #751). Each draft reads `abcd`, its anchors and its span read off the
+/// board's own `image` as a page reads them: `a` and `d`, and the run of `b`
+/// and `c`. Another write puts `X` before the text; a delete of `b` and `c`
+/// typed against the older state is refused `arrangement_moved` at its first
+/// dial, shifted within the call — the run of `b` and `c` standing between `a`
+/// and `d` in the shell's one read of the whole image — and lands once, the
+/// draft reading `Xad`; a rearrange swapping them lands once, the draft reading
+/// `Xacbd`. Another write then takes `b` and `c` out of a third draft and puts
+/// `XY` in their place, as many units: the stale delete is held moved, nothing
+/// of it lands, and the draft reads `aXYd` (the mutant that judges the span by
+/// its count alone deletes `XY`, the other writer's words; the one that holds a
+/// delete with its span moved asks the person to place what the shell could
+/// place).
+#[test]
+fn a_stale_delete_or_rearrange_is_shifted_by_its_spans_own_units_and_lands_once() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, session, .. } = held_ground(&dir, &sd);
+    let op = |frame: Value, anchors: Option<&Value>| {
+        let mut args = json!({"session": session, "frame": frame});
+        if let Some(anchors) = anchors {
+            args["anchors"] = anchors.clone();
+        }
+        shell.call("op", &args).unwrap()
+    };
+    let at = |answer: &Value| answer["at"].as_u64().unwrap_or_else(|| panic!("acked: {answer}"));
+    let text = |draft: &str| text_of(&op(skep_client::board::frames::retrieve_v(draft, 1, 6), None));
+    // A draft reading `abcd`, the state it was written at, and the anchors a
+    // page sends for `b` and `c`, read off the board's own image.
+    let abcd = || -> (String, u64, Value) {
+        let minted = op(json!({"op": "create_new_document", "account": "1.0.1"}), None);
+        let draft = minted["addr"].as_str().unwrap().to_string();
+        let written = at(&op(json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abcd"], "as_of": minted["at"]}), None));
+        let image = |from: u64, width: u64| op(skep_client::board::frames::image(&draft, from, width), None)["runs"].clone();
+        let unit = |v: u64| image(v, 1)[0]["i_start"].as_str().unwrap_or_else(|| panic!("the identity of position {v}")).to_string();
+        let span: Vec<Value> = image(2, 2).as_array().unwrap().iter().map(|run| json!({"start": run["i_start"], "width": run["width"]})).collect();
+        let anchors = json!({"before": unit(1), "after": unit(4), "span": span});
+        (draft, written, anchors)
+    };
+    let position = |n: u64| json!({"subspace": "1", "ordinal": n.to_string()});
+    let delete = |draft: &str, typed: u64| json!({"op": "delete", "doc": draft, "p": position(2), "width": "2", "as_of": typed});
+    let rearrange = |draft: &str, typed: u64| json!({"op": "rearrange", "doc": draft, "cuts": [position(2), position(3), position(4)], "as_of": typed});
+    for (burst, landed) in [(&delete as &dyn Fn(&str, u64) -> Value, "Xad"), (&rearrange, "Xacbd")] {
+        let (draft, typed, anchors) = abcd();
+        let moved = at(&op(json!({"op": "insert", "doc": draft, "at": position(1), "values": ["X"], "as_of": typed}), None));
+        let shifted = op(burst(&draft, typed), Some(&anchors));
+        assert!(at(&shifted) > moved, "the shifted burst is acked within the call, above the other write: {shifted}");
+        assert_eq!(text(&draft), landed, "the burst lands once, one position later than typed");
+    }
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    // The span refilled: `b` and `c` out, `XY` in their place, as many units.
+    let (draft, typed, anchors) = abcd();
+    let emptied = at(&op(json!({"op": "delete", "doc": draft, "p": position(2), "width": "2", "as_of": typed}), None));
+    let refilled = at(&op(json!({"op": "insert", "doc": draft, "at": position(2), "values": ["XY"], "as_of": emptied}), None));
+    let held = op(delete(&draft, typed), Some(&anchors));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("moved")), "a delete whose span another writer refilled is held moved: {held}");
+    assert_eq!(text(&draft), "aXYd", "nothing of it lands: the other writer's words stand");
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    assert!(changes_under(&shell.boards[0].board, &token, &draft, refilled).is_empty(), "a refusal commits nothing");
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!((rows.as_array().unwrap().len(), rows[0]["cause"].as_str(), &rows[0]["anchors"]), (1, Some("moved"), &anchors), "{rows}");
     shell.shutdown();
     sd.shutdown();
 }

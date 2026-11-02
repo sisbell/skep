@@ -352,30 +352,34 @@ fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     assert_eq!((g.states(), g.lines().len()), (vec!["kept".to_string()], 0), "the drop of the document's one line says `kept`");
 }
 
-/// Checks that a stale burst whose anchors stand with the span between them
-/// whole is shifted and lands within the call (skep #442), one cell per op.
+/// Checks that a stale burst whose span stands whole is shifted and lands.
 ///
-/// The draft as the page read it ran `abc` (I-positions 1 to 3); another
-/// writer then put `XY` before it (I-positions 10 and 11), and the board's
-/// arrangement moved to 77. Each burst, typed against the older state and
-/// carrying the identities on either side of the span it edits, is refused
-/// `arrangement_moved` at its first dial and shifted by one image read — its
-/// `before` anchor stands two positions later, the span between the anchors
-/// as it was — and dialed again with every position it names moved by two
-/// and `as_of` the read's state, the rest of the frame as composed: the
-/// insert's `at` (the units on either side of it), the delete's `p` (the
-/// units on either side of its two positions, the `after` the document's
-/// end), the copy's `at` (appended after the last unit, no `after`), the
-/// reinstate's `at`, the rearrange's every cut (the units on either side of
-/// its first cut to its last). The page meets the ack within the call, two
-/// dials made, one image read, no `/changes` read, no line standing, the
-/// file gone, and no `held` event said for a line entered and settled within
-/// one call. An insert at the document's start, the other writer's text
-/// appended after it, moves by nothing and is sent again typed at the
-/// read's state alone (the mutants that hold the stale burst moved, that
-/// move one op's positions and not another's, or that type the shifted
-/// frame at the page's state — refused again — each leave the page's text
-/// unplaced; the one that reads history reads what the shift never needs).
+/// It lands within the call (skep #442, #751), one cell per op. The draft as
+/// the page read it ran `abc` (I-positions 1 to 3); another writer then put
+/// `XY` before it (I-positions 10 and 11), and the board's arrangement moved
+/// to 77. Each burst, typed against the older state and carrying the identities
+/// on either side of the span it edits — and, for the delete and the rearrange,
+/// of the units the span holds — is refused `arrangement_moved` at its first
+/// dial and shifted by one image read — its `before` anchor stands two
+/// positions later, the span between the anchors holding its own units still —
+/// and dialed again with every position it names moved by two and `as_of` the
+/// read's state, the rest of the frame as composed: the insert's `at` (the
+/// units on either side of it), the delete's `p` (the units on either side of
+/// its two positions, the `after` the document's end), the copy's `at`
+/// (appended after the last unit, no `after`), the reinstate's `at`, the
+/// rearrange's every cut (the units on either side of its first cut to its
+/// last). However the board split the span's runs — the page's read answering
+/// them apart where the shell's answers one, or the shell's apart where the
+/// page's answered one — the span compares whole. The page meets the ack within
+/// the call, two dials made, one image read, no `/changes` read, no line
+/// standing, the file gone, and no `held` event said for a line entered and
+/// settled within one call. An insert at the document's start, the other
+/// writer's text appended after it, moves by nothing and is sent again typed at
+/// the read's state alone (the mutants that hold the stale burst moved, that
+/// move one op's positions and not another's, that compare the span's runs
+/// unjoined, or that type the shifted frame at the page's state — refused again
+/// — each leave the page's text unplaced; the one that reads history reads what
+/// the shift never needs).
 #[test]
 fn a_stale_burst_whose_anchors_stand_with_the_span_whole_is_shifted_and_lands_within_the_call() {
     let moved_before = || vec![run(&i(10), 2), run(&i(1), 3)];
@@ -393,10 +397,18 @@ fn a_stale_burst_whose_anchors_stand_with_the_span_whole_is_shifted_and_lands_wi
     type Cell = (&'static str, Vec<Value>, Box<dyn Fn(u64) -> Value>, Anchors, Value);
     let cells: Vec<Cell> = vec![
         ("an insert between a and b", moved_before(), Box::new(|typed| insert_at(DOC, 2, json!(["x"]), typed)), anchors(Some(&i(1)), Some(&i(2))), at(4)),
-        ("a delete of b and c", moved_before(), Box::new(|typed| delete_at(DOC, 2, 2, typed)), anchors(Some(&i(1)), None), at(4)),
+        ("a delete of b and c", moved_before(), Box::new(|typed| delete_at(DOC, 2, 2, typed)), spanned(Some(&i(1)), None, &[(&i(2), 2)]), at(4)),
+        ("a delete of b and c, the page's read answering them apart", moved_before(), Box::new(|typed| delete_at(DOC, 2, 2, typed)), spanned(Some(&i(1)), None, &[(&i(2), 1), (&i(3), 1)]), at(4)),
         ("a copy appended after c", moved_before(), Box::new(|typed| copy_at(DOC, 4, typed)), anchors(Some(&i(3)), None), at(6)),
         ("a reinstate between b and c", moved_before(), Box::new(|typed| reinstate_at(DOC, 3, typed)), anchors(Some(&i(2)), Some(&i(3))), at(5)),
-        ("a rearrange about b and c", moved_before(), Box::new(|typed| rearrange_at(DOC, &[2, 3, 4], typed)), anchors(Some(&i(1)), None), json!([at(4), at(5), at(6)])),
+        ("a rearrange about b and c", moved_before(), Box::new(|typed| rearrange_at(DOC, &[2, 3, 4], typed)), spanned(Some(&i(1)), None, &[(&i(2), 2)]), json!([at(4), at(5), at(6)])),
+        (
+            "a rearrange about b and c, the shell's read answering them apart",
+            vec![run(&i(10), 2), run(&i(1), 1), run(&i(2), 1), run(&i(3), 1)],
+            Box::new(|typed| rearrange_at(DOC, &[2, 3, 4], typed)),
+            spanned(Some(&i(1)), None, &[(&i(2), 2)]),
+            json!([at(4), at(5), at(6)]),
+        ),
         ("an insert at the start, the change after it", moved_after(), Box::new(|typed| insert_at(DOC, 1, json!(["x"]), typed)), anchors(None, Some(&i(1))), at(1)),
     ];
     for (cell, image, frame, anchors, moved) in cells {
@@ -483,50 +495,77 @@ fn the_shifted_frame_is_on_the_line_before_the_shifted_dial_and_a_relaunch_reads
     assert!(g.lines().is_empty() && g.states() == ["kept"], "kept");
 }
 
-/// Checks that a cut span, a lost anchor, anchors at the wrong edge, no
-/// anchors and a read the board does not answer each fall to the moved hold
-/// (skep #442).
+/// Checks that each burst the shift cannot carry falls to the moved hold.
 ///
-/// Another writer's row moved the document to 77; the burst, typed against
-/// the older state, is refused at its first dial, and the shift is not made:
-/// the span between the anchors holds a position it did not hold (another
-/// writer's text inside it); the `after` anchor is in the document no
-/// longer; the `before` anchor is none though the span began past the
-/// document's start; the burst carries no anchors — an agent's — and no
-/// read is made; the image read is not answered. Each is the first brief's
-/// moved hold, unchanged: answered `held` under `moved`, one dial, the
-/// verdict on the line beside the page's frame and its anchors, the `held`
-/// event `moved` naming the hand of the row since the typed state, why said
-/// once in the shell's own window save for a burst without anchors, and no
-/// probe sending the line (the mutants that shift through a cut span or a
-/// lost anchor put the person's words where they did not; the one that
-/// holds nothing after a failed read loses the burst).
+/// A cut span, a refilled span, a lost anchor, an anchor at two places, anchors
+/// at the wrong edge, no anchors, no span and a read the board does not answer
+/// each fall to it (skep #442, #751). The draft as the page read it ran `abc`
+/// (I-positions 1 to 3). Another writer's row moved the document to 77; the
+/// burst, typed against the older state, is refused at its first dial, and the
+/// shift is not made: the span between the anchors holds a position it did not
+/// hold (another writer's text inside it); a delete's or a rearrange's span
+/// holds as many positions as it did and other units — `b` and `c` taken out
+/// and `XY` put in their place, nothing else moved, so the shifted frame would
+/// remove or move `XY` — or its own in another order, `c` before `b`; the
+/// `after` anchor is in the document no longer; the `before` anchor stands at
+/// two places, a passage of `abc` quoted again after it; the `before` anchor is
+/// none though the span began past the document's start; the burst carries no
+/// anchors — an agent's — and no read is made; a delete or a rearrange carries
+/// anchors and no span of the units it edits; an insert's anchors name a span,
+/// or a delete's a span of other than its width; the image read is not
+/// answered. Each is the first brief's moved hold, unchanged: answered `held`
+/// under `moved`, one dial, the verdict on the line beside the page's frame and
+/// its anchors, the `held` event `moved` naming the hand of the row since the
+/// typed state, why said once in the shell's own window save for a burst
+/// without anchors, and no probe sending the line (the mutants that shift
+/// through a cut span, a refilled or rearranged one by its count alone, a lost
+/// anchor, or an anchor at its first place put the person's words where they
+/// did not, or act on the other writer's; the one that shifts a span-less
+/// delete by its count alone deletes what it cannot name; the one that holds
+/// nothing after a failed read loses the burst).
 #[test]
 fn a_cut_span_a_lost_anchor_no_anchors_and_an_unanswered_read_each_fall_to_the_moved_hold() {
     let whole = || vec![run(&i(10), 2), run(&i(1), 3)];
-    /// A cell: its name, the image now, the burst's anchors, whether the
-    /// image read is unanswered, the image reads made, and the why said.
-    type Cell = (&'static str, Vec<Value>, Option<Anchors>, bool, usize, Option<&'static str>);
+    let insert = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| insert_at(DOC, 2, json!(["x"]), typed)) };
+    let delete = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| delete_at(DOC, 2, 2, typed)) };
+    let rearrange = || -> Box<dyn Fn(u64) -> Value> { Box::new(|typed| rearrange_at(DOC, &[2, 3, 4], typed)) };
+    let between = || Some(anchors(Some(&i(1)), Some(&i(2))));
+    let b_and_c = || Some(spanned(Some(&i(1)), None, &[(&i(2), 2)]));
+    /// A cell: its name, the image now, the burst typed at a state, its
+    /// anchors, whether the image read is unanswered, the image reads made,
+    /// and the why said.
+    type Cell = (&'static str, Vec<Value>, Box<dyn Fn(u64) -> Value>, Option<Anchors>, bool, usize, Option<&'static str>);
+    let refilled = "no longer holds the units the burst names";
     let cells: Vec<Cell> = vec![
-        ("a cut span", vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)], Some(anchors(Some(&i(1)), Some(&i(2)))), false, 1, Some("the span its anchors bound holds 1 positions now, not the 0 it held")),
-        ("a lost anchor", vec![run(&i(10), 2), run(&i(1), 2)], Some(anchors(Some(&i(2)), Some(&i(3)))), false, 1, Some("its after anchor is in the document no longer")),
-        ("anchors at the wrong edge", whole(), Some(anchors(None, Some(&i(2)))), false, 1, Some("the anchors do not bound the span the frame names")),
-        ("no anchors", whole(), None, false, 0, None),
-        ("a read the board does not answer", whole(), Some(anchors(Some(&i(1)), Some(&i(2)))), true, 1, Some("the document's image could not be read")),
+        ("a cut span", vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)], insert(), between(), false, 1, Some("the span its anchors bound holds 1 positions now, not the 0 it held")),
+        ("a delete's span refilled with as many other units", vec![run(&i(1), 1), run(&i(10), 2)], delete(), b_and_c(), false, 1, Some(refilled)),
+        ("a rearrange's span refilled with as many other units", vec![run(&i(1), 1), run(&i(10), 2)], rearrange(), b_and_c(), false, 1, Some(refilled)),
+        ("a rearrange's span rearranged", vec![run(&i(1), 1), run(&i(3), 1), run(&i(2), 1)], rearrange(), b_and_c(), false, 1, Some(refilled)),
+        ("a lost anchor", vec![run(&i(10), 2), run(&i(1), 2)], insert(), Some(anchors(Some(&i(2)), Some(&i(3)))), false, 1, Some("its after anchor is in the document no longer")),
+        ("an anchor at two places", vec![run(&i(10), 2), run(&i(1), 3), run(&i(1), 2)], insert(), between(), false, 1, Some("its before anchor stands at two places in the document")),
+        ("anchors at the wrong edge", whole(), insert(), Some(anchors(None, Some(&i(2)))), false, 1, Some("the anchors do not bound the span the frame names")),
+        ("no anchors", whole(), insert(), None, false, 0, None),
+        ("a delete with no span", whole(), delete(), Some(anchors(Some(&i(1)), None)), false, 1, Some("its anchors name no span of the units it edits")),
+        ("a rearrange with no span", whole(), rearrange(), Some(anchors(Some(&i(1)), None)), false, 1, Some("its anchors name no span of the units it edits")),
+        ("an insert whose anchors name a span", whole(), insert(), Some(spanned(Some(&i(1)), Some(&i(2)), &[(&i(2), 1)])), false, 1, Some("the anchors name a span of units, and the frame places at a point")),
+        ("a delete's span of other than its width", whole(), delete(), Some(spanned(Some(&i(1)), None, &[(&i(2), 1)])), false, 1, Some("the anchors' span names other than the 2 units")),
+        ("a read the board does not answer", whole(), insert(), between(), true, 1, Some("the document's image could not be read")),
     ];
-    for (cell, image, anchors, unread, reads, why) in cells {
+    for (cell, image, frame, anchors, unread, reads, why) in cells {
         let g = ground();
         let typed = g.fake.head();
         *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
         *g.fake.image.lock().unwrap() = image;
         g.fake.image_unread.store(unread, Ordering::SeqCst);
         g.fake.move_arrangement(DOC, 77);
-        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), anchors.clone()) else { panic!("{cell}: held") };
+        let page = frame(typed);
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, page.clone(), anchors.clone()) else { panic!("{cell}: held") };
         crate::shapes::assert_declared("HeldAnswer", &held);
         assert_eq!((held["resp"].as_str(), held["cause"].as_str(), g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (Some("held"), Some("moved"), 1, reads), "{cell}: {held}");
         let lines = g.lines();
-        assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), &lines[0]["refusal"]), (Some("moved"), Some(false), &arrangement_moved(typed, 77)), "{cell}: the verdict on the line: {lines:?}");
-        assert_eq!(lines[0]["frame"]["at"]["ordinal"], "2", "{cell}: the frame as the page composed it");
+        let verdict = arrangement_moved_on(page["op"].as_str().unwrap(), typed, 77);
+        assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), &lines[0]["refusal"]), (Some("moved"), Some(false), &verdict), "{cell}: the verdict on the line: {lines:?}");
+        assert_eq!(lines[0]["frame"], page, "{cell}: the frame as the page composed it");
         assert_eq!(lines[0].get("anchors").cloned(), anchors.as_ref().map(Anchors::json), "{cell}: the anchors on the line");
         let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
         let [moved] = &said[..] else { panic!("{cell}: one held event: {said:?}") };

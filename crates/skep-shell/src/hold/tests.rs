@@ -806,6 +806,15 @@ fn anchors(before: Option<&str>, after: Option<&str>) -> Anchors {
     Anchors::of(&json!({"before": before, "after": after})).expect("the anchors' form")
 }
 
+/// The anchors a page sends for a delete or a rearrange (skep #751).
+///
+/// They are `before` and `after`, and the span's runs as its `image` read
+/// gave them, each `width` units from the I-address `start`.
+fn spanned(before: Option<&str>, after: Option<&str>, runs: &[(&str, u64)]) -> Anchors {
+    let span: Vec<Value> = runs.iter().map(|(start, width)| json!({"start": start, "width": width.to_string()})).collect();
+    Anchors::of(&json!({"before": before, "after": after, "span": span})).expect("the anchors' form")
+}
+
 /// The principal's held file under the ground's store, at the fake's chain.
 fn held_file(g: &Ground) -> std::path::PathBuf {
     g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held")

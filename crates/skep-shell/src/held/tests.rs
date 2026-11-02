@@ -104,13 +104,16 @@ fn ks(queue: &HeldQueue) -> Vec<u64> {
 
 // ── T1 ──────────────────────────────────────────────────────────────────────
 
-/// THE HEADER written once; a second open reads it; `v` is read FIRST — a
-/// `v: 2` header with a valid body answers the NEWER face and reads no line; an
-/// unknown header member refuses the file; a torn last line is ignored and the
-/// lines before it read; a middle line that does not parse HALTS the file; the
-/// members' order and spelling of a written line are byte-equal to §3c.2 —
-/// a line without anchors, and one carrying the page's anchors after its
-/// frame, an edge spelled `null`.
+/// Checks that the header is written once and the line forms are byte-equal.
+///
+/// A second open reads the header; `v` is read first — a `v: 2` header with
+/// a valid body answers the newer face and reads no line; an unknown header
+/// member refuses the file; a torn last line is ignored and the lines before
+/// it read; a middle line that does not parse halts the file; the members'
+/// order and spelling of a written line are byte-equal to §3c.2 — a line
+/// without anchors, one carrying the page's anchors after its frame, an edge
+/// spelled `null`, and one whose anchors name a span, its runs after the
+/// edges.
 #[test]
 fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     let tmp = TempDir::new().unwrap();
@@ -123,6 +126,9 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     assert!(queue.on_disk(), "the first hold writes the header and the line");
     let anchored = queue.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), Some(anchors(Some("1.0.7.0.1.0.1.4"), None)), Reason::of("behind", false)).unwrap();
     assert!(anchored.unwritten.is_none(), "{:?}", anchored.unwritten);
+    let span = spanned(None, Some("1.0.7.0.1.0.1.9"), &[("1.0.7.0.1.0.1.1", 2), ("1.0.7.0.1.0.1.7", 1)]);
+    let spanning = queue.hold("1.0.7.0.1", None, 5, json!({"op": "delete"}), Some(span.clone()), Reason::of("behind", false)).unwrap();
+    assert!(spanning.unwritten.is_none(), "{:?}", spanning.unwritten);
 
     // The exact byte forms (§3c.2), the lines' `time` apart.
     let raw = fs::read_to_string(tmp.path().join("held").join(chain().to_string()).join("principal-7.held")).unwrap();
@@ -133,13 +139,19 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     assert!(held.contains(",\"sent\":false,\"time\":") && held.ends_with('}'), "{held}");
     let held = lines.next().unwrap();
     assert!(held.starts_with("{\"held\":2,\"doc\":\"1.0.7.0.1\",\"base\":5,\"frame\":{\"op\":\"insert\"},\"anchors\":{\"before\":\"1.0.7.0.1.0.1.4\",\"after\":null},\"cause\":\"behind\","), "{held}");
+    let held = lines.next().unwrap();
+    assert!(
+        held.starts_with("{\"held\":3,\"doc\":\"1.0.7.0.1\",\"base\":5,\"frame\":{\"op\":\"delete\"},\"anchors\":{\"before\":null,\"after\":\"1.0.7.0.1.0.1.9\",\"span\":[{\"start\":\"1.0.7.0.1.0.1.1\",\"width\":\"2\"},{\"start\":\"1.0.7.0.1.0.1.7\",\"width\":\"1\"}]},\"cause\":\"behind\","),
+        "{held}"
+    );
 
     // A second open reads the header and the standing lines, the anchors
     // with theirs.
     let reopened = live(d.open_file(7, "1.0.7").unwrap());
-    assert_eq!(reopened.lines().len(), 2);
+    assert_eq!(reopened.lines().len(), 3);
     assert_eq!(reopened.lines()[0].doc, "1.0.7.0.1");
-    assert_eq!((reopened.lines()[0].anchors.clone(), reopened.lines()[1].anchors.clone()), (None, Some(anchors(Some("1.0.7.0.1.0.1.4"), None))));
+    let read: Vec<Option<Anchors>> = reopened.lines().iter().map(|l| l.anchors.clone()).collect();
+    assert_eq!(read, [None, Some(anchors(Some("1.0.7.0.1.0.1.4"), None)), Some(span)]);
 
     // `v: 2` with a valid body → the NEWER face, no line read (v FIRST).
     let d2 = {
@@ -611,16 +623,18 @@ fn a_line_kept_at_a_position_is_the_base_of_the_lines_behind_it() {
     assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), raised, "a reopen raises them from the `done` line");
 }
 
-/// EVERY LINE FORM READS BACK AS IT WAS HELD (§3c.2), the law over its
-/// members: a line with no `id`, a plain one, and the page's own `id`
-/// holding a quote, a newline and a backslash — the page's string this file
-/// keeps — each under a hold `sent: false`, one that MAY have landed, and a
-/// REFUSED run's with the board's verdict beside it, over a frame of a
-/// multi-byte value, each without anchors, with both, and with an edge on
-/// either side; reopened, the queue is the queue that was held (the mutant
-/// reader that drops `refusal` reads a refused run back as holding, and the
-/// resend then sends what awaits the person's act; the one that drops the
-/// anchors holds a burst the shift can no longer move).
+/// Checks that every line form reads back as it was held (§3c.2).
+///
+/// It is the law over a line's members: a line with no `id`, a plain one,
+/// and the page's own `id` holding a quote, a newline and a backslash — the
+/// page's string this file keeps — each under a hold `sent: false`, one that
+/// *may* have landed, and a refused run's with the board's verdict beside it,
+/// over a frame of a multi-byte value, each without anchors, with both, with
+/// an edge on either side, and with a span of two runs; reopened, the queue
+/// is the queue that was held (the mutant reader that drops `refusal` reads
+/// a refused run back as holding, and the resend then sends what awaits the
+/// person's act; the one that drops the anchors, or their span, holds a
+/// burst the shift cannot move).
 #[test]
 fn every_line_form_reads_back_as_it_was_held() {
     let tmp = TempDir::new().unwrap();
@@ -628,7 +642,13 @@ fn every_line_form_reads_back_as_it_was_held() {
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "detail": "past \"the\" end"});
     let reasons = [Reason::of("unreachable", false), Reason::of("poisoned", true), Reason::refused("out_of_bounds", verdict)];
-    let anchored = [None, Some(anchors(Some("1.0.1.0.1.0.1.2"), Some("1.0.1.0.2.0.1.9"))), Some(anchors(None, Some("1.0.1.0.1.0.1.1"))), Some(anchors(Some("1.0.1.0.1.0.1.5"), None))];
+    let anchored = [
+        None,
+        Some(anchors(Some("1.0.1.0.1.0.1.2"), Some("1.0.1.0.2.0.1.9"))),
+        Some(anchors(None, Some("1.0.1.0.1.0.1.1"))),
+        Some(anchors(Some("1.0.1.0.1.0.1.5"), None)),
+        Some(spanned(Some("1.0.1.0.1.0.1.1"), None, &[("1.0.1.0.1.0.1.2", 3), ("1.0.1.0.2.0.1.18446744073709551615", 1)])),
+    ];
     for id in [None, Some("plain"), Some("a \"quote\", a\nnewline, a \\ backslash")] {
         for reason in &reasons {
             for anchors in &anchored {
@@ -638,14 +658,24 @@ fn every_line_form_reads_back_as_it_was_held() {
         }
     }
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
-    assert_eq!(reopened.lines().len(), 36);
+    assert_eq!(reopened.lines().len(), 45);
     assert_eq!(reopened.lines(), queue.lines(), "the reopened queue is the queue that was held");
 }
 
 /// The anchors a line carries: `before` and `after`, each an I-address or
-/// none.
+/// none, and no span.
 fn anchors(before: Option<&str>, after: Option<&str>) -> Anchors {
-    Anchors { before: before.map(str::to_string), after: after.map(str::to_string) }
+    Anchors { before: before.map(str::to_string), after: after.map(str::to_string), span: None }
+}
+
+/// The anchors a page sends for a span of units.
+///
+/// They are `before` and `after`, and the span's runs, each its `start` and
+/// its width — read through their one door, as the bridge and the reader
+/// read them.
+fn spanned(before: Option<&str>, after: Option<&str>, runs: &[(&str, u64)]) -> Anchors {
+    let span: Vec<Value> = runs.iter().map(|(start, width)| json!({"start": start, "width": width.to_string()})).collect();
+    Anchors::of(&json!({"before": before, "after": after, "span": span})).expect("the anchors' form")
 }
 
 /// A REWRITTEN FRAME reads back under its ordinal (skep #442): a line held
@@ -893,18 +923,23 @@ fn line_with(member: &str, value: Option<Value>) -> Vec<u8> {
     format!("{line}\n").into_bytes()
 }
 
-/// THE READER reads every line WHOLE or halts the file as damaged (P38): a
-/// line that is no UTF-8 or no JSON object, a `held` line missing a member
-/// or holding one of another type — a `doc` that is no document address, a
-/// frame that is no object, a `sent` that is no boolean, anchors of no
-/// object, naming one anchor, a member beside the two, or an anchor that is
-/// no I-address — an ordinal past the page's (the largest a `u64` holds
-/// among them, whose successor no longer panics), and a `done` line of
-/// another form; the same file with the line whole reads live, its anchors
-/// of their form read (the mutants that default a missing member, read text
-/// lossily, or take any ordinal, rebuild the person's text out of a file no
-/// writer of this format wrote; the one that reads anchors of another form
-/// as none shifts nothing a relaunch should).
+/// Checks that the reader reads every line whole or halts the file (P38).
+///
+/// It halts as damaged on a line that is no UTF-8 or no JSON object, a
+/// `held` line missing a member or holding one of another type — a `doc`
+/// that is no document address, a frame that is no object, a `sent` that is
+/// no boolean, anchors of no object, naming one anchor, a member beside the
+/// three, an anchor that is no I-address, or a span of no list, of no run,
+/// or holding a run that is not one I-extent in its spelling — an ordinal
+/// past the page's (the largest a `u64` holds among them, read without a
+/// panic), and a `done` line of another form; the same file with the line
+/// whole reads live, its anchors of their form read, a span among them (the
+/// mutants that default a missing member, read text lossily, or take any
+/// ordinal, rebuild the person's text out of a file no writer of this format
+/// wrote; the one that reads anchors of another form as none shifts nothing
+/// a relaunch should; the one that takes a span run of another spelling — a
+/// width signed, of a leading zero, or past a `u64` — compares units the
+/// page never named).
 #[test]
 fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let valid = line_with("sent", Some(json!(false)));
@@ -913,6 +948,12 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let tmp = TempDir::new().unwrap();
     let anchored = live(opened_over(&tmp, &line_with("anchors", Some(json!({"before": null, "after": "1.0.1.0.1.0.1.3"})))));
     assert_eq!(anchored.lines()[0].anchors, Some(anchors(None, Some("1.0.1.0.1.0.1.3"))), "anchors of their form read");
+    let tmp = TempDir::new().unwrap();
+    let span = json!({"before": "1.0.1.0.1.0.1.1", "after": null, "span": [{"start": "1.0.1.0.1.0.1.2", "width": "2"}]});
+    let spanning = live(opened_over(&tmp, &line_with("anchors", Some(span))));
+    assert_eq!(spanning.lines()[0].anchors, Some(spanned(Some("1.0.1.0.1.0.1.1"), None, &[("1.0.1.0.1.0.1.2", 2)])), "a span of its form read");
+    let with_span = |span: Value| line_with("anchors", Some(json!({"before": null, "after": null, "span": span})));
+    let run = |start: &str, width: Value| json!({"start": start, "width": width});
     // The bytes no UTF-8 holds sit inside a string member, so a lossy read
     // would make a whole line of them.
     let mut not_utf8 = valid.clone();
@@ -929,10 +970,23 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         ("a sent of no boolean", line_with("sent", Some(json!("no")))),
         ("anchors of no object", line_with("anchors", Some(json!("1.0.1.0.1.0.1.3")))),
         ("anchors naming one anchor", line_with("anchors", Some(json!({"before": null})))),
-        ("anchors with a member beside the two", line_with("anchors", Some(json!({"before": null, "after": null, "span": 2})))),
+        ("anchors with a member beside the three", line_with("anchors", Some(json!({"before": null, "after": null, "edge": 2})))),
         ("an anchor of no I-address", line_with("anchors", Some(json!({"before": "x.1", "after": null})))),
         ("an anchor with a leading zero", line_with("anchors", Some(json!({"before": null, "after": "1.0.1.0.1.0.1.03"})))),
         ("an anchor of one component", line_with("anchors", Some(json!({"before": "7", "after": null})))),
+        ("a span of no list", with_span(json!(2))),
+        ("a span of null", with_span(Value::Null)),
+        ("a span of no run", with_span(json!([]))),
+        ("a span run of no object", with_span(json!(["1.0.1.0.1.0.1.2"]))),
+        ("a span run with no width", with_span(json!([{"start": "1.0.1.0.1.0.1.2"}]))),
+        ("a span run with a member beside the two", with_span(json!([{"start": "1.0.1.0.1.0.1.2", "width": "1", "end": "1.0.1.0.1.0.1.2"}]))),
+        ("a span run whose start is no I-address", with_span(json!([run("x.2", json!("1"))]))),
+        ("a span run whose width is a number", with_span(json!([run("1.0.1.0.1.0.1.2", json!(1))]))),
+        ("a span run of no width", with_span(json!([run("1.0.1.0.1.0.1.2", json!("0"))]))),
+        ("a span run whose width has a leading zero", with_span(json!([run("1.0.1.0.1.0.1.2", json!("02"))]))),
+        ("a span run whose width is signed", with_span(json!([run("1.0.1.0.1.0.1.2", json!("+2"))]))),
+        ("a span run whose width passes a u64", with_span(json!([run("1.0.1.0.1.0.1.2", json!("18446744073709551616"))]))),
+        ("a span run whose units pass a u64", with_span(json!([run("1.0.1.0.1.0.1.18446744073709551615", json!("2"))]))),
         ("no cause", line_with("cause", None)),
         ("no time", line_with("time", None)),
         ("an id of no string", line_with("id", Some(json!(7)))),

@@ -69,8 +69,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Answer", json!({"id": "m-0", "value": "phone"})),
         ("Cancel", json!({"id": "m-0"})),
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable"})),
-        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "insert"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null}, "cause": "unreachable", "sent": false, "time": 1})),
-        ("Anchors", crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": null})).expect("the anchors' form").json()),
+        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "unreachable", "sent": false, "time": 1})),
+        ("Anchors", crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]})).expect("the anchors' form").json()),
         ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}]})),
         ("Hand", json!({"key": "other", "fingerprint": "ab", "label": "phone"})),
         ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
@@ -165,6 +165,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  hands?: Hand[];\n",
         "  anchors?: Anchors;\n",
         "  before: string | null;\n",
+        "  span?: { start: string; width: string }[];\n",
         "  site: { addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number };\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");

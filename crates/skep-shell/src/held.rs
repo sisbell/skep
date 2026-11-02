@@ -250,50 +250,133 @@ impl Reason {
     }
 }
 
-/// The identities on either side of the span a burst edits (skep #442).
+/// The identities a burst's edit is placed by (skep #442, #751).
 ///
 /// They are the page's, sent over the bridge beside the frame and kept with
 /// the held line, never on the wire: `before` the I-address of the unit just
-/// before the span, `after` the I-address of the unit just after it, each
-/// `None` at the document's edge — an insert at the first position has no
-/// unit before it, one at the end none after. Where the board refuses the
-/// burst as typed against an older state of its document, the shell finds
-/// the two in the document's current image and, where the span between
-/// them is whole, moves every position the burst names by their one
-/// displacement and sends it again (`hold::resend`); a burst that carries
-/// none — an agent's through the MCP tools — is held as a moved document.
-/// Made by [`Anchors::of`] alone, from the bridge's argument and from the
-/// held file's member alike, so every anchor kept is an I-address in the
-/// tumbler-string form the shift splits ([`i_address`]).
+/// before the span the burst edits, `after` the I-address of the unit just
+/// after it, each `None` at the document's edge — an insert at the first
+/// position has no unit before it, one at the end none after — and `span`
+/// the I-runs of the units the span holds, in V-order, as the page's `image`
+/// read gave them: present for a delete and a rearrange, whose span holds
+/// units, and absent for an insert, a copy and a reinstate, which place at a
+/// point. Where the board refuses the burst as typed against an older state
+/// of its document, the shell finds `before` and `after` in the document's
+/// current image and, where the units between them are the span's own —
+/// none for a placement, so the two stand adjacent — moves every position
+/// the burst names by their one displacement and sends it again
+/// (`hold::resend`); a burst that carries none — an agent's through the MCP
+/// tools — is held as a moved document, and so is a delete or a rearrange
+/// that carries no `span`. Made by [`Anchors::of`] alone, from the bridge's
+/// argument and from the held file's member alike, so every anchor kept is
+/// an I-address in the tumbler-string form the shift splits ([`i_address`])
+/// and every run of a span one [`SpanRun`] admits (SP-18).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchors {
     /// The I-address of the unit just before the span; `None` at the start.
     pub before: Option<String>,
     /// The I-address of the unit just after the span; `None` at the end.
     pub after: Option<String>,
+    /// The I-runs of the units the span holds, in V-order.
+    ///
+    /// It is `None` where the page names none, as it names none for a
+    /// placement at a point.
+    pub span: Option<Vec<SpanRun>>,
 }
 
 impl Anchors {
     /// Returns the anchors `v` spells, where it is of their form.
     ///
-    /// The form is `{before, after}`, both present and nothing beside them,
-    /// each `null` or an I-address ([`i_address`]); any other value is of
-    /// no form, which the bridge refuses `malformed_args` naming `anchors`
-    /// and the held file's reader halts on.
+    /// The form is `{before, after, span?}`, `before` and `after` present,
+    /// each `null` or an I-address ([`i_address`]), `span` absent or a
+    /// non-empty list of runs of [`SpanRun`]'s form, and nothing beside the
+    /// three; any other value is of no form, which the bridge refuses
+    /// `malformed_args` naming `anchors` and the held file's reader halts on.
     pub fn of(v: &Value) -> Option<Anchors> {
-        let m = v.as_object().filter(|m| m.len() == 2)?;
+        let m = v.as_object().filter(|m| m.keys().all(|k| matches!(k.as_str(), "before" | "after" | "span")))?;
         let anchor = |name: &str| match m.get(name)? {
             Value::Null => Some(None),
             Value::String(text) if i_address(text).is_some() => Some(Some(text.clone())),
             _ => None,
         };
-        Some(Anchors { before: anchor("before")?, after: anchor("after")? })
+        let span = match m.get("span") {
+            None => None,
+            Some(Value::Array(runs)) if !runs.is_empty() => Some(runs.iter().map(SpanRun::of).collect::<Option<Vec<_>>>()?),
+            Some(_) => return None,
+        };
+        Some(Anchors { before: anchor("before")?, after: anchor("after")?, span })
     }
 
     /// Returns the anchors as the bridge and the held file spell them.
     pub fn json(&self) -> Value {
-        json!({"before": self.before, "after": self.after})
+        let mut v = json!({"before": self.before, "after": self.after});
+        if let Some(span) = &self.span {
+            v["span"] = span.iter().map(SpanRun::json).collect();
+        }
+        v
     }
+}
+
+/// One I-run of the units a burst's span holds (skep #751).
+///
+/// It is `width` units of I-space from the I-address `start`, as an `image`
+/// read answers a run. Made by `SpanRun::of` alone, through [`Anchors::of`]:
+/// `start` an I-address ([`i_address`]), `width` a natural of 1 or more, and
+/// every unit's last component — `start`'s plus one less than `width` — within
+/// a `u64`, so the shift compares it with the image's runs and checks nothing
+/// again (SP-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanRun {
+    /// `start` less its last component.
+    prefix: String,
+    /// `start`'s last component: the first unit's.
+    first: u64,
+    /// The units the run holds, 1 or more.
+    width: u64,
+}
+
+impl SpanRun {
+    /// Returns the run `v` spells, where it is of its form.
+    ///
+    /// The form is `{start, width}`, both present and nothing beside them,
+    /// `start` an I-address and `width` a natural of 1 or more in its one
+    /// decimal spelling, as the wire spells a natural; any other value is of
+    /// no form.
+    fn of(v: &Value) -> Option<SpanRun> {
+        let m = v.as_object().filter(|m| m.len() == 2)?;
+        let (prefix, first) = i_address(m.get("start")?.as_str()?)?;
+        let width = m.get("width")?.as_str().filter(|w| natural(w))?.parse::<u64>().ok().filter(|w| *w >= 1)?;
+        first.checked_add(width - 1)?;
+        Some(SpanRun { prefix: prefix.to_string(), first, width })
+    }
+
+    /// Returns the run as the shift compares runs.
+    ///
+    /// It is its I-prefix, its first unit's last component and its width:
+    /// the three of an `image` run.
+    pub fn extent(&self) -> (&str, u64, u64) {
+        (&self.prefix, self.first, self.width)
+    }
+
+    /// Returns the run's `start` in its one spelling.
+    ///
+    /// It is the spelling [`SpanRun::of`] read: an I-address's components
+    /// carry no leading zero, so its prefix and last component spell it.
+    fn start(&self) -> String {
+        format!("{}.{}", self.prefix, self.first)
+    }
+
+    /// Returns the run as the bridge and the held file spell it.
+    fn json(&self) -> Value {
+        json!({"start": self.start(), "width": self.width.to_string()})
+    }
+}
+
+/// Returns whether `text` is a natural in its one decimal spelling.
+///
+/// The spelling is digits alone, with no leading zero.
+fn natural(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && (text == "0" || !text.starts_with('0'))
 }
 
 /// Splits an I-address at its last component: the prefix, and the last
@@ -306,7 +389,6 @@ impl Anchors {
 /// anchor in a run by: a run `image` answers is `i_start` and a width, its
 /// positions `prefix.(last + n)` for `n` below the width.
 pub fn i_address(text: &str) -> Option<(&str, u64)> {
-    let natural = |c: &str| !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()) && (c == "0" || !c.starts_with('0'));
     if !within_components(text) || !text.split('.').all(natural) {
         return None;
     }
@@ -339,11 +421,12 @@ pub struct HeldLine {
     /// The wire frame, with no `attest` (§3c.2): the page's as composed, or
     /// as the shell last shifted it ([`HeldQueue::rewrite`]).
     pub frame: Value,
-    /// The page's anchors, where the burst carried them (skep #442).
+    /// The page's anchors, where the burst carried them (skep #442, #751).
     ///
-    /// They bound the span the frame edits by identity, for the shift; a
-    /// burst that carried none is held as a moved document where the board
-    /// refuses it as typed against an older state.
+    /// They bound the span the frame edits by identity, and name the units a
+    /// delete's or a rearrange's span holds, for the shift; a burst that
+    /// carried none is held as a moved document where the board refuses it
+    /// as typed against an older state.
     pub anchors: Option<Anchors>,
     /// Why the line is held.
     pub reason: Reason,
@@ -444,9 +527,9 @@ fn ordinal(v: &Value) -> Option<u64> {
 /// Returns a `held` line's members, every one of its type, or `None`.
 ///
 /// `doc` is a document address, `id` a string where present, `frame` an
-/// object, `anchors` of their form ([`Anchors::of`]) where present — a line
-/// written before the anchors existed carries none, and reads as before —
-/// `refusal` any value where present, a `null` one read as none.
+/// object, `anchors` of their form ([`Anchors::of`]) where present — absent
+/// on a line whose burst carried none, and their `span` absent where they
+/// name none — `refusal` any value where present, a `null` one read as none.
 fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
     let doc = m.get("doc")?.as_str().filter(|d| document_address(d).is_some())?.to_string();
     let id = match m.remove("id") {
@@ -1193,7 +1276,9 @@ fn header_bytes(chain: &Chain, principal: u64, account: &str) -> Vec<u8> {
 /// Its members are `held, doc, id?, base, frame, anchors?, cause,
 /// refusal?, sent, time`, in that order — `anchors` as
 /// `{"before":<I-address or null>,"after":<I-address or null>}`, on a line
-/// whose burst carried them alone.
+/// whose burst carried them alone, a span they name spelled before its
+/// closing brace as `,"span":[{"start":<I-address>,"width":"<natural>"}]`,
+/// one object per run.
 fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
@@ -1202,7 +1287,12 @@ fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     let _ = write!(s, ",\"base\":{},\"frame\":{}", l.base, l.frame);
     if let Some(anchors) = &l.anchors {
         let anchor = |a: &Option<String>| a.as_deref().map_or_else(|| "null".to_string(), json_str);
-        let _ = write!(s, ",\"anchors\":{{\"before\":{},\"after\":{}}}", anchor(&anchors.before), anchor(&anchors.after));
+        let _ = write!(s, ",\"anchors\":{{\"before\":{},\"after\":{}", anchor(&anchors.before), anchor(&anchors.after));
+        if let Some(span) = &anchors.span {
+            let runs: Vec<String> = span.iter().map(|run| format!("{{\"start\":{},\"width\":\"{}\"}}", json_str(&run.start()), run.width)).collect();
+            let _ = write!(s, ",\"span\":[{}]", runs.join(","));
+        }
+        s.push('}');
     }
     let _ = write!(s, ",\"cause\":{}", json_str(&l.reason.cause));
     if let Some(r) = &l.reason.refusal {

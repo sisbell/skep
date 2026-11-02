@@ -22,32 +22,37 @@
 //! the head's own landing is no verdict — the person's own later write, a
 //! sibling's, another hand's — and the head goes from the head; and a read
 //! the board did not answer decides nothing: the next probe reads again.
-//! Whether the DOCUMENT MOVED is the board's to say, (iii), by one route:
-//! a line it refuses as typed against an older state of its document
+//! Whether the *document moved* is the board's to say, (iii), by one route: a
+//! line it refuses as typed against an older state of its document
 //! (`arrangement_moved`, the frame's `as_of` below the arrangement's last
-//! change). Such a line is SHIFTED where it can be, by identity (skep #442;
-//! [`Holds::shift_and_send`], the one function the first dial takes too):
-//! the page's anchors — the I-addresses on either side of the span the
-//! burst edits, kept with the line — are found in the document's current
-//! image by ONE live read, and where both stand with the span between them
-//! whole, every position the burst names moves by their one displacement,
-//! the shifted frame is written to the line before it is dialed, and the
-//! line is sent again, each shift one try toward the resend's bound; where
-//! the shift is not exact — no anchors, an anchor lost, the span cut, the
-//! read refused, the bound reached — the document is faced `moved`, never
-//! rebased inexactly, the verdict kept on the line and the hands read once
-//! since the line's typed state. The read judges no move, and no line is
-//! shifted before it: the shift lives in the send, which runs for a line
-//! the read let go alone. Every document is read first, and the lines of
-//! those its reads let go then go out in `k` order across the documents
-//! (§3c.5's order, "which keeps each document's order"), so a `copy` held
-//! between two bursts on its source transcludes the source as it stood when
-//! the person wrote it. Each line goes out through the hold's one reader of
-//! a write's answer, as a first dial does. A resend marks its line as one
-//! that may have landed before it dials, synced, and the line stays so
-//! through every resend short of its ack and through a move, so its next
-//! read takes a landing it finds as the line's own — after a crash or a
-//! refused write between a dial and its answer too (§3c.2's `sent`).
+//! change). Such a line is *shifted* where it can be, by identity
+//! (skep #442, #751), in [`Holds::shift_and_send`] — the one function the first
+//! dial takes too: the page's anchors — the I-addresses on either side of the
+//! span the burst edits and, for a delete or a rearrange, the I-runs of the
+//! units the span holds, kept with the line — are found in the document's
+//! current image by one live read, and where each anchor stands at one place
+//! with the span's own units between them, every position the burst names moves
+//! by their one displacement, the shifted frame is written to the line before
+//! it is dialed, and the line is sent again, each shift one try toward the
+//! resend's bound; where the shift is not exact — no anchors, a delete or a
+//! rearrange without its span, an anchor lost or standing at two places, the
+//! span cut or refilled, the read refused, the bound reached — the document is
+//! faced `moved`, never rebased inexactly, the verdict kept on the line and the
+//! hands read once since the line's typed state. A rearrange that landed where
+//! the read cannot see it — its row's testimony lost, or the feed's history
+//! reclaimed — leaves the span's own units between its anchors in another
+//! order, so its resend, refused by the board, is held moved and never applied
+//! twice. The read judges no move, and no line is shifted before it: the shift
+//! lives in the send, which runs for a line the read let go alone. Every
+//! document is read first, and the lines of those its reads let go then go out
+//! in `k` order across the documents (§3c.5's order, "which keeps each
+//! document's order"), so a `copy` held between two bursts on its source
+//! transcludes the source as it stood when the person wrote it. Each line goes
+//! out through the hold's one reader of a write's answer, as a first dial does.
+//! A resend marks its line as one that may have landed before it dials, synced,
+//! and the line stays so through every resend short of its ack and through a
+//! move, so its next read takes a landing it finds as the line's own — after a
+//! crash or a refused write between a dial and its answer too (§3c.2's `sent`).
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -59,7 +64,7 @@ use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
 use super::{awaits_act, cause, is_lost_answer, line_state, AttestedWhereOwed, BoardSlot, Dialed, HeldState, Holds, MAX_LOST_ANSWERS};
-use crate::held::{i_address, Anchors, Done, HeldLine, Reason};
+use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind};
 use crate::wire::{delivered_values, values_of};
@@ -69,8 +74,9 @@ use crate::wire::{delivered_values, values_of};
 ///
 /// The board clips an `image` region to the arrangement (M5's resolution
 /// clips silently, and a natural rides the wire unbounded), so one read over
-/// this window answers the document's whole content image — the runs tiling
-/// its positions in V-order — whatever its extent, and the anchors are found
+/// this window answers the document's whole content image — its runs in
+/// V-order, a run the document places twice identical in start and width
+/// answered once ([`Image`]) — whatever its extent, and the anchors are found
 /// wherever they now stand; a document past the board's run budget answers
 /// `image_too_large`, and the shift is not made.
 const IMAGE_WINDOW: u64 = u64::MAX;
@@ -88,12 +94,26 @@ pub(super) enum Unshiftable {
     /// The image read answered no image: refused, the death signal, no
     /// answer, or runs that are no I-extents.
     Unread(String),
+    /// The burst is a delete or a rearrange whose anchors name no span.
+    ///
+    /// No identity says which units its span held.
+    NoSpan,
     /// An anchor is in the document no longer: `before` or `after`.
     AnchorLost(&'static str),
+    /// An anchor stands at two places in the document: `before` or `after`.
+    ///
+    /// No one place says where the burst's span stands now.
+    AnchorTwice(&'static str),
     /// The span between the anchors holds other positions than it held
     /// when the burst was typed: another write cut it, or filled it.
     SpanCut { between: u64, were: u64 },
-    /// The frame names positions the anchors cannot bound.
+    /// The span between the anchors holds other units than the burst names.
+    ///
+    /// It holds as many positions as it held when the burst was typed, and
+    /// other units than the span's own, or its own in another order: another
+    /// write emptied it and filled it again, or rearranged it.
+    SpanRefilled,
+    /// The frame names a span its anchors cannot bound or do not name.
     Malformed(String),
 }
 
@@ -104,8 +124,11 @@ impl fmt::Display for Unshiftable {
             Unshiftable::NoLine => write!(f, "the line stands no longer"),
             Unshiftable::PastTheBound { tries } => write!(f, "its {tries} tries stand at the bound of {MAX_LOST_ANSWERS}"),
             Unshiftable::Unread(why) => write!(f, "the document's image could not be read: {why}"),
+            Unshiftable::NoSpan => write!(f, "its anchors name no span of the units it edits"),
             Unshiftable::AnchorLost(which) => write!(f, "its {which} anchor is in the document no longer"),
+            Unshiftable::AnchorTwice(which) => write!(f, "its {which} anchor stands at two places in the document"),
             Unshiftable::SpanCut { between, were } => write!(f, "the span its anchors bound holds {between} positions now, not the {were} it held when the burst was typed"),
+            Unshiftable::SpanRefilled => write!(f, "the span its anchors bound no longer holds the units the burst names, in their order"),
             Unshiftable::Malformed(why) => write!(f, "{why}"),
         }
     }
@@ -127,14 +150,15 @@ pub(super) struct Shifted {
 /// The span a burst's frame edits, in the V-positions it names.
 ///
 /// It is what the anchors bound: `first`, the first position the burst
-/// names, the unit before which is the `before` anchor; and `interior`, how
-/// many positions lay between the two anchors when the burst was typed —
-/// none for an insert, a copy or a reinstate, which place at a point; a
+/// names, the unit before which is the `before` anchor; and `units`, the
+/// positions that lay between the two anchors when the burst was typed,
+/// whose units the anchors' `span` names — `None` for an insert, a copy or
+/// a reinstate, which place at a point, nothing between the anchors; a
 /// delete's `width`; a rearrange's cut span, its first cut to its last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EditedSpan {
     first: u64,
-    interior: u64,
+    units: Option<u64>,
 }
 
 impl EditedSpan {
@@ -146,20 +170,27 @@ impl EditedSpan {
         match frame["op"].as_str()? {
             // A placement at a point: the anchors are the units on either
             // side of `at`, nothing between them.
-            "insert" | "copy" | "reinstate" => Some(EditedSpan { first: ordinal(&frame["at"])?, interior: 0 }),
+            "insert" | "copy" | "reinstate" => Some(EditedSpan { first: ordinal(&frame["at"])?, units: None }),
             // A removal: the anchors are the units on either side of the
             // `width` positions from `p`.
-            "delete" => Some(EditedSpan { first: ordinal(&frame["p"])?, interior: nat(&frame["width"])? }),
+            "delete" => Some(EditedSpan { first: ordinal(&frame["p"])?, units: Some(nat(&frame["width"])?) }),
             // A rearrangement about its cuts: the anchors are the units on
             // either side of the span from the first cut to the last, every
             // cut moving with it.
             "rearrange" => {
                 let cuts: Vec<u64> = frame["cuts"].as_array()?.iter().map(ordinal).collect::<Option<_>>()?;
                 let (first, last) = (*cuts.first()?, *cuts.last()?);
-                (cuts.windows(2).all(|w| w[0] < w[1])).then_some(EditedSpan { first, interior: last - first })
+                (cuts.windows(2).all(|w| w[0] < w[1])).then_some(EditedSpan { first, units: Some(last - first) })
             }
             _ => None,
         }
+    }
+
+    /// Returns how many positions lay between the anchors when it was typed.
+    ///
+    /// A placement at a point has none between them.
+    fn interior(self) -> u64 {
+        self.units.unwrap_or(0)
     }
 
     /// Returns `frame` with every position it names moved by `displacement`,
@@ -200,77 +231,169 @@ fn ordinal(position: &Value) -> Option<u64> {
     (nat(&position["subspace"])? == 1).then(|| nat(&position["ordinal"])).flatten()
 }
 
-/// Returns the runs an `image` answered, each its I-prefix, its first
-/// position and its width.
+/// A document's content image as the shift reads it.
 ///
-/// They tile the content positions the window covers, in V-order, the
-/// board's run decomposition (M5's runs tile the content prefix
-/// contiguously); an answer naming no runs, or a run that is no I-extent,
-/// is no image.
-fn image_runs(image: &Value) -> Result<Vec<(&str, u64, u64)>, Unshiftable> {
-    let runs = image["runs"].as_array().ok_or_else(|| Unshiftable::Unread("the image read answered no runs".into()))?;
-    runs.iter()
-        .map(|run| {
-            let (prefix, first) = run["i_start"].as_str().and_then(i_address)?;
-            let width = nat(&run["width"]).filter(|w| *w >= 1)?;
-            Some((prefix, first, width))
-        })
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| Unshiftable::Unread("a run the image read answered is no I-extent".into()))
+/// It is the runs one `image` read answered, in V-order from the first
+/// position: the board's run decomposition (M5's runs tile the content prefix
+/// contiguously), save that the board answers each run once — deduped on its
+/// start and width — so a run the document places twice, identical in start and
+/// width, stands here at its first place alone. Made by [`Image::of`] alone,
+/// which admits each run only where its every position is within a `u64`, and
+/// the runs only where their positions end within one at `past_end`, so no sum
+/// the shift makes over them passes a `u64`.
+#[derive(Debug)]
+struct Image<'a> {
+    /// The runs, each its I-prefix, its first position and its width.
+    runs: Vec<(&'a str, u64, u64)>,
+    /// The V-position past the last run's: the image's extent plus one.
+    past_end: u64,
 }
 
-/// Returns `frame` shifted through the document's current image, by its
-/// anchors, typed against `as_of` (skep #442).
+impl<'a> Image<'a> {
+    /// Returns the image an `image` read answered.
+    ///
+    /// An answer naming no runs, a run that is no I-extent — its start no
+    /// I-address, its width none of 1 or more, or its positions past a
+    /// `u64` — or runs whose positions pass every position, is no image.
+    fn of(image: &'a Value) -> Result<Image<'a>, Unshiftable> {
+        let answered = image["runs"].as_array().ok_or_else(|| Unshiftable::Unread("the image read answered no runs".into()))?;
+        let runs = answered
+            .iter()
+            .map(|run| {
+                let (prefix, first) = run["i_start"].as_str().and_then(i_address)?;
+                let width = nat(&run["width"]).filter(|w| *w >= 1)?;
+                first.checked_add(width - 1)?;
+                Some((prefix, first, width))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| Unshiftable::Unread("a run the image read answered is no I-extent".into()))?;
+        let past_end = runs.iter().try_fold(1u64, |v, (_, _, width)| v.checked_add(*width)).ok_or_else(|| Unshiftable::Unread("the image's runs pass every position".into()))?;
+        Ok(Image { runs, past_end })
+    }
+
+    /// Returns the V-position `anchor` stands at, the `which` anchor.
+    ///
+    /// It is found in a run of the anchor's prefix holding its position, at
+    /// the V-position the run gives it — in every run, so an anchor found
+    /// at two places is refused, as one found nowhere is lost.
+    fn position_of(&self, anchor: &str, which: &'static str) -> Result<u64, Unshiftable> {
+        let (prefix, n) = i_address(anchor).ok_or_else(|| Unshiftable::Malformed(format!("the {which} anchor is no I-address")))?;
+        let mut found = None;
+        let mut v = 1u64;
+        for &(run_prefix, first, width) in &self.runs {
+            if run_prefix == prefix && n >= first && n - first < width {
+                if found.is_some() {
+                    return Err(Unshiftable::AnchorTwice(which));
+                }
+                found = Some(v + (n - first));
+            }
+            v += width;
+        }
+        found.ok_or(Unshiftable::AnchorLost(which))
+    }
+
+    /// Returns the runs the image arranges at `width` positions from `from`.
+    ///
+    /// They are its runs clipped to those positions, and joined
+    /// ([`joined`]).
+    fn runs_at(&self, from: u64, width: u64) -> Vec<(&'a str, u64, u64)> {
+        let to = from.saturating_add(width);
+        let mut v = 1u64;
+        let mut cut = Vec::new();
+        for &(prefix, first, run_width) in &self.runs {
+            let (lo, hi) = (v.max(from), (v + run_width).min(to));
+            if lo < hi {
+                cut.push((prefix, first + (lo - v), hi - lo));
+            }
+            v += run_width;
+        }
+        joined(cut)
+    }
+}
+
+/// Returns `runs` with each run that continues the one before joined to it.
 ///
-/// The search: each anchor's I-address is found in `image`'s runs — a run
-/// of the anchor's prefix holding its position — at the V-position the run
-/// gives it; an anchor found nowhere is lost. The wholeness test: the
-/// positions between the two anchors now — `before`'s V-position standing
-/// for 0 where the span began at the document's start, `after`'s for the
-/// extent plus one where it reached the end — must be as many as lay
-/// between them when the burst was typed ([`EditedSpan`]): none for a
-/// placement at a point, so the anchors stand adjacent still; a delete's
-/// width; a rearrange's cut span. A span another write cut, or filled, is
-/// not whole, and the shift is not made. What the test cannot tell, named:
-/// a write that removed positions between the anchors and placed as many
-/// back passes it — the anchors name the span's edges, not its interior —
-/// and a document arranging one I-address at two places names it twice,
-/// the search finding the first, a document the board images as fewer runs
-/// than it arranges (an I-run placed twice, identical in start and width,
-/// images once) counting short. The displacement is one for every position:
-/// the `before` anchor's V-position plus one, less the first position the
-/// burst named — so a change that sat wholly before the span moves it by
-/// its width, one wholly after by nothing — applied to every position the
-/// frame names ([`EditedSpan::displaced`]).
+/// A run continues the one before where its prefix is the same and its
+/// first position the one past the other's last. The joined list is the one
+/// spelling two run lists compare in, however the board split a list's runs
+/// when each was read.
+fn joined<'a>(runs: impl IntoIterator<Item = (&'a str, u64, u64)>) -> Vec<(&'a str, u64, u64)> {
+    let mut out: Vec<(&'a str, u64, u64)> = Vec::new();
+    for (prefix, first, width) in runs {
+        match out.last_mut() {
+            Some(last) if last.0 == prefix && last.1.checked_add(last.2) == Some(first) => last.2 = last.2.saturating_add(width),
+            _ => out.push((prefix, first, width)),
+        }
+    }
+    out
+}
+
+/// Returns `frame` shifted by its anchors through the document's image.
+///
+/// The shifted frame is typed against `as_of` (skep #442, #751). The checks
+/// of the frame and the anchors alone come first: the anchors bound the
+/// span the frame names — a span at the document's start alone has no unit
+/// before it — and name the units it holds where it holds some, a delete's
+/// or a rearrange's `span` as many as the frame's span holds, and none for
+/// an insert, a copy or a reinstate, which place at a point. Then the search
+/// ([`Image::position_of`]): each anchor's I-address is found in `image`'s
+/// runs — a run of the anchor's prefix holding its position — at the
+/// V-position the run gives it; an anchor found nowhere is lost, and one
+/// found at two places — a document arranging its I-address twice, as a
+/// passage quoted twice does — gives the span no one place to stand. Then
+/// the wholeness test, by identity: the positions between the two anchors
+/// now — `before`'s V-position standing for 0 where the span began at the
+/// document's start, `after`'s for the extent plus one where it reached the
+/// end — are as many as lay between them when the burst was typed
+/// ([`EditedSpan`]), and their units are the span's own, in its order: the
+/// image's runs clipped to them and the span's runs, each list joined
+/// ([`joined`]), equal run for run, however the board split either read's
+/// runs. A placement's span holds nothing, so its anchors stand adjacent
+/// still; a delete's or a rearrange's span another write cut, filled,
+/// emptied and filled again with as many other units, or rearranged, is not
+/// whole; and the shift is not made. What the test cannot tell, named: a
+/// document the board images as fewer runs than it arranges — an I-run
+/// placed twice, identical in start and width, imaged once ([`Image`]) — is
+/// counted short past the run's second place, which neither the search nor
+/// the clip sees, so an anchor past it is found short by the run's width,
+/// its count and its units passing the test and the burst landing that far
+/// early. The displacement is one for every position: the `before` anchor's
+/// V-position plus one, less the first position the burst named — so a
+/// change that sat wholly before the span moves it by its width, one wholly
+/// after by nothing — applied to every position the frame names
+/// ([`EditedSpan::displaced`]).
 fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) -> Result<Value, Unshiftable> {
     let span = EditedSpan::of(frame).ok_or_else(|| Unshiftable::Malformed("the frame names no content positions the anchors could bound".into()))?;
     if anchors.before.is_none() != (span.first == 1) {
         return Err(Unshiftable::Malformed("the anchors do not bound the span the frame names: a span at the document's start alone has no unit before it".into()));
     }
-    let runs = image_runs(image)?;
-    let extent = runs.iter().try_fold(0u64, |extent, (_, _, width)| extent.checked_add(*width)).ok_or_else(|| Unshiftable::Unread("the image's runs pass every position".into()))?;
-    let position_of = |anchor: &str, which: &'static str| -> Result<u64, Unshiftable> {
-        let (prefix, n) = i_address(anchor).ok_or_else(|| Unshiftable::Malformed(format!("the {which} anchor is no I-address")))?;
-        let mut v = 1u64;
-        for (run_prefix, first, width) in &runs {
-            if *run_prefix == prefix && n >= *first && n - *first < *width {
-                return Ok(v + (n - *first));
+    let named = match (span.units, &anchors.span) {
+        (None, None) => Vec::new(),
+        (None, Some(_)) => return Err(Unshiftable::Malformed("the anchors name a span of units, and the frame places at a point".into())),
+        (Some(_), None) => return Err(Unshiftable::NoSpan),
+        (Some(units), Some(runs)) => {
+            if runs.iter().try_fold(0u64, |n, run| n.checked_add(run.extent().2)) != Some(units) {
+                return Err(Unshiftable::Malformed(format!("the anchors' span names other than the {units} units the frame's span holds")));
             }
-            v += width;
+            joined(runs.iter().map(SpanRun::extent))
         }
-        Err(Unshiftable::AnchorLost(which))
     };
+    let image = Image::of(image)?;
     let before = match &anchors.before {
         None => 0,
-        Some(anchor) => position_of(anchor, "before")?,
+        Some(anchor) => image.position_of(anchor, "before")?,
     };
     let after = match &anchors.after {
-        None => extent + 1,
-        Some(anchor) => position_of(anchor, "after")?,
+        None => image.past_end,
+        Some(anchor) => image.position_of(anchor, "after")?,
     };
-    let between = after.checked_sub(before).and_then(|n| n.checked_sub(1)).ok_or(Unshiftable::SpanCut { between: 0, were: span.interior })?;
-    if between != span.interior {
-        return Err(Unshiftable::SpanCut { between, were: span.interior });
+    let were = span.interior();
+    let between = after.checked_sub(before).and_then(|n| n.checked_sub(1)).ok_or(Unshiftable::SpanCut { between: 0, were })?;
+    if between != were {
+        return Err(Unshiftable::SpanCut { between, were });
+    }
+    if image.runs_at(before + 1, between) != named {
+        return Err(Unshiftable::SpanRefilled);
     }
     let displacement = i128::from(before) + 1 - i128::from(span.first);
     span.displaced(frame, displacement, as_of).ok_or_else(|| Unshiftable::Malformed("a position the frame names moves to no position".into()))
@@ -734,29 +857,30 @@ impl Holds {
         }
     }
 
-    /// Shifts a line the board refused as typed against an older state of
-    /// its document, and sends it again (skep #442): the one function the
-    /// first dial ([`Holds::shift_at_first_dial`]) and the resend
-    /// ([`Holds::send_line`]) call, each dialing as it dials.
+    /// Shifts a line the board refused as typed stale, and sends it again.
     ///
-    /// `verdict` is the board's `arrangement_moved`, its `site.current` the
-    /// floor the shifted frame is typed against. In this order, the first
-    /// that holds answering why the shift was not made ([`Unshiftable`]): a
-    /// line of ordinal `k` stands; it carries anchors; its lost answers and
-    /// shifts together stand below [`MAX_LOST_ANSWERS`] — then the shift is
-    /// counted, one try, so a document another writer keeps moving stops the
-    /// shell at the bound — and ONE live read is made, `image` over the whole
-    /// content window ([`IMAGE_WINDOW`]) under the session, the one read of
-    /// the shift (no `/changes`, no history: the anchors are found at any
-    /// age); the anchors found in it and the span between them whole, every
-    /// position the frame names moved by the one displacement
-    /// ([`shifted_frame`]), the frame typed against the read's own `as_of`,
-    /// the state its positions are true of, never below the verdict's
+    /// It is the one function the first dial ([`Holds::shift_at_first_dial`])
+    /// and the resend ([`Holds::send_line`]) call for a line the board refused
+    /// as typed against an older state of its document (skep #442, #751), each
+    /// dialing as it dials. `verdict` is the board's `arrangement_moved`, its
+    /// `site.current` the floor the shifted frame is typed against. In this
+    /// order, the first that holds answering why the shift was not made
+    /// ([`Unshiftable`]): a line of ordinal `k` stands; it carries anchors; its
+    /// lost answers and shifts together stand below [`MAX_LOST_ANSWERS`] — then
+    /// the shift is counted, one try, so a document another writer keeps moving
+    /// stops the shell at the bound — and one live read is made, `image` over
+    /// the whole content window ([`IMAGE_WINDOW`]) under the session, the one
+    /// read of the shift (no `/changes`, no history: the anchors are found at
+    /// any age); the anchors found in it at one place each and the span between
+    /// them whole — the units it held when the burst was typed, in their order
+    /// — every position the frame names moved by the one displacement
+    /// ([`shifted_frame`]), the frame typed against the read's own `as_of`, the
+    /// state its positions are true of, never below the verdict's
     /// `site.current`. Then the frame is attested (an attest that cannot be
     /// composed dials nothing and writes nothing: the dial that never left,
-    /// `left` false, the line as it was), WRITTEN TO THE LINE before it is
-    /// dialed — `HeldQueue::rewrite`, synced, a copy refused said on `Talk`
-    /// — and the line marked as one that may have landed where it is not so
+    /// `left` false, the line as it was), written to the line before it is
+    /// dialed — `HeldQueue::rewrite`, synced, a copy refused said on `Talk` —
+    /// and the line marked as one that may have landed where it is not so
     /// marked yet, so a relaunch after the shifted answer is lost reads the
     /// landed test at the shifted positions; then dialed by `dial`.
     pub(super) fn shift_and_send(&self, session: &SessionEntry, k: u64, verdict: &Value, dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed) -> Result<Shifted, Unshiftable> {
@@ -816,30 +940,30 @@ impl Holds {
         self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), &[]);
     }
 
-    /// Marks every line of a moved document: `cause: moved`, never rebased
-    /// inexactly.
+    /// Marks every line of a moved document `cause: moved`.
     ///
-    /// It is reached from the board's verdict alone — a resend or a first
-    /// dial refused as typed against an older state of its document that
-    /// the shift could not move through the change exactly
-    /// ([`Holds::shift_and_send`]: no anchors, an anchor lost, the span
-    /// between them cut, the read refused, the shifts at their bound) —
-    /// never from the read, which judges no move. A moved document is one
-    /// the shift could not move through exactly: the exact rebase by
-    /// identity is the shift, made where the page's anchors stand with the
-    /// span between them whole, and a burst it cannot carry so is held here,
-    /// since a silent inexact rebase could put words where the person did
-    /// not. No line is sent. Each keeps its own `sent`, so a line that may
-    /// have landed reads before it is sent again (§3c.2). `judged` is the
-    /// line the board refused, with the board's verdict, kept as its refusal
-    /// — the state the line was typed against and the document's current
-    /// one; a moved reason carries one (`Dialed::refused`). The hands whose
-    /// rows moved it ride the `held` event's `moved` state (§3c.5; §4b.2),
-    /// the data of the face's three forms. The page's half — what the burst
-    /// machine does at a `held` answer, how it re-projects the held frames
-    /// at a launch, the moved document's face — is the frontend's and in
-    /// neither repository at this pin (unverified here, the record §7 item
-    /// 4; stated from assisted-frontend §7b).
+    /// No line is rebased inexactly. It is reached from the board's verdict
+    /// alone — a resend or a first dial refused as typed against an older state
+    /// of its document that the shift could not move through the change exactly
+    /// ([`Holds::shift_and_send`]: no anchors, a delete or a rearrange without
+    /// its span, an anchor lost or at two places, the span between them cut or
+    /// refilled, the read refused, the shifts at their bound) — never from the
+    /// read, which judges no move. A moved document is one the shift could not
+    /// move through exactly: the exact rebase by identity is the shift, made
+    /// where the page's anchors stand at one place each with the span's own
+    /// units between them, and a burst it cannot carry so is held here, since a
+    /// silent inexact rebase could put words where the person did not. No line
+    /// is sent. Each keeps its own `sent`, so a line that may have landed reads
+    /// before it is sent again (§3c.2). `judged` is the line the board refused,
+    /// with the board's verdict, kept as its refusal — the state the line was
+    /// typed against and the document's current one; a moved reason carries one
+    /// (`Dialed::refused`). The hands whose rows moved it ride the `held`
+    /// event's `moved` state (§3c.5; §4b.2), the data of the face's three
+    /// forms. The page's half — what the burst machine does at a `held` answer,
+    /// how it re-projects the held frames at a launch, the moved document's
+    /// face — is the frontend's and in neither repository at this pin
+    /// (unverified here, the record §7 item 4; stated from assisted-frontend
+    /// §7b).
     pub(super) fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str, judged: Option<(u64, Value)>) {
         self.with_principal(board_reference, principal, |ph| {
             let marks: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| (l.k, l.reason.sent)).collect();

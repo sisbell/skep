@@ -1084,25 +1084,27 @@ impl Shell {
     /// In this order: `malformed_args` naming `frame` where it is no object,
     /// then the form's (`guest_form`). In the guest form, the target's
     /// (`unknown_board`, `not_canonical`, `malformed_args`), then a write
-    /// refused without a dial (`write_in_guest_form`), then the board's
-    /// verdict or `unreachable`. In the session form, `malformed_args`
-    /// naming `anchors` where the member is present and not of its declared
-    /// form — `{before, after}`, each an I-address or `null` — never read as
+    /// refused without a dial (`write_in_guest_form`), then the board's verdict
+    /// or `unreachable`. In the session form, `malformed_args` naming `anchors`
+    /// where the member is present and not of its declared form —
+    /// `{before, after, span?}`, each anchor an I-address or `null`, `span` a
+    /// non-empty list of `{start, width}` runs, `start` an I-address and
+    /// `width` a natural of 1 or more in its decimal string — never read as
     /// absent, then naming `session`, then `session_ended`; a write under a
-    /// bare session refused `write_in_bare_session`; a `publish` frame
-    /// refused `publish_is_a_call` without a dial — a publication crosses as
+    /// bare session refused `write_in_bare_session`; a `publish` frame refused
+    /// `publish_is_a_call` without a dial — a publication crosses as
     /// `publication.confirm`, composed by the shell from the panel it holds,
-    /// never as a frame the page composed (§4b.1's `op` row, decision 1
-    /// (b)); then the hold's answer ([`Holds::send`]), the anchors handed to
-    /// it for a burst's line — the identities on either side of the span the
-    /// burst edits, by which the shell shifts the burst where the board
-    /// refuses it as typed against an older state (skep #442); absent, the
-    /// burst is admitted as one the shell cannot shift, held as a moved
-    /// document there — an unholdable write under a standing hold refused
-    /// `stopped`, `poisoned` or `halted` (§3c.4) — or for an `/op-at` frame
-    /// the board's verdict or `unreachable`; and `session_died` where a death
-    /// signal met at the dial or at a read the attest needed ends the
-    /// session.
+    /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b));
+    /// then the hold's answer ([`Holds::send`]), the anchors handed to it for a
+    /// burst's line — the identities on either side of the span the burst edits
+    /// and, for a delete or a rearrange, of the units it holds, by which the
+    /// shell shifts the burst where the board refuses it as typed against an
+    /// older state (skep #442, #751); absent, the burst is admitted as one the
+    /// shell cannot shift, held as a moved document there — an unholdable write
+    /// under a standing hold refused `stopped`, `poisoned` or `halted` (§3c.4)
+    /// — or for an `/op-at` frame the board's verdict or `unreachable`; and
+    /// `session_died` where a death signal met at the dial or at a read the
+    /// attest needed ends the session.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");

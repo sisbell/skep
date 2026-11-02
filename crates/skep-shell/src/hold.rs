@@ -20,17 +20,18 @@
 //! hold-class answer or refused run, which is held, and a burst the board
 //! refuses as typed against an older state of its document
 //! (`arrangement_moved`): shifted through the change by the page's anchors
-//! and sent again within the call where the span they bound is whole
-//! (`resend`'s shift, skep #442), else held as a moved document, the board's
-//! verdict kept on its line. A write the hold never
-//! holds is faced where a burst's would be held (§3c.4: "a non-burst write
-//! that fails … is faced at its act") — and the seven of them §3c.4 names
-//! ([`UNHOLDABLE_WRITES`], `publication.confirm`'s send beside them) meeting
-//! a hold that stands at the board before any dial — the own node stopped,
-//! the write path poisoned, the writes halted — are REFUSED at once with
-//! the hold's cause as the refusal's name ([`Holds::unholdable_refusal`]),
-//! never held and never dialed, the page answering before it composes; a
-//! board that is unreachable is no such hold, its dial failing as it fails.
+//! and sent again within the call where the span they bound holds the
+//! burst's own units still (`resend`'s shift, skep #442, #751), else held
+//! as a moved document, the board's verdict kept on its line. A write the
+//! hold never holds is faced where a burst's would be held (§3c.4: "a
+//! non-burst write that fails … is faced at its act") — and the seven of
+//! them §3c.4 names ([`UNHOLDABLE_WRITES`], `publication.confirm`'s send
+//! beside them) meeting a hold that stands at the board before any dial —
+//! the own node stopped, the write path poisoned, the writes halted — are
+//! REFUSED at once with the hold's cause as the refusal's name
+//! ([`Holds::unholdable_refusal`]), never held and never dialed, the page
+//! answering before it composes; a board that is unreachable is no such
+//! hold, its dial failing as it fails.
 //! A write takes that path under a session that may write alone: the `op`
 //! row refuses a bare session's before any dial (`SessionEntry::may_write`),
 //! and the resend sends under no bare session. A write the session's key
@@ -172,8 +173,9 @@ fn is_burst(frame: &Value) -> bool {
 /// person a line whose resends lost their answer ([`MAX_LOST_ANSWERS`]), its
 /// verdict beside it. A line the board refused as typed against an older
 /// state of its document (`arrangement_moved`) that the shift could not move
-/// through the change exactly — no anchors, an anchor lost, the span between
-/// them cut, the read refused, or the shifts at their bound — carries
+/// through the change exactly — no anchors, a delete or a rearrange without
+/// its span, an anchor lost or at two places, the span between them cut or
+/// refilled, the read refused, or the shifts at their bound — carries
 /// `moved`, and the board's verdict beside it as a refused run's does; a
 /// line the shift moved and sent again keeps the cause it had.
 mod cause {
@@ -262,9 +264,9 @@ enum Decision {
     ///
     /// It is an older state of the document's arrangement
     /// (`arrangement_moved`): the burst is shifted through the change and
-    /// sent again where its anchors stand with the span between them whole
-    /// (`resend`'s shift), else held as a moved document, the verdict kept
-    /// on the line.
+    /// sent again where its anchors stand at one place each with the span's
+    /// own units between them (`resend`'s shift), else held as a moved
+    /// document, the verdict kept on the line.
     Moved,
     /// A silent reissue of this kind.
     ///
@@ -1293,11 +1295,11 @@ impl Holds {
         }
     }
 
-    /// Shifts a burst the board refused at its first dial as typed against
-    /// an older state of its document, and sends it again within the call
-    /// (skep #442; §4b.1's `op` row).
+    /// Shifts a burst refused stale at its first dial, and resends it.
     ///
-    /// The burst carries its anchors, and the board's verdict (`reason`)
+    /// The board refused it as typed against an older state of its document,
+    /// and it is sent again within the call (skep #442, #751; §4b.1's `op`
+    /// row). The burst carries its anchors, and the board's verdict (`reason`)
     /// names the state it was typed against and the document's current one.
     /// The line is entered first — as the verdict held it, `moved` with the
     /// verdict on it, no dial of it having landed — and said to no one yet:
@@ -1316,8 +1318,9 @@ impl Holds {
     /// answer a first dial faces drops the line, entered for the shift
     /// alone, and faces it; the death signal leaves the line standing for
     /// the session that stands next, the caller ending this one. Where the
-    /// shift is not exact — an anchor lost, the span between them cut, the
-    /// read refused, the bound reached — the line is the moved hold as a
+    /// shift is not exact — a delete or a rearrange without its span, an
+    /// anchor lost or at two places, the span between them cut or refilled,
+    /// the read refused, the bound reached — the line is the moved hold as a
     /// burst without anchors meets it: the newest verdict on the line, the
     /// hands read once ([`Holds::hands_since_typed_state`]), the `held`
     /// event `moved`, the call answered `held`.

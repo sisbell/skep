@@ -60,7 +60,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   naming the kept file; the walk run at the open under the same catch as
   its thread), `serial_lock`,
   `serial_figures`, `commit_under`, `take_turn_after_refusal`,
-  `write_first_head` (`FirstHead`), `seed_registry` (`Seeded`: the rows
+  `write_first_head` (`FirstHead`), `retry_the_owed_head` — the claim's
+  first head, refused and owed, tried again off the write path when the
+  checkpoint thread's retry clock runs out, under the serial lock as the
+  open takes it — `seed_registry` (`Seeded`: the rows
   `written`, the rows that `stood`, the type `refused`) — the link-type
   registry's seed the daemon runs at every open: one named section and one
   `defines` link into `1.1.0.1.0.1` for every type of `skep-registry`'s
@@ -95,7 +98,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `stopped_feed_files` (`StoppedFile`), `attest_store_figures`
   (`AttestStoreFigures`), what the never compacted `feed-attest.log` holds
   on disk and in memory, `checkpoint_signal`
-  (`CheckpointSignal`: `wait`, `stop`, `is_stopped`, `Woken`), `shutdown`
+  (`CheckpointSignal`: `wait`, `stop`, `is_stopped`, `Woken` — a raise,
+  the head retry, the tick or the stop), `shutdown`
   and `lines`, the classed door `Lines` (`say`) a line of the daemon's
   goes through to stand in the one record; `write_meta` (`FrameMeta`,
   `attributed`, `WriteMeta`, `Signed`), what the feed will say of a write;
@@ -110,8 +114,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `STANDING_INTERVAL`, the three the daemon reads too, the last its panic
   hook's rate beside the standing line's cadence;
   `FEED_WALK_PROGRESS_BOUNDARIES`, `FEED_WALK_PROGRESS_INTERVAL`,
-  `MAX_CHANGES_PAGE_BYTES` and `FEED_RESIDENT_WINDOW`, the change feed's
-  resident window in positions, the core's own.
+  `MAX_CHANGES_PAGE_BYTES`, `FEED_RESIDENT_WINDOW`, the change feed's
+  resident window in positions, and `HEAD_RETRY_FIRST` and
+  `HEAD_RETRY_CAP`, the clock an owed first head is retried on, the core's
+  own.
 - **The lock**, `serial` — `SerialGuard`, the write-serialization guard
   the routes hold across the door, and `SerialFigures` (`since`), its
   takes and waits, which the daemon's landing line says.
@@ -124,7 +130,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   clock and its one refusal, the registry seed's three (a type hidden from
   a board's seed, every type lifted, a refusal of the seed's n-th commit),
   the feed's and the attest store's failure arms and the attest store's
-  sync mark, the lines said, the checkpoint signal's tick. Forwards
+  sync mark, the lines said, the checkpoint signal's tick and its head
+  retry (its clock fixed, its hold, whether it is armed). Forwards
   nothing.
 
 Its modules, each with a line saying what it holds, are declared in

@@ -125,7 +125,9 @@ fn the_misminted_drafts_line_names_both_addresses_and_that_the_head_goes_on() {
 }
 
 /// ROW 38's TWO LINES at fixed inputs — the refusal with its position, the
-/// commit it was met at and the cause, the clearing with the landed
+/// commit it was met at and the cause, where no head stands yet when it is
+/// tried again (every write's turn, and the daemon's retry within the
+/// clock's cap, a minute), the clearing with the landed
 /// position, the attempts refused, the first refused position and how long
 /// the refusals stood — and THE CAUSE's RENDERING as the wire renders a
 /// rejection: the code as the wire spells it (`durability`, never
@@ -151,8 +153,13 @@ fn row_38s_lines_render_the_ruled_words_and_the_cause_as_the_wire_renders_a_reje
         "head writer: the head at position 24 was refused at its insert (durability: the test \
          seam's refusal); no head written this cycle; no head stands yet, so a claimed board \
          refuses every attested write attestation_invalid:board_unavailable until one lands — \
-         tried again at every write's turn",
+         tried again at every write's turn, and on a claimed board by the daemon within a minute",
         "no head standing: the board term's absence and when it is retried"
+    );
+    assert_eq!(
+        crate::limits::HEAD_RETRY_CAP,
+        std::time::Duration::from_secs(60),
+        "the line's \"within a minute\" is the retry's longest period"
     );
     assert_eq!(
         RefusalsClearedLine { landed: 31, attempts: 7, since: 24, elapsed_ms: 1_830 }.to_string(),

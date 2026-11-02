@@ -1071,7 +1071,9 @@ impl Daemon {
     /// refusal of either fails nothing: it is surfaced on the operator
     /// stream, the open returns `Ok`, the seed's rest waits for the next open
     /// and the board answers attested writes
-    /// `attestation_invalid:board_unavailable` until a head lands.
+    /// `attestation_invalid:board_unavailable` until a head lands — at the
+    /// next write's turn or on the checkpoint thread's retry clock, which
+    /// the refusal arms, whichever comes first.
     ///
     /// Two steps here cost more than O(1) in the data dir beyond the
     /// engine's own recovery: the blob store's open, which tail-checks and
@@ -1673,7 +1675,10 @@ impl Daemon {
     /// flip's own line was never said. A head the driver refuses here is
     /// surfaced as every refused head is, and fails nothing: the open
     /// returns all the same, and the board answers attested writes
-    /// `board_unavailable` until a head lands.
+    /// `board_unavailable` until a head lands — at the next write's turn, or
+    /// on the retry's clock the refusal arms, which the checkpoint thread
+    /// takes once `serve` spawns it ([`Daemon::retry_the_owed_head`]),
+    /// whichever comes first.
     ///
     /// **Why not one transaction.** A head names the committed
     /// `(position, chain)` pair read before its own write opens — a
@@ -2699,6 +2704,25 @@ impl Daemon {
             self.resident.read();
         }
         self.say_checkpoint_line(Class::Landing, line.to_string());
+    }
+
+    /// Tries the claim's owed first head, off the write path.
+    ///
+    /// It is what the checkpoint thread runs where its wait answers
+    /// [`Woken::Retry`](skep_core::commits::Woken::Retry), the retry's clock
+    /// the head writer armed at a refused `H.1` (`head.rs`, the claim's
+    /// head, owed): the write path's serial lock taken, as the open takes it
+    /// to write the head (`Daemon::write_the_claims_head_if_owed`), and the
+    /// head writer's turn under it ([`Commits::retry_the_owed_head`]) — so
+    /// every head commit the retry makes rides the head writer's own door
+    /// ordered against every write, and a claimed board whose `H.1` was
+    /// refused writes it though no write comes. A no-op where the debt has
+    /// ended. No line of its own: a refusal is the head writer's row 38, said
+    /// once per cause and counted after, the next try armed one doubled
+    /// period on, and a landing after refusals says its clearing line.
+    pub(crate) fn retry_the_owed_head(&self) {
+        let serial = self.commits.serial_lock();
+        self.commits.retry_the_owed_head(&serial);
     }
 }
 

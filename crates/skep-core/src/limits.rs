@@ -2,9 +2,11 @@
 //!
 //! They are the request-body cap of the two frame-carrying routes (wire.md
 //! §Transport), the change feed's page byte budget and its resident window
-//! (wire.md §The change feed) and the operator stream's cadences — the
+//! (wire.md §The change feed), the operator stream's cadences — the
 //! standing line's, the feed walk's progress and the hold-down the edge
-//! pairs judge their second line by (`operations.md` §1.1 m11, m12, m15).
+//! pairs judge their second line by (`operations.md` §1.1 m11, m12, m15) —
+//! and the clock a claimed board's owed first head is retried on (wire.md
+//! §The other endpoints).
 //!
 //! Each is `pub`, the daemon reading three from here: the request-body cap,
 //! the hold-down and the standing line's cadence. The daemon's own bounds —
@@ -163,6 +165,35 @@ pub const FEED_WALK_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 /// late.
 pub const EDGE_HOLD_DOWN: Duration = Duration::from_secs(15);
 
+/// The head retry's first period: 5 s.
+///
+/// It is how long after a claimed board's first head `H.1` is refused the
+/// checkpoint thread tries it again of its own accord, under the write
+/// path's serial lock as the open does (`commits::CheckpointSignal`'s retry;
+/// `commits/head.rs`, the claim's head, owed). Without it the head waits on
+/// a write's turn, and a client that sends no attested write while the
+/// board has no head gives none: every signed write of its person's stalls
+/// until a restart. Each refused try arms the next at twice the period
+/// before, up to [`HEAD_RETRY_CAP`]; the first head that lands disarms the
+/// clock and sets the period back to this. A tick costs one turn of the
+/// serial lock on a board whose first head is owed — the head's commits
+/// where it lands, one look at the head writer's state where a write's turn
+/// landed it first — and nothing elsewhere: a board with no head owed arms
+/// no clock.
+pub const HEAD_RETRY_FIRST: Duration = Duration::from_secs(5);
+
+/// The head retry's longest period: 60 s.
+///
+/// It is the most [`HEAD_RETRY_FIRST`]'s doubling reaches, so while a
+/// claimed board's first head stays owed — a full volume, a halted write
+/// path — the checkpoint thread tries it at least once a minute: a head the
+/// driver admits again lands within a minute of its cause clearing, and the
+/// tries the refusal meets are counted and said once per cause (row 38), so
+/// the cap bounds the work and the noise, never the stall. A tick costs one
+/// turn of the serial lock on a board whose first head is owed, and nothing
+/// elsewhere.
+pub const HEAD_RETRY_CAP: Duration = Duration::from_secs(60);
+
 /// The page byte budget of `/changes`: 2 MiB (signed ops; SO-I9; P29).
 ///
 /// It is the most bytes one page's entries and the commas between them may
@@ -229,5 +260,28 @@ mod tests {
     #[test]
     fn the_link_stores_body_cap_is_this_one() {
         assert_eq!(skep_links::REQUEST_BODY_BYTES, MAX_REQUEST_BODY as u64);
+    }
+
+    /// The wire document states the head retry's two figures as the
+    /// constants set them, at both its sites — the `board_unavailable`
+    /// cause and the published head's paragraph: the first try
+    /// [`HEAD_RETRY_FIRST`] after the refusal, read through the constant,
+    /// and the tries never more than [`HEAD_RETRY_CAP`] apart, which the
+    /// document spells "a minute" and is asserted beside it. So a moved
+    /// figure is a red test, not a drift.
+    #[test]
+    fn the_wire_document_states_the_head_retrys_two_figures_as_set() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
+        let wire = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let wire = wire.split_whitespace().collect::<Vec<_>>().join(" ");
+        let first = format!("first try {} s after the refusal", HEAD_RETRY_FIRST.as_secs());
+        assert_eq!(wire.matches(&first).count(), 2, "wire.md says {first:?} at both its sites");
+        assert_eq!(HEAD_RETRY_CAP, Duration::from_secs(60), "wire.md's \"a minute\"");
+        assert_eq!(
+            wire.matches("never more than a minute apart").count(),
+            2,
+            "wire.md bounds the tries by the cap at both its sites"
+        );
     }
 }

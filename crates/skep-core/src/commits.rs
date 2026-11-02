@@ -48,9 +48,11 @@
 //! `H.1`, the refusal is surfaced and the claim stands, the head owed at the
 //! write path's next turn — a refused write's turn included
 //! ([`Commits::take_turn_after_refusal`]), ahead of the cadence's own
-//! triggers — so the board is without a board term until a head lands, for
-//! exactly one write where that write's turn lands it (`head.rs`, what a
-//! refusal does).
+//! triggers — and on the checkpoint thread's retry clock
+//! ([`Commits::retry_the_owed_head`]; the signal, below), whichever comes
+//! first: so the board is without a board term until a head lands, for at
+//! most one write where that write's turn lands it and for none where the
+//! clock lands it first (`head.rs`, the claim's head, owed).
 //!
 //! **And the registry seed** (commons-seeding §1 to §4; `registry.rs`, this
 //! card's other child). At every open, after this card opens and before the
@@ -116,7 +118,12 @@
 //! whole from genesis (wire.md §The change feed, Retention), the journal's
 //! reclamation bounding the board's STATES and never its record of events,
 //! so after a landing the thread reads what the feed holds for its line
-//! ([`Commits::feed_figures`]) and rewrites nothing.
+//! ([`Commits::feed_figures`]) and rewrites nothing. The same signal carries
+//! the owed head's retry: the head writer arms it where the claim's first
+//! head is refused and disarms it where a head ends the debt, and the
+//! thread, woken by it, tries the head under the write path's lock
+//! ([`Commits::retry_the_owed_head`]) — a board with no head owed arms
+//! nothing, and its thread wakes as it did.
 //!
 //! **And the walk behind the listener** (`operations.md` §3.3 step 2; §4
 //! row 16; §1.1 m15). Where `commits.log` was lost or torn, the feed's open
@@ -215,7 +222,7 @@ pub use registry::{
 use self::classify::derived_journal;
 use self::head::HeadWriter;
 use self::time::TimeWriter;
-use crate::limits::STANDING_INTERVAL;
+use crate::limits::{HEAD_RETRY_CAP, HEAD_RETRY_FIRST, STANDING_INTERVAL};
 
 /// What [`Commits::write_first_head`] came to.
 ///
@@ -227,8 +234,8 @@ use crate::limits::STANDING_INTERVAL;
 /// wrote one before or at the claim, an hour idle before the ceremony's last
 /// step being enough — leaves the board term present, and a refusal leaves
 /// it owed, the board answering attested writes `board_unavailable` until a
-/// head lands, one write where the next turn's head lands (`head.rs`, the
-/// claim's head, owed).
+/// head lands — at the next write's turn or on the checkpoint thread's retry
+/// clock, whichever comes first (`head.rs`, the claim's head, owed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FirstHead {
     /// `H.1` landed in this call, naming the committed pair as it stood.
@@ -240,7 +247,7 @@ pub enum FirstHead {
     /// The head writer's driver refused it.
     ///
     /// It is surfaced by the head writer, the head owed at the write path's
-    /// next turn.
+    /// next turn and on the checkpoint thread's retry clock.
     Refused,
 }
 use self::sidecar::{OpTerms, WalkControl};
@@ -500,8 +507,9 @@ pub struct Commits {
     ///
     /// Raised after the record step of a commit that finds the kernel's due
     /// flag set, or whose execute ran a checkpoint inline — the kernel's
-    /// backstop — and moved the inline count; waited on by the thread `serve`
-    /// spawns, stopped at shutdown.
+    /// backstop — and moved the inline count; its head retry armed by the
+    /// head writer at each refused first head and disarmed where the debt
+    /// ends; waited on by the thread `serve` spawns, stopped at shutdown.
     checkpoint_signal: CheckpointSignal,
     /// The inline count as this card last saw it (m13).
     ///
@@ -803,7 +811,9 @@ impl Commits {
     /// stops. Raised by `Commits::commit_recorded` after the record step of
     /// every commit that finds the kernel's due flag set, or whose execute
     /// ran the kernel's backstop inline; the thread reads the flag itself and
-    /// runs the checkpoint where it stands.
+    /// runs the checkpoint where it stands. Its head retry is armed by the
+    /// head writer while the claim's first head is owed, and the thread
+    /// answers it with [`Commits::retry_the_owed_head`].
     pub fn checkpoint_signal(&self) -> &CheckpointSignal {
         &self.checkpoint_signal
     }
@@ -929,8 +939,10 @@ impl Commits {
     /// wrote (row 12). The head writer answers whether a head landed; whether
     /// a head already stood is read here off the world the kernel holds after
     /// the call (`board_term`), so a refusal — the third case — is what is
-    /// left. Nothing else about a head moves: `HeadWriter::write_first_head`
-    /// states the rule.
+    /// left; it leaves the head owed, written at the write path's next turn,
+    /// by the checkpoint thread's retry ([`Commits::retry_the_owed_head`]) or
+    /// at the next open, whichever comes first. Nothing else about a head
+    /// moves: `HeadWriter::write_first_head` states the rule.
     pub fn write_first_head(&self, serial: &SerialGuard<'_>) -> FirstHead {
         if self.head_writer.write_first_head(self, serial) {
             return FirstHead::Written;
@@ -1063,10 +1075,37 @@ impl Commits {
     /// serialization guard (SO-I4 (a)): nothing landed, so the cadence counts
     /// nothing and evaluates no trigger, and what the turn is for is the one
     /// head no trigger makes due — the claim's `H.1` where its driver refused
-    /// it, owed until a head lands (`head.rs`, the claim's head, owed). Free
-    /// where no head is owed: one lock, one look at the state.
+    /// it, owed until a head lands: this turn's, a later write's or the
+    /// checkpoint thread's retry ([`Commits::retry_the_owed_head`]), whichever
+    /// comes first (`head.rs`, the claim's head, owed). Free where no head is
+    /// owed: one lock, one look at the state.
     pub fn take_turn_after_refusal(&self, serial: &SerialGuard<'_>) {
         self.head_writer.take_turn(self, serial);
+    }
+
+    /// Tries the claim's owed first head, under the caller's serialization
+    /// guard.
+    ///
+    /// It is the third caller of the owed head (`head.rs`, the claim's head,
+    /// owed), beside a write's turn ([`Commits::commit_under`],
+    /// [`Commits::take_turn_after_refusal`]) and the open
+    /// ([`Commits::write_first_head`]): the head writer's turn
+    /// (`HeadWriter::take_turn`), which evaluates the owed first head ahead
+    /// of every trigger and counts nothing where nothing landed, taken where
+    /// the retry's deadline on [`CheckpointSignal`] passed — the thread
+    /// `serve` spawns answering [`Woken::Retry`] by it — so a claimed board
+    /// whose `H.1` was refused writes it with no write sent. Its commits ride
+    /// the head writer's own door under this guard, as the open's do. A
+    /// refusal is the head writer's to say, once per cause, and arms the next
+    /// try one doubled period on; a landing after refusals says its clearing
+    /// line; so the retry says nothing of its own. A no-op where no head is
+    /// owed — one lock, one look at the state, and no turn — so a wake that
+    /// a write's landing raced to the lock writes nothing: no head after the
+    /// first comes of a retry.
+    pub fn retry_the_owed_head(&self, serial: &SerialGuard<'_>) {
+        if self.head_writer.first_head_owed() {
+            self.head_writer.take_turn(self, serial);
+        }
     }
 
     /// Runs the ordering protocol and nothing after it.
@@ -2470,18 +2509,18 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
 
 /// The checkpoint thread's signal.
 ///
-/// It is a pending bit, the stop and the tick's deadline under one mutex,
-/// one condvar — the pruner's cadence's shape, with a wake beside the
-/// interval. `Commits::commit_recorded` raises it after the record step of a
-/// commit that finds the kernel's due flag set, or whose execute ran the
-/// kernel's backstop inline; the thread `skepd::serve` spawns waits on it,
-/// runs the checkpoint and returns to wait; the shutdown stops it, so a wait
-/// ends at once and no thread blocks a stop. A wake while no thread waits is
-/// kept as the pending bit, so a crossing is never lost to a thread that was
-/// busy; two wakes before one wait coalesce into one, since the thread reads
-/// the kernel's flag and not a count. Costs one mutex lock per wake and one
-/// per wait — once per crossing of the cadence, and per commit only while a
-/// crossing's flag stands unserviced.
+/// It is a pending bit, the stop, the tick's deadline and the head retry's
+/// under one mutex, one condvar — the pruner's cadence's shape, with a wake
+/// beside the interval. `Commits::commit_recorded` raises it after the
+/// record step of a commit that finds the kernel's due flag set, or whose
+/// execute ran the kernel's backstop inline; the thread `skepd::serve`
+/// spawns waits on it, runs the checkpoint and returns to wait; the shutdown
+/// stops it, so a wait ends at once and no thread blocks a stop. A wake
+/// while no thread waits is kept as the pending bit, so a crossing is never
+/// lost to a thread that was busy; two wakes before one wait coalesce into
+/// one, since the thread reads the kernel's flag and not a count. Costs one
+/// mutex lock per wake and one per wait — once per crossing of the cadence,
+/// and per commit only while a crossing's flag stands unserviced.
 ///
 /// **And the tick** (`operations.md` §1 the rates; §1.1 m11): the wait is
 /// timed — every [`STANDING_INTERVAL`] with neither raise nor stop it
@@ -2494,6 +2533,18 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
 /// and a raise, and a raise outranks a tick whose deadline has passed beside
 /// it; the raise is answered first and the tick at the next wait, so neither
 /// is lost.
+///
+/// **And the retry** (`head.rs`, the claim's head, owed): beside the tick
+/// the wait keeps a second deadline, armed only while the claim's first
+/// head is owed — the head writer arms it at each refused first head,
+/// [`HEAD_RETRY_FIRST`] on and doubling at every refused try to
+/// [`HEAD_RETRY_CAP`], and disarms it at the head that ends the debt — and
+/// answers [`Woken::Retry`] once it passes, on which the thread tries the
+/// head under the write path's lock ([`Commits::retry_the_owed_head`]). A
+/// raise outranks a retry whose deadline has passed beside it, and a retry
+/// a tick, each answered at the next wait; the deadline is cleared as it is
+/// answered and set again only by the next refusal. Unarmed — every board
+/// whose first head stands or was never owed — the wait is the tick's alone.
 pub struct CheckpointSignal {
     state: Mutex<SignalState>,
     cond: Condvar,
@@ -2512,6 +2563,43 @@ struct SignalState {
     /// It is set one interval past the moment each tick is answered, and
     /// otherwise moved only by the test seam (`set_tick_interval`).
     tick_due: Instant,
+    /// When the owed first head is next tried, or `None` where it is not.
+    ///
+    /// It is set one period on by each refused first head
+    /// (`CheckpointSignal::arm_head_retry`), cleared as the wait answers it
+    /// and by the head that ends the debt (`disarm_head_retry`), and
+    /// otherwise moved only by the test seam (`set_retry_period`).
+    retry_due: Option<Instant>,
+    /// The period the next arming waits.
+    ///
+    /// It starts at `retry_first` and doubles at every arming to
+    /// `retry_cap`; the disarm sets it back.
+    retry_period: Duration,
+    /// The retry's first period.
+    ///
+    /// It is [`HEAD_RETRY_FIRST`], or the figure the test seam fixed it at.
+    retry_first: Duration,
+    /// The retry's longest period.
+    ///
+    /// It is [`HEAD_RETRY_CAP`], or the figure the test seam fixed it at.
+    retry_cap: Duration,
+    /// The test seam's hold on the retry (`hold_retry`).
+    ///
+    /// Set, a deadline that passes is answered by no wait, so a suite pins
+    /// what a write's turn does with the head owed and no clock racing it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    retry_held: bool,
+}
+
+impl SignalState {
+    /// Returns the retry's deadline where one stands and no hold is on it.
+    fn retry_deadline(&self) -> Option<Instant> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        if self.retry_held {
+            return None;
+        }
+        self.retry_due
+    }
 }
 
 /// What a wait on the [`CheckpointSignal`] ended with.
@@ -2523,6 +2611,11 @@ pub enum Woken {
     ///
     /// The thread says the standing line, where a standing state stands.
     Tick,
+    /// The head retry's deadline passed: the first head is owed.
+    ///
+    /// The thread tries the claim's first head under the write path's lock
+    /// ([`Commits::retry_the_owed_head`]).
+    Retry,
     /// The stop was asked.
     Stop,
 }
@@ -2535,6 +2628,12 @@ impl CheckpointSignal {
                 stopped: false,
                 interval: STANDING_INTERVAL,
                 tick_due: Instant::now() + STANDING_INTERVAL,
+                retry_due: None,
+                retry_period: HEAD_RETRY_FIRST,
+                retry_first: HEAD_RETRY_FIRST,
+                retry_cap: HEAD_RETRY_CAP,
+                #[cfg(any(test, feature = "test-hooks"))]
+                retry_held: false,
             }),
             cond: Condvar::new(),
         }
@@ -2550,13 +2649,17 @@ impl CheckpointSignal {
         self.cond.notify_one();
     }
 
-    /// Waits for a raise, the tick or the stop, whichever comes first.
+    /// Waits for a raise, the head retry, the tick or the stop, whichever
+    /// comes first.
     ///
-    /// The stop outranks the others once asked, a raise outranking a tick
-    /// that is due beside it (the tick then answers the next wait). A raise
-    /// that came before this wait is answered at once; so is a tick whose
-    /// deadline passed while the thread was busy, since the deadline stands
-    /// in the state and no wake moved it.
+    /// The stop outranks the others once asked, a raise outranking a retry
+    /// or a tick that is due beside it, and a retry a tick (the outranked
+    /// one then answers the next wait). A raise that came before this wait
+    /// is answered at once; so is a retry or a tick whose deadline passed
+    /// while the thread was busy, since each deadline stands in the state and
+    /// no wake moved it. The retry's deadline is cleared as it is answered,
+    /// so it is answered once per arming; the timed wait runs to the earlier
+    /// of the two deadlines.
     pub fn wait(&self) -> Woken {
         let mut state = self.state.lock();
         loop {
@@ -2568,13 +2671,45 @@ impl CheckpointSignal {
                 return Woken::Due;
             }
             let now = Instant::now();
+            let retry_due = state.retry_deadline();
+            if retry_due.is_some_and(|due| now >= due) {
+                state.retry_due = None;
+                return Woken::Retry;
+            }
             if now >= state.tick_due {
                 state.tick_due = now + state.interval;
                 return Woken::Tick;
             }
-            let deadline = state.tick_due;
+            let deadline = retry_due.map_or(state.tick_due, |due| due.min(state.tick_due));
             self.cond.wait_until(&mut state, deadline);
         }
+    }
+
+    /// Arms the head retry one period from now, and doubles the period.
+    ///
+    /// It is the head writer's call at every refused first head (`head.rs`,
+    /// the claim's head, owed) — the claim's, the open's, a write's turn's or
+    /// a retry's own — so each refused try sets the next one period on, the
+    /// period doubling to the cap; a parked wait is woken to take the
+    /// deadline. One lock, nothing called under it.
+    pub(crate) fn arm_head_retry(&self) {
+        let mut state = self.state.lock();
+        state.retry_due = Some(Instant::now() + state.retry_period);
+        state.retry_period = state.retry_period.saturating_mul(2).min(state.retry_cap);
+        self.cond.notify_one();
+    }
+
+    /// Disarms the head retry and sets its period back to the first.
+    ///
+    /// It is the head writer's call where the first head stops being owed —
+    /// a head landed, or found standing, while it was owed — and nowhere
+    /// else, so a healthy board's turns never take this lock. A wait parked
+    /// on the deadline wakes at it, finds none and parks to the tick. One
+    /// lock, nothing called under it.
+    pub(crate) fn disarm_head_retry(&self) {
+        let mut state = self.state.lock();
+        state.retry_due = None;
+        state.retry_period = state.retry_first;
     }
 
     /// Stops the signal: every wait answers [`Woken::Stop`], now and forever.
@@ -2595,6 +2730,58 @@ impl CheckpointSignal {
         state.interval = interval;
         state.tick_due = Instant::now() + interval;
         self.cond.notify_all();
+    }
+
+    /// The test seam behind `skepd::Daemon::set_head_retry_millis`.
+    ///
+    /// It fixes the retry's clock at `period` — its first period and its cap
+    /// alike, so it no longer doubles — re-times a deadline that stands to
+    /// one period from now, and wakes a parked wait to take it: so a suite
+    /// drives the retry in milliseconds, or holds it off for as long as it
+    /// likes. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn set_retry_period(&self, period: Duration) {
+        let mut state = self.state.lock();
+        state.retry_first = period;
+        state.retry_cap = period;
+        state.retry_period = period;
+        if state.retry_due.is_some() {
+            state.retry_due = Some(Instant::now() + period);
+        }
+        self.cond.notify_all();
+    }
+
+    /// The test seam behind `skepd::Daemon::hold_the_head_retry`.
+    ///
+    /// It holds the retry for good: a deadline armed, now or later, is
+    /// answered by no wait — it stands until the head that ends the debt
+    /// disarms it — so a suite pins what a write's turn does with the head
+    /// owed and no clock racing it. No release. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn hold_retry(&self) {
+        self.state.lock().retry_held = true;
+    }
+
+    /// The test seam behind `skepd::Daemon::head_retry_armed`.
+    ///
+    /// It answers whether a retry deadline stands, held or not. Not a stable
+    /// API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn retry_armed(&self) -> bool {
+        self.state.lock().retry_due.is_some()
+    }
+
+    /// The test seam's read of the period the next arming waits.
+    ///
+    /// The unit suite reads the doubling off it with no wait. Not a stable
+    /// API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn retry_period(&self) -> Duration {
+        self.state.lock().retry_period
     }
 
     /// Returns whether the stop has been asked.

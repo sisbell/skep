@@ -376,6 +376,47 @@ impl Daemon {
     pub fn set_standing_interval_millis(&self, millis: u64) {
         self.commits.checkpoint_signal().set_tick_interval(Duration::from_millis(millis));
     }
+
+    /// Fixes the head retry's clock at `millis`, its first period and its
+    /// cap alike.
+    ///
+    /// **Test hook** (the same standing). The checkpoint thread's retry of
+    /// an owed first head (`Daemon::retry_the_owed_head`) waits so many
+    /// milliseconds in place of the shipped five seconds doubling to a
+    /// minute, and no longer doubles; a deadline already armed is re-timed
+    /// to `millis` from now and a parked wait woken to take it — so a suite
+    /// drives the retry through a seam rather than a wait, or sets it long
+    /// to judge the board while the head is owed and then short to see it
+    /// land. Every daemon's clock is the constants' until this is called.
+    #[doc(hidden)]
+    pub fn set_head_retry_millis(&self, millis: u64) {
+        self.commits.checkpoint_signal().set_retry_period(Duration::from_millis(millis));
+    }
+
+    /// Holds the head retry for good: no retry runs on this daemon.
+    ///
+    /// **Test hook** (the same standing). A deadline the head writer arms,
+    /// before or after this, stands and is answered by no wait — so a suite
+    /// that stands a claimed board with its first head owed pins what a
+    /// write's turn does with it, or that the head stays owed, with no clock
+    /// racing the cell. Armed before the refusal it is about. No release:
+    /// the cells that hold need none.
+    #[doc(hidden)]
+    pub fn hold_the_head_retry(&self) {
+        self.commits.checkpoint_signal().hold_retry();
+    }
+
+    /// Returns whether the head retry's deadline stands, held or not.
+    ///
+    /// **Test hook** (the same standing). It is armed at each refused first
+    /// head, cleared as the checkpoint thread answers it and where the head
+    /// that ends the debt lands — so a healthy board, and one whose refused
+    /// head was a cadence head, answers `false`.
+    #[doc(hidden)]
+    pub fn head_retry_armed(&self) -> bool {
+        self.commits.checkpoint_signal().retry_armed()
+    }
+
     /// Arms a panic of the next worker, once, or of every worker.
     ///
     /// **Test hook** (the `fuzz_support` standing: `#[doc(hidden)]`, not a
@@ -1070,7 +1111,11 @@ impl Daemon {
     /// unadvanced, the triggering write untouched), so a suite can stand a
     /// *running* claimed board with no board term and judge what the write
     /// path does next (the first head owed at every turn, a refused write's
-    /// included — `tests/it/head.rs`). The refusal is injected *inside* the
+    /// included — `tests/it/head.rs`) — and what the checkpoint thread's
+    /// retry does, which the refusal arms: a cell that judges the write
+    /// path's turn holds the retry first ([`Daemon::hold_the_head_retry`]),
+    /// or drives it ([`Daemon::set_head_retry_millis`]), since it lands the
+    /// head five seconds on. The refusal is injected *inside* the
     /// driver — the first store call of the head's write answers a
     /// `durability` rejection whose `detail` is the seam's standing one,
     /// `the test seam's refusal` — so it rides row 38's whole path. Disarms

@@ -8,10 +8,11 @@
 //!   second refused write adds none; `writes.halted` true; the next tick says `the kernel is
 //!   poisoned`.
 //! * m10 AT THE HEAD WRITER's OWN COMMIT: the claim's `H.1` refused, owed at
-//!   the next turn — a write refused ahead of the store takes it, the
-//!   barrier and the repair armed to fail — the head's own commit poisons
-//!   the kernel: row 38's line, then the ruled line at once, the kernel read
-//!   at the door rather than the answer the head writer swallowed.
+//!   the next turn, its retry held — a write refused ahead of the store
+//!   takes it, the barrier and the repair armed to fail — the head's own
+//!   commit poisons the kernel: row 38's line, then the ruled line at once,
+//!   the kernel read at the door rather than the answer the head writer
+//!   swallowed.
 //! * m10 AT THE CATCH: the journal's append PANICKED and the repair failed
 //!   — the kernel poisoned and the panic re-raised, the write answered `500
 //!   internal_panic` — the ruled line, its cause the unwind's, is in the
@@ -166,20 +167,22 @@ fn the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted(
 }
 
 /// m10 — THE HALT LINE AT THE HEAD WRITER's OWN COMMIT (§4 row 29): the
-/// claim's `H.1` refused at the seam, the head is owed at the next turn; the
-/// journal's next barrier armed to fail on a full volume and its repair to
-/// fail, an attested write refused ahead of the store — no board term to
-/// name — gives the head writer its turn, and the head's own commit poisons
-/// the kernel. The head writer turns its refusal into its own line (row 38,
-/// `poisoned`), and the ruled line follows it ONCE, before any further
-/// write: the door reads the kernel after every execute, not the answer the
-/// head writer swallowed.
+/// claim's `H.1` refused at the seam, the head is owed at the next turn —
+/// the checkpoint thread's retry of it HELD, so the write's turn below is
+/// the one that tries it; the journal's next barrier armed to fail on a
+/// full volume and its repair to fail, an attested write refused ahead of
+/// the store — no board term to name — gives the head writer its turn, and
+/// the head's own commit poisons the kernel. The head writer turns its
+/// refusal into its own line (row 38, `poisoned`), and the ruled line
+/// follows it ONCE, before any further write: the door reads the kernel
+/// after every execute, not the answer the head writer swallowed.
 #[test]
 fn the_kernels_halt_is_said_when_the_head_writers_own_commit_poisons_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
     ceremony_before_the_claim(port);
+    sd.daemon().hold_the_head_retry();
     sd.daemon().refuse_the_next_head_once();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let claim = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));

@@ -399,6 +399,114 @@ fn the_checkpoint_signal_keeps_a_raise_coalesces_a_burst_and_stops_every_wait_fo
     );
 }
 
+/// THE HEAD RETRY on the checkpoint thread's signal (`head.rs`, the claim's
+/// head, owed), each claim on a signal of its own. THE PERIOD, read with no
+/// wait: 5, 10, 20, 40, 60, 60 s across six arms — doubling from
+/// `HEAD_RETRY_FIRST` to the cap — and 5 s again at the disarm, which takes
+/// the deadline. Every timed claim on the seam's millisecond clock: an arm
+/// WAKES a wait parked on the hour's tick alone, which answers `Retry` once
+/// the deadline passes and not before, and once — the deadline cleared as
+/// it is answered; a raise standing beside a passed deadline is answered
+/// first and the retry at the next wait; the retry beside a passed tick
+/// first and the tick at the next; the stop outranks it; a disarmed retry
+/// and a held one answer no wait; and the tick answers on its own deadline
+/// with a retry armed past it.
+#[test]
+fn the_head_retry_doubles_to_its_cap_and_answers_once_past_its_deadline_behind_a_raise() {
+    let (long, short) = (Duration::from_secs(5), Duration::from_millis(100));
+    let ms = Duration::from_millis;
+
+    let signal = Arc::new(CheckpointSignal::new());
+    assert!(!signal.retry_armed(), "a new signal arms no retry");
+    let periods: Vec<u64> = (0..6)
+        .map(|_| {
+            let period = signal.retry_period().as_secs();
+            signal.arm_head_retry();
+            period
+        })
+        .collect();
+    assert_eq!(periods, [5, 10, 20, 40, 60, 60], "the period each arm waits, doubling to the cap");
+    assert!(signal.retry_armed(), "armed");
+    signal.disarm_head_retry();
+    assert!(!signal.retry_armed(), "the disarm takes the deadline");
+    assert_eq!(signal.retry_period(), HEAD_RETRY_FIRST, "…and sets the first period back");
+
+    let signal = Arc::new(CheckpointSignal::new());
+    signal.set_retry_period(ms(1_000));
+    let parked = waiter(&signal);
+    std::thread::sleep(short);
+    signal.arm_head_retry();
+    assert_eq!(parked.recv_timeout(short).ok(), None, "an armed retry answers no wait before its deadline");
+    assert_eq!(
+        parked.recv_timeout(long).ok(),
+        Some(Woken::Retry),
+        "the arm woke a wait parked on the hour's tick, which answers once the deadline passes"
+    );
+    assert!(!signal.retry_armed(), "the deadline cleared as it is answered");
+    let next = waiter(&signal);
+    assert_eq!(next.recv_timeout(short).ok(), None, "answered once: the next wait parks");
+    signal.stop();
+    assert_eq!(next.recv_timeout(long).ok(), Some(Woken::Stop));
+
+    let signal = Arc::new(CheckpointSignal::new());
+    signal.set_retry_period(ms(1));
+    signal.arm_head_retry();
+    signal.raise();
+    std::thread::sleep(ms(20));
+    assert_eq!(
+        waiter(&signal).recv_timeout(long).ok(),
+        Some(Woken::Due),
+        "a raise beside a passed deadline is answered first"
+    );
+    assert_eq!(waiter(&signal).recv_timeout(long).ok(), Some(Woken::Retry), "…the retry at the next wait");
+    signal.arm_head_retry();
+    signal.set_tick_interval(ms(1));
+    std::thread::sleep(ms(20));
+    assert_eq!(
+        waiter(&signal).recv_timeout(long).ok(),
+        Some(Woken::Retry),
+        "a retry beside a passed tick is answered first"
+    );
+    assert_eq!(waiter(&signal).recv_timeout(long).ok(), Some(Woken::Tick), "…the tick at the next wait");
+    signal.arm_head_retry();
+    std::thread::sleep(ms(20));
+    signal.stop();
+    assert_eq!(waiter(&signal).recv_timeout(long).ok(), Some(Woken::Stop), "the stop outranks a passed retry");
+
+    let signal = Arc::new(CheckpointSignal::new());
+    signal.set_retry_period(ms(1));
+    signal.arm_head_retry();
+    signal.disarm_head_retry();
+    std::thread::sleep(ms(20));
+    let parked = waiter(&signal);
+    assert_eq!(parked.recv_timeout(short).ok(), None, "a disarmed retry answers no wait");
+    signal.stop();
+    assert_eq!(parked.recv_timeout(long).ok(), Some(Woken::Stop));
+
+    let signal = Arc::new(CheckpointSignal::new());
+    signal.set_retry_period(ms(1));
+    signal.hold_retry();
+    signal.arm_head_retry();
+    std::thread::sleep(ms(20));
+    let parked = waiter(&signal);
+    assert_eq!(parked.recv_timeout(short).ok(), None, "a held retry answers no wait, its deadline passed");
+    assert!(signal.retry_armed(), "…the deadline standing");
+    signal.stop();
+    assert_eq!(parked.recv_timeout(long).ok(), Some(Woken::Stop));
+
+    let signal = Arc::new(CheckpointSignal::new());
+    signal.set_retry_period(ms(60_000));
+    signal.arm_head_retry();
+    signal.set_tick_interval(ms(50));
+    assert_eq!(
+        waiter(&signal).recv_timeout(long).ok(),
+        Some(Woken::Tick),
+        "the tick answers on its own deadline, a retry armed past it"
+    );
+    assert!(signal.retry_armed(), "…the retry still armed");
+    signal.stop();
+}
+
 /// THE FULL VOLUME's LINE (`operations.md` §1.1 m1), in the ruled words,
 /// with the position the refused write would have taken — and the door it
 /// goes through keeps it in the record under its class word.

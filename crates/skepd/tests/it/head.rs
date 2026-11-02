@@ -1575,13 +1575,18 @@ fn span_read_out(line: &str) -> String {
 /// triggers — naming the claim's position, and its retry is ADMITTED and
 /// attested, with no restart and no second head. Before the fix the board
 /// answered `board_unavailable` until a trigger the refused writer could
-/// not fire, or a restart.
+/// not fire, or a restart. The checkpoint thread's retry of the owed head
+/// is HELD (`hold_the_head_retry`, before the refusal arms it), so the
+/// write's turn is what pays the head here and no clock races it: the
+/// refusal arms the retry, and the write's landing disarms it. The clock's
+/// own landing is the next cell's.
 #[test]
 fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_included() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
     ceremony_before_the_claim(port);
+    sd.daemon().hold_the_head_retry();
     sd.daemon().refuse_the_next_head_once();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
@@ -1603,9 +1608,11 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
         "failure: head writer: the head at position {claim_at} was refused at its insert \
          (durability: the test seam's refusal); no head written this cycle; no head stands yet, \
          so a claimed board refuses every attested write attestation_invalid:board_unavailable \
-         until one lands — tried again at every write's turn"
+         until one lands — tried again at every write's turn, and on a claimed board by the \
+         daemon within a minute"
     );
     assert_eq!(head_lines(&sd), std::slice::from_ref(&refused), "the refused H.1, said once with its position");
+    assert!(sd.daemon().head_retry_armed(), "the refusal armed the retry, held");
 
     // The next attested write: refused for want of the board term — and its
     // turn pays the owed head.
@@ -1619,6 +1626,7 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     let h1 = board_term(port).expect("H.1 written at the refused write's turn");
     assert_eq!(h1.log_position, claim_at, "H.1 names the claim's position: nothing landed between");
     assert_eq!(head_position(port), claim_at + H1_RECORDS, "the head's records, and nothing else");
+    assert!(!sd.daemon().head_retry_armed(), "the write's landing disarmed the retry");
     // The landing clears the refusal: one `landing:` line naming the head's
     // position, the one attempt refused, the first refused position — here
     // the same, nothing having landed between — and how long it stood; and
@@ -1640,6 +1648,114 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the retry is admitted: {v}");
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).expect("a boundary").is_some(), "…and attested");
     assert!(head_record(port, &head_member(2)).is_none(), "no second head");
+    sd.shutdown();
+}
+
+/// (vi) — THE OWED HEAD LANDS WITH NO WRITE (skep #723; `head.rs`, the
+/// claim's head, owed): the claim's own `H.1` refused at the seam arms the
+/// checkpoint thread's retry — held off at a minute first, so the board is
+/// judged while the head is owed: no board term, the refusal said once, the
+/// live pair the claim's — then driven at 50 ms (`set_head_retry_millis`,
+/// which re-times the armed deadline). With NO write sent, `H.1` lands,
+/// naming that committed pair and nothing landed between; the head writer's
+/// lines are exactly the refusal and its clearing, the clock adding none;
+/// the retry is disarmed; and the next attested write is admitted and
+/// attested at once — not `board_unavailable` — with no second head.
+/// Before the fix the head waited on a write's turn the client never gave,
+/// or a restart.
+#[test]
+fn a_refused_first_head_lands_on_the_retry_clock_with_no_write_sent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    sd.daemon().set_head_retry_millis(60_000);
+    sd.daemon().refuse_the_next_head_once();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let claim_at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
+    assert!(claimed(port), "the claim stands, its H.1 refused");
+    assert!(board_term(port).is_none(), "no board term: the first head was refused");
+    assert!(sd.daemon().head_retry_armed(), "the refusal armed the retry");
+    let (live, chain) = health(port);
+    assert_eq!(live, claim_at, "the refused head landed nothing: the live pair is the claim's");
+    let head_lines = |sd: &Skepd| -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("head writer:")).collect()
+    };
+    let refused = format!(
+        "failure: head writer: the head at position {claim_at} was refused at its insert \
+         (durability: the test seam's refusal); no head written this cycle; no head stands yet, \
+         so a claimed board refuses every attested write attestation_invalid:board_unavailable \
+         until one lands — tried again at every write's turn, and on a claimed board by the \
+         daemon within a minute"
+    );
+    assert_eq!(head_lines(&sd), std::slice::from_ref(&refused), "the refused H.1, said once");
+
+    // The clock driven at 50 ms; nothing is written but by the daemon.
+    sd.daemon().set_head_retry_millis(50);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while head_lines(&sd).len() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "FINDING (#723): no write sent, and the owed H.1 never landed: {:?}",
+            head_lines(&sd)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let h1 = board_term(port).expect("H.1 written by the retry, no write sent");
+    assert_eq!(h1.log_position, claim_at, "H.1 names the claim's position: nothing landed between");
+    let rec = head_record(port, &head_member(1)).expect("H.1");
+    assert_eq!(rec["position"].as_u64(), Some(claim_at), "…the committed pair's position: {rec}");
+    assert_eq!(rec["chain"].as_str(), Some(chain.as_str()), "…and its chain: {rec}");
+    assert_eq!(head_position(port), claim_at + H1_RECORDS, "the head's records, and nothing else");
+    let said = head_lines(&sd);
+    assert_eq!(said.len(), 2, "the refusal, then its clearing, and no line of the clock's: {said:?}");
+    assert_eq!(said[0], refused);
+    assert_eq!(
+        span_read_out(&said[1]),
+        format!(
+            "landing: head writer: a head landed at position {claim_at}; 1 refused attempts since \
+             position {claim_at}, over N ms, are cleared"
+        ),
+        "the clearing"
+    );
+    assert!(!sd.daemon().head_retry_armed(), "the landing disarmed the retry");
+
+    // The next attested write: admitted and attested at once; one head.
+    let grant = typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT);
+    let v = op(port, Some(&signed), &grant);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "admitted, not board_unavailable: {v}");
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).expect("a boundary").is_some(), "…and attested");
+    assert!(head_record(port, &head_member(2)).is_none(), "no second head");
+    sd.shutdown();
+}
+
+/// (vi) — A HEALTHY BOARD ARMS NO RETRY: a clean claim writes its `H.1` and
+/// arms nothing; and a refused CADENCE head — the hour's, as row 38's cell
+/// drives it — said with no tail, a head standing, is retried by its
+/// trigger, which stays due, and arms no clock either: the retry is the
+/// claim's owed first head's alone.
+#[test]
+fn a_healthy_board_and_a_refused_cadence_head_arm_no_retry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    assert!(board_term(port).is_some(), "the claim wrote H.1");
+    assert!(!sd.daemon().head_retry_armed(), "a clean claim arms no retry");
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    sd.daemon().set_head_writer_clock_millis(clock_origin() + WELL_PAST_THE_HOUR_MILLIS);
+    sd.daemon().refuse_the_next_head_once();
+    let p1 = commit(port, &owner, CLAIMANT_ACCOUNT);
+    let said: Vec<String> =
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("head writer:")).collect();
+    assert_eq!(
+        said,
+        [format!(
+            "failure: head writer: the head at position {p1} was refused at its insert \
+             (durability: the test seam's refusal); no head written this cycle"
+        )],
+        "the hour's head refused, a head standing"
+    );
+    assert!(!sd.daemon().head_retry_armed(), "a refused cadence head arms no retry");
     sd.shutdown();
 }
 

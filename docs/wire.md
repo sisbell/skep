@@ -2426,9 +2426,12 @@ the deposit's `make_link` — §The claim ceremony and credentials):
   the algorithm — an empty set included; PERMANENT, no retry under that
   key succeeds), `malformed` (the blob is not the tag's fixed width;
   PERMANENT, a re-compose), `board_unavailable` (the board has no `H.1`, so the frame's
-  `board` term has no value — on a claimed board only for the ONE write
-  after a refused `H.1`, whose own turn writes the head (§The other
-  endpoints), or on a journal damaged below `H.1`; REORDER: the retry is
+  `board` term has no value — on a claimed board only while a refused
+  `H.1` is owed: the next write's own turn writes the head, or the daemon
+  does with no write sent, whichever comes first — its first try 5 s after
+  the refusal, its tries never more than a minute apart — so at most the
+  ONE write that comes before the head meets this (§The other endpoints);
+  or on a journal damaged below `H.1`; REORDER: the retry is
   admitted), `withheld` (a `publish` COPIES IN a run whose origin the
   writer may not read — a staging draft's run onto a draft the read
   predicate withholds from it — and the store would admit the shot, the
@@ -6031,9 +6034,13 @@ WRITES `H.1`: the board's first head is committed by the daemon in the claim's
 own serialized step, right after the claim link and before any later write is
 admitted, naming the claim's own position — so a claimed board has the board
 term every attested write's entry frame names (§Sessions,
-`attestation_invalid`) from the claim's step, or from the write path's next
-turn after a refused `H.1`: where the head writer's driver refuses it the
-claim stands, the one attested write after it answers
+`attestation_invalid`) from the claim's step, or, after a refused `H.1`,
+from the next write's turn or the daemon's own try, whichever comes
+first: where the head writer's driver refuses it the claim stands and the
+head is OWED; the daemon tries it again with no write sent — the first try
+5 s after the refusal, each refused try doubling the wait, never more than a
+minute apart — under the write path's own serialization, so it is ordered
+against every write; an attested write that comes before the head answers
 `attestation_invalid:board_unavailable`, that write's own turn writes `H.1`
 (the "claimed, no head" test runs at every turn of the write path, a refused
 write's included, ahead of the cadence's triggers) and its retry is admitted

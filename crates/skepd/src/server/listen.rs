@@ -781,10 +781,11 @@ pub(super) fn wake_addr(bound: Ipv4Addr) -> Ipv4Addr {
 /// the landing's re-reads and says the backstop's line off the kernel's
 /// inline count; a wake the flag's arm has just answered with a landing
 /// finds the count said and does nothing. Then it waits on the write path's
-/// signal for the next crossing or inline run, the standing interval's tick,
-/// or the stop. A flag set, or a count moved, before the thread existed (a
-/// crossing inside the open's own commits) is read at the first pass,
-/// before any wait. A failure is the operator's line per attempt, and the
+/// signal for the next crossing or inline run, the head retry's deadline,
+/// the standing interval's tick, or the stop. A flag set, or a count moved,
+/// before the thread existed (a crossing inside the open's own commits) is
+/// read at the first pass, before any wait, and a retry the open armed at
+/// the first wait. A failure is the operator's line per attempt, and the
 /// next crossing's to retry: the kernel clears the flag as it starts, so a
 /// kernel that cannot checkpoint is not asked again until a commit crosses.
 ///
@@ -793,6 +794,20 @@ pub(super) fn wake_addr(bound: Ipv4Addr) -> Ipv4Addr {
 /// (`Daemon::say_the_standing_line`) — one line where a standing bad state
 /// stands, nothing on a healthy board — then takes its turn as after any
 /// wake.
+///
+/// **And the retry** (`skep-core`'s `commits/head.rs`, the claim's head,
+/// owed). While a claimed board's first head is owed — the claim's `H.1`, or
+/// the open's, refused — the head writer keeps a second deadline on the same
+/// signal, `skep_core::limits::HEAD_RETRY_FIRST` on and doubling at each
+/// refused try to `HEAD_RETRY_CAP`; where it passes the wait answers
+/// [`Woken::Retry`], and the thread tries the head under the write path's
+/// serial lock as the open does (`Daemon::retry_the_owed_head`), saying
+/// nothing of its own, then takes its turn as after any wake. A board with
+/// no head owed arms no deadline, and its waits are the tick's alone. Where
+/// this thread is gone — the OS refused it at the spawn, or it ended on a
+/// caught panic — no retry runs: the write path's turn and the next open
+/// still land the head, and the standing line, which this thread carries,
+/// says nothing of it.
 ///
 /// **The catch** (row 41). The whole loop runs under `catch_unwind`, and a
 /// panic that escapes a turn ends the thread through its catch
@@ -819,6 +834,7 @@ fn checkpoint_on_due(daemon: &Daemon, signal: &CheckpointSignal) {
         }
         match signal.wait() {
             Woken::Due => {}
+            Woken::Retry => daemon.retry_the_owed_head(),
             Woken::Tick => daemon.say_the_standing_line(),
             Woken::Stop => return,
         }

@@ -67,7 +67,9 @@
 //! owed: the "claimed, no head" test runs at every turn of the write path
 //! from then on — a refused write's turn included,
 //! [`Commits::take_turn_after_refusal`] — ahead of the landed-commit
-//! triggers, so the next turn writes it (the claim's head, owed, below).
+//! triggers, and on the checkpoint thread's retry clock
+//! ([`Commits::retry_the_owed_head`]), so the next turn or the clock,
+//! whichever comes first, writes it (the claim's head, owed, below).
 //!
 //! **Resume by reading.** At open the writer reads `H`'s latest member — its
 //! `position` and `chain` (the next head's `prev`; a head is owed only once
@@ -128,7 +130,10 @@
 //! how long the refusals lasted ([`RefusalsClearedLine`]), so the next
 //! refusal is news again and the condition is gone at the same place the
 //! line is said. The next landed commit retries a cadence head, whose
-//! trigger stays due.
+//! trigger stays due; an owed first head is retried at every turn and on
+//! the checkpoint thread's retry clock too (the claim's head, owed), each
+//! try refused for the same cause counted and not said again, so the clock
+//! adds no line.
 //!
 //! **The claim's head, owed** (SO-I4 (a): the boundary is derived "from the
 //! write path's next turn wherever its first write was refused"). The first
@@ -137,17 +142,31 @@
 //! turn — a landed write's, a refused write's
 //! ([`Commits::take_turn_after_refusal`]), a replay's — ahead of the
 //! landed-commit triggers, until a head lands; where a head already stands
-//! the test is a no-op, so it costs an idle turn one look at the state. So a
-//! running claimed board whose `H.1` was refused answers attested writes
-//! `attestation_invalid:board_unavailable` for exactly one write — the
-//! refused writer's own turn writes `H.1`, and its retry is admitted — and
-//! not until a trigger it cannot fire, or a restart. The open closes the same
-//! window for a board that restarts inside it (skepd's `server.rs`). The
-//! daemon opens its kernel `Fsync` only, so a head is never written over an
-//! in-memory kernel (whose chain is the zero seed at every coordinate); a
-//! poisoned kernel refuses the triggering write first, so no head the
-//! cadence makes due is attempted over it — an owed first head is attempted
-//! at every turn, and the kernel refuses it too.
+//! the test is a no-op, so it costs an idle turn one look at the state. And
+//! it is tried with no write at all: each refused first head arms a retry
+//! on the checkpoint thread's signal
+//! ([`CheckpointSignal`](super::CheckpointSignal)),
+//! [`HEAD_RETRY_FIRST`](crate::limits::HEAD_RETRY_FIRST) on and doubling at
+//! every refused try to [`HEAD_RETRY_CAP`](crate::limits::HEAD_RETRY_CAP),
+//! on which the thread takes the write path's serial lock as the open does
+//! and the head writer's turn under it ([`Commits::retry_the_owed_head`]);
+//! the head that ends the debt disarms it, and a board with no head owed
+//! arms nothing. A client that sends no attested write while the board has
+//! no head therefore waits on no turn it will not give. So a running
+//! claimed board whose `H.1` was refused answers attested writes
+//! `attestation_invalid:board_unavailable` for at most one write — the
+//! refused writer's own turn writes `H.1`, and its retry is admitted — or
+//! for none, where the clock writes it first; and not until a trigger it
+//! cannot fire, or a restart, but within a minute of its cause clearing,
+//! the clock's longest period. Where the checkpoint thread is gone (skepd's
+//! `server/listen.rs`) no retry runs, and the turn and the open remain. The
+//! open closes the same window for a board that restarts inside it (skepd's
+//! `server.rs`). The daemon opens its kernel `Fsync` only, so a head is
+//! never written over an in-memory kernel (whose chain is the zero seed at
+//! every coordinate); a poisoned kernel refuses the triggering write first,
+//! so no head the cadence makes due is attempted over it — an owed first
+//! head is attempted at every turn and on the retry's clock, and the kernel
+//! refuses it too.
 //!
 //! **Why not `Caller::System`.** That is M9's rule-fire path (PUB-6.28),
 //! which mints nothing and carries three registration conditions the head
@@ -359,12 +378,15 @@ struct HeadState {
     staging_draft: Option<Address>,
     /// The claim's head, owed (the module doc's section).
     ///
-    /// Set where a first head — the claim's step's, or the open's — did not
-    /// land, refused by the driver or by a halted write path's door; cleared
-    /// when any head lands. While set, every turn evaluates "claimed, no head"
-    /// ahead of the cadence's triggers, so the one trigger the refused writer
-    /// can fire — its own next turn — writes the head. Never set on a board
-    /// with a head: `write_head_if_due` reads `last_head` first.
+    /// Set where a first head — the claim's step's, the open's, or a turn's
+    /// or a retry's while it is owed — did not land, refused by the driver or
+    /// by a halted write path's door; cleared when any head lands. While set,
+    /// every turn evaluates "claimed, no head" ahead of the cadence's
+    /// triggers, so the one trigger the refused writer can fire — its own
+    /// next turn — writes the head, and the checkpoint thread's retry clock,
+    /// armed at each refusal that sets it and disarmed where it is cleared,
+    /// writes it with no write sent at all. Never set on a board with a head:
+    /// `write_head_if_due` reads `last_head` first.
     first_head_owed: bool,
     /// Row 38's memo: the last refusal said, its commit and its cause.
     ///
@@ -689,20 +711,33 @@ impl HeadWriter {
     /// Takes the head writer's turn, under the caller's serialization guard.
     ///
     /// It is taken from [`Commits::commit_under`] after every write that door
-    /// runs — a refusal and a replay included — and from
+    /// runs — a refusal and a replay included — from
     /// [`Commits::take_turn_after_refusal`] after a write refused ahead of the
-    /// store: if a commit landed (the kernel's seq, not the answer, is the
-    /// arbiter) count it, and if a head is due, write it. The head's own
-    /// commits go through [`Commits::commit_recorded`], which gives the head
-    /// writer no turn, so they never reach here: neither counted nor able to
-    /// re-trigger, by construction. The seq refresh at the end is what keeps
-    /// them from reading as a later write's landing: without it, the first
-    /// write after a head that lands nothing — a refusal, a replay — would
-    /// find the seq past the writer's last look, count the head's own commits
-    /// as its own, and could write a head naming the last head's own publish.
-    /// A landed commit counts once either way.
+    /// store, and from [`Commits::retry_the_owed_head`] where the retry's
+    /// clock ran out with the claim's first head owed: if a commit landed
+    /// (the kernel's seq, not the answer, is the arbiter) count it, and if a
+    /// head is due, write it. The head's own commits go through
+    /// [`Commits::commit_recorded`], which gives the head writer no turn, so
+    /// they never reach here: neither counted nor able to re-trigger, by
+    /// construction. The seq refresh at the end is what keeps them from
+    /// reading as a later write's landing: without it, the first write after
+    /// a head that lands nothing — a refusal, a replay — would find the seq
+    /// past the writer's last look, count the head's own commits as its own,
+    /// and could write a head naming the last head's own publish. A landed
+    /// commit counts once either way.
     pub(super) fn take_turn(&self, wp: &Commits, serial: &SerialGuard<'_>) {
         self.write_head_if_due(wp, serial, false);
+    }
+
+    /// Returns whether the claim's first head is owed (the claim's head,
+    /// owed).
+    ///
+    /// It is [`Commits::retry_the_owed_head`]'s look before it takes a turn,
+    /// under the state lock alone: read under the caller's serialization
+    /// guard, it stands until the turn, since only a turn under that guard
+    /// moves it.
+    pub(super) fn first_head_owed(&self) -> bool {
+        self.state.lock().first_head_owed
     }
 
     /// Writes the claim's head `H.1` (signed ops), whatever the cadence says.
@@ -717,14 +752,14 @@ impl HeadWriter {
     /// the driver refused while serving — closed before anything is served. A
     /// refusal takes the module doc's account of what a refusal does:
     /// surfaced, the claim standing, and the head owed at the write path's
-    /// next turn (the claim's head, owed) or the next open. A no-op on a board
-    /// that has a head: the cadence may have written one before or at the
-    /// claim (an hour idle before the ceremony's last step is enough), and
-    /// then `H.1` stands and this writes nothing — the claim writes one head,
-    /// never a second, and a clean reopen of a headed board writes none. The
-    /// cadence's counters move by what landed, as in the head writer's turn,
-    /// and every head after this one is the cadence's alone. Answers whether a
-    /// head landed.
+    /// next turn, on the retry's clock or at the next open, whichever comes
+    /// first (the claim's head, owed). A no-op on a board that has a head:
+    /// the cadence may have written one before or at the claim (an hour idle
+    /// before the ceremony's last step is enough), and then `H.1` stands and
+    /// this writes nothing — the claim writes one head, never a second, and a
+    /// clean reopen of a headed board writes none. The cadence's counters
+    /// move by what landed, as in the head writer's turn, and every head
+    /// after this one is the cadence's alone. Answers whether a head landed.
     pub(super) fn write_first_head(&self, wp: &Commits, serial: &SerialGuard<'_>) -> bool {
         self.write_head_if_due(wp, serial, true)
     }
@@ -736,8 +771,15 @@ impl HeadWriter {
     /// triggers, or, with `first`, the board's first head owed. The two differ
     /// in what makes a head due, and in nothing else — except that a first
     /// head the driver refused stays owed (the claim's head, owed), so every
-    /// later turn evaluates as a `first` call until a head lands. `true` iff a
-    /// head landed.
+    /// later turn evaluates as a `first` call until a head lands. It is the
+    /// one place the debt moves, so the retry's clock moves here with it and
+    /// nowhere else: every refused first head — the claim's, the open's, a
+    /// turn's or a retry's — sets the flag and arms the checkpoint thread's
+    /// retry one period on, the period doubling to its cap
+    /// ([`CheckpointSignal`](super::CheckpointSignal)); where the flag falls
+    /// — a head landed, or found standing, while it was owed — the retry is
+    /// disarmed and the period set back; a turn that leaves the flag down
+    /// takes nothing of the signal. `true` iff a head landed.
     fn write_head_if_due(&self, wp: &Commits, serial: &SerialGuard<'_>, first: bool) -> bool {
         // Decide under the state lock, releasing it before any commit.
         let due_head = {
@@ -749,9 +791,14 @@ impl HeadWriter {
 
             // The board's first head is owed once: a board that has one — read
             // off `H` at open, or written this uptime by the claim or by the
-            // cadence — is not asked for another, and owes none.
+            // cadence — is not asked for another, and owes none. A debt it
+            // found standing ends here, and the retry's clock with it; a
+            // flag already down takes nothing of the signal.
             if state.last_head.is_some() {
-                state.first_head_owed = false;
+                if state.first_head_owed {
+                    state.first_head_owed = false;
+                    wp.checkpoint_signal().disarm_head_retry();
+                }
                 if first {
                     return false;
                 }
@@ -840,12 +887,22 @@ impl HeadWriter {
             state.last_head = Some(due_head.record);
             state.commits_since_head = 0;
             state.last_head_millis = due_head.now_millis;
-            state.first_head_owed = false;
+            // The debt ends where it stood, and the retry's clock with it;
+            // a cadence head's landing, the flag already down, takes nothing
+            // of the signal.
+            if state.first_head_owed {
+                state.first_head_owed = false;
+                wp.checkpoint_signal().disarm_head_retry();
+            }
         } else if first {
-            // A refused first head is owed at the next turn (the claim's
-            // head, owed); a refused cadence head is retried by its trigger,
-            // which stays due.
+            // A refused first head is owed at the next turn and on the
+            // retry's clock, armed one period on — at every refused try of
+            // it, the retry's own included, the period doubling to its cap
+            // (the claim's head, owed); a refused cadence head is retried by
+            // its trigger, which stays due, and arms nothing. The signal's
+            // lock is a leaf, taken under this one and calling nothing.
             state.first_head_owed = true;
+            wp.checkpoint_signal().arm_head_retry();
         }
         // The head's own commits — a whole head's, or a refused one's partial
         // (the draft mint, the orphaned insert) — moved the seq: the next
@@ -1265,9 +1322,12 @@ fn wire_code(refusal: &Rejection) -> String {
 /// Where no head stands yet, the line adds what that costs: `; no head
 /// stands yet, so a claimed board refuses every attested write
 /// attestation_invalid:board_unavailable until one lands — tried again at
-/// every write's turn` — the board term is `H.1`'s (signed-ops D13), and a
-/// first head refused is owed at every turn (the module doc's account of
-/// the claim's head, owed). A pure value the unit suite pins by
+/// every write's turn, and on a claimed board by the daemon within a
+/// minute` — the board term is `H.1`'s (signed-ops D13), and a first head
+/// refused is owed at every turn and on the checkpoint thread's retry
+/// clock, whose period never passes a minute
+/// ([`HEAD_RETRY_CAP`](crate::limits::HEAD_RETRY_CAP); the module doc's
+/// account of the claim's head, owed). A pure value the unit suite pins by
 /// `to_string()`; emitted under `Class::Failure` through
 /// [`HeadWriter::say_the_refusal_once`], once per commit and cause.
 struct HeadRefusedLine<'a> {
@@ -1291,7 +1351,7 @@ impl std::fmt::Display for HeadRefusedLine<'_> {
             f.write_str(
                 "; no head stands yet, so a claimed board refuses every attested write \
                  attestation_invalid:board_unavailable until one lands — tried again at every \
-                 write's turn",
+                 write's turn, and on a claimed board by the daemon within a minute",
             )?;
         }
         Ok(())
@@ -1432,11 +1492,13 @@ fn read_head_member(world: &World, member: &Address) -> Option<HeadRecord> {
 /// first head the driver refused — a refusal the claim survives (on a healthy
 /// kernel, M2's `TxnError::Durability`: ENOSPC, the OS refusing entropy),
 /// surfaced on the operator stream (I11 (c)), and written at the write path's
-/// next turn, where it is owed, or the next open (the module doc: the first
-/// head is the claim's) — or a journal damaged below `H.1` (the member gone,
-/// or its record not one this build reads). Answered as the corpus's term,
-/// [`BoardTerm`], and not as its shape: it is a committed pair, but the one
-/// fixed from the claim on, never the live pair `/health` serves.
+/// next turn, where it is owed, on the checkpoint thread's retry clock or at
+/// the next open, whichever comes first (the module doc: the first head is
+/// the claim's; the claim's head, owed) — or a journal damaged below `H.1`
+/// (the member gone, or its record not one this build reads). Answered as
+/// the corpus's term, [`BoardTerm`], and not as its shape: it is a
+/// committed pair, but the one fixed from the claim on, never the live pair
+/// `/health` serves.
 pub(crate) fn board_term(world: &World) -> Option<BoardTerm> {
     let first_head = birth_version(world.m3(), &head_document())?;
     let rec = read_head_member(world, &first_head)?;

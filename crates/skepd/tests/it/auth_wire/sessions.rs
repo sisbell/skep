@@ -455,13 +455,16 @@ fn the_claims_flip_says_the_account_the_claims_position_the_mode_and_the_head() 
 /// today): the claim's `H.1` refused by the driver, the flip's line says
 /// `H.1 owed — the head writer refused it` with the claim's position and
 /// the mode the flag picks — CLAIMED-PERMISSIVE here — and is said BEFORE
-/// the claim-time warnings, whose first is the permissive one.
+/// the claim-time warnings, whose first is the permissive one. The
+/// checkpoint thread's retry of the owed head is HELD, so the head stays
+/// owed while the cell reads the board.
 #[test]
 fn a_refused_first_head_is_said_owed_on_the_flips_line_before_the_claims_warnings() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_configured(dir.path(), true);
     let port = sd.port();
     ceremony_before_the_claim(port);
+    sd.daemon().hold_the_head_retry();
     sd.daemon().refuse_the_next_head_once();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));

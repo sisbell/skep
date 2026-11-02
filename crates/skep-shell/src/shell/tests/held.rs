@@ -924,9 +924,11 @@ fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
 /// device key generated into the store and bound for (origin, 1); the
 /// delegate of `1.0.1` to principal 1 from the boot session; the home's mint;
 /// the genesis deposit of the device key; and, the seam armed just before
-/// it, the claim link under a signed full session. Nothing is written after,
-/// so the head stays owed. Answers the library's board and the owner's bare
-/// session, alive on the permissive board, for the writes a cell makes after.
+/// it, the claim link under a signed full session. The daemon's own retry of
+/// the owed head is held first, for good, so only a write's turn can land
+/// it: nothing is written after, so the head stays owed. Answers the
+/// library's board and the owner's bare session, alive on the permissive
+/// board, for the writes a cell makes after.
 fn claim_with_the_head_refused(sd: &Skepd, origin: &str, store: &Path) -> (Board, Token) {
     use skep_client::board::{acked_addr, frames, Opened as SessionOpened, Scope, SessionBody, T_CLAIM};
     use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
@@ -960,6 +962,7 @@ fn claim_with_the_head_refused(sd: &Skepd, origin: &str, store: &Path) -> (Board
     deposit(&board, &owner, &Deposit { home: &home, subject: "1.0.1", kind: DepositKind::Enroll(entries), hand: None, id: "test.genesis" }).unwrap();
     let pre = precheck(&board, 1, &fp).unwrap();
     let signed = handshake_prechecked(&board, Scope::Full, &*signer, &pre, Site::Claim).unwrap();
+    sd.daemon().hold_the_head_retry();
     sd.daemon().refuse_the_next_head_once();
     acked(signed.op(&frames::make_link(&home, &["1.0.1"], &[], T_CLAIM, None)).unwrap());
     let _ = signed.close();
@@ -982,8 +985,8 @@ fn claim_with_the_head_refused(sd: &Skepd, origin: &str, store: &Path) -> (Board
 /// `unwritable`, and listed. The shell closed and relaunched while the head
 /// is still refused lists the line from the pending file — not from memory,
 /// which the close emptied. The head then lands — a bare write's turn pays
-/// it, standing in here for the daemon's own lane, which lands an owed head
-/// off the write path — and the next probe joins the line into the board's
+/// it, the daemon's own retry of the owed head held by the helper so the
+/// cell decides when — and the next probe joins the line into the board's
 /// own file and sends it once, kept, the pending file gone and the board's
 /// file compacted away (the mutant that keeps the line in memory loses it at
 /// the close; the one that never joins resends nothing; the one that joins

@@ -62,7 +62,13 @@
 //! past the person's own other write of its kind — which a read from the
 //! old base takes for its landing — sent, shifted and kept; and a first
 //! moved face naming every hand since the typed state though the line's
-//! base stands past it.
+//! base stands past it. And THE HEAD THAT WILL NOT READ (skep #725, #727):
+//! one head read per probe before any document, the documents held
+//! `head_unreadable` skipped unread while it fails; the `held` event and the
+//! head's `Talk` line said once per change of state, not per probe; at the
+//! head's first read the pending lines joining the board's file and sent in
+//! `k` order, and renumbered — `held` said again — where the file already
+//! holds lines.
 
 use super::*;
 
@@ -2006,4 +2012,152 @@ fn after_the_persons_send_an_anchored_resend_whose_span_is_whole_is_shifted_and_
     );
     assert!(g.lines().is_empty() && !held_file(&g).exists(), "kept, the file gone");
     assert_eq!(g.states(), ["sending", "kept"], "shifted and kept, never moved again");
+}
+
+/// Checks that one probe over two documents held on an unreadable head makes
+/// ONE head read and reads no document (skep #727).
+///
+/// Two documents' heads are held `head_unreadable`, each `sent` — a lost
+/// answer's line the head then held so — so the resend's read would run for
+/// each were it not skipped. The probe reads the board's head once, before
+/// any document, and while it answers `head_unreadable` skips both: no
+/// `/changes` read, nothing dialed, nothing said; the lines stand (the mutant
+/// that reads the head per document costs a read per held document per probe;
+/// the one that reads each document first costs a `/changes` read and a
+/// `sending`/`holding` pair per document per probe, for as long as the head
+/// stays unreadable).
+#[test]
+fn one_probe_over_two_head_unreadable_documents_makes_one_head_read_and_reads_no_document() {
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let unreadable = |sent: bool| Reason { cause: "head_unreadable".into(), refusal: Some(json!({"kind": "halt", "name": "head_unreadable"})), sent };
+    g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), unreadable(true)).unwrap();
+    g.hold_for(&insert(OTHER, json!(["b"]), g.fake.head()), unreadable(true)).unwrap();
+    let _ = g.states();
+    let (head_reads, changes_reads) = (g.fake.head_reads.load(Ordering::SeqCst), g.fake.changes_reads.load(Ordering::SeqCst));
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.head_reads.load(Ordering::SeqCst) - head_reads, 1, "one head read per probe, before any document");
+    assert_eq!(g.fake.changes_reads.load(Ordering::SeqCst) - changes_reads, 0, "no document is read while the head will not");
+    assert_eq!((g.fake.sends(), g.states()), (0, Vec::<String>::new()), "nothing dialed, nothing said");
+    assert_eq!(g.lines().len(), 2, "both lines stand");
+}
+
+/// Checks that the `held` event and the head's `Talk` line are said once per
+/// change of state while the head will not read (skep #727).
+///
+/// The head's state is said once as the session's open first reads it; a
+/// burst held on it says `holding` once; three probes say nothing more —
+/// no event, no second line; once the head reads, one line says so, the line
+/// is sent and kept, and a further probe says nothing (the mutant that says
+/// the state per probe floods the log; the one that emits the event per
+/// probe shows the page a `sending` that never leads anywhere).
+#[test]
+fn the_held_event_and_the_heads_talk_line_are_said_once_per_change_of_state() {
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    assert_eq!(said_containing(&g, "cannot be read").len(), 1, "the head's state, said once at the session's open: {:?}", g.said.lock().unwrap());
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held") };
+    assert_eq!(held["cause"], "head_unreadable", "{held}");
+    assert_eq!(g.states(), ["holding"], "the hold's one event");
+    for _ in 0..3 {
+        g.holds.probe("b-1");
+    }
+    assert_eq!(g.states(), Vec::<String>::new(), "the event once, across three probes");
+    assert_eq!(said_containing(&g, "cannot be read").len(), 1, "the line once per change of state, not per probe");
+    assert!(said_containing(&g, "reads again").is_empty());
+    g.fake.head_garbled.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(said_containing(&g, "reads again").len(), 1, "said once as the state clears: {:?}", g.said.lock().unwrap());
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "sent and kept");
+    g.holds.probe("b-1");
+    assert_eq!((said_containing(&g, "reads again").len(), said_containing(&g, "cannot be read").len()), (1, 1), "nothing more on a board whose head reads");
+}
+
+/// Checks that at the head's first read the pending lines join the board's
+/// file and are sent in order (skep #725).
+///
+/// Three bursts on two documents, held while the head record stood damaged,
+/// are on the pending file; the record then reads, and the next probe joins
+/// them into the board's own file — their ordinals kept, the join said once
+/// — removes the pending file, and sends them in `k` order across the
+/// documents, each kept, the board's file compacting away after (the mutant
+/// that sends the pending lines without the join leaves them on a file no
+/// relaunch at the chain reads; the one that joins out of order lands a
+/// later burst before an earlier one).
+#[test]
+fn at_the_heads_first_read_the_pending_lines_join_and_are_sent_in_order() {
+    let fake = Fake::new();
+    *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    for (doc, value) in [(DOC, "a"), (OTHER, "b"), (DOC, "c")] {
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(doc, json!([value]), g.fake.head()), None) else { panic!("{value}: held") };
+        assert_eq!(held["resp"], "held", "{held}");
+    }
+    let pending = pending_file(&g);
+    assert_eq!(file_lines(&std::fs::read_to_string(&pending).unwrap()).len(), 3, "three lines on the pending file");
+    let _ = g.states();
+    *g.fake.head_answer.lock().unwrap() = None;
+    g.holds.probe("b-1");
+    let sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| f["values"][0].as_str().unwrap_or("?").to_string()).collect();
+    assert_eq!(sent, ["a", "b", "c"], "sent in `k` order across the documents");
+    assert!(g.lines().is_empty(), "every line kept");
+    assert!(!pending.exists(), "the pending file is removed once its lines joined");
+    assert!(!held_file(&g).exists(), "the board's file compacted away once every line was kept");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("3 held lines joined") && joined[0].contains("their ordinals kept"), "{joined:?}");
+}
+
+/// Checks that pending lines joining a file that holds lines are renumbered
+/// and `held` said again (skep #725; the join's hazard).
+///
+/// An earlier run left a line in the board's own file under ordinal 1; this
+/// run, the head unreadable, holds two lines on the pending file under
+/// ordinals 1 and 2. At the head's first read the pending lines join behind
+/// the earlier one, renumbered 2 and 3, and the `held` event is said again
+/// for their document — the state and the count as they were, the event
+/// forced past the once-per-change memory — so the page reads the new
+/// ordinals before it acts on one; the join is said once as renumbered (the
+/// mutant that keeps the ordinals writes two lines under one; the one that
+/// trusts the memory leaves the page acting on an ordinal that now names
+/// another line).
+#[test]
+fn pending_lines_joining_a_file_that_holds_lines_are_renumbered_and_held_is_said_again() {
+    let store = TempDir::new().unwrap();
+    let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+    dir.ensure().unwrap();
+    let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+    assert!(queue.hold(DOC, None, 0, insert(DOC, json!(["earlier"]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    drop(queue);
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    for value in ["x", "y"] {
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(OTHER, json!([value]), g.fake.head()), None) else { panic!("{value}: held") };
+        assert_eq!(held["resp"], "held", "{held}");
+    }
+    let ks = |g: &Ground| g.lines().iter().map(|l| (l["held"].as_u64().unwrap(), l["doc"].as_str().unwrap().to_string())).collect::<Vec<_>>();
+    assert_eq!(ks(&g), [(1, OTHER.to_string()), (2, OTHER.to_string())], "the pending file's ordinals");
+    let _ = g.states();
+    // The head reads, the board away for the dial: the lines stand to be read.
+    g.fake.head_garbled.store(false, Ordering::SeqCst);
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(ks(&g), [(1, DOC.to_string()), (2, OTHER.to_string()), (3, OTHER.to_string())], "renumbered behind the earlier run's line");
+    let events: Vec<(String, String, u64)> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| (e.data["doc"].as_str().unwrap().to_string(), e.data["state"].as_str().unwrap().to_string(), e.data["held"].as_u64().unwrap())).collect();
+    assert_eq!(events.first(), Some(&(OTHER.to_string(), "holding".to_string(), 2)), "the `held` event said again for the renumbered document, before any resend: {events:?}");
+    assert!(!pending_file(&g).exists(), "the pending file is gone");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("2 held lines joined") && joined[0].contains("renumbered"), "{joined:?}");
+    let on_disk = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
+    let disk_ks: Vec<u64> = on_disk.iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert!(disk_ks.contains(&2) && disk_ks.contains(&3), "the renumbered lines on the board's file: {disk_ks:?}");
 }

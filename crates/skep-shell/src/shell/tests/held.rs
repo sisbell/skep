@@ -912,3 +912,142 @@ fn the_persons_send_on_a_moved_document_names_only_the_changes_since_it() {
     shell.shutdown();
     sd.shutdown();
 }
+
+/// Claims the board at `origin` with the store at `store` by hand, the claim's
+/// own `H.1` refused by the daemon's seam: a running claimed board with no
+/// head record.
+///
+/// The shell's `claim` call runs the whole walk in one breath, and the walk
+/// writes after the claim — the agent-space step — each write's turn paying
+/// the head the seam refused, so the seam cannot hold through it; the steps
+/// are taken here one by one, as the daemon's own suite takes them: the
+/// device key generated into the store and bound for (origin, 1); the
+/// delegate of `1.0.1` to principal 1 from the boot session; the home's mint;
+/// the genesis deposit of the device key; and, the seam armed just before
+/// it, the claim link under a signed full session. Nothing is written after,
+/// so the head stays owed. Answers the library's board and the owner's bare
+/// session, alive on the permissive board, for the writes a cell makes after.
+fn claim_with_the_head_refused(sd: &Skepd, origin: &str, store: &Path) -> (Board, Token) {
+    use skep_client::board::{acked_addr, frames, Opened as SessionOpened, Scope, SessionBody, T_CLAIM};
+    use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind};
+    use skep_client::ceremony::handshake::{handshake_prechecked, Site};
+    use skep_client::derive::precheck;
+    use skep_client::sheet::Label;
+    use skep_client::store::{Binding, FileStore, KeyId, KeySelector, KeyStore};
+    use skep_identity::Enrollment;
+    let board = Board::new(Origin::parse(origin).unwrap(), skep_client::PlainHttp::new());
+    let keys = FileStore::open(store);
+    let KeyId(fp) = keys.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    let key = keys.list().unwrap().into_iter().find(|k| k.fingerprint == fp).expect("the key generated");
+    let signer = keys.signer(&KeySelector::Path(&key.path)).unwrap();
+    let bare = |principal: u64| -> Token {
+        match board.session_open(SessionBody::Bare { principal }).unwrap() {
+            SessionOpened::Token(token) => token,
+            other => panic!("a bare session as principal {principal} on the unclaimed board: {other:?}"),
+        }
+    };
+    let acked = |answer: Answer| -> Value {
+        let Answer::Document(v) = answer else { panic!("the session stands") };
+        assert!(acked_addr(&v).is_some(), "acked: {v}");
+        v
+    };
+    let boot = bare(0);
+    acked(board.op(Some(&boot), &frames::delegate("1.0.1", 1, None)).unwrap());
+    let owner = bare(1);
+    let minted = acked(board.op(Some(&owner), &frames::create_home("1.0.1", None)).unwrap());
+    let home = acked_addr(&minted).unwrap().to_string();
+    let entries = vec![Enrollment::new(key.public.clone(), false, key.label.clone()).unwrap()];
+    deposit(&board, &owner, &Deposit { home: &home, subject: "1.0.1", kind: DepositKind::Enroll(entries), hand: None, id: "test.genesis" }).unwrap();
+    let pre = precheck(&board, 1, &fp).unwrap();
+    let signed = handshake_prechecked(&board, Scope::Full, &*signer, &pre, Site::Claim).unwrap();
+    sd.daemon().refuse_the_next_head_once();
+    acked(signed.op(&frames::make_link(&home, &["1.0.1"], &[], T_CLAIM, None)).unwrap());
+    let _ = signed.close();
+    keys.bind(&Binding::Enrollment { origin: board.dialed().clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp }).unwrap();
+    (board, owner)
+}
+
+/// Checks that a burst held while the board's head will not read survives a
+/// relaunch and is sent once the head reads (skep #725, #727).
+///
+/// The daemon's claim lands with its `H.1` refused (the seam
+/// `refuse_the_next_head_once`, armed just before the claim link — the claim
+/// driven by hand, since the shell's own walk writes after the claim and each
+/// write's turn would pay the owed head ([`claim_with_the_head_refused`]) —
+/// and again before the one bare write that mints the draft): a running
+/// claimed board with no head record. A signed shell
+/// over it: the session's open names the pending directory under the
+/// origin's hash and says the head's state once; a burst into the draft is
+/// held `head_unreadable` in the pending file, its answer carrying no
+/// `unwritable`, and listed. The shell closed and relaunched while the head
+/// is still refused lists the line from the pending file — not from memory,
+/// which the close emptied. The head then lands — a bare write's turn pays
+/// it, standing in here for the daemon's own lane, which lands an owed head
+/// off the write path — and the next probe joins the line into the board's
+/// own file and sends it once, kept, the pending file gone and the board's
+/// file compacted away (the mutant that keeps the line in memory loses it at
+/// the close; the one that never joins resends nothing; the one that joins
+/// without removing the pending file sends it again at the next launch).
+#[test]
+fn a_burst_held_while_the_head_will_not_read_survives_a_relaunch_and_is_sent_once_it_reads() {
+    use sha2::{Digest, Sha256};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    let (library, bare) = claim_with_the_head_refused(&sd, &origin, &store);
+    assert!(library.board_term().unwrap().is_none(), "the claim stands, its H.1 refused");
+    // The draft, minted by a bare write whose turn would pay the owed head:
+    // the seam armed again, so the head stays owed.
+    sd.daemon().refuse_the_next_head_once();
+    let Answer::Document(minted) = library.op(Some(&bare), &skep_client::board::frames::create_document("1.0.1", false, None)).unwrap() else { panic!("the bare session stands") };
+    let draft = minted["addr"].as_str().unwrap_or_else(|| panic!("the draft is minted: {minted}")).to_string();
+    let typed = minted["at"].as_u64().unwrap();
+    assert!(library.board_term().unwrap().is_none(), "the mint's turn met the seam: still no H.1");
+    let hash = skep_search::Chain::from_bytes(Sha256::digest(origin.as_bytes()).into()).to_string();
+    let pending = store.join("held").join("pending").join(&hash).join("principal-1.held");
+    let k = {
+        let (shell, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+        let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+        let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+        let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["b"], "as_of": typed}})).unwrap();
+        assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("head_unreadable")), "{held}\n{}", lines.lock().unwrap().join("\n"));
+        assert!(held.get("unwritable").is_none(), "on disk, in the pending file: {held}");
+        assert!(pending.is_file(), "the pending file stands at {}", pending.display());
+        assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"b\"]"), "the pending file holds the line");
+        let rows = shell.call("held", &json!({"session": session})).unwrap();
+        assert_eq!((rows.as_array().unwrap().len(), rows[0]["cause"].as_str()), (1, Some("head_unreadable")), "{rows}");
+        assert_eq!(lines.lock().unwrap().iter().filter(|l| l.contains("cannot be read")).count(), 1, "the head's state said once: {}", lines.lock().unwrap().join("\n"));
+        shell.shutdown();
+        held["held"].as_u64().unwrap()
+    };
+    // The relaunch, the head still refused: the line is listed from the
+    // pending file.
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "the relaunch lists the line from the pending file: {rows}\n{}", lines.lock().unwrap().join("\n"));
+    assert_eq!((rows[0]["doc"].as_str(), rows[0]["cause"].as_str(), rows[0]["held"].as_u64()), (Some(draft.as_str()), Some("head_unreadable"), Some(k)), "{rows}");
+    // The head lands: another bare write's turn pays it.
+    let Answer::Document(_) = library.op(Some(&bare), &skep_client::board::frames::create_document("1.0.1", false, None)).unwrap() else { panic!("the bare session stands") };
+    assert!(library.board_term().unwrap().is_some(), "H.1 landed at the write's turn");
+    // The next probe joins the pending line into the board's file and sends
+    // it once.
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 1)})).unwrap();
+    assert_eq!(text_of(&read), "b", "the burst is on the board once: {read}");
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    assert_eq!(changes_under(&shell.boards[0].board, &token, &draft, typed).len(), 1, "one row of the burst, never two");
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+    assert!(!pending.exists(), "the pending file joined the board's file and is gone");
+    assert!(held_path(&store).is_none(), "the board's file compacted away");
+    let talk = lines.lock().unwrap().join("\n");
+    assert!(talk.contains("1 held line joined the board's held file"), "the join said once: {talk}");
+    shell.shutdown();
+    sd.shutdown();
+}

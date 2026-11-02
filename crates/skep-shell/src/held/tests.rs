@@ -38,6 +38,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use skep_client::Origin;
 use tempfile::TempDir;
 
 use super::*;
@@ -1092,4 +1094,231 @@ fn a_line_past_the_line_bound_halts_the_reader_and_is_never_written() {
     assert_eq!(held.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::InvalidInput), "the line is answered unwritten");
     assert_eq!(ks(&queue), [held.k], "and stands in the queue");
     assert!(!queue.on_disk(), "and is copied nowhere");
+}
+
+// ── THE PENDING DIRECTORY (§3c.1; skep #725) ────────────────────────────────
+
+/// The origin a pending directory is named by in these cells.
+fn origin() -> Origin {
+    Origin::parse("http://127.0.0.1:4242").unwrap()
+}
+
+/// The pending directory for [`origin`] under `tmp`, made.
+fn pending_dir(tmp: &TempDir) -> HeldDir {
+    let d = HeldDir::pending(tmp.path(), &origin());
+    d.ensure().unwrap();
+    d
+}
+
+/// The hash a pending directory is named by: the lowercase hex SHA-256 of the
+/// origin as `Board::dialed` spells it.
+fn hash_of(origin: &str) -> Chain {
+    Chain::from_bytes(Sha256::digest(origin.as_bytes()).into())
+}
+
+/// The principal-1 pending file's path under `tmp`.
+fn pending_path(tmp: &TempDir) -> std::path::PathBuf {
+    tmp.path().join("held").join("pending").join(hash_of(origin().as_str()).to_string()).join("principal-1.held")
+}
+
+/// Checks that a pending file carries the origin and `v` 2 and reads back.
+///
+/// Its directory is `held/pending/<hash>/`, the hash the SHA-256 of the
+/// origin dialed, 64 lowercase hex as a chain's name is; its header is the
+/// chain file's in every member save `v` 2 and `board` the origin, byte-exact;
+/// its lines read back as they were held, the header's account the queue's
+/// own; another origin's pending file in the directory is set aside under
+/// the hash of the origin it names and never read; a pending file misplaced
+/// into a chain directory halts `Newer`, the chain reader untouched; and a
+/// chain file (`v` 1) in a pending directory is a header off that
+/// directory's spelling (the mutants that read a pending file as a chain
+/// file's, or take `v` 2 in a chain directory, write under a name the board
+/// never gave).
+#[test]
+fn a_pending_file_carries_the_origin_and_v_2_and_reads_back_with_its_lines() {
+    let tmp = TempDir::new().unwrap();
+    let d = pending_dir(&tmp);
+    let hash = hash_of(origin().as_str()).to_string();
+    assert!(hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{hash}");
+    let path = pending_path(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    assert!(queue.is_pending() && !queue.on_disk());
+    let held = queue.hold("1.0.1.0.1", None, 5, json!({"op": "insert"}), None, Reason::of("head_unreadable", false)).unwrap();
+    assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
+    let raw = fs::read_to_string(&path).unwrap();
+    assert_eq!(raw.lines().next().unwrap(), r#"{"type":"skep-held-bursts","v":2,"board":"http://127.0.0.1:4242","principal":1,"account":"1.0.1"}"#);
+    assert!(raw.lines().nth(1).unwrap().starts_with("{\"held\":1,\"doc\":\"1.0.1.0.1\",\"base\":5,\"frame\":{\"op\":\"insert\"},\"cause\":\"head_unreadable\","), "the chain file's line form: {raw}");
+    let reopened = live(d.open_file(1, "").unwrap());
+    assert_eq!(ks(&reopened), [1], "the line reads back");
+    assert_eq!((reopened.account(), reopened.board().as_deref(), reopened.is_pending()), (Some("1.0.1"), Some("http://127.0.0.1:4242"), true), "the header's account and board are the file's own");
+
+    // Another origin's pending file: set aside under the hash of the origin
+    // it names, never read, this principal's file started fresh.
+    let other = "http://127.0.0.1:1";
+    fs::write(&path, format!("{{\"type\":\"skep-held-bursts\",\"v\":2,\"board\":\"{other}\",\"principal\":1,\"account\":\"1.0.1\"}}\n{{\"held\":1,\"doc\":\"1.0.1.0.1\",\"base\":0,\"frame\":{{}},\"cause\":\"stopped\",\"sent\":false,\"time\":1}}\n")).unwrap();
+    let Opened::Live { queue, aside } = d.open_file(1, "1.0.1").unwrap() else { panic!("set aside, never halted") };
+    let aside1 = path.parent().unwrap().join(aside_name("principal-1.held", &hash_of(other), 1));
+    assert_eq!(aside.as_deref(), Some(aside1.as_path()), "the aside under the other origin's hash");
+    assert!(aside1.is_file() && queue.lines().is_empty() && !path.exists(), "the file set aside, this principal's started fresh");
+
+    // A pending file misplaced into a chain directory: `Newer`, as the chain
+    // reader has it for every `v` above 1.
+    let chain_dir = dir(&tmp);
+    fs::write(file_path(&tmp), format!("{{\"type\":\"skep-held-bursts\",\"v\":2,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", origin().as_str())).unwrap();
+    assert!(matches!(chain_dir.open_file(1, "1.0.1").unwrap(), Opened::Halted { why: HaltWhy::Newer, .. }), "a pending file in a chain directory halts Newer");
+    // A chain file in a pending directory: a header off the directory's
+    // spelling.
+    fs::write(&path, format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", chain())).unwrap();
+    assert!(matches!(d.open_file(1, "1.0.1").unwrap(), Opened::Halted { why: HaltWhy::UnknownMember, .. }), "a chain file in a pending directory is a header off its spelling");
+}
+
+/// Checks that the join keeps ordinals into a fresh file and renumbers into
+/// one that holds lines, or whose next ordinal is past them.
+///
+/// Five lines held pending with three of them done leave 3 and 5 standing:
+/// into a board's file that holds no line, each keeps its ordinal and the
+/// file's next ordinal is set past them, the lines' members as they were
+/// held and a reopen reading them so; into a file that holds a line, the
+/// lines are renumbered from its next ordinal in order, and a reopen reads
+/// them so; into a file that holds no line but whose next ordinal is past
+/// the pending lines' first — every line done and the file kept by a refused
+/// removal — they are renumbered too (the mutant that keeps an ordinal a
+/// standing line holds writes two lines under one; the one that renumbers
+/// into a fresh file hands the page ordinals it does not hold).
+#[cfg(unix)]
+#[test]
+fn the_join_keeps_ordinals_into_a_fresh_file_and_renumbers_into_one_that_holds_lines() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let pending = pending_dir(&tmp);
+    let chain_dir = dir(&tmp);
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    for n in 1..=5u64 {
+        let doc = format!("1.0.1.0.{n}");
+        from.hold(&doc, Some("id"), 7, json!({"op": "insert", "doc": doc}), None, Reason::of("head_unreadable", false)).unwrap();
+    }
+    for k in [1, 2, 4] {
+        from.done(k, Done::Dropped).unwrap();
+    }
+    assert_eq!(ks(&from), [3, 5]);
+    // Into a fresh file: the ordinals kept, the next set past them.
+    let mut into = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    let joined = into.join(&from).unwrap();
+    assert_eq!((joined.entered, joined.repeated, joined.renumbered), (vec![(3, 3), (5, 5)], 0, false));
+    assert_eq!(ks(&into), [3, 5]);
+    assert_eq!(into.hold("1.0.1.0.6", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k, 6, "the next ordinal set past them");
+    let reopened = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    let read: Vec<(u64, &str, u64, &str, Option<&str>)> = reopened.lines().iter().map(|l| (l.k, l.doc.as_str(), l.base, l.reason.cause.as_str(), l.id.as_deref())).collect();
+    assert_eq!(read, [(3, "1.0.1.0.3", 7, "head_unreadable", Some("id")), (5, "1.0.1.0.5", 7, "head_unreadable", Some("id")), (6, "1.0.1.0.6", 0, "behind", None)], "the lines as they were held, on disk");
+    from.remove_file().unwrap();
+    assert!(!pending_path(&tmp).exists(), "the pending file removed after the join");
+
+    // Into a file that holds a line: renumbered from its next ordinal.
+    let tmp = TempDir::new().unwrap();
+    let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    from.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
+    from.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+    let mut into = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    into.hold("1.0.1.0.9", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+    let joined = into.join(&from).unwrap();
+    assert_eq!((joined.entered, joined.renumbered), (vec![(1, 2), (2, 3)], true));
+    assert_eq!(ks(&into), [1, 2, 3]);
+    let read: Vec<(u64, u64)> = live(chain_dir.open_file(1, "1.0.1").unwrap()).lines().iter().map(|l| (l.k, l.frame["v"].as_u64().unwrap_or(0))).collect();
+    assert_eq!(read, [(1, 0), (2, 1), (3, 2)], "in order, on disk");
+
+    // Into a file that holds no line but whose next ordinal is past the
+    // pending lines' first: every line done, the removal refused by a sealed
+    // directory, so the file stands and its ordinals run on.
+    let tmp = TempDir::new().unwrap();
+    let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
+    let board_dir = tmp.path().join("held").join(chain().to_string());
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    from.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("head_unreadable", false)).unwrap();
+    let mut into = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    for _ in 0..3 {
+        into.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+    }
+    into.done(1, Done::Dropped).unwrap();
+    into.done(2, Done::Dropped).unwrap();
+    fs::set_permissions(&board_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    let settled = into.done(3, Done::Dropped).unwrap();
+    fs::set_permissions(&board_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(settled.unremoved.is_some() && into.lines().is_empty(), "the file stands, every line done");
+    let joined = into.join(&from).unwrap();
+    assert_eq!((joined.entered, joined.renumbered), (vec![(1, 4)], true), "past every ordinal the file names");
+    assert_eq!(ks(&live(chain_dir.open_file(1, "1.0.1").unwrap())), [4]);
+}
+
+/// Checks that a join cut before the pending file's removal joins again
+/// without doubling a line.
+///
+/// Two pending lines join a fresh board's file; the crash comes before the
+/// pending file is removed, so both files stand. The next launch reads both
+/// and joins again: each line a standing line already carries — by `doc`,
+/// `id` and frame, never by ordinal — is not entered again, the file grows by
+/// no line, and the pending file is then removed. A crash after one of two
+/// writes leaves one line to enter, under the ordinal the file's next gives
+/// it (the mutant that enters every pending line again resends the person's
+/// text twice; the one that matches by ordinal doubles a renumbered line).
+#[test]
+fn a_join_cut_before_the_pending_files_removal_joins_again_without_doubling_a_line() {
+    let tmp = TempDir::new().unwrap();
+    let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    from.hold("1.0.1.0.1", Some("a"), 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
+    from.hold("1.0.1.0.1", Some("b"), 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+    let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    assert_eq!(chain.join(&from).unwrap().entered, [(1, 1), (2, 2)]);
+    // The crash: the pending file is not removed. The next launch reads both.
+    let bytes = file_len(&tmp);
+    let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    let again = chain.join(&from).unwrap();
+    assert_eq!((again.entered.len(), again.repeated, again.renumbered), (0, 2, false), "nothing entered again");
+    assert_eq!((ks(&chain), file_len(&tmp)), (vec![1, 2], bytes), "the queue and the file as they were");
+    from.remove_file().unwrap();
+    assert!(!pending_path(&tmp).exists());
+
+    // A crash after one of two writes: the second alone enters, under the
+    // file's next ordinal.
+    let tmp = TempDir::new().unwrap();
+    let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    from.hold("1.0.1.0.1", Some("a"), 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
+    from.hold("1.0.1.0.2", Some("b"), 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+    let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    chain.hold("1.0.1.0.1", Some("a"), 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
+    let joined = chain.join(&from).unwrap();
+    assert_eq!((joined.entered, joined.repeated), (vec![(2, 2)], 1), "the line already there is passed over, the other entered");
+    assert_eq!(ks(&live(chain_dir.open_file(1, "1.0.1").unwrap())), [1, 2]);
+}
+
+/// Checks that a join the device refuses is undone and leaves the pending
+/// file.
+///
+/// The second copy's sync fails: the join is refused naming the line, every
+/// line it entered is `done … dropped` — the board's file, holding nothing
+/// now, gone — the pending file stands with both lines, and a reopen of each
+/// reads what stood before (the mutant that keeps the half-joined lines on
+/// both sides sends a line twice at the next launch; the one that removes
+/// the pending file loses the line whose copy was refused).
+#[test]
+fn a_join_the_device_refuses_is_undone_and_leaves_the_pending_file() {
+    let tmp = TempDir::new().unwrap();
+    let (pending, chain_dir) = (pending_dir(&tmp), dir(&tmp));
+    let mut from = live(pending.open_file(1, "1.0.1").unwrap());
+    from.hold("1.0.1.0.1", None, 0, json!({"op": "insert", "v": 1}), None, Reason::of("head_unreadable", false)).unwrap();
+    from.hold("1.0.1.0.2", None, 0, json!({"op": "insert", "v": 2}), None, Reason::of("behind", false)).unwrap();
+    let mut chain = live(chain_dir.open_file(1, "1.0.1").unwrap());
+    // The first copy lands; the seam run after its sync makes the next fail.
+    AFTER_SYNC.with(|s| *s.borrow_mut() = Some(Box::new(|_: &Path| FAIL_SYNC.with(|f| f.set(true)))));
+    let refused = chain.join(&from).unwrap_err();
+    AFTER_SYNC.with(|s| *s.borrow_mut() = None);
+    FAIL_SYNC.with(|f| f.set(false));
+    assert_eq!((refused.k, refused.error.kind()), (2, std::io::ErrorKind::StorageFull), "refused at the second line's copy");
+    assert!(chain.lines().is_empty() && !chain.on_disk(), "undone: nothing entered, the file gone");
+    assert_eq!(ks(&from), [1, 2], "the pending queue untouched");
+    assert_eq!(ks(&live(pending.open_file(1, "1.0.1").unwrap())), [1, 2], "the pending file stands with both lines");
+    assert!(live(chain_dir.open_file(1, "1.0.1").unwrap()).lines().is_empty(), "the board's file reads fresh");
 }

@@ -260,9 +260,10 @@ impl<T: Clone> Armed<T> {
 ///
 /// It holds the chain `board_term` reads — or no `H.1` at all, where one is
 /// armed missing; the death signal, where its read is armed closed; an answer
-/// lost on the way, where it is armed unanswered; or the answer armed in its
-/// place, a record that cannot be read among them — and whether `/health`
-/// names a claimant, as it does unless armed unclaimed. It holds the
+/// lost on the way, where it is armed unanswered; a garbled answer, no JSON
+/// or past the cap, where it is armed so; or the answer armed in its place,
+/// a record that cannot be read among them — the reads of it counted — and
+/// whether `/health` names a claimant, as it does unless armed unclaimed. It holds the
 /// `/changes` rows the read sees, each served only past the query's `since`
 /// and at or under its `under`, or a refusal armed in the page's place — the
 /// page budget's for the next few reads among them — and the reads of them
@@ -286,6 +287,15 @@ struct Fake {
     no_head: AtomicBool,
     head_closed: AtomicBool,
     head_unreachable: AtomicBool,
+    /// The head record's read answered a `200` whose body is no JSON, as a
+    /// proxy's page is: the client's `DialError::Response`, a garbled answer
+    /// (skep #728).
+    head_garbled: AtomicBool,
+    /// The head record's read answered past the client's answer cap:
+    /// `DialError::TooLarge`, a garbled answer too (skep #728).
+    head_too_large: AtomicBool,
+    /// The head record's reads made, whatever each answered.
+    head_reads: AtomicUsize,
     /// The answer armed for the head record's read, in the record's place.
     ///
     /// It is a status and its body, a `200`'s body the document served.
@@ -355,6 +365,9 @@ impl Fake {
             no_head: AtomicBool::new(false),
             head_closed: AtomicBool::new(false),
             head_unreachable: AtomicBool::new(false),
+            head_garbled: AtomicBool::new(false),
+            head_too_large: AtomicBool::new(false),
+            head_reads: AtomicUsize::new(0),
             head_answer: Mutex::new(None),
             unclaimed: AtomicBool::new(false),
             rows: Mutex::new(Vec::new()),
@@ -528,11 +541,18 @@ impl Dialer for Fake {
             }
             if body["op"].as_str() == Some("retrieve_v") {
                 if body["specs"][0]["doc"].as_str() == Some(HEAD_MEMBER_1) {
+                    self.head_reads.fetch_add(1, Ordering::SeqCst);
                     if self.head_closed.load(Ordering::SeqCst) {
                         return Ok(closed());
                     }
                     if self.head_unreachable.load(Ordering::SeqCst) {
                         return Err(DialError::Io("the head read's answer was lost".into()));
+                    }
+                    if self.head_garbled.load(Ordering::SeqCst) {
+                        return Ok(Response { status: 200, headers: Headers::default(), body: b"<html>a proxy's page</html>".to_vec() });
+                    }
+                    if self.head_too_large.load(Ordering::SeqCst) {
+                        return Err(DialError::TooLarge { cap: 1 });
                     }
                     if let Some((status, answer)) = self.head_answer.lock().unwrap().clone() {
                         return Ok(respond(status, answer));
@@ -865,6 +885,20 @@ fn spanned(before: Option<&str>, after: Option<&str>, runs: &[(&str, u64)]) -> A
 /// The principal's held file under the ground's store, at the fake's chain.
 fn held_file(g: &Ground) -> std::path::PathBuf {
     g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held")
+}
+
+/// The principal's PENDING held file under the ground's store (§3c.1): under
+/// `held/pending/<hash>/`, the hash the SHA-256 of the origin the ground's
+/// board dials, as the shell names the directory.
+fn pending_file(g: &Ground) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let hash = Chain::from_bytes(Sha256::digest(g.session.board.dialed().as_str().as_bytes()).into());
+    g.store.path().join("held").join("pending").join(hash.to_string()).join("principal-1.held")
+}
+
+/// The TALK lines the hold said that contain `text`, in order.
+fn said_containing(g: &Ground, text: &str) -> Vec<String> {
+    g.said.lock().unwrap().iter().filter(|line| line.contains(text)).cloned().collect()
 }
 
 /// The `held` lines a held file's text holds, each parsed, in file order.

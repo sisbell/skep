@@ -61,6 +61,40 @@
 //! frame is dialed, so a relaunch reads the positions the shell last sent,
 //! never the page's.
 //!
+//! **The pending directory** (§3c.1; skep #725). A board whose head record
+//! stands and cannot be read, or a claimed board serving none — the shell's
+//! `head_unreadable` hold (SP-14) — names no chain yet, so its lines go to
+//! `held/pending/<hash>/principal-<n>.held`, `<hash>` the lowercase hex
+//! SHA-256 of the origin dialed, as `Board::dialed` spells it
+//! ([`HeldDir::pending`]), 64 hex as a chain's name is: the one directory
+//! here named by an origin, the design's rule that no file here is bent for
+//! it alone (§3c.1, §9 item 43). Its file is the chain file's in every member
+//! save two — the header's `v` is 2 and its `board` the origin dialed — and
+//! its lines are the chain file's lines, unchanged, each synced before its
+//! answer as a chain file's is, so a close loses none and a relaunch that
+//! dials the same origin finds them. Its reader is [`HeldDir::open_file`] in
+//! the directory's own mode: it accepts `v` 2 alone — a `v` above it halts
+//! `Newer`, any other `v` the unknown-member face — and a `board` equal to
+//! the origin dialed, another origin's file set aside by the same
+//! non-overwriting rename under the hash of the origin it names; the chain
+//! directory's reader is untouched, so a pending file misplaced into a chain
+//! directory halts `Newer`. Once `H.1` reads, the pending file's standing
+//! lines JOIN the board's own queue ([`HeldQueue::join`]) line by line in
+//! `k` order, each written and synced there first, and only then is the
+//! pending file removed ([`HeldQueue::remove_file`]): a crash between leaves
+//! both, and the next join re-runs — a line a standing chain line already
+//! carries, by `doc`, `id` and frame and never by ordinal, is not entered
+//! again, so nothing is doubled. Where the chain queue holds no line and its
+//! next ordinal is at or below the pending lines' first, each line keeps its
+//! ordinal and the chain queue's next is set past them; otherwise the lines
+//! are renumbered from the chain queue's next ordinal in order, and the hold
+//! re-says `held` for their documents, so a page or an agent reads the new
+//! ordinals before it acts on one. A copy the device refuses mid-join undoes
+//! the join — every line it entered `done … dropped`, the pending file
+//! standing for the next launch's — so a line is never half on each side. A
+//! queue kept in memory alone joins by the same rule, so no line waits for
+//! an empty queue to reach disk.
+//!
 //! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
 //! header member, or a middle line that is not a whole line of the two
 //! forms — not UTF-8, not a JSON object, a member missing or of another
@@ -113,6 +147,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+use skep_client::Origin;
 use skep_search::{aside_name, Chain};
 use skep_util::file::{self, Appender, LineReader, Next, OnTail};
 
@@ -519,13 +555,78 @@ impl HaltWhy {
     }
 }
 
-/// The directory `held/<chain>/`, a principal's file opened under it.
+/// The directory `held/<chain>/` or `held/pending/<hash>/`, a principal's
+/// file opened under it.
 ///
-/// It is ensured `0700` and locked once for the shell's life.
-#[derive(Debug)]
+/// It is ensured `0700` and locked once for the shell's life — a board's own
+/// directory for it, the pending one until the board's `H.1` reads (the
+/// module doc).
+#[derive(Debug, Clone)]
 pub struct HeldDir {
     path: PathBuf,
-    chain: Chain,
+    named: Named,
+}
+
+/// What names a held directory, and the header's `board` and `v` with it.
+///
+/// A file's header spells the name the directory is keyed by, so a file
+/// copied into the wrong directory is told from its header alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Named {
+    /// `held/<chain>/`: a board's own, named by `H.1`'s chain.
+    ///
+    /// Its header's `v` is 1 and its `board` the chain.
+    Chain(Chain),
+    /// `held/pending/<hash>/`: a board's whose `H.1` will not read, named by
+    /// the hash of the origin dialed (the module doc).
+    ///
+    /// Its header's `v` is 2 and its `board` the origin.
+    Pending { origin: String, hash: Chain },
+}
+
+impl Named {
+    /// Returns the header's `v` a file of this directory carries.
+    fn v(&self) -> u64 {
+        match self {
+            Named::Chain(_) => 1,
+            Named::Pending { .. } => 2,
+        }
+    }
+
+    /// Returns the header's `board` a file of this directory carries.
+    fn board(&self) -> String {
+        match self {
+            Named::Chain(chain) => chain.to_string(),
+            Named::Pending { origin, .. } => origin.clone(),
+        }
+    }
+
+    /// Returns the directory's own 64-hex name: the chain, or the hash.
+    fn hex(&self) -> Chain {
+        match self {
+            Named::Chain(chain) => *chain,
+            Named::Pending { hash, .. } => *hash,
+        }
+    }
+
+    /// Returns the name a misplaced file is set aside under: its own, where
+    /// its header's `board` spells one, else the directory's.
+    ///
+    /// A chain directory's aside carries the file's own chain; a pending
+    /// directory's the hash of the origin the file names, the form its
+    /// directory would be named by.
+    fn aside_of(&self, board: Option<&str>) -> Chain {
+        match self {
+            Named::Chain(_) => board.and_then(Chain::parse).unwrap_or_else(|| self.hex()),
+            Named::Pending { .. } => board.map_or_else(|| self.hex(), origin_hash),
+        }
+    }
+}
+
+/// Returns the pending directory's name for `origin`: the lowercase hex
+/// SHA-256 of the origin as `Board::dialed` spells it, 64 hex as a chain is.
+fn origin_hash(origin: &str) -> Chain {
+    Chain::from_bytes(Sha256::digest(origin.as_bytes()).into())
 }
 
 /// Returns a whole line's JSON object, or `None` where it is no UTF-8 object.
@@ -600,7 +701,73 @@ impl HeldDir {
     /// `data_dir` is the data directory the index takes (§3c.8), the held
     /// store beside the key store and never under it (§3c.1's `<app data>`).
     pub fn new(data_dir: &Path, chain: Chain) -> HeldDir {
-        HeldDir { path: data_dir.join("held").join(chain.to_string()), chain }
+        HeldDir { path: data_dir.join("held").join(chain.to_string()), named: Named::Chain(chain) }
+    }
+
+    /// Returns the pending directory `<data_dir>/held/pending/<hash>/` for a
+    /// board dialed at `origin` whose `H.1` will not read (the module doc).
+    ///
+    /// `<hash>` is the lowercase hex SHA-256 of the origin as `Board::dialed`
+    /// spells it; its files carry the origin as their header's `board` and
+    /// `v` 2, and join the board's own directory once `H.1` reads.
+    pub fn pending(data_dir: &Path, origin: &Origin) -> HeldDir {
+        let hash = origin_hash(origin.as_str());
+        HeldDir { path: data_dir.join("held").join("pending").join(hash.to_string()), named: Named::Pending { origin: origin.as_str().to_string(), hash } }
+    }
+
+    /// Returns whether the directory stands on disk.
+    ///
+    /// A pending directory that does not holds no file of an earlier run's
+    /// to join, so the join touches nothing there.
+    pub fn exists(&self) -> bool {
+        self.path.is_dir()
+    }
+
+    /// Returns the `board` the directory's files carry in their header: the
+    /// chain, or the origin a pending directory is named by.
+    pub fn board(&self) -> String {
+        self.named.board()
+    }
+
+    /// Returns the principals whose files stand in the directory, in order.
+    ///
+    /// They are the `principal-<n>.held` files — an earlier run's, where the
+    /// directory is a pending one and the join runs — listed through the
+    /// tail module's lister (SP-3), which names the files of a suffix no
+    /// writer holds a lock on; a held file is held by no lock of its own, the
+    /// directory's `lock` being the holder's guard, so every one is listed.
+    /// An aside, or any other name, is no principal's file. A directory that
+    /// does not stand holds none.
+    ///
+    /// # Errors
+    ///
+    /// Returns the directory's read failing, or a file's open.
+    pub fn principals(&self) -> io::Result<Vec<u64>> {
+        let mut out: Vec<u64> = file::stale(&self.path, ".held")?
+            .iter()
+            .filter_map(|path| {
+                let name = path.file_name()?.to_str()?;
+                let n: u64 = name.strip_prefix("principal-")?.strip_suffix(".held")?.parse().ok()?;
+                (Self::file_name(n) == name).then_some(n)
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        Ok(out)
+    }
+
+    /// Sets the principal's file aside, as a misplaced file is set aside.
+    ///
+    /// It is the join's refusal of a pending file whose header names another
+    /// board than the one dialed, or of a board's file naming another chain
+    /// (the module doc) — the rename that never overwrites, under the name
+    /// the file's own `board` gives it ([`Named::aside_of`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns the link's I/O error other than a name taken, or the unlink's.
+    pub fn set_aside(&self, principal: u64, board: Option<&str>) -> io::Result<PathBuf> {
+        self.move_aside(&Self::file_name(principal), &self.named.aside_of(board))
     }
 
     /// Creates the directory and `held/` above it, each `0700` (§3c.1).
@@ -673,7 +840,17 @@ impl HeldDir {
     /// too, so the next line is written where the last of them ends, a torn
     /// tail cut off first; the open itself writes nothing, a tail it meets
     /// left for that cut and answered ([`HeldQueue::torn`]) for the shell
-    /// to say once. `account` is the header's where this open writes one.
+    /// to say once. `account` is the header's where this open writes one; a
+    /// header read gives the queue the file's own ([`HeldQueue::account`]).
+    ///
+    /// **The directory's mode.** The `v` accepted and the `board` a file must
+    /// name are the directory's own ([`Named`]): a board's directory reads
+    /// `v` 1 and its chain, a pending one `v` 2 and the origin dialed (the
+    /// module doc). A `v` above the directory's is the newer face whatever
+    /// the directory — a pending file misplaced into a board's directory
+    /// among them — and a `v` below it, or none, the unknown-member face; a
+    /// `board` that is not the directory's is a misplaced file, set aside
+    /// under the name its own `board` gives it ([`Named::aside_of`]).
     ///
     /// # Errors
     ///
@@ -681,7 +858,7 @@ impl HeldDir {
     /// and the move's where a misplaced file cannot be moved aside.
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
-        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, headless: false, torn: None, whole_bytes: 0, remark_bytes: 0 };
+        let disk = Disk { path: path.clone(), named: self.named.clone(), principal, account: account.to_string(), created: false, headless: false, torn: None, whole_bytes: 0, remark_bytes: 0 };
         let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
         let Some(mut reader) = LineReader::open(&path, MAX_HELD_LINE_BYTES)? else { return Ok(fresh(disk, None)) };
         let halted = |why: HaltWhy| Ok(Opened::Halted { path: path.clone(), why });
@@ -697,11 +874,13 @@ impl HeldDir {
             Next::End => return Ok(fresh(Disk { headless: true, torn: Some(Torn::Header { bytes: 0 }), ..disk }, None)),
             Next::Long { .. } => return halted(HaltWhy::Damaged),
         };
-        // `v` read first (§3c.2): a `v` above 1 is the newer face, never
-        // half-read.
+        // `v` read first (§3c.2): a `v` above the directory's own is the
+        // newer face, never half-read; any other `v` is a header off this
+        // directory's spelling.
+        let own_v = self.named.v();
         match header.get("v").and_then(Value::as_u64) {
-            Some(1) => {}
-            Some(n) if n > 1 => return halted(HaltWhy::Newer),
+            Some(v) if v == own_v => {}
+            Some(v) if v > own_v => return halted(HaltWhy::Newer),
             _ => return halted(HaltWhy::UnknownMember),
         }
         // No unknown member, and the type pinned.
@@ -711,15 +890,16 @@ impl HeldDir {
         if header.keys().any(|k| !matches!(k.as_str(), "type" | "v" | "board" | "principal" | "account")) {
             return halted(HaltWhy::UnknownMember);
         }
-        // A misplaced file — header `board` not the directory's chain, or
+        // A misplaced file — header `board` not the directory's own (its
+        // chain, or the origin a pending directory is named by), or
         // `principal` not the file's name — moved aside, this file started
         // fresh.
-        let own_chain = header.get("board").and_then(Value::as_str).and_then(Chain::parse);
-        let board_here = own_chain == Some(self.chain);
+        let board = header.get("board").and_then(Value::as_str);
+        let board_here = board == Some(self.named.board().as_str());
         let principal_here = header.get("principal").and_then(Value::as_u64) == Some(principal);
         if !board_here || !principal_here {
+            let aside_chain = self.named.aside_of(board);
             drop(reader);
-            let aside_chain = own_chain.unwrap_or(self.chain);
             let aside = self.move_aside(&Self::file_name(principal), &aside_chain)?;
             return Ok(fresh(disk, Some(aside)));
         }
@@ -770,7 +950,10 @@ impl HeldDir {
         }
         let lines: Vec<HeldLine> = standing.into_values().collect();
         let held_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
-        let disk = Disk { created: true, whole_bytes: reader.whole(), remark_bytes, torn, ..disk };
+        // The header's account is the file's own from here: what the join
+        // opens the board's file under for a principal with no session now.
+        let account = header.get("account").and_then(Value::as_str).map_or_else(|| disk.account.clone(), str::to_string);
+        let disk = Disk { created: true, whole_bytes: reader.whole(), remark_bytes, torn, account, ..disk };
         // `max_k` is within MAX_ORDINAL, so its successor is a `u64`.
         Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
     }
@@ -832,7 +1015,8 @@ pub struct HeldQueue {
 #[derive(Debug)]
 struct Disk {
     path: PathBuf,
-    chain: Chain,
+    /// The directory's name, which the header's `board` and `v` spell.
+    named: Named,
     principal: u64,
     account: String,
     created: bool,
@@ -1138,6 +1322,135 @@ impl HeldQueue {
         }
         Ok(Settled { unwritten, unremoved })
     }
+
+    /// Returns the account the queue's file names in its header, where it has
+    /// a file: the one the join opens the board's own file under.
+    pub fn account(&self) -> Option<&str> {
+        self.disk.as_ref().map(|d| d.account.as_str())
+    }
+
+    /// Returns the `board` the queue's file names in its header, where it has
+    /// a file: a board's chain, or the origin a pending file carries.
+    pub fn board(&self) -> Option<String> {
+        self.disk.as_ref().map(|d| d.named.board())
+    }
+
+    /// Returns whether the queue's file is a pending directory's (the module
+    /// doc), whose lines join the board's own file once `H.1` reads.
+    pub fn is_pending(&self) -> bool {
+        self.disk.as_ref().is_some_and(|d| matches!(d.named, Named::Pending { .. }))
+    }
+
+    /// Joins into this queue the standing lines of `from`, in `k` order.
+    ///
+    /// It is the module doc's join: `from` is the queue of a board's pending
+    /// file, or one kept in memory alone, and this queue the board's own, its
+    /// file opened under the chain `H.1` names. A line of `from` that a
+    /// standing line here already carries — the same `doc`, `id` and frame,
+    /// never the same ordinal, since the ordinals may have been renumbered —
+    /// is not entered again, so a join cut between its writes and the pending
+    /// file's removal re-runs whole at the next launch and doubles nothing.
+    /// Where this queue holds no line and its next ordinal is at or below the
+    /// first of `from`'s, each line KEEPS its ordinal and the next ordinal
+    /// here is set past them, so a page holding the ordinals reads them
+    /// unchanged; otherwise the lines are RENUMBERED from this queue's next
+    /// ordinal in order, and the caller re-says `held` for their documents.
+    /// Each line is copied to this queue's file and synced as it enters
+    /// (persist-first), its `base`, frame, anchors, reason and `time` as
+    /// `from` held them; the queue's frame bytes count them, and no budget
+    /// refuses one — the join enters what stood, as a reopen reads a file
+    /// whole, and the queue holds nothing more until it drains below its
+    /// budgets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JoinRefused`] where a copy was refused — by the device, or
+    /// for a line whose ordinal here would pass [`MAX_ORDINAL`] — and the
+    /// join is UNDONE: every line it entered here is `done … dropped`, this
+    /// queue standing as it stood, and `from` untouched, its file standing
+    /// for the next launch's join. Nothing is lost, and nothing enters twice.
+    pub fn join(&mut self, from: &HeldQueue) -> Result<Joined, JoinRefused> {
+        let keep = self.lines.is_empty() && from.lines.first().is_some_and(|first| self.next_k <= first.k);
+        let mut joined = Joined::default();
+        for line in &from.lines {
+            if self.lines.iter().any(|standing| standing.doc == line.doc && standing.id == line.id && standing.frame == line.frame) {
+                joined.repeated += 1;
+                continue;
+            }
+            let k = if keep { line.k } else { self.next_k };
+            let refused = |error: io::Error| JoinRefused { k: line.k, error };
+            if k > MAX_ORDINAL {
+                self.undo(&joined);
+                return Err(refused(io::Error::new(io::ErrorKind::InvalidInput, format!("the ordinal {k} is past the held store's {MAX_ORDINAL}"))));
+            }
+            let entered = HeldLine { k, ..line.clone() };
+            if let Some(d) = self.disk.as_mut() {
+                if let Err(e) = d.write_line(&held_line_bytes(&entered)) {
+                    self.undo(&joined);
+                    return Err(refused(e));
+                }
+            }
+            // `k` is within MAX_ORDINAL, so its successor is a `u64`.
+            self.next_k = k + 1;
+            self.held_bytes = self.held_bytes.saturating_add(json_len(&entered.frame));
+            self.lines.push(entered);
+            joined.renumbered |= k != line.k;
+            joined.entered.push((line.k, k));
+        }
+        Ok(joined)
+    }
+
+    /// Undoes a join that was refused mid-way: every line it entered is
+    /// `done … dropped`, so this queue stands as it stood.
+    fn undo(&mut self, joined: &Joined) {
+        for &(_, k) in &joined.entered {
+            // A `done` the device refuses leaves the line read as held at a
+            // reopen, where the next join finds it standing and enters it no
+            // second time; the refused copy is said by the join's caller.
+            let _ = self.done(k, Done::Dropped);
+        }
+    }
+
+    /// Removes the queue's file, where it has one: the pending file once its
+    /// lines have joined the board's own (the module doc), after every one
+    /// of them is on disk there.
+    ///
+    /// The queue is given up by its caller after; a file that went, or none
+    /// that stood, is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns the unlink's I/O error other than a file not found, the file
+    /// standing for the next launch's join.
+    pub fn remove_file(&mut self) -> io::Result<()> {
+        match self.disk.as_mut() {
+            Some(d) => d.remove(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// What a join entered ([`HeldQueue::join`]), for the caller to re-key its
+/// memory by and say.
+#[derive(Debug, Default)]
+pub struct Joined {
+    /// Each line entered: the ordinal it had in the queue it came from, and
+    /// the one it took here.
+    pub entered: Vec<(u64, u64)>,
+    /// The lines not entered again: a standing line here carries each.
+    pub repeated: usize,
+    /// Whether a line entered took another ordinal than it had.
+    pub renumbered: bool,
+}
+
+/// Why a join was refused, and undone ([`HeldQueue::join`]).
+#[derive(Debug)]
+pub struct JoinRefused {
+    /// The ordinal, in the queue joined from, of the line whose copy was
+    /// refused.
+    pub k: u64,
+    /// The copy's refusal.
+    pub error: io::Error,
 }
 
 impl Disk {
@@ -1205,7 +1518,7 @@ impl Disk {
         if self.created {
             return Ok(());
         }
-        let header = header_bytes(&self.chain, self.principal, &self.account);
+        let header = header_bytes(&self.named, self.principal, &self.account);
         let headed = if self.headless {
             match Appender::open_at(&self.path, 0) {
                 Ok(mut file) => file.append_by(header.strip_suffix(b"\n").unwrap_or(&header), OnTail::Cut, write_synced).map(drop),
@@ -1321,9 +1634,10 @@ fn write_synced(file: &mut File, bytes: &[u8]) -> io::Result<()> {
 /// Returns the header's exact bytes (§3c.2).
 ///
 /// Its members stand in one order, no whitespace outside strings, lowercase
-/// hex, one `\n`.
-fn header_bytes(chain: &Chain, principal: u64, account: &str) -> Vec<u8> {
-    format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{chain}\",\"principal\":{principal},\"account\":{}}}\n", json_str(account)).into_bytes()
+/// hex, one `\n`: `v` 1 and the chain for a board's own file, `v` 2 and the
+/// origin dialed for a pending one ([`Named`]).
+fn header_bytes(named: &Named, principal: u64, account: &str) -> Vec<u8> {
+    format!("{{\"type\":\"skep-held-bursts\",\"v\":{},\"board\":{},\"principal\":{principal},\"account\":{}}}\n", named.v(), json_str(&named.board()), json_str(account)).into_bytes()
 }
 
 /// Returns a `held` line's exact bytes (§3c.2).

@@ -63,13 +63,20 @@ pub enum EventName {
     /// or at a resend, that the shell could not shift through the change
     /// exactly by the page's anchors (skep #442) — a burst it shifts is sent
     /// again and lands, no `moved` said — carrying the hands whose rows
-    /// moved the document, read off the rows since the burst's typed state;
-    /// the resend's read judges only whether a line's own write landed
-    /// (§3c.5). Emitted at a hold's start, at each line's resolution or
-    /// drop, and at each state the resend moves a document through — never
-    /// when a principal's file is read at its session's open, whose lines
-    /// `held(session)` lists, nor for a line a call enters, shifts and
-    /// settles within itself.
+    /// moved the document, read off the rows since the burst's typed state
+    /// or the person's last `send` on the document, whichever is later; the
+    /// resend's read judges only whether a line's own write landed (§3c.5).
+    /// Emitted ONCE PER CHANGE of a document's state (skep #727): at a hold's
+    /// start, at each line's resolution or drop, and at each state the resend
+    /// moves a document through — the same state and count said again for
+    /// the same board, session and document is not emitted again, so a
+    /// document waiting on a board's head record that will not read is said
+    /// once, not at each probe; and again, whatever was last said, where the
+    /// lines' ordinals were renumbered as they joined the board's held file,
+    /// so the page reads the new ordinals by `held(session)` before it acts
+    /// on one — never when a principal's file is read at its session's open,
+    /// whose lines `held(session)` lists, nor for a line a call enters,
+    /// shifts and settles within itself.
     Held,
     /// The state of a publication's one request as it moves: `publication`.
     ///

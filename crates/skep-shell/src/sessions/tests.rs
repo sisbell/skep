@@ -473,6 +473,11 @@ enum Answered {
     Unanswered,
     /// The death signal: a `200` whose `Skepd-Session` says `closed`.
     Closed,
+    /// A `200` whose body is no JSON, as a proxy's page is: the client's
+    /// `DialError::Response`, a garbled answer (skep #728).
+    Garbled,
+    /// An answer past the client's cap: `DialError::TooLarge`, garbled too.
+    TooLarge,
 }
 
 impl Answered {
@@ -484,6 +489,8 @@ impl Answered {
             Answered::Status(status, v) => answer(*status, v),
             Answered::Unanswered => Err(DialError::Connect("the board is not answering".into())),
             Answered::Closed => Ok(Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() }),
+            Answered::Garbled => Ok(Response { status: 200, headers: Headers::default(), body: b"<html>a proxy's page</html>".to_vec() }),
+            Answered::TooLarge => Err(DialError::TooLarge { cap: 1 }),
         }
     }
 }
@@ -583,5 +590,52 @@ fn a_board_term_is_read_only_where_the_boards_head_record_reads() {
             (signs, answered) => panic!("{cell}: {signs:?} expected, {answered:?} answered"),
         }
         assert_eq!(dialer.health_reads.load(Ordering::SeqCst), health_reads, "{cell}: the `/health` reads");
+    }
+}
+
+/// Checks that a garbled head answer is `head_unreadable` and an unanswered
+/// read `unreachable` (skep #728).
+///
+/// It is the one classifier of a board's head, `board_head`, which the attest
+/// and the held store's directory share: a `200` of no JSON or an answer past
+/// the cap to the head record's read — and to the claimant arm's `/health`
+/// read where no record is served — is the board's own fault, the record
+/// served garbled, refused `head_unreadable` with "served garbled" and the
+/// error in its cause; a read that goes unanswered says nothing of the head,
+/// and stays `unreachable`; and the attest's `signing_term` answers as the
+/// classifier does (the mutant that reads a garbled answer as a lost one
+/// points the person at the network for a board that answered, and the held
+/// store keeps the line in memory alone).
+#[test]
+fn a_garbled_head_answer_is_head_unreadable_and_an_unanswered_read_unreachable() {
+    let health = |claimant: Value| {
+        Answered::Document(json!({"ok": true, "log_position": 10, "auth": {"claimant": claimant, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}}))
+    };
+    let claimed = health(json!("1.0.1"));
+    let none = Answered::Document(json!({"resp": "rejected", "code": "doc_not_registered", "disposition": "reorder"}));
+    let cells = [
+        ("the head read answered no JSON", Answered::Garbled, claimed.clone(), Signs::HeadUnreadable("head record (`H.1`) served garbled"), 0),
+        ("the head read answered past the cap", Answered::TooLarge, claimed.clone(), Signs::HeadUnreadable("head record (`H.1`) served garbled"), 0),
+        ("no record, `/health` answered no JSON", none.clone(), Answered::Garbled, Signs::HeadUnreadable("`/health` served garbled"), 1),
+        ("no record, `/health` answered past the cap", none.clone(), Answered::TooLarge, Signs::HeadUnreadable("`/health` served garbled"), 1),
+        ("the head read unanswered", Answered::Unanswered, claimed, Signs::Unreachable, 0),
+        ("no record, `/health` unanswered", none, Answered::Unanswered, Signs::Unreachable, 1),
+    ];
+    for (cell, head, health, signs, health_reads) in cells {
+        let dialer = Arc::new(HeadBoard { head, health, health_reads: AtomicUsize::new(0) });
+        let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&dialer)));
+        let classified = board_head(&board);
+        match (&signs, &classified) {
+            (Signs::Unreachable, Err(Refusal::Unreachable(_))) => {}
+            (Signs::HeadUnreadable(why), Err(refusal)) => {
+                let v = refusal.to_value();
+                assert_eq!((refusal.name(), v["kind"].as_str()), ("head_unreadable", Some("halt")), "{cell}: {v}");
+                assert!(v["cause"].as_str().is_some_and(|cause| cause.contains(why)), "{cell}: {v}");
+            }
+            (signs, answered) => panic!("{cell}: {signs:?} expected, {answered:?} answered"),
+        }
+        assert_eq!(dialer.health_reads.load(Ordering::SeqCst), health_reads, "{cell}: the `/health` reads");
+        let entry = Sessions::new(None, Arc::new(|_: &str| {})).register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+        assert_eq!(entry.signing_term().map_err(|r| r.name().to_string()), classified.map_err(|r| r.name().to_string()), "{cell}: the attest reads the one classifier");
     }
 }

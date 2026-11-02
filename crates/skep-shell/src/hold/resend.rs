@@ -74,7 +74,7 @@ use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, 
 use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HeldState, Holds, HAND_OVER_DEADLINE};
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{SessionEntry, SessionKind};
+use crate::sessions::{board_head, SessionEntry, SessionKind};
 use crate::wire::{delivered_values, values_of};
 
 /// The window the shift's one read images: every arranged content position
@@ -502,7 +502,15 @@ impl Holds {
 
     /// Runs the probe's dial and the resend: the body of [`Holds::probe`].
     ///
-    /// It runs once per board at a time.
+    /// It runs once per board at a time. After `/health`, ONE read of the
+    /// board's head (`sessions::board_head`) before any document (skep #727):
+    /// the same answer establishes the directory ([`Holds::establish`]) and
+    /// decides which documents the resend skips — never two reads in one
+    /// probe for the hold's sake — and the board's head state is said once
+    /// per change ([`Holds::note_head`]). While the head answers
+    /// `head_unreadable`, every document whose head line is held so is
+    /// skipped: no `/changes` read, no `sending`, no attest attempted; the
+    /// other documents resend as they do.
     fn drain(&self, board_reference: &str, slot: &BoardSlot) {
         let board = &slot.board;
         // The probe's one `/health` read (§3c.4): a board that does not answer
@@ -512,16 +520,20 @@ impl Holds {
         if self.note_health(board_reference, &health) {
             return;
         }
-        // The board answers and takes writes: the hold ends. A directory no
-        // session's open could establish is tried again, and each principal
-        // with lines resends them under a session of its own that may write;
-        // a bare one, which reads alone, sends none (foundations §3.3 state
-        // 3), so a principal with no other session keeps its lines held.
-        self.establish(slot);
+        // The board answers and takes writes: the hold ends. The head is read
+        // once; a directory no session's open could establish is tried again
+        // with it, and each principal with lines resends them under a session
+        // of its own that may write; a bare one, which reads alone, sends none
+        // (foundations §3.3 state 3), so a principal with no other session
+        // keeps its lines held.
+        let head = board_head(board);
+        self.note_head(board_reference, &head);
+        self.establish(board_reference, slot, &head);
+        let head_unreadable = matches!(head, Err(Refusal::Halt { name: Name::HEAD_UNREADABLE, .. }));
         let principals: Vec<u64> = slot.lock().principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect();
         for principal in principals {
             let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
-            self.resume(&session);
+            self.resume(&session, head_unreadable);
         }
     }
 
@@ -533,14 +545,17 @@ impl Holds {
     /// go sent in `k` order across the documents ([`Holds::send_in_order`]).
     /// The documents are gathered by one pass over the queue, each found
     /// among those already seen by a set's lookup, never a scan of them.
-    fn resume(&self, session: &SessionEntry) {
+    /// `head_unreadable` is whether the probe's one read of the board's head
+    /// answered so: the documents whose head line waits on the head are then
+    /// skipped ([`Holds::resume_doc`]).
+    fn resume(&self, session: &SessionEntry, head_unreadable: bool) {
         let Some(docs) = self.with_principal(&session.board_reference, session.facts.principal, |ph| {
             let mut seen = HashSet::new();
             ph.queue.lines().iter().filter(|l| seen.insert(l.doc.as_str())).map(|l| l.doc.clone()).collect::<Vec<String>>()
         }) else {
             return;
         };
-        let sending: HashSet<String> = docs.into_iter().filter(|doc| self.resume_doc(session, doc)).collect();
+        let sending: HashSet<String> = docs.into_iter().filter(|doc| self.resume_doc(session, doc, head_unreadable)).collect();
         self.send_in_order(session, sending);
     }
 
@@ -558,10 +573,15 @@ impl Holds {
     /// kept and never handed over. A head no dial of which left (`sent`
     /// false) is not read at all: nothing of it can stand on the board, so it
     /// goes from the head — or is handed over, where its deadline has passed.
-    fn resume_doc(&self, session: &SessionEntry, doc: &str) -> bool {
+    /// A head held `head_unreadable` while the probe's read of the board's
+    /// head answers so (`head_unreadable`) is skipped whole — no read, no
+    /// `sending`, nothing said (skep #727): its send would fail the same way,
+    /// and the `held` event and the `Talk` line were said once as the state
+    /// began; it is tried again the probe the head reads.
+    fn resume_doc(&self, session: &SessionEntry, doc: &str, head_unreadable: bool) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
-        if awaits_act(&head) {
+        if awaits_act(&head) || (head_unreadable && head.reason.cause == cause::HEAD_UNREADABLE) {
             return false;
         }
         let outcome = if head.reason.sent { self.read_outcome(session, doc, &head) } else { ReadOutcome::SendFromHead };

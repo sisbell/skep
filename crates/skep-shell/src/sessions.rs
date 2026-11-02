@@ -19,8 +19,10 @@
 //! ([`SessionEntry::attest`]), whichever caller sends it — a call's `op`, or
 //! the held-burst resend's — and none goes out unsigned where a signature is
 //! owed: the board term it signs over is read at the session's board
-//! ([`SessionEntry::signing_term`]), and a head record that stands and cannot
-//! be read, or a claimed board that serves none, refuses the write
+//! ([`SessionEntry::signing_term`], through [`board_head`], the one
+//! classifier of a board's head the held store's directory reads too), and
+//! a head record that stands and cannot be read, one the board served
+//! garbled, or a claimed board that serves none, refuses the write
 //! `head_unreadable` (SP-14).
 //!
 //! **The end** ([`Sessions::end`]). A death signal is met by two callers —
@@ -81,7 +83,7 @@ use skep_client::search::SessionRef;
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
-use skep_client::{Board, Origin};
+use skep_client::{Board, DialError, Origin};
 use skep_identity::{BoardTerm, Fingerprint, PublicKey};
 
 use crate::attest::{in_checked_set, wants_attest, Composer, Unattested};
@@ -177,35 +179,20 @@ impl SessionEntry {
 
     /// Returns the board term a signed write under this session signs over.
     ///
-    /// It is `H.1`'s pair, read at the session's own board
-    /// (`Board::board_term`); none where the board serves no head record and
-    /// names no claimant — a board no one has claimed, which takes a write
-    /// unsigned. A head record that stands and cannot be read, and a claimed
-    /// board that serves none, are never read as no record (SP-14): a write
-    /// owed a signature is then never sent without one.
+    /// It is the board's head as [`board_head`] classifies it, read at the
+    /// session's own board: `H.1`'s pair; none where the board serves no
+    /// head record and names no claimant — a board no one has claimed, which
+    /// takes a write unsigned. A head record that stands and cannot be read,
+    /// and a claimed board that serves none, are never read as no record
+    /// (SP-14): a write owed a signature is then never sent without one.
     ///
     /// # Errors
     ///
-    /// Returns `unreachable` where a read it makes — the head record's, then
-    /// `/health`'s — goes unanswered; and `head_unreadable`, a halt's face
-    /// naming why, where the head record stands and cannot be read, the
-    /// board refuses its read, or the board serves none and names a claimant
-    /// or cannot say through `/health` whether it does.
+    /// [`board_head`]'s: `unreachable` where a read it makes goes
+    /// unanswered, and `head_unreadable` where the head record stands and
+    /// cannot be read, was served garbled, or is owed and not served.
     pub fn signing_term(&self) -> Result<Option<BoardTerm>, Refusal> {
-        match self.board.board_term() {
-            Ok(Some(board_term)) => Ok(Some(board_term)),
-            Ok(None) => match self.board.health() {
-                Ok(health) => match health.claimant() {
-                    None => Ok(None),
-                    Some(claimant) => Err(head_unreadable(format!("the board names {claimant} its claimant and serves no head record (`H.1`)"))),
-                },
-                Err(Halt::Dial(e)) => Err(Refusal::Unreachable(e)),
-                Err(h) => Err(head_unreadable(format!("the board serves no head record (`H.1`), and its `/health` could not say whether it is claimed: {h}"))),
-            },
-            Err(Halt::Dial(e)) => Err(Refusal::Unreachable(e)),
-            Err(Halt::Halt(face)) => Err(head_unreadable(format!("{}: {}", face.state, face.cause))),
-            Err(h) => Err(head_unreadable(format!("the board refused the read of its head record (`H.1`): {h}"))),
-        }
+        board_head(&self.board)
     }
 
     /// Returns the attest a write under this session carries, on its frame.
@@ -258,10 +245,71 @@ impl SessionEntry {
     }
 }
 
+/// Classifies the board's head: a term, none, `head_unreadable` or unreachable.
+///
+/// It is the one decision of what `H.1` says, shared by the attest a signed
+/// write owes ([`SessionEntry::signing_term`]) and by the held store's
+/// directory (`hold`'s `Directory::of`), so the two never disagree on what a
+/// board's head is. `Ok(Some)` is `H.1`'s pair, read by `Board::board_term`,
+/// which keeps a pair once read; `Ok(None)` a board that serves no head
+/// record and names no claimant through `/health` — a board no one has
+/// claimed, which takes a write unsigned and holds no held text (`client.md`
+/// §3c.1). Every other answer is a failure, never an absence (SP-14).
+///
+/// **A garbled answer is the board's** (skep #728). An `H.1` read, or the
+/// claimant arm's `/health` read, that the board answered with a body that
+/// is no JSON or past the client's answer cap (`DialError::Response`,
+/// `DialError::TooLarge`) is `head_unreadable`, its cause "served garbled"
+/// and the error: the board was reached and answered, so the fault is its
+/// head record's to repair, never the network's — and the burst so held is
+/// skipped at each probe until the head reads, not retried as a lost
+/// connection would be. Every other dial error — a connection never made,
+/// a timeout, an answer cut short — is the board away, `unreachable`.
+///
+/// # Errors
+///
+/// Returns `unreachable` where a read it makes — the head record's, then
+/// `/health`'s — goes unanswered; and `head_unreadable`, a halt's face
+/// naming why, where the head record stands and cannot be read, was served
+/// garbled, the board refuses its read, or the board serves none and names
+/// a claimant or cannot say through `/health` whether it does.
+pub(crate) fn board_head(board: &Board) -> Result<Option<BoardTerm>, Refusal> {
+    match board.board_term() {
+        Ok(Some(board_term)) => Ok(Some(board_term)),
+        Ok(None) => match board.health() {
+            Ok(health) => match health.claimant() {
+                None => Ok(None),
+                Some(claimant) => Err(head_unreadable(format!("the board names {claimant} its claimant and serves no head record (`H.1`)"))),
+            },
+            Err(Halt::Dial(e)) => Err(garbled_or_away(e, "the board serves no head record (`H.1`), and its `/health`")),
+            Err(h) => Err(head_unreadable(format!("the board serves no head record (`H.1`), and its `/health` could not say whether it is claimed: {h}"))),
+        },
+        Err(Halt::Dial(e)) => Err(garbled_or_away(e, "the board's head record (`H.1`)")),
+        Err(Halt::Halt(face)) => Err(head_unreadable(format!("{}: {}", face.state, face.cause))),
+        Err(h) => Err(head_unreadable(format!("the board refused the read of its head record (`H.1`): {h}"))),
+    }
+}
+
+/// Splits a read's dial error: a garbled answer is the board's, the rest is
+/// the board away (skep #728).
+///
+/// `read` names what was read, for the garbled face's cause: the board
+/// answered, and its answer was no JSON or past the cap, so the fault is
+/// `head_unreadable`'s; a connection never made, a timeout or an answer cut
+/// short says nothing of the head, and is `unreachable`.
+fn garbled_or_away(e: DialError, read: &str) -> Refusal {
+    match e {
+        DialError::Response(_) | DialError::TooLarge { .. } => head_unreadable(format!("{read} served garbled: {e}")),
+        other => Refusal::Unreachable(other),
+    }
+}
+
 /// Returns `head_unreadable`: a signed write's signature could not be made.
 ///
 /// Its face says the write was not sent, `why` the board's head record could
-/// not be read as its cause, and that a held burst is resent once it reads.
+/// not be read as its cause — the record standing and not reading, a claimed
+/// board serving none, or the board's answer to the read served garbled
+/// (skep #728) — and that a held burst is resent once it reads.
 fn head_unreadable(why: String) -> Refusal {
     Refusal::named(
         Name::HEAD_UNREADABLE,

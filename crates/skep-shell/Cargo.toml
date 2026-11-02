@@ -48,6 +48,11 @@ skep-util = { path = "../skep-util" }
 # The bridge's values: every call's input and output, every event, is a
 # `serde_json::Value` shaped as client.md §4b.1 and §4b.2 draw it.
 serde_json.workspace = true
+# The pending held directory's name (client.md §3c.1): the SHA-256 of the
+# origin dialed, 64 lowercase hex as a chain's name is, for a board whose
+# head record will not read and so names no chain yet — the workspace's one
+# hash, as skep-identity's fingerprints take it.
+sha2.workspace = true
 
 [dev-dependencies]
 # The real daemon in-process on an ephemeral port over a temp data dir, as

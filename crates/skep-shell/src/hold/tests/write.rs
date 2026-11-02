@@ -36,9 +36,9 @@
 //! the caller's bug; the stored frame without its attest; P38's halted file
 //! refusing every act at the principal's door, `resolve` among them, a copy
 //! the store cannot make, and a queue kept in memory for want of its file
-//! taking the file once it empties and never before; no `held` event when a
-//! session's open reads its file, and a misplaced file set aside and said
-//! on `Talk` alone.
+//! joining the board's file as soon as the directory is this shell's; no
+//! `held` event when a session's open reads its file, and a misplaced file
+//! set aside and said on `Talk` alone.
 //!
 //! It checks the burst's door too: a burst the board takes at no send
 //! refused at the act and held never — past the frame cap as sent, or as a
@@ -52,10 +52,13 @@
 //! And it checks the board term a signed write signs over (SP-14): a signed
 //! burst over a head record (`H.1`) that stands and cannot be read, or none at
 //! a board that names a claimant, held `head_unreadable` with nothing sent
-//! unsigned, tried again at each probe and sent attested once the record
-//! reads; a write the hold never holds refused so; the head read halting, or
-//! its answer lost, holding the burst unsent; and an unclaimed board serving
-//! no record the one board a signed write goes out unsigned at.
+//! unsigned, its line in the pending file under the origin's hash (skep
+//! #725), skipped at each probe and sent attested once the record reads; a
+//! garbled head answer held so, never `unreachable` (skep #728); the drop
+//! admitted on such a line and `send` refused (skep #726); a write the hold
+//! never holds refused so; the head read halting, or its answer lost, holding
+//! the burst unsent; and an unclaimed board serving no record the one board a
+//! signed write goes out unsigned at.
 
 use super::*;
 
@@ -1015,17 +1018,23 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
 }
 
-/// Checks that a line the store cannot copy says why and stands (§3c.3).
+/// Checks that a line the store cannot copy says why and stands (§3c.3), and
+/// that a line the store CAN copy for want of `H.1` alone goes to the pending
+/// file (§3c.1; skep #725).
 ///
-/// It stands in memory ("Persist first"): at an unclaimed board with no
-/// `H.1` to name its directory, the burst is held under its own cause —
-/// never `other_window`, another window's lock alone — its answer
+/// A line stands in memory ("Persist first") where no directory can be named
+/// or written: at an UNCLAIMED board with no `H.1` to name its directory —
+/// which holds no held text (§3c.1) — the burst is held under its own cause
+/// — never `other_window`, another window's lock alone — its answer
 /// `unwritable` naming the missing term, nothing written; at a file the
 /// device refuses (a directory where the file would be), the device's
 /// refusal rides the answer. Either line stands in the queue, and the next
 /// probe resends and keeps it, unsigned at the unclaimed board, which has no
 /// term to sign over (the mutant that drops `unwritable` tells the page a
-/// burst a crash would lose is on disk).
+/// burst a crash would lose is on disk). A board whose head record stands
+/// and CANNOT be read is no such board: its line goes to the pending file
+/// under the hash of the origin dialed, its answer carrying no `unwritable`
+/// (the mutant that keeps such a line in memory loses it at a close).
 #[test]
 fn a_line_the_store_cannot_copy_says_why_and_stands() {
     let fake = Fake::new();
@@ -1054,46 +1063,72 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+
+    // A head record that stands and cannot be read: the pending file, no
+    // `unwritable`.
+    let fake = Fake::new();
+    *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let answer = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
+    assert!(answer.get("unwritable").is_none(), "the line is on disk, in the pending file: {answer}");
+    let pending = pending_file(&g);
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"hello\"]"), "the pending file holds the line at {}", pending.display());
+    assert!(!held_file(&g).exists(), "nothing under a chain the board has not named");
 }
 
-/// Checks that an unwritable queue takes its file once it empties.
+/// Checks that a queue kept in memory joins the board's file as soon as the
+/// directory is this shell's (the record's F4; `Custody::Unwritable`).
 ///
-/// A queue kept in memory for want of its file takes the file once it
-/// empties, and never before (§3c.3; `Custody::Unwritable`): at a board
-/// with no `H.1`, a line held in memory alone and refused `write_busy` at
-/// its resend — reissued at the next probe, the line standing — still
-/// stands when the probe — the board now naming its `H.1` —
-/// establishes the directory, so the next burst is held `behind` it, still
-/// `unwritable`, under the next ordinal; once both are kept, the next line
-/// is copied to the board's file (the mutant that opens the file while
-/// lines stand replaces the queue and dials the next burst past a line it
-/// lost; the ones that never re-open the file, or never establish the
-/// directory, keep every later line in memory alone, for a crash to lose).
+/// At an unclaimed board, with no `H.1` to name its directory, a line is
+/// held in memory alone, `unwritable`, and refused `write_busy` at its resend
+/// — reissued at the next probe, the line standing. The board then names its
+/// `H.1`: the probe establishes the directory and the standing line JOINS the
+/// board's file at once, its ordinal kept, with no wait for an empty queue —
+/// so the next burst, held `behind` it, is copied to the file too, under the
+/// next ordinal and with no `unwritable`; once both are kept the file
+/// compacts and the next line recreates it (the mutant that waits for an
+/// empty queue keeps every line of the outage, and every line after it, in
+/// memory for a crash to lose; the one that renumbers a line into an empty
+/// file hands the page an ordinal it does not hold).
 #[test]
-fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
+fn a_queue_kept_in_memory_joins_the_boards_file_as_soon_as_the_directory_is_this_shells() {
     let fake = Fake::new();
     fake.no_head.store(true, Ordering::SeqCst);
+    fake.unclaimed.store(true, Ordering::SeqCst);
     let store = TempDir::new().unwrap();
     let facts = writer_facts(&store);
     let g = ground_over(fake, store, facts, 0);
     let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     assert!(first["unwritable"].is_string(), "{first}");
-    g.fake.no_head.store(false, Ordering::SeqCst);
     g.fake.op_refused.every((503, json!({"error": "write_busy"})));
     g.holds.probe("b-1");
     assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line stands, not taken at its resend");
+    assert!(!g.store.path().join("held").exists(), "nothing written while the board names no H.1");
+    // The board names its H.1: the probe's one head read establishes the
+    // directory, and the standing line joins the file before the resend.
+    g.fake.no_head.store(false, Ordering::SeqCst);
+    g.fake.unclaimed.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let file = held_file(&g);
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"a\"]"), "the standing line is in the board's file, with no wait for an empty queue");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined") && joined[0].contains("their ordinals kept"), "{joined:?}");
+    assert_eq!((g.fake.sends(), g.lines().len()), (2, 1), "resent and refused again, still standing");
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the standing line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
-    assert!(behind["unwritable"].is_string(), "in memory alone while a line stands: {behind}");
+    assert!(behind.get("unwritable").is_none(), "copied to the board's file: {behind}");
     let ks: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
-    assert_eq!(ks, [1, 2], "no line renumbered");
+    assert_eq!(ks, [1, 2], "the joined line kept its ordinal, the next line the one after");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"b\"]"), "the next line is in the file too");
     g.fake.op_refused.clear();
     g.holds.probe("b-1");
     assert!(g.lines().is_empty(), "both kept");
+    assert!(!file.exists(), "the file compacted away");
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
     assert!(next.get("unwritable").is_none(), "{next}");
-    let file = g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held");
-    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"c\"]"), "the next line recreates the board's file");
 }
 
 /// Checks that no `held` event goes out when a session's open reads its file.
@@ -1267,7 +1302,8 @@ fn a_head_read_that_halts_holds_the_burst_unsent() {
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
-/// Checks that a signed burst over an unreadable head record is held unsent.
+/// Checks that a signed burst over an unreadable head record is held unsent,
+/// on disk, and sent once the record reads.
 ///
 /// A writer's attest signs over the board's head record (`H.1`). Where the
 /// record stands and cannot be read — a content item, an atom of no JSON, a
@@ -1275,12 +1311,17 @@ fn a_head_read_that_halts_holds_the_burst_unsent() {
 /// refuses or answers `500` — or the board names a claimant and serves none,
 /// as an empty delivery or `doc_not_registered`, and where an unclaimed
 /// board's record is damaged, the burst is held `head_unreadable` with nothing
-/// dialed. The answer's `unwritable` names `H.1`; the line, `sent: false`,
-/// carries the refusal that says why; it awaits no act of the person's; and a
-/// probe tries it again and sends nothing. Once the record reads, the next
-/// probe sends it attested and keeps it (SP-14; the mutants that read a record
-/// that cannot be read as no record send the person's text unsigned, and the
-/// one that faces the refusal at the act loses the burst).
+/// dialed. The line goes to the PENDING file under the hash of the origin
+/// dialed, the answer carrying no `unwritable` (skep #725); the line, `sent:
+/// false`, carries the refusal that says why; the person's `send` on it is
+/// `not_resolvable`, since no act of theirs makes the head read; and a probe
+/// SKIPS it — nothing dialed, and the `held` event not said again, the
+/// `holding` of the hold the one event (skep #727). Once the record reads,
+/// the next probe joins the line into the board's own file, sends it
+/// attested and keeps it, the pending file gone (SP-14; the mutants that read
+/// a record that cannot be read as no record send the person's text
+/// unsigned, the one that faces the refusal at the act loses the burst, and
+/// the one that keeps the line in memory loses it at a close).
 #[test]
 fn a_signed_burst_over_an_unreadable_head_record_is_held_and_sent_once_it_reads() {
     let delivery = |items: Value| Some((200, json!({"resp": "delivery", "items": items})));
@@ -1311,23 +1352,96 @@ fn a_signed_burst_over_an_unreadable_head_record_is_held_and_sent_once_it_reads(
         let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("{cell}: held, never sent unsigned") };
         crate::shapes::assert_declared("HeldAnswer", &held);
         assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("head_unreadable")), "{cell}: {held}");
-        assert!(held["unwritable"].as_str().is_some_and(|unwritable| unwritable.contains("H.1")), "{cell}: the line is in memory alone, and says why: {held}");
+        assert!(held.get("unwritable").is_none(), "{cell}: the line is on disk, in the pending file: {held}");
+        let pending = pending_file(&g);
+        assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"hello\"]"), "{cell}: the pending file holds the line at {}", pending.display());
         let lines = g.lines();
         let refusal = &lines[0]["refusal"];
         assert_eq!((lines[0]["sent"].as_bool(), refusal["name"].as_str(), refusal["kind"].as_str()), (Some(false), Some("head_unreadable"), Some("halt")), "{cell}: {lines:?}");
         assert!(refusal["cause"].as_str().is_some_and(|cause| cause.contains(why)), "{cell}: the refusal says why: {refusal}");
         assert_eq!((g.fake.sends(), g.states()), (0, vec!["holding".to_string()]), "{cell}: nothing dialed");
         let k = lines[0]["held"].as_u64().unwrap();
-        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap_err().name(), "not_resolvable", "{cell}: it awaits no act of the person's");
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap_err().name(), "not_resolvable", "{cell}: no act of the person's makes the head read");
         g.holds.probe("b-1");
-        assert_eq!((g.fake.sends(), g.states()), (0, vec!["sending".to_string(), "holding".to_string()]), "{cell}: tried again, nothing sent");
+        assert_eq!((g.fake.sends(), g.states()), (0, Vec::<String>::new()), "{cell}: skipped: nothing sent, nothing said again");
         *g.fake.head_answer.lock().unwrap() = None;
         g.fake.no_head.store(false, Ordering::SeqCst);
         g.holds.probe("b-1");
         let sent = g.fake.sends.lock().unwrap().clone();
         assert!(sent.len() == 1 && sent[0].get("attest").is_some(), "{cell}: sent once the record reads, attested: {sent:?}");
         assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "{cell}: and kept");
+        assert!(!pending.exists(), "{cell}: the pending file joined the board's file and is gone");
     }
+}
+
+/// Checks that a garbled head answer holds the burst `head_unreadable`, never
+/// `unreachable` (skep #728).
+///
+/// The head read answered — a `200` whose body is no JSON, as a proxy's page
+/// is, or an answer past the client's cap — so the board was reached and its
+/// head is what cannot be read: the burst is held `head_unreadable`, its
+/// refusal's cause "served garbled" with the error, its line in the pending
+/// file, nothing dialed. A read whose answer was LOST stays `unreachable`
+/// (`an_unanswered_read_the_attest_needs_holds_the_burst_unsent`): the board
+/// may be away (the mutant that reads a garbled answer as a lost one points
+/// the person at the network for a board that answered, and retries the line
+/// at every probe).
+#[test]
+fn a_garbled_head_answer_holds_the_burst_head_unreadable_never_unreachable() {
+    for (cell, garbled, too_large) in [("a 200 of no JSON", true, false), ("an answer past the cap", false, true)] {
+        let fake = Fake::new();
+        fake.head_garbled.store(garbled, Ordering::SeqCst);
+        fake.head_too_large.store(too_large, Ordering::SeqCst);
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("{cell}: held, nothing sent") };
+        assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("head_unreadable")), "{cell}: {held}");
+        let lines = g.lines();
+        let refusal = &lines[0]["refusal"];
+        assert_eq!((lines[0]["sent"].as_bool(), refusal["name"].as_str()), (Some(false), Some("head_unreadable")), "{cell}: {lines:?}");
+        assert!(refusal["cause"].as_str().is_some_and(|cause| cause.contains("served garbled")), "{cell}: the board's fault, named: {refusal}");
+        assert!(pending_file(&g).is_file(), "{cell}: in the pending file, never memory alone");
+        assert_eq!(g.fake.sends(), 0, "{cell}: nothing dialed");
+    }
+}
+
+/// Checks that a line held `head_unreadable` is dropped by `resolve(drop)` and
+/// refused `resolve(send)` (skep #726).
+///
+/// The board's head may never be repaired, so the person may give such a
+/// write up: the drop is admitted, and drops the line AND every later line of
+/// its document — a later burst was composed against the page's text with the
+/// dropped one in it, so sent alone it would land off — the other document's
+/// line standing; the `held` event says the document kept with no line; the
+/// `done … dropped` lines are on the pending file; nothing is dialed. `send`
+/// stays `not_resolvable`: no act of the person's makes the head read (the
+/// mutant that refuses the drop leaves the queue to fill behind a line no one
+/// can clear; the one that admits `send` dials a write it cannot sign).
+#[test]
+fn a_line_held_head_unreadable_is_dropped_by_resolve_drop_and_refused_resolve_send() {
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(head)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held, nothing sent") };
+    assert_eq!(head["cause"], "head_unreadable", "{head}");
+    let k = head["held"].as_u64().unwrap();
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind") };
+    let OpAnswer::Answered(Ok(other)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["c"]), g.fake.head()), None) else { panic!("held behind") };
+    assert_eq!((behind["cause"].as_str(), other["cause"].as_str()), (Some("behind"), Some("behind")));
+    let _ = g.states();
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap_err().name(), "not_resolvable", "no act of the person's makes the head read");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped, "the drop is admitted");
+    let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap().to_string()).collect();
+    assert_eq!(docs, [OTHER], "the line and every later line of its document dropped; the other document's stands");
+    let events: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0]["doc"].as_str(), events[0]["held"].as_u64(), events[0]["state"].as_str()), (Some(DOC), Some(0), Some("kept")), "{events:?}");
+    let text = std::fs::read_to_string(pending_file(&g)).unwrap();
+    assert_eq!(text.matches("\"as\":\"dropped\"").count(), 2, "both drops on the pending file: {text}");
+    assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
 /// Checks that a write the hold never holds is refused over an unreadable head
@@ -1596,4 +1710,38 @@ fn a_held_file_the_compaction_cannot_remove_is_said_on_talk_and_appended_on() {
     std::fs::set_permissions(&board_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), ours).open_file(1, "1.0.1").unwrap() else { panic!("the file reads live") };
     assert_eq!(queue.lines().len(), 1, "a reopen reads the line");
+}
+
+/// Checks that the `held` event's memory emits a state and count once until
+/// it changes or is cleared (skep #727).
+///
+/// The same state and count for one board, session and document is emitted
+/// once; a changed count, or a changed state, is emitted; the join's forced
+/// re-emit goes out whatever was last emitted; a document kept with no line
+/// left clears its key, so the same pair after it is news again; and the
+/// memory is per session — a second session of the principal sees its own
+/// first emit (the mutant that forgets the memory floods the page with the
+/// same state at every probe; the one that never clears a key keeps a map
+/// entry per document ever held; the one that keys by document alone
+/// starves a second tab of its first event).
+#[test]
+fn the_held_events_memory_emits_a_pair_once_until_it_changes_or_is_cleared() {
+    let g = ground();
+    let emit = |state: HeldState, held: u64| g.holds.emit_held(&g.session, DOC, held, state, Some("unreachable"), &[]);
+    emit(HeldState::Holding, 1);
+    emit(HeldState::Holding, 1);
+    assert_eq!(g.states(), ["holding"], "the same pair once");
+    emit(HeldState::Holding, 2);
+    emit(HeldState::Sending, 2);
+    emit(HeldState::Sending, 2);
+    assert_eq!(g.states(), ["holding", "sending"], "a changed count, then a changed state, each once");
+    g.holds.emit_held_again(&g.session, DOC, 2, HeldState::Sending, None);
+    assert_eq!(g.states(), ["sending"], "the forced re-emit goes out whatever was last emitted");
+    emit(HeldState::Kept, 0);
+    emit(HeldState::Holding, 1);
+    assert_eq!(g.states(), ["kept", "holding"], "a document kept with no line clears its key: the pair after it is news");
+    assert_eq!(g.holds.last_emitted.lock().unwrap().len(), 1, "one key per document still held, none for a document kept whole");
+    let second = g.holds.sessions.register(&BoardEntry { reference: "b-1".into(), board: Arc::clone(&g.session.board) }, Open { token: Token::parse(&"9e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 }, &mut NoSupplements);
+    g.holds.emit_held(&second, DOC, 1, HeldState::Holding, Some("unreachable"), &[]);
+    assert_eq!(g.states(), ["holding"], "a second session of the principal sees its own first emit");
 }

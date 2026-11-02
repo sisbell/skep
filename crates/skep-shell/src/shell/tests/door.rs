@@ -486,8 +486,15 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
 ///
 /// It accepts every connection, reads its one request — its head through
 /// the blank line, its body as long as its `Content-Length` says — keeps the
-/// body's JSON, and drops the connection: a board that answers nothing and
-/// says what frames reached it.
+/// body's JSON, writes a response head that declares a body, and drops the
+/// connection before any byte of it: a board that breaks the connection and
+/// answers nothing, and says what frames reached it. The client reads the
+/// break as `DialError::Truncated`, a broken connection and never an answer,
+/// so every dial through it — a signed write's read of the board's head
+/// record among them — is `unreachable`; a connection dropped with no byte
+/// at all would be read as a response that is no HTTP, which the shell
+/// holds as the board's garbled answer to a head read (skep #728), not as a
+/// board away.
 pub(super) fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -513,6 +520,9 @@ pub(super) fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
                         kept.lock().unwrap().push(frame);
                     }
                 }
+                // The break: a head declaring one byte of body, and the
+                // connection dropped before it.
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n");
             });
         }
     });

@@ -3,8 +3,10 @@
 //! The table (T6) takes every `DialError`, every disposition, `poisoned`,
 //! `internal_panic`, `write_busy` once and twice, `durability` once, twice and
 //! three times, `arrangement_moved`, and an ack, each to exactly its row, the
-//! table the one owner of every reissue's bound; the five kinds are bursts and
-//! the eleven other
+//! table the one owner of every reissue's bound; the failed send, which starts
+//! and runs a line's clock (`HAND_OVER_DEADLINE`), is every answer but an ack,
+//! the death signal and a dial that never left, each with its token; the five
+//! kinds are bursts and the eleven other
 //! `WRITE_KINDS` are not; the five held states are the declared ones, and the
 //! two acts of `resolve` the declared words and no other spelling.
 //!
@@ -18,8 +20,10 @@
 //! recorded, a look taken as each is recorded, and a refusal or the death
 //! signal armed for a send — the holds over it with a session opened as the
 //! shell opens one and every line the hold says on `Talk` recorded (`Ground`),
-//! a burst held through the hold's own door at the base a hold takes now, and
-//! each `held` event, `held` row and `held` answer held to its declaration.
+//! the clock a line's deadline reads moved forward by a cell where it waits
+//! past one (`Holds::advance`), a burst held through the hold's own door at
+//! the base a hold takes now, and each `held` event, `held` row and `held`
+//! answer held to its declaration.
 //! The ground's session is a writer's — signed, under a key its store
 //! generates, since a bare session reads alone and no probe resends under it —
 //! save where a cell asks for a bare one (`bare_ground`) or for a key no store
@@ -65,7 +69,7 @@ fn the_five_kinds_are_bursts_and_no_other_write_kind_is() {
 }
 
 fn rej(code: &str, disposition: &str) -> Decision {
-    classify(DialOutcome::Rejected { code, disposition }, Reissues::default())
+    classify(DialOutcome::Rejected { code, disposition }, &Reissues::default())
 }
 
 /// The reissues a burst has been given: `write_busy` ones and `durability`
@@ -89,16 +93,16 @@ fn retry(code: &str) -> Value {
 fn every_outcome_classifies_to_exactly_its_row() {
     // No connection made — the burst did not leave (`sent: false`).
     for e in [DialError::Connect("x".into()), DialError::Resolve("x".into()), DialError::Tls("x".into())] {
-        assert_eq!(classify(DialOutcome::Dial(&e), Reissues::default()), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
     }
     // The request left, its answer lost — it MAY have landed (`sent: true`).
     for e in [DialError::Timeout("x".into()), DialError::Io("x".into()), DialError::Truncated { declared: 9, got: 1 }, DialError::Response("x".into()), DialError::TooLarge { cap: 1 }] {
-        assert_eq!(classify(DialOutcome::Dial(&e), Reissues::default()), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
     }
     // The scheme this build does not hold, or a request refused before any
     // connection — faced as built, no probe ends either.
     for e in [DialError::NotHeld("https".into()), DialError::Request("x".into())] {
-        assert_eq!(classify(DialOutcome::Dial(&e), Reissues::default()), Decision::Neither, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), &Reissues::default()), Decision::Neither, "{e}");
     }
     // The codes. `poisoned` MAY have landed (§3c.2): the frames reached the
     // journal and a restart replays them, so its line says `sent: true`.
@@ -110,14 +114,14 @@ fn every_outcome_classifies_to_exactly_its_row() {
     // `write_busy` once → reissue, after the short wait; the reissue's own →
     // the next refusal, faced.
     let busy = DialOutcome::Rejected { code: "write_busy", disposition: "retry" };
-    assert_eq!(classify(busy, given(0, 0)), Decision::Reissue(Reissue::WriteBusy));
-    assert_eq!(classify(busy, given(1, 0)), Decision::Neither);
+    assert_eq!(classify(busy, &given(0, 0)), Decision::Reissue(Reissue::WriteBusy));
+    assert_eq!(classify(busy, &given(1, 0)), Decision::Neither);
     // `durability` once, twice → reissue as-is; a THIRD on the same burst →
     // hold; a `write_busy` given beside counts nothing toward the rider.
     let durability = DialOutcome::Rejected { code: "durability", disposition: "retry" };
-    assert_eq!(classify(durability, given(0, 0)), Decision::Reissue(Reissue::Durability));
-    assert_eq!(classify(durability, given(1, 1)), Decision::Reissue(Reissue::Durability));
-    assert_eq!(classify(durability, given(0, 2)), Decision::Hold { cause: "durability", sent: false });
+    assert_eq!(classify(durability, &given(0, 0)), Decision::Reissue(Reissue::Durability));
+    assert_eq!(classify(durability, &given(1, 1)), Decision::Reissue(Reissue::Durability));
+    assert_eq!(classify(durability, &given(0, 2)), Decision::Hold { cause: "durability", sent: false });
     assert_eq!((Reissue::WriteBusy.wait(), Reissue::Durability.wait()), (WRITE_BUSY_WAIT, Duration::ZERO));
     let mut noted = Reissues::default();
     for kind in [Reissue::WriteBusy, Reissue::Durability, Reissue::Durability] {
@@ -132,6 +136,49 @@ fn every_outcome_classifies_to_exactly_its_row() {
     assert_eq!(rej("arrangement_moved", "permanent"), Decision::Moved);
     // Any other retry-class rejection on a burst → faced, not held.
     assert_eq!(rej("history_busy", "retry"), Decision::Neither);
+}
+
+/// THE FAILED SEND (§3c.4): the one rule a line's clock starts and runs by.
+///
+/// A dial's answer starts or runs its line's clock (`HAND_OVER_DEADLINE`) where
+/// the send left, or was answered, and did not land — a lost answer,
+/// `poisoned`, `durability`, a refused run, a move, a reissue-class answer, any
+/// refusal of the board's faced — and never where it landed, where the session
+/// died, or where no dial left: a connection never made, a request refused
+/// before any connection, an attest that could not be composed, a signature not
+/// made, a hold before any dial. Its token is the held cause, or the board's in
+/// the `code:detail` convention (the mutant that reads a connection never made
+/// as a failure hands an outage's line to the person; the one that reads the
+/// shell's own refusal as the board's hands a line over that the board never
+/// judged).
+#[test]
+fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left() {
+    let held = |cause: &str, sent: bool| Dialed::Held { reason: Reason::of(cause, sent), refusal: Refusal::malformed("x") };
+    let board = |v: Value| Refusal::from(skep_client::board::Rejection::of(&v).expect("a rejected document").refused(&v));
+    let face = skep_client::halt::Face { state: "s".into(), cause: "c".into(), act: "a".into() };
+    let cells: Vec<(&str, Dialed, Option<&str>)> = vec![
+        ("an ack", Dialed::Acked(json!({"resp": "ack", "at": 1})), None),
+        ("the death signal", Dialed::Died, None),
+        ("a connection never made", held("unreachable", false), None),
+        ("an answer lost", held("unreachable", true), Some("unreachable")),
+        ("poisoned", held("poisoned", true), Some("poisoned")),
+        ("a third durability", held("durability", false), Some("durability")),
+        ("a move", Dialed::Held { reason: Reason { cause: "moved".into(), refusal: Some(arrangement_moved(40, 45)), sent: false }, refusal: Refusal::malformed("x") }, Some("moved")),
+        ("a refused run", Dialed::Held { reason: Reason::refused("out_of_bounds", json!({})), refusal: Refusal::malformed("x") }, Some("out_of_bounds")),
+        ("a signature not made", held("head_unreadable", false), None),
+        ("a reissue", Dialed::Reissue { kind: Reissue::WriteBusy, refusal: Refusal::board(503, json!({"error": "write_busy"})) }, Some("write_busy")),
+        ("a write_busy past its reissue", Dialed::Faced(Refusal::board(503, json!({"error": "write_busy"}))), Some("write_busy")),
+        ("a code the table holds nowhere", Dialed::Faced(board(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry"}))), Some("credential_refused:index_rebuilding")),
+        ("a request refused before any connection", Dialed::Faced(Refusal::Unreachable(DialError::Request("x".into()))), None),
+        ("the attest's composer halted", Dialed::Faced(Refusal::named(Name::ATTEST_NOT_COMPOSED, face)), None),
+        ("an attest whose read went unanswered", Dialed::from(Unattested::Refused(Refusal::Unreachable(DialError::Timeout("x".into())))), None),
+    ];
+    for (cell, dialed, token) in cells {
+        assert_eq!(dialed.failure().as_deref(), token, "{cell}");
+    }
+    for cause in ["halted", "stopped", "behind"] {
+        assert_eq!(failed_send(&Reason::of(cause, false)), None, "{cause}: a hold before any dial");
+    }
 }
 
 /// The five held states are the declared `HeldEvent.state` union's words,

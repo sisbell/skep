@@ -213,13 +213,18 @@ impl Name {
     /// Its standing frames or its lines hold the queue's budget already, or
     /// its ordinals are spent — the burst refused, and kept nowhere.
     pub const HELD_FULL: Name = Name("held_full");
-    /// A held line whose resends lost their answer, handed to the person.
+    /// A held line handed to the person at its deadline, no landing found.
     ///
-    /// The shell sent it `hold`'s `MAX_LOST_ANSWERS` times without an answer
-    /// it could read — a timeout, a garbled answer, the board's handler
-    /// panicking — and stopped: the line is a refused run under this token,
-    /// its `sent` kept, until `resolve` sends it again or drops it (§3c.4;
-    /// skep #608). Its detail names the `tries`.
+    /// Its first failed send stood `hold`'s `HAND_OVER_DEADLINE`, two
+    /// minutes, past, whatever the failure — a lost answer (a timeout, a
+    /// garbled answer, the board's handler panicking), a reissue-class answer
+    /// at its count, a `durability` hold, the board's refusal of it as typed
+    /// against an older state, shifted or not — and the read found no
+    /// landing, so the shell stopped resending it: the line is a refused run
+    /// under this token, its `sent` kept, until `resolve` sends it again or
+    /// drops it (§3c.4). Its detail names `last`, the last failure's token —
+    /// the held cause, or the board's — and `elapsed_ms`, the milliseconds
+    /// since the line's first failed send.
     pub const ANSWERS_LOST: Name = Name("answers_lost");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");

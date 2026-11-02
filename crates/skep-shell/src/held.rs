@@ -198,16 +198,20 @@ pub struct Reason {
     /// A token of §3c.4's table, the shell's `head_unreadable`, or a refused
     /// run's own token.
     ///
-    /// A refused run's token is the board's, or the shell's `answers_lost`
-    /// where it handed the person a line whose resends lost their answer.
-    /// `head_unreadable` holds a signed write whose signature could not be
-    /// made, until the board's head record reads again (SP-14).
+    /// A refused run's token is the board's — a refusal at a resend under a
+    /// code the shell's table holds nowhere among them, handed to the person
+    /// at once — or the shell's `answers_lost` where it handed the person a
+    /// line no landing of which was found two minutes after its first failed
+    /// send. `head_unreadable` holds a signed write whose signature could not
+    /// be made, until the board's head record reads again (SP-14).
     pub cause: String,
     /// The verdict beside a refused run's line, or a held line's reason.
     ///
     /// It is the board's verbatim, or the shell's `answers_lost` refusal
-    /// where it handed the line to the person (§3c.4; skep #608); at a line
-    /// the board refused as typed against an older state of its document,
+    /// where it handed the line to the person at its deadline, its `last` the
+    /// last failure's token — the held cause, or the board's — and its
+    /// `elapsed_ms` the time since the line's first failed send (§3c.4); at a
+    /// line the board refused as typed against an older state of its document,
     /// held `moved`, the board's `arrangement_moved` verbatim, naming the
     /// state the burst was typed against and the document's current one; at
     /// a line held `head_unreadable`, the shell's refusal naming why the

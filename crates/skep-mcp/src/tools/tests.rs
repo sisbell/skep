@@ -530,3 +530,29 @@ fn the_publication_cards_state_the_shells_shapes() {
         assert_eq!(enumerated, answers, "{name}: an answer is the shell's OriginAnswer");
     }
 }
+
+/// The held cards name the shell's hand-over and a burst kept in memory alone.
+///
+/// The `held` card's causes name the shell's own refused run,
+/// `answers_lost`, as skep-shell spells it — why the shell stopped resending
+/// and the members of its refusal — and a refused run under a code the
+/// shell holds no row for; the `resolve` card says what `send` and `drop` do
+/// with such a line; and HELD BURSTS says a burst answered `unwritable` is
+/// lost with the process (skep #733, #700). A card that names neither leaves
+/// an agent to guess whether a line handed back may have landed, and free to
+/// stop a process that holds a write in memory alone.
+#[test]
+fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let card = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).and_then(|t| t["description"].as_str()).unwrap_or_else(|| panic!("the {name} card"));
+    let lost = skep_shell::Name::ANSWERS_LOST.as_str();
+    let held = card("held");
+    assert!(held.contains(&format!("{lost}: the shell stopped resending: no landing two minutes after the line's first failed send")), "the held card names the hand-over: {held}");
+    assert!(held.contains(&format!("the shell's own for {lost}, {{kind, name, last, elapsed_ms}}")), "the held card names its refusal's members: {held}");
+    assert!(held.contains("a code the shell holds no row for among them, refused at a resend and handed to you at once"), "the held card names the board's own code handed over: {held}");
+    let resolve = card("resolve");
+    assert!(resolve.contains(&format!("that the shell handed back to you ({lost})")), "the resolve card names the line: {resolve}");
+    assert!(resolve.contains("dropped, given up for good") && resolve.contains("is read first and kept where it landed, and otherwise sent again, its two-minute clock started afresh"), "the resolve card says what each act does: {resolve}");
+    let held_bursts = catalog.instructions().split("\n\n").find(|paragraph| paragraph.starts_with("HELD BURSTS. ")).expect("the held bursts paragraph");
+    assert!(held_bursts.contains("A burst whose held answer carries unwritable — why the shell could not write its line to disk — is kept in memory alone, and is lost if the process ends before it is resent."), "{held_bursts}");
+}

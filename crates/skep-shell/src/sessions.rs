@@ -139,8 +139,8 @@ pub struct SessionEntry {
     ///
     /// It is a held burst's `base` on a document where the shell knows the
     /// position of no write of its principal's — no ack, and no landing the
-    /// resend's read found (§3c.2) — so the resend's read sees every row that
-    /// could have moved it.
+    /// resend's read found (§3c.2) — so the resend's read, from that base,
+    /// meets every row that could be the line's own landing (§3c.5).
     pub opened_at: u64,
     /// The reason its end carried, set once by the caller that ended it.
     ///

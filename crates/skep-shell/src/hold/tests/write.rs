@@ -18,8 +18,8 @@
 //! shifted positions and keeping the line; a cut span, a lost anchor,
 //! anchors at the wrong edge, no anchors and a read the board does not
 //! answer each falling to the moved hold with its verdict and hands; and a
-//! document that keeps moving stopping the shifts at the resend's bound,
-//! held moved, the person's send counting afresh; a held line
+//! document that keeps moving stopping the shifts at the line's deadline,
+//! held moved, the person's send starting its clock afresh; a held line
 //! under the board's own directory;
 //! a refusal the table holds nowhere faced at the first dial, a
 //! `write_busy` and a first and second `durability` reissued within the
@@ -581,33 +581,38 @@ fn a_cut_span_a_lost_anchor_no_anchors_and_an_unanswered_read_each_fall_to_the_m
     }
 }
 
-/// Checks that a document that keeps moving stops shifting at the bound and
-/// is held moved (skep #442; the resend's bound).
+/// Checks that a document that keeps moving stops shifting at the deadline.
 ///
-/// Another writer's change lands as each dial of the burst reaches the
-/// board, so every dial is refused `arrangement_moved` and every shift is
-/// exact: the shell shifts and dials `MAX_LOST_ANSWERS` times, one image
-/// read each, then holds the line moved under the newest verdict, the frame
-/// as last shifted, `sent` for the dials that left, the bound said once in
-/// the shell's own window; no probe sends it; and the person's `send` counts
-/// the shifts afresh — the next probe sends it, shifts it once and keeps it
-/// (the mutant that counts no shift loops the shell for as long as the
-/// other writer writes; the one that keeps the count at the person's send
-/// hands the line straight back).
+/// It is then held moved (skep #442, #716). Another writer's change lands as
+/// each dial of the burst reaches the board, thirty seconds passing at each, so
+/// every dial is refused `arrangement_moved` — each refusal a failed send of
+/// the line — and every shift is exact: the line is born at the page's refused
+/// dial, its clock started, and the shell shifts and dials while its first
+/// failed send stands less than two minutes past — four shifts, one image read
+/// each — then holds the line moved under the newest verdict, the frame as last
+/// shifted, `sent` for the dials that left, the deadline said once in the
+/// shell's own window; no probe sends it; and the person's `send` starts the
+/// clock afresh — the next probe sends it, shifts it once and keeps it (the
+/// mutant that bounds no shift loops the shell for as long as the other writer
+/// writes; the one that keeps the clock at the person's send hands the line
+/// straight back).
 #[test]
-fn a_document_that_keeps_moving_stops_shifting_at_the_bound_and_is_held_moved() {
+fn a_document_that_keeps_moving_stops_shifting_at_the_deadline_and_is_held_moved() {
     let g = ground();
     let typed = g.fake.head();
     *g.fake.image.lock().unwrap() = vec![run(&i(1), 3)];
-    let fake = Arc::clone(&g.fake);
+    let (fake, holds) = (Arc::clone(&g.fake), Arc::downgrade(&g.holds));
     *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
         let at = fake.next_at.fetch_add(1, Ordering::SeqCst);
         fake.move_arrangement(DOC, at);
+        if let Some(holds) = holds.upgrade() {
+            holds.advance(Duration::from_secs(30));
+        }
     }));
-    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("held moved at the bound") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2))))) else { panic!("held moved at the deadline") };
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("moved")), "{held}");
-    let tries = MAX_LOST_ANSWERS as usize;
-    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (tries + 1, tries), "the page's dial, then one shift and one dial per try to the bound");
+    let shifts = 4;
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (shifts + 1, shifts), "the page's dial, then one shift and one dial each, thirty seconds apart, until two minutes from the first refusal");
     let lines = g.lines();
     let verdict = &lines[0]["refusal"];
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), verdict["code"].as_str()), (Some("moved"), Some(true), Some("arrangement_moved")), "{lines:?}");
@@ -615,13 +620,13 @@ fn a_document_that_keeps_moving_stops_shifting_at_the_bound_and_is_held_moved() 
     assert_eq!(lines[0]["frame"]["as_of"].as_u64(), verdict["site"]["as_of"].as_u64(), "the frame as last shifted: {lines:?}");
     assert_eq!(g.states(), ["moved"]);
     let talk = g.said.lock().unwrap().clone();
-    assert_eq!(talk.iter().filter(|l| l.contains(&format!("its {MAX_LOST_ANSWERS} tries stand at the bound"))).count(), 1, "{talk:?}");
+    assert_eq!(talk.iter().filter(|l| l.starts_with(&format!("held: line 1 on {DOC} was not shifted (its first failed send was ")) && l.contains(" s ago, past the two-minute deadline)")).count(), 1, "{talk:?}");
     *g.fake.at_send.lock().unwrap() = None;
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sends(), tries + 1, "the line awaits the person's act");
+    assert_eq!(g.fake.sends(), shifts + 1, "the line awaits the person's act");
     assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Send).unwrap(), Resolved::HandedBack);
     g.holds.probe("b-1");
-    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (tries + 3, tries + 1), "the person's send counts afresh: sent, refused once more, shifted and kept");
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst)), (shifts + 3, shifts + 1), "the person's send starts the clock afresh: sent, refused once more, shifted and kept");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -985,8 +990,9 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
 ///
 /// A queue kept in memory for want of its file takes the file once it
 /// empties, and never before (§3c.3; `Custody::Unwritable`): at a board
-/// with no `H.1`, a line held in memory alone and refused at its resend
-/// still stands when the probe — the board now naming its `H.1` —
+/// with no `H.1`, a line held in memory alone and refused `write_busy` at
+/// its resend — reissued at the next probe, the line standing — still
+/// stands when the probe — the board now naming its `H.1` —
 /// establishes the directory, so the next burst is held `behind` it, still
 /// `unwritable`, under the next ordinal; once both are kept, the next line
 /// is copied to the board's file (the mutant that opens the file while
@@ -1003,7 +1009,7 @@ fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
     let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     assert!(first["unwritable"].is_string(), "{first}");
     g.fake.no_head.store(false, Ordering::SeqCst);
-    g.fake.op_rejected.every(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
     g.holds.probe("b-1");
     assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line stands, not taken at its resend");
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the standing line") };
@@ -1011,7 +1017,7 @@ fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
     assert!(behind["unwritable"].is_string(), "in memory alone while a line stands: {behind}");
     let ks: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(ks, [1, 2], "no line renumbered");
-    g.fake.op_rejected.clear();
+    g.fake.op_refused.clear();
     g.holds.probe("b-1");
     assert!(g.lines().is_empty(), "both kept");
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);

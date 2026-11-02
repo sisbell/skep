@@ -13,10 +13,11 @@
 //! until a session that may write stands: one read per document (`GET
 //! /changes`) before its first resend, which answers one question of the
 //! document's head — did its own write land? — and nothing more: (i)
-//! nothing of it landed, send from the head, or, the head's resends having
-//! lost their answer [`MAX_LOST_ANSWERS`] times, hand it to the person as a
-//! refused run (`answers_lost`), dialed never again until the person sends
-//! it; (ii) the in-flight burst landed, the head `done kept` and its
+//! nothing of it landed, send from the head, or, the head's first failed
+//! send standing [`HAND_OVER_DEADLINE`] past, whatever the failure, hand it
+//! to the person as a refused run (`answers_lost`), naming the last failure
+//! and the time elapsed, dialed never again until the person sends it; (ii)
+//! the in-flight burst landed, the head `done kept` and its
 //! position the document's base, as an ack's is (§3c.2). A head no dial of
 //! which left is not read at all: it goes from the head. A row that is not
 //! the head's own landing is no verdict — the person's own later write, a
@@ -33,10 +34,11 @@
 //! current image by one live read, and where each anchor stands at one place
 //! with the span's own units between them, every position the burst names moves
 //! by their one displacement, the shifted frame is written to the line before
-//! it is dialed, and the line is sent again, each shift one try toward the
-//! resend's bound; where the shift is not exact — no anchors, a delete or a
-//! rearrange without its span, an anchor lost or standing at two places, the
-//! span cut or refilled, the read refused, the bound reached — the document is
+//! it is dialed, and the line is sent again, each refusal that shifts it a
+//! failed send of the line, so the shifts stop at its deadline; where the
+//! shift is not exact — no anchors, a delete or a rearrange without its span,
+//! an anchor lost or standing at two places, the span cut or refilled, the
+//! read refused, the deadline passed — the document is
 //! faced `moved`, never rebased inexactly, the verdict kept on the line and the
 //! hands read once since the line's typed state. A rearrange that landed where
 //! the read cannot see it — its row's testimony lost, or the feed's history
@@ -48,7 +50,11 @@
 //! in `k` order across the documents (§3c.5's order, "which keeps each
 //! document's order"), so a `copy` held between two bursts on its source
 //! transcludes the source as it stood when the person wrote it. Each line goes
-//! out through the hold's one reader of a write's answer, as a first dial does.
+//! out through the hold's one reader of a write's answer, as a first dial does,
+//! every failed send of it noted on its clock and its "sent again" said once
+//! per change of the failure; one the board refuses under a code the table
+//! holds nowhere is handed to the person at once, a refused run under the
+//! board's token, since it cannot resolve (§3c.4).
 //! A resend marks its line as one that may have landed before it dials, synced,
 //! and the line stays so through every resend short of its ack and through a
 //! move, so its next read takes a landing it finds as the line's own — after a
@@ -59,11 +65,12 @@ use std::collections::HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, is_lost_answer, line_state, AttestedWhereOwed, BoardSlot, Dialed, HeldState, Holds, MAX_LOST_ANSWERS};
+use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HeldState, Holds, HAND_OVER_DEADLINE};
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind};
@@ -89,8 +96,10 @@ pub(super) enum Unshiftable {
     NoAnchors,
     /// No line of the ordinal stands.
     NoLine,
-    /// The line's lost answers and shifts stand at [`MAX_LOST_ANSWERS`].
-    PastTheBound { tries: u32 },
+    /// The line's first failed send stands its deadline or more past.
+    ///
+    /// `elapsed_ms` is the time since it ([`HAND_OVER_DEADLINE`]).
+    PastTheDeadline { elapsed_ms: u64 },
     /// The image read answered no image: refused, the death signal, no
     /// answer, or runs that are no I-extents.
     Unread(String),
@@ -122,7 +131,7 @@ impl fmt::Display for Unshiftable {
         match self {
             Unshiftable::NoAnchors => write!(f, "the burst carries no anchors"),
             Unshiftable::NoLine => write!(f, "the line stands no longer"),
-            Unshiftable::PastTheBound { tries } => write!(f, "its {tries} tries stand at the bound of {MAX_LOST_ANSWERS}"),
+            Unshiftable::PastTheDeadline { elapsed_ms } => write!(f, "its first failed send was {} s ago, past the two-minute deadline", elapsed_ms / 1000),
             Unshiftable::Unread(why) => write!(f, "the document's image could not be read: {why}"),
             Unshiftable::NoSpan => write!(f, "its anchors name no span of the units it edits"),
             Unshiftable::AnchorLost(which) => write!(f, "its {which} anchor is in the document no longer"),
@@ -542,9 +551,12 @@ impl Holds {
     /// document the read sends from the head, or whose landed head leaves
     /// lines behind it; never one whose head awaits the person's act, which
     /// is read never, nor one the read left undecided, nor one whose head it
-    /// hands to the person ([`Holds::hand_over`]). A head no dial of which
-    /// left (`sent` false) is not read at all: nothing of it can stand on the
-    /// board, so it goes from the head.
+    /// hands to the person: a head no landing of which the read found, its
+    /// first failed send [`HAND_OVER_DEADLINE`] past or more
+    /// ([`Holds::hand_over`]). The read runs first, so a landing it finds is
+    /// kept and never handed over. A head no dial of which left (`sent`
+    /// false) is not read at all: nothing of it can stand on the board, so it
+    /// goes from the head — or is handed over, where its deadline has passed.
     fn resume_doc(&self, session: &SessionEntry, doc: &str) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
@@ -583,13 +595,16 @@ impl Holds {
                 }
             }
             ReadOutcome::SendFromHead => {
-                // Nothing of the head has landed: past its lost answers'
-                // bound it is the person's, dialed never again (§3c.4; skep
-                // #608).
-                let lost = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&head.k).map_or(0, |given| given.lost)).unwrap_or(0);
-                if lost >= MAX_LOST_ANSWERS {
-                    self.hand_over(session, &head, lost);
-                    return false;
+                // Nothing of the head has landed: its first failed send at
+                // the deadline or past it, it is the person's, dialed never
+                // again (§3c.4; skep #716).
+                let clock = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&head.k).and_then(|given| given.first_failed.zip(given.last.clone()))).flatten();
+                if let Some((first_failed, last)) = clock {
+                    let elapsed = self.now().saturating_duration_since(first_failed);
+                    if elapsed >= HAND_OVER_DEADLINE {
+                        self.hand_over(session, &head, &last, elapsed);
+                        return false;
+                    }
                 }
                 self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None, &[]);
                 true
@@ -746,21 +761,29 @@ impl Holds {
     /// dial answered: an ack `done kept`; the line refused as typed against
     /// an older state of its document shifted through the change and dialed
     /// again ([`Holds::shift_and_send`]) — its answer settled here as any
-    /// dial's is, the verdict again shifting it again as far as the bound
-    /// lets it — or, where the shift is not exact, the document faced
-    /// `moved` ([`Holds::mark_moved`]) — the one route to that face — the
-    /// board's verdict kept on the line and the hands whose rows moved it
+    /// dial's is, the verdict again shifting it again as far as the line's
+    /// deadline lets it — or, where the shift is not exact, the document
+    /// faced `moved` ([`Holds::mark_moved`]) — the one route to that face —
+    /// the board's verdict kept on the line and the hands whose rows moved it
     /// named; a hold-class answer or a refused run re-marked and faced, the
     /// line keeping its `sent` — a resend that never left, or one the board
-    /// refused, says nothing of an earlier dial's write (§3c.2) — and a lost
-    /// answer counted against the line ([`MAX_LOST_ANSWERS`]); a
+    /// refused, says nothing of an earlier dial's write (§3c.2); a
     /// reissue-class answer counted against the line and reissued at the
-    /// next probe, so its third `durability` holds it; a refusal the table
-    /// holds nowhere left standing for the next probe, never `done`; the
-    /// death signal left to the caller that ends the session — the session
-    /// that stands resends after its read. `Continue` where the line is
-    /// settled and sending goes on, `Break` where the line's document stops
-    /// at it.
+    /// next probe, so its third `durability` holds it, and a `write_busy`
+    /// past its one reissue left standing for the next probe too; any other
+    /// code of the board's the table holds nowhere handed to the person at
+    /// once, a refused run under the board's token with its verdict verbatim
+    /// and its `sent` kept, through the door a `permanent` refusal takes,
+    /// since it cannot resolve (§3c.4; skep #720); a refusal of the shell's
+    /// own — a request refused before any connection, or an attest that
+    /// could not be composed — left standing for the next probe, never
+    /// `done`; the death signal left to the caller that ends the session —
+    /// the session that stands resends after its read. Every failed send of
+    /// the line ([`Dialed::failure`]) is noted on its clock
+    /// ([`HAND_OVER_DEADLINE`]), and a line standing for the next probe says
+    /// "sent again" where its failure's token differs from the last
+    /// failure's, so once per change. `Continue` where the line is settled
+    /// and sending goes on, `Break` where the line's document stops at it.
     ///
     /// THE LANDED TEST COMES FIRST: this runs for a line
     /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
@@ -768,7 +791,7 @@ impl Holds {
     /// and a landing the read keeps is shifted never.
     fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> ControlFlow<()> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
+        let given = || self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).cloned()).flatten().unwrap_or_default();
         // The line is marked as one that may have landed before its dial
         // leaves (§3c.2's `sent`), synced, so a crash or a refused write
         // between the dial and its answer never leaves a write that may have
@@ -776,18 +799,25 @@ impl Holds {
         // nothing. The mark stands whatever the dial answers, a connection
         // never made among them, and a copy the device refuses is said and
         // the dial made all the same. An attest that could not be composed
-        // dials nothing and marks nothing: the line keeps its own `sent`.
-        let (mut dialed, mut sent) = match self.attest_where_owed(session, &line.frame) {
+        // dials nothing and marks nothing: the line keeps its own `sent`, and
+        // nothing left (`left` false).
+        let (mut dialed, mut sent, mut left) = match self.attest_where_owed(session, &line.frame) {
             Ok(frame) => {
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, Reason { sent: true, ..line.reason.clone() }));
-                (self.dial(session, &frame, given()), true)
+                (self.dial(session, &frame, &given()), true, true)
             }
-            Err(why) => (Dialed::from(why), line.reason.sent),
+            Err(why) => (Dialed::from(why), line.reason.sent, false),
         };
         // The frame the dial sent, for its ack's noting: the line's, or the
         // shifted one.
         let mut frame = Cow::Borrowed(&line.frame);
         loop {
+            // A failed send of the line notes its token on the line's clock:
+            // `Some(true)` where the token differs from the last failure's as
+            // it stood, a line's first failure among them; `Some(false)` where
+            // it repeats it, said already; none where no send failed — an
+            // ack, the death signal, or a dial that never left.
+            let failed = if left { dialed.failure().map(|token| self.note_failure(board_reference, principal, line.k, token)) } else { None };
             match dialed {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &frame, &ack);
@@ -806,9 +836,10 @@ impl Holds {
                     // whose rows moved it since the line's typed state
                     // (§3c.5).
                     let verdict = reason.refusal.clone().unwrap_or(Value::Null);
-                    match self.shift_and_send(session, line.k, &verdict, |shifted| self.dial(session, shifted, given())) {
+                    match self.shift_and_send(session, line.k, &verdict, |shifted| self.dial(session, shifted, &given())) {
                         Ok(shifted) => {
                             sent |= shifted.left;
+                            left = shifted.left;
                             frame = Cow::Owned(shifted.frame);
                             dialed = shifted.dialed;
                         }
@@ -821,23 +852,22 @@ impl Holds {
                         }
                     }
                 }
-                Dialed::Held { reason, .. } => {
+                Dialed::Held { reason, refusal } => {
                     let state = line_state(&reason);
                     let said = reason.cause.clone();
-                    // A lost answer counts one try against the line
-                    // (MAX_LOST_ANSWERS), read off this dial's own answer; the
-                    // read decides at the next probe whether it landed.
-                    let lost = is_lost_answer(&reason);
                     // The line keeps its `sent`, the mark made before the dial
                     // included: a resend that never left, or one the board
-                    // refused, says nothing of an earlier dial's write.
+                    // refused, says nothing of an earlier dial's write. The
+                    // read decides at the next probe whether it landed.
                     let reason = Reason { sent: reason.sent || sent, ..reason };
-                    self.with_principal(board_reference, principal, |ph| {
-                        if lost {
-                            ph.reissues.entry(line.k).or_default().lost += 1;
-                        }
-                        self.remark_line(ph, line.k, reason);
-                    });
+                    self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
+                    // A failure the line stands through for the next probe is
+                    // said once per change; a refused run's face is its
+                    // `held` event, and a dial that never left is the
+                    // board's outage, no failure of the line.
+                    if failed == Some(true) && state == HeldState::Holding {
+                        self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    }
                     self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said), &[]);
                     return ControlFlow::Break(());
                 }
@@ -845,11 +875,36 @@ impl Holds {
                     // The rider's count (§3c.4), per line across its probes:
                     // the third `durability` holds it.
                     self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
-                    self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    if failed != Some(false) {
+                        self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    }
                     return ControlFlow::Break(());
                 }
+                // The board's own verdict under a code the table holds
+                // nowhere, save a `write_busy` past its one reissue: it cannot
+                // resolve, so the line is the person's at once (§3c.4; skep
+                // #720) — a refused run under the board's token with its
+                // verdict verbatim, its `sent` kept, through the door a
+                // `permanent` refusal takes, the lines behind it waiting with
+                // it. A refusal of the board's that reached no dial — a read
+                // the attest's composer made — is the shell's own.
+                Dialed::Faced(Refusal::Board(r)) if left && r.code != "write_busy" => {
+                    let token = r.token();
+                    let reason = Reason { sent, ..Reason::refused(&token, r.body.clone()) };
+                    self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
+                    self.say(format_args!("line {} on {} was not taken ({r}), a code the shell holds no row for; it is handed to the person, who may send it again or drop it", line.k, line.doc));
+                    self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), &[]);
+                    return ControlFlow::Break(());
+                }
+                // A `write_busy` past its one reissue, the line's clock
+                // running on, or a refusal of the shell's own, which dialed
+                // nothing the board judged and starts no clock: the line
+                // stands for the next probe, and the shell's own is said at
+                // each.
                 Dialed::Faced(refusal) => {
-                    self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    if failed != Some(false) {
+                        self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                    }
                     return ControlFlow::Break(());
                 }
                 Dialed::Died => return ControlFlow::Break(()),
@@ -866,9 +921,11 @@ impl Holds {
     /// `site.current` the floor the shifted frame is typed against. In this
     /// order, the first that holds answering why the shift was not made
     /// ([`Unshiftable`]): a line of ordinal `k` stands; it carries anchors; its
-    /// lost answers and shifts together stand below [`MAX_LOST_ANSWERS`] — then
-    /// the shift is counted, one try, so a document another writer keeps moving
-    /// stops the shell at the bound — and one live read is made, `image` over
+    /// first failed send stands less than [`HAND_OVER_DEADLINE`] past — each
+    /// refusal that brings a line here is a failed send of it, noted by the
+    /// caller before it calls, so a document another writer keeps moving stops
+    /// the shell at the line's deadline, the clock alone bounding the shifts —
+    /// and one live read is made, `image` over
     /// the whole content window ([`IMAGE_WINDOW`]) under the session, the one
     /// read of the shift (no `/changes`, no history: the anchors are found at
     /// any age); the anchors found in it at one place each and the span between
@@ -887,14 +944,12 @@ impl Holds {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
         let anchors = line.anchors.as_ref().ok_or(Unshiftable::NoAnchors)?;
-        // The bound (MAX_LOST_ANSWERS): the lost answers and the shifts meet
-        // it as one count of tries; the shift is counted before its read, so
-        // a read that fails is a try too.
-        let tries = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&k).copied().unwrap_or_default().tries()).unwrap_or(0);
-        if tries >= MAX_LOST_ANSWERS {
-            return Err(Unshiftable::PastTheBound { tries });
+        // The line's deadline (HAND_OVER_DEADLINE), read before the shift's
+        // read: past it the line falls to the moved hold, the person's act.
+        let first_failed = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&k).and_then(|given| given.first_failed)).flatten();
+        if let Some(elapsed) = first_failed.map(|first| self.now().saturating_duration_since(first)).filter(|elapsed| *elapsed >= HAND_OVER_DEADLINE) {
+            return Err(Unshiftable::PastTheDeadline { elapsed_ms: millis(elapsed) });
         }
-        self.with_principal(board_reference, principal, |ph| ph.reissues.entry(k).or_default().shifted += 1);
         // The one live read, outside every lock as every dial is.
         let image = match session.board.op(Some(&session.token), &frames::image(&line.doc, 1, IMAGE_WINDOW)) {
             Ok(Answer::Document(v)) => match Rejection::of(&v) {
@@ -920,23 +975,31 @@ impl Holds {
         Ok(Shifted { dialed, frame: shifted, left: true })
     }
 
-    /// Hands a line whose resends lost their answer to the person (§3c.4).
+    /// Hands a line at its deadline to the person (§3c.4).
     ///
-    /// Its lost answers have reached [`MAX_LOST_ANSWERS`] and the read found
-    /// no landing: the line is re-marked a refused run under the shell's
-    /// `answers_lost`, its `sent` kept — so the person's `send` reads before
-    /// it dials, and a landing the read finds then is kept (§3c.5) — and the
-    /// lines behind it wait with it, as behind any refused run, until
-    /// `resolve` sends or drops it. It is said once in the shell's own
-    /// window, and on the `held` event as `refused` (skep #608).
-    fn hand_over(&self, session: &SessionEntry, head: &HeldLine, lost: u32) {
+    /// Its first failed send stands `elapsed` past, [`HAND_OVER_DEADLINE`] or
+    /// more, and the read found no landing: the line is re-marked a refused
+    /// run under the shell's `answers_lost`, its refusal naming `last`, the
+    /// last failure's token, and `elapsed_ms`, its `sent` kept — so the
+    /// person's `send` reads before it dials, and a landing the read finds
+    /// then is kept (§3c.5) — and the lines behind it wait with it, as behind
+    /// any refused run, until `resolve` sends or drops it. It is said once in
+    /// the shell's own window, and on the `held` event as `refused` (skep
+    /// #716).
+    fn hand_over(&self, session: &SessionEntry, head: &HeldLine, last: &str, elapsed: Duration) {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let refusal = Refusal::shell(Name::ANSWERS_LOST, json!({"tries": lost})).to_value();
-        // The count reaches its bound only at a lost answer, which marks the
-        // line `sent`; the line keeps whatever it carries.
+        let refusal = Refusal::shell(Name::ANSWERS_LOST, json!({"last": last, "elapsed_ms": millis(elapsed)})).to_value();
+        // The line keeps its `sent`: a resend marks it before its dial, so a
+        // line resent before its deadline may have landed and is read before
+        // the person's `send` dials it again.
         let reason = Reason { sent: head.reason.sent, ..Reason::refused(Name::ANSWERS_LOST.as_str(), refusal) };
         self.with_principal(board_reference, principal, |ph| self.remark_line(ph, head.k, reason));
-        self.say(format_args!("line {} on {}: {lost} resends lost their answer; it is handed to the person, who may send it again or drop it", head.k, head.doc));
+        self.say(format_args!(
+            "line {} on {}: no landing {} s after its first failed send (last: {last}); it is handed to the person, who may send it again or drop it",
+            head.k,
+            head.doc,
+            elapsed.as_secs()
+        ));
         self.emit_held(session, &head.doc, self.count(board_reference, principal, &head.doc), HeldState::Refused, Some(Name::ANSWERS_LOST.as_str()), &[]);
     }
 
@@ -947,7 +1010,7 @@ impl Holds {
     /// of its document that the shift could not move through the change exactly
     /// ([`Holds::shift_and_send`]: no anchors, a delete or a rearrange without
     /// its span, an anchor lost or at two places, the span between them cut or
-    /// refilled, the read refused, the shifts at their bound) — never from the
+    /// refilled, the read refused, the line's deadline passed) — never from the
     /// read, which judges no move. A moved document is one the shift could not
     /// move through exactly: the exact rebase by identity is the shift, made
     /// where the page's anchors stand at one place each with the span's own

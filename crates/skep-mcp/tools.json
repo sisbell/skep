@@ -2433,7 +2433,7 @@
     },
     {
       "name": "resolve",
-      "description": "The shell's resolve call: your act on a held burst the board refused, whose document moved, or that the shell handed back to you (answers_lost) — \"drop\" marks the line (and the lines behind it in a refused run) dropped, given up for good; \"send\" hands it back to the resend: a line that may have landed (sent true) is read first and kept where it landed, and otherwise sent again, its two-minute clock started afresh. A line still holding or sending is not_resolvable until the board answers or the shell hands it to you; an ordinal that stands no longer is no_such_held. Response: {}.",
+      "description": "The shell's resolve call: your act on a held burst the board refused, whose document moved, or that the shell handed back to you (answers_lost) — \"drop\" marks the line (and the lines behind it in a refused run) dropped, given up for good; \"send\" hands it back to the resend: a line that may have landed (sent true) is read first and kept where it landed, and otherwise sent again, its two-minute clock started afresh; on a moved document, it first records that the changes which moved it have been seen: a document moved again names only the changes since. A line still holding or sending is not_resolvable until the board answers or the shell hands it to you; an ordinal that stands no longer is no_such_held. Response: {}.",
       "inputSchema": {
         "type": "object",
         "properties": {

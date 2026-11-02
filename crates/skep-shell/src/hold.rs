@@ -202,13 +202,14 @@ mod cause {
 
 /// A hand whose row moved a held document (§3c.5; §4b.2's `held` event).
 ///
-/// Each is read off a `/changes` row since the burst's typed state, where
-/// the board refused it as typed against an older state — the one route to
-/// a moved document; the resend's read judges no move: this store's own
-/// key, another key with the label this shell's key store holds for it, an
-/// unsigned hand under local trust, or a row whose testimony the board lost
-/// — the data of the three forms the moved face draws, the strings the
-/// copy's.
+/// Each is read off a `/changes` row since the burst's typed state, or since
+/// the position the person's last `send` on the document acknowledged the
+/// rows through where that is later, where the board refused it as typed
+/// against an older state — the one route to a moved document; the resend's
+/// read judges no move: this store's own key, another key with the label
+/// this shell's key store holds for it, an unsigned hand under local trust,
+/// or a row whose testimony the board lost — the data of the three forms the
+/// moved face draws, the strings the copy's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hand {
     /// `own`, `other`, `bare` or `lost`.
@@ -871,23 +872,43 @@ impl Custody {
 /// [`PrincipalHold::note_position`]: the `base` a hold on that document
 /// takes ([`PrincipalHold::base_of`], §3c.2), the position the resend's
 /// read of the line starts from, read before the burst's dial so an ack
-/// read during the dial never lifts it past the line's own landing — and
-/// the reissues each line's resend has been given and its clock, its first
+/// read during the dial never lifts it past the line's own landing — the
+/// reissues each line's resend has been given and its clock, its first
 /// failed send and its last failure's token, kept across its probes
-/// ([`Reissues`]). An ack touches no standing line's base: a line held keeps
-/// the base it was held at, raised only behind a line kept on its document
-/// (`HeldQueue::done`).
+/// ([`Reissues`]), and the position each line's moved document was
+/// acknowledged through by the person's `send`
+/// ([`PrincipalHold::seen_through`]). An ack touches no standing line's
+/// base: a line held keeps the base it was held at, raised only behind a
+/// line kept on its document (`HeldQueue::done`) and by the person's `send`
+/// on a moved document (`HeldQueue::remark_raised`, [`Holds::resolve`]).
 #[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
     queue: HeldQueue,
     last_acked: HashMap<String, u64>,
     reissues: HashMap<u64, Reissues>,
+    /// The position the person's `send` acknowledged each line's moved
+    /// document through, by the line's ordinal (§3c.4; skep #757).
+    ///
+    /// It is set at the person's `send` on a moved document for each line
+    /// it re-marks, at the position the board's verdict read through — the
+    /// one the line's `base` is raised to ([`Holds::resolve`]) — and taken
+    /// out where the line leaves the queue, as its reissues are
+    /// ([`Holds::done_line`]). The hands a moved face names are read since
+    /// it where it stands past the burst's typed state
+    /// ([`Holds::hands_since_typed_state`]): the rows the person
+    /// acknowledged are named no more. Never the line's `base`, which can
+    /// stand past a burst's typed state for reasons of its own — an ack, a
+    /// line kept before it — and would drop real hands from a first moved
+    /// face. In memory, as the clock is: a relaunch forgets it, and the
+    /// first face after one names the acknowledged hands again, while the
+    /// raised `base` persists.
+    seen_through: HashMap<u64, u64>,
 }
 
 impl PrincipalHold {
     fn new() -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new() }
+        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new(), seen_through: HashMap::new() }
     }
 
     /// Notes `at`, the position of a write of the principal's on `doc`.
@@ -1430,7 +1451,7 @@ impl Holds {
                     self.say(format_args!("line {k} on {doc} was not shifted ({why}); the document is held as moved"));
                     self.mark_moved(board_reference, principal, &doc, Some((k, verdict.clone())));
                     let moved = Reason { cause: cause::MOVED.to_string(), refusal: Some(verdict), sent };
-                    let hands = self.hands_since_typed_state(session, &doc, &moved);
+                    let hands = self.hands_since_typed_state(session, &doc, Some(k), &moved);
                     self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Moved, None, &hands);
                     return OpAnswer::Answered(Ok(answer));
                 }
@@ -1519,7 +1540,7 @@ impl Holds {
     /// Returns `store_halted` where P38 halted the file, and `held_full`
     /// where the principal's queue is full ([`Holds::hold_line`]).
     pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, base: u64) -> Result<Value, Refusal> {
-        let hands = self.hands_since_typed_state(session, &burst.doc, &reason);
+        let hands = self.hands_since_typed_state(session, &burst.doc, None, &reason);
         self.hold_line(&mut self.lock(&session.board_reference), session, burst, reason, base, &hands)
     }
 
@@ -1654,6 +1675,30 @@ impl Holds {
     /// ([`Resolved::HandedBack`]): the probe that resends them is the
     /// caller's to hand the board's feed thread.
     ///
+    /// **The raise** (§3c.4; skep #757). On a moved document the send first
+    /// raises each waiting line's `base` to the position the board's verdict
+    /// read through — the `site.current` of its `arrangement_moved`, kept on
+    /// the line it refused — a base already past it standing, the raise
+    /// written to the held file with the line's re-mark
+    /// (`HeldQueue::remark_raised`), a copy the device refuses said as every
+    /// re-mark's is. The act is the person's acknowledgment of the rows that
+    /// moved the document: each line's read for its own landing starts past
+    /// them, and a document held moved again names only the hands since
+    /// ([`PrincipalHold::seen_through`]). A document no line of which carries
+    /// such a verdict is raised nothing. The lines then re-enter as every
+    /// line does: the read, then the send — a stale send shifted where its
+    /// span is whole, else held moved again.
+    ///
+    /// **No landing is passed over.** A head that landed among the rows the
+    /// raise passes over was kept before the verdict was given: a document
+    /// is held moved by the board's verdict on a dial alone, and every
+    /// resend of a line that may have landed is preceded by the read for its
+    /// own landing from its base (§3c.5), so a landing that read could keep
+    /// was kept first, and the rows the verdict read through hold none. One
+    /// no read can keep — its row's testimony lost, of a kind no read
+    /// confirms — is judged as every resend is, by the board's typed state
+    /// and the shift's test of the span, raised or not.
+    ///
     /// # Errors
     ///
     /// Its refusals come in this order, the first that holds answering:
@@ -1685,10 +1730,26 @@ impl Holds {
                 // before it is sent again (§3c.5) — their clocks cleared, so
                 // each starts afresh at the line's next failed send, the read
                 // run at the next probe, and the refusal faced again where it
-                // recurs; the reissues given stand.
+                // recurs; the reissues given stand. On a moved document each
+                // is raised first, and written so, to the position the board's
+                // verdict read through — `site.current`, on the line the board
+                // refused — the rows up to it the ones the act acknowledges:
+                // the read starts past them, none of them a landing the read
+                // before the verdict's dial could keep, and their hands are
+                // named no more. A document whose lines carry no such verdict
+                // is re-marked as it stands.
                 let waiting: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| (l.k, l.reason.sent)).collect();
+                let through = ph.queue.lines().iter().filter(|l| l.doc == doc && l.reason.cause == cause::MOVED).find_map(|l| l.reason.refusal.as_ref()?["site"]["current"].as_u64());
                 for (k, sent) in waiting {
-                    self.remark_line(ph, k, Reason::of(cause::BEHIND, sent));
+                    let behind = Reason::of(cause::BEHIND, sent);
+                    match through {
+                        Some(at) => {
+                            self.remark_raised_line(ph, k, behind, at);
+                            let seen = ph.seen_through.entry(k).or_insert(at);
+                            *seen = (*seen).max(at);
+                        }
+                        None => self.remark_line(ph, k, behind),
+                    }
                     if let Some(given) = ph.reissues.get_mut(&k) {
                         given.first_failed = None;
                         given.last = None;
@@ -1797,11 +1858,25 @@ impl Holds {
         }
     }
 
+    /// Re-marks one line in place and raises its `base` to `at`, its
+    /// ordinal kept.
+    ///
+    /// It serves the person's `send` on a moved document
+    /// ([`Holds::resolve`]); a copy refused, by the device or past the file's
+    /// re-mark budget, is said on `Talk` as [`Holds::remark_line`] says one,
+    /// the queue taking the reason and the raised base all the same.
+    fn remark_raised_line(&self, ph: &mut PrincipalHold, k: u64, reason: Reason, at: u64) {
+        if let Err(e) = ph.queue.remark_raised(k, reason, at) {
+            self.say(format_args!("line {k}'s re-mark could not be written ({e}); a reopen reads its earlier one"));
+        }
+    }
+
     /// Takes one line out of the queue, whatever the disk did.
     ///
     /// A `done` the device refused is said on `Talk`, and so is a held
     /// file the volume would not remove once every line in it was done —
-    /// the store appends on to it.
+    /// the store appends on to it. The line's reissues and the position
+    /// its moved document was acknowledged through go with it.
     fn done_line(&self, ph: &mut PrincipalHold, k: u64, done: Done) {
         if let Ok(settled) = ph.queue.done(k, done) {
             if let Some(e) = settled.unwritten {
@@ -1812,6 +1887,7 @@ impl Holds {
             }
         }
         ph.reissues.remove(&k);
+        ph.seen_through.remove(&k);
     }
 
     /// Emits the `held` event (§4b.2) at the session's board.
@@ -1833,22 +1909,37 @@ impl Holds {
     /// Returns the hands whose rows moved a document past a burst's typed
     /// state (§3c.5; §4b.2's `held` event).
     ///
-    /// `reason` is the line's as a dial held it. Where it is `moved` with the
-    /// board's verdict — the burst refused `arrangement_moved` — the rows
-    /// since the typed state the verdict echoes (`site.as_of`) are read once,
-    /// `GET /changes?since=<as_of>&under=<doc>&drafts=true` under the
-    /// session: the rows that moved the document past the burst, their hands
-    /// named each once ([`Holds::hands_of`]). A page whose `more` stands names
-    /// the hands of the page it holds, the rows past it unread; a read the
-    /// board answers with no page — a refusal, the death signal, no answer —
-    /// names none, the document faced moved all the same. Any other reason
-    /// reads nothing and names none.
-    fn hands_since_typed_state(&self, session: &SessionEntry, doc: &str, reason: &Reason) -> Vec<Hand> {
+    /// `reason` is the line's as a dial held it, and `k` the line's ordinal
+    /// where it has one — none for a first dial's hold, whose line is
+    /// entered after the read. Where `reason` is `moved` with the board's
+    /// verdict — the burst refused `arrangement_moved` — the rows are read
+    /// once since the later of the typed state the verdict echoes
+    /// (`site.as_of`) and the position the person's last `send` on the
+    /// document acknowledged the rows through, where one stands for line `k`
+    /// ([`PrincipalHold::seen_through`], §3c.4):
+    /// `GET /changes?since=<since>&under=<doc>&drafts=true` under the
+    /// session, the rows that moved the document past the burst and that the
+    /// person has not acknowledged, their hands named each once
+    /// ([`Holds::hands_of`]). So a document moved again after the person's
+    /// `send` names the hands since it alone, and a first moved face names
+    /// every hand since the typed state, whatever the line's `base`, which
+    /// can stand past the typed state for reasons of its own. The
+    /// acknowledgment is the shell's memory, as a line's clock is: a relaunch
+    /// forgets it, and the first face after one names the acknowledged hands
+    /// again, the line's raised `base` persisting. A page whose `more` stands
+    /// names the hands of the page it holds, the rows past it unread; a read
+    /// the board answers with no page — a refusal, the death signal, no
+    /// answer — names none, the document faced moved all the same. Any other
+    /// reason reads nothing and names none.
+    fn hands_since_typed_state(&self, session: &SessionEntry, doc: &str, k: Option<u64>, reason: &Reason) -> Vec<Hand> {
         let typed = match &reason.refusal {
             Some(verdict) if reason.cause == cause::MOVED => verdict["site"]["as_of"].as_u64(),
             _ => None,
         };
-        let Some(since) = typed else { return Vec::new() };
+        let Some(typed) = typed else { return Vec::new() };
+        // The rows the person's `send` acknowledged are named no more.
+        let seen = k.and_then(|k| self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.seen_through.get(&k).copied()).flatten());
+        let since = seen.map_or(typed, |seen| seen.max(typed));
         match session.board.changes(Some(&session.token), &ChangesQuery { since, under: Some(doc), drafts: true, limit: None }) {
             Ok(ChangesAnswer::Page(page)) => self.hands_of(session, &page.changes),
             _ => Vec::new(),

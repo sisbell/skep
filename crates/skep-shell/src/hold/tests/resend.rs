@@ -54,7 +54,15 @@
 //! first failure and never the last, a connection never made starting none,
 //! the deadline the two minutes it is pinned to; its landing kept where the
 //! read finds one, before the hand-over or at the person's `send`; and
-//! "sent again" said once per change of the failure.
+//! "sent again" said once per change of the failure. And THE PERSON's `send`
+//! ON A MOVED DOCUMENT (skep #757): a document moved again after it naming
+//! only the hands since, the rows the person acknowledged named no more, and
+//! a line leaving the queue taking the acknowledgment with it, so a later
+//! line of its ordinal names every hand; an anchored line, its base raised
+//! past the person's own other write of its kind — which a read from the
+//! old base takes for its landing — sent, shifted and kept; and a first
+//! moved face naming every hand since the typed state though the line's
+//! base stands past it.
 
 use super::*;
 
@@ -498,6 +506,42 @@ fn a_moved_documents_hands_are_named_each_once() {
     assert_eq!(hands, [json!({"key": "bare"})], "each hand once: {hands:?}");
     let hands = moved_hands(|_, _| vec![json!({"at": 77, "op": "insert", "docs": [DOC], "attest": {"alg": "x", "sig": "y"}}), row(78, json!("bare"))]);
     assert_eq!((hands.len(), hands[0]["key"].as_str(), hands[1]["key"].as_str()), (2, Some("own"), Some("bare")), "a signed row is the own hand, as the read reads it: {hands:?}");
+}
+
+/// Checks that a first moved face names every hand since the typed state,
+/// though the line's base stands past it (§3c.5; skep #757).
+///
+/// The person's link homed in the document is acked at 80, which moves no
+/// arrangement and makes 80 the base of the next hold there; a burst typed
+/// against the document at 70 — the page's last read of its text — is then
+/// refused as typed against an older state, another writer's change at 75
+/// having moved it. At a first dial, and at a resend of a line held before
+/// any dial, the burst is held moved at the base 80, and its face names the
+/// hand of the change at 75, between the typed state and the base (the
+/// mutant that reads the hands since the line's base draws the first moved
+/// face with no hand).
+#[test]
+fn a_first_moved_face_names_every_hand_since_the_typed_state_though_the_base_stands_past_it() {
+    let link = json!({"op": "make_link", "home": DOC, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}});
+    for at_a_resend in [false, true] {
+        let g = ground();
+        g.fake.next_at.store(81, Ordering::SeqCst);
+        *g.fake.rows.lock().unwrap() = vec![json!({"at": 75, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+        g.holds.note_ack(&g.session, &link, &json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 80}));
+        g.fake.op_rejected.next(1, arrangement_moved(70, 75));
+        if at_a_resend {
+            g.hold(&insert(DOC, json!(["x"]), 70), "unreachable", false);
+            g.holds.probe("b-1");
+        } else {
+            let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), 70), None) else { panic!("held, not faced") };
+            assert_eq!(held["cause"], "moved", "{held}");
+        }
+        let lines = g.lines();
+        assert_eq!((lines[0]["cause"].as_str(), lines[0]["base"].as_u64()), (Some("moved"), Some(80)), "at a resend {at_a_resend}: {lines:?}");
+        let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document faced moved");
+        assert_held_event_declared(&moved);
+        assert_eq!(moved["hands"], json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "at a resend {at_a_resend}: the hand between the typed state and the base: {moved}");
+    }
 }
 
 /// A sibling session of the ground's: a second tab of the same principal,
@@ -1821,4 +1865,145 @@ fn a_moved_documents_lines_keep_each_its_own_sent() {
     assert_eq!(marks(), [("moved".to_string(), Some(true), true), ("moved".to_string(), Some(false), false)], "each line keeps its own, the verdict on the line refused");
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
     assert_eq!(marks(), [("behind".to_string(), Some(true), false), ("behind".to_string(), Some(false), false)], "and through the person's send");
+}
+
+/// Checks that a document moved again after the person's `send` names the
+/// hands since it alone (§3c.4; skep #757).
+///
+/// A burst without anchors — an agent's — refused at its first dial as typed
+/// against an older state, another writer's change at 77 having moved the
+/// document: held moved, its face naming that writer's hand. The person's
+/// `send` acknowledges the rows the board's verdict read through, the line's
+/// base raised to 77; a third hand's change lands at 78, and the next
+/// probe's resend, refused again with no shift exact without anchors, is
+/// held moved: its face names the third hand alone, the change the person
+/// acknowledged named no more, the line standing at its raised base under
+/// the newest verdict (the mutant that reads the hands since the typed state
+/// at every face names the acknowledged hand again beside the new one, and
+/// the person meets the face they sent past).
+#[test]
+fn a_document_moved_again_after_the_persons_send_names_only_the_hands_since() {
+    let g = ground();
+    let typed = g.fake.head();
+    let row = |at: u64, key: String| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
+    *g.fake.rows.lock().unwrap() = vec![row(77, "ff".repeat(32))];
+    let faces = || -> Vec<Value> {
+        let moved: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held && e.data["state"] == "moved").map(|e| e.data).collect();
+        moved.iter().for_each(assert_held_event_declared);
+        moved.iter().map(|d| d["hands"].clone()).collect()
+    };
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 77));
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["x"]), typed), None) else { panic!("held, not faced") };
+    let k = held["held"].as_u64().unwrap();
+    assert_eq!((held["cause"].as_str(), faces()), (Some("moved"), vec![json!([{"key": "other", "fingerprint": "ff".repeat(32)}])]), "the first face names the writer who moved it: {held}");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    assert_eq!(g.lines()[0]["base"], 77, "the base raised to the verdict's `site.current`");
+    g.fake.rows.lock().unwrap().push(row(78, "ee".repeat(32)));
+    g.fake.op_rejected.next(1, arrangement_moved(typed, 78));
+    g.holds.probe("b-1");
+    assert_eq!(faces(), [json!([{"key": "other", "fingerprint": "ee".repeat(32)}])], "moved again: the hand since the person's send alone");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["base"].as_u64(), &lines[0]["refusal"]), (Some("moved"), Some(77), &arrangement_moved(typed, 78)), "{lines:?}");
+}
+
+/// Checks that a line leaving the queue takes the person's acknowledgment of
+/// its document with it (skep #757).
+///
+/// A line typed against the document at 70, refused at a resend as typed
+/// against an older state — two other writers' changes at 75 and 77 having
+/// moved it — is held moved naming both hands; the person's `send`
+/// acknowledges them, and the resend is acked and kept, the queue emptied and
+/// its ordinals starting again. A later burst typed at 70 too — an agent's,
+/// from its last read — takes the line's ordinal, and the board refuses its
+/// resend as typed against an older state: its first moved face names both
+/// hands again, the acknowledgment having gone with the line it was the
+/// person's act on (the mutant that keeps it past the line's `done` reads
+/// the new line's hands since the old line's acknowledgment, and its first
+/// face names none).
+#[test]
+fn a_line_leaving_the_queue_takes_the_persons_acknowledgment_with_it() {
+    let g = ground();
+    g.fake.next_at.store(100, Ordering::SeqCst);
+    let row = |at: u64, key: String| json!({"at": at, "op": "insert", "key": key, "docs": [DOC]});
+    *g.fake.rows.lock().unwrap() = vec![row(75, "dd".repeat(32)), row(77, "ff".repeat(32))];
+    let both = json!([{"key": "other", "fingerprint": "dd".repeat(32)}, {"key": "other", "fingerprint": "ff".repeat(32)}]);
+    let face = || g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").map(|d| d["hands"].clone());
+    let k = g.hold(&insert(DOC, json!(["a"]), 70), "unreachable", false)["held"].as_u64().unwrap();
+    g.fake.op_rejected.next(1, arrangement_moved(70, 77));
+    g.holds.probe("b-1");
+    assert_eq!(face(), Some(both.clone()), "the first line's face");
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "the person's send: sent and kept");
+    let reused = g.hold(&insert(DOC, json!(["b"]), 70), "unreachable", false)["held"].as_u64().unwrap();
+    assert_eq!(reused, k, "the emptied queue's ordinals start again");
+    g.fake.op_rejected.next(1, arrangement_moved(70, 100));
+    g.holds.probe("b-1");
+    assert_eq!((g.lines()[0]["cause"].as_str(), face()), (Some("moved"), Some(both)), "the later line's first face names every hand since its typed state");
+}
+
+/// Checks that an anchored resend after the person's `send` is shifted and
+/// kept (§3c.4; skep #757).
+///
+/// A held delete of `b` and `c` — `Wabc` as the page read it, its `before`
+/// anchor `a`, no `after`, its span the I-run of `b` and `c` — its first
+/// dial's answer lost, `sent`. At the next probe its read finds no landing,
+/// and as the resend reaches the board the person's own other delete, of
+/// `W` — made not through this shell, the `skep` command's — lands and moves
+/// the document: the resend is refused as typed against an older state, the
+/// shift's image read goes unanswered, and the document is held moved, the
+/// person's own hand named. The person's `send` acknowledges the rows the
+/// verdict read through, the base raised to that delete's position; the
+/// next probe's read starts past it — a row of the head's own hand and kind,
+/// no landing of the head's, since the head's dial after it was refused,
+/// which a read from the old base takes for the head's landing — finds
+/// none, and sends the head: refused again, shifted through the change by
+/// one image read, `a` one position earlier and `b` and `c` whole after it
+/// to the document's end, `p` moved by one and typed at the read's state,
+/// acked and kept (the mutant that leaves the base keeps the head on the
+/// person's other delete, and `b` and `c` are never deleted).
+#[test]
+fn after_the_persons_send_an_anchored_resend_whose_span_is_whole_is_shifted_and_kept() {
+    let g = ground();
+    let typed = g.fake.head();
+    // `Wabc` as the page read it: `W` the I-position 10, `a` to `c` 1 to 3.
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 1), run(&i(1), 3)];
+    let k = g.hold_anchored(&delete_at(DOC, 3, 2, typed), spanned(Some(&i(1)), None, &[(&i(2), 2)]), "unreachable", true)["held"].as_u64().unwrap();
+    // The person's own delete of `W` lands as the resend reaches the board.
+    let (fake, own, landed) = (Arc::clone(&g.fake), g.own_key(), AtomicBool::new(false));
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || {
+        if !landed.swap(true, Ordering::SeqCst) {
+            let at = fake.next_at.fetch_add(1, Ordering::SeqCst);
+            fake.rows.lock().unwrap().push(json!({"at": at, "op": "delete", "key": own, "docs": [DOC]}));
+            *fake.image.lock().unwrap() = vec![run(&i(1), 3)];
+            fake.move_arrangement(DOC, at);
+        }
+    }));
+    g.fake.image_unread.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    let current = lines[0]["refusal"]["site"]["current"].as_u64().expect("the verdict's position");
+    assert!(current > typed, "{lines:?}");
+    assert_eq!(
+        (g.fake.sends(), lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0]["base"].as_u64()),
+        (1, Some("moved"), Some(true), Some(0)),
+        "refused stale, its image unread: held moved: {lines:?}"
+    );
+    let moved = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).find(|d| d["state"] == "moved").expect("the document faced moved");
+    assert_eq!(moved["hands"], json!([{"key": "own", "fingerprint": g.own_key()}]), "the person's own other delete: {moved}");
+    *g.fake.at_send.lock().unwrap() = None;
+    g.fake.image_unread.store(false, Ordering::SeqCst);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    assert_eq!(g.lines()[0]["base"].as_u64(), Some(current), "the base raised past the person's own other delete");
+    let _ = g.states();
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sent.len(), g.fake.image_reads.load(Ordering::SeqCst)), (3, 2), "sent, refused once more, shifted by one image read and sent again: {sent:?}");
+    assert_eq!(
+        (sent[2]["p"]["ordinal"].as_str(), sent[2]["width"].as_str(), sent[2]["as_of"].as_u64()),
+        (Some("2"), Some("2"), Some(current)),
+        "`p` moved by one, typed at the read's state: {sent:?}"
+    );
+    assert!(g.lines().is_empty() && !held_file(&g).exists(), "kept, the file gone");
+    assert_eq!(g.states(), ["sending", "kept"], "shifted and kept, never moved again");
 }

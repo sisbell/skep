@@ -40,7 +40,8 @@
 //! an anchor lost or standing at two places, the span cut or refilled, the
 //! read refused, the deadline passed — the document is
 //! faced `moved`, never rebased inexactly, the verdict kept on the line and the
-//! hands read once since the line's typed state. A rearrange that landed where
+//! hands read once since the line's typed state, or since the person's last
+//! `send` on the document where that is later. A rearrange that landed where
 //! the read cannot see it — its row's testimony lost, or the feed's history
 //! reclaimed — leaves the span's own units between its anchors in another
 //! order, so its resend, refused by the board, is held moved and never applied
@@ -833,8 +834,9 @@ impl Holds {
                     // is faced moved — the board's verdict the one judge of a
                     // move — each line keeping its own `sent`, the line
                     // refused keeping the verdict, and named by the hands
-                    // whose rows moved it since the line's typed state
-                    // (§3c.5).
+                    // whose rows moved it since the line's typed state, or
+                    // since the person's last `send` on it where that is
+                    // later (§3c.5).
                     let verdict = reason.refusal.clone().unwrap_or(Value::Null);
                     match self.shift_and_send(session, line.k, &verdict, |shifted| self.dial(session, shifted, &given())) {
                         Ok(shifted) => {
@@ -845,7 +847,7 @@ impl Holds {
                         }
                         Err(why) => {
                             self.say(format_args!("line {} on {} was not shifted ({why}); the document is held as moved", line.k, line.doc));
-                            let hands = self.hands_since_typed_state(session, &line.doc, &reason);
+                            let hands = self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason);
                             self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
                             self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
                             return ControlFlow::Break(());

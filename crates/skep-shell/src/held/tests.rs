@@ -16,9 +16,11 @@
 //! The queue's cells, the queue the memory and the file its copy: a line the
 //! device refused stands in the queue under its ordinal; a re-mark reads
 //! back as the one line it re-marks; a `done` the device refused still
-//! settles its line, a reopen reading the line as held again; and a line
-//! kept at a position is the base of the lines behind it on its document,
-//! in the queue and at a reopen.
+//! settles its line, a reopen reading the line as held again; a line kept
+//! at a position is the base of the lines behind it on its document, in the
+//! queue and at a reopen; and a line re-marked with its base raised — the
+//! person's `send` on a moved document — reads back with the raised base,
+//! never lowered by a raise below it or a later `done` kept below it.
 //!
 //! The budgets' cells: the queue's frames held to the board's frame cap and
 //! its lines to the line budget — a reopened queue past it read whole,
@@ -621,6 +623,55 @@ fn a_line_kept_at_a_position_is_the_base_of_the_lines_behind_it() {
     let raised = [(held[0], 0), (held[2], 42), (held[3], 0), (held[4], 99)];
     assert_eq!(bases(&queue), raised);
     assert_eq!(bases(&live(d.open_file(1, "1.0.1").unwrap())), raised, "a reopen raises them from the `done` line");
+}
+
+/// Checks that a raised re-mark reads back with its base, never lowered.
+///
+/// It is the person's `send` on a moved document (§3c.4; skep #757): three
+/// lines on a document — the first `moved` with the board's verdict, the
+/// second `moved`, both at 4, and the third `behind` at 99. The second,
+/// re-marked `behind` and raised to 40, takes both, its copy on disk and
+/// spending the re-mark budget as a re-mark does; the first, re-marked
+/// `behind` and raised to 2, below its base, takes the reason and keeps its
+/// base — a raise is never a lowering; the third, raised to 40 below its 99
+/// under the reason it carries, writes nothing, and nor do a raise the
+/// second carries already and a line not standing. A reopen reads one line
+/// per ordinal with the raised base and the new reason, its re-mark budget
+/// spent as the writer spent it; and a `done` of the first kept at 20,
+/// below the raised base, leaves the second at 40, in the queue and at a
+/// reopen (the mutant writer that keeps the base off its line relaunches
+/// the base below the rows the person acknowledged; the one that sets the
+/// base to the position lowers the line past it, and its read takes a row it
+/// passed for its own landing again).
+#[test]
+fn a_raised_remark_reads_back_with_its_base_and_no_later_done_lowers_it() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let verdict = json!({"resp": "rejected", "op": "insert", "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": 2, "current": 40}});
+    let moved = Reason { cause: "moved".into(), refusal: Some(verdict), sent: true };
+    let k1 = queue.hold("1.0.1.0.1", None, 4, json!({"op": "insert"}), None, moved).unwrap().k;
+    let k2 = queue.hold("1.0.1.0.1", None, 4, json!({"op": "delete"}), None, Reason::of("moved", false)).unwrap().k;
+    let k3 = queue.hold("1.0.1.0.1", None, 99, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k;
+    let spent = |queue: &HeldQueue| queue.disk.as_ref().map_or(0, |d| d.remark_bytes);
+    let (written, budget) = (file_len(&tmp), spent(&queue));
+    queue.remark_raised(k2, Reason::of("behind", false), 40).unwrap();
+    assert!(file_len(&tmp) > written && spent(&queue) > budget, "the raise is on disk, and spends the re-mark budget");
+    queue.remark_raised(k1, Reason::of("behind", true), 2).unwrap();
+    let (written, budget) = (file_len(&tmp), spent(&queue));
+    queue.remark_raised(k2, Reason::of("behind", false), 40).unwrap();
+    queue.remark_raised(k3, Reason::of("behind", false), 40).unwrap();
+    queue.remark_raised(99, Reason::of("behind", false), 40).unwrap();
+    assert_eq!((file_len(&tmp), spent(&queue)), (written, budget), "a reason and base the line carries, a raise below a standing base, and a line not standing write nothing");
+    let marks = |queue: &HeldQueue| queue.lines().iter().map(|l| (l.k, l.base, l.reason.clone())).collect::<Vec<_>>();
+    let raised = vec![(k1, 4, Reason::of("behind", true)), (k2, 40, Reason::of("behind", false)), (k3, 99, Reason::of("behind", false))];
+    assert_eq!(marks(&queue), raised, "raised, never lowered");
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert_eq!((marks(&reopened), spent(&reopened)), (raised.clone(), spent(&queue)), "a reopen reads the raised base, and counts its line as a re-mark");
+    queue.done(k1, Done::Kept { at: Some(20) }).unwrap();
+    let kept = raised[1..].to_vec();
+    assert_eq!(marks(&queue), kept, "a `done` kept below the raised base leaves it");
+    assert_eq!(marks(&live(d.open_file(1, "1.0.1").unwrap())), kept, "and so does a reopen");
 }
 
 /// Checks that every line form reads back as it was held (§3c.2).

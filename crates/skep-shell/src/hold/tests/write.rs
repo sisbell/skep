@@ -10,9 +10,13 @@
 //! state held moved at its first dial where it carries no anchors, the
 //! board's verdict on its line and the hand that moved the document named,
 //! and a moved line with the verdict reading `moved` and taking a moved
-//! document's acts; THE SHIFT at a first dial (skep #442): a stale burst
-//! whose anchors stand with the span between them whole shifted and landing
-//! within the call, one cell per op in what the displacement moves; the
+//! document's acts; the person's `send` on a moved document raising each
+//! waiting line's base to the verdict's `site.current`, in the queue and on
+//! disk, a base past it standing, and raising none where no line carries a
+//! verdict naming a position (skep #757); THE SHIFT at a first dial (skep
+//! #442): a stale burst whose anchors stand with the span between them
+//! whole shifted and landing within the call, one cell per op in what the
+//! displacement moves; the
 //! shifted frame on the line, marked sent, before the shifted dial, and a
 //! relaunch after that dial's answer is lost reading the landed test at the
 //! shifted positions and keeping the line; a cut span, a lost anchor,
@@ -325,9 +329,10 @@ fn a_burst_refused_as_typed_against_an_older_state_is_held_moved_at_its_first_di
 /// A line held `moved` with the board's verdict as its refusal reads `moved`
 /// — its state, the `held` event's — never `refused` for the refusal beside
 /// it (the mutant that reads the refusal first faces it a refused run);
-/// `resolve(send)` hands it back `behind`, the probe then sending and keeping
-/// it and the burst held behind it; and `resolve(drop)` drops a second such
-/// line, its document then `kept`.
+/// `resolve(send)` hands it back `behind`, its base raised to the verdict's
+/// `site.current` (§3c.4) and the burst held behind it, which awaited no
+/// act, at its own, the probe then sending and keeping both; and
+/// `resolve(drop)` drops a second such line, its document then `kept`.
 #[test]
 fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     let verdict = arrangement_moved(40, 45);
@@ -341,8 +346,8 @@ fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     assert_eq!((lines[0]["cause"].as_str(), &lines[0]["refusal"]), (Some("moved"), &verdict), "{lines:?}");
     assert_eq!(g.states(), ["moved", "holding"], "the moved line says `moved`, the burst behind it `holding`");
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
-    let causes: Vec<String> = g.lines().iter().map(|l| l["cause"].as_str().unwrap_or("?").to_string()).collect();
-    assert_eq!(causes, ["behind", "behind"], "handed back");
+    let handed: Vec<(String, Option<u64>)> = g.lines().iter().map(|l| (l["cause"].as_str().unwrap_or("?").to_string(), l["base"].as_u64())).collect();
+    assert_eq!(handed, [("behind".to_string(), Some(45)), ("behind".to_string(), Some(0))], "handed back, the moved line's base raised to the verdict's `site.current`");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 2, "both sent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
@@ -350,6 +355,71 @@ fn a_moved_line_with_the_boards_verdict_takes_a_moved_documents_acts() {
     assert_eq!(g.states(), ["moved"]);
     assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
     assert_eq!((g.states(), g.lines().len()), (vec!["kept".to_string()], 0), "the drop of the document's one line says `kept`");
+}
+
+/// Checks that the person's `send` on a moved document raises its waiting
+/// lines' bases to the verdict's `site.current` (§3c.4; skep #757).
+///
+/// Two lines held on a document at the session's open, 80 — the first a
+/// lost answer's, `sent: true`, the second held after the person's link
+/// homed in the document was acked at 99, which moves no arrangement, so its
+/// base is 99 — and another writer's change at 95: the board refuses the
+/// first line's resend as typed against an older state, its verdict reading
+/// through 95, and both stand `moved`, the verdict on the first. The
+/// person's `send` re-marks both `behind`, each keeping its own `sent`, the
+/// first's base raised to 95 and the second's standing at 99, past it — in
+/// the queue, and on disk as the last line of each ordinal (the mutant that
+/// leaves the bases reads the rows the person acknowledged again, and may
+/// take the person's own other write among them for a line's landing; the
+/// one that sets each base to the position lowers the second's to 95; the
+/// one that raises the queue alone relaunches the bases below the rows).
+#[test]
+fn the_persons_send_on_a_moved_document_raises_each_waiting_lines_base_to_the_verdicts_current() {
+    let g = writer_at(80);
+    g.fake.next_at.store(100, Ordering::SeqCst);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 95, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let k1 = g.hold(&insert(DOC, json!(["a"]), 70), "unreachable", true)["held"].as_u64().unwrap();
+    let link = json!({"op": "make_link", "home": DOC, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}});
+    g.holds.note_ack(&g.session, &link, &json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 99}));
+    let k2 = g.hold(&insert(DOC, json!(["b"]), 70), "behind", false)["held"].as_u64().unwrap();
+    g.fake.op_rejected.next(1, arrangement_moved(70, 95));
+    g.holds.probe("b-1");
+    let marks = || -> Vec<(u64, String, Option<bool>, Option<u64>)> {
+        g.lines().iter().map(|l| (l["held"].as_u64().unwrap_or(0), l["cause"].as_str().unwrap_or("?").to_string(), l["sent"].as_bool(), l["base"].as_u64())).collect()
+    };
+    assert_eq!(marks(), [(k1, "moved".to_string(), Some(true), Some(80)), (k2, "moved".to_string(), Some(false), Some(99))], "the document moved at the first line's resend");
+    assert_eq!(g.lines()[0]["refusal"], arrangement_moved(70, 95), "the verdict on the line the board refused");
+    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    assert_eq!(
+        marks(),
+        [(k1, "behind".to_string(), Some(true), Some(95)), (k2, "behind".to_string(), Some(false), Some(99))],
+        "the first raised to the verdict's `site.current`, the second past it standing"
+    );
+    let text = std::fs::read_to_string(held_file(&g)).unwrap();
+    let last = |k: u64| file_lines(&text).into_iter().rfind(|l| l["held"] == k).map(|l| (l["cause"].as_str().unwrap_or("?").to_string(), l["base"].as_u64()));
+    assert_eq!((last(k1), last(k2)), (Some(("behind".to_string(), Some(95))), Some(("behind".to_string(), Some(99)))), "each raise on disk: {text}");
+}
+
+/// Checks that the person's `send` raises no base where no line of the
+/// moved document carries a verdict naming a position (§3c.4).
+///
+/// A line held `moved` with no verdict beside it, and one whose verdict
+/// names its `site.current` as no natural, give the raise no position: the
+/// person's `send` re-marks the line `behind`, its base standing where it
+/// was held, though the person's later ack on the document stands past it
+/// (the mutant that raises to a position of its own choosing — the last ack
+/// the shell noted there — reads past rows no verdict read through).
+#[test]
+fn the_persons_send_on_a_moved_document_with_no_verdict_raises_no_base() {
+    let unnatural = json!({"resp": "rejected", "op": "insert", "code": "arrangement_moved", "disposition": "permanent", "site": {"as_of": 40, "current": "45"}});
+    for (cell, refusal) in [("no verdict", None), ("a verdict naming no natural position", Some(unnatural))] {
+        let g = ground();
+        let k = g.hold_for(&insert(DOC, json!(["a"]), 40), Reason { cause: "moved".to_string(), refusal, sent: false }).unwrap()["held"].as_u64().unwrap();
+        g.holds.note_ack(&g.session, &insert(DOC, json!(["z"]), 40), &json!({"resp": "ack", "at": 60}));
+        assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack, "{cell}");
+        let lines = g.lines();
+        assert_eq!((lines[0]["cause"].as_str(), lines[0]["base"].as_u64()), (Some("behind"), Some(0)), "{cell}: {lines:?}");
+    }
 }
 
 /// Checks that a stale burst whose span stands whole is shifted and lands.

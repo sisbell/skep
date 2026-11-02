@@ -48,11 +48,18 @@
 //! raises to it the `base` of every line held after it on its document
 //! ([`HeldQueue::done`]), in the queue as the `done` is written and again at
 //! a reopen from that `done` line, so no line is rewritten to carry it
-//! (§3c.2). A line's frame is rewritten by one act alone, the shift of a
-//! burst the board refused as typed against an older state of its document
-//! ([`HeldQueue::rewrite`], skep #442): a `held` line of its ordinal
-//! carrying the shifted frame, synced before the shifted frame is dialed,
-//! so a relaunch reads the positions the shell last sent, never the page's.
+//! (§3c.2). The person's `send` on a moved document raises a line's `base`
+//! to the position the board's verdict read through
+//! ([`HeldQueue::remark_raised`], §3c.4): a `held` line of its ordinal
+//! carrying the raised base beside its new reason, which the reader takes in
+//! the earlier line's place as it takes a re-mark. Neither raise lowers a
+//! base: a base already past the position stands, and a later `done` kept
+//! below a raised base leaves it. A line's frame is rewritten by one act
+//! alone, the shift of a burst the board refused as typed against an older
+//! state of its document ([`HeldQueue::rewrite`], skep #442): a `held` line
+//! of its ordinal carrying the shifted frame, synced before the shifted
+//! frame is dialed, so a relaunch reads the positions the shell last sent,
+//! never the page's.
 //!
 //! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
 //! header member, or a middle line that is not a whole line of the two
@@ -167,11 +174,12 @@ pub const MAX_HELD_LINES: usize = 4096;
 /// many times over — a head of kilobytes re-marked thousands of times, the
 /// largest line the writer copies re-marked once. A shift of the line's
 /// frame ([`HeldQueue::rewrite`]) spends the budget a whole frame too, as a
-/// re-mark does, and the hold bounds the shifts a line takes. Past it a
-/// re-mark is taken in the queue alone, its copy refused as a copy the
-/// device refused is ([`HeldQueue::remark`]): a reopen reads the reason —
-/// and the frame — copied last, and the resend's read decides the line
-/// from there.
+/// re-mark does, and the hold bounds the shifts a line takes; a raise of its
+/// base at the person's `send` ([`HeldQueue::remark_raised`]) is a re-mark,
+/// and spends it as one. Past it a re-mark is taken in the queue alone, its
+/// copy refused as a copy the device refused is ([`HeldQueue::remark`]): a
+/// reopen reads the reason — and the frame and the base — copied last, and
+/// the resend's read decides the line from there.
 const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 
 /// The largest ordinal a line may carry: `2^53 − 1`.
@@ -418,9 +426,14 @@ pub struct HeldLine {
     /// held under (§3c.2), read before the burst's dial so it is never past
     /// the line's own landing. A line held before it on `doc` and kept at a
     /// later position raises it to that position ([`HeldQueue::done`]), so
-    /// its read starts past that landing. An ack of a later write raises it
-    /// never: the read takes no row for a move, and a row of the shell's
-    /// own that is not the line's landing is no verdict.
+    /// its read starts past that landing; and the person's `send` on a moved
+    /// document raises it to the position the board's verdict read through
+    /// ([`HeldQueue::remark_raised`], §3c.4), so its read starts past the
+    /// rows the person acknowledged, none of them its landing — a line is
+    /// held moved by the board's verdict on a dial alone, after the read for
+    /// its own landing. An ack of a later write raises it never: the read
+    /// takes no row for a move, and a row of the shell's own that is not the
+    /// line's landing is no verdict.
     pub base: u64,
     /// The wire frame, with no `attest` (§3c.2): the page's as composed, or
     /// as the shell last shifted it ([`HeldQueue::rewrite`]).
@@ -991,6 +1004,44 @@ impl HeldQueue {
             return Ok(());
         }
         line.reason = reason;
+        line.time = now_ms();
+        let bytes = held_line_bytes(line);
+        match self.disk.as_mut() {
+            Some(d) => d.write_remark(&bytes),
+            None => Ok(()),
+        }
+    }
+
+    /// Re-marks a standing line and raises its `base` to `at`.
+    ///
+    /// It is the raise the person's `send` on a moved document writes
+    /// (§3c.4; skep #757), beside the one a line kept on its document makes
+    /// behind it ([`HeldQueue::done`]): `at` is the position the board's
+    /// verdict on the document read through, the rows up to it the ones the
+    /// act acknowledges, so the line's read for its own landing starts past
+    /// them (§3c.5). The line takes `reason`, and its `base` is raised to
+    /// `at` where `at` is past it — a base already past `at` stands, never
+    /// lowered. It appends one `held` line of its ordinal carrying both,
+    /// synced, which the reader takes in the earlier line's place as it takes
+    /// a re-mark, so a reopen reads the raised base; a `done` kept below it
+    /// later leaves it standing, in the queue and at a reopen alike, since
+    /// either raise takes the greater. A reason and a base the line already
+    /// carries change nothing and write nothing. The queue takes both
+    /// whatever the disk did. A line not standing is left alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a copy refused — by the device, or past the file's
+    /// [`MAX_HELD_REMARK_BYTES`], which a raise spends as a re-mark does — for
+    /// the caller to say (a reopen then reads the earlier reason and base).
+    pub fn remark_raised(&mut self, k: u64, reason: Reason, at: u64) -> io::Result<()> {
+        let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
+        let base = line.base.max(at);
+        if line.reason == reason && line.base == base {
+            return Ok(());
+        }
+        line.reason = reason;
+        line.base = base;
         line.time = now_ms();
         let bytes = held_line_bytes(line);
         match self.disk.as_mut() {

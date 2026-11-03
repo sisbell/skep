@@ -480,17 +480,18 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
     assert_eq!(entry["docs"], serde_json::json!([m1]), "the pinned address, not the head m2");
 
     // The base's shape, each a permanent refusal and a clean no-op: once a
-    // member exists the memberless base and the birth shape are superseded
-    // (the shot must name the member it was staged from); an extent past
-    // the base's count; a base outside the chain; a run whose stated
-    // origin is not the document that minted it.
+    // member exists the birth shape — no base at all — is superseded (the
+    // shot must name a base); an extent past the base's count — the
+    // memberless base's own pre-chain arrangement holds the one atom, and
+    // never floats to the head's three; a base outside the chain; a run
+    // whose stated origin is not the document that minted it.
     let d = draft_with(port, &bare, "abc");
     let before = head(port);
-    assert_refused(
-        &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[])),
-        "base_superseded",
-    );
     assert_refused(&op(port, Some(&signed), &publish(CLAIMANT_DOC1, None, None, &[])), "base_superseded");
+    assert_refused(
+        &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 2)), None, &[])),
+        "base_extent_too_large",
+    );
     assert_refused(
         &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((&m2, 9)), None, &[])),
         "base_extent_too_large",
@@ -504,6 +505,19 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
         "bad_run",
     );
     assert_eq!(head(port), before, "a refused shot commits nothing");
+    // The memberless base — the document itself, named by a draft begun
+    // before any version — is no refusal once a member stands: the shot
+    // lands as the FIRST member's next daughter, m1.2 beside m1.1, holding
+    // nothing (no runs, and the pre-chain arrangement holds nothing past
+    // the one position the copy took), the head m2 unmoved.
+    let beside = acked_addr(&op(
+        port,
+        Some(&signed),
+        &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[]),
+    ));
+    assert_eq!(beside, format!("{m1}.2"), "version 1's next daughter, never a trunk member");
+    assert_eq!(content_extent(port, &beside), 0, "an empty member");
+    assert_eq!(content_extent(port, CLAIMANT_DOC1), 3, "the bare address still floats to the head m2");
     sd.shutdown();
 }
 

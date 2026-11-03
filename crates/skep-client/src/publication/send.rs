@@ -37,10 +37,13 @@
 //! → one re-sign with the skipped deposits dropped — presence re-read for
 //! every `retract` and `read_with` entry — under a fresh `id`; `unparseable`
 //! on a request carrying an optional member → the older-board arm;
-//! `base_superseded` → the bare document's base met at the board where its
-//! first member stands, past a race the caller's re-read of the base did not
-//! see, naming that member; the shot's own table's other codes → the
-//! library's own fault; `withheld`, `signed_session_required`,
+//! `base_superseded` → the board's refusal of a request naming NO base
+//! while `doc` holds a member — a shape this library never sends at the
+//! document form, where the request's base is the one `draft_base` read (a
+//! draft begun from the bare document lands as the first member's daughter,
+//! told as its standing), so the arm stands for a raw caller of this
+//! library, naming the trunk's first member; the shot's own table's other
+//! codes → the library's own fault; `withheld`, `signed_session_required`,
 //! `doc_not_registered` as the merge names them; everything else the board's
 //! refusal verbatim.
 
@@ -212,9 +215,13 @@ pub enum Refusal {
     /// A minting records-less request whose answer was lost and whose
     /// edition claim no read finds: the publication may already stand.
     MayAlreadyStand,
-    /// `base_superseded`: the request's base is the bare document and the
-    /// board holds its first member — published past a race the caller's
-    /// re-read of the base did not see; nothing was published.
+    /// `base_superseded`: the request named no base and the board holds
+    /// `doc`'s first member — the birth shape once the chain has opened;
+    /// nothing was published. A request this library builds at the document
+    /// form always names its base, the one read off the board, and a draft
+    /// begun from the bare document lands as the first member's daughter
+    /// ([`super::Standing::SupersededFirst`]), so the arm is reached by a raw
+    /// caller of this library alone.
     BaseSuperseded {
         /// The first member of the request's `doc`, `⟨doc⟩.1`.
         first: Address,

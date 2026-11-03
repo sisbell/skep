@@ -168,7 +168,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  anchors?: Anchors;\n",
         "  standing?: BaseStanding;\n",
         "  left_behind: string[];\n",
-        "export type BaseStanding = 'at_head' | 'behind' | 'first';\n",
+        "export type BaseStanding = 'at_head' | 'behind' | 'first' | 'superseded_first';\n",
         "  before: string | null;\n",
         "  span?: { start: string; width: string }[];\n",
         "  site: { addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number };\n",

@@ -447,9 +447,11 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
 /// field typed by one string literal with its value and an open shape ending
 /// `, …`, the empty answer as `{}` — and the open and count cards the shapes
 /// of the panel's members; the open card names each standing the shell's
-/// `BaseStanding` spells and its two refusals of a base by the shell's names
-/// — `base_unrecorded` with its members and reasons, `base_superseded` with
-/// its members — and the confirm card the shot's `base_superseded` arm; the
+/// `BaseStanding` spells and its one refusal of a base by the shell's name —
+/// `base_unrecorded` with its members and reasons — and no `base_superseded`
+/// (the shell refuses no standing; a draft begun before version 1 is told
+/// `superseded_first`), while the confirm card names the library's
+/// `base_superseded {first}` arm; the
 /// selection's runs, the switches, a destination and an answer are schema'd
 /// as the shell's `Run`, `Switches`, `Destination` and `OriginAnswer` spell
 /// them (SP-24). A shape the shell changes in one place alone would tell
@@ -525,11 +527,13 @@ fn the_publication_cards_state_the_shells_shapes() {
         let standing = standing.trim_matches('\'');
         assert!(open.contains(standing), "the open card names the standing {standing}: {open}");
     }
-    let (unrecorded, superseded) = (skep_shell::Name::BASE_UNRECORDED.as_str(), skep_shell::Name::BASE_SUPERSEDED.as_str());
+    let (unrecorded, superseded) = (skep_shell::Name::BASE_UNRECORDED.as_str(), "base_superseded");
     assert!(open.contains(&format!("{unrecorded} {{draft, doc, reason}}")) && ["no_record", "other_chain", "free_standing"].iter().all(|reason| open.contains(reason)), "the open card names base_unrecorded's members and reasons: {open}");
-    assert!(open.contains(&format!("{superseded} {{draft, doc, first}}")), "the open card names base_superseded's members: {open}");
+    assert!(!open.contains(superseded), "the open refuses no standing — a draft begun before version 1 is told superseded_first: {open}");
+    assert!(open.contains("superseded_first (") && open.contains("beside version 1 as its daughter"), "the open card tells the fourth standing and where its member lands: {open}");
     let confirm = entry("publication_confirm")["description"].as_str().expect("the confirm card");
-    assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm card names the shot's base_superseded arm: {confirm}");
+    assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm card names the library's base_superseded arm: {confirm}");
+    assert!(confirm.contains("superseded_first where version 1 was"), "the confirm card re-states a first draft's standing moved: {confirm}");
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
     let answers: BTreeSet<String> = alias("OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();

@@ -39,7 +39,10 @@
 //! member, and a walk of the feed for it fails where the history is
 //! reclaimed; the probe needs neither, and names no head member. The
 //! successor rule is the merge's (`merge::reads`), copied here, since this
-//! module stands outside the merge's feature.
+//! module stands outside the merge's feature. Every standing is told, none
+//! refused: a draft begun from the bare document whose first member now
+//! stands ([`Standing::SupersededFirst`]) publishes beside that member as
+//! its daughter, as a draft behind the head publishes beside its base.
 //!
 //! **The family left behind** ([`left_behind`]) is every draft `also` names,
 //! then — where this publication becomes the head — every other draft of
@@ -93,10 +96,12 @@ pub enum Standing {
     /// The base is the bare document and its chain is empty: the next
     /// publication is its first member.
     First,
-    /// The base is the bare document and its first member stands: the board
-    /// refuses the shot `base_superseded`.
+    /// The base is the bare document and its first member stands: the next
+    /// publication lands beside `first` as its daughter, and the head does
+    /// not move — a draft begun before any version, published beside
+    /// version 1.
     SupersededFirst {
-        /// `doc`'s first member, `⟨doc⟩.1`.
+        /// `doc`'s first member, `⟨doc⟩.1`, the daughter's parent.
         first: Address,
     },
 }
@@ -179,8 +184,9 @@ pub fn standing(p: &Publisher<'_>, doc: &Address, base: &Address) -> Result<Stan
 /// caller's order, whose recorded base is the rendering draft's
 /// (`inputs.base`): one `doc_metadata` of each, read as [`draft_base`] reads
 /// the draft's, the rendering draft and those `also` names read never. At
-/// [`Standing::Behind`] the publication lands as a daughter and leaves no
-/// other draft behind. None at the mint form, which has no base.
+/// [`Standing::Behind`] and [`Standing::SupersededFirst`] the publication
+/// lands as a daughter and leaves no other draft behind. None at the mint
+/// form, which has no base.
 ///
 /// # Errors
 ///

@@ -2,7 +2,7 @@
 //! draft of a source, shares the source's whole surface into it and records
 //! where it began — and the base's move at every shot the draft renders.
 
-use skep_arrangement::{AsOf, Deposit, DraftBase, HasM5, InsertError, Shot, StageError, Vstream};
+use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, HasM5, InsertError, Shot, StageError, Vstream};
 use skep_kernel::{Attestation, Kernel};
 use skep_namespace::{HasM3, PrincipalId};
 use tempfile::tempdir;
@@ -246,6 +246,78 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
         k.snapshot().world().m5().draft_base(&d),
         Some(&DraftBase { base: e1_1, extent: n(3), source: e1 })
     );
+}
+
+/// A DRAFT BEGUN BEFORE VERSION 1 PUBLISHES BESIDE IT (B3-S10; PUB-2.44 —
+/// nothing is refused for want of a base): two drafts are staged from the
+/// bare document while its chain is empty, each recording the bare document
+/// as its base at the count the copy took; a deposit lands in the bare
+/// document's own arrangement after the copies; a sibling staged after it
+/// publishes version 1. The first draft's shot — the bare document still its
+/// base, as staged — lands as VERSION 1's DAUGHTER, `D.1.1`, carrying what
+/// the BARE DOCUMENT holds past the copy's extent (the deposit, which
+/// version 1 does not hold: the tail is the base's own arrangement, never
+/// the head's) after the draft's words, the head unmoved and the draft's
+/// base moved to the daughter; the second such draft lands `D.1.2`. The
+/// birth shape, no base at all, is still refused once a member stands.
+#[test]
+fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_documents_tail() {
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c, memberless
+    let (d, _) = vs.stage(PrincipalId(1), &pdoc()).expect("the first draft, off the bare document");
+    let (d2, _) = vs.stage(PrincipalId(1), &pdoc()).expect("the second draft, off the bare document");
+    for draft in [&d, &d2] {
+        assert_eq!(
+            k.snapshot().world().m5().draft_base(draft),
+            Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc() }),
+            "the bare document, at the count the copy took"
+        );
+    }
+    // A deposit into the bare document after the copies: its own
+    // arrangement grows to four while the chain is still empty.
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared(), now(&k))
+        .expect("a declared deposit at the memberless edition's fresh position");
+    // A sibling staged after the deposit publishes version 1 off the bare
+    // document at four: nothing carried, and the head holds a b c z.
+    let (s, _) = vs.stage(PrincipalId(1), &pdoc()).expect("the sibling");
+    let readable = readable_by(PrincipalId(1));
+    let first = Shot { base: Some(base(&pdoc(), 4)), draft: Some(s.clone()), also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let (e1, _) = vs.publish(P1, &pdoc(), &first, &readable).expect("version 1");
+    assert_eq!(e1, vdoc());
+    assert_eq!(bytes_of(&k.snapshot(), &e1), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()], "version 1 holds the three alone");
+    // The first draft's own word, then its shot off the base the board
+    // records for it — the bare document at three.
+    let (w, _) = vs
+        .insert(P1, &d, vp(1, 4), vec![val(b"w")], Deposit::Undeclared, now(&k))
+        .expect("the draft's own word");
+    let shot = Shot { base: Some(base(&pdoc(), 3)), draft: Some(d.clone()), also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&d, &w, 1)] };
+    let (daughter, _) = vs.publish(P1, &pdoc(), &shot, &readable).expect("the draft begun before version 1 lands beside it");
+    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "version 1's daughter");
+    {
+        let s = k.snapshot();
+        assert_eq!(
+            bytes_of(&s, &daughter),
+            [b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"w".to_vec(), b"z".to_vec()],
+            "the runs, then the bare document's tail past the copy — the deposit version 1 never held"
+        );
+        assert_eq!(s.world().m5().content_count(&pdoc()), n(4), "the tail is the bare document's own arrangement past three, which holds four");
+        assert_eq!(reading_surface(s.world().m3(), &pdoc()), e1, "a daughter moves no head");
+        assert_eq!(
+            s.world().m5().draft_base(&d),
+            Some(&DraftBase { base: daughter.clone(), extent: n(5), source: pdoc() }),
+            "the base moved to the daughter, at its whole count, the source kept"
+        );
+    }
+    // The second draft begun before version 1: the next daughter of version
+    // 1, never a trunk member.
+    let second = Shot { base: Some(base(&pdoc(), 3)), draft: Some(d2.clone()), also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    let (daughter2, _) = vs.publish(P1, &pdoc(), &second, &readable).expect("the second such draft lands beside version 1 too");
+    assert_eq!(daughter2, a(&[1, 0, 1, 0, 3, 1, 2]));
+    assert_eq!(bytes_of(&k.snapshot(), &daughter2), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec(), b"z".to_vec()]);
+    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no trunk member was minted");
+    // The birth shape — no base at all — is still refused once a member stands.
+    let birth = Shot { base: None, draft: None, also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
+    assert!(matches!(rejected(vs.publish(P1, &pdoc(), &birth, &readable)), skep_arrangement::PublishError::BaseSuperseded));
 }
 
 /// A draft the board held no base for — a plain mint, never staged — gains

@@ -52,7 +52,7 @@ use skep_arrangement::{
     Pairing, PublishWorld, ReinstateError, Run, Shot, ShotRun, VPos,
 };
 use skep_kernel::{LockKey, Seq, Staging, TxnError, MAX_TXN_BYTES};
-use skep_namespace::{HasM3, M3State};
+use skep_namespace::{first_version_address, HasM3, M3State};
 
 use super::nullify::retraction_tuple;
 use super::supersession::supersession_claim;
@@ -296,8 +296,11 @@ impl From<EmitCoreError> for PublicationError {
 ///    in the commit that gives the edition its first member: at the
 ///    document form a request whose deposits claim is refused
 ///    `Publish(ClaimRefused)` naming the edition where `doc`'s trunk
-///    already holds a member — the trunk's head, the read `base_superseded`
-///    makes (skep #692); the mint form's edition is memberless by
+///    already holds a member — the trunk's head, the read the shot's
+///    admission makes of the base (skep #692); a shot off the bare document
+///    onto such a chain lands as the first member's daughter and is refused
+///    here all the same where it claims, the claim being no daughter's; the
+///    mint form's edition is memberless by
 ///    construction. Then the plan ([`plan_deposits`]) — THE VALIDATION's
 ///    (3), (4) and (5), the first fault in list order refusing the whole as
 ///    `Plan` — the same world the daemon's composer read for the body it
@@ -892,7 +895,8 @@ where
     ///
     /// It opens one transaction over the union of the shot's keys —
     /// `doc`'s head key, `content_lock_key` of the document it projects to,
-    /// the base's `version_lock_key` where the base is a member — each
+    /// the base's `version_lock_key` where the base is a member and the
+    /// first member's where the base is the bare document — each
     /// named draft's `link_lock_key` where records will be minted in it (a
     /// run of its identity re-inserted: the rendering `draft`'s, and each
     /// `also` draft's), the rendering draft's `content_lock_key` where
@@ -956,7 +960,11 @@ where
 /// function over the request so the set is held by a test without a kernel.
 ///
 /// The shot's — `doc`'s head key, `content_lock_key` of the document it
-/// projects to, the base's `version_lock_key` where the base is a member,
+/// projects to, the base's `version_lock_key` where the base is a member and
+/// the first member's (`D.1`'s) where the base is the bare document — taken
+/// whether or not the chain holds a member yet, since this function cannot
+/// know, and while it holds none the shot mints `D.1` itself under the head
+/// key every shot takes —
 /// the trunk's `link_lock_key` where the deposits claim at the document form
 /// — or the account's `document_lock_key` at the mint form; each named
 /// draft's `link_lock_key` where a run of its identity is re-inserted (its
@@ -976,8 +984,12 @@ fn publication_lock_keys(
             let trunk = trunk_of(doc);
             let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
             if let Some(base) = &shot.base {
-                if base.member != trunk {
-                    keys.push(M3State::version_lock_key(&base.member));
+                // A member's own version key; the first member's for the
+                // bare document, whose daughter the shot mints once a
+                // member stands.
+                let frontier = if base.member == trunk { first_version_address(&trunk) } else { Some(base.member.clone()) };
+                if let Some(frontier) = frontier {
+                    keys.push(M3State::version_lock_key(&frontier));
                 }
             }
             // The edition claim at the document form lands in the

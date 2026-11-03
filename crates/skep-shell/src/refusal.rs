@@ -131,21 +131,11 @@ impl Name {
     /// of a draft the board records no base for. The act is staging the
     /// draft with `stage` from the version it is to publish after, which
     /// records its base. A `publication.confirm` whose re-read finds the base
-    /// gone answers it too.
+    /// gone answers it too. It is the one refusal of a base: every STANDING
+    /// of a recorded base is told on the panel and refused never, a draft
+    /// begun from the bare document whose first member now stands among them
+    /// (`superseded_first`), which publishes beside that member.
     pub const BASE_UNRECORDED: Name = Name("base_unrecorded");
-    /// A `publication.open` at the document form for a draft whose first
-    /// version another publication made.
-    ///
-    /// The draft was staged from the bare document while its chain was
-    /// empty, and the chain's first member now stands
-    /// (`skep_client::publication::standing`, `SupersededFirst`; D4 (a)): the
-    /// board refuses the draft's shot, so the shell refuses it first, before
-    /// any panel. The detail names the `draft`, the `doc` and `first`, the
-    /// document's first member; the act is a draft staged from a version,
-    /// the draft's words pasted into it by identity. A `publication.confirm`
-    /// whose re-read finds the first member landed since the panel answers
-    /// it too.
-    pub const BASE_SUPERSEDED: Name = Name("base_superseded");
     /// A publication read met `withheld` on a document it needs.
     ///
     /// Brief 1's `Fault::Unreadable`; the detail names the `doc`.

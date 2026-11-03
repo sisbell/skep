@@ -1953,9 +1953,13 @@ staged off one head both land, the first on the trunk and the second
 under it, and nothing is refused for want of a base. A memberless
 document is its own base (`base` = `doc`), and `base` absent is that
 same **birth version** (PUB-2.34): the chain's first member, `.1`,
-either way. Once a member exists the memberless base and the birth
-shape are superseded — the shot must name the member it was staged
-from (`base_superseded`). A member address given as `doc` is the
+either way while the chain is empty. Once a member exists the two part:
+the memberless base — a draft begun before any version — yields the
+FIRST member's daughter, in the nested form (`1.0.1.0.1.1.1`), its
+`base_extent` and its carried tail read against the document's own
+pre-chain arrangement, the one its copy was taken from; `base` absent
+names nothing to land under and is refused (`base_superseded`) — the
+one shape that code names. A member address given as `doc` is the
 document's shot.
 
 **The member's arrangement** (PUB-2.40, PUB-2.41, PUB-2.42): `runs` is
@@ -2320,7 +2324,7 @@ commits nothing:
 | `bad_run` | permanent | — | a run's `origin` is not the document that minted its `i_start`, or `i_start` is not a content element |
 | `private_source_versionless` | permanent | — | `doc` is PRIVATE — a private document has no chain (PUB-2.9's flag-`true` face) |
 | `base_not_in_chain` | permanent | — | `base` is a document, or a member, outside `doc`'s chain |
-| `base_superseded` | permanent | — | `doc` already has a member and the shot names the memberless base (or none) |
+| `base_superseded` | permanent | — | the shot names no base and `doc` already has a member |
 | `base_extent_too_large` | permanent | — | `base_extent` exceeds the base's arranged content count |
 | `withheld` | reorder | `addr` = the origin's document | a run's origin is not readable to the session principal |
 | `already_published` | permanent | `addr` = the member the words were published into | a draft-native run overlaps the `from` of a correspondence record homed in the draft (the twin fence, above) — read inside the transaction, after the shot's own table through the source gate and ahead of the count and the existence walk |
@@ -2343,8 +2347,8 @@ document named and ⟨O⟩ the origin withheld:
 * `withheld` — "⟨O⟩ is not shared with you — the shot windows it.
   Remove that window, or wait for its owner's grant." Nothing about
   how much of ⟨O⟩ the shot named (PUB-8.5).
-* `base_superseded` — "⟨D⟩ has versions now — name the version your
-  draft was staged from as the base."
+* `base_superseded` — "the publish names no base and ⟨D⟩ has versions
+  now — name the version the draft was staged from."
 * `base_not_in_chain` — "the base is not a version of ⟨D⟩."
 * `bad_run`, `base_extent_too_large` — the client's own arithmetic is
   wrong; there is no user-facing act to offer.
@@ -3359,9 +3363,10 @@ none of.
 **`publish`** — the SHOT: append the next member of `doc`'s
 version chain, born published, in one commit, its arrangement the
 client's own `runs` (§The publish shot and head-float). `base` is the
-member the draft was staged from — `doc` itself while the chain is
-empty — with `base_extent` the number of content positions the staged
-copy took, both present or neither (neither is the birth version);
+member the draft was staged from — `doc` itself where the draft was
+staged before any version — with `base_extent` the number of content
+positions the staged copy took, both present or neither (neither is
+the birth version);
 `draft` names the RENDERING draft — the draft whose arrangement the
 runs render, the home of the kept places and of the records for its own
 identity — whose runs are re-inserted as fresh identity under `doc`'s

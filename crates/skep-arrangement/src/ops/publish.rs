@@ -18,13 +18,13 @@ use num_traits::Zero;
 use skep_address::{Address, Nat};
 use skep_content::{ContentStretch, ContentWrite, HasContent, Piece, Val};
 use skep_kernel::{Seq, Staging, TxnError, WorldState};
-use skep_namespace::{HasM3, M3Rec, M3State};
+use skep_namespace::{first_version_address, HasM3, M3Rec, M3State};
 
 use super::{
     allocate_for_placement, allocate_stretch_for_placement, head_lock_key, Vstream,
     MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
-use crate::chain::{published_target, trunk_head, trunk_of};
+use crate::chain::{birth_version, published_target, trunk_head, trunk_of};
 use crate::error::PublishError;
 use crate::ownership::{gate_write, Caller};
 use crate::run::Run;
@@ -265,16 +265,22 @@ where
     /// head's daughter (PUB-2.44); nothing is positionally applied to an
     /// advanced head and nothing is refused for want of a base (PUB-2.38). A
     /// memberless document is its own base, and the base absent is the birth
-    /// shape (PUB-2.34); either way the shot mints the birth version, the
-    /// chain's first member `D.1`, and either form is admitted only while the
-    /// chain is empty — once a member exists the document's own pre-chain
-    /// arrangement is no base, and the shot must name the member it was staged
-    /// from (`BaseSuperseded`). The two are one destination and not one
-    /// arrangement: with no base there is no extent and so no carried tail,
-    /// and a deposit that landed in the memberless document after the render
-    /// stays in the pre-chain arrangement the member supersedes. A client
-    /// wanting the deposit cell honored at birth names the document itself as
-    /// its base, with the extent its render took.
+    /// shape (PUB-2.34); while the chain is empty either form mints the birth
+    /// version, the chain's first member `D.1`. Once a member exists the two
+    /// part: the document itself named as the base — a draft begun before
+    /// any version — is a base like any member's, and the shot lands as the
+    /// FIRST member's daughter (`mint_version(D.1)`, `D.1.1`), the anchor
+    /// [`birth_version`]; the base absent names nothing to land under, and
+    /// the shot is refused `BaseSuperseded` — the one shape that code names.
+    /// The two are one destination and not one arrangement: with no base
+    /// there is no extent and so no carried tail, and a deposit that landed
+    /// in the memberless document after the render stays in the pre-chain
+    /// arrangement the member supersedes. A client wanting the deposit cell
+    /// honored at birth names the document itself as its base, with the
+    /// extent its render took; so does a draft begun before any version,
+    /// whose extent and carried tail are read against the document's own
+    /// pre-chain arrangement, the one its copy was taken from, never the
+    /// head's.
     ///
     /// **The member's arrangement** (PUB-2.40, PUB-2.41, PUB-2.42): each
     /// supplied run by its origin document — the trunk (PUB-2.15) of the
@@ -389,9 +395,12 @@ where
     /// `version_lock_key`), `content_lock_key(trunk_of(doc))` (the
     /// fresh-identity mints), and the base's own version key when the base is
     /// a member — the daughter chain's frontier, taken since which chain the
-    /// member joins is decided inside. Every origin is read off the
-    /// transaction's working world; no origin is locked (a window is a
-    /// reference).
+    /// member joins is decided inside — or the first member's (`D.1`'s) when
+    /// the base is the bare document, taken whether or not the chain holds a
+    /// member yet: the caller cannot know, and while the chain is empty the
+    /// shot mints `D.1` itself under the head key every shot takes. Every
+    /// origin is read off the transaction's working world; no origin is
+    /// locked (a window is a reference).
     ///
     /// A member address given as `doc` is gated as named — its registration
     /// and ω — and then projected to its document (PUB-2.15): the shot is
@@ -457,8 +466,11 @@ where
     /// named drafts — then each run's origin document in run order,
     /// each run's shape (`BadRun`) settled as its origin document is derived →
     /// `PrivateSourceVersionless` (slot 5: a private document has no chain,
-    /// PUB-2.9's `true` face) → the base's shape: `BaseNotInChain` →
-    /// `BaseSuperseded` → `BaseExtentTooLarge` → the source gate (slot 6,
+    /// PUB-2.9's `true` face) → the base's shape: `BaseSuperseded` where the
+    /// shot names no base and a member stands (the absent base alone); where
+    /// it names one, `BaseNotInChain` → `BaseExtentTooLarge`, the bare
+    /// document as the base checked for its extent against its own
+    /// arrangement and never refused superseded → the source gate (slot 6,
     /// PUB-6.23; PUB-8.1's second constraint): `readable` consulted per
     /// distinct origin document, in run order, skipping the document's own
     /// I-space and every run the base already arranges (PUB-6.24's carried
@@ -495,8 +507,12 @@ where
         let trunk = trunk_of(doc);
         let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
         if let Some(base) = &shot.base {
-            if base.member != trunk {
-                keys.push(M3State::version_lock_key(&base.member));
+            // A member's own version key; the first member's for the bare
+            // document, whose daughter the shot mints once a member stands —
+            // taken unconditionally, since which it is is decided inside.
+            let frontier = if base.member == trunk { first_version_address(&trunk) } else { Some(base.member.clone()) };
+            if let Some(frontier) = frontier {
+                keys.push(M3State::version_lock_key(&frontier));
             }
         }
         // The attested arm (signed ops): `transact` itself where this handle
@@ -552,8 +568,9 @@ where
 /// keys are the caller's, `publish`'s own being the chain's head key
 /// ([`head_lock_key`]`(doc)`), `content_lock_key` of the document `doc`
 /// projects to, and the base's own `version_lock_key` where the base is a
-/// member and not that document — a caller composing several stagings under
-/// one transaction supplies the union of their keys. It carries no
+/// member and not that document, or the first member's where the base is
+/// that document itself — a caller composing several stagings under one
+/// transaction supplies the union of their keys. It carries no
 /// attestation either: the signature slot is the transaction's, filled by
 /// the caller's `transact_attested` as `publish` fills it under the handle's
 /// arm.
@@ -873,9 +890,12 @@ fn admit<'s, W: HasM3 + HasM5>(
     }
     // The base's shape, and the anchor the member is minted under — judged
     // against the head every floating reader answers from, read before the
-    // member is minted.
+    // member is minted. The base is the request's, as staged: nothing here
+    // reads it against the record the board keeps for a draft.
     let head = trunk_head(m3, doc);
     let anchor = match &shot.base {
+        // The birth shape names nothing to land under once a member stands:
+        // the one shape `BaseSuperseded` refuses.
         None => {
             if head.is_some() {
                 return Err(PublishError::BaseSuperseded);
@@ -883,20 +903,24 @@ fn admit<'s, W: HasM3 + HasM5>(
             trunk.clone()
         }
         Some(base) => {
-            if base.member == trunk {
-                if head.is_some() {
-                    return Err(PublishError::BaseSuperseded);
-                }
-            } else if trunk_of(&base.member) != trunk {
+            if base.member != trunk && trunk_of(&base.member) != trunk {
                 return Err(PublishError::BaseNotInChain);
             }
+            // The extent against the base's own arrangement — for the bare
+            // document, its pre-chain arrangement, which `content_count`
+            // answers for the address named and never floats to the head.
             if base.extent > m5.content_count(&base.member) {
                 return Err(PublishError::BaseExtentTooLarge);
             }
             // The head/pinned distinction is the commit's own (PUB-2.39's
-            // head/older): the memberless document, or a base that is still
-            // the head ⇒ the trunk's next member; else the base's daughter.
-            if base.member == trunk || head.as_ref() == Some(&base.member) {
+            // head/older): a base that is still the head ⇒ the trunk's next
+            // member; else the base's daughter. The bare document as the
+            // base is the birth version while the chain is empty, and the
+            // FIRST member's daughter once a member stands — a draft begun
+            // before any version lands beside version 1.
+            if base.member == trunk {
+                birth_version(m3, doc).unwrap_or_else(|| trunk.clone())
+            } else if head.as_ref() == Some(&base.member) {
                 trunk.clone()
             } else {
                 base.member.clone()

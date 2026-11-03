@@ -288,7 +288,8 @@ pub struct Inputs {
     /// the version its `stage` recorded (the bare document while the chain
     /// is empty) or the member its newest publication made, with the extent
     /// the board records, so the shot lands after it, or as its daughter
-    /// where the trunk has moved past it (PUB-2.44; B3-S10).
+    /// where the trunk has moved past it (PUB-2.44; B3-S10) — for the bare
+    /// document, as the first member's daughter once a member stands.
     pub base: Option<(Address, u64)>,
     /// `D`, the RENDERING draft — the draft whose arrangement the selection
     /// renders, the home of the kept places and of the records for its own

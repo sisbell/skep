@@ -575,12 +575,16 @@ impl World {
                 }
             }
         }
-        // The member's address.
+        // The member's address: the trunk's next member off the head, a
+        // daughter off any other member, and off the bare document — a
+        // draft begun before any version — the FIRST member's daughter once
+        // a member stands; the birth shape, no base, is refused then.
         let base = frame["base"].as_str().map(str::to_string);
         let member = match self.trunk_head.get(&trunk).cloned() {
             Some(head) if base.as_deref() == Some(head.as_str()) => format!("{trunk}.{}", head.rsplit('.').next().unwrap().parse::<u64>().unwrap() + 1),
             Some(_) => {
-                let b = base.clone().unwrap_or(trunk.clone());
+                let Some(b) = base.clone() else { return refused("base_superseded", json!({})) };
+                let b = if b == trunk { format!("{trunk}.1") } else { b };
                 let k = 1 + self.docs.keys().filter(|m| m.strip_prefix(&format!("{b}.")).is_some_and(|rest| !rest.contains('.'))).count();
                 format!("{b}.{k}")
             }
@@ -2216,6 +2220,68 @@ fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
     assert!(dialer.ops().iter().all(|op| op == "doc_metadata"), "no feed read: {:?}", dialer.ops());
     dialer.world().history_busy = SCAN_BUSY_REISSUES as usize + 1;
     assert_eq!(standing(&p, &a(X), &a(X)), Err(Fault::Busy), "a refused probe is that fault, never an absent member");
+}
+
+/// THE LANDED WALK FROM THE BARE DOCUMENT (B3-S10's draft begun before
+/// version 1): two drafts are staged from the memberless `X`, each holding
+/// `X`'s three positions by reference and words of its own. The first's
+/// shot births `X.1`, and its landed test from the walk finds it there — the
+/// chain was empty at the send, the shot made its first member. The second's
+/// base is still the bare document, so its shot lands as `X.1`'s DAUGHTER,
+/// `X.1.1`, and its landed test from the walk finds it: the first member
+/// probed and passed over (it holds the first draft's words, not the
+/// second's), then the first member's daughters in order — never `X.2`, the
+/// trunk's second member, which no bare-based shot mints.
+#[test]
+fn the_landed_walk_from_a_bare_base_finds_the_first_member_then_its_daughters_and_never_the_second_member() {
+    let (first_draft, second_draft) = ("1.0.1.0.37", "1.0.1.0.38");
+    let (x1, x11, x2) = (format!("{X}.1"), format!("{X}.1.1"), format!("{X}.2"));
+    let (mut world, _) = World::base();
+    world.text(X, 1, "xyz");
+    world.doc(X, true, ACCOUNT, vec![run(X, 1, 3)]);
+    world.text(first_draft, 1, "ab");
+    world.doc(first_draft, false, ACCOUNT, vec![run(X, 1, 3), run(first_draft, 1, 2)]);
+    world.text(second_draft, 1, "wxyz");
+    world.doc(second_draft, false, ACCOUNT, vec![run(X, 1, 3), run(second_draft, 1, 4)]);
+    for d in [first_draft, second_draft] {
+        world.stage(d, X);
+    }
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let bare = |draft: &str, selection: Vec<Run>| Inputs { doc: Some(a(X)), base: Some((a(X), 3)), draft: a(draft), also: Vec::new(), selection, notes: Vec::new(), readable_drafts: vec![a(draft)], published: vec![a(X)], ..inputs() };
+    let request_of = |inputs: &Inputs| -> Request {
+        let e = enumerate(&p, inputs).expect("enumerated");
+        let panel = panel(&p, inputs, &e).expect("the panel");
+        let Built::Request(request) = build(&p, inputs, &e, &panel, &Confirmed::default()).expect("built") else { panic!("inert") };
+        *request
+    };
+    // The chain empty at the send: the shot births `X.1`, and the walk
+    // finds it at the first member.
+    let first = bare(first_draft, vec![run(X, 1, 3), run(first_draft, 1, 2)]);
+    let mut request = request_of(&first);
+    let Sent::Acknowledged(ack) = send(&p, &first, &mut request).unwrap() else { panic!("acknowledged") };
+    assert_eq!(ack.member.to_string(), x1, "the birth version");
+    dialer.clear();
+    assert!(matches!(landed(&p, &first, &request, Base::Walk).unwrap(), Verdict::Passed(Ack { ref member, via: AckVia::Walk, .. }) if member.to_string() == x1), "the walk from the bare document finds the first member the shot made");
+    // The chain opened since: the second draft's shot lands as `X.1`'s
+    // daughter, and the walk passes over `X.1` to find it there.
+    let second = bare(second_draft, vec![run(X, 1, 3), run(second_draft, 1, 4)]);
+    let mut request = request_of(&second);
+    let Sent::Acknowledged(ack) = send(&p, &second, &mut request).unwrap() else { panic!("acknowledged") };
+    assert_eq!(ack.member.to_string(), x11, "beside version 1, as its daughter");
+    dialer.clear();
+    let verdict = landed(&p, &second, &request, Base::Walk).unwrap();
+    assert!(matches!(verdict, Verdict::Passed(Ack { ref member, via: AckVia::Walk, .. }) if member.to_string() == x11), "the walk finds the daughter: {verdict:?}");
+    let probed: Vec<String> = dialer.frames("doc_metadata").iter().filter_map(|f| f["doc"].as_str().map(str::to_string)).collect();
+    assert_eq!(probed.first(), Some(&x1), "the first member first: {probed:?}");
+    assert!(probed.len() > 1 && probed[1..].iter().all(|d| *d == x11), "then its first daughter, and nothing else: {probed:?}");
+    assert!(dialer.frames("image").iter().all(|f| f["d"].as_str() != Some(x2.as_str())) && !probed.contains(&x2), "never the trunk's second member");
+    // Nothing of the second draft's landed: the walk ends at the first
+    // absent daughter, `X.1.2`, not found.
+    let mut other = request.clone();
+    other.runs[1] = run(second_draft, 2, 3);
+    assert_eq!(landed(&p, &second, &other, Base::Walk).unwrap(), Verdict::NotFound);
 }
 
 /// THE FAMILY LEFT BEHIND (skep #744): every draft `also` names, in its

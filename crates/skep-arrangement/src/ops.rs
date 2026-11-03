@@ -580,8 +580,9 @@ where
 /// Public for the caller that opens a transaction of its own over
 /// [`stage_publish`]: the shot's keys are this, `content_lock_key` of the
 /// document the shot names projects to, and the base's own `version_lock_key`
-/// where the base is a member — and a caller composing several stagings under
-/// one transaction supplies the union of their keys, this among them.
+/// where the base is a member, or the first member's where the base is the
+/// bare document — and a caller composing several stagings under one
+/// transaction supplies the union of their keys, this among them.
 pub fn head_lock_key(doc: &Address) -> LockKey {
     M3State::version_lock_key(&trunk_of(doc))
 }

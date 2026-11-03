@@ -24,7 +24,11 @@
 //! publish row at the record's position); the walk from the request's own `base` for a
 //! records-less shot — the trunk's next member, then the base's daughters
 //! in order until the first absent, the merge landing's `standing_member`
-//! generalised to the base it holds; and `edition_claims(D)` for a minting
+//! generalised to the base it holds; for the bare document as the base, the
+//! chain's first member — the chain may have been empty at the send, the
+//! shot then minting it — then that member's daughters, among which a draft
+//! begun before any version lands once a member stands, and never the
+//! trunk's second member; and `edition_claims(D)` for a minting
 //! records-less request, the claims kept where their home's owner is the
 //! person and their stored type is the claim type exactly. A member found
 //! passes where it holds THE RUNS over its first `placed` positions — its
@@ -188,7 +192,8 @@ pub enum Base {
     /// The draft's records naming a draft-native run of the request.
     Records,
     /// The walk from the request's own base — the trunk's next member, then
-    /// the base's daughters.
+    /// the base's daughters; for the bare document as the base, the chain's
+    /// first member, then its daughters.
     Walk,
     /// The edition claim read from the draft, at the mint form.
     EditionClaims,
@@ -280,18 +285,29 @@ pub(crate) fn landed_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, r
                 return if inputs.mint.is_some() { landed_with(door, p, inputs, request, Base::EditionClaims) } else { walk_birth(door, inputs, request) };
             };
             let Some(trunk) = inputs.doc.as_ref() else { return Ok(Verdict::NotFound) };
-            let mut members: Vec<Address> = Vec::new();
-            if let Some(next) = next_member(trunk, base_member) {
-                members.push(next);
-            }
-            for member in members {
-                match test_member(door, inputs, request, &member, AckVia::Walk)? {
+            // The member the shot mints where the base is the head, and the
+            // member whose daughters it lands among where it is not: for a
+            // member base the trunk's next member and the base itself; for
+            // the BARE DOCUMENT as the base the chain's first member both
+            // ways — the chain may have been empty at the send, the shot
+            // then minting `⟨trunk⟩.1`, and a draft begun before any version
+            // lands among that member's daughters once a member stands.
+            // Never the trunk's second member, which no bare-based shot
+            // mints.
+            let (next, under) = if base_member == trunk {
+                let Some(first) = parse_address(&format!("{trunk}.1")) else { return Ok(Verdict::NotFound) };
+                (Some(first.clone()), first)
+            } else {
+                (next_member(trunk, base_member), base_member.clone())
+            };
+            if let Some(next) = next {
+                match test_member(door, inputs, request, &next, AckVia::Walk)? {
                     Verdict::NotFound => {}
                     other => return Ok(other),
                 }
             }
             for k in 1u64.. {
-                let daughter = parse_address(&format!("{base_member}.{k}")).expect("a daughter's address");
+                let daughter = parse_address(&format!("{under}.{k}")).expect("a daughter's address");
                 match door.metadata(&daughter.to_string()) {
                     Err(Fault::NoSuchDocument(_)) => return Ok(Verdict::NotFound),
                     Err(e) => return Err(e),
@@ -338,7 +354,8 @@ fn walk_birth(door: &Door<'_>, inputs: &Inputs, request: &Request) -> Result<Ver
 }
 
 /// Returns the trunk member after `base`: its one version component plus
-/// one; `None` where `base` is the memberless document itself.
+/// one; `None` where `base` is the memberless document itself, whose walk
+/// the caller starts at the chain's first member instead.
 fn next_member(trunk: &Address, base: &Address) -> Option<Address> {
     let (trunk, base) = (trunk.to_string(), base.to_string());
     let rest = base.strip_prefix(&format!("{trunk}."))?;

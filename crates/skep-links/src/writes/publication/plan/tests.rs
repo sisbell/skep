@@ -1,5 +1,5 @@
 use skep_address::{validate, Nat, Tumbler};
-use skep_arrangement::{head_lock_key, MintedRun, ShotRun, VPos};
+use skep_arrangement::{head_lock_key, Base, MintedRun, ShotRun, VPos};
 use skep_kernel::LockKey;
 use skep_namespace::M3State;
 
@@ -183,6 +183,30 @@ fn a_family_publication_takes_each_also_drafts_link_key_and_no_content_key_for_i
     let other_alone = shot(vec![other.clone()], vec![ShotRun { origin: other.clone(), run: run(&other_ca(1), 1) }]);
     let keys = publication_lock_keys(&target, &other_alone, &[None], &none);
     assert!(keys.contains(&M3State::link_lock_key(&other)) && !keys.contains(&M3State::link_lock_key(&draft)), "{keys:?}");
+}
+
+/// THE LOCK SET's VERSION KEY: a member base takes its own `version_lock_key`
+/// — the daughter chain's frontier — and the BARE DOCUMENT as the base takes
+/// the FIRST member's, `D.1`'s, whether or not the chain holds a member yet:
+/// once one stands the shot mints `D.1`'s daughter, and while none does the
+/// shot mints `D.1` itself under the head key every shot takes, which the
+/// set holds in either case; the birth shape, no base, takes neither.
+#[test]
+fn a_bare_base_takes_the_first_members_version_key_and_a_member_base_its_own() {
+    let (edition, draft) = (a(&[1, 0, 1, 0, 3]), a(&[1, 0, 1, 0, 1]));
+    let (first, second) = (a(&[1, 0, 1, 0, 3, 1]), a(&[1, 0, 1, 0, 3, 2]));
+    let target = PublishTarget::Document(edition.clone());
+    let none = PublishDeposits::default();
+    let shot = |base: Option<Base>| Shot { base, draft: Some(draft.clone()), also: vec![], runs: vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }] };
+    let bare = publication_lock_keys(&target, &shot(Some(Base { member: edition.clone(), extent: Nat::from(0u32) })), &[None], &none);
+    assert!(bare.contains(&head_lock_key(&edition)) && bare.contains(&M3State::content_lock_key(&edition)), "the shot's own: {bare:?}");
+    assert!(bare.contains(&M3State::version_lock_key(&first)), "the bare document's base takes the first member's version key: {bare:?}");
+    assert!(!bare.contains(&M3State::version_lock_key(&second)), "never the trunk's second member's: {bare:?}");
+    let member = publication_lock_keys(&target, &shot(Some(Base { member: second.clone(), extent: Nat::from(3u32) })), &[None], &none);
+    assert!(member.contains(&M3State::version_lock_key(&second)) && !member.contains(&M3State::version_lock_key(&first)), "a member base takes its own: {member:?}");
+    let birth = publication_lock_keys(&target, &shot(None), &[None], &none);
+    assert!(!birth.contains(&M3State::version_lock_key(&first)) && !birth.contains(&M3State::version_lock_key(&second)), "the birth shape takes no member's key: {birth:?}");
+    assert!(birth.contains(&head_lock_key(&edition)), "{birth:?}");
 }
 
 /// The two commons values M7 spells for the plan, and the read-with test:

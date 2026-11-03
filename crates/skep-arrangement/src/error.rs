@@ -346,11 +346,11 @@ pub enum StageError {
 ///   it discloses nothing about what exists.
 /// * `BaseNotInChain` — `base` names a document that is neither the document
 ///   nor a member of its chain (PUB-2.37: a shot lands under its own base).
-/// * `BaseSuperseded` — the base is absent, or names the document itself,
-///   while the document already has a member: the birth shape (PUB-2.34) and
-///   the memberless base (PUB-2.66) both name the document's own pre-chain
-///   arrangement, which the chain has superseded; name the member the draft
-///   was staged from.
+/// * `BaseSuperseded` — the base is absent while the document already has a
+///   member: the birth shape (PUB-2.34) names nothing to land under once the
+///   chain has opened; name the base the draft was staged from. The document
+///   itself named as the base is no case of this — a draft begun before any
+///   version lands as the first member's daughter.
 /// * `BaseExtentTooLarge` — `base.extent` exceeds the base's current content
 ///   count: the render claims to have seen more than the member holds.
 /// * `ClaimRefused(edition)` — the publication's own verdict (the link-sets
@@ -407,7 +407,7 @@ pub enum PublishError {
     BadRun,
     /// The base is neither the document nor a member of its chain.
     BaseNotInChain,
-    /// The base is absent or the document itself, and a member exists.
+    /// The base is absent, and a member exists.
     BaseSuperseded,
     /// `base.extent` exceeds the base's current content count.
     BaseExtentTooLarge,
@@ -511,7 +511,7 @@ impl fmt::Display for PublishError {
                 "publish: the base is neither the document nor a member of its chain",
             ),
             PublishError::BaseSuperseded => f.write_str(
-                "publish: the document already has a member, so its own pre-chain arrangement is no base — name the member the draft was staged from",
+                "publish: the document already has a member, so the shot must name a base — the member or the document the draft was staged from",
             ),
             PublishError::BaseExtentTooLarge => f.write_str(
                 "publish: the base extent exceeds the base's current content count",

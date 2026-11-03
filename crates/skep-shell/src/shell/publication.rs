@@ -81,20 +81,21 @@
 //! (a draft minted and never staged), `other_chain` (a base in another
 //! document's chain) or `free_standing` (an alternative of a draft the board
 //! records no base for) — and never takes the chain's head in its place.
-//! THE STANDING (D4 (a)+(b′)) is that base typed against the chain's head
-//! by the library's `standing`, one probe of the trunk member after it, and
-//! told before any act: `at_head`; `behind`, told and never refused, the
-//! shot landing the daughter; or `first`. A draft staged from the bare
-//! document whose first member now stands is refused `base_superseded`
-//! naming the draft, `doc` and that member, `first`, since the board would
-//! refuse its shot. `confirm` reads the base and types the standing again
-//! beside its re-read: a standing moved since the panel — a sibling's shot
-//! landing while it stood — is re-stated with the new `standing`, nothing
-//! sent, and one that now refuses is refused as at `open`. The reads run
-//! once the session stands and before the index or the draft is read, so a
-//! refusal waits on neither; the mint form has no chain and is the birth
-//! shape, with no standing. A `base` the page sends is no member of the row
-//! and is read by nothing.
+//! THE STANDING (D4 (a)+(b′), (d)) is that base typed against the chain's
+//! head by the library's `standing`, one probe of the trunk member after it,
+//! and told before any act, never refused: `at_head`; `behind`, the shot
+//! landing the base's daughter; `first`, the bare document while its chain
+//! is empty; or `superseded_first`, a draft begun from the bare document
+//! whose first member now stands — the shot lands beside that member, as
+//! its daughter, and the head does not move. `confirm` reads the base and
+//! types the standing again beside its re-read: a standing moved since the
+//! panel — a sibling's shot landing while it stood, `at_head` → `behind` or
+//! `first` → `superseded_first` — is re-stated with the new `standing`,
+//! nothing sent, and a base the board no longer records is refused as at
+//! `open`. The reads run once the session stands and before the index or
+//! the draft is read, so a refusal waits on neither; the mint form has no
+//! chain and is the birth shape, with no standing. A `base` the page sends
+//! is no member of the row and is read by nothing.
 //!
 //! **The family left behind** (skep #744): every draft `also` names, then —
 //! where the publication becomes the head, its standing `at_head` or
@@ -367,24 +368,25 @@ impl Shell {
     /// Returns `draft`'s base in `doc`'s chain with its extent, read off the
     /// board, and its standing against the chain's head (**The base**).
     ///
+    /// Every standing is carried, none refused: `superseded_first` — the
+    /// bare document as the base, its first member standing — lands the shot
+    /// beside that member as its daughter, as `behind` lands it beside its
+    /// base.
+    ///
     /// # Errors
     ///
     /// In this order: the base's reads' faults, as `fault` maps them for
     /// `call`; `base_unrecorded` naming the draft, `doc` and the `reason`
     /// where the board records no base for the draft in `doc`'s chain; the
-    /// standing's probe's faults; then `base_superseded` naming the draft,
-    /// `doc` and `first` where the base is the bare document and its first
-    /// member stands.
+    /// standing's probe's faults.
     fn typed_base(&self, session: &SessionEntry, p: &Publisher<'_>, call: &str, doc: &Address, draft: &Address) -> Result<((Address, u64), Standing), Refusal> {
         let fault = |f: Fault| self.fault(session, call, f);
         let (base, copied) = match lib::draft_base(p, doc, draft).map_err(fault)? {
             lib::base::Base::Recorded { base, copied } => (base, copied),
             lib::base::Base::Unrecorded(why) => return Err(Refusal::shell(Name::BASE_UNRECORDED, json!({"draft": draft.to_string(), "doc": doc.to_string(), "reason": unrecorded_json(why)}))),
         };
-        match lib::standing(p, doc, &base).map_err(fault)? {
-            Standing::SupersededFirst { first } => Err(Refusal::shell(Name::BASE_SUPERSEDED, json!({"draft": draft.to_string(), "doc": doc.to_string(), "first": first.to_string()}))),
-            standing => Ok(((base, copied), standing)),
-        }
+        let standing = lib::standing(p, doc, &base).map_err(fault)?;
+        Ok(((base, copied), standing))
     }
 
     /// Returns the draft's whole arrangement as I-runs: the selection where
@@ -516,9 +518,10 @@ impl Shell {
     ///    `shape`, the board's own verdicts verbatim, `unreachable` — then
     ///    `base_unrecorded` naming the draft, `doc` and the `reason` where
     ///    the board records no base for the draft in `doc`'s chain; then the
-    ///    standing's probe's, as the base read's — then `base_superseded`
-    ///    naming the draft, `doc` and `first` where the draft's base is the
-    ///    bare document and its first member stands;
+    ///    standing's probe's, as the base read's — the standing itself is
+    ///    told, whichever it is, a draft begun from the bare document whose
+    ///    first member now stands told `superseded_first` and landing beside
+    ///    that member as its daughter;
     /// 5. `feed_stopped` where the shell's own lists are owed — the page
     ///    passing no `readable_drafts` or no `published`, or the standing
     ///    `at_head` or `first` — and the board's feed thread has stopped;
@@ -758,8 +761,10 @@ impl Shell {
     /// `write_in_bare_session`; `stopped`, `poisoned` or `halted` where a
     /// hold stands at the board; `store_unreadable`, `no_account`; at the
     /// document form the base's re-read and the standing's, refused as
-    /// `publication.open`'s step 4 — `base_unrecorded` or `base_superseded`
-    /// with the `publication` event's `refused` naming it; then the reads'
+    /// `publication.open`'s step 4 — `base_unrecorded` with the
+    /// `publication` event's `refused` naming it (a standing moved since the
+    /// panel, `first` → `superseded_first` among them, is the re-statement,
+    /// never a refusal); then the reads'
     /// and the send's faults as `publication.open` names them, the board
     /// term's read among them (`SessionEntry::signing_term`). A refusal of
     /// the composition or the board is the RESULT's third shape, never an
@@ -787,13 +792,14 @@ impl Shell {
         let inputs = &state.inputs;
         let p = signed.publisher(&session);
         let fault = |f: Fault| self.fault(&session, "publication.confirm", f);
-        // The base read again and its standing typed again (D4 (b′)): one
-        // that now refuses is refused as at the open, by name.
+        // The base read again and its standing typed again (D4 (b′)): a base
+        // the board no longer records is refused as at the open, by name; a
+        // standing that moved is re-stated below.
         let standing = match &inputs.doc {
             Some(trunk) => match self.typed_base(&session, &p, "publication.confirm", trunk, &draft) {
                 Ok((_, standing)) => Some(standing),
                 Err(refusal) => {
-                    if matches!(&refusal, Refusal::Shell { name, .. } if *name == Name::BASE_UNRECORDED || *name == Name::BASE_SUPERSEDED) {
+                    if matches!(&refusal, Refusal::Shell { name, .. } if *name == Name::BASE_UNRECORDED) {
                         self.publication_event(&session, &draft, "refused", json!({"arm": refusal.name()}));
                     }
                     return Err(refusal);

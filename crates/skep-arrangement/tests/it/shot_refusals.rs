@@ -1064,10 +1064,12 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         PublishError::BaseNotInChain
     ));
     assert_eq!(k.current_seq(), before, "every refusal is a clean no-op");
-    // Once a member exists, the birth shape and the memberless base are both
-    // superseded (PUB-2.34, PUB-2.66) — the member must be named. The
-    // superseded base speaks ahead of its extent, 99 being past anything the
-    // edition holds.
+    // Once a member exists, the birth shape — no base at all — is superseded
+    // (PUB-2.34): the shot must name a base. The ABSENT base alone answers
+    // `BaseSuperseded`; the document itself named as the base is a base
+    // like a member's, checked for its extent against the document's own
+    // pre-chain arrangement — 99 is past the three it holds, whatever the
+    // head holds — and never refused superseded.
     let (member1, _) = vs.publish(P1, &pdoc(), &plain(vec![shot_run(&pdoc(), &pca(1), 3)]), &readable).expect("birth");
     let after = k.current_seq();
     assert!(matches!(
@@ -1081,24 +1083,29 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
             &Shot { base: Some(base(&pdoc(), 99)), draft: None, also: vec![], runs: vec![] },
             &readable
         )),
-        PublishError::BaseSuperseded
+        PublishError::BaseExtentTooLarge
     ));
+    assert_eq!(k.current_seq(), after, "every refusal is a clean no-op");
+    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no member was minted");
     // Named by the member, the shot is still the document's (PUB-2.15): a
-    // base naming the document itself is its superseded pre-chain
-    // arrangement, whichever chain address names the shot. Judged against
-    // the address named instead, the pre-chain arrangement would pass for a
-    // base and a member would be minted off it.
-    assert!(matches!(
-        rejected(vs.publish(
+    // base naming the document itself, whichever chain address names the
+    // shot, is a draft begun before any version, and the shot LANDS as the
+    // FIRST member's daughter — `D.1.1`, under the member the chain opened
+    // with, the head unmoved. Judged against the address named instead, the
+    // base would be the member's own pre-chain arrangement, which no member
+    // has, and the shot would be refused or minted off the wrong anchor.
+    let (daughter, _) = vs
+        .publish(
             P1,
             &member1,
             &Shot { base: Some(base(&pdoc(), 3)), draft: None, also: vec![], runs: vec![] },
-            &readable
-        )),
-        PublishError::BaseSuperseded
-    ));
-    assert_eq!(k.current_seq(), after);
-    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no member was minted");
+            &readable,
+        )
+        .expect("the bare base lands as the first member's daughter");
+    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "beside version 1, under it");
+    assert_eq!(k.snapshot().world().m5().content_count(&daughter), n(0), "no runs, and nothing of the bare document past its extent");
+    assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), member1, "a daughter moves no head");
+    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no trunk member was minted");
     // Named, the member is a base — and a shot with no runs lands an EMPTY
     // member, read as the lazy empty arrangement.
     let (member2, _) = vs
@@ -1267,7 +1274,8 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
     // refusal of the composite's own — the existence walk's, the budgets' —
     // or a commit. Each shot is asked of the world `publish` then opens on:
     // one slot's verdict apiece, one refused past the gate, one that commits,
-    // after which the birth shape is superseded — and then the gate's two
+    // after which the birth shape — no base at all — is superseded, the
+    // absent base alone answering `BaseSuperseded` — and then the gate's two
     // skips, under a consult refusing every origin.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c, memberless

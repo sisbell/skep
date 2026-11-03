@@ -5,7 +5,8 @@
 //! key enrolled in the set above; A2 the startup line names the refusing
 //! seam and no ceremony tool is listed, nor `publish`; A3 the tools — every
 //! wire op but `publish`, the shell's calls, the publication family's among
-//! them, the apparatus — a publication landing a version, its panel dying
+//! them, the apparatus — a publication landing a version, a draft begun
+//! before version 1 told so and landing beside it, its panel dying
 //! with the session and nothing sent twice, and `fetch`'s image block,
 //! resource blob, cap and cut stream; A4 `changes_since`
 //! answering a published write after a position, `next` advancing; A5
@@ -266,6 +267,44 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     assert_eq!(frontier["resp"], "frontier", "{frontier}");
     let by_identity = mcp.call_json("retrieve_i", json!({"spans": [{"start": run["i_start"], "width": "3"}]}));
     assert_eq!(by_identity["resp"], "i_delivery", "{by_identity}");
+    assert!(mcp.finish().success());
+}
+
+/// A3: a draft begun before version 1 publishes beside it, as its daughter.
+///
+/// Two drafts are staged from the bare edition and written. The later one's
+/// `publication_open` holds `standing: first` and its confirm lands `E.1`.
+/// The earlier one's open then answers `standing: superseded_first` — told,
+/// no refusal, no draft left behind — and its confirm is acknowledged
+/// `E.1.1`, version 1's daughter, holding its words, while the edition still
+/// reads version 1 (the mutant that refuses the open by name answers an
+/// error here; the one that lands the trunk's next member answers `E.2`).
+#[test]
+fn a3_a_draft_begun_before_version_one_publishes_beside_it_as_its_daughter() {
+    let fixture = Fixture::new("a3-daughter");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let edition = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT, "published": true}))["addr"].as_str().expect("the edition").to_string();
+    let early = stage_of(&mut mcp, &edition);
+    let typed = mcp.position();
+    mcp.acked("insert", json!({"as_of": typed, "doc": early, "at": {"subspace": "1", "ordinal": "1"}, "values": ["early"]}));
+    let first = stage_of(&mut mcp, &edition);
+    let typed = mcp.position();
+    mcp.acked("insert", json!({"as_of": typed, "doc": first, "at": {"subspace": "1", "ordinal": "1"}, "values": ["abc"]}));
+    let panel = mcp.call_json("publication_open", json!({"draft": first, "doc": edition, "readable_drafts": [first], "published": [edition]}));
+    assert_eq!(panel["standing"], "first", "{panel}");
+    let acked = mcp.call_json("publication_confirm", json!({}));
+    let member = format!("{edition}.1");
+    assert_eq!(acked["member"].as_str(), Some(member.as_str()), "{acked}");
+    let panel = mcp.call_json("publication_open", json!({"draft": early, "doc": edition, "readable_drafts": [early], "published": [edition]}));
+    assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("superseded_first"), &json!([])), "begun before version 1: told, not refused, and a daughter leaves no draft behind: {panel}");
+    let acked = mcp.call_json("publication_confirm", json!({}));
+    let daughter = format!("{edition}.1.1");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str()), (Some("acknowledged"), Some(daughter.as_str()), Some("answer")), "version 1's daughter: {acked}");
+    let read = mcp.call_json("retrieve_v", json!({"specs": [{"doc": daughter, "span": {"start": "1.1", "width": "0.5"}}]}));
+    assert_eq!(read["items"], json!([{"content": "early"}]), "{read}");
+    let head = mcp.call_json("retrieve_v", json!({"specs": [{"doc": edition, "span": {"start": "1.1", "width": "0.3"}}]}));
+    assert_eq!(head["items"], json!([{"content": "abc"}]), "the edition still reads version 1: {head}");
     assert!(mcp.finish().success());
 }
 

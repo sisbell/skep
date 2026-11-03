@@ -1731,11 +1731,12 @@ kept place the request carries for it in its places member — moved,
 split, deleted or rearranged since the client read it — `site.index`
 the runs entry; permanent, the client re-reads the draft and composes
 its places afresh) and `stray_place_unrecorded` (the re-window's stray
-arm: a kept place beside a run of the document's own identity that no
-correspondence record homed in the draft names whole as its to-span —
+arm: a kept place beside a run of published identity — the document's
+own, or another document's words — that no correspondence record the
+caller may read names whole as its to-span, wherever homed —
 `site.index` the runs entry; permanent, a record naming fresh identity
-once, so the client re-reads the draft's records and re-composes the
-run by them); the publication's deposits (§The
+once, so the client re-reads the records and re-composes the run by
+them); the publication's deposits (§The
 publish shot and head-float, the deposits), each permanent, each
 carrying `site.index` — the entry's position in its own list, the links
 list, the retract list or the read-with list: `link_home_refused` (a
@@ -2074,35 +2075,45 @@ or arranges it elsewhere or in another order since the place was read
 client re-reads the draft and composes the places afresh (the editor
 orders its own bursts around the act, and the race face that names
 whose write moved the run is the client's). AND THE STRAY PLACES WITH
-THEM: where the draft arranges words a correspondence record homed in
-it already names as its `from` — left there by an act the editor's
-mapping does not reach, a second device's undo made before it learned
-the records, an agent's raw `reinstate` — the client re-composes such
-a run BY REFERENCE to the record's `to`, the published identity (a run
-whose `origin` is `doc`'s own trunk), and sends its kept place beside
-it as it sends a draft-native run's; the commit reads the records
-homed in the draft whose `to` covers the run — one record, a piece of
-one at its offset, or several adjoining records piece by piece, the
-two slots of a record being of one width — checks that the draft still
-arranges the record's `from` words at the place, by identity as above,
-and re-windows them there onto the record's `to` in the same
-transaction: the member places the run by reference as any run of the
-document's own, no identity is minted and no record written, the
-draft's link run-list is untouched (links move with identity), and
-the words show as published wherever the draft is read from then on.
-A stray run no record of the draft covers whole is refused
-`stray_place_unrecorded`, permanent, `site.index` the `runs` entry and
-nothing else, nothing committed: a record names fresh identity once,
-at the publication that minted it, so the client re-reads the draft's
-records and re-composes the run by them. A request that sends no
-places, or `null` at every entry, is the shot as before: the draft is
-left as it stands. The shape is the codec's, refused ahead of every
-store: a list longer than `runs`, a place beside a run whose `origin`
-is neither the `draft` nor `doc`'s own trunk (a window onto another
-document, or a run of a draft `also` names — those drafts are never
-re-windowed), one beside any run at the mint form, one outside the
-content subspace, or one that is no V-position is `malformed` with
-`site.index` the entry. The board's own producers send none.
+THEM: where the draft arranges words a correspondence record the
+caller may read already names as its `from` — a record homed in the
+draft itself, its words left there by an act the editor's mapping does
+not reach, a second device's undo made before it learned the records,
+an agent's raw `reinstate`; or a record homed in another draft the
+caller reads — the quoted draft's, an `also` draft's, a granted
+draft's — whose words the draft holds by transclusion and an earlier
+shot of that draft published, into this document or into another (the
+link-sets design §5.5, the counterpart first) — the client re-composes
+such a run BY REFERENCE to the record's `to`, the published identity
+(a run whose `origin` is `doc`'s own trunk, or the other published
+document the record's `to` lies in), and sends its kept place beside
+it as it sends a draft-native run's; the commit reads every
+correspondence record the caller may read whose `to` covers the run,
+wherever homed — one record, a piece of one at its offset, or several
+adjoining records piece by piece, the two slots of a record being of
+one width — checks that the draft still arranges the record's `from`
+words at the place, by identity as above, and re-windows them there
+onto the record's `to` in the same transaction: the member places the
+run by reference as any run of a published document, no identity is
+minted and no record written, the draft's link run-list is untouched
+(links move with identity), and the words show as published wherever
+the draft is read from then on. A record the caller may not read is
+never used. A stray run no record the caller may read covers whole is
+refused `stray_place_unrecorded`, permanent, `site.index` the `runs`
+entry and nothing else, nothing committed — a place beside an ordinary
+window onto another document, which no record names, among them: a
+placed window is re-windowed through a record or refused, never
+silently kept; a record names fresh identity once, at the publication
+that minted it, so the client re-reads the records and re-composes the
+run by them. A request that sends no places, or `null` at every entry,
+is the shot as before: the draft is left as it stands. The shape is the
+codec's, refused ahead of every store: a list longer than `runs`, a
+place beside a run of a draft `also` names (those drafts are left as
+they stand by this shot), one in a request naming no `draft`, one
+outside the content subspace, or one that is no V-position is
+`malformed` with `site.index` the entry; a place stands beside any
+other run, at either form, and whether it re-windows is the commit's
+to decide. The board's own producers send none.
 
 **The deposits** (the link-sets design §5.7). A publication may carry,
 beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes and
@@ -2332,7 +2343,7 @@ commits nothing:
 | `dangling_source` | permanent | — | an address a run names holds no value |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget — or, with a kept place, the draft's run-list at its re-window |
 | `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's draft words at the kept place the request carries for it (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
-| `stray_place_unrecorded` | permanent | `index` = the `runs` entry | a kept place stands beside a run of `doc`'s own identity and no correspondence record homed in the `draft` names that identity whole as its `to` (the stray places, above) — read inside the transaction at the re-window, ahead of the entry's check |
+| `stray_place_unrecorded` | permanent | `index` = the `runs` entry | a kept place stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at the re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
 | `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
 | `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
@@ -2361,9 +2372,10 @@ document named and ⟨O⟩ the origin withheld:
   DRAFT face; the race face that names whose write moved them is the
   client's, read off the change feed).
 * `stray_place_unrecorded` — the client's own arithmetic is wrong: it
-  re-composed a run by reference to published words no record of ⟨D⟩
-  names; there is no user-facing act to offer, the client re-reads the
-  records.
+  re-composed a run by reference to published words no record the
+  person may read names, wherever homed, or sent a place beside a
+  window no record names; there is no user-facing act to offer, the
+  client re-reads the records.
 * `not_owner` naming a draft — ⟨D⟩ the named draft at fault, `draft` or
   one `also` names; the DRAFT face stands — "⟨D⟩ is not yours — a
   publication keeps its records in the draft it was staged in; publish
@@ -3392,23 +3404,25 @@ publish shot and head-float, the kept places): a list parallel to `runs`
 by index, each entry a V-position as `reinstate`'s `at` is spelled —
 for a run of the `draft`, the place it held in the draft when the
 client composed the request, read off the draft's image (`image`) at
-the confirmation; or, for a STRAY run — a run of `doc`'s own identity
-the client re-composed by reference to a correspondence record of the
-draft, the record's published words, where the draft still arranges the
-record's draft words — the place those words hold — or `null`; a
-shorter list is padded with `null`, and absent or all-`null` is the
-shot as before, writing nothing of the draft. With a place the commit
-re-windows the draft there, the published identity replacing the
-draft's own words, and refuses the publication `kept_place_moved`
-where the draft no longer arranges those words at it, or
-`stray_place_unrecorded` where no record of the draft names a stray
-run's identity whole. A place beside a run whose `origin` is neither
-the `draft` nor `doc`'s own trunk — a window onto another document,
-never re-windowed, or a run of a draft `also` names, whose draft is
-left as it stands — or any run at the mint form, outside the content
-subspace, or past the runs is `malformed`, `site.index` the entry. The
-places lie OUTSIDE the signed frame, as `draft` does: a shot with
-places signs as the same shot without them. Owner-gated, and the
+the confirmation; or, for a STRAY run — a run of `doc`'s own identity,
+or of another published document's words the draft holds, the client
+re-composed by reference to a correspondence record the caller may
+read, wherever homed, the record's published words, where the draft
+still arranges the record's draft words — the place those words hold —
+or `null`; a shorter list is padded with `null`, and absent or
+all-`null` is the shot as before, writing nothing of the draft. With a
+place the commit re-windows the draft there, the published identity
+replacing the draft's own words, and refuses the publication
+`kept_place_moved` where the draft no longer arranges those words at
+it, or `stray_place_unrecorded` where no record the caller may read
+names a stray run's identity whole — a place beside an ordinary window
+onto another document, which no record names, is refused so, never
+silently kept. A place beside a run of a draft `also` names, whose
+draft is left as it stands, one in a request naming no `draft`, one
+outside the content subspace, or one past the runs is `malformed`,
+`site.index` the entry; a place stands beside any other run, at either
+form. The places lie OUTSIDE the signed frame, as `draft` does: a shot
+with places signs as the same shot without them. Owner-gated, and the
 publish class's input from any session.
 THE TARGET takes one of two forms: `doc`, the published document whose
 chain the shot appends — the form above — or THE MINT FORM, `account`

@@ -51,7 +51,7 @@ use skep_arrangement::{trunk_of, Run, Shot, VPos, MAX_PLACED_RUNS, MAX_REINSERTE
 use super::plan::{EndArg, NamedAddress, PublishDeposits, PublishTarget};
 use super::correspondence_type;
 use crate::budget::MAX_SLOT_SPANS;
-use crate::endset::enc;
+use crate::endset::{enc, Endset};
 use crate::state::{View, TO, TYPE};
 use crate::LinkWorld;
 
@@ -268,7 +268,7 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 
 /// Prices the bytes a publication would stage, from the table: an UPPER
 /// bound on what the kernel charges the transaction, read off the request
-/// and one stab of the rendering draft's records per stray place.
+/// and one stab of every home's records per stray place.
 ///
 /// The terms, each at the table's figure:
 ///
@@ -289,10 +289,12 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///   atom's bytes past two ride the draft's content, which the price does
 ///   not read;
 /// * per run of any other origin [`PLACED_RUN_BYTES`], and where it carries
-///   a place — a STRAY run of the document's own identity — one stab of the
-///   draft's TO slot by its span, the records overlapping it ×
-///   [`KEPT_PLACE_BYTES`], one piece per record (a window of another
-///   origin, which the codec refuses a place on, is priced as one);
+///   a place — a STRAY run of published identity, the document's own or
+///   another document's, re-windowed through the records — one stab of the
+///   TO slot by its span across every home, the correspondence records
+///   overlapping it wherever homed × [`KEPT_PLACE_BYTES`], one piece per
+///   record, at least one; the stab asks no visibility class, since a
+///   record the commit will not read only raises this bound;
 /// * per `links` entry [`COPY_FIXED_BYTES`] + [`stored_span_bytes`] of
 ///   every span its three slots spell — an `addrs` element as its unit
 ///   span, a tag as a unit span at the member's depth, a `spans` element as
@@ -310,7 +312,7 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 /// draft-native runs for the endpoints' sort, linear in the lists — plus
 /// the stray stabs; saturating, so an absurd request prices at `u64::MAX`.
 pub fn price_staged_bytes<W: LinkWorld>(world: &W, target: &PublishTarget, shot: &Shot, places: &[Option<VPos>], deposits: &PublishDeposits) -> u64 {
-    let (trunk, draft) = (target.term(), shot.draft_document());
+    let draft = shot.draft_document();
     let mut bytes = SHOT_BYTES;
     if let Some(rendering) = &shot.draft {
         bytes = bytes.saturating_add(stored_tumbler_bytes(rendering.tumbler()));
@@ -343,13 +345,10 @@ pub fn price_staged_bytes<W: LinkWorld>(world: &W, target: &PublishTarget, shot:
         } else {
             bytes = bytes.saturating_add(PLACED_RUN_BYTES);
             if placed {
-                let records = match &draft {
-                    Some(draft) if origin.as_ref() == Some(&trunk) => {
-                        let span = entry.run.iextent();
-                        world.links().match_links_in(draft, (TO, [&span]), &[(TYPE, &ty)], View::Active).len() as u64
-                    }
-                    _ => 0,
-                };
+                // The stray stab, across every home and at no visibility
+                // class: the records the commit may read are among these.
+                let span = Endset::from_spans([entry.run.iextent()]);
+                let records = world.links().match_links(&[(TO, &span), (TYPE, &ty)], View::Active).len() as u64;
                 bytes = bytes.saturating_add(records.max(1).saturating_mul(KEPT_PLACE_BYTES));
             }
         }

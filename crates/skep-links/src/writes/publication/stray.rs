@@ -1,32 +1,40 @@
 //! THE STRAY PLACES (the link-sets design §5.7, "AND THE STRAY PLACES WITH
-//! THEM"): a kept place beside a run of the document's own identity — a run
-//! the client re-composed by reference to a correspondence record's `to`
-//! where the draft still arranges that record's `from`, left there by an
-//! act the editor's mapping does not reach, a second device's undo made
-//! before it learned the records, an agent's raw `reinstate` — and the
-//! record read that turns the run back into the draft words it stands for,
-//! piece by piece, for the re-window to check and replace.
+//! THEM"; §5.5, the counterpart first): a kept place beside a run of
+//! published identity no pairing holds — the document's own, or another
+//! document's — a run the client re-composed by reference to a
+//! correspondence record's `to` where the draft still arranges that
+//! record's `from`: the record's draft words left there by an act the
+//! editor's mapping does not reach, a second device's undo made before it
+//! learned the records, an agent's raw `reinstate`, or another draft's
+//! words the draft holds by transclusion that an earlier shot of that draft
+//! published — and the record read that turns the run back into the draft
+//! words it stands for, piece by piece, for the re-window to check and
+//! replace.
 //!
-//! [`record_pieces`] is the read: the correspondence records homed in the
-//! draft whose stored `to` overlaps the run's I-span — one stab of the TO
-//! slot within the draft's home, the twin fence's read turned around — each
-//! kept by the stored type slot's exact test, each cut to the overlap and
+//! [`record_pieces`] is the read: the correspondence records the caller may
+//! read whose stored `to` covers the run, wherever homed — the re-windowed
+//! draft's, an `also` draft's, a granted draft's — one stab of the TO slot
+//! across every home, the twin fence's read turned around and widened, each
+//! hit kept where the caller's visibility class admits the record's home
+//! and by the stored type slot's exact test, each cut to the overlap and
 //! mapped onto the same piece of its `from` (the two slots are of one
 //! width, so an offset into one is the offset into the other), the pieces
 //! in the run's order. They must tile the run whole: a gap, or no record
-//! at all, re-windows nothing and refuses the publication with the entry
-//! (`StrayPlaceUnrecorded`). The arithmetic over the slots is
-//! [`pieces_of`], a pure function over span pairs, so the tiling rule is
-//! held without a world.
+//! the caller may read at all, re-windows nothing and refuses the
+//! publication with the entry (`StrayPlaceUnrecorded`). The arithmetic over
+//! the slots is [`pieces_of`], a pure function over span pairs, so the
+//! tiling rule is held without a world — and records of several homes tile
+//! as one home's do.
 
 use std::cmp::{max, min};
 
-use skep_address::{ordinal, shift, validate, Address, Nat, Span, Tumbler};
+use skep_address::{document_of, ordinal, shift, validate, Nat, Span, Tumbler};
 use skep_arrangement::Run;
 
 use super::{correspondence_type, is_correspondence_class};
-use crate::endset::enc;
+use crate::endset::{enc, Endset};
 use crate::state::{View, TO, TYPE};
+use crate::writes::Visibility;
 use crate::LinkWorld;
 
 /// One piece of a stray run: the draft words a record names (`from`) and
@@ -43,23 +51,34 @@ pub(super) struct Piece {
     pub to: Run,
 }
 
-/// Returns the pieces of `run`, a run of the document's own identity, as the
-/// correspondence records homed in `draft` name them — in `run`'s order,
-/// tiling it whole — or `None` where the records do not cover it.
+/// Returns the pieces of `run`, a run of published identity, as the
+/// correspondence records the caller may read whose `to` covers it name
+/// them, wherever homed — in `run`'s order, tiling it whole — or `None`
+/// where the records the caller may read do not cover it.
 ///
-/// One stab of `draft`'s TO slot by `run`'s I-span, on the active view,
-/// each hit kept by the stored type slot's exact test
+/// One stab of the TO slot by `run`'s I-span across every home, on the
+/// active view ([`match_links`] by the TO and TYPE slots, the driver the
+/// slot with the fewer homes), each hit kept where `readable` admits the
+/// record's home — the home read off the hit's address by
+/// [`document_of`], the link element's document, as the store reads a
+/// link's home — and by the stored type slot's exact test
 /// ([`is_correspondence_class`]: a link typed the parent `counterpart` is
-/// an ordinary link and no record) and read as its two slots; the
-/// arithmetic is [`pieces_of`]'s. Costs `O(log n)` plus the hits, the
-/// records of `draft` overlapping the run — never the draft's history.
-pub(super) fn record_pieces<W: LinkWorld>(world: &W, draft: &Address, run: &Run) -> Option<Vec<Piece>> {
+/// an ordinary link and no record), then read as its two slots; the
+/// arithmetic is [`pieces_of`]'s, and records of several homes tile as one
+/// home's do. A record the caller may not read is never used: the read is
+/// bounded by the shot's own visibility class. Costs `O(log n)` plus the
+/// hits, the records of every home overlapping the run — never any draft's
+/// history.
+///
+/// [`match_links`]: crate::LinkState::match_links
+pub(super) fn record_pieces<W: LinkWorld>(world: &W, readable: &Visibility<'_, W>, run: &Run) -> Option<Vec<Piece>> {
     let links = world.links();
     let ty = enc([correspondence_type()]);
-    let span = run.iextent();
+    let span = Endset::from_spans([run.iextent()]);
     let records: Vec<(&Span, &Span)> = links
-        .match_links_in(draft, (TO, [&span]), &[(TYPE, &ty)], View::Active)
+        .match_links(&[(TO, &span), (TYPE, &ty)], View::Active)
         .iter()
+        .filter(|hit| document_of(hit).is_some_and(|home| readable(world, &home)))
         .filter_map(|hit| links.readlink(hit))
         .filter(|record| is_correspondence_class(record.type_slot()))
         .filter_map(|record| Some((one_span(record.from_slot())?, one_span(record.to_slot())?)))
@@ -131,6 +150,8 @@ fn same_chain(a: &Tumbler, b: &Tumbler) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use skep_address::Address;
+
     use super::*;
 
     fn t(comps: &[u32]) -> Tumbler {

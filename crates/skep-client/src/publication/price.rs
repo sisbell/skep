@@ -148,8 +148,10 @@ pub struct Shape<'a> {
     pub claim: bool,
     /// The kept places, parallel to the runs.
     pub places: &'a [Option<u64>],
-    /// Per run, the records covering it where it is a stray run re-composed
-    /// by reference with a place — priced at one piece each; zero where it
+    /// Per run, the records covering it where it is a run re-composed by
+    /// reference with a place — a stray run of the document's own identity
+    /// the twin pre-check re-composed, or a counterpart's covered piece in
+    /// this document or another — priced at one piece each; zero where it
     /// is none.
     pub stray_records: &'a [usize],
     /// The `links` entries.

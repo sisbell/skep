@@ -602,13 +602,21 @@ impl World {
                     return refused("kept_place_moved", json!({"index": k}));
                 }
             } else {
-                // A stray run: a record of the draft naming the run whole as its to.
-                let Some(d) = &draft else { return refused("stray_place_unrecorded", json!({"index": k})) };
-                let covering = records_in(self, d).into_iter().find(|(rec, _)| {
-                    let to = addresses(&rec.to[0]);
-                    (run.i_start..run.reach()).all(|n| to.contains(&format!("{}.0.1.{n}", run.origin)))
-                });
-                let Some((rec, _)) = covering else { return refused("stray_place_unrecorded", json!({"index": k})) };
+                // A stray run: a correspondence record the caller may read,
+                // wherever homed, naming the run whole as its to.
+                if draft.is_none() {
+                    return refused("stray_place_unrecorded", json!({"index": k}));
+                }
+                let covering = self
+                    .links
+                    .iter()
+                    .filter(|l| !l.retracted && self.readable(&l.home) && l.ty.first().is_some_and(|t| t.0 == T_CORRESPONDENCE))
+                    .find(|rec| {
+                        let to = addresses(&rec.to[0]);
+                        (run.i_start..run.reach()).all(|n| to.contains(&format!("{}.0.1.{n}", run.origin)))
+                    })
+                    .cloned();
+                let Some(rec) = covering else { return refused("stray_place_unrecorded", json!({"index": k})) };
                 let to = addresses(&rec.to[0]);
                 let offset = to.iter().position(|x| *x == run.i_start_text()).unwrap();
                 let from: Vec<(Address, u64)> = addresses(&rec.from[0]).iter().skip(offset).take(run.width as usize).map(|x| { let (p, n) = x.rsplit_once('.').unwrap(); (a(&trunk_of(p).unwrap()), n.parse().unwrap()) }).collect();
@@ -1456,7 +1464,8 @@ fn the_request_spells_every_member_and_the_canonical_member_end() {
 /// request; DROP leaves the run out; KEEP PRIVATE sends it as a window with
 /// no place; and THE COUNTERPART FIRST — a record of a draft the person reads
 /// naming the window's words — offered as data and, taken, re-composed by
-/// reference with no place.
+/// reference WITH the covered piece's kept place, the rest a window with
+/// none.
 #[test]
 fn the_three_answers_and_the_counterpart_first() {
     let (world, _) = World::base();
@@ -1512,7 +1521,68 @@ fn the_three_answers_and_the_counterpart_first() {
     let Built::Request(taken) = build(&p, &with_o, &e, &panel, &confirmed).unwrap() else { panic!() };
     assert_eq!(taken.runs[2], run(E, 16, 4), "the covered part re-composed by reference to the record's to");
     assert_eq!(taken.runs[3], run(O, 5, 1), "the rest a window still");
-    assert_eq!(&taken.places[2..], &[None, None]);
+    assert_eq!(&taken.places[2..], &[Some(30), None], "the covered piece with its kept place, the rendering draft's own position of it; the window with none");
+    assert_eq!(&taken.stray_records[2..], &[1, 0], "the covered piece counts the one record the commit reads for it");
+}
+
+/// THE COUNTERPART's KEPT PLACE (the link-sets design §5.5: "its KEPT
+/// PLACE sent beside it as a stray's is"): the covered piece of a window
+/// re-composed by reference to a record's `to` carries the rendering
+/// draft's own V-position of it — in THIS document, where the record's `to`
+/// is `E`'s identity, and in ANOTHER, where an earlier shot published the
+/// origin's words into `F` — the uncovered remainder a window with none;
+/// the pre-check passes the piece through with its place and counts its
+/// one record, the price charges the kept place beside the run; the request
+/// is not inert for it; and the scripted board, reading the record wherever
+/// homed, re-windows `D` there onto the published identity, `E`'s or `F`'s.
+#[test]
+fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_another_and_the_precheck_counts_its_record() {
+    const F: &str = "1.0.1.0.10";
+    // The record's `to`: E's 5..8 (the fixture's earlier record in D names
+    // E's 16..19 already), or F's 16..19.
+    for (what, to_doc, to_first, published_into_f) in [("into this document", E, 5u64, false), ("into another document", F, 16u64, true)] {
+        let (mut world, _) = World::base();
+        if published_into_f {
+            world.text(F, 1, "another document one");
+            world.doc(F, true, ACCOUNT, vec![run(F, 1, 20)]);
+        }
+        // O's `quot` published before as `to_doc`'s words: the record in O.
+        let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(to_doc, to_first, 4)], T_CORRESPONDENCE);
+        let (dialer, board, signer) = open(world);
+        let tok = token();
+        let p = publisher(&board, &tok, &signer);
+        let mut inputs = inputs();
+        inputs.readable_drafts.push(a(O));
+        let e = enumerate(&p, &inputs).unwrap();
+        let panel = super::panel::panel(&p, &inputs, &e).unwrap();
+        let counterpart = panel.windows[0].counterpart.as_ref().expect("the counterpart offered at the panel");
+        assert_eq!((counterpart.record.to_string(), counterpart.to.document().as_deref(), counterpart.to.first), (record.clone(), Some(to_doc), to_first), "{what}");
+        let mut confirmed = switched(None);
+        confirmed.answers.insert(2, OriginAnswer::Counterpart);
+        let Built::Request(mut taken) = build(&p, &inputs, &e, &panel, &confirmed).unwrap() else { panic!("{what}: inert") };
+        assert_eq!(taken.runs, vec![run(E, 1, 19), run(D, 1, 10), run(to_doc, to_first, 4), run(O, 5, 1)], "{what}: the covered part by reference to the record's to, the rest a window");
+        assert_eq!(taken.places, vec![None, Some(20), Some(30), None], "{what}: the covered piece's place is D's own position of it; the window has none");
+        assert_eq!(taken.stray_records, vec![0, 0, 1, 0], "{what}: the one record the commit reads for the piece");
+        assert!(matches!(taken.pieces[2], Piece::Values(_)) == !published_into_f, "{what}: E's own identity reads through the draft, F's is a window by address");
+        // The price charges the piece's kept place per record it counts.
+        let mut unplaced = (*taken).clone();
+        (unplaced.places[2], unplaced.stray_records[2]) = (None, 0);
+        let mut twice = (*taken).clone();
+        twice.stray_records[2] = 2;
+        assert_eq!(taken.priced(0, 0).bytes, unplaced.priced(0, 0).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the piece, at its one record");
+        assert_eq!(twice.priced(0, 0).bytes, taken.priced(0, 0).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
+        assert!(taken.price.admits(), "{what}: {:?}", taken.price);
+        // Sent: the board finds the record in O by its `to`, checks D
+        // arranges O's words at 30, and re-windows D there.
+        dialer.clear();
+        let Sent::Acknowledged(ack) = send(&p, &inputs, &mut taken).unwrap() else { panic!("{what}: refused") };
+        assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Answer), "{what}");
+        let w = dialer.world();
+        assert_eq!(w.docs[D].runs, vec![run(E, 1, 29), run(to_doc, to_first, 4), run(O, 5, 1)], "{what}: D re-windowed onto the published identity where O's words stood, its own fresh words I-adjacent to E's");
+        assert_eq!(w.docs[&format!("{E}.2")].runs, vec![run(E, 1, 29), run(to_doc, to_first, 4), run(O, 5, 1)], "{what}: the member holds the published words by reference");
+        let row = w.rows.iter().find(|r| r.at == ack.at).expect("the publish row");
+        assert_eq!(row.docs[..2], [format!("{E}.2"), D.to_string()], "{what}: the member, then the re-windowed draft");
+    }
 }
 
 /// THE TWIN PRE-CHECK: a draft-native run whose words an earlier shot

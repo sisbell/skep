@@ -39,7 +39,7 @@ use skep_kernel::{Attestation, Kernel, Seq, TxnError};
 use skep_links::{
     correspondence_type, enc, is_correspondence_class, stage_correspondence, stage_publication,
     Endset, HasLinks, Link, LinkWriter, PublicationError, PublishDeposits, PublishTarget, SlotArg,
-    FROM, TO,
+    Visibility, FROM, TO,
 };
 use skep_namespace::{HasM3, M3Rec, M3State};
 
@@ -779,17 +779,21 @@ fn a_stray_run_whose_draft_words_moved_since_is_refused_with_its_entry_and_write
     }
 }
 
-/// UNRECORDED: a run of E's identity no record of the draft names whole —
-/// E's `x y` minted from doc2's words, so recorded in doc2 and not in doc1;
-/// and `b c x`, which doc1's record covers in part — with a place is
-/// refused `StrayPlaceUnrecorded` with the entry, nothing committed: the
-/// shot's mints and the re-window of an earlier entry are discarded with
-/// it. And below the codec's door a place beside a window onto another
-/// document (doc2's own words) is checked as any place is and re-windows
-/// nothing — refused `KeptPlaceMoved` where the draft does not arrange it
-/// there.
+/// RECORDED ELSEWHERE, OR UNRECORDED: the stray read runs over every
+/// correspondence record the caller may read whose `to` covers the run,
+/// WHEREVER HOMED — so E's `x y`, minted from doc2's words and recorded in
+/// doc2 alone, IS found from doc1's shot (the same caller's), and the check
+/// then asks doc1 for doc2's words at the place, where doc1 arranges its
+/// own `a`: `KeptPlaceMoved` with the entry; `b c x`, covered by doc1's
+/// record and doc2's together, tiles whole and fails the check the same
+/// way. `StrayPlaceUnrecorded` keeps two premises: a window onto doc2's
+/// own words, which no record names — refused, never silently kept — and
+/// `x y` at a visibility class that does not admit doc2, the record's home
+/// unreadable to the caller: a record the caller may not read is never
+/// used. Each commits nothing: the shot's mints and the re-window of an
+/// earlier entry are discarded with it.
 #[test]
-fn a_stray_run_no_record_of_the_draft_covers_whole_is_refused_with_its_entry_and_writes_nothing() {
+fn a_stray_run_no_record_the_caller_may_read_covers_whole_is_refused_with_its_entry_and_writes_nothing() {
     let k = kernel_over(edition_world());
     stray_board(&k);
     let into_e = PublishTarget::Document(pdoc());
@@ -806,18 +810,22 @@ fn a_stray_run_no_record_of_the_draft_covers_whole_is_refused_with_its_entry_and
     writer(&k).publication(P1, &into_e, &from_doc2, &[], &none).expect("E.2, x y minted from doc2");
     assert_eq!(bytes_of(&k, &pmember(2)), "bcxy");
     let before = k.snapshot();
-    let cells: [(&str, ShotRun, PublicationError); 3] = [
-        ("x y, recorded in doc2 alone", shot_run(&pdoc(), &pca(3), 2), PublicationError::StrayPlaceUnrecorded { index: 2 }),
-        ("b c x, covered in part", shot_run(&pdoc(), &pca(1), 3), PublicationError::StrayPlaceUnrecorded { index: 2 }),
-        ("a window onto doc2, below the door", shot_run(&doc2(), &ca2(1), 2), PublicationError::KeptPlaceMoved { index: 2 }),
+    // The caller's visibility class that does not admit doc2: the record
+    // homed there is the caller's own, and still never read.
+    let all_but_doc2: &Visibility<'_, World> = &|_: &World, d: &Address| *d != doc2();
+    let cells: [(&str, ShotRun, &Visibility<'_, World>, PublicationError); 4] = [
+        ("x y, recorded in doc2 alone: found, and doc1 arranges `a` at the place", shot_run(&pdoc(), &pca(3), 2), &ALL_VISIBLE, PublicationError::KeptPlaceMoved { index: 2 }),
+        ("b c x, covered by doc1's record and doc2's: found whole, the check fails", shot_run(&pdoc(), &pca(1), 3), &ALL_VISIBLE, PublicationError::KeptPlaceMoved { index: 2 }),
+        ("a window onto doc2's own words: no record names them", shot_run(&doc2(), &ca2(1), 2), &ALL_VISIBLE, PublicationError::StrayPlaceUnrecorded { index: 2 }),
+        ("x y, its record homed in a draft the caller may not read", shot_run(&pdoc(), &pca(3), 2), all_but_doc2, PublicationError::StrayPlaceUnrecorded { index: 2 }),
     ];
-    for (what, stray, expected) in cells {
+    for (what, stray, readable, expected) in cells {
         // The head's run by reference, the stray `b c` with its place (which
         // holds), then the entry under test with a place of its own.
         let mut the_shot = shot_off_head(&k, vec![shot_run(&pdoc(), &pca(1), 2), stray]);
         the_shot.draft = Some(doc1());
         assert_eq!(the_shot.runs.len(), 3, "{what}");
-        let refusal = refused(writer(&k).publication(P1, &into_e, &the_shot, &places(3, &[(1, 4), (2, 1)]), &none));
+        let refusal = refused(writer_at(&k, readable).publication(P1, &into_e, &the_shot, &places(3, &[(1, 4), (2, 1)]), &none));
         assert_eq!(refusal, expected, "{what}");
         let s = k.snapshot();
         assert_eq!(s.seq(), before.seq(), "{what}: nothing committed, the first entry's re-window with it");
@@ -825,6 +833,186 @@ fn a_stray_run_no_record_of_the_draft_covers_whole_is_refused_with_its_entry_and
         assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 1), run(&pca(1), 2), run(&ca(2), 2)], "{what}: the draft unchanged");
         assert!(!s.world().m3().is_registered_document(&pmember(3)), "{what}: no member");
     }
+}
+
+/// #747 HEALED (the stray read widened): a family publication re-mints
+/// doc2's words with the record homed in doc2, the rendering draft doc1 —
+/// holding those words by identity — re-windowed for its own run alone and
+/// left arranging doc2's identity for theirs (no place may stand beside an
+/// `also` run); at doc1's OWN next shot the run re-composed to the trunk's
+/// identity is sent with doc1's place, and the one commit finds doc2's
+/// record by its `to`, wherever homed, and re-windows doc1 there: the same
+/// bytes, E's identity where doc2's stood, doc2's record standing alone, no
+/// identity minted, ONE commit.
+#[test]
+fn a_rendering_draft_holding_an_also_drafts_published_words_heals_at_its_own_next_shot_through_that_drafts_record() {
+    let k = journaled_over(edition_world());
+    draft_holding(&k, "ab");
+    other_draft_holding(&k, "xy");
+    Vstream::new(&k).copy(P1, &doc1(), vp(1, 3), &[spec(&doc2(), 1, 1, 2)], AsOf::Typed(k.current_seq())).expect("doc1 a b x y, doc2's words by identity");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 2), run(&ca2(1), 2)]);
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let w = writer(&k);
+    // The family shot: doc1's own run with its place; doc2's run, named
+    // `also`, with none.
+    let the_family = family(None, vec![shot_run(&doc1(), &ca(1), 2), shot_run(&doc2(), &ca2(1), 2)]);
+    let (m1, _) = w.publication(P1, &into, &the_family, &places(2, &[(0, 1)]), &none).expect("E.1");
+    assert_eq!(bytes_of(&k, &m1), "abxy");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 2), run(&ca2(1), 2)], "the premise: doc1 re-windowed for its own words, doc2's old identity standing — #747");
+    assert_eq!(records_in_doc2(&k), vec![record(&run(&ca2(1), 2), &run(&pca(3), 2))], "the record homed in doc2");
+    assert_eq!(records_in_doc1(&k).len(), 1);
+    let before = k.snapshot();
+    // doc1's next shot: the head's runs by reference, the stale run
+    // re-composed to the trunk's identity with doc1's place beside it.
+    let healing = Shot {
+        base: Some(skep_arrangement::Base { member: m1.clone(), extent: n(4) }),
+        draft: Some(doc1()),
+        also: vec![],
+        runs: vec![shot_run(&pdoc(), &pca(1), 2), shot_run(&pdoc(), &pca(3), 2)],
+    };
+    let (m2, seq) = w.publication(P1, &into, &healing, &places(2, &[(1, 3)]), &none).expect("healed through doc2's record");
+    assert_eq!(m2, pmember(2));
+    assert_eq!(k.boundaries_above(before.seq()).expect("boundaries"), vec![(seq, None)], "ONE commit");
+    assert_eq!(bytes_of(&k, &doc1()), "abxy", "the same bytes");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 4)], "E's identity throughout: doc2's words healed at doc1's place");
+    assert!(footprint(&k, &doc1(), &run(&ca2(1), 2)).is_empty(), "doc2's identity arranged nowhere in doc1");
+    assert_eq!(runs_of(&k, &doc2()), vec![run(&ca2(1), 2)], "doc2 itself left as it stands, healed at its own next shot");
+    assert_eq!((records_in_doc1(&k).len(), records_in_doc2(&k).len()), (1, 1), "no new record");
+    assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(5)), "no identity minted");
+    assert_eq!(bytes_of(&k, &m2), "abxy");
+}
+
+/// H1 HEALED (the counterpart first, the link-sets design §5.5): doc1
+/// transcluded doc2's words BEFORE doc2 published them; doc2's own shot
+/// mints them with the record homed in doc2 and re-windows doc2, doc1
+/// still arranging doc2's old identity; at doc1's own next shot — doc2 not
+/// named — the window re-composed to the record's `to` is sent with doc1's
+/// place beside doc1's own fresh run's, and the one commit re-windows both:
+/// doc1 arranges its own fresh identity and E's for doc2's words, the
+/// member holds the second by reference, no record but doc1's own new one,
+/// nothing of doc2's minted again.
+#[test]
+fn a_draft_that_transcluded_another_drafts_words_before_they_were_published_heals_at_its_own_next_shot() {
+    let k = kernel_over(edition_world());
+    draft_holding(&k, "ab");
+    other_draft_holding(&k, "xy");
+    Vstream::new(&k).copy(P1, &doc1(), vp(1, 3), &[spec(&doc2(), 1, 1, 2)], AsOf::Typed(k.current_seq())).expect("doc1 a b x y, the transclusion");
+    let into = PublishTarget::Document(pdoc());
+    let none = PublishDeposits::default();
+    let w = writer(&k);
+    // doc2 publishes its words itself, re-windowed at its place.
+    let doc2_shot = Shot { base: None, draft: Some(doc2()), also: vec![], runs: vec![shot_run(&doc2(), &ca2(1), 2)] };
+    let (m1, _) = w.publication(P1, &into, &doc2_shot, &places(1, &[(0, 1)]), &none).expect("E.1 from doc2");
+    assert_eq!(runs_of(&k, &doc2()), vec![run(&pca(1), 2)], "doc2 re-windowed");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 2), run(&ca2(1), 2)], "the premise: doc1 holds doc2's old identity — H1");
+    // doc1's next shot: its own `a b` with its place, then the window
+    // re-composed by reference to doc2's record's `to` with its place.
+    let healing = Shot {
+        base: Some(skep_arrangement::Base { member: m1.clone(), extent: n(2) }),
+        draft: Some(doc1()),
+        also: vec![],
+        runs: vec![shot_run(&doc1(), &ca(1), 2), shot_run(&pdoc(), &pca(1), 2)],
+    };
+    let (m2, _) = w.publication(P1, &into, &healing, &places(2, &[(0, 1), (1, 3)]), &none).expect("both kinds of place hold");
+    assert_eq!(m2, pmember(2));
+    assert_eq!(bytes_of(&k, &doc1()), "abxy", "the same bytes");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(3), 2), run(&pca(1), 2)], "doc1's fresh identity, then E's for doc2's words");
+    assert!(footprint(&k, &doc1(), &run(&ca2(1), 2)).is_empty(), "doc2's identity arranged nowhere in doc1");
+    assert_eq!(bytes_of(&k, &m2), "abxy");
+    assert_eq!(runs_of(&k, &m2), vec![run(&pca(3), 2), run(&pca(1), 2)], "the member holds doc2's published words by reference");
+    assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(1), 2), &run(&pca(3), 2))], "doc1's own record alone");
+    assert_eq!(records_in_doc2(&k).len(), 1, "doc2's record stands, no new one");
+    assert_eq!(k.snapshot().world().m3().next_content_address(&pdoc()), Some(pca(5)), "nothing of doc2's minted again");
+}
+
+/// The owner's second published document `F`: `[1,0,1,0,4]`, the chain's
+/// next after `E`, registered published by [`two_editions_world`] alone —
+/// the document another draft's words were published into.
+fn fdoc() -> Address {
+    a(&[1, 0, 1, 0, 4])
+}
+
+/// `F`'s content element `k`.
+fn fca(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 4, 0, 1, k])
+}
+
+/// [`edition_world`] with `F` registered published beside `E`.
+fn two_editions_world() -> World {
+    let world = edition_world();
+    World { m3: world.m3.apply_m3(Seq(0), &M3Rec::allocate(fdoc(), true)), ..world }
+}
+
+/// A COUNTERPART INTO ANOTHER DOCUMENT (the link-sets design §5.5: a window
+/// onto a run of any draft the person reads that an earlier shot re-minted
+/// is re-composed by reference to the record's `to`, in whichever document
+/// it lies): doc2 is F's draft, its `x` and `y` published into F by two
+/// shots — two records homed in doc2, `to` F's identity; doc1, E's
+/// rendering draft, holds doc2's words by transclusion from before. At a
+/// visibility class that does not admit doc2 the run re-composed to F's
+/// identity with its place is refused `StrayPlaceUnrecorded`, nothing
+/// committed. At the caller's own class the price counts the two records
+/// the stab finds, and the commit re-windows doc1 onto F's identity
+/// through them, piece by piece — the fresh run windowing F, the document
+/// whose shot minted it — the member holding F's words by reference, no
+/// record written, nothing minted in F.
+#[test]
+fn a_window_onto_words_published_into_another_document_is_re_windowed_through_that_drafts_record() {
+    use skep_links::{price_staged_bytes, stored_tumbler_bytes, CORRESPONDENCE_RECORD_BYTES, KEPT_PLACE_BYTES, PLACED_RUN_BYTES, REINSERTED_VALUE_BYTES, SHOT_BYTES};
+    let k = kernel_over(two_editions_world());
+    draft_holding(&k, "ab");
+    other_draft_holding(&k, "xy");
+    Vstream::new(&k).copy(P1, &doc1(), vp(1, 3), &[spec(&doc2(), 1, 1, 2)], AsOf::Typed(k.current_seq())).expect("doc1 a b x y, the transclusion");
+    let (into_e, into_f) = (PublishTarget::Document(pdoc()), PublishTarget::Document(fdoc()));
+    let none = PublishDeposits::default();
+    let w = writer(&k);
+    // doc2 into F, twice: `x`, then `y` beside it — two records in doc2.
+    let first = Shot { base: None, draft: Some(doc2()), also: vec![], runs: vec![shot_run(&doc2(), &ca2(1), 1)] };
+    let (f1, _) = w.publication(P1, &into_f, &first, &places(1, &[(0, 1)]), &none).expect("F.1");
+    let second = Shot {
+        base: Some(skep_arrangement::Base { member: f1, extent: n(1) }),
+        draft: Some(doc2()),
+        also: vec![],
+        runs: vec![shot_run(&fdoc(), &fca(1), 1), shot_run(&doc2(), &ca2(2), 1)],
+    };
+    w.publication(P1, &into_f, &second, &places(2, &[(1, 2)]), &none).expect("F.2");
+    assert_eq!(records_in_doc2(&k), vec![record(&run(&ca2(1), 1), &run(&fca(1), 1)), record(&run(&ca2(2), 1), &run(&fca(2), 1))], "two records homed in doc2, `to` F's identity");
+    assert_eq!(runs_of(&k, &doc2()), vec![run(&fca(1), 2)], "doc2 re-windowed onto F");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 2), run(&ca2(1), 2)], "the premise: doc1 holds doc2's old identity");
+    // doc1's shot into E: its own `a b` with its place, the window
+    // re-composed to F's identity with its place.
+    let the_shot = Shot { base: None, draft: Some(doc1()), also: vec![], runs: vec![shot_run(&doc1(), &ca(1), 2), shot_run(&fdoc(), &fca(1), 2)] };
+    let the_places = places(2, &[(0, 1), (1, 3)]);
+    let before = k.snapshot();
+    let all_but_doc2: &Visibility<'_, World> = &|_: &World, d: &Address| *d != doc2();
+    assert_eq!(
+        refused(writer_at(&k, all_but_doc2).publication(P1, &into_e, &the_shot, &the_places, &none)),
+        PublicationError::StrayPlaceUnrecorded { index: 1 },
+        "the records' home unreadable to the caller: no readable record covers the run"
+    );
+    assert_eq!(k.snapshot().seq(), before.seq(), "nothing committed");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&ca(1), 2), run(&ca2(1), 2)], "the draft unchanged");
+    // The price: the all-homes stab finds doc2's two records for the placed
+    // run of F's words — two pieces, not one.
+    let drafted = SHOT_BYTES + stored_tumbler_bytes(doc1().tumbler());
+    assert_eq!(
+        price_staged_bytes(before.world(), &into_e, &the_shot, &the_places, &none),
+        drafted + (PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES) + (PLACED_RUN_BYTES + 2 * KEPT_PLACE_BYTES) + 2 * REINSERTED_VALUE_BYTES,
+        "the draft-native run as one piece; the placed run of F's words at its two records"
+    );
+    let (m1, _) = w.publication(P1, &into_e, &the_shot, &the_places, &none).expect("re-windowed onto F's identity through doc2's records");
+    assert_eq!(m1, pmember(1));
+    assert_eq!(bytes_of(&k, &doc1()), "abxy", "the same bytes");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 2), run(&fca(1), 2)], "doc1's fresh identity, then F's for doc2's words");
+    assert!(footprint(&k, &doc1(), &run(&ca2(1), 2)).is_empty(), "doc2's identity arranged nowhere in doc1");
+    assert_eq!(bytes_of(&k, &m1), "abxy");
+    assert_eq!(runs_of(&k, &m1), vec![run(&pca(1), 2), run(&fca(1), 2)], "the member holds F's words by reference");
+    assert_eq!(records_in_doc1(&k), vec![record(&run(&ca(1), 2), &run(&pca(1), 2))], "doc1's own record alone, none for the window");
+    assert_eq!(records_in_doc2(&k).len(), 2, "doc2's records stand");
+    let s = k.snapshot();
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(3)), "E minted doc1's words alone");
+    assert_eq!(s.world().m3().next_content_address(&fdoc()), Some(fca(3)), "nothing minted in F");
 }
 
 // ───────────────────────── the deposits in the one commit (S3) ─────────────────────────

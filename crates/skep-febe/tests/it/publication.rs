@@ -663,11 +663,15 @@ fn a_shot_with_kept_places_re_windows_the_draft_and_a_moved_place_is_refused_wit
 /// words, E's own identity, with their place beside: ONE commit (the ack's
 /// `at` the position after it) after which the draft images E's identity at
 /// the place and the member holds the run by reference, twice. Then
-/// identity of E minted from another draft's words, re-composed from this
-/// draft with a place, is lowered `stray_place_unrecorded`, permanent,
-/// `site.index` the `runs` entry and nothing else, committing nothing. The
-/// places pass through M10 verbatim: what is pinned here is the surface's
-/// dispatch and the lowering's shape.
+/// identity of E minted from another draft's words, recorded there alone,
+/// re-composed from this draft with a place: the record is FOUND wherever
+/// homed (the same user's draft), and the draft does not arrange the
+/// other's words at the place — lowered `kept_place_moved`; and a window
+/// onto the other draft's own private words with a place, which no record
+/// names, is admitted by the codec and lowered `stray_place_unrecorded`,
+/// permanent, `site.index` the `runs` entry and nothing else, committing
+/// nothing. The places pass through M10 verbatim: what is pinned here is
+/// the surface's dispatch and the lowering's shape.
 #[test]
 fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unrecorded_one_is_refused_with_its_entry() {
     let fx = setup();
@@ -704,16 +708,25 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
     assert_eq!(image_at(&draft, 6, 1), vec![], "five positions: the draft's own words nowhere");
     assert_eq!(image_at(&second, 1, 2), vec![fresh.clone()], "the member holds the run by reference");
     assert_eq!(image_at(&second, 3, 2), vec![fresh.clone()], "twice");
-    // Unrecorded: another draft's words minted into E, recorded there alone.
+    // Recorded elsewhere: another draft's words minted into E, recorded
+    // there alone — found by the widened read, and then the draft arranges
+    // its own `a` where the other's words are asked for.
     let other = create_doc(&fx);
     let (other_start, _) = insert3(&fx, &other);
-    let others = ShotRun { origin: other.clone(), run: Run::new(other_start, nat(3)).expect("x y z") };
-    let third = Shot { base: Some(Base { member: second.clone(), extent: nat(4) }), draft: Some(other.clone()), also: vec![], runs: vec![by_reference.clone(), by_reference.clone(), others] };
+    let others = ShotRun { origin: other.clone(), run: Run::new(other_start.clone(), nat(3)).expect("x y z") };
+    let third = Shot { base: Some(Base { member: second.clone(), extent: nat(4) }), draft: Some(other.clone()), also: vec![], runs: vec![by_reference.clone(), by_reference.clone(), others.clone()] };
     let (third, _) = ack_addr(ex(&fx.febe, fx.user, Op::Publish { target: into_e.clone(), shot: third, places: vec![], deposits: PublishDeposits::default() }));
     let others_fresh = ShotRun { origin: edition.clone(), run: Run::new(under(&edition, &[0, 1, 3]), nat(3)).expect("the other's fresh run") };
-    let stale = Shot { base: Some(Base { member: third, extent: nat(7) }), draft: Some(draft.clone()), also: vec![], runs: vec![by_reference.clone(), by_reference, others_fresh] };
+    let stale = Shot { base: Some(Base { member: third.clone(), extent: nat(7) }), draft: Some(draft.clone()), also: vec![], runs: vec![by_reference.clone(), by_reference.clone(), others_fresh] };
     let before = fx.febe.log_position();
-    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { target: into_e, shot: stale, places: vec![None, None, Some(vp(1, 1))], deposits: PublishDeposits::default() }));
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { target: into_e.clone(), shot: stale, places: vec![None, None, Some(vp(1, 1))], deposits: PublishDeposits::default() }));
+    assert_eq!(rej.code, RejectCode::KeptPlaceMoved, "the other draft's record is found, and the check asks this draft for its words: {rej}");
+    assert_eq!(rej.site.as_ref().and_then(|s| s.index), Some(2));
+    assert_eq!(fx.febe.log_position(), before, "nothing committed");
+    // Unrecorded: a window onto the other draft's own private words — which
+    // no record names as its `to` — with a place.
+    let window = Shot { base: Some(Base { member: third, extent: nat(7) }), draft: Some(draft.clone()), also: vec![], runs: vec![by_reference.clone(), by_reference, others] };
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Publish { target: into_e, shot: window, places: vec![None, None, Some(vp(1, 1))], deposits: PublishDeposits::default() }));
     assert_eq!(rej.code, RejectCode::StrayPlaceUnrecorded, "{rej}");
     assert_eq!(rej.disposition, skep_febe::Disposition::Permanent);
     let site = rej.site.expect("the entry rides the site");

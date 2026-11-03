@@ -21,11 +21,13 @@
 //! that the draft still arranges that run's identity at that place and its
 //! replacement there by the fresh run it became, a placement and a removal
 //! ([`stage_reinstate_at`], [`stage_delete_at`], M5's) — a draft-native
-//! run's pieces read off the pairing, a stray run's — one of the document's
-//! own identity, re-composed by reference to a record's `to` — off the
-//! draft's records (the child module `stray`); the family's other drafts are
-//! left as they stand, their words published through the records they hold
-//! and healed by the stray path at their own next shot — and
+//! run's pieces read off the pairing, a stray run's — one of published
+//! identity, the document's own or another document's, re-composed by
+//! reference to a record's `to` — off the correspondence records the caller
+//! may read whose `to` covers the run, wherever homed (the child module
+//! `stray`); the family's other drafts are left as they stand, their words
+//! published through the records they hold and healed by the stray path at
+//! their own next shot — and
 //! [`LinkWriter::publication`] the public op: one `transact_attested` over
 //! the union of the shot's keys, each named draft's link key where a run of
 //! its identity is re-inserted, the rendering draft's content key where a
@@ -74,9 +76,10 @@ mod plan;
 // prices them, the price of a request's staged bytes from it, and the
 // maximal and the reachable request's sums against the transaction budget.
 mod sizes;
-// The stray places: the record read that turns a run of the document's own
-// identity, re-composed by reference to a record's `to`, back into the
-// draft words the re-window checks and replaces.
+// The stray places: the record read that turns a run of published identity,
+// re-composed by reference to a record's `to`, back into the draft words
+// the re-window checks and replaces — over every record the caller may
+// read, wherever homed.
 mod stray;
 
 pub use plan::{
@@ -183,7 +186,7 @@ impl ReadPrice {
 /// is no principal — `Caller::System`, which no request path carries — has
 /// no account and so no homes, and prices the draft term alone. The staged
 /// bytes are [`price_staged_bytes`]'s — request arithmetic over the table,
-/// and one stab of the draft's records per stray place. The counts may move
+/// and one stab of every home's records per stray place. The counts may move
 /// between this read and the composite's own, where the transport takes
 /// its lock after it (the survey's C8): the budget is conservative by
 /// design, and the composite reads under the lock exactly as it did
@@ -354,10 +357,13 @@ impl From<EmitCoreError> for PublicationError {
 ///    draft words at that place, then their replacement there by the
 ///    published identity, piece by piece: a draft-native entry's pieces are
 ///    the pairing's, the fresh runs it became; a STRAY entry's — a run of
-///    the document's own identity, re-composed by reference to a
-///    correspondence record's `to` — are the records' (the child module
-///    `stray`), the draft words each record names as its `from`, and a
-///    stray run no record of the draft covers whole refuses
+///    published identity no pairing holds, the document's own or another
+///    document's, re-composed by reference to a correspondence record's
+///    `to` — are the records' (the child module `stray`): every
+///    correspondence record the caller may read whose `to` covers the run,
+///    wherever homed — the rendering draft's, an `also` draft's, a granted
+///    draft's — the draft words each names as its `from`; a stray run no
+///    record the caller may read covers whole refuses
 ///    `StrayPlaceUnrecorded` with the entry. The family's other drafts
 ///    (`also`) are NOT re-windowed: "each shows the words it contributed as
 ///    a COUNTERPART from then on, through the record the shot homed in it
@@ -368,14 +374,17 @@ impl From<EmitCoreError> for PublicationError {
 /// `places` is parallel to `shot.runs` by index, each entry the run's place
 /// or `None`; a shorter list is read as padded with `None`, and an entry
 /// past the runs is nothing's and is ignored. A place belongs to a run of
-/// the rendering draft's identity or to a run of the document's own trunk —
-/// the wire's codec refuses one on a window onto any other document and on
-/// a run of a draft `also` names (`malformed`, with the entry) — and below
-/// that door one on such a window is checked as any place is and re-windows
-/// nothing, the entry having no piece, while one beside an `also` draft's
-/// run is checked as any place is against the rendering draft, which
-/// arranges that identity there or refuses `KeptPlaceMoved`; one with no
-/// draft named is ignored with the re-window, which has no draft to window.
+/// the rendering draft's identity or to a run of any published document's
+/// — the document's own trunk, or another document whose words the draft
+/// holds by transclusion — the wire's codec refusing one on a run of a
+/// draft `also` names alone (`malformed`, with the entry); below that door
+/// a placed run no pairing holds is re-windowed through the records or
+/// refused `StrayPlaceUnrecorded` — an ordinary window, which no record
+/// names, is refused, never silently kept — while one beside an `also`
+/// draft's run is checked as any place is against the rendering draft,
+/// which arranges that identity there or refuses `KeptPlaceMoved`; one with
+/// no draft named is ignored with the re-window, which has no draft to
+/// window.
 ///
 /// The caller's lock keys are the union of the shot's
 /// ([`stage_publish`]'s card), each named draft's `link_lock_key` where
@@ -385,8 +394,9 @@ impl From<EmitCoreError> for PublicationError {
 /// deposit names by address and the account's `document_lock_key` at the
 /// mint form — [`LinkWriter::publication`] supplies exactly that. The visibility class
 /// `readable` is the caller's: the shot's source gate consults it per
-/// origin, and every deposit's gate is handed it as every deposit's is —
-/// the claim's dedup runs at it, a guaranteed miss.
+/// origin, every deposit's gate is handed it as every deposit's is — the
+/// claim's dedup runs at it, a guaranteed miss — and the re-window's stray
+/// read keeps a record only where it admits the record's home.
 ///
 /// Returns the member and the pairing [`stage_publish`] returned beside it,
 /// for a wider composite that places the pieces itself.
@@ -489,9 +499,10 @@ where
     }
     // 7. The deposits, exactly as planned.
     stage_deposits(stg, readable, caller, &plan, &member, edition.as_ref(), &trunk_of(doc), shot, &pairing)?;
-    // 8. The re-window, last: the rendering draft alone.
+    // 8. The re-window, last: the rendering draft alone, its stray read at
+    //    the caller's own visibility class.
     if let Some(draft) = shot.draft_document() {
-        stage_rewindow(stg, caller, &draft, &trunk_of(doc), shot, places, &pairing)?;
+        stage_rewindow(stg, readable, caller, &draft, &trunk_of(doc), shot, places, &pairing)?;
     }
     Ok((member, pairing))
 }
@@ -605,18 +616,21 @@ where
 ///     DRAFT-NATIVE entry's are its pieces of the pairing [`stage_publish`]
 ///     returned — the fresh runs it became, or an earlier entry's where it
 ///     placed the identity by reference — tiling the run from its start in
-///     I-order ([`Pairing`]'s contract). A STRAY entry's — a run of the
-///     document's own trunk, which no pairing holds, re-composed by the
-///     client by reference to a correspondence record's `to` where the
-///     draft still arranges that record's `from` (the design's "AND THE
-///     STRAY PLACES WITH THEM") — are read off the draft's records
-///     ([`stray::record_pieces`]): the records homed in the draft whose `to`
-///     covers the entry's span, each cut to the piece it covers and mapped
-///     onto the same piece of its `from`; a span no record covers whole
-///     refuses `StrayPlaceUnrecorded` with the entry, nothing committed. A
-///     window onto another document, which the wire's codec refuses a place
-///     on, has no piece: below that door it is checked as (a) checks any
-///     place and re-windows nothing.
+///     I-order ([`Pairing`]'s contract). A STRAY entry's — a run of
+///     published identity no pairing holds, the document's own trunk's or
+///     ANY other document's, re-composed by the client by reference to a
+///     correspondence record's `to` where the draft still arranges that
+///     record's `from` (the design's "AND THE STRAY PLACES WITH THEM", and
+///     §5.5's counterpart first: a window onto another draft's words that
+///     an earlier shot of that draft published, in this document or in
+///     another) — are read off the records ([`stray::record_pieces`]):
+///     every correspondence record the caller may read whose `to` covers
+///     the entry's span, wherever homed — the draft's, an `also` draft's, a
+///     granted draft's — each cut to the piece it covers and mapped onto
+///     the same piece of its `from`; a span no record the caller may read
+///     covers whole refuses `StrayPlaceUnrecorded` with the entry, nothing
+///     committed — an ordinary window onto another document, which no
+///     record names, among them: it is refused, never silently kept.
 /// (a) THE CHECK: the V-span of the entry's width that opens at the place
 ///     resolves, in the draft as the records staged so far left it
 ///     (`stg.working()`), to exactly the pieces' `from` runs in sequence —
@@ -640,8 +654,14 @@ where
 /// (b) THE REPLACEMENT, piece by piece, each at its offset from the place
 ///     (the widths before it, summed): the `to` piece placed by identity at
 ///     the place plus the offset ([`stage_reinstate_at`], windowing the
-///     edition's trunk, which minted it — an identity `reinstate` admits
-///     into a private draft as any), which moves the `from` piece right by
+///     trunk of the document the piece's `to` lies under — the document
+///     whose shot minted it: this request's trunk for a draft-native piece
+///     and for a stray of its own identity, another document's for a
+///     record's `to` minted there — a published identity `reinstate`
+///     admits into a private draft as any; its precondition on the origin's
+///     readability holds, the record's `to` being a published member's
+///     identity, readable to every caller, and its registration check met
+///     by the same token), which moves the `from` piece right by
 ///     the `to` piece's width; then that piece's position RE-DERIVED off
 ///     the working world — the `to` piece's width past its place, where the
 ///     placement left it, asked of the arrangement again and never carried
@@ -655,16 +675,16 @@ where
 ///     (links move with identity, `reinstate`'s rule).
 ///
 /// Cost: per place, one resolution of the entry's span over the draft's
-/// run-list, and two records per piece; per stray place one stab of the
-/// draft's TO slot beside it.
+/// run-list, and two records per piece; per stray place one stab of the TO
+/// slot across every home beside it, each hit asked of `readable` once.
 ///
 /// # Errors
 ///
 /// `Reinstate(NotContentSubspace)` for a place outside the content subspace
 /// — the placement's own verdict for the position, asked ahead of the check,
 /// which the wire's codec refuses first; `StrayPlaceUnrecorded { index }`
-/// where a stray entry's span is not covered whole by the draft's records;
-/// `KeptPlaceMoved { index }` where the check fails, and where the
+/// where a stray entry's span is not covered whole by the records the
+/// caller may read; `KeptPlaceMoved { index }` where the check fails, and where the
 /// re-derivation finds the piece elsewhere than the placement left it,
 /// which the check rules out; `Reinstate` with the placement's own —
 /// `PublishedTarget` where the draft is a published document (a draft named
@@ -672,8 +692,10 @@ where
 /// run-list is at M5's budget; the rest made unreachable by the check and
 /// the admission — and `Delete` with the removal's, `PublishedTarget` alone
 /// reachable, the placement refusing it first.
+#[allow(clippy::too_many_arguments)]
 fn stage_rewindow<W>(
     stg: &mut Staging<W>,
+    readable: &Visibility<'_, W>,
     caller: Caller,
     draft: &Address,
     trunk: &Address,
@@ -690,25 +712,17 @@ where
             return Err(ReinstateError::NotContentSubspace.into());
         }
         // The pieces: the pairing's for a draft-native entry, the records'
-        // for a stray entry of the trunk's own identity.
+        // for a stray entry — a run of published identity no pairing holds,
+        // of whichever document — read wherever homed at the caller's own
+        // visibility class.
         let mut pieces: Vec<stray::Piece> = pairing
             .iter()
             .filter(|piece| piece.index == index)
             .map(|piece| stray::Piece { from: piece.from.clone(), to: piece.to.clone() })
             .collect();
         if pieces.is_empty() {
-            let origin = document_of(entry.run.i_start()).map(|d| trunk_of(&d));
-            if origin.as_ref() == Some(trunk) {
-                pieces = stray::record_pieces(stg.working(), draft, &entry.run)
-                    .ok_or(PublicationError::StrayPlaceUnrecorded { index })?;
-            } else {
-                // A window onto another document, below the codec's door:
-                // checked as any place is, and re-windowing nothing.
-                if !arranged_at(stg.working().m5(), draft, place, [&entry.run]) {
-                    return Err(PublicationError::KeptPlaceMoved { index });
-                }
-                continue;
-            }
+            pieces = stray::record_pieces(stg.working(), readable, &entry.run)
+                .ok_or(PublicationError::StrayPlaceUnrecorded { index })?;
         }
         // (a) The check, of the working world: the pieces' draft words, at
         //     the place, in their order, and nothing else over the span.
@@ -724,7 +738,12 @@ where
         let mut offset = Nat::from(0u32);
         for piece in &pieces {
             let at = VPos::content(&place.ordinal + &offset);
-            let fresh = ShotRun { origin: trunk.clone(), run: piece.to.clone() };
+            // The fresh run windows the document whose shot minted the
+            // piece's `to`: this request's trunk for a draft-native piece
+            // and a stray of its own identity, another document's for a
+            // record's `to` minted there.
+            let origin = document_of(piece.to.i_start()).map_or_else(|| trunk.clone(), |d| trunk_of(&d));
+            let fresh = ShotRun { origin, run: piece.to.clone() };
             stage_reinstate_at(stg, caller, draft, at.clone(), &[fresh], AsOf::Unchecked)?;
             // The draft-native piece, where the placement left it: the
             // published piece's width past its place, read off the working

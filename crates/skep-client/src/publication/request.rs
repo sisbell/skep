@@ -23,8 +23,11 @@
 //! publish-first is NOT this request, which stays inert; DROP leaves the
 //! run out; KEEP PRIVATE sends it as a window with no place beside it) and
 //! THE COUNTERPART offered first where a record of a draft the person reads
-//! names a window's words; the twin pre-check re-composing what the draft's
-//! records already name; then `links` — each switched-on row's offered
+//! names a window's words — taken, the covered piece re-composed by
+//! reference to the record's `to`, in this document or another, with its
+//! kept place beside it as a stray's, so the commit re-windows the draft
+//! there through the record; the twin pre-check re-composing what the
+//! draft's records already name; then `links` — each switched-on row's offered
 //! links and the formatting line's marks, `home` the tag `member` or the
 //! row's picked set, `from`/`to` in the address form, the I-span form or THE
 //! MEMBER-POSITION FORM for an end on this shot's new words, spelled
@@ -76,7 +79,8 @@ pub enum Answer {
     /// Send the run as a window onto the private origin, no place beside it.
     KeepPrivate,
     /// Take the counterpart: the run re-composed by reference to the
-    /// record's published words.
+    /// record's published words, its covered piece sent with its kept place
+    /// so the commit re-windows the draft there through the record.
     Counterpart,
 }
 
@@ -287,7 +291,9 @@ pub struct Request {
     pub runs: Vec<Run>,
     /// The kept places, parallel to the runs.
     pub places: Vec<Option<u64>>,
-    /// Per run, the records covering a stray run re-composed by reference.
+    /// Per run, the records covering a run re-composed by reference with a
+    /// place — a stray run the twin pre-check re-composed, or a counterpart's
+    /// covered piece, one record each; zero elsewhere.
     pub stray_records: Vec<usize>,
     /// The signed body's pieces, parallel to the runs.
     pub pieces: Vec<Piece>,
@@ -628,7 +634,15 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             (_, Some(Answer::PublishFirst)) => publish_first.push(i),
             (_, Some(Answer::Counterpart)) if counterpart.is_some() => {
                 // The part the record covers by reference to its published
-                // words, the rest a window, in the piece's order.
+                // words — in whichever document the record's `to` lies,
+                // this request's or another's — WITH ITS KEPT PLACE, the
+                // rendering draft's own V-position of the piece, so the
+                // commit re-windows the draft there through the record (the
+                // link-sets design §5.5, the counterpart first; its "KEPT
+                // PLACE sent beside it as a stray's is"); the uncovered
+                // remainder a window with none, in the piece's order. A
+                // request whose only place is such a piece is NOT inert: the
+                // healed window is a change to the draft.
                 let c = counterpart.as_ref().expect("a counterpart");
                 let origin = parse_address(&c.to.document().unwrap_or_default()).unwrap_or_else(|| run.origin.clone());
                 for (piece, ordinal) in pieces {
@@ -638,9 +652,10 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
                         let covered = c.from.first <= cursor && cursor < hi;
                         let end = if covered { hi } else if c.from.first > cursor && c.from.first < piece.reach() { c.from.first } else { piece.reach() };
                         let run_out = if covered { Run::new(origin.clone(), c.to.first + (cursor - c.from.first), end - cursor) } else { Run::new(piece.origin.clone(), cursor, end - cursor) };
+                        let in_draft = ordinal + (cursor - piece.i_start);
                         runs.push(run_out);
-                        places.push(None);
-                        draft_places.push(Some(ordinal + (cursor - piece.i_start)));
+                        places.push(covered.then_some(in_draft));
+                        draft_places.push(Some(in_draft));
                         cursor = end;
                     }
                 }

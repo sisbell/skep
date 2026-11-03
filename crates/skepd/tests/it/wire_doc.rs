@@ -747,21 +747,25 @@ fn doc_states_the_kept_places_and_their_refusal() {
 }
 
 /// THE STRAY PLACES (the link-sets design §5.7, "AND THE STRAY PLACES WITH
-/// THEM"; lane F4): §Arrangement's `places` names a run of either kind — the
-/// draft's, or a stray run of `doc`'s own identity re-composed by reference
-/// to a record — and the window it still refuses; §The publish shot and
-/// head-float states the stray arm, its record read, its check and its
-/// token; §Rejection codes carries the token and its table row. The
+/// THEM"; §5.5, the counterpart first; lane F4): §Arrangement's `places`
+/// names a run of either kind — the draft's, or a stray run of `doc`'s own
+/// identity or of another document's words, re-composed by reference to a
+/// record the caller may read, wherever homed — and the one run a place
+/// may not stand beside, an `also` draft's; §The publish shot and
+/// head-float states the stray arm, its record read over every record the
+/// caller may read, its check, its token and the window it refuses rather
+/// than keeps; §Rejection codes carries the token and its table row. The
 /// daemon's answers are pinned in `publish.rs` and the stores' suites; this
 /// pins that the contract says so.
 #[test]
 fn doc_states_the_stray_places_and_their_refusal() {
     let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
     for fact in [
-        "or, for a STRAY run — a run of `doc`'s own identity",
-        "re-composed by reference to a correspondence record of the draft",
-        "`stray_place_unrecorded` where no record of the draft names a stray run's identity whole",
-        "neither the `draft` nor `doc`'s own trunk — a window onto another document, never re-windowed",
+        "or, for a STRAY run — a run of `doc`'s own identity, or of another published document's words the draft holds",
+        "re-composed by reference to a correspondence record the caller may read, wherever homed",
+        "`stray_place_unrecorded` where no record the caller may read names a stray run's identity whole",
+        "a place beside an ordinary window onto another document, which no record names, is refused so, never silently kept",
+        "A place beside a run of a draft `also` names, whose draft is left as it stands, one in a request naming no `draft`, one outside the content subspace, or one past the runs is `malformed`, `site.index` the entry; a place stands beside any other run, at either form",
     ] {
         assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
     }
@@ -769,17 +773,23 @@ fn doc_states_the_stray_places_and_their_refusal() {
     for fact in [
         "AND THE STRAY PLACES WITH THEM",
         "re-composes such a run BY REFERENCE to the record's `to`",
+        "the commit reads every correspondence record the caller may read whose `to` covers the run, wherever homed",
         "checks that the draft still arranges the record's `from` words at the place, by identity as above",
         "re-windows them there onto the record's `to` in the same transaction",
         "no identity is minted and no record written",
-        "A stray run no record of the draft covers whole is refused `stray_place_unrecorded`",
+        "A record the caller may not read is never used",
+        "A stray run no record the caller may read covers whole is refused `stray_place_unrecorded`",
+        "a placed window is re-windowed through a record or refused, never silently kept",
+        "a place stands beside any other run, at either form, and whether it re-windows is the commit's to decide",
         "| `stray_place_unrecorded` | permanent | `index` = the `runs` entry |",
+        "no correspondence record the caller may read names that identity whole as its `to`, wherever homed",
         "* `stray_place_unrecorded` —",
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
     assert!(codes.contains("and `stray_place_unrecorded` (the re-window's stray arm"), "§Rejection codes carries the token");
+    assert!(codes.contains("that no correspondence record the caller may read names whole as its to-span, wherever homed"), "§Rejection codes states the widened read");
 }
 
 /// THE STAGED BYTES, THE PRICE's FIFTH TERM (the link-sets design §5.6, M6;

@@ -687,7 +687,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
             if claim && shot.draft.is_none() {
                 return Err(PErr("field 'claim': the edition claim names the rendering draft, so 'draft' is required beside it".into()).into());
             }
-            let places = fields.places(&shot, &target)?;
+            let places = fields.places(&shot)?;
             let deposits = fields.deposits(&shot, &target, claim)?;
             Op::Publish { target, shot, places, deposits }
         }
@@ -1228,17 +1228,21 @@ impl Fields {
     /// Outside the signed preimage, as `draft` is: the composer reads the
     /// shot alone, and this is read after it, against the runs it took.
     ///
-    /// A place stands beside a run of either kind the re-window has words
-    /// for: a run of THE RENDERING DRAFT's own identity, whose stated
-    /// `origin` projects to the request's `draft`, and a STRAY run, one of
-    /// the document's own identity — its `origin` projecting to the trunk of
-    /// `doc` — which the client re-composed by reference to a correspondence
-    /// record's published words where the draft still arranges the record's
-    /// draft words (the design's "AND THE STRAY PLACES WITH THEM"); a run of
-    /// a draft `also` names takes no place — those drafts are left as they
-    /// stand, the rendering draft alone re-windowed (B3-S11 P5) — a window
-    /// onto any other document is never re-windowed, and at the mint form
-    /// the edition has no identity before the commit, so no run is its own.
+    /// A place stands beside any run the re-window may have words for: a
+    /// run of THE RENDERING DRAFT's own identity, whose stated `origin`
+    /// projects to the request's `draft`, and a run of any published
+    /// document's identity — a STRAY run of the document's own, its
+    /// `origin` projecting to the trunk of `doc`, or a run of another
+    /// document's words — which the client re-composed by reference to a
+    /// correspondence record's published words where the draft still
+    /// arranges the record's draft words (the design's "AND THE STRAY
+    /// PLACES WITH THEM"; §5.5's counterpart first): whether such a run
+    /// re-windows is the commit's to decide, through the records the caller
+    /// may read, wherever homed, refusing `stray_place_unrecorded` where
+    /// none covers it. One rule at both forms. A run of a draft `also`
+    /// names takes no place — those drafts are left as they stand, the
+    /// rendering draft alone re-windowed (B3-S11 P5) — and a request naming
+    /// no draft carries none, the re-window having no draft to window.
     ///
     /// # Errors
     ///
@@ -1246,13 +1250,10 @@ impl Fields {
     /// its `index` — the `malformed` rejection's `site.index` — where the
     /// list is longer than `runs` (the first entry past them), where a
     /// non-null entry is no V-position, lies outside the content subspace
-    /// (a kept place is a content position), or sits beside a run whose
-    /// stated `origin` projects to neither the request's `draft` nor the
-    /// trunk of its `doc` — a run of a draft `also` names among them: a
-    /// place belongs to a run of the rendering draft's identity or a stray
-    /// run of the document's own identity, and a request naming no draft
-    /// has none.
-    fn places(&mut self, shot: &Shot, target: &PublishTarget) -> Result<Vec<Option<VPos>>, Refusal> {
+    /// (a kept place is a content position), sits beside a run whose stated
+    /// `origin` projects to a draft `also` names, or stands in a request
+    /// naming no draft.
+    fn places(&mut self, shot: &Shot) -> Result<Vec<Option<VPos>>, Refusal> {
         let Some(v) = self.take_opt("places") else { return Ok(Vec::new()) };
         let arr =
             v.as_array().ok_or_else(|| PErr("field 'places': expected a JSON array".into()))?;
@@ -1262,10 +1263,8 @@ impl Fields {
                 Some(shot.runs.len()),
             ));
         }
-        let draft = shot.draft_document();
-        // The document's own trunk at the document form; the account at the
-        // mint form, which no run's origin projects to.
-        let own = target.term();
+        let drafted = shot.draft.is_some();
+        let also: Vec<Address> = shot.also.iter().map(trunk_of).collect();
         let at = |index: usize, fault: &str| {
             Refusal(format!("field 'places': [{index}]: {fault}"), Some(index))
         };
@@ -1279,11 +1278,13 @@ impl Fields {
             if !place.is_content() {
                 return Err(at(index, "a kept place is a content position"));
             }
-            let origin = trunk_of(&run.origin);
-            if draft.is_none() || (draft.as_ref() != Some(&origin) && origin != own) {
+            if !drafted {
+                return Err(at(index, "a kept place is a place in the rendering draft, which the request does not name"));
+            }
+            if also.contains(&trunk_of(&run.origin)) {
                 return Err(at(
                     index,
-                    "a kept place belongs to a run of the rendering draft's own identity, whose origin is the request's 'draft', or to a stray run of the document's own identity; a run of a draft 'also' names takes no place, and a window onto another document is never re-windowed",
+                    "a kept place belongs to a run of the rendering draft's own identity or to a run of a published document's words, which the commit re-windows through a correspondence record or refuses; a run of a draft 'also' names takes no place",
                 ));
             }
             out.push(Some(place));

@@ -11,7 +11,10 @@
 //! kept place beside it as a draft-native run's — the stray places the
 //! commit re-windows — and a piece of an `also` draft's with none, so the
 //! request never meets `already_published` for words any draft of the
-//! family already published.
+//! family already published. A run of no named draft's identity passes
+//! through as given: with its place where the request's counterpart arm
+//! sent one beside a record's covered piece — counted as the one record the
+//! commit reads for that piece — and with none otherwise.
 //!
 //! **The landed test, after a lost answer or `already_published`.** ONE
 //! composition answering whether THIS request's effect committed and in
@@ -74,7 +77,9 @@ pub struct Recomposed {
     /// — a window's `None`.
     pub draft_places: Vec<Option<u64>>,
     /// Per run, the records covering it where it was re-composed by
-    /// reference; zero elsewhere.
+    /// reference with a place — one for a piece this pre-check re-composed,
+    /// one for a counterpart's covered piece the request's arm placed;
+    /// zero elsewhere.
     pub stray_records: Vec<usize>,
     /// The records the pre-check read.
     pub records: Vec<Record>,
@@ -100,7 +105,10 @@ pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &
 /// One four-set read per named draft — the rendering draft first, then
 /// each `also` draft, in the request's order — over that draft's records
 /// for the runs of its own identity; a named draft with no run of its
-/// identity in `runs` is not read.
+/// identity in `runs` is not read. A run of no named draft's identity is
+/// passed through as given, its record count `1` where it carries a place
+/// — the counterpart's covered piece, re-composed by the request's arm by
+/// reference to a record the panel read — and `0` otherwise.
 pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>]) -> Result<Recomposed, Fault> {
     door.step("twin_precheck");
     let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
@@ -128,7 +136,9 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
         let place = places.get(k).copied().flatten();
         let in_draft = draft_places.get(k).copied().flatten();
         if !inputs.is_named_draft(&run.origin) {
-            out.push(run.clone(), place, in_draft, 0);
+            // A placed run of no named draft's identity is a counterpart's
+            // covered piece: the one record the commit reads for it.
+            out.push(run.clone(), place, in_draft, usize::from(place.is_some()));
             continue;
         }
         // The pieces: each ordinal of the run either covered by one record

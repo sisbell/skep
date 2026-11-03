@@ -520,8 +520,9 @@ pub enum PlanFault {
 /// record's mint and seat; then the deposits as planned — each deposit's
 /// gate (`NotOwner` on a home the plan did not read, a backstop), its mint
 /// and its seat; then THE RE-WINDOW, per `runs` entry that carries a kept
-/// place, in `runs`' order: for a stray run the records' read
-/// (`StrayPlaceUnrecorded`), the check by identity (`KeptPlaceMoved`), then
+/// place, in `runs`' order: for a stray run the read of the records the
+/// caller may read, wherever homed (`StrayPlaceUnrecorded`), the check by
+/// identity (`KeptPlaceMoved`), then
 /// the placement's own verdicts (`Reinstate`) and the removal's (`Delete`)
 /// as the fresh run is put at the place and the draft-native piece taken
 /// out behind it.
@@ -566,18 +567,21 @@ pub enum PublicationError {
         /// draft no longer honours.
         index: usize,
     },
-    /// A kept place stands beside a run of the document's own identity — a
-    /// stray run, re-composed by reference to a correspondence record's
-    /// published words (the link-sets design §5.7, THE STRAY PLACES) — and
-    /// the records homed in the draft do not name that identity as their
-    /// `to`, whole: no record covers the span, or the records covering it
-    /// leave a gap. `index` is the `runs` entry. Permanent: a record names
-    /// fresh identity once, at the publication that minted it, so no later
-    /// commit can cover the span; the client re-reads the draft's records
-    /// and re-composes the run by them. Nothing is committed.
+    /// A kept place stands beside a run of published identity no pairing
+    /// holds — a stray run of the document's own, or a run of another
+    /// document's words, re-composed by reference to a correspondence
+    /// record's published words (the link-sets design §5.7, THE STRAY
+    /// PLACES; §5.5, the counterpart first) — and no correspondence record
+    /// the caller may read covers the run whole as its `to`, wherever homed:
+    /// no record covers the span, the records covering it leave a gap, or
+    /// the only record that would is homed in a draft the caller may not
+    /// read. `index` is the `runs` entry. Permanent: a record names fresh
+    /// identity once, at the publication that minted it, so no later commit
+    /// can cover the span; the client re-reads the records and re-composes
+    /// the run by them. Nothing is committed.
     StrayPlaceUnrecorded {
         /// The position in the request's `runs` of the entry whose identity
-        /// no record of the draft names whole.
+        /// no record the caller may read names whole.
         index: usize,
     },
     /// The re-window's placement of a fresh run at a kept place was refused —
@@ -905,7 +909,7 @@ impl fmt::Display for PublicationError {
             ),
             PublicationError::StrayPlaceUnrecorded { index } => write!(
                 f,
-                "publication: no correspondence record of the draft names run {index}'s identity whole as its published words, so its kept place re-windows nothing"
+                "publication: no correspondence record the caller may read names run {index}'s identity whole as its published words, so its kept place re-windows nothing"
             ),
             PublicationError::Reinstate(e) => write!(f, "publication: the re-window's placement refused: {e}"),
             PublicationError::Delete(e) => write!(f, "publication: the re-window's removal refused: {e}"),

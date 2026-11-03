@@ -699,16 +699,17 @@ fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
 /// parses to no place, and marshals to no member; a list with a place
 /// parses to `runs`' length, a short one padded with `null`, and marshals
 /// as that list, which parses back to the same request. A place stands
-/// beside a draft-native run or beside a run of `doc`'s own identity — a
-/// STRAY run, re-composed by reference to a record's published words — and
+/// beside a draft-native run or beside a run of any published document's
+/// identity — a STRAY run of `doc`'s own, or another document's words, each
+/// re-composed by reference to a record's published words, whether it
+/// re-windows being the commit's to decide — at either form, one rule; and
 /// the shape refusals name their entry in the `malformed` rejection's
 /// `site.index`: a list longer than `runs` (the first entry past them), a
-/// place on a window onto any other document, a place with no draft named,
-/// a place beside any run at the mint form (the edition has no identity
-/// before the commit), a place outside the content subspace, one that is
-/// no V-position, one with a member of its own; a `places` that is no array
-/// is refused with no site. The member is read against the envelope as
-/// every other is: `extra` beside it stays refused.
+/// place with no draft named, a place outside the content subspace, one
+/// that is no V-position, one with a member of its own (a place beside a
+/// run of a draft `also` names is the family cell's); a `places` that is
+/// no array is refused with no site. The member is read against the
+/// envelope as every other is: `extra` beside it stays refused.
 #[test]
 fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     let codec = JsonCodec;
@@ -766,20 +767,26 @@ fn a_shots_kept_places_are_parallel_to_its_runs_and_refused_by_entry() {
     let req = parse_ok(&codec, &drafted(r#","places":[{"subspace":"1","ordinal":"1"},null]"#));
     assert_eq!(places_of(&req), vec![Some(vp(1, 1)), None], "a place on the edition's own run is a stray place");
     assert!(canonical(&req).contains(r#""places":[{"ordinal":"1","subspace":"1"},null]"#));
-    // A window onto another document, with the draft named, stays refused;
-    // so does any run at the mint form, where no run is the edition's own.
+    // A place beside a window onto another document, with the draft named,
+    // is ADMITTED and carried by the canonical form — whether it re-windows
+    // is the commit's, through the records the caller may read — and so is
+    // one beside any run at the mint form: one rule at both forms.
     let windowed = |places: &str| {
         format!(
             r#"{{"op":"publish","doc":"1.0.1.0.1","draft":"1.0.1.0.7","runs":[{{"origin":"1.0.1.0.7","i_start":"1.0.1.0.7.0.1.1","width":"2"}},{{"origin":"1.0.1.0.9","i_start":"1.0.1.0.9.0.1.1","width":"1"}}]{places}}}"#
         )
         .into_bytes()
     };
-    assert_eq!(index_of(&windowed(r#","places":[null,{"subspace":"1","ordinal":"3"}]"#)), Some(1), "a window onto another document");
+    let req = parse_ok(&codec, &windowed(r#","places":[null,{"subspace":"1","ordinal":"3"}]"#));
+    assert_eq!(places_of(&req), vec![None, Some(vp(1, 3))], "a place beside another document's run is admitted");
+    let text = canonical(&req);
+    assert!(text.contains(r#""places":[null,{"ordinal":"3","subspace":"1"}]"#), "{text}");
+    assert_eq!(parse_ok(&codec, text.as_bytes()), req, "the canonical form carries it and parses to the same request");
     assert_eq!(places_of(&parse_ok(&codec, &windowed(r#","places":[{"subspace":"1","ordinal":"1"},null]"#))), vec![Some(vp(1, 1)), None], "the draft's run beside it, admitted");
     let minted = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.7","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
-    assert_eq!(index_of(minted), Some(0), "at the mint form no run is the edition's own");
-    assert_eq!(index_of(&frame("", r#","places":[null,{"subspace":"1","ordinal":"4"}]"#)), Some(1), "no draft named: no run is draft-native");
-    assert_eq!(index_of(&frame("", r#","places":[{"subspace":"1","ordinal":"1"},null]"#)), Some(0), "no draft named: no stray run either, the records living in the draft");
+    assert_eq!(places_of(&parse_ok(&codec, minted)), vec![Some(vp(1, 1))], "at the mint form a place stands beside another document's run as at the document form");
+    assert_eq!(index_of(&frame("", r#","places":[null,{"subspace":"1","ordinal":"4"}]"#)), Some(1), "no draft named: no draft to window");
+    assert_eq!(index_of(&frame("", r#","places":[{"subspace":"1","ordinal":"1"},null]"#)), Some(0), "no draft named: no stray run either, the re-window having no draft");
     assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"2","ordinal":"1"}]"#)), Some(1), "the link subspace");
     assert_eq!(index_of(&drafted(r#","places":[null,{"subspace":"1"}]"#)), Some(1), "no V-position");
     assert_eq!(index_of(&drafted(r#","places":[null,7]"#)), Some(1), "no object");
@@ -838,11 +845,15 @@ fn a_shots_also_names_the_familys_other_drafts_and_is_refused_by_entry() {
     assert!(detail.contains("'also'") && index == Some(1), "no address: {detail}");
     let (detail, index) = refused(&frame(r#","draft":"1.0.1.0.7","also":"1.0.1.0.8""#, ""));
     assert!(detail.contains("'also'") && index.is_none(), "no array: {detail}");
-    // A place beside the other draft's run is refused with the entry; the
-    // trunk's own run and the rendering draft's keep theirs.
+    // A place beside the other draft's run is refused with the entry — the
+    // one run a place may not stand beside, at either form; the trunk's
+    // own run and the rendering draft's keep theirs.
     let family = |places: &str| frame(r#","draft":"1.0.1.0.7","also":["1.0.1.0.8"]"#, places);
     let (detail, index) = refused(&family(r#","places":[null,null,{"subspace":"1","ordinal":"6"}]"#));
     assert!(detail.contains("places") && detail.contains("'also'") && index == Some(2), "{detail}");
+    let minted_family = br#"{"op":"publish","mint":true,"account":"1.0.1","draft":"1.0.1.0.7","also":["1.0.1.0.8"],"runs":[{"origin":"1.0.1.0.8","i_start":"1.0.1.0.8.0.1.1","width":"1"}],"places":[{"subspace":"1","ordinal":"1"}]}"#;
+    let (detail, index) = refused(minted_family);
+    assert!(detail.contains("'also'") && index == Some(0), "at the mint form too: {detail}");
     let req = parse_ok(&codec, &family(r#","places":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"4"},null]"#));
     match &req.op {
         Op::Publish { places, .. } => assert_eq!(places, &vec![Some(vp(1, 1)), Some(vp(1, 4)), None]),

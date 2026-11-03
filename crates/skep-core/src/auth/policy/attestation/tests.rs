@@ -150,6 +150,7 @@ fn the_check_answers_the_store_s_own_admission_of_the_shot() {
         target: PublishTarget::Document(h.clone()),
         shot: Shot { base, draft: None, also: vec![], runs: Vec::new() },
         places: Vec::new(),
+        also_places: Vec::new(),
         deposits: PublishDeposits::default(),
     };
     assert!(
@@ -246,4 +247,54 @@ fn the_sessions_own_key_is_the_first_candidate() {
         in_set_order,
         "a key the set does not hold moves nothing"
     );
+}
+
+/// Checks that the kept places lie outside the signed preimage.
+///
+/// Two requests differing in `also_places` alone — one carrying an `also`
+/// draft's place for a run, one carrying none — compose the same entry
+/// frame, byte for byte, as two differing in `places` alone do, and as one
+/// carrying both lists does against one carrying neither: the body spells
+/// the shot's runs by value and address and names no draft and no place
+/// (the design record §2.5; the link-sets design §5.7), so a signature made
+/// over the frame without either list verifies the frame with them, and the
+/// signed entry's bytes are unchanged for every request this lane admits.
+#[test]
+fn a_shot_with_also_places_composes_the_same_entry_frame_as_the_same_shot_without_them() {
+    use skep_arrangement::VPos;
+    use skep_febe::{AlsoPlaces, PublishDeposits, PublishTarget};
+    use skep_identity::BoardTerm;
+    use skep_namespace::{head_document, SYSTEM_PRINCIPAL};
+    use skep_signature::TAG_MLDSA65_ED25519;
+
+    let engine = skep_engine::Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    let snap = engine.kernel().snapshot();
+    let world = snap.world();
+    // The system account's staging draft and a sibling: the frame reads
+    // neither, so neither need hold a run of the shot.
+    let (draft, other) = (addr_of(&[1, 1, 0, 1, 0, 3]), addr_of(&[1, 1, 0, 1, 0, 4]));
+    let publish = |places: Vec<Option<VPos>>, also_places: Vec<AlsoPlaces>| Op::Publish {
+        target: PublishTarget::Document(head_document()),
+        shot: Shot { base: None, draft: Some(draft.clone()), also: vec![other.clone()], runs: Vec::new() },
+        places,
+        also_places,
+        deposits: PublishDeposits::default(),
+    };
+    let alg = SigAlgRow::of_tag(TAG_MLDSA65_ED25519).expect("tag 1").token;
+    let frame = |op: Op| {
+        let board = BoardTerm { log_position: 1, chain: [0; 32] };
+        entry::compose(world, &op, SYSTEM_PRINCIPAL, board).expect("the shot composes").to_bytes(alg)
+    };
+    let place = Some(VPos::content(Nat::from(1u32)));
+    let others = vec![AlsoPlaces { draft: other.clone(), places: vec![place.clone()] }];
+    let bare = frame(publish(Vec::new(), Vec::new()));
+    assert!(!bare.is_empty(), "the premise: a frame composes");
+    assert_eq!(frame(publish(Vec::new(), others.clone())), bare, "`also_places` alone differing: the same bytes");
+    assert_eq!(frame(publish(vec![place.clone()], Vec::new())), bare, "`places` alone differing: the same bytes");
+    assert_eq!(frame(publish(vec![place], others)), bare, "both lists carried: the same bytes");
 }

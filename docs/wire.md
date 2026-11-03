@@ -1592,7 +1592,11 @@ Fields:
   the typed state), the state a writer reads again before placing its
   text afresh.
   Span faults: `not_ordinal_level`, `not_level_uniform`,
-  `start_not_zero_free`, `start_too_shallow`.
+  `start_not_zero_free`, `start_too_shallow`. On the publication's two
+  re-window refusals, `kept_place_moved` and `stray_place_unrecorded`,
+  `addr` names the draft being re-windowed at the place `index` names —
+  the rendering `draft`, or a draft `also` names whose `also_places`
+  entry carries it (§The publish shot and head-float, the kept places).
 * `detail` — optional message (always present on `unparseable`, where
   it says what failed to parse). On `credential_refused` the field is a
   MACHINE token — the code:detail convention, one pinned token per
@@ -1725,18 +1729,20 @@ draft, or one of the family's other drafts — already names as its
 from-span — the words were re-inserted by an earlier shot, and
 `site.addr` is the member they were published into; permanent, the
 record standing for good), `kept_place_moved` (the publication's
-re-window: the draft no longer arranges a run's draft words — a
-draft-native run's identity, a stray run's record from-span — at the
-kept place the request carries for it in its places member — moved,
-split, deleted or rearranged since the client read it — `site.index`
-the runs entry; permanent, the client re-reads the draft and composes
-its places afresh) and `stray_place_unrecorded` (the re-window's stray
-arm: a kept place beside a run of published identity — the document's
-own, or another document's words — that no correspondence record the
-caller may read names whole as its to-span, wherever homed —
-`site.index` the runs entry; permanent, a record naming fresh identity
-once, so the client re-reads the records and re-composes the run by
-them); the publication's deposits (§The
+re-window: a re-windowed draft no longer arranges a run's draft words —
+a draft-native run's identity, a stray run's record from-span — at the
+kept place the request carries for it in that draft's list, the places
+member for the rendering draft or its also_places entry for a draft
+also names — moved, split, deleted or rearranged since the client read
+it — `site.index` the runs entry and `site.addr` that draft; permanent,
+the client re-reads that draft and composes its places afresh) and
+`stray_place_unrecorded` (the re-window's stray arm: a kept place beside
+a run of published identity — the document's own, or another document's
+words — that no correspondence record the caller may read names whole
+as its to-span, wherever homed — `site.index` the runs entry and
+`site.addr` the draft being re-windowed at it; permanent, a record
+naming fresh identity once, so the client re-reads the records and
+re-composes the run by them); the publication's deposits (§The
 publish shot and head-float, the deposits), each permanent, each
 carrying `site.index` — the entry's position in its own list, the links
 list, the retract list or the read-with list: `link_home_refused` (a
@@ -2040,41 +2046,55 @@ the registry seed — shoot from the system account's staging draft and
 mint their records there (§The other endpoints; §Registry; §The change
 feed's positions), each run fresh, so the fence never meets them.
 
-**The kept places** (the link-sets design §5.7; B3-S11 P5, THE
-RENDERING DRAFT ALONE). The request may carry,
-per run of the rendering `draft`, the V-place the run held in the draft
-when the client composed the request — `places`, beside `runs`
-(§Arrangement), read off the draft's image at the confirmation — and
-the shot's ONE commit then RE-WINDOWS the draft at each, after the
-records: it checks
+**The kept places** (the link-sets design §5.7 (viii); B3-S11 P5;
+skep #739, EVERY NAMED DRAFT RE-WINDOWED). The request may carry,
+per run of ANY named draft's identity — the rendering `draft`'s own,
+or a draft `also` names, which the rendering draft holds by identity —
+the V-place the run held in the RENDERING draft when the client composed
+the request — `places`, beside `runs` (§Arrangement), read off that
+draft's image at the confirmation — and, per draft `also` names, THAT
+DRAFT's OWN kept places — `also_places`, one entry per `also` draft
+re-windowed, each a list parallel to `runs` the same way, read off that
+draft's image — and the shot's ONE commit then RE-WINDOWS EVERY NAMED
+DRAFT at its own places, after the records: the rendering draft first,
+then each `also` draft in `also`'s order, each over the working state
+the one before it left. For each place it checks
 that the draft still arranges that run's identity at that place, by
 identity — the V-span of the run's width at the place resolves to
 exactly the run's addresses, in its order — and replaces it THERE by
 the fresh run the member holds, a `reinstate` of the fresh run at the
 place and a `delete` of the draft's own run behind it, piece by piece
 at each piece's offset, applied in turn inside the transaction so
-positions stay true: the draft reads the same bytes at every position
-afterwards and arranges the member's identity where it arranged its
-own, at every principal, with no client step between the version and
-the re-window and no crash that leaves the draft showing published
-words as its own. Where the shot re-minted the identity of other drafts
-of the family too (`also`), THOSE DRAFTS ARE NOT RE-WINDOWED BY IT —
+positions stay true: each re-windowed draft reads the same bytes at
+every position afterwards and arranges the member's identity where it
+arranged its own, at every principal, with no client step between the
+version and the re-window and no crash that leaves a draft showing
+published words as its own. The pieces are the same whichever named
+draft is re-windowed at a run: a run of an `also` draft's identity is
+that draft's own words and, in the rendering draft, words it holds by
+identity, and both drafts window the one fresh run the shot minted for
+it. A named draft no list carries a place for is left as it stands —
 "each shows the words it contributed as a COUNTERPART from then on,
 through the record the shot homed in it (P57) … and is healed at its
-own next shot by the stray path" (B3-S11 P5): a run of a draft `also`
-names takes no place, and such a draft is left as it stands, its words
-published through the records it holds. The check is by MEMBERSHIP of the named place: a
+own next shot by the stray path" (B3-S11 P5) — and no `also` draft's
+RECORDED BASE MOVES: the shot moves the rendering draft's base alone to
+the member it renders (§Namespace, `stage`; `doc_metadata`), so a
+re-windowed `also` draft stands behind the member it now windows, its
+next publication a daughter's. The check is by MEMBERSHIP of the named place: a
 draft arranging a run's identity twice is re-windowed at the place the
 request names and left standing at the other, which the twin fence
 meets at its own publication; a run named twice in `runs` with a place
 on each re-windows both onto the one fresh run the first entry minted.
-Where the check fails — the draft moved the run, split it, deleted it,
-or arranges it elsewhere or in another order since the place was read
-— the whole publication is refused `kept_place_moved`, permanent,
-`site.index` the `runs` entry and nothing else, nothing committed: the
-client re-reads the draft and composes the places afresh (the editor
-orders its own bursts around the act, and the race face that names
-whose write moved the run is the client's). AND THE STRAY PLACES WITH
+Where the check fails in any draft — that draft moved the run, split
+it, deleted it, or arranges it elsewhere or in another order since the
+place was read — the whole publication is refused `kept_place_moved`,
+permanent, `site.index` the `runs` entry and `site.addr` THE DRAFT that
+no longer honours the place — the rendering draft, or the `also` draft
+whose entry failed — nothing committed, every other draft's re-window
+discarded with it: the client re-reads that draft and composes its
+places afresh (the editor orders its own bursts around the act, and the
+race face that names whose write moved the run is the client's, read
+off the change feed under the draft `site.addr` names). AND THE STRAY PLACES WITH
 THEM: where the draft arranges words a correspondence record the
 caller may read already names as its `from` — a record homed in the
 draft itself, its words left there by an act the editor's mapping does
@@ -2087,7 +2107,9 @@ link-sets design §5.5, the counterpart first) — the client re-composes
 such a run BY REFERENCE to the record's `to`, the published identity
 (a run whose `origin` is `doc`'s own trunk, or the other published
 document the record's `to` lies in), and sends its kept place beside
-it as it sends a draft-native run's; the commit reads every
+it as it sends a draft-native run's — in `places` for the rendering
+draft, in a draft's `also_places` entry for a stray run that draft
+arranges; the commit reads every
 correspondence record the caller may read whose `to` covers the run,
 wherever homed — one record, a piece of one at its offset, or several
 adjoining records piece by piece, the two slots of a record being of
@@ -2100,20 +2122,29 @@ minted and no record written, the draft's link run-list is untouched
 the draft is read from then on. A record the caller may not read is
 never used. A stray run no record the caller may read covers whole is
 refused `stray_place_unrecorded`, permanent, `site.index` the `runs`
-entry and nothing else, nothing committed — a place beside an ordinary
+entry and `site.addr` the draft being re-windowed at it, nothing
+committed — a place beside an ordinary
 window onto another document, which no record names, among them: a
 placed window is re-windowed through a record or refused, never
 silently kept; a record names fresh identity once, at the publication
 that minted it, so the client re-reads the records and re-composes the
 run by them. A request that sends no places, or `null` at every entry,
-is the shot as before: the draft is left as it stands. The shape is the
-codec's, refused ahead of every store: a list longer than `runs`, a
-place beside a run of a draft `also` names (those drafts are left as
-they stand by this shot), one in a request naming no `draft`, one
-outside the content subspace, or one that is no V-position is
-`malformed` with `site.index` the entry; a place stands beside any
-other run, at either form, and whether it re-windows is the commit's
-to decide. The board's own producers send none.
+in either list is the shot as before: every draft is left as it
+stands. The shape is the codec's, refused ahead of every store: a
+`places` list longer than `runs`, a place in a request naming no
+`draft`, one outside the content subspace, or one that is no
+V-position is `malformed` with `site.index` the entry; a place in
+`places` stands beside any run, at either form, and whether it
+re-windows is the commit's to decide. For `also_places` (§Arrangement,
+`publish`): an entry naming a draft `also` does not name, repeating an
+earlier entry's draft, or that is no object of `draft` and `places`,
+and more entries than `also` names drafts, are `malformed` with
+`site.index` the ENTRY; a list longer than `runs`, a place that is no
+content V-position, and a place beside a run of the rendering draft's
+or of another `also` draft's identity — which that draft alone is
+re-windowed at, through its own list — are `malformed` with
+`site.index` the PLACE within the entry's list. The board's own
+producers send none.
 
 **The deposits** (the link-sets design §5.7). A publication may carry,
 beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes and
@@ -2342,8 +2373,8 @@ commits nothing:
 | `too_many_values` | permanent | — | the distinct positions the draft-native runs name exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values; a position two runs name counts once) — arithmetic on the request, asked ahead of existence |
 | `dangling_source` | permanent | — | an address a run names holds no value |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget — or, with a kept place, the draft's run-list at its re-window |
-| `kept_place_moved` | permanent | `index` = the `runs` entry | the draft no longer arranges the entry's draft words at the kept place the request carries for it (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
-| `stray_place_unrecorded` | permanent | `index` = the `runs` entry | a kept place stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at the re-window, ahead of the entry's check |
+| `kept_place_moved` | permanent | `index` = the `runs` entry, `addr` = the draft | the draft `addr` names — the rendering `draft`, or a draft `also` names — no longer arranges the entry's draft words at the kept place the request carries for it in that draft's list (the kept places, above) — a draft-native run's own identity, a stray run's record `from` — checked inside the transaction, last, draft by draft (the rendering draft first, then each `also` draft in `also`'s order) and entry by entry in `runs`' order; a published document named as the `draft` answers `published_target` at the placement instead |
+| `stray_place_unrecorded` | permanent | `index` = the `runs` entry, `addr` = the draft | a kept place in the draft `addr` names stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at that draft's re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
 | `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
 | `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
@@ -2369,8 +2400,10 @@ document named and ⟨O⟩ the origin withheld:
   names is ⟨k⟩).
 * `kept_place_moved` — "⟨D⟩ changed under this publication — the words
   you selected moved since you read them; look again and publish" (the
-  DRAFT face; the race face that names whose write moved them is the
-  client's, read off the change feed).
+  DRAFT face, ⟨D⟩ the draft `site.addr` names — the one being
+  published from, or another of the family it names; the race face that
+  names whose write moved them is the client's, read off the change
+  feed under that draft).
 * `stray_place_unrecorded` — the client's own arithmetic is wrong: it
   re-composed a run by reference to published words no record the
   person may read names, wherever homed, or sent a place beside a
@@ -3402,10 +3435,11 @@ re-minted run by its values and names no draft, so a shot naming the
 family's other drafts signs as the same shot naming none. `places`, optional, is the draft's KEPT PLACES (§The
 publish shot and head-float, the kept places): a list parallel to `runs`
 by index, each entry a V-position as `reinstate`'s `at` is spelled —
-for a run of the `draft`, the place it held in the draft when the
-client composed the request, read off the draft's image (`image`) at
-the confirmation; or, for a STRAY run — a run of `doc`'s own identity,
-or of another published document's words the draft holds, the client
+for a run of the `draft`, or of a draft `also` names which the `draft`
+holds by identity, the place it held in the `draft` when the client
+composed the request, read off the draft's image (`image`) at the
+confirmation; or, for a STRAY run — a run of `doc`'s own identity, or
+of another published document's words the draft holds, the client
 re-composed by reference to a correspondence record the caller may
 read, wherever homed, the record's published words, where the draft
 still arranges the record's draft words — the place those words hold —
@@ -3417,13 +3451,38 @@ replacing the draft's own words, and refuses the publication
 it, or `stray_place_unrecorded` where no record the caller may read
 names a stray run's identity whole — a place beside an ordinary window
 onto another document, which no record names, is refused so, never
-silently kept. A place beside a run of a draft `also` names, whose
-draft is left as it stands, one in a request naming no `draft`, one
-outside the content subspace, or one past the runs is `malformed`,
-`site.index` the entry; a place stands beside any other run, at either
-form. The places lie OUTSIDE the signed frame, as `draft` does: a shot
-with places signs as the same shot without them. Owner-gated, and the
-publish class's input from any session.
+silently kept. A place in a request naming no `draft`, one outside the
+content subspace, or one past the runs is `malformed`, `site.index` the
+entry; a place stands beside any run, in a request naming a `draft`, at
+either form. `also_places`, optional, is EACH `also` DRAFT's OWN KEPT
+PLACES (§The publish shot and head-float, the kept places; skep #739):
+a list of entries `{"draft": ⟨address⟩, "places": [⟨V-position⟩ |
+null, …]}` — at most one entry per draft, each `draft` one `also`
+names, each `places` parallel to `runs` by index as the draft's own is
+and no longer than `runs`, a non-null entry the content V-position the
+run held IN THAT DRAFT when the client composed the request, read off
+that draft's image — a place beside a run of that draft's own identity,
+or beside a stray run it arranges; a place beside a run of the
+rendering `draft`'s or of another `also` draft's identity is
+`malformed`, that draft alone being re-windowed at its run through its
+own list. An entry whose list is all `null` is dropped, a shorter list
+padded with `null`; absent, or every entry dropped, re-windows no
+`also` draft. The commit re-windows each named draft at its own list
+after the rendering draft, in `also`'s order, refusing the whole
+publication `kept_place_moved` naming the draft (`site.addr`) and the
+entry (`site.index`) where that draft no longer arranges the run's
+words at its place. The shape is the codec's, refused `malformed` ahead
+of every store: an entry naming a draft `also` does not name, a
+repeated draft, an entry that is no object of `draft` and `places`, or
+more entries than drafts `also` names, `site.index` the entry; a list
+longer than `runs`, a place that is no content V-position, or one
+beside the rendering draft's or another `also` draft's run,
+`site.index` the place within the entry's list. The canonical form
+writes `also_places` only where some entry carries a place, those
+entries in `also`'s order. The places lie OUTSIDE the signed frame, as
+`draft` does — both lists: a shot with places in either signs as the
+same shot without them. Owner-gated, and the publish class's input
+from any session.
 THE TARGET takes one of two forms: `doc`, the published document whose
 chain the shot appends — the form above — or THE MINT FORM, `account`
 with `mint: true` and no `doc` (§The publish shot and head-float, the
@@ -5520,7 +5579,7 @@ Each entry:
   `nullify` — PUB-6.46 — its home AND the target link's home, a
   SET with each document named once, so a same-home retraction carries
   one name); the **minted** document for
-  `create_new_document`/`fork`/`version`,
+  `create_new_document`/`fork`/`version`/`stage`,
   and for `publish` the minted MEMBER (`1.0.1.0.1.2`, whose
   trunk is the document it advances) FIRST, then, at the mint form, the
   EDITION it was minted under, then the RENDERING draft, ALWAYS, whether
@@ -5528,9 +5587,12 @@ Each entry:
   place the request sent, or wrote nothing in it — a shot that only removes
   or reorders published words names it too, so a draft's newest
   publication row names the member it made (B3-S10) — then each other
-  draft `also` named where the shot minted a correspondence record in it,
-  in the request's order, so an `also` draft written alone never stands
-  where the rendering draft does:
+  draft `also` named that the commit WROTE: where the shot minted a
+  correspondence record in it, or re-windowed it at a place its
+  `also_places` entry carries (minting nothing in it), in the request's
+  order, so a draft whose arrangement the commit moved is on the row and
+  an `also` draft written alone never stands where the rendering draft
+  does:
   "the drafts the shot named, the rendering draft first among them"
   (B3-S10), `[member, D, A, …]`, the
   member first by rule, the order a mirror reads the member by (§The

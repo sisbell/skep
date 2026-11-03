@@ -91,6 +91,7 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
             target: PublishTarget::Document(edition.clone()),
             shot,
             places,
+            also_places: Vec::new(),
             deposits: PublishDeposits::default(),
         };
         match write_meta(&op).expect("a write").docs {
@@ -131,6 +132,60 @@ fn a_publish_rows_drafts_lead_with_the_rendering_draft_then_the_also_drafts_writ
     );
     // No draft named: none.
     assert!(drafts_of(Shot { base: None, draft: None, also: vec![], runs: vec![run_of("1.0.1.0.1", 1)] }, vec![]).is_empty());
+}
+
+/// A publication's row names an `also` draft the commit RE-WINDOWS though
+/// no run of its identity is re-inserted — its `also_places` entry carrying
+/// a place — AFTER the rendering draft, in the request's order (H5: the
+/// recorded row and the bare row's witness, a draft whose arrangement the
+/// commit moved, agree); an entry whose list carries no place names
+/// nothing, an entry for a draft `also` does not name names nothing, and
+/// the rendering draft stands first whether or not either list places it.
+#[test]
+fn a_publish_row_names_an_also_draft_re_windowed_without_a_run_of_its_own_after_the_rendering_draft() {
+    use skep_address::Nat;
+    use skep_febe::{AlsoPlaces, PublishDeposits, PublishTarget, Run, Shot, ShotRun, VPos};
+
+    let addr = |text: &str| crate::codec::wire_address(text).expect("a test address");
+    let (edition, d, a1, b) = (addr("1.0.1.0.1"), addr("1.0.1.0.5"), addr("1.0.1.0.6"), addr("1.0.1.0.7"));
+    let trunk_run = ShotRun {
+        origin: edition.clone(),
+        run: Run::new(addr("1.0.1.0.1.0.1.1"), Nat::from(1u32)).expect("a run"),
+    };
+    let place = Some(VPos::content(Nat::from(1u32)));
+    let drafts_of = |also_places: Vec<AlsoPlaces>| {
+        let op = Op::Publish {
+            target: PublishTarget::Document(edition.clone()),
+            // The trunk's own run by reference: no draft's identity re-inserted.
+            shot: Shot { base: None, draft: Some(d.clone()), also: vec![a1.clone(), b.clone()], runs: vec![trunk_run.clone()] },
+            places: vec![],
+            also_places,
+            deposits: PublishDeposits::default(),
+        };
+        match write_meta(&op).expect("a write").docs {
+            AffectedDocs::Published { drafts, .. } => drafts,
+            _ => panic!("a publication's row"),
+        }
+    };
+    // B re-windowed at a stray place, nothing re-inserted: D first, then B;
+    // A, placed nowhere and re-inserting nothing, not.
+    assert_eq!(
+        drafts_of(vec![AlsoPlaces { draft: b.clone(), places: vec![place.clone()] }]),
+        vec![d.clone(), b.clone()],
+        "the re-windowed `also` draft after the rendering draft"
+    );
+    // Both entries carrying a place: the request's order, D first.
+    assert_eq!(
+        drafts_of(vec![AlsoPlaces { draft: b.clone(), places: vec![place.clone()] }, AlsoPlaces { draft: a1.clone(), places: vec![place.clone()] }]),
+        vec![d.clone(), a1.clone(), b.clone()],
+        "in `also`'s order, whatever the entries' order"
+    );
+    // An entry with no place, and one for a draft `also` does not name: nothing.
+    assert_eq!(
+        drafts_of(vec![AlsoPlaces { draft: a1.clone(), places: vec![None] }, AlsoPlaces { draft: addr("1.0.1.0.9"), places: vec![place] }]),
+        vec![d.clone()],
+        "no place, or no named draft: the rendering draft alone"
+    );
 }
 
 /// The index's entry hint, decided off the frame in each arm: an insert
@@ -190,6 +245,7 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
         target: PublishTarget::Document(doc),
         shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },
         places: Vec::new(),
+        also_places: Vec::new(),
         deposits: PublishDeposits::default(),
     };
     assert!(matches!(
@@ -269,6 +325,7 @@ fn each_write_states_the_terms_its_row_carries() {
         target: PublishTarget::Document(doc.clone()),
         shot: Shot { base: None, draft: None, also: vec![], runs: Vec::new() },
         places: Vec::new(),
+        also_places: Vec::new(),
         deposits: PublishDeposits::default(),
     };
     assert!(matches!(terms(publish), RowTerms::Publish));

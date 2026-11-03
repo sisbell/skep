@@ -826,6 +826,7 @@ fn a_stage_lands_private_where_version_refuses_and_doc_metadata_serves_its_base(
             target: skep_febe::PublishTarget::Document(edition),
             shot,
             places: Vec::new(),
+            also_places: Vec::new(),
             deposits: skep_febe::PublishDeposits::default(),
         },
     ));

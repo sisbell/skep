@@ -146,9 +146,11 @@ pub struct FaultSite {
     /// read together, and an `index` alone always has exactly one container.
     /// Filled by M6's per-spec and per-span refusals, by M10's successor guard
     /// for a per-spec refusal, by the doc-argument consult's refusal of a
-    /// RETRIEVEI span's shape, by the publication's kept-place refusal
-    /// (`KeptPlaceMoved`: the `runs` entry whose place the draft no longer
-    /// honours), by the publication's deposit plan (the six deposit codes,
+    /// RETRIEVEI span's shape, by the publication's two re-window refusals
+    /// (`KeptPlaceMoved`: the `runs` entry whose place the draft `addr`
+    /// names no longer honours; `StrayPlaceUnrecorded`: the `runs` entry no
+    /// record the caller may read covers whole, `addr` the draft being
+    /// re-windowed at it), by the publication's deposit plan (the six deposit codes,
     /// and every slot-form and class-fence code a `links` entry answers:
     /// the entry's position in its own list — `links`, `retract` or
     /// `read_with` — never a span's within a slot), and by a transport's
@@ -171,9 +173,13 @@ pub struct FaultSite {
     /// target link that failed the ω check; and every `Withheld` — M10's
     /// doc-argument consult and source consult, and M5's publish shot —
     /// naming the first unreadable document in declaration order (PUB-8.4's
-    /// pinned `site.addr`) — and from the publication's own two:
+    /// pinned `site.addr`) — and from the publication's own four:
     /// `already_published` naming the member the words were published into,
-    /// `claim_refused` naming the edition that already holds a member.
+    /// `claim_refused` naming the edition that already holds a member, and
+    /// the re-window's `kept_place_moved` and `stray_place_unrecorded`
+    /// naming the draft being re-windowed — the rendering draft, or a draft
+    /// `also` names whose `also_places` entry carries the place — beside
+    /// the entry in `index`.
     pub addr: Option<Address>,
     /// The document state a refused edit was typed against (skep #442).
     ///
@@ -383,38 +389,46 @@ pub enum RejectCode {
     /// A draft-native run of the shot is already published (the link-sets
     /// design §5.7's twin fence).
     ///
-    /// Its I-span overlaps a span a correspondence record homed in the draft
-    /// already names as its `from` — any part of it — so the words were
+    /// Its I-span overlaps a span a correspondence record homed in the run's
+    /// own draft — the rendering draft, or one of the family's other drafts
+    /// — already names as its `from` — any part of it — so the words were
     /// re-inserted by an earlier shot, and `site.addr` is the member that
     /// shot minted them into, the record's `to`'s member. Permanent by the
     /// catch-all: the record stands for good, so the same request can never
     /// land; the act that exists is a shot re-composing the run by reference
     /// to the published words. Nothing is committed.
     AlreadyPublished,
-    /// The draft no longer arranges a run's identity at the kept place the
-    /// shot carries for it (the link-sets design §5.7's re-window).
+    /// A re-windowed draft no longer arranges a run's identity at the kept
+    /// place the shot carries for it in that draft (the link-sets design
+    /// §5.7's re-window, of every named draft at its own places).
     ///
-    /// Since the client read the place — the V-position the draft-native run
-    /// held in the draft when the request was composed, carried in `places`
-    /// beside `runs` — the draft moved the run, split it, deleted it, or
-    /// arranges it elsewhere or in another order, so the fresh run cannot be
-    /// put where the draft's own words were; `site.index` is the `runs`
-    /// entry. Permanent by the catch-all: the same request can never land —
-    /// the act that exists is a re-read of the draft and a request with the
-    /// places composed afresh. Nothing is committed.
+    /// Since the client read the place — the V-position the run held in
+    /// that draft when the request was composed, carried in `places` for the
+    /// rendering draft or in its `also_places` entry for a draft `also`
+    /// names — the draft moved the run, split it, deleted it, or arranges it
+    /// elsewhere or in another order, so the fresh run cannot be put where
+    /// the draft's own words were; `site.index` is the `runs` entry and
+    /// `site.addr` the draft that no longer honours the place. Permanent by
+    /// the catch-all: the same request can never land — the act that exists
+    /// is a re-read of that draft and a request with its places composed
+    /// afresh. Nothing is committed.
     KeptPlaceMoved,
-    /// A kept place stands beside a run of the document's own identity — a
-    /// stray run, re-composed by reference to a correspondence record's
-    /// published words — and no record homed in the draft names that
-    /// identity whole as its `to` (the link-sets design §5.7's stray places).
+    /// A kept place stands beside a run of published identity the shot does
+    /// not mint — a stray run of the document's own, or another document's
+    /// words, re-composed by reference to a correspondence record's
+    /// published words — and no record the caller may read, wherever homed,
+    /// names that identity whole as its `to` (the link-sets design §5.7's
+    /// stray places).
     ///
-    /// The records covering the run's span leave a gap, or there is none:
-    /// the identity was minted from another draft's words, or the client
-    /// mis-read the records. `site.index` is the `runs` entry. Permanent by
-    /// the catch-all: a record names fresh identity once, at the publication
-    /// that minted it, so no later commit can cover the span — the act that
-    /// exists is a re-read of the draft's records and a run re-composed by
-    /// them. Nothing is committed.
+    /// The records the caller may read covering the run's span leave a gap,
+    /// or there is none: the identity was minted from words no readable
+    /// record names, or the client mis-read the records. `site.index` is the
+    /// `runs` entry and `site.addr` the draft being re-windowed at the place
+    /// — the rendering draft, or a draft `also` names whose `also_places`
+    /// entry carries it. Permanent by the catch-all: a record names fresh
+    /// identity once, at the publication that minted it, so no later commit
+    /// can cover the span — the act that exists is a re-read of the records
+    /// and a run re-composed by them. Nothing is committed.
     StrayPlaceUnrecorded,
     // ── M7 link ──
     /// A `Resolve` V-spec fails its well-formedness check.

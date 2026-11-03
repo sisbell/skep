@@ -94,34 +94,37 @@ fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
 }
 
 /// The re-window's refusal (the link-sets design §5.7), at the lowering:
-/// `kept_place_moved` carries the `runs` entry in `site.index` and NOTHING
-/// else — permanent, no detail, no other site field. The shape is what
-/// `wire.md` pins and `tests/publish.rs` reads back over the wire; this is
-/// where it is decided.
+/// `kept_place_moved` carries the `runs` entry in `site.index` and the
+/// draft that no longer honours the place in `site.addr` — the rendering
+/// draft's, or an `also` draft's whose `also_places` entry failed — and
+/// NOTHING else: permanent, no detail, no other site field. The shape is
+/// what `wire.md` pins and `tests/publish.rs` reads back over the wire; this
+/// is where it is decided.
 #[test]
-fn kept_place_moved_names_its_runs_entry_and_nothing_else() {
+fn kept_place_moved_names_its_runs_entry_and_its_draft_and_nothing_else() {
     let rej = lower_txn(
         OpKind::Publish,
-        TxnError::Rejected(PublicationError::KeptPlaceMoved { index: 3 }),
+        TxnError::Rejected(PublicationError::KeptPlaceMoved { index: 3, draft: doc() }),
     );
     assert_eq!(rej.code, RejectCode::KeptPlaceMoved);
     assert_eq!(rej.disposition, Disposition::Permanent, "the same request can never land");
     let site = rej.site.expect("the entry rides the site");
-    assert_eq!(site.index, Some(3));
-    assert!(site.addr.is_none() && site.slot.is_none() && site.fault.is_none());
+    assert_eq!((site.index, site.addr), (Some(3), Some(doc())), "the entry and the draft");
+    assert!(site.slot.is_none() && site.fault.is_none());
     assert!(site.operand.is_none() && site.region.is_none());
     assert!(rej.detail.is_none(), "no detail rides the code");
     // The stray places' record read (lane F4), the same shape: the entry in
-    // `site.index`, permanent, nothing else.
+    // `site.index`, the draft being re-windowed in `site.addr`, permanent,
+    // nothing else.
     let rej = lower_txn(
         OpKind::Publish,
-        TxnError::Rejected(PublicationError::StrayPlaceUnrecorded { index: 2 }),
+        TxnError::Rejected(PublicationError::StrayPlaceUnrecorded { index: 2, draft: doc() }),
     );
     assert_eq!(rej.code, RejectCode::StrayPlaceUnrecorded);
     assert_eq!(rej.disposition, Disposition::Permanent, "a record names fresh identity once");
     let site = rej.site.expect("the entry rides the site");
-    assert_eq!(site.index, Some(2));
-    assert!(site.addr.is_none() && site.slot.is_none() && site.fault.is_none());
+    assert_eq!((site.index, site.addr), (Some(2), Some(doc())), "the entry and the draft");
+    assert!(site.slot.is_none() && site.fault.is_none());
     assert!(rej.detail.is_none(), "no detail rides the code");
 }
 
@@ -500,8 +503,8 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(PublicationError::HomeNotRegistered);
     same_name(PublicationError::NotOwner(doc()));
     same_name(PublicationError::AlreadyPublished { site: doc() });
-    same_name(PublicationError::KeptPlaceMoved { index: 0 });
-    same_name(PublicationError::StrayPlaceUnrecorded { index: 0 });
+    same_name(PublicationError::KeptPlaceMoved { index: 0, draft: doc() });
+    same_name(PublicationError::StrayPlaceUnrecorded { index: 0, draft: doc() });
     // The deposit plan's (lane S3): the six of the lane's own, the
     // slot-form and class-fence verdicts `make_link` answers — the three
     // fenced classes deviating as `make_link`'s do — and the two shape

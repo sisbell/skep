@@ -1109,12 +1109,14 @@ impl HeadWriter {
         shot: Shot,
         refused: Refused<'_>,
     ) -> Option<Address> {
-        // No kept place, and no deposit: the producer's shot leaves its
-        // draft as it stands and writes no link.
+        // No kept place in either list, and no deposit: the producer's shot
+        // names no `also` draft, leaves its draft as it stands and writes no
+        // link.
         let op = Op::Publish {
             target: PublishTarget::Document(doc),
             shot,
             places: Vec::new(),
+            also_places: Vec::new(),
             deposits: PublishDeposits::default(),
         };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
@@ -1134,6 +1136,7 @@ impl HeadWriter {
                     Caller::Principal(SYSTEM_PRINCIPAL),
                     &target,
                     &shot,
+                    &[],
                     &[],
                     &PublishDeposits::default(),
                 )

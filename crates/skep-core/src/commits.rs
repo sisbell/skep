@@ -2164,10 +2164,13 @@ enum AffectedDocs {
     /// refuses one a record already names), re-windowed it at a kept place
     /// (a stray run's among them, minting nothing; the design's F4), or
     /// wrote nothing in it, a shot that only removes or reorders published
-    /// words; each `also` draft where a run of its identity is re-inserted,
-    /// the one write the commit makes in it (it is never re-windowed), so an
-    /// `also` draft written alone never stands where the rendering draft
-    /// does; empty where the request names no draft. `mints` is the request's
+    /// words; each `also` draft the commit WRITES — a run of its identity
+    /// re-inserted (its record minted in it), or its `also_places` entry
+    /// carrying a place (the commit re-windows it there, minting nothing in
+    /// it) — so a draft whose arrangement the commit moved is on the row
+    /// whether or not a record landed in it, and an `also` draft written
+    /// alone never stands where the rendering draft does; empty where the
+    /// request names no draft. `mints` is the request's
     /// mint form, the edition then the member's own trunk. `homes` are the
     /// homes the request's `links` entries name by address, and the private
     /// homes of the originals they name, each of which the commit writes
@@ -2373,23 +2376,28 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // re-inserts the named drafts' values as fresh identity under it,
         // minting one correspondence record per piece of draft identity it
         // re-inserts, homed in the draft whose identity the piece was (the
-        // link-sets design §5.7), and re-windows the rendering draft at
-        // every kept place the request sends beside its runs (the design's
-        // F4): the row names the rendering draft beside the member ALWAYS,
-        // first among the drafts, whether or not the commit writes it — so
-        // a reader that reads a draft's base off its newest publication
-        // finds the member this one minted, a shot that only removes or
-        // reorders published words among them (B3-S10) — then each `also`
-        // draft where a run of its identity is re-inserted, the one write
-        // the commit makes in it, in the request's order; all of it request
-        // arithmetic (`Shot::named_drafts`, the rendering draft first, and
-        // `Shot::reinserted_runs_of`).
-        Op::Publish { target, shot, deposits, .. } => {
+        // link-sets design §5.7), and re-windows every named draft at the
+        // kept places the request sends for it — the rendering draft's in
+        // `places`, each `also` draft's in its `also_places` entry (the
+        // design's F4; §5.7 (viii)): the row names the rendering draft
+        // beside the member ALWAYS, first among the drafts, whether or not
+        // the commit writes it — so a reader that reads a draft's base off
+        // its newest publication finds the member this one minted, a shot
+        // that only removes or reorders published words among them (B3-S10)
+        // — then each `also` draft the commit writes, in the request's
+        // order: a run of its identity re-inserted, or its `also_places`
+        // entry carrying a place, the two writes the commit can make in it;
+        // all of it request arithmetic (`Shot::named_drafts`, the rendering
+        // draft first, `Shot::reinserted_runs_of`, and the entries).
+        Op::Publish { target, shot, also_places, deposits, .. } => {
             let reinserted = shot.reinserted_values();
+            let rewindowed = |draft: &Address| {
+                also_places.iter().any(|entry| trunk_of(&entry.draft) == *draft && entry.carries_a_place())
+            };
             let drafts: Vec<Address> = shot
                 .named_drafts()
                 .enumerate()
-                .filter(|(k, draft)| *k == 0 || shot.reinserted_runs_of(draft).next().is_some())
+                .filter(|(k, draft)| *k == 0 || shot.reinserted_runs_of(draft).next().is_some() || rewindowed(draft))
                 .map(|(_, draft)| draft)
                 .collect();
             // The homes the deposits name by address (the link-sets design

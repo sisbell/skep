@@ -3,7 +3,7 @@ use skep_arrangement::{head_lock_key, Base, MintedRun, ShotRun, VPos};
 use skep_kernel::LockKey;
 use skep_namespace::M3State;
 
-use super::super::publication_lock_keys;
+use super::super::{publication_lock_keys, AlsoPlaces};
 use super::*;
 
 fn a(comps: &[u32]) -> Address {
@@ -149,39 +149,58 @@ fn resolve_end_resolves_the_tags_and_the_member_positions_at_the_commit() {
 /// THE LOCK SET of a family publication (the link-sets design §5.7; the card
 /// on `LinkWriter::publication`): each named draft's link key where a run
 /// of its identity is re-inserted — the rendering draft's and the `also`
-/// draft's alike — and the rendering draft's content key alone where a
-/// place is carried, never an `also` draft's content key; an `also` draft
-/// with no run of its identity takes no key; the set sorted and deduped.
+/// draft's alike — and each RE-WINDOWED draft's content key: the rendering
+/// draft's where `places` carries a place, the `also` draft's where its
+/// `also_places` entry carries one, neither's where its list carries none;
+/// an `also` draft with no run of its identity takes no link key; the set
+/// sorted and deduped.
 #[test]
-fn a_family_publication_takes_each_also_drafts_link_key_and_no_content_key_for_it() {
+fn a_family_publication_takes_each_also_drafts_link_key_and_its_content_key_where_its_entry_carries_a_place() {
     let (edition, draft, other) = (a(&[1, 0, 1, 0, 3]), a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
     let other_ca = |k: u32| a(&[1, 0, 1, 0, 2, 0, 1, k]);
     let shot = |also: Vec<Address>, runs: Vec<ShotRun>| Shot { base: None, draft: Some(draft.clone()), also, runs };
     let target = PublishTarget::Document(edition.clone());
     let none = PublishDeposits::default();
     let place = Some(VPos::content(Nat::from(1u32)));
-    // Both drafts re-inserted, a place beside the rendering draft's run.
+    // Both drafts re-inserted, a place beside the rendering draft's run in
+    // `places` and none in any `also_places` entry.
     let both = shot(
         vec![other.clone()],
         vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }, ShotRun { origin: other.clone(), run: run(&other_ca(1), 1) }],
     );
-    let keys: Vec<LockKey> = publication_lock_keys(&target, &both, &[place.clone(), None], &none);
+    let keys: Vec<LockKey> = publication_lock_keys(&target, &both, &[place.clone(), None], &[], &none);
     assert!(keys.contains(&head_lock_key(&edition)) && keys.contains(&M3State::content_lock_key(&edition)), "the shot's own: {keys:?}");
     assert!(keys.contains(&M3State::link_lock_key(&draft)) && keys.contains(&M3State::link_lock_key(&other)), "each named draft's link key: {keys:?}");
     assert!(keys.contains(&M3State::content_lock_key(&draft)), "the rendering draft's content key, a place carried: {keys:?}");
-    assert!(!keys.contains(&M3State::content_lock_key(&other)), "no content key for the `also` draft, never re-windowed: {keys:?}");
+    assert!(!keys.contains(&M3State::content_lock_key(&other)), "no content key for the `also` draft where no entry places it: {keys:?}");
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(keys, sorted, "M2's order, duplicates collapsed");
+    // The `also` draft's entry carrying a place: its content key, and not
+    // the rendering draft's where `places` carries none; an entry with no
+    // place takes none; both lists placing, both keys.
+    let other_places = [AlsoPlaces { draft: other.clone(), places: vec![None, place.clone()] }];
+    let keys = publication_lock_keys(&target, &both, &[None, None], &other_places, &none);
+    assert!(keys.contains(&M3State::content_lock_key(&other)), "the `also` draft's content key where its entry carries a place: {keys:?}");
+    assert!(!keys.contains(&M3State::content_lock_key(&draft)), "and not the rendering draft's where `places` carries none: {keys:?}");
+    let empty_entry = [AlsoPlaces { draft: other.clone(), places: vec![None, None] }];
+    let keys = publication_lock_keys(&target, &both, &[None, None], &empty_entry, &none);
+    assert!(!keys.contains(&M3State::content_lock_key(&other)) && !keys.contains(&M3State::content_lock_key(&draft)), "an entry with no place re-windows nothing: {keys:?}");
+    let keys = publication_lock_keys(&target, &both, &[place.clone(), None], &other_places, &none);
+    assert!(keys.contains(&M3State::content_lock_key(&draft)) && keys.contains(&M3State::content_lock_key(&other)), "both lists place: both content keys: {keys:?}");
     let mut sorted = keys.clone();
     sorted.sort();
     sorted.dedup();
     assert_eq!(keys, sorted, "M2's order, duplicates collapsed");
     // No run of the `also` draft: no key of its; no place: no content key.
     let draft_alone = shot(vec![other.clone()], vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }]);
-    let keys = publication_lock_keys(&target, &draft_alone, &[None], &none);
+    let keys = publication_lock_keys(&target, &draft_alone, &[None], &[], &none);
     assert!(keys.contains(&M3State::link_lock_key(&draft)) && !keys.contains(&M3State::link_lock_key(&other)), "{keys:?}");
     assert!(!keys.contains(&M3State::content_lock_key(&draft)), "{keys:?}");
     // The `also` draft's run alone: its link key and not the rendering draft's.
     let other_alone = shot(vec![other.clone()], vec![ShotRun { origin: other.clone(), run: run(&other_ca(1), 1) }]);
-    let keys = publication_lock_keys(&target, &other_alone, &[None], &none);
+    let keys = publication_lock_keys(&target, &other_alone, &[None], &[], &none);
     assert!(keys.contains(&M3State::link_lock_key(&other)) && !keys.contains(&M3State::link_lock_key(&draft)), "{keys:?}");
 }
 
@@ -198,13 +217,13 @@ fn a_bare_base_takes_the_first_members_version_key_and_a_member_base_its_own() {
     let target = PublishTarget::Document(edition.clone());
     let none = PublishDeposits::default();
     let shot = |base: Option<Base>| Shot { base, draft: Some(draft.clone()), also: vec![], runs: vec![ShotRun { origin: draft.clone(), run: run(&ca(1), 2) }] };
-    let bare = publication_lock_keys(&target, &shot(Some(Base { member: edition.clone(), extent: Nat::from(0u32) })), &[None], &none);
+    let bare = publication_lock_keys(&target, &shot(Some(Base { member: edition.clone(), extent: Nat::from(0u32) })), &[None], &[], &none);
     assert!(bare.contains(&head_lock_key(&edition)) && bare.contains(&M3State::content_lock_key(&edition)), "the shot's own: {bare:?}");
     assert!(bare.contains(&M3State::version_lock_key(&first)), "the bare document's base takes the first member's version key: {bare:?}");
     assert!(!bare.contains(&M3State::version_lock_key(&second)), "never the trunk's second member's: {bare:?}");
-    let member = publication_lock_keys(&target, &shot(Some(Base { member: second.clone(), extent: Nat::from(3u32) })), &[None], &none);
+    let member = publication_lock_keys(&target, &shot(Some(Base { member: second.clone(), extent: Nat::from(3u32) })), &[None], &[], &none);
     assert!(member.contains(&M3State::version_lock_key(&second)) && !member.contains(&M3State::version_lock_key(&first)), "a member base takes its own: {member:?}");
-    let birth = publication_lock_keys(&target, &shot(None), &[None], &none);
+    let birth = publication_lock_keys(&target, &shot(None), &[None], &[], &none);
     assert!(!birth.contains(&M3State::version_lock_key(&first)) && !birth.contains(&M3State::version_lock_key(&second)), "the birth shape takes no member's key: {birth:?}");
     assert!(birth.contains(&head_lock_key(&edition)), "{birth:?}");
 }

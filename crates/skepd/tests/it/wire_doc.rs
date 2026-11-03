@@ -708,20 +708,32 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
     assert!(feed.contains("then every other home the commit's"), "§The change feed states the row's homes");
 }
 
-/// THE KEPT PLACES (the link-sets design §5.7; lane S2): §Arrangement's
-/// `publish` names the `places` member — parallel to `runs`, a V-position
-/// or `null` per entry, outside the signed frame, absent the shot as before
-/// — §The publish shot and head-float states the re-window, its check by
-/// membership and its refusal with the entry, and §Rejection codes carries
-/// the token. The daemon's answers are pinned in `publish.rs` and skep-core's
-/// suite; this pins that the contract says so.
+/// THE KEPT PLACES (the link-sets design §5.7; lane S2; every named draft
+/// re-windowed, skep #739): §Arrangement's `publish` names the `places`
+/// member — parallel to `runs`, a V-position or `null` per entry, outside
+/// the signed frame, absent the shot as before — and the `also_places`
+/// member, each `also` draft's own places, its shape and its refusals;
+/// §The publish shot and head-float states the re-window of EVERY named
+/// draft at its own places, its order, its check by membership, that no
+/// `also` draft's recorded base moves, and its refusal with the entry AND
+/// the draft; §Rejections states `site.addr` on the two re-window codes;
+/// §Rejection codes carries the token; and §The change feed names a
+/// re-windowed `also` draft on the row. The daemon's answers are pinned in
+/// `publish.rs` and skep-core's suite; this pins that the contract says so.
 #[test]
 fn doc_states_the_kept_places_and_their_refusal() {
     let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
     for fact in [
         "`places`, optional, is the draft's KEPT PLACES",
         "a list parallel to `runs` by index",
+        "or of a draft `also` names which the `draft` holds by identity",
         "absent or all-`null` is the shot as before",
+        "a place stands beside any run, in a request naming a `draft`, at either form",
+        "`also_places`, optional, is EACH `also` DRAFT's OWN KEPT PLACES",
+        "at most one entry per draft, each `draft` one `also` names",
+        "a place beside a run of the rendering `draft`'s or of another `also` draft's identity is `malformed`",
+        "An entry whose list is all `null` is dropped",
+        "The canonical form writes `also_places` only where some entry carries a place, those entries in `also`'s order",
         "The places lie OUTSIDE the signed frame, as `draft` does",
         "`malformed`, `site.index` the entry",
     ] {
@@ -730,33 +742,49 @@ fn doc_states_the_kept_places_and_their_refusal() {
     let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
     for fact in [
         "**The kept places**",
-        "RE-WINDOWS the draft at each, after the records",
+        "EVERY NAMED DRAFT RE-WINDOWED",
+        "RE-WINDOWS EVERY NAMED DRAFT at its own places, after the records",
+        "the rendering draft first, then each `also` draft in `also`'s order",
         "The check is by MEMBERSHIP of the named place",
-        "| `kept_place_moved` | permanent | `index` = the `runs` entry |",
-        "A request that sends no places, or `null` at every entry, is the shot as before",
+        "no `also` draft's RECORDED BASE MOVES",
+        "`site.index` the `runs` entry and `site.addr` THE DRAFT that no longer honours the place",
+        "| `kept_place_moved` | permanent | `index` = the `runs` entry, `addr` = the draft |",
+        "A request that sends no places, or `null` at every entry, in either list is the shot as before",
         "The board's own producers send none",
         "* `kept_place_moved` —",
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }
+    let rejections = prose("\n## Rejections", &["\n### Rejection codes"]);
+    assert!(
+        rejections.contains("On the publication's two re-window refusals, `kept_place_moved` and `stray_place_unrecorded`, `addr` names the draft being re-windowed"),
+        "§Rejections states `site.addr` on the two re-window codes"
+    );
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
     assert!(
         codes.contains("`kept_place_moved` (the publication's re-window"),
         "§Rejection codes carries the token"
     );
+    assert!(codes.contains("`site.index` the runs entry and `site.addr` that draft"), "§Rejection codes states the draft on the code");
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(
+        feed.contains("or re-windowed it at a place its `also_places` entry carries (minting nothing in it)"),
+        "§The change feed names a re-windowed `also` draft on the row"
+    );
+    assert!(feed.contains("`create_new_document`/`fork`/`version`/`stage`"), "§The change feed names `stage` among the mints");
 }
 
 /// THE STRAY PLACES (the link-sets design §5.7, "AND THE STRAY PLACES WITH
 /// THEM"; §5.5, the counterpart first; lane F4): §Arrangement's `places`
 /// names a run of either kind — the draft's, or a stray run of `doc`'s own
 /// identity or of another document's words, re-composed by reference to a
-/// record the caller may read, wherever homed — and the one run a place
-/// may not stand beside, an `also` draft's; §The publish shot and
-/// head-float states the stray arm, its record read over every record the
-/// caller may read, its check, its token and the window it refuses rather
-/// than keeps; §Rejection codes carries the token and its table row. The
-/// daemon's answers are pinned in `publish.rs` and the stores' suites; this
-/// pins that the contract says so.
+/// record the caller may read, wherever homed — and stands beside any run
+/// in a request naming a `draft`; §The publish shot and head-float states
+/// the stray arm in either list, its record read over every record the
+/// caller may read, its check, its token with the entry and the draft, and
+/// the window it refuses rather than keeps; §Rejection codes carries the
+/// token and its table row. The daemon's answers are pinned in `publish.rs`
+/// and the stores' suites; this pins that the contract says so.
 #[test]
 fn doc_states_the_stray_places_and_their_refusal() {
     let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
@@ -765,7 +793,8 @@ fn doc_states_the_stray_places_and_their_refusal() {
         "re-composed by reference to a correspondence record the caller may read, wherever homed",
         "`stray_place_unrecorded` where no record the caller may read names a stray run's identity whole",
         "a place beside an ordinary window onto another document, which no record names, is refused so, never silently kept",
-        "A place beside a run of a draft `also` names, whose draft is left as it stands, one in a request naming no `draft`, one outside the content subspace, or one past the runs is `malformed`, `site.index` the entry; a place stands beside any other run, at either form",
+        "A place in a request naming no `draft`, one outside the content subspace, or one past the runs is `malformed`, `site.index` the entry; a place stands beside any run, in a request naming a `draft`, at either form",
+        "or beside a stray run it arranges",
     ] {
         assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
     }
@@ -773,15 +802,17 @@ fn doc_states_the_stray_places_and_their_refusal() {
     for fact in [
         "AND THE STRAY PLACES WITH THEM",
         "re-composes such a run BY REFERENCE to the record's `to`",
+        "in `places` for the rendering draft, in a draft's `also_places` entry for a stray run that draft arranges",
         "the commit reads every correspondence record the caller may read whose `to` covers the run, wherever homed",
         "checks that the draft still arranges the record's `from` words at the place, by identity as above",
         "re-windows them there onto the record's `to` in the same transaction",
         "no identity is minted and no record written",
         "A record the caller may not read is never used",
         "A stray run no record the caller may read covers whole is refused `stray_place_unrecorded`",
+        "`site.index` the `runs` entry and `site.addr` the draft being re-windowed at it",
         "a placed window is re-windowed through a record or refused, never silently kept",
-        "a place stands beside any other run, at either form, and whether it re-windows is the commit's to decide",
-        "| `stray_place_unrecorded` | permanent | `index` = the `runs` entry |",
+        "a place in `places` stands beside any run, at either form, and whether it re-windows is the commit's to decide",
+        "| `stray_place_unrecorded` | permanent | `index` = the `runs` entry, `addr` = the draft |",
         "no correspondence record the caller may read names that identity whole as its `to`, wherever homed",
         "* `stray_place_unrecorded` —",
     ] {

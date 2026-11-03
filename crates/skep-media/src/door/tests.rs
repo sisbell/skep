@@ -160,6 +160,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
             }],
         },
         places: Vec::new(),
+        also_places: Vec::new(),
         deposits: PublishDeposits::default(),
     };
     assert_eq!(
@@ -220,6 +221,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
             }],
         },
         places: Vec::new(),
+        also_places: Vec::new(),
         deposits: PublishDeposits::default(),
     };
     let deposit = |p: PrincipalId, interval: Duration| {

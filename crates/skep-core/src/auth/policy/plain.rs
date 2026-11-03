@@ -287,7 +287,9 @@ pub struct PublicationReadRefusal {
     pub homes: usize,
     /// The `links` entries and the `read_with` entries, summed.
     pub entries: usize,
-    /// The draft's content runs; `0` for a shot naming no draft.
+    /// The content runs of every draft the commit re-windows, summed — the
+    /// rendering draft where `places` carries a place, each `also` draft
+    /// where its `also_places` entry does; `0` for a shot re-windowing none.
     pub draft_runs: usize,
     /// The request's runs.
     pub runs: usize,
@@ -319,9 +321,9 @@ impl PublicationReadRefusal {
 ///
 /// It is M7's [`price_publication_reads`] over `world` as the caller — the
 /// caller's link-holding homes × (`links` + `read_with` entries), plus the
-/// draft's content runs × the request's runs, the work of the composite's
-/// four in-lock reads counted before any is made, against M7's one reads
-/// budget; and the bytes the commit would stage, priced from M7's
+/// re-windowed drafts' content runs × the request's runs, the work of the
+/// composite's four in-lock reads counted before any is made, against M7's
+/// one reads budget; and the bytes the commit would stage, priced from M7's
 /// worst-case table off the request, against the kernel's transaction
 /// budget, so no request reaches the kernel's `txn_over_budget` with its
 /// records staged — [`ReadPrice::over_budget`], the one comparison,
@@ -336,17 +338,25 @@ impl PublicationReadRefusal {
 /// budget is conservative by design (`MAX_PUBLICATION_READS`'s card, and the
 /// bytes an upper bound): a request refused here would have cost at least
 /// its price, and one admitted may cost a little more. The twin fence, the
-/// plan's reads and the kept-place check stay where the composite makes
-/// them; this bounds them and reads nothing of theirs but one stab of the
-/// draft's records per stray place.
+/// plan's reads and the kept-place checks stay where the composite makes
+/// them; this bounds them and reads nothing of theirs but one stab, per
+/// stray place in either list, of the correspondence records across every
+/// home — the records the caller may read, wherever homed, are among them.
 pub fn publication_read_refusal(
     world: &World,
     op: &Op,
     principal: PrincipalId,
 ) -> Option<PublicationReadRefusal> {
-    let Op::Publish { target, shot, places, deposits } = op else { return None };
-    let price =
-        price_publication_reads(world, Caller::Principal(principal), target, shot, places, deposits);
+    let Op::Publish { target, shot, places, also_places, deposits } = op else { return None };
+    let price = price_publication_reads(
+        world,
+        Caller::Principal(principal),
+        target,
+        shot,
+        places,
+        also_places,
+        deposits,
+    );
     if !price.over_budget() {
         return None;
     }

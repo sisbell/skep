@@ -69,7 +69,7 @@ use skep_febe::{
 use skep_identity::SigAlgRow;
 use skep_kernel::{Attestation, Seq};
 use skep_links::{
-    member_end, request_image, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
+    member_end, request_image, AlsoPlaces, EndArg, Endset, LinkEntry, MemberSpan, NamedAddress,
     PublishDeposits, PublishTarget, View, MAX_SLOT_SPANS,
 };
 use skep_namespace::PrincipalId;
@@ -505,8 +505,9 @@ type PResult<T> = Result<T, PErr>;
 /// `Unparseable` rejection carries (`site.index`).
 ///
 /// Every leaf parser answers a bare [`PErr`], which lifts into this naming
-/// no entry; the one parser that localizes its refusal — the publish shot's
-/// `places`, refused entry by entry ([`Fields::places`]) — answers this
+/// no entry; the parsers that localize their refusal — the publish shot's
+/// `places` and `also_places`, refused entry by entry ([`Fields::places`],
+/// [`Fields::also_places`]), and its deposits' three lists — answer this
 /// directly. The request's own faults ride it to [`ParseError`]. A tuple as
 /// [`PErr`] is, its detail first, so a reader of either names the text the
 /// same way.
@@ -674,12 +675,14 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         // private, so the flag on this op is an unknown field `finish`
         // refuses, as `attest` is: a stage is outside the checked set.
         "stage" => Op::Stage { from: fields.addr("from")? },
-        // The target, the claim's flag, the shot, then its kept places and
-        // its deposits beside it (the link-sets design §5.7): the places
-        // parallel to the runs the shot just took, so they are read against
-        // them; the deposits' member positions read against the same runs.
-        // The claim rides either form (skep #692) and names the rendering
-        // draft, so `draft` is required beside it at both.
+        // The target, the claim's flag, the shot, then its kept places — the
+        // rendering draft's, and each `also` draft's own — and its deposits
+        // beside it (the link-sets design §5.7): the places parallel to the
+        // runs the shot just took, so they are read against them, and each
+        // `also_places` entry's draft against the `also` list the shot took;
+        // the deposits' member positions read against the same runs. The
+        // claim rides either form (skep #692) and names the rendering draft,
+        // so `draft` is required beside it at both.
         "publish" => {
             let target = fields.publish_target()?;
             let claim = fields.flag("claim")?;
@@ -688,8 +691,9 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
                 return Err(PErr("field 'claim': the edition claim names the rendering draft, so 'draft' is required beside it".into()).into());
             }
             let places = fields.places(&shot)?;
+            let also_places = fields.also_places(&shot)?;
             let deposits = fields.deposits(&shot, &target, claim)?;
-            Op::Publish { target, shot, places, deposits }
+            Op::Publish { target, shot, places, also_places, deposits }
         }
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
@@ -1228,21 +1232,22 @@ impl Fields {
     /// Outside the signed preimage, as `draft` is: the composer reads the
     /// shot alone, and this is read after it, against the runs it took.
     ///
-    /// A place stands beside any run the re-window may have words for: a
-    /// run of THE RENDERING DRAFT's own identity, whose stated `origin`
-    /// projects to the request's `draft`, and a run of any published
-    /// document's identity — a STRAY run of the document's own, its
-    /// `origin` projecting to the trunk of `doc`, or a run of another
-    /// document's words — which the client re-composed by reference to a
-    /// correspondence record's published words where the draft still
-    /// arranges the record's draft words (the design's "AND THE STRAY
-    /// PLACES WITH THEM"; §5.5's counterpart first): whether such a run
-    /// re-windows is the commit's to decide, through the records the caller
-    /// may read, wherever homed, refusing `stray_place_unrecorded` where
-    /// none covers it. One rule at both forms. A run of a draft `also`
-    /// names takes no place — those drafts are left as they stand, the
-    /// rendering draft alone re-windowed (B3-S11 P5) — and a request naming
-    /// no draft carries none, the re-window having no draft to window.
+    /// A place stands beside ANY run, in a request naming a `draft` — the
+    /// rendering draft's own position of that run: a run of THE RENDERING
+    /// DRAFT's own identity, whose stated `origin` projects to the request's
+    /// `draft`; a run of a draft `also` names, which the rendering draft
+    /// holds by identity and is re-windowed at as at any run of its own (the
+    /// `also` draft's own place for it rides `also_places`, §5.7 (viii));
+    /// and a run of any published document's identity — a STRAY run of the
+    /// document's own, its `origin` projecting to the trunk of `doc`, or a
+    /// run of another document's words — which the client re-composed by
+    /// reference to a correspondence record's published words where the
+    /// draft still arranges the record's draft words (the design's "AND THE
+    /// STRAY PLACES WITH THEM"; §5.5's counterpart first): whether such a
+    /// run re-windows is the commit's to decide, through the records the
+    /// caller may read, wherever homed, refusing `stray_place_unrecorded`
+    /// where none covers it. One rule at both forms. A request naming no
+    /// draft carries none, the re-window having no draft to window.
     ///
     /// # Errors
     ///
@@ -1250,9 +1255,8 @@ impl Fields {
     /// its `index` — the `malformed` rejection's `site.index` — where the
     /// list is longer than `runs` (the first entry past them), where a
     /// non-null entry is no V-position, lies outside the content subspace
-    /// (a kept place is a content position), sits beside a run whose stated
-    /// `origin` projects to a draft `also` names, or stands in a request
-    /// naming no draft.
+    /// (a kept place is a content position), or stands in a request naming
+    /// no draft.
     fn places(&mut self, shot: &Shot) -> Result<Vec<Option<VPos>>, Refusal> {
         let Some(v) = self.take_opt("places") else { return Ok(Vec::new()) };
         let arr =
@@ -1264,12 +1268,11 @@ impl Fields {
             ));
         }
         let drafted = shot.draft.is_some();
-        let also: Vec<Address> = shot.also.iter().map(trunk_of).collect();
         let at = |index: usize, fault: &str| {
             Refusal(format!("field 'places': [{index}]: {fault}"), Some(index))
         };
         let mut out: Vec<Option<VPos>> = Vec::with_capacity(shot.runs.len());
-        for (index, (entry, run)) in arr.iter().zip(&shot.runs).enumerate() {
+        for (index, entry) in arr.iter().enumerate() {
             if entry.is_null() {
                 out.push(None);
                 continue;
@@ -1281,18 +1284,122 @@ impl Fields {
             if !drafted {
                 return Err(at(index, "a kept place is a place in the rendering draft, which the request does not name"));
             }
-            if also.contains(&trunk_of(&run.origin)) {
-                return Err(at(
-                    index,
-                    "a kept place belongs to a run of the rendering draft's own identity or to a run of a published document's words, which the commit re-windows through a correspondence record or refuses; a run of a draft 'also' names takes no place",
-                ));
-            }
             out.push(Some(place));
         }
         if out.iter().all(Option::is_none) {
             return Ok(Vec::new());
         }
         out.resize(shot.runs.len(), None);
+        Ok(out)
+    }
+
+    /// Takes each `also` draft's own kept places (the link-sets design §5.7
+    /// (viii), every named draft re-windowed at its own kept places; skep
+    /// #739).
+    ///
+    /// `also_places` is a list of entries, each `{"draft": ⟨address⟩,
+    /// "places": [⟨V-position⟩ | null, …]}`: at most one entry per draft, its
+    /// `draft` one the request's `also` names, its `places` parallel to
+    /// `runs` by index as the rendering draft's `places` is and no longer
+    /// than it — a non-null entry the content V-position the run held IN
+    /// THAT DRAFT when the client composed the request, read off that
+    /// draft's image, or `null` for a run that draft is not re-windowed at.
+    /// A place in draft A's list stands beside a run of A's own identity
+    /// (whose stated `origin` projects to A) or beside a run of no named
+    /// draft's identity — a stray, re-composed by reference to a record's
+    /// published words, read through the records the caller may read; a
+    /// place beside a run of THE RENDERING DRAFT's or of ANOTHER `also`
+    /// draft's identity is refused, that draft alone being re-windowed at
+    /// its own run, by its own list. An entry whose list is all `null` is
+    /// dropped and a shorter list padded with `null` to `runs`' length, so
+    /// what is handed on holds one entry per draft that is re-windowed, each
+    /// list exactly `runs`' length with a place in it, in the order given —
+    /// which the marshal writes back in `also`'s order. Absent, or every
+    /// entry dropped, is a shot that re-windows no `also` draft and reads as
+    /// the empty list. Outside the signed preimage, as `places` is. The
+    /// outer list is bounded by `also` and each inner list by `runs`, both
+    /// under the wire cap already, so no cap of its own.
+    ///
+    /// # Errors
+    ///
+    /// A [`Refusal`] where the member is no array, naming no entry; where
+    /// the list holds more entries than `also` names drafts, naming the
+    /// first entry past them; and, naming the entry's position in
+    /// `also_places` — the `malformed` rejection's `site.index` — where an
+    /// entry is no object of `draft` and `places`, where its `draft` is no
+    /// address or not among `also`, or where it repeats an earlier entry's
+    /// draft; and, naming the PLACE's position within the entry's list as
+    /// [`Fields::places`] names its — where an entry's `places` is longer
+    /// than `runs` (the first place past them), or a place is no
+    /// V-position, lies outside the content subspace, or stands beside a run
+    /// of the rendering draft's or another `also` draft's identity.
+    fn also_places(&mut self, shot: &Shot) -> Result<Vec<AlsoPlaces>, Refusal> {
+        let Some(v) = self.take_opt("also_places") else { return Ok(Vec::new()) };
+        let arr = v
+            .as_array()
+            .ok_or_else(|| PErr("field 'also_places': expected a JSON array".into()))?;
+        if arr.len() > shot.also.len() {
+            return Err(Refusal(
+                format!(
+                    "field 'also_places': {} entries beside {} drafts 'also' names; each draft's places are named at most once",
+                    arr.len(),
+                    shot.also.len()
+                ),
+                Some(shot.also.len()),
+            ));
+        }
+        // Every named draft as the document it projects to: a place in one
+        // draft's list beside a run of another named draft's identity is
+        // that other draft's to carry, in its own list.
+        let named: Vec<Address> = shot.named_drafts().collect();
+        let at = |k: usize, fault: &str| Refusal(format!("field 'also_places': [{k}]: {fault}"), Some(k));
+        let mut out: Vec<AlsoPlaces> = Vec::with_capacity(arr.len());
+        for (k, entry) in arr.iter().enumerate() {
+            let m = p_obj(entry, &["draft", "places"]).map_err(|e| at(k, &e.0))?;
+            let draft = field(m, "draft", p_addr).map_err(|e| at(k, &e.0))?;
+            if !shot.also.contains(&draft) {
+                return Err(at(k, "names a draft 'also' does not name; an entry's draft is one of the family's other drafts the request names"));
+            }
+            if out.iter().any(|earlier| earlier.draft == draft) {
+                return Err(at(k, "repeats an earlier entry's draft; each draft's places are named once"));
+            }
+            let list = need(m, "places").map_err(|e| at(k, &e.0))?;
+            let list = list.as_array().ok_or_else(|| at(k, "places: expected a JSON array"))?;
+            if list.len() > shot.runs.len() {
+                return Err(Refusal(
+                    format!("field 'also_places': [{k}]: places: {} entries beside {} runs", list.len(), shot.runs.len()),
+                    Some(shot.runs.len()),
+                ));
+            }
+            let this = trunk_of(&draft);
+            let within = |index: usize, fault: &str| {
+                Refusal(format!("field 'also_places': [{k}]: places: [{index}]: {fault}"), Some(index))
+            };
+            let mut places: Vec<Option<VPos>> = Vec::with_capacity(shot.runs.len());
+            for (index, (place, run)) in list.iter().zip(&shot.runs).enumerate() {
+                if place.is_null() {
+                    places.push(None);
+                    continue;
+                }
+                let place = p_vpos(place).map_err(|e| within(index, &e.0))?;
+                if !place.is_content() {
+                    return Err(within(index, "a kept place is a content position"));
+                }
+                let origin = trunk_of(&run.origin);
+                if origin != this && named.contains(&origin) {
+                    return Err(within(
+                        index,
+                        "a kept place in a draft's own list belongs to a run of that draft's identity or to a run of a published document's words; a run of the rendering draft's or of another 'also' draft's identity is re-windowed in that draft alone, at the place its own list carries",
+                    ));
+                }
+                places.push(Some(place));
+            }
+            if places.iter().all(Option::is_none) {
+                continue;
+            }
+            places.resize(shot.runs.len(), None);
+            out.push(AlsoPlaces { draft, places });
+        }
         Ok(out)
     }
 

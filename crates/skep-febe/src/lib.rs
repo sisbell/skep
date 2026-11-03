@@ -283,6 +283,6 @@ pub use skep_retrieval::{
 // `NamedAddress` and `MemberSpan` — are M7's, as `SlotArg` is: `Op::Publish`
 // is unbuildable without them (the link-sets design §5.7).
 pub use skep_links::{
-    enc, EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress, PublishDeposits,
-    PublishTarget, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE,
+    enc, AlsoPlaces, EndArg, Endset, Invalid, Link, LinkEntry, MemberSpan, NamedAddress,
+    PublishDeposits, PublishTarget, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE,
 };

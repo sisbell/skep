@@ -299,13 +299,15 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // so an absent one marshals to no field and `parse ∘ marshal` is a
         // fixpoint — and so do the kept places: `places` rides only where
         // one is present, the list `runs`' length with `null` at a run with
-        // none, the form the parse pads a shorter list to — and so do the
+        // none, the form the parse pads a shorter list to; `also_places`
+        // only where some entry carries a place, those entries alone, in
+        // `also`'s order, each list as `places` is — and so do the
         // deposits (the link-sets design §5.7): the target in its one form
         // (`doc`, or `account` with `mint: true`), `claim: true` where the
         // deposits claim, at either form (an unset flag is no field), and
         // each of `links`, `retract` and `read_with` only where it holds an
         // entry.
-        Op::Publish { target, shot, places, deposits } => {
+        Op::Publish { target, shot, places, also_places, deposits } => {
             let mut pairs = match target {
                 PublishTarget::Document(doc) => vec![("doc", j_addr(doc))],
                 PublishTarget::Mint { account } => vec![("account", j_addr(account)), ("mint", Value::Bool(true))],
@@ -330,6 +332,20 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             if places.iter().any(Option::is_some) {
                 let places = places.iter().map(|p| p.as_ref().map_or(Value::Null, j_vpos));
                 pairs.push(("places", Value::Array(places.collect())));
+            }
+            // Each `also` draft's own places, in `also`'s order, an entry
+            // only where it carries a place.
+            let also_places: Vec<Value> = shot
+                .also
+                .iter()
+                .filter_map(|draft| also_places.iter().find(|entry| entry.draft == *draft && entry.carries_a_place()))
+                .map(|entry| {
+                    let places = entry.places.iter().map(|p| p.as_ref().map_or(Value::Null, j_vpos));
+                    obj(vec![("draft", j_addr(&entry.draft)), ("places", Value::Array(places.collect()))])
+                })
+                .collect();
+            if !also_places.is_empty() {
+                pairs.push(("also_places", Value::Array(also_places)));
             }
             if !deposits.links.is_empty() {
                 pairs.push(("links", Value::Array(deposits.links.iter().map(j_link_entry).collect())));

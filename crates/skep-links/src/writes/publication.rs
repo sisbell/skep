@@ -3,7 +3,7 @@
 //! shot's correspondence records beside it in each named draft, every public
 //! deposit the request carries (the accepted links as copies with their
 //! claims, the held removals' retractions, the read-withs, the edition
-//! claim) and the rendering draft re-windowed at its kept places, in one
+//! claim) and every named draft re-windowed at its own kept places, in one
 //! transaction.
 //!
 //! [`stage_publication`] is the composite as a function over a caller-opened
@@ -16,27 +16,31 @@
 //! in the named draft whose identity the piece was — the rendering `draft`'s
 //! in it, an `also` draft's in that draft (the Nelson way, B3-S10; A-328) —
 //! ([`stage_correspondence`]); THE DEPOSITS, exactly as planned, per home in
-//! the signed entry's order; and THE RE-WINDOW OF THE RENDERING DRAFT ALONE
-//! (B3-S11 P5): for each run the request carries a kept place for, the check
-//! that the draft still arranges that run's identity at that place and its
-//! replacement there by the fresh run it became, a placement and a removal
-//! ([`stage_reinstate_at`], [`stage_delete_at`], M5's) — a draft-native
-//! run's pieces read off the pairing, a stray run's — one of published
+//! the signed entry's order; and THE RE-WINDOW OF EVERY NAMED DRAFT, each at
+//! its own kept places (§5.7 (viii), the Nelson way): the rendering draft at
+//! the request's `places`, then each draft `also` names at its
+//! [`AlsoPlaces`] entry, in `also`'s order — for each run a list carries a
+//! kept place for, the check that that draft still arranges the run's
+//! identity at that place and its replacement there by the fresh run it
+//! became, a placement and a removal ([`stage_reinstate_at`],
+//! [`stage_delete_at`], M5's) — a named draft's run's pieces read off the
+//! pairing, whichever draft is re-windowed; a stray run's — one of published
 //! identity, the document's own or another document's, re-composed by
 //! reference to a record's `to` — off the correspondence records the caller
 //! may read whose `to` covers the run, wherever homed (the child module
-//! `stray`); the family's other drafts are left as they stand, their words
-//! published through the records they hold and healed by the stray path at
-//! their own next shot — and
+//! `stray`); a named draft no list carries a place for is left as it stands,
+//! its words published through the records it holds and healed by the stray
+//! path at its own next shot — and
 //! [`LinkWriter::publication`] the public op: one `transact_attested` over
 //! the union of the shot's keys, each named draft's link key where a run of
-//! its identity is re-inserted, the rendering draft's content key where a
-//! place is carried, every home's link key where a deposit lands, and the
-//! account's document key where an edition is minted. The correspondence
-//! class has this one writer; the fences on the three request-typed doors
-//! keep every other act off it. Within one commit a home's link addresses
-//! rise in the order the daemon mints them — THE PIN, stated at
-//! `mint_link`'s frontier read and held by `tests/it/publication.rs`.
+//! its identity is re-inserted, each re-windowed draft's content key where
+//! its list carries a place, every home's link key where a deposit lands,
+//! and the account's document key where an edition is minted. The
+//! correspondence class has this one writer; the fences on the three
+//! request-typed doors keep every other act off it. Within one commit a
+//! home's link addresses rise in the order the daemon mints them — THE PIN,
+//! stated at `mint_link`'s frontier read and held by
+//! `tests/it/publication.rs`.
 //!
 //! Beside the composite sits its price, [`price_publication_reads`]: the
 //! four reads the composite makes under the lock and, its fifth term, the
@@ -96,6 +100,48 @@ pub use sizes::{
     SHOT_BYTES,
 };
 
+/// The kept places of one draft `also` names (the wire's `also_places`
+/// entry; the link-sets design §5.7 (viii), every named draft re-windowed
+/// at its own kept places).
+///
+/// `draft` is a draft the request's `also` names, as the request spells it;
+/// `places` is parallel to the shot's `runs` by index, as the request's
+/// `places` is for the rendering draft — each entry the V-position the run
+/// held IN THIS DRAFT when the client composed the request, read off this
+/// draft's image, or `None` for a run this draft is not re-windowed at. A
+/// place stands beside a run of this draft's own identity (its pieces the
+/// pairing's) or beside a stray run of published identity (its pieces the
+/// records' the caller may read, wherever homed); the wire's codec refuses
+/// one beside a run of the rendering draft's or another `also` draft's
+/// identity, which that draft alone may be re-windowed at. The commit
+/// re-windows this draft at these places after the rendering draft, in
+/// `also`'s order, each place checked by identity against this draft
+/// (`KeptPlaceMoved` naming it). Outside the signed preimage as `places`
+/// is. A list shorter than `runs` is read as padded with `None`; an entry
+/// past the runs is nothing's and is ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlsoPlaces {
+    /// The draft `also` names whose kept places these are.
+    pub draft: Address,
+    /// Its kept places, parallel to the shot's `runs` by index.
+    pub places: Vec<Option<VPos>>,
+}
+
+impl AlsoPlaces {
+    /// Returns whether any entry carries a place: the draft is re-windowed.
+    pub fn carries_a_place(&self) -> bool {
+        self.places.iter().any(Option::is_some)
+    }
+}
+
+/// Returns the `also_places` entry for `draft` — a document an `also` entry
+/// projects to — where one carries a place; `None` where none names it or
+/// its list is all `None`. The one lookup the re-window, the lock set and
+/// the two prices make, so each reads the same entry per draft.
+fn also_places_of<'a>(also_places: &'a [AlsoPlaces], draft: &Address) -> Option<&'a AlsoPlaces> {
+    also_places.iter().find(|entry| trunk_of(&entry.draft) == *draft && entry.carries_a_place())
+}
+
 /// The price of a publication: the four in-lock reads the design names,
 /// read off one snapshot (the link-sets design §5.7, EVERY IN-LOCK READ IS
 /// BOUNDED BY A REFUSAL AHEAD OF THE LOCK), and its fifth term, the bytes
@@ -117,10 +163,13 @@ pub struct ReadPrice {
     /// whose read ranges over the caller's homes — (3)'s claim read and
     /// (5)'s presence read.
     pub entries: usize,
-    /// The rendering draft's content runs, `content_run_count` of the draft
-    /// the shot names as `draft` — the one draft the re-window reads; `0`
-    /// for a shot naming none. The `also` drafts add no term: nothing is
-    /// re-windowed in them, and the fence's stab per run is priced below.
+    /// The content runs of every draft the re-window reads, summed:
+    /// `content_run_count` of the rendering draft where `places` carries a
+    /// place, and of each `also` draft whose `also_places` entry carries one
+    /// — the drafts the commit re-windows, each read once per placed run;
+    /// `0` for a shot that re-windows nothing. A named draft no list places
+    /// is not read and adds no term; the fence's stab per run is priced
+    /// below.
     pub draft_runs: usize,
     /// The request's runs, `shot.runs.len()`: the kept-place check costs
     /// the draft's run count per placed run, and the twin fence one stab per
@@ -180,17 +229,18 @@ impl ReadPrice {
 /// It reads two counts of the world and two of the request, and walks
 /// nothing: the caller's link-holding homes by [`homes_under`] of the
 /// caller's account (one seek per home found, the account's prefix read
-/// off M3's principal table), the rendering draft's content run count by
-/// M5's one map lookup (the `also` drafts, never re-windowed, add none),
-/// the entries and the runs off the request's lists. A caller that
-/// is no principal — `Caller::System`, which no request path carries — has
-/// no account and so no homes, and prices the draft term alone. The staged
-/// bytes are [`price_staged_bytes`]'s — request arithmetic over the table,
-/// and one stab of every home's records per stray place. The counts may move
-/// between this read and the composite's own, where the transport takes
-/// its lock after it (the survey's C8): the budget is conservative by
-/// design, and the composite reads under the lock exactly as it did
-/// before it was priced.
+/// off M3's principal table), each re-windowed draft's content run count by
+/// M5's one map lookup — the rendering draft where `places` carries a place,
+/// each `also` draft where its `also_places` entry does, summed; a named
+/// draft no list places adds none — the entries and the runs off the
+/// request's lists. A caller that is no principal — `Caller::System`, which
+/// no request path carries — has no account and so no homes, and prices the
+/// draft term alone. The staged bytes are [`price_staged_bytes`]'s — request
+/// arithmetic over the table, and one stab of every home's records per stray
+/// place. The counts may move between this read and the composite's own,
+/// where the transport takes its lock after it (the survey's C8): the budget
+/// is conservative by design, and the composite reads under the lock exactly
+/// as it did before it was priced.
 ///
 /// [`homes_under`]: crate::LinkState::homes_under
 pub fn price_publication_reads<W: LinkWorld + HasM5>(
@@ -199,6 +249,7 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
     target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
+    also_places: &[AlsoPlaces],
     deposits: &PublishDeposits,
 ) -> ReadPrice {
     let homes = match caller {
@@ -208,16 +259,31 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
             .map_or(0, |account| world.links().homes_under(&enc([account])).len()),
         Caller::System => 0,
     };
-    let draft_runs = shot
-        .draft_document()
-        .map_or(0, |draft| world.m5().content_run_count(&draft));
+    let draft_runs = rewindowed_drafts(shot, places, also_places)
+        .map(|draft| world.m5().content_run_count(&draft))
+        .fold(0usize, usize::saturating_add);
     ReadPrice {
         homes,
         entries: deposits.links.len().saturating_add(deposits.read_with.len()),
         draft_runs,
         runs: shot.runs.len(),
-        staged_bytes: price_staged_bytes(world, target, shot, places, deposits),
+        staged_bytes: price_staged_bytes(world, target, shot, places, also_places, deposits),
     }
+}
+
+/// Returns the drafts the commit re-windows, each as the document it
+/// projects to, in the order it re-windows them: the rendering draft where
+/// `places` carries a place, then each `also` draft whose `also_places`
+/// entry carries one, in `also`'s order — the drafts whose content key the
+/// lock set takes and whose run count the price reads. Request arithmetic.
+fn rewindowed_drafts<'a>(
+    shot: &'a Shot,
+    places: &'a [Option<VPos>],
+    also_places: &'a [AlsoPlaces],
+) -> impl Iterator<Item = Address> + 'a {
+    let rendering = shot.draft_document().filter(|_| places.iter().any(Option::is_some));
+    let also = shot.also.iter().map(trunk_of).filter(move |draft| also_places_of(also_places, draft).is_some());
+    rendering.into_iter().chain(also)
 }
 
 impl From<HomeFault> for PublicationError {
@@ -256,8 +322,9 @@ impl From<EmitCoreError> for PublicationError {
 /// the request mints one, the shot, for every piece of draft identity it
 /// minted one correspondence record in the named draft whose identity the
 /// piece was, every public deposit the request carries as the plan holds
-/// it, and the rendering draft's re-window at the kept places the request
-/// carries.
+/// it, and every named draft's re-window at the kept places the request
+/// carries for it — the rendering draft's in `places`, each `also` draft's
+/// in its `also_places` entry.
 ///
 /// It is the link-sets design's ONE COMMIT (§5.7) as a function over a
 /// caller-opened [`Staging`], the form every store op a composite may need
@@ -349,50 +416,66 @@ impl From<EmitCoreError> for PublicationError {
 ///    gate's registration and ω check, so a home the plan did not read is
 ///    refused `NotOwner` with its address. A request carrying no deposit
 ///    stages none here and commits as S2 left it.
-/// 8. THE RE-WINDOW, last (`stage_rewindow`), of THE RENDERING DRAFT ALONE
-///    (B3-S11 P5): for each `runs` entry that carries a kept place in
-///    `places` — the V-position the run held in the draft when the client
-///    composed the request, outside the signed preimage as `draft` is — in
-///    `runs`' order, the check that the draft still arranges that run's
-///    draft words at that place, then their replacement there by the
-///    published identity, piece by piece: a draft-native entry's pieces are
-///    the pairing's, the fresh runs it became; a STRAY entry's — a run of
-///    published identity no pairing holds, the document's own or another
-///    document's, re-composed by reference to a correspondence record's
-///    `to` — are the records' (the child module `stray`): every
-///    correspondence record the caller may read whose `to` covers the run,
-///    wherever homed — the rendering draft's, an `also` draft's, a granted
-///    draft's — the draft words each names as its `from`; a stray run no
-///    record the caller may read covers whole refuses
-///    `StrayPlaceUnrecorded` with the entry. The family's other drafts
-///    (`also`) are NOT re-windowed: "each shows the words it contributed as
-///    a COUNTERPART from then on, through the record the shot homed in it
-///    (P57) … and is healed at its own next shot by the stray path". A
-///    request with no place — `places` empty, or every entry `None` — is
-///    today's shot, writing nothing of the draft.
+/// 8. THE RE-WINDOW, last (`stage_rewindow`), of EVERY NAMED DRAFT at its
+///    own kept places (the design's §5.7 (viii), the Nelson way): first THE
+///    RENDERING DRAFT at `places`, then EACH `also` DRAFT at its
+///    `also_places` entry, in `also`'s order — each re-window reading the
+///    working world the ones before it left, so a draft re-windowed second
+///    sees the first's replacements. Within one draft, for each `runs` entry
+///    that carries a kept place in that draft's list — the V-position the
+///    run held in THAT draft when the client composed the request, outside
+///    the signed preimage as `draft` is — in `runs`' order, the check that
+///    the draft still arranges that run's draft words at that place, then
+///    their replacement there by the published identity, piece by piece: a
+///    named draft's entry's pieces are the pairing's for that entry
+///    (`piece.index == index`), the fresh runs it became — THE SAME PIECES
+///    whichever named draft is re-windowed at the entry, the rendering draft
+///    arranging an `also` draft's identity by identity and the `also` draft
+///    natively; a STRAY entry's — a run of published identity no pairing
+///    holds, the document's own or another document's, re-composed by
+///    reference to a correspondence record's `to` — are the records' (the
+///    child module `stray`): every correspondence record the caller may read
+///    whose `to` covers the run, wherever homed — the rendering draft's, an
+///    `also` draft's, a granted draft's — the draft words each names as its
+///    `from`; a stray run no record the caller may read covers whole refuses
+///    `StrayPlaceUnrecorded` with the entry and the draft. A named draft no
+///    list carries a place for is left as it stands: "each shows the words
+///    it contributed as a COUNTERPART from then on, through the record the
+///    shot homed in it (P57) … and is healed at its own next shot by the
+///    stray path". A request with no place in any list is today's shot,
+///    writing nothing of any draft. NO `also` DRAFT's RECORDED BASE MOVES:
+///    the fold moves the rendering draft's base alone to the member it
+///    renders (M5's `ShotPlace`, its `draft`), as before — a re-windowed
+///    `also` draft stands behind the member it now windows, the designed
+///    outcome.
 ///
 /// `places` is parallel to `shot.runs` by index, each entry the run's place
-/// or `None`; a shorter list is read as padded with `None`, and an entry
-/// past the runs is nothing's and is ignored. A place belongs to a run of
-/// the rendering draft's identity or to a run of any published document's
-/// — the document's own trunk, or another document whose words the draft
-/// holds by transclusion — the wire's codec refusing one on a run of a
-/// draft `also` names alone (`malformed`, with the entry); below that door
-/// a placed run no pairing holds is re-windowed through the records or
+/// in the rendering draft or `None`; each `also_places` entry's list is
+/// parallel the same way, the place in THAT draft; a shorter list is read
+/// as padded with `None`, and an entry past the runs is nothing's and is
+/// ignored. A place in the rendering draft's list belongs to a run of ANY
+/// named draft's identity — its own, or an `also` draft's, which the
+/// rendering draft arranges by identity — or to a run of any published
+/// document's — the document's own trunk, or another document whose words
+/// the draft holds by transclusion; a place in an `also` draft's list to a
+/// run of that draft's own identity or to a run of a published document's,
+/// the wire's codec refusing one beside the rendering draft's or another
+/// `also` draft's run (`malformed`, with the entry). Below that door a
+/// placed run no pairing holds is re-windowed through the records or
 /// refused `StrayPlaceUnrecorded` — an ordinary window, which no record
-/// names, is refused, never silently kept — while one beside an `also`
-/// draft's run is checked as any place is against the rendering draft,
-/// which arranges that identity there or refuses `KeptPlaceMoved`; one with
-/// no draft named is ignored with the re-window, which has no draft to
-/// window.
+/// names, is refused, never silently kept; every placed run is checked as
+/// any place is against the draft being re-windowed, which arranges that
+/// identity there or refuses `KeptPlaceMoved` naming it; a list with no
+/// draft named is ignored with the re-window, which has no draft to window.
 ///
 /// The caller's lock keys are the union of the shot's
 /// ([`stage_publish`]'s card), each named draft's `link_lock_key` where
-/// records will be minted in it (a run of its identity re-inserted), the
-/// rendering draft's `content_lock_key` where a place is carried (no `also`
-/// draft's: nothing is re-windowed there), `link_lock_key` of every home a
-/// deposit names by address and the account's `document_lock_key` at the
-/// mint form — [`LinkWriter::publication`] supplies exactly that. The visibility class
+/// records will be minted in it (a run of its identity re-inserted), each
+/// re-windowed draft's `content_lock_key` — the rendering draft's where
+/// `places` carries a place, each `also` draft's where its `also_places`
+/// entry does — `link_lock_key` of every home a deposit names by address and
+/// the account's `document_lock_key` at the mint form —
+/// [`LinkWriter::publication`] supplies exactly that. The visibility class
 /// `readable` is the caller's: the shot's source gate consults it per
 /// origin, every deposit's gate is handed it as every deposit's is — the
 /// claim's dedup runs at it, a guaranteed miss — and the re-window's stray
@@ -412,9 +495,10 @@ impl From<EmitCoreError> for PublicationError {
 /// `NotOwner`) and its `Mint` and `Seat` — and `Plan(SlotTooLarge)` where a
 /// member-position end resolves to more spans than a slot holds, which the
 /// request's own run count cannot tell ahead of the mint — then the
-/// re-window's (`StrayPlaceUnrecorded` and `KeptPlaceMoved` with the entry,
-/// `Reinstate`, `Delete` — `stage_rewindow` states which are reachable). An
-/// `Err` commits nothing of the transaction.
+/// re-window's (`StrayPlaceUnrecorded` and `KeptPlaceMoved` with the entry
+/// and the draft, `Reinstate`, `Delete` — `stage_rewindow` states which are
+/// reachable), the rendering draft's first and then each `also` draft's in
+/// `also`'s order. An `Err` commits nothing of the transaction.
 ///
 /// # Panics
 ///
@@ -422,12 +506,14 @@ impl From<EmitCoreError> for PublicationError {
 /// kernel.
 ///
 /// [`match_links_in`]: crate::LinkState::match_links_in
+#[allow(clippy::too_many_arguments)]
 pub fn stage_publication<W>(
     stg: &mut Staging<W>,
     caller: Caller,
     target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
+    also_places: &[AlsoPlaces],
     deposits: &PublishDeposits,
     readable: &Visibility<'_, W>,
 ) -> Result<(Address, Pairing), PublicationError>
@@ -499,10 +585,18 @@ where
     }
     // 7. The deposits, exactly as planned.
     stage_deposits(stg, readable, caller, &plan, &member, edition.as_ref(), &trunk_of(doc), shot, &pairing)?;
-    // 8. The re-window, last: the rendering draft alone, its stray read at
-    //    the caller's own visibility class.
+    // 8. The re-window, last: the rendering draft at `places`, then each
+    //    `also` draft at its own list, in `also`'s order, each over the
+    //    working world the ones before it left — every stray read at the
+    //    caller's own visibility class.
+    let trunk = trunk_of(doc);
     if let Some(draft) = shot.draft_document() {
-        stage_rewindow(stg, readable, caller, &draft, &trunk_of(doc), shot, places, &pairing)?;
+        stage_rewindow(stg, readable, caller, &draft, &trunk, shot, places, &pairing)?;
+        for other in shot.also.iter().map(trunk_of) {
+            if let Some(entry) = also_places_of(also_places, &other) {
+                stage_rewindow(stg, readable, caller, &other, &trunk, shot, &entry.places, &pairing)?;
+            }
+        }
     }
     Ok((member, pairing))
 }
@@ -601,22 +695,27 @@ where
     Ok(())
 }
 
-/// Stages the draft's re-window at its kept places: for each `runs` entry
-/// that carries a place, the check that `draft` still arranges that run's
-/// draft words there, and their replacement there by the published
-/// identity.
+/// Stages one draft's re-window at its kept places: for each `runs` entry
+/// that carries a place in `places`, the check that `draft` still arranges
+/// that run's draft words there, and their replacement there by the
+/// published identity.
 ///
 /// It is the link-sets design's "re-window of `D` at its kept places,
-/// checked by identity" (§5.7), the S-gate's composite, with THE STRAY
-/// PLACES beside it: for each entry of `shot.runs` with a place in
-/// `places`, in `runs`' order —
+/// checked by identity — and of every draft the request names beside it,
+/// each at its own kept places" (§5.7 (viii)), the S-gate's composite, with
+/// THE STRAY PLACES beside it, run once per re-windowed draft: `draft` the
+/// rendering draft with the request's `places`, or a draft `also` names with
+/// its `also_places` entry's list — the pieces the same whichever draft is
+/// re-windowed, the check and the replacement asked of `draft` alone. For
+/// each entry of `shot.runs` with a place in `places`, in `runs`' order —
 ///
 /// THE PIECES: each entry is re-windowed as pieces, a draft-native `from`
-///     beside the published `to` it stands for, of one width. A
-///     DRAFT-NATIVE entry's are its pieces of the pairing [`stage_publish`]
-///     returned — the fresh runs it became, or an earlier entry's where it
-///     placed the identity by reference — tiling the run from its start in
-///     I-order ([`Pairing`]'s contract). A STRAY entry's — a run of
+///     beside the published `to` it stands for, of one width. A NAMED
+///     DRAFT's entry's — of `draft`'s own identity, or of another named
+///     draft's which `draft` arranges by identity — are its pieces of the
+///     pairing [`stage_publish`] returned — the fresh runs it became, or an
+///     earlier entry's where it placed the identity by reference — tiling
+///     the run from its start in I-order ([`Pairing`]'s contract). A STRAY entry's — a run of
 ///     published identity no pairing holds, the document's own trunk's or
 ///     ANY other document's, re-composed by the client by reference to a
 ///     correspondence record's `to` where the draft still arranges that
@@ -682,11 +781,12 @@ where
 ///
 /// `Reinstate(NotContentSubspace)` for a place outside the content subspace
 /// — the placement's own verdict for the position, asked ahead of the check,
-/// which the wire's codec refuses first; `StrayPlaceUnrecorded { index }`
-/// where a stray entry's span is not covered whole by the records the
-/// caller may read; `KeptPlaceMoved { index }` where the check fails, and where the
-/// re-derivation finds the piece elsewhere than the placement left it,
-/// which the check rules out; `Reinstate` with the placement's own —
+/// which the wire's codec refuses first; `StrayPlaceUnrecorded { index,
+/// draft }` where a stray entry's span is not covered whole by the records
+/// the caller may read; `KeptPlaceMoved { index, draft }` where the check
+/// fails, and where the re-derivation finds the piece elsewhere than the
+/// placement left it, which the check rules out — each naming `draft`, the
+/// one being re-windowed; `Reinstate` with the placement's own —
 /// `PublishedTarget` where the draft is a published document (a draft named
 /// outside the chain need not be private), `TooManyRuns` where the draft's
 /// run-list is at M5's budget; the rest made unreachable by the check and
@@ -711,10 +811,10 @@ where
         if !place.is_content() {
             return Err(ReinstateError::NotContentSubspace.into());
         }
-        // The pieces: the pairing's for a draft-native entry, the records'
-        // for a stray entry — a run of published identity no pairing holds,
-        // of whichever document — read wherever homed at the caller's own
-        // visibility class.
+        // The pieces: the pairing's for a named draft's entry — whichever
+        // draft is being re-windowed at it — the records' for a stray entry,
+        // a run of published identity no pairing holds, of whichever
+        // document, read wherever homed at the caller's own visibility class.
         let mut pieces: Vec<stray::Piece> = pairing
             .iter()
             .filter(|piece| piece.index == index)
@@ -722,12 +822,12 @@ where
             .collect();
         if pieces.is_empty() {
             pieces = stray::record_pieces(stg.working(), readable, &entry.run)
-                .ok_or(PublicationError::StrayPlaceUnrecorded { index })?;
+                .ok_or_else(|| PublicationError::StrayPlaceUnrecorded { index, draft: draft.clone() })?;
         }
         // (a) The check, of the working world: the pieces' draft words, at
         //     the place, in their order, and nothing else over the span.
         if !arranged_at(stg.working().m5(), draft, place, pieces.iter().map(|piece| &piece.from)) {
-            return Err(PublicationError::KeptPlaceMoved { index });
+            return Err(PublicationError::KeptPlaceMoved { index, draft: draft.clone() });
         }
         // (b) The replacement, piece by piece at each piece's offset. The
         //     two staged bodies take the UNCHECKED arm of the stale-edit
@@ -750,7 +850,7 @@ where
             // world.
             let moved = VPos::content(&at.ordinal + piece.to.width());
             if !arranged_at(stg.working().m5(), draft, &moved, [&piece.from]) {
-                return Err(PublicationError::KeptPlaceMoved { index });
+                return Err(PublicationError::KeptPlaceMoved { index, draft: draft.clone() });
             }
             stage_delete_at(stg, caller, draft, moved, piece.from.width().clone(), AsOf::Unchecked)?;
             offset = &offset + piece.from.width();
@@ -909,8 +1009,8 @@ where
 {
     /// THE PUBLICATION (the link-sets design §5.7): the publish shot, the
     /// edition where the request mints one, its correspondence records in
-    /// each named draft, every public deposit the request carries and the
-    /// rendering draft's re-window at its kept places in ONE commit.
+    /// each named draft, every public deposit the request carries and every
+    /// named draft's re-window at its own kept places in ONE commit.
     ///
     /// It opens one transaction over the union of the shot's keys —
     /// `doc`'s head key, `content_lock_key` of the document it projects to,
@@ -918,9 +1018,10 @@ where
     /// first member's where the base is the bare document — each
     /// named draft's `link_lock_key` where records will be minted in it (a
     /// run of its identity re-inserted: the rendering `draft`'s, and each
-    /// `also` draft's), the rendering draft's `content_lock_key` where
-    /// `places` carries a place (the re-window edits that draft's
-    /// arrangement and no other's), the
+    /// `also` draft's), each re-windowed draft's `content_lock_key` — the
+    /// rendering draft's where `places` carries a place, each `also` draft's
+    /// where its `also_places` entry does (the re-window edits exactly those
+    /// drafts' arrangements) — the
     /// `link_lock_key` of every home a deposit names by address (a `links`
     /// entry's bare home, its `old`'s home, a `retract` target's home, a
     /// `read_with` set, and the trunk of `doc` where the deposits claim at
@@ -936,17 +1037,19 @@ where
     /// function. The visibility class this handle carries is the shot's
     /// `readable`, the value M10 lends M5's shot on the plain path.
     ///
-    /// `places` is the request's kept places, parallel to `shot.runs` by
-    /// index — empty for a request that sends none; `deposits` the request's
-    /// three lists — empty for one that sends none. Both empty, at the
-    /// document form, is today's shot.
+    /// `places` is the request's kept places in the rendering draft,
+    /// parallel to `shot.runs` by index — empty for a request that sends
+    /// none; `also_places` the kept places of each draft `also` names, one
+    /// [`AlsoPlaces`] per draft that is re-windowed — empty for one that
+    /// re-windows no `also` draft; `deposits` the request's three lists —
+    /// empty for one that sends none. All empty, at the document form, is
+    /// today's shot.
     ///
     /// Returns `(member, seq)`: the member's address, the ack's — at the
     /// mint form, the first member of the edition minted, its trunk — and
     /// the one commit's `Seq`. A caller reads the records back off each
     /// named draft's link subspace, the deposits off each home's, in
-    /// minting order, and the re-windowed rendering draft off its
-    /// arrangement.
+    /// minting order, and each re-windowed draft off its arrangement.
     ///
     /// # Errors
     ///
@@ -964,11 +1067,12 @@ where
         target: &PublishTarget,
         shot: &Shot,
         places: &[Option<VPos>],
+        also_places: &[AlsoPlaces],
         deposits: &PublishDeposits,
     ) -> Result<(Address, Seq), TxnError<PublicationError>> {
-        let keys = publication_lock_keys(target, shot, places, deposits);
+        let keys = publication_lock_keys(target, shot, places, also_places, deposits);
         self.kernel.transact_attested(&keys, self.attest, |stg| {
-            stage_publication(stg, caller, target, shot, places, deposits, self.visibility)
+            stage_publication(stg, caller, target, shot, places, also_places, deposits, self.visibility)
                 .map(|(member, _)| member)
         })
     }
@@ -988,14 +1092,17 @@ where
 /// — or the account's `document_lock_key` at the mint form; each named
 /// draft's `link_lock_key` where a run of its identity is re-inserted (its
 /// records are minted there — the rendering `draft`'s and each `also`
-/// draft's alike); the rendering draft's `content_lock_key` alone where a
-/// place is carried (it alone is re-windowed; no `also` draft's); the
-/// `link_lock_key` of every home a deposit names by address. M2's own
-/// bytewise order, duplicates collapsed, as `editlink` hands its pair.
+/// draft's alike); each re-windowed draft's `content_lock_key` — the
+/// rendering draft's where `places` carries a place, each `also` draft's
+/// where its `also_places` entry does; a named draft no list places takes
+/// none, nothing being re-windowed in it; the `link_lock_key` of every home
+/// a deposit names by address. M2's own bytewise order, duplicates
+/// collapsed, as `editlink` hands its pair.
 fn publication_lock_keys(
     target: &PublishTarget,
     shot: &Shot,
     places: &[Option<VPos>],
+    also_places: &[AlsoPlaces],
     deposits: &PublishDeposits,
 ) -> Vec<LockKey> {
     let mut keys = match target {
@@ -1025,19 +1132,15 @@ fn publication_lock_keys(
         PublishTarget::Mint { account, .. } => vec![M3State::document_lock_key(account)],
     };
     // Each named draft's link key where a run of its identity is
-    // re-inserted (its records are minted there); the rendering draft's
-    // content key alone where a place is carried (it alone is
-    // re-windowed).
+    // re-inserted (its records are minted there); each re-windowed draft's
+    // content key — the rendering draft's where `places` carries a place,
+    // each `also` draft's where its own list does.
     for draft in shot.named_drafts() {
         if shot.reinserted_runs_of(&draft).next().is_some() {
             keys.push(M3State::link_lock_key(&draft));
         }
     }
-    if let Some(draft) = shot.draft_document() {
-        if places.iter().any(Option::is_some) {
-            keys.push(M3State::content_lock_key(&draft));
-        }
-    }
+    keys.extend(rewindowed_drafts(shot, places, also_places).map(|draft| M3State::content_lock_key(&draft)));
     for entry in &deposits.links {
         if let NamedAddress::Address(home) = &entry.home {
             keys.push(M3State::link_lock_key(home));

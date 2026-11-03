@@ -519,13 +519,15 @@ pub enum PlanFault {
 /// [`stage_correspondence`](crate::stage_correspondence) alone — and the
 /// record's mint and seat; then the deposits as planned — each deposit's
 /// gate (`NotOwner` on a home the plan did not read, a backstop), its mint
-/// and its seat; then THE RE-WINDOW, per `runs` entry that carries a kept
-/// place, in `runs`' order: for a stray run the read of the records the
-/// caller may read, wherever homed (`StrayPlaceUnrecorded`), the check by
-/// identity (`KeptPlaceMoved`), then
-/// the placement's own verdicts (`Reinstate`) and the removal's (`Delete`)
-/// as the fresh run is put at the place and the draft-native piece taken
-/// out behind it.
+/// and its seat; then THE RE-WINDOW, per re-windowed draft — the rendering
+/// draft at the request's `places`, then each draft `also` names at its
+/// `also_places` entry, in `also`'s order — and within each per `runs`
+/// entry that carries a kept place there, in `runs`' order: for a stray run
+/// the read of the records the caller may read, wherever homed
+/// (`StrayPlaceUnrecorded`, naming the draft), the check by identity
+/// (`KeptPlaceMoved`, naming the draft), then the placement's own verdicts
+/// (`Reinstate`) and the removal's (`Delete`) as the fresh run is put at the
+/// place and the draft-native piece taken out behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicationError {
     /// The shot's own refusal, as `publish` states it — and, at the mint
@@ -555,17 +557,24 @@ pub enum PublicationError {
     /// A record's or a deposit's seat in its home's link subspace was
     /// refused.
     Seat(SeatError),
-    /// The draft no longer arranges a run's identity at the kept place the
-    /// request carries for it (the link-sets design §5.7): since the client
-    /// read the place the draft moved the run, split it, deleted it, or
-    /// arranges it elsewhere — or arranges its addresses there in another
-    /// order. `index` is the `runs` entry the place belongs to. Permanent:
-    /// the same request can never land; the client re-reads the draft and
-    /// composes the places afresh. Nothing is committed.
+    /// A re-windowed draft no longer arranges a run's identity at the kept
+    /// place the request carries for it in that draft (the link-sets design
+    /// §5.7): since the client read the place the draft moved the run, split
+    /// it, deleted it, or arranges it elsewhere — or arranges its addresses
+    /// there in another order. `index` is the `runs` entry the place belongs
+    /// to; `draft` the draft whose re-window failed — the rendering draft,
+    /// whose places are the request's `places`, or a draft `also` names,
+    /// whose places are its `also_places` entry. Permanent: the same request
+    /// can never land; the client re-reads that draft and composes its
+    /// places afresh. Nothing is committed.
     KeptPlaceMoved {
         /// The position in the request's `runs` of the entry whose place the
         /// draft no longer honours.
         index: usize,
+        /// The re-windowed draft that no longer honours the place: the
+        /// document the rendering `draft` or the named `also` draft projects
+        /// to.
+        draft: Address,
     },
     /// A kept place stands beside a run of published identity no pairing
     /// holds — a stray run of the document's own, or a run of another
@@ -575,7 +584,9 @@ pub enum PublicationError {
     /// the caller may read covers the run whole as its `to`, wherever homed:
     /// no record covers the span, the records covering it leave a gap, or
     /// the only record that would is homed in a draft the caller may not
-    /// read. `index` is the `runs` entry. Permanent: a record names fresh
+    /// read. `index` is the `runs` entry; `draft` the draft being re-windowed
+    /// at that place — the rendering draft, or a draft `also` names whose
+    /// `also_places` entry carries it. Permanent: a record names fresh
     /// identity once, at the publication that minted it, so no later commit
     /// can cover the span; the client re-reads the records and re-composes
     /// the run by them. Nothing is committed.
@@ -583,6 +594,9 @@ pub enum PublicationError {
         /// The position in the request's `runs` of the entry whose identity
         /// no record the caller may read names whole.
         index: usize,
+        /// The re-windowed draft the place belongs to: the document the
+        /// rendering `draft` or the named `also` draft projects to.
+        draft: Address,
     },
     /// The re-window's placement of a fresh run at a kept place was refused —
     /// `reinstate`'s own verdict, `PublishedTarget` where the draft named is
@@ -903,13 +917,13 @@ impl fmt::Display for PublicationError {
             }
             PublicationError::Mint(e) => write!(f, "publication: a record's mint failed: {e}"),
             PublicationError::Seat(e) => write!(f, "publication: a record's seat refused: {e}"),
-            PublicationError::KeptPlaceMoved { index } => write!(
+            PublicationError::KeptPlaceMoved { index, draft } => write!(
                 f,
-                "publication: the draft no longer arranges run {index}'s identity at the kept place the request carries for it"
+                "publication: the draft {draft} no longer arranges run {index}'s identity at the kept place the request carries for it there"
             ),
-            PublicationError::StrayPlaceUnrecorded { index } => write!(
+            PublicationError::StrayPlaceUnrecorded { index, draft } => write!(
                 f,
-                "publication: no correspondence record the caller may read names run {index}'s identity whole as its published words, so its kept place re-windows nothing"
+                "publication: no correspondence record the caller may read names run {index}'s identity whole as its published words, so its kept place in the draft {draft} re-windows nothing"
             ),
             PublicationError::Reinstate(e) => write!(f, "publication: the re-window's placement refused: {e}"),
             PublicationError::Delete(e) => write!(f, "publication: the re-window's removal refused: {e}"),

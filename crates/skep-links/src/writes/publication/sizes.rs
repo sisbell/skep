@@ -49,7 +49,7 @@ use skep_address::{document_of, subtree_of, Nat, Span, Tumbler};
 use skep_arrangement::{trunk_of, Run, Shot, VPos, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
 
 use super::plan::{EndArg, NamedAddress, PublishDeposits, PublishTarget};
-use super::correspondence_type;
+use super::{correspondence_type, AlsoPlaces};
 use crate::budget::MAX_SLOT_SPANS;
 use crate::endset::{enc, Endset};
 use crate::state::{View, TO, TYPE};
@@ -277,10 +277,14 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///   the placing record's own slot), the edition's mint at the mint form,
 ///   and the edition claim where the deposits claim, at either form;
 /// * per draft-native run — of any named draft, the rendering `draft`'s or
-///   an `also` draft's, a record costing the same in either home — its PIECES × ([`PLACED_RUN_BYTES`] +
+///   an `also` draft's, a record costing the same in either home
+///   ([`Shot::is_draft_native`] of its origin, the one test the commit's
+///   placement asks) — its PIECES × ([`PLACED_RUN_BYTES`] +
 ///   [`CORRESPONDENCE_RECORD_BYTES`]), and × [`KEPT_PLACE_BYTES`] beside
-///   where the entry carries a place — the pieces bounded off the request
-///   as one more than the endpoints of other draft-native runs lying
+///   PER LIST THAT PLACES IT — the rendering draft's `places`, and each
+///   `also_places` entry whose list carries a place at the entry, every such
+///   list re-windowing its own draft at the run — the pieces bounded off the
+///   request as one more than the endpoints of other draft-native runs lying
 ///   strictly inside the run's extent, since the pairing cuts a run only
 ///   where an earlier run's minted piece begins or ends; a run overlapping
 ///   no other is one piece;
@@ -288,13 +292,14 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///   name ([`Shot::reinserted_values`]) × [`REINSERTED_VALUE_BYTES`] — an
 ///   atom's bytes past two ride the draft's content, which the price does
 ///   not read;
-/// * per run of any other origin [`PLACED_RUN_BYTES`], and where it carries
-///   a place — a STRAY run of published identity, the document's own or
-///   another document's, re-windowed through the records — one stab of the
-///   TO slot by its span across every home, the correspondence records
-///   overlapping it wherever homed × [`KEPT_PLACE_BYTES`], one piece per
-///   record, at least one; the stab asks no visibility class, since a
-///   record the commit will not read only raises this bound;
+/// * per run of any other origin [`PLACED_RUN_BYTES`], and per list that
+///   places it — a STRAY run of published identity, the document's own or
+///   another document's, re-windowed through the records in each draft
+///   whose list carries a place at it — one stab of the TO slot by its span
+///   across every home, the correspondence records overlapping it wherever
+///   homed × [`KEPT_PLACE_BYTES`], one piece per record, at least one; the
+///   stab asks no visibility class, since a record the commit will not read
+///   only raises this bound;
 /// * per `links` entry [`COPY_FIXED_BYTES`] + [`stored_span_bytes`] of
 ///   every span its three slots spell — an `addrs` element as its unit
 ///   span, a tag as a unit span at the member's depth, a `spans` element as
@@ -311,8 +316,14 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 /// costs a fraction of an atom. Request arithmetic — `O(n log n)` in the
 /// draft-native runs for the endpoints' sort, linear in the lists — plus
 /// the stray stabs; saturating, so an absurd request prices at `u64::MAX`.
-pub fn price_staged_bytes<W: LinkWorld>(world: &W, target: &PublishTarget, shot: &Shot, places: &[Option<VPos>], deposits: &PublishDeposits) -> u64 {
-    let draft = shot.draft_document();
+pub fn price_staged_bytes<W: LinkWorld>(
+    world: &W,
+    target: &PublishTarget,
+    shot: &Shot,
+    places: &[Option<VPos>],
+    also_places: &[AlsoPlaces],
+    deposits: &PublishDeposits,
+) -> u64 {
     let mut bytes = SHOT_BYTES;
     if let Some(rendering) = &shot.draft {
         bytes = bytes.saturating_add(stored_tumbler_bytes(rendering.tumbler()));
@@ -333,23 +344,28 @@ pub fn price_staged_bytes<W: LinkWorld>(world: &W, target: &PublishTarget, shot:
         1 + past.saturating_sub(first) as u64
     };
     let ty = enc([correspondence_type()]);
+    // The lists that place an entry: the rendering draft's, and each `also`
+    // draft's — one re-window per list that carries a place at it.
+    let placed_in = |index: usize| -> u64 {
+        let rendering = u64::from(places.get(index).is_some_and(Option::is_some));
+        let also = also_places.iter().filter(|entry| entry.places.get(index).is_some_and(Option::is_some)).count() as u64;
+        rendering.saturating_add(also)
+    };
     for (index, entry) in shot.runs.iter().enumerate() {
-        let placed = places.get(index).is_some_and(Option::is_some);
+        let placed = placed_in(index);
         let origin = document_of(entry.run.i_start()).map(|d| trunk_of(&d));
-        if draft.is_some() && origin == draft {
+        if origin.is_some_and(|origin| shot.is_draft_native(&origin)) {
             let pieces = pieces_bound(&entry.run);
             bytes = bytes.saturating_add(pieces.saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
-            if placed {
-                bytes = bytes.saturating_add(pieces.saturating_mul(KEPT_PLACE_BYTES));
-            }
+            bytes = bytes.saturating_add(placed.saturating_mul(pieces.saturating_mul(KEPT_PLACE_BYTES)));
         } else {
             bytes = bytes.saturating_add(PLACED_RUN_BYTES);
-            if placed {
+            if placed > 0 {
                 // The stray stab, across every home and at no visibility
                 // class: the records the commit may read are among these.
                 let span = Endset::from_spans([entry.run.iextent()]);
                 let records = world.links().match_links(&[(TO, &span), (TYPE, &ty)], View::Active).len() as u64;
-                bytes = bytes.saturating_add(records.max(1).saturating_mul(KEPT_PLACE_BYTES));
+                bytes = bytes.saturating_add(placed.saturating_mul(records.max(1).saturating_mul(KEPT_PLACE_BYTES)));
             }
         }
     }

@@ -82,11 +82,12 @@ impl fmt::Debug for Op {
                 .field("published", published)
                 .finish(),
             Op::Stage { from } => f.debug_struct("Stage").field("from", from).finish(),
-            Op::Publish { target, shot, places, deposits } => f
+            Op::Publish { target, shot, places, also_places, deposits } => f
                 .debug_struct("Publish")
                 .field("target", target)
                 .field("shot", shot)
                 .field("places", places)
+                .field("also_places", also_places)
                 .field("deposits", deposits)
                 .finish(),
             Op::MakeLink { home, from, to, ty, replaces } => f

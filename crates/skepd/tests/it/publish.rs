@@ -825,19 +825,25 @@ fn a_drafted_shots_row_names_the_draft_beside_the_member_for_its_owner_and_keeps
 /// §The change feed): D stages E.1 and is re-windowed onto it, then goes on
 /// with `xy` of its own; A, an alternative of D's, holds D's whole
 /// arrangement BY IDENTITY — E's words and D's unpublished `xy` — and `pq`
-/// of its own. A's shot naming D among `also` lands E.2 with fresh identity
-/// for every re-minted run, one correspondence record homed in A for its
-/// own words and one in D for D's, the row's `docs` `[E.2, A, D]` to the
-/// owner — the member, the rendering draft, then the draft `also` named —
-/// and `[E.2]` to a guest; D is NOT re-windowed, still arranging its own
-/// `xy`. THE TWIN FENCE reaches across the family: D's re-shot of the words
-/// A published from it is `already_published`, `site.addr` E.2, and so is
-/// a family shot of D's naming A among `also` with A's words; `also` naming
-/// a draft the caller does not own is `not_owner`, `site.addr` that draft;
-/// each commits nothing. And the shape is the codec's: `also` without
-/// `draft`, and a place beside a run of a draft `also` names, are
-/// `malformed`. Last, a family shot whose commit writes the `also` draft
-/// alone names the rendering draft first all the same: `[E.3, A, D]`.
+/// of its own. A's shot naming D among `also` — `places` carrying A's own
+/// positions for D's `xy` and its `pq`, `also_places` carrying D's own
+/// position for `xy`, both sent by hand (the client sends neither yet) —
+/// lands E.2 with fresh identity for every re-minted run, one
+/// correspondence record homed in A for its own words and one in D for D's,
+/// the row's `docs` `[E.2, A, D]` to the owner — the member, the rendering
+/// draft, then the draft `also` named — and `[E.2]` to a guest; and BOTH
+/// DRAFTS ARE RE-WINDOWED in the one commit (skep #739): A images E's
+/// identity throughout, D images E's identity where its own `xy` were, its
+/// private copy gone. THE TWIN FENCE reaches across the family: D's re-shot
+/// of the words A published from it is `already_published`, `site.addr`
+/// E.2, and so is a family shot of D's naming A among `also` with A's
+/// words; `also` naming a draft the caller does not own is `not_owner`,
+/// `site.addr` that draft; each commits nothing. And the shape is the
+/// codec's: `also` without `draft`, and an `also_places` entry naming a
+/// draft `also` does not, are `malformed`, while a place beside a run of a
+/// draft `also` names is ADMITTED by the codec and judged by the store.
+/// Last, a family shot whose commit writes the `also` draft alone names the
+/// rendering draft first all the same: `[E.3, A, D]`.
 #[test]
 fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_and_names_every_draft_on_the_row() {
     const T_CORRESPONDENCE: &str = "1.1.0.1.0.1.0.3.102.1";
@@ -866,10 +872,13 @@ fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_an
         vec![(format!("{e}.0.1.1"), "3".to_string()), (d_xy.clone(), "2".to_string()), (a_pq.clone(), "2".to_string())],
         "the premise: A holds E's identity, D's own words by identity, and its own"
     );
-    // A's shot naming D among `also`.
+    // A's shot naming D among `also`: A's places for D's `xy` (4) and its
+    // own `pq` (6) in `places`, D's place for `xy` (4) in `also_places`.
     let before = head(port);
-    let family = publish_family(&e, Some((&e1, 3)), &a_draft, &[&d], &[run(&e, &format!("{e}.0.1.1"), 3), run(&d, &d_xy, 2), run(&a_draft, &a_pq, 2)]);
-    let e2 = acked_addr(&op(port, Some(&signed), &family));
+    let mut family: Value = serde_json::from_str(&publish_family(&e, Some((&e1, 3)), &a_draft, &[&d], &[run(&e, &format!("{e}.0.1.1"), 3), run(&d, &d_xy, 2), run(&a_draft, &a_pq, 2)])).expect("a frame");
+    family["places"] = serde_json::json!([null, {"subspace": "1", "ordinal": "4"}, {"subspace": "1", "ordinal": "6"}]);
+    family["also_places"] = serde_json::json!([{"draft": d, "places": [null, {"subspace": "1", "ordinal": "4"}]}]);
+    let e2 = acked_addr(&op(port, Some(&signed), &family.to_string()));
     assert_eq!(e2, format!("{e}.2"));
     assert_eq!(text(port, &e2, 1, 7), "abcxypq");
     assert_eq!(image(port, &e2, 1, 7), vec![(format!("{e}.0.1.1"), "7".to_string())], "fresh identity for every re-minted run, I-adjacent to E's own");
@@ -892,18 +901,24 @@ fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_an
     assert!(owners[0]["attest"].is_object(), "{}", owners[0]);
     let guests = changes_since(port, before);
     assert_eq!(guests[0]["docs"], serde_json::json!([e2]), "reduced to the member for a guest: {}", guests[0]);
-    // D is not re-windowed.
-    assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(d_xy.clone(), "2".to_string())], "D still arranges its own words: a counterpart through its record, healed at its own next shot");
-    // THE TWIN FENCE across the family.
+    // Both drafts re-windowed in the one commit: A at its places, D at its own.
+    assert_eq!(text_as(port, Some(&bare), &a_draft, 1, 7), "abcxypq", "A reads the same text");
+    assert_eq!(image_as(port, Some(&bare), &a_draft, 1, 7), vec![(format!("{e}.0.1.1"), "7".to_string())], "A images E's identity throughout: D's words and its own re-windowed at A's places");
+    assert_eq!(text_as(port, Some(&bare), &d, 1, 5), "abcxy", "D reads the same text");
+    assert_eq!(image_as(port, Some(&bare), &d, 1, 5), vec![(format!("{e}.0.1.1"), "5".to_string())], "D images E's identity where its own `xy` were: re-windowed at its own place, its private copy gone");
+    // THE TWIN FENCE across the family. Both drafts window E's identity for
+    // the published words now, so the suite's signer — which reads a run's
+    // values through the draft's arrangement — is handed them: the daemon
+    // composes the same body off the content store, by I-address.
     let before = head(port);
-    let v = op(port, Some(&signed), &publish(&e, Some((&e2, 7)), Some(&d), &[run(&d, &d_xy, 2)]));
+    let v = op_with_publish_values(port, &signed, &publish(&e, Some((&e2, 7)), Some(&d), &[run(&d, &d_xy, 2)]), &[b"x", b"y"]);
     let rej = expect_resp(&v, "rejected");
     assert_eq!(
         (rej["code"].as_str(), rej["disposition"].as_str(), rej["site"]["addr"].as_str()),
         (Some("already_published"), Some("permanent"), Some(e2.as_str())),
         "D's re-shot of the words A published from it: {v}"
     );
-    let v = op(port, Some(&signed), &publish_family(&e, Some((&e2, 7)), &d, &[&a_draft], &[run(&a_draft, &a_pq, 1)]));
+    let v = op_with_publish_values(port, &signed, &publish_family(&e, Some((&e2, 7)), &d, &[&a_draft], &[run(&a_draft, &a_pq, 1)]), &[b"p"]);
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["site"]["addr"].as_str()), (Some("already_published"), Some(e2.as_str())), "A's words from a family shot of D's: {v}");
     assert_eq!(head(port), before, "nothing committed");
@@ -923,11 +938,23 @@ fn a_family_shot_re_mints_another_drafts_words_homes_each_record_in_its_draft_an
     let v = op_as_written(port, Some(&signed), &format!(r#"{{"op":"publish","doc":"{e}","also":["{d}"],"runs":[]}}"#));
     let rej = expect_resp(&v, "rejected");
     assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("malformed"), Some("unparseable")), "`also` without `draft`: {v}");
+    // A place beside a run of a draft `also` names is the codec's to admit
+    // and the store's to judge: this one meets the twin fence (D's `xy` are
+    // published), so the refusal is the store's `already_published`, never
+    // the codec's `malformed`.
     let mut placed: Value = serde_json::from_str(&publish_family(&e, Some((&e2, 7)), &a_draft, &[&d], &[run(&d, &d_xy, 2)])).expect("a frame");
     placed["places"] = serde_json::json!([{"subspace": "1", "ordinal": "4"}]);
-    let v = op_as_written(port, Some(&signed), &placed.to_string());
+    let v = op_with_publish_values(port, &signed, &placed.to_string(), &[b"x", b"y"]);
     let rej = expect_resp(&v, "rejected");
-    assert_eq!((rej["code"].as_str(), rej["site"].clone()), (Some("malformed"), serde_json::json!({"index": 0})), "a place beside a run of a draft `also` names: {v}");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str()), (Some("already_published"), Some("publish")), "a place beside a run of a draft `also` names is admitted by the codec and judged by the store: {v}");
+    assert_eq!(head(port), before, "nothing committed");
+    // An `also_places` entry naming a draft `also` does not name is
+    // `malformed`, `site.index` the entry.
+    let mut strangers: Value = serde_json::from_str(&publish_family(&e, Some((&e2, 7)), &a_draft, &[&d], &[run(&e, &format!("{e}.0.1.1"), 7)])).expect("a frame");
+    strangers["also_places"] = serde_json::json!([{"draft": a_draft, "places": [{"subspace": "1", "ordinal": "1"}]}]);
+    let v = op_as_written(port, Some(&signed), &strangers.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["op"].as_str(), rej["site"].clone()), (Some("malformed"), Some("unparseable"), serde_json::json!({"index": 0})), "an `also_places` entry naming the rendering draft, which `also` does not name: {v}");
     assert_eq!(head(port), before, "nothing committed");
     // A family shot whose commit writes the `also` draft alone — A's own
     // words none, E's by reference and D's new `zz` re-minted: the row names
@@ -1336,7 +1363,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("kept_place_moved"), "{v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
-    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "the runs entry, and nothing else: {v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": d2, "index": 0}), "the runs entry and the draft that no longer honours the place, and nothing else: {v}");
     assert!(rej.get("detail").is_none(), "no detail rides the code: {v}");
     assert_eq!(head(port), before, "nothing committed");
     assert!(changes_since(port, before).is_empty());
@@ -1360,7 +1387,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("stray_place_unrecorded"), "a place on a window onto another document, which no record names: {v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
-    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "the runs entry, and nothing else: {v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": d2, "index": 0}), "the runs entry and the draft being re-windowed, and nothing else: {v}");
     assert!(rej.get("detail").is_none(), "{v}");
     assert_eq!(head(port), before, "nothing committed");
     assert_eq!(text_as(port, Some(&bare), &d3, 1, 1), "q", "the third document as it stands");
@@ -1373,7 +1400,7 @@ fn a_shot_with_kept_places_re_windows_the_draft_on_the_wire_and_a_moved_place_is
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("kept_place_moved"), "the record homed in `d` is found; `d2` does not arrange `d`'s words at the place: {v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
-    assert_eq!(rej["site"], serde_json::json!({"index": 0}), "the runs entry, and nothing else: {v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": d2, "index": 0}), "the runs entry and the draft, and nothing else: {v}");
     assert!(rej.get("detail").is_none(), "{v}");
     assert_eq!(head(port), before, "nothing committed");
     sd.shutdown();
@@ -1496,7 +1523,7 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire
     let v = op(port, Some(&signed), &stale.to_string());
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("kept_place_moved"), "`d2`'s record is found; `d` does not arrange `d2`'s words at the place: {v}");
-    assert_eq!(rej["site"], serde_json::json!({"index": 2}), "{v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": d, "index": 2}), "the entry and the draft: {v}");
     assert_eq!(head(port), before, "nothing committed");
     // Unrecorded: a place beside a window onto `d2`'s own private words,
     // which no record names as its `to`.
@@ -1508,7 +1535,7 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("stray_place_unrecorded"), "{v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
-    assert_eq!(rej["site"], serde_json::json!({"index": 2}), "the runs entry, and nothing else: {v}");
+    assert_eq!(rej["site"], serde_json::json!({"addr": d, "index": 2}), "the runs entry and the draft being re-windowed, and nothing else: {v}");
     assert!(rej.get("detail").is_none(), "no detail rides the code: {v}");
     assert_eq!(head(port), before, "nothing committed");
     assert!(changes_since(port, before).is_empty());
@@ -1516,15 +1543,19 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire
 }
 
 /// THE HEAL ON THE WIRE (skep #747; the link-sets design §5.5, the
-/// counterpart first): A holds D's `x y` by identity and publishes the
-/// family, D named `also` — A re-windowed for its own words, D's record
-/// homed in D, A still imaging D's identity for D's words. A's next shot
-/// sends those words re-composed to E's identity with A's place beside
-/// them, and the commit reads D's record wherever homed and re-windows A
-/// there: A reads the same text and images E's identity throughout, D is
-/// left as it stands, no record is written in either draft, nothing is
-/// minted, and the publish row names the member and A — the draft the
-/// commit re-windowed — to its owner, the member alone to a guest.
+/// counterpart first; §5.7 (viii), every named draft re-windowed): A holds
+/// D's `x y` by identity and publishes the family, D named `also`, no place
+/// sent beside D's run in either list — A re-windowed for its own words,
+/// D's record homed in D, A still imaging D's identity for D's words and D
+/// as it stands. A's next shot names D `also` again and sends those words
+/// re-composed to E's identity with A's place beside them in `places` and
+/// D's place beside them in `also_places`, and the commit reads D's record
+/// wherever homed and re-windows BOTH drafts there: each reads the same
+/// text and images E's identity, no record is written in either draft,
+/// nothing is minted, and the publish row names the member, A — the
+/// rendering draft — and then D, the `also` draft the commit re-windowed
+/// though nothing was re-inserted in it (H5), to its owner; the member
+/// alone to a guest.
 #[test]
 fn a_rendering_drafts_next_shot_heals_an_also_drafts_identity_through_its_record_on_the_wire() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1553,35 +1584,31 @@ fn a_rendering_drafts_next_shot_heals_an_also_drafts_identity_through_its_record
     );
     let record_in_d = read_link(port, Some(&bare), &format!("{d}.0.2.1"));
     assert_eq!(record_in_d["slots"][1][0]["start"].as_str(), Some(format!("{e}.0.1.4").as_str()), "D's record, homed in D: {record_in_d}");
-    // A's next shot: E's words by reference, D's words re-composed to E's
-    // identity with A's place beside them.
+    assert_eq!(image_as(port, Some(&bare), &d, 1, 2), vec![(d_xy.clone(), "2".to_string())], "#747's state: D as it stands, no list placed its run");
+    // A's next shot, D named `also` again: E's words by reference, D's words
+    // re-composed to E's identity with A's place beside them in `places`
+    // and D's place beside them in `also_places` — nothing re-inserted in
+    // either draft.
     let before = head(port);
-    let healing = placed_frame(
-        &publish(&e, Some((&e1, 5)), Some(&a_draft), &[run(&e, &fresh, 3), run(&e, &format!("{e}.0.1.4"), 2)]),
-        serde_json::json!([null, {"subspace": "1", "ordinal": "4"}]),
-    );
+    let mut healing: Value = serde_json::from_str(&publish_family(&e, Some((&e1, 5)), &a_draft, &[&d], &[run(&e, &fresh, 3), run(&e, &format!("{e}.0.1.4"), 2)])).expect("a frame");
+    healing["places"] = serde_json::json!([null, {"subspace": "1", "ordinal": "4"}]);
+    healing["also_places"] = serde_json::json!([{"draft": d, "places": [null, {"subspace": "1", "ordinal": "1"}]}]);
     let e2 = acked_addr(&op(port, Some(&signed), &healing.to_string()));
     assert_eq!(e2, format!("{e}.2"));
     assert_eq!(text_as(port, Some(&bare), &a_draft, 1, 5), "abcxy", "A reads the same text");
     assert_eq!(image_as(port, Some(&bare), &a_draft, 1, 5), vec![(fresh.clone(), "5".to_string())], "A images E's identity throughout: healed through D's record");
-    assert_eq!(image_as(port, Some(&bare), &d, 1, 2), vec![(d_xy.clone(), "2".to_string())], "D left as it stands, healed at its own next shot");
+    assert_eq!(text_as(port, Some(&bare), &d, 1, 2), "xy", "D reads the same text");
+    assert_eq!(image_as(port, Some(&bare), &d, 1, 2), vec![(format!("{e}.0.1.4"), "2".to_string())], "D images E's identity where its own words were: healed in the same commit, through its own record");
     assert_eq!(text(port, &e2, 1, 5), "abcxy");
     assert_eq!(image(port, &e2, 1, 5), vec![(fresh, "5".to_string())], "the member holds the words by reference, nothing minted");
     assert!(read_link(port, Some(&bare), &format!("{a_draft}.0.2.2")).is_null(), "no new record in A");
     assert!(read_link(port, Some(&bare), &format!("{d}.0.2.2")).is_null(), "no new record in D");
     let owners = changes_since_as(port, Some(&signed), before);
     assert_eq!(owners.len(), 1, "one commit: {owners:?}");
-    assert_eq!(owners[0]["docs"], serde_json::json!([e2, a_draft]), "the member, then the re-windowed draft: {}", owners[0]);
+    assert_eq!(owners[0]["docs"], serde_json::json!([e2, a_draft, d]), "the member, the rendering draft, then the `also` draft the commit re-windowed though it re-inserted nothing in it (H5): {}", owners[0]);
     let guests = changes_since(port, before);
     assert_eq!(guests[0]["docs"], serde_json::json!([e2]), "reduced to the member for a guest: {}", guests[0]);
     sd.shutdown();
-}
-
-/// `frame` with `places` set beside the shot's own members.
-fn placed_frame(frame: &str, places: Value) -> Value {
-    let mut v: Value = serde_json::from_str(frame).expect("a frame");
-    v["places"] = places;
-    v
 }
 
 // ── THE PUBLICATION's DEPOSITS AND ITS SIGNED BODY (the link-sets design §5.7; lane S3) ──
@@ -2027,16 +2054,18 @@ fn pending_then_re_ask(sd: &skepd::Skepd, b: &DepositBoard, frame: &str) -> Valu
 
 /// THE PRICE AHEAD OF THE LOCK over the wire (the link-sets design §5.7, W8
 /// (1)): the draft fragmented into eighteen content runs by seventeen inserts
-/// at its first position, and a shot of 4096 runs over it priced at
-/// 18 × 4096 — past `MAX_PUBLICATION_READS` — is refused
-/// `publication_over_budget`, permanent, no `site`, its `detail` the four
-/// terms, the total and the budget, WITH EVERY WRITE PERMIT HELD: the refusal
-/// stands ahead of the pool, so ahead of both locks and of the admission
-/// (the frame is sent unsigned, and the price answers before the signature
-/// is asked for); nothing committed. The same draft under 3640 runs prices
-/// inside the budget and passes the step, the admission then answering for
-/// the unsigned frame; and an ordinary one-run shot off the fragmented
-/// draft, priced 18, lands.
+/// at its first position, and a shot of 4096 runs over it carrying a kept
+/// place — so the re-window reads the draft, and its run count is the
+/// draft term — priced at 18 × 4096 — past `MAX_PUBLICATION_READS` — is
+/// refused `publication_over_budget`, permanent, no `site`, its `detail` the
+/// four terms, the total and the budget, WITH EVERY WRITE PERMIT HELD: the
+/// refusal stands ahead of the pool, so ahead of both locks and of the
+/// admission (the frame is sent unsigned, and the price answers before the
+/// signature is asked for); nothing committed. The same shot with NO place
+/// reads no draft and passes the price; the same draft under 3640 placed
+/// runs prices inside the budget and passes the step, the admission then
+/// answering for the unsigned frame; and an ordinary one-run shot off the
+/// fragmented draft, priced 18, lands.
 #[test]
 fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool_and_commits_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2047,7 +2076,13 @@ fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool
         expect_resp(&op(port, Some(&b.bare), &insert(&b.d, 1, "x", false)), "ack_addr");
     }
     let runs: Vec<String> = (0..4096).map(|_| run(&b.d, &b.d_text, 1)).collect();
-    let over = publish(&b.e, None, Some(&b.d), &runs);
+    // A kept place beside the first run: the re-window reads the draft.
+    let placed = |frame: &str| -> String {
+        let mut v: Value = serde_json::from_str(frame).expect("a frame");
+        v["places"] = serde_json::json!([{"subspace": "1", "ordinal": "1"}]);
+        v.to_string()
+    };
+    let over = placed(&publish(&b.e, None, Some(&b.d), &runs));
     let before = head(port);
     let mut held = Vec::new();
     while let Some(permit) = sd.daemon().try_hold_write_permit() {
@@ -2064,9 +2099,16 @@ fn a_publication_priced_past_the_reads_budget_is_refused_ahead_of_the_write_pool
     assert!(detail.ends_with("link-holding homes × 0 links and read-with entries + 18 draft runs × 4096 runs; narrow the request"), "{detail}");
     drop(held);
     assert_eq!(head(port), before, "nothing committed");
+    // No place: the re-window reads no draft, the draft term is nothing, and
+    // the price admits the same 4096 runs; the unsigned frame then meets the
+    // admission, never the price.
+    let v = op_as_written(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &runs));
+    let rej = expect_resp(&v, "rejected");
+    assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "no place carried: no draft is read, and the price admits: {v}");
+    assert_eq!(head(port), before);
     // Inside the budget: 18 × 3640 = 65520 passes the price; the unsigned
     // frame then meets the admission, never the price.
-    let v = op_as_written(port, Some(&b.signed), &publish(&b.e, None, Some(&b.d), &runs[..3640]));
+    let v = op_as_written(port, Some(&b.signed), &placed(&publish(&b.e, None, Some(&b.d), &runs[..3640])));
     let rej = expect_resp(&v, "rejected");
     assert_ne!(rej["code"].as_str(), Some("publication_over_budget"), "at the budget the price admits: {v}");
     assert_eq!(head(port), before);

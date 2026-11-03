@@ -9,7 +9,7 @@ use skep_arrangement::{trunk_of, Deposit, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_kernel::{Attestation, Seq};
-use skep_links::{Endset, PublishDeposits, PublishTarget, SlotArg, View};
+use skep_links::{AlsoPlaces, Endset, PublishDeposits, PublishTarget, SlotArg, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 
@@ -319,27 +319,39 @@ pub enum Op {
     /// names no policy of its own.
     ///
     /// **The kept places** (the link-sets design §5.7). `places` is parallel
-    /// to `shot.runs` by index: for a draft-native run, the V-position it
-    /// held in the staging draft when the client composed the request, read
-    /// off the draft's image — or, for a STRAY run, one of the document's
-    /// own identity the client re-composed by reference to a correspondence
-    /// record's published words where the draft still arranges the record's
-    /// draft words, the place those words hold — or `None`; empty where the
-    /// request carries none, which is today's shot, writing nothing of the
-    /// draft. The composite checks, in the shot's one commit, that the
-    /// draft still arranges each such run's draft words at its place and
-    /// replaces them there by the published identity, refusing the whole
+    /// to `shot.runs` by index: for a run of any named draft's identity —
+    /// the rendering draft's own, or an `also` draft's, which the rendering
+    /// draft holds by identity — the V-position it held in the RENDERING
+    /// draft when the client composed the request, read off that draft's
+    /// image — or, for a STRAY run, one of published identity the client
+    /// re-composed by reference to a correspondence record's published words
+    /// where the draft still arranges the record's draft words, the place
+    /// those words hold — or `None`; empty where the request carries none,
+    /// which is today's shot, writing nothing of the draft. `also_places`
+    /// carries, per draft `also` names, THAT draft's own kept places
+    /// ([`AlsoPlaces`]: the draft and a list parallel to `runs` the same
+    /// way, a place beside a run of that draft's identity or beside a stray
+    /// run), one entry per draft that is re-windowed; empty where none is.
+    /// The composite re-windows every named draft at its own places in the
+    /// shot's one commit — the rendering draft at `places`, then each
+    /// `also` draft at its entry, in `also`'s order — checking that each
+    /// draft still arranges each such run's draft words at its place there
+    /// and replacing them by the published identity, refusing the whole
     /// publication where it does not (`KeptPlaceMoved`, `site.index` the
-    /// entry) or where no record of the draft names a stray run's identity
-    /// whole (`StrayPlaceUnrecorded`, the same site). They ride BESIDE the
+    /// entry and `site.addr` the draft) or where no record the caller may
+    /// read, wherever homed, names a stray run's identity whole
+    /// (`StrayPlaceUnrecorded`, the same site). Both lists ride BESIDE the
     /// shot and not in it: the shot is the member's arrangement, what the
-    /// entry signature is composed over, and a place is a fact about the
-    /// draft, outside the signed preimage as `draft` is — so the composer
-    /// reads `shot` and `doc` alone, and every builder of a `Shot` stands.
-    /// The wire's codec holds the list to `runs`' length, each place to a
-    /// run of the draft or of `doc`'s own trunk and to the content subspace,
-    /// padded with `None` to `runs`' length where any place is present; M10
-    /// hands it through verbatim.
+    /// entry signature is composed over, and a place is a fact about a
+    /// draft, outside the signed preimage as `draft` and `also` are — so the
+    /// composer reads `shot` and `doc` alone, and every builder of a `Shot`
+    /// stands. The wire's codec holds each list to `runs`' length and each
+    /// place to the content subspace, padded with `None` to `runs`' length
+    /// where any place is present; it admits a place in `places` beside any
+    /// run in a request naming a `draft`, and a place in an `also` draft's
+    /// list beside a run of that draft's identity or of no named draft's,
+    /// refusing one beside the rendering draft's or another `also` draft's
+    /// run; M10 hands both through verbatim.
     ///
     /// **The target and the deposits** (the link-sets design §5.7; lane
     /// S3). `target` is where the publication lands: a published document
@@ -363,7 +375,13 @@ pub enum Op {
     /// [`Codec::parse`] says why and what a route owes.
     ///
     /// [`Codec::parse`]: crate::Codec::parse
-    Publish { target: PublishTarget, shot: Shot, places: Vec<Option<VPos>>, deposits: PublishDeposits },
+    Publish {
+        target: PublishTarget,
+        shot: Shot,
+        places: Vec<Option<VPos>>,
+        also_places: Vec<AlsoPlaces>,
+        deposits: PublishDeposits,
+    },
     // ── link writes (→ M7) ──
     /// MAKELINK (ASN-0120): an open link from three three-form slots.
     ///

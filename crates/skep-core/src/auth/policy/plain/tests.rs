@@ -53,10 +53,12 @@ impl TwoAccounts {
 /// priced past `MAX_PUBLICATION_READS`, and nothing at the budget. The
 /// draft term: the maker's draft fragmented into seventeen runs by
 /// seventeen inserts at its first position — each value's identity above
-/// the last's, so no run merges — and a shot of 4096 runs over it prices at
-/// 17 × 4096, past the budget's 16 × 4096; the same shot off a sixteen-run
-/// draft is at the budget and admitted. The home term: one link deposited
-/// in the maker's home makes it the one link-holding home, and a read-with
+/// the last's, so no run merges — and a shot of 4096 runs over it, a kept
+/// place carried so the re-window reads the draft, prices at 17 × 4096,
+/// past the budget's 16 × 4096; the same shot off a sixteen-run draft is at
+/// the budget and admitted, and the seventeen-run shot with NO place carried
+/// reads no draft and is admitted too. The home term: one link deposited in
+/// the maker's home makes it the one link-holding home, and a read-with
 /// list one entry past the budget is refused on it where the shot names no
 /// draft. The other's account prices no homes of the maker's, and an op
 /// that is no publish is nothing's.
@@ -64,10 +66,10 @@ impl TwoAccounts {
 fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     use serde_json::json;
     use skep_address::Nat;
-    use skep_arrangement::HasM5;
+    use skep_arrangement::{HasM5, VPos};
     use skep_febe::{EndArg, LinkEntry, MemberSpan, NamedAddress, PublishDeposits, PublishTarget, Run, Shot, ShotRun};
     use skep_kernel::MAX_TXN_BYTES;
-    use skep_links::{stored_tumbler_bytes, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, SHOT_BYTES};
+    use skep_links::{stored_tumbler_bytes, KEPT_PLACE_BYTES, MAX_PUBLICATION_READS, PLACED_RUN_BYTES, READ_WITH_BYTES, SHOT_BYTES};
 
     use crate::auth::policy::{publication_read_refusal, PublicationReadRefusal};
 
@@ -86,11 +88,18 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         also: vec![],
         runs: vec![ShotRun { origin: home.clone(), run: Run::new(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(1u32)).expect("a run") }; runs],
     };
-    let publish = |shot: Shot, read_with: usize| Op::Publish {
+    let publish_at = |shot: Shot, places: Vec<Option<VPos>>, read_with: usize| Op::Publish {
         target: PublishTarget::Document(home.clone()),
         shot,
-        places: Vec::new(),
+        places,
+        also_places: Vec::new(),
         deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with] },
+    };
+    // A drafted shot carries one kept place — beside its first run, a stray
+    // place — so the re-window reads the draft; a draftless one none.
+    let publish = |shot: Shot, read_with: usize| {
+        let places = if shot.draft.is_some() { vec![Some(VPos::content(Nat::from(1u32)))] } else { Vec::new() };
+        publish_at(shot, places, read_with)
     };
     // The draft term, at the budget and one run past it.
     fragment(16);
@@ -100,14 +109,16 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
     fragment(1);
     let snap = board.engine.kernel().snapshot();
     // The staged bytes beside the reads: the shot, the rendering draft's
-    // address in its slot and 4096 by-reference placements, inside the
-    // transaction budget.
-    let staged = SHOT_BYTES + stored_tumbler_bytes(draft.tumbler()) + 4096 * PLACED_RUN_BYTES;
+    // address in its slot, 4096 by-reference placements and the one stray
+    // place's stab (no record: one piece), inside the transaction budget.
+    let staged = SHOT_BYTES + stored_tumbler_bytes(draft.tumbler()) + 4096 * PLACED_RUN_BYTES + KEPT_PLACE_BYTES;
     assert_eq!(
         publication_read_refusal(snap.world(), &publish(shot(Some(draft.clone()), 4096), 0), maker_id),
         Some(PublicationReadRefusal { homes: 0, entries: 0, draft_runs: 17, runs: 4096, total: 17 * 4096, budget: MAX_PUBLICATION_READS, staged_bytes: staged, byte_budget: MAX_TXN_BYTES }),
         "17 × 4096 is past it: every term named"
     );
+    let unplaced = publish_at(shot(Some(draft.clone()), 4096), Vec::new(), 0);
+    assert_eq!(publication_read_refusal(snap.world(), &unplaced, maker_id), None, "no place carried: the re-window reads no draft, and the draft term is nothing");
     // The home term: one link-holding home, a list one entry past the budget.
     exec(&board.febe, maker, json!({"op": "make_link", "home": board.home, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
     let snap = board.engine.kernel().snapshot();
@@ -131,6 +142,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         target: PublishTarget::Document(home.clone()),
         shot: shot(None, 4096),
         places: Vec::new(),
+        also_places: Vec::new(),
         deposits: PublishDeposits {
             claim: false,
             links: (0..count)

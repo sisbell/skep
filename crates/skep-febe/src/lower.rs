@@ -496,17 +496,20 @@ impl Lower for PublicationError {
             PublicationError::Mint(m) => m.lower(),
             PublicationError::Seat(s) => s.lower(),
             // The re-window's check: `site.index` the `runs` entry whose
-            // kept place the draft no longer honours, and nothing else rides
-            // the code.
-            PublicationError::KeptPlaceMoved { index } => (
+            // kept place the draft no longer honours, `site.addr` that draft
+            // — the rendering draft, or the `also` draft whose entry failed —
+            // and nothing else rides the code.
+            PublicationError::KeptPlaceMoved { index, draft } => (
                 RejectCode::KeptPlaceMoved,
-                Some(FaultSite { index: Some(index), ..FaultSite::default() }),
+                Some(FaultSite { index: Some(index), addr: Some(draft), ..FaultSite::default() }),
             ),
             // The stray places' record read: `site.index` the `runs` entry
-            // no record of the draft covers whole, and nothing else.
-            PublicationError::StrayPlaceUnrecorded { index } => (
+            // no record the caller may read, wherever homed, covers whole,
+            // `site.addr` the draft being re-windowed at it, and nothing
+            // else.
+            PublicationError::StrayPlaceUnrecorded { index, draft } => (
                 RejectCode::StrayPlaceUnrecorded,
-                Some(FaultSite { index: Some(index), ..FaultSite::default() }),
+                Some(FaultSite { index: Some(index), addr: Some(draft), ..FaultSite::default() }),
             ),
             // The re-window's placement and removal lower through M5's
             // tables, so they read as `reinstate`'s and `delete`'s.

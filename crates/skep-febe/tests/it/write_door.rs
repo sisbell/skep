@@ -1007,7 +1007,7 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     };
     let before = fx.febe.log_position();
     assert_withheld(
-        ex(&fx.febe, other, Op::Publish { target: PublishTarget::Document(their_edition), shot: shot(), places: vec![], deposits: PublishDeposits::default() }),
+        ex(&fx.febe, other, Op::Publish { target: PublishTarget::Document(their_edition), shot: shot(), places: vec![], also_places: vec![], deposits: PublishDeposits::default() }),
         OpKind::Publish,
         &unreadable_edition,
     );
@@ -1016,7 +1016,7 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     ack_addr(ex(
         &fx.febe,
         fx.user,
-        Op::Publish { target: PublishTarget::Document(unreadable_edition.clone()), shot: shot(), places: vec![], deposits: PublishDeposits::default() },
+        Op::Publish { target: PublishTarget::Document(unreadable_edition.clone()), shot: shot(), places: vec![], also_places: vec![], deposits: PublishDeposits::default() },
     ));
 }
 

@@ -55,9 +55,10 @@
 //!   them, empty in the birth shape — the member's address read off the
 //!   request and never minted here, so the frame stays position-free; the
 //!   kept places a `publish` carries beside its shot (`Op::Publish`'s
-//!   `places`, the link-sets design §5.7) are no part of it, outside the
-//!   preimage as `draft` is, so a shot with places verifies as the same
-//!   shot without them; and, behind the shot's rows, THE DEPOSIT ROWS of a
+//!   `places` and `also_places`, the link-sets design §5.7) are no part of
+//!   it, outside the preimage as `draft` and `also` are, so a shot with
+//!   places in either list verifies as the same shot without them; and,
+//!   behind the shot's rows, THE DEPOSIT ROWS of a
 //!   publication that carries `links`, `retract` or `read_with` entries
 //!   (the link-sets design §5.7's signed entry; the signed-ops record's D25
 //!   delta): M7's own [`plan_deposits`] over this snapshot — the one
@@ -435,14 +436,15 @@ pub(super) fn compose(
                 entry_body_edit_link(link_slots(&link), &unit_span(original)),
             )
         }
-        // The kept places the request carries beside the shot (the
-        // link-sets design §5.7) are outside the preimage, as `draft` and
+        // The kept places the request carries beside the shot — `places`,
+        // the rendering draft's, and `also_places`, each `also` draft's (the
+        // link-sets design §5.7) — are outside the preimage, as `draft` and
         // `also` are: the shot alone is read here — the body spells every
         // re-minted run by its values and names no draft, so a shot naming
         // the family's other drafts signs as the same shot naming none — and
-        // a shot with places signs as the same shot without them. The
-        // deposits beside it are IN the preimage, behind the shot's rows
-        // (`publication_body`).
+        // a shot with places in either list signs as the same shot without
+        // them. The deposits beside it are IN the preimage, behind the shot's
+        // rows (`publication_body`).
         Op::Publish { target, shot, deposits, .. } => {
             // The frame's `doc`: the trunk at the document form, the parent
             // account at the mint form — the term M5's classing takes too

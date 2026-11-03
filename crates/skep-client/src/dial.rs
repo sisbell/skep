@@ -12,14 +12,18 @@
 //! where a body follows, `Content-Length` as the body's length in ASCII
 //! decimal — the body follows, the answer is read to close and its
 //! `Content-Length` checked against what arrived: a short body is a broken
-//! connection, never an answer. The response's headers are returned whole
-//! so the board can read `Skepd-Session: closed`. No redirect is followed —
-//! the daemon issues none, and following one would dial an origin the
-//! caller did not sign (AUTH-4.8). No proxy environment is honored — a
-//! proxy is a peer the signature knows nothing about (§9 item 24). A
-//! `Dialer` never rewrites the origin string it is handed (§1.4): a
-//! transport that changed the origin under its caller would sign one string
-//! and dial another.
+//! connection, never an answer. So is a head cut short: in both forms of the
+//! dial, an answer that closes before its head's blank line is
+//! [`DialError::Io`] where nothing arrived or what arrived opens as a status
+//! line does (`HTTP/1.`, or a prefix of it) — a board that hung up — and
+//! [`DialError::Response`], no HTTP response, where it opens any other way.
+//! The response's headers are returned whole so the board can read
+//! `Skepd-Session: closed`. No redirect is followed — the daemon issues
+//! none, and following one would dial an origin the caller did not sign
+//! (AUTH-4.8). No proxy environment is honored — a proxy is a peer the
+//! signature knows nothing about (§9 item 24). A `Dialer` never rewrites the
+//! origin string it is handed (§1.4): a transport that changed the origin
+//! under its caller would sign one string and dial another.
 //!
 //! **Timeouts.** Connect 5 s, read/write 10 s a call for the frames
 //! (skep-mcp's constants — a skepd op is milliseconds even under fsync), and
@@ -219,9 +223,6 @@ impl fmt::Debug for StreamedResponse {
 }
 
 /// Why a dial failed — transport, §2.3's exit 4.
-///
-/// A streamed form's head that cannot be read is [`DialError::Response`],
-/// whatever stopped the read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DialError {
@@ -240,10 +241,17 @@ pub enum DialError {
     Timeout(String),
     /// The request could not be written or the response read.
     ///
-    /// It covers the TLS handshake's and record layer's refusals, met
-    /// mid-exchange, and a socket whose timeout cannot be set.
+    /// It covers a connection closed before its answer's head was whole —
+    /// nothing sent, or a head that opened as a status line and was cut off
+    /// — the TLS handshake's and record layer's refusals, met mid-exchange,
+    /// and a socket whose timeout cannot be set. Its text quotes no byte of
+    /// the answer (SP-15).
     Io(String),
     /// The bytes read were no HTTP response, or no answer the wire gives.
+    ///
+    /// An answer closed before its head was whole is this only where its
+    /// bytes open as no status line; one that sent nothing, or cut off a
+    /// head that opened as a status line, is [`DialError::Io`].
     Response(String),
     /// The body ended before its declared `Content-Length`.
     ///
@@ -635,7 +643,8 @@ impl Dialer for PlainHttp {
             .map_err(|e| io_fault(origin, "write", e))?;
         let raw = read_to_close(&mut *conn, MAX_ANSWER_BYTES).map_err(|e| io_fault(origin, "read", e))?;
         let raw = raw.ok_or(DialError::TooLarge { cap: MAX_ANSWER_BYTES })?;
-        let (status, headers, body_at) = parse_head(&raw).map_err(|e| DialError::Response(Self::fail(origin, "response", e)))?;
+        let body_at = head_len(&raw).ok_or_else(|| closed_before_head(origin, &raw))?;
+        let (status, headers) = parse_head(&raw[..body_at]).map_err(|e| DialError::Response(Self::fail(origin, "response", e)))?;
         let mut body = raw[body_at..].to_vec();
         if let Some(cl) = headers.get("Content-Length").and_then(|v| v.trim().parse::<usize>().ok()) {
             if body.len() < cl {
@@ -663,7 +672,7 @@ impl Dialer for PlainHttp {
         // The answer's head — the interim `100 Continue` where a body
         // follows, else the final head.
         let mut reader = HeadReader::new(conn);
-        let (mut status, mut headers) = reader.head().map_err(|e| DialError::Response(Self::fail(origin, "response", e)))?;
+        let (mut status, mut headers) = reader.head(origin)?;
         if has_body {
             if status == 100 {
                 on_interim(&headers);
@@ -675,7 +684,7 @@ impl Dialer for PlainHttp {
                     }
                     reader.conn.write_all(&buf[..n]).map_err(|e| io_fault(origin, "write body", e))?;
                 }
-                let (s, h) = reader.head().map_err(|e| DialError::Response(Self::fail(origin, "response", e)))?;
+                let (s, h) = reader.head(origin)?;
                 status = s;
                 headers = h;
             }
@@ -713,19 +722,50 @@ fn read_to_close(conn: &mut dyn Read, cap: usize) -> io::Result<Option<Vec<u8>>>
     Ok((raw.len() <= cap).then_some(raw))
 }
 
-/// Parses one response's status, headers and body start out of its bytes.
+/// The opening of every status line this dialer reads: `HTTP/1.`.
+///
+/// `parse_head` holds a whole head's status line to it, and
+/// `closed_before_head` reads the bytes of a head cut short against it.
+const STATUS_LINE_OPENING: &str = "HTTP/1.";
+
+/// Returns the length of the response head at the start of `raw`.
+///
+/// The head runs through its blank line; `None` where `raw` holds none.
+fn head_len(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|w| w == b"\r\n\r\n").map(|sep| sep + 4)
+}
+
+/// Returns the fault of an answer that closed before its head's blank line.
+///
+/// `got` is what arrived. Nothing at all, or bytes that open as a status line
+/// does (`STATUS_LINE_OPENING`, or a prefix of it), are a connection broken
+/// before the head was whole: [`DialError::Io`], as a body short of its
+/// `Content-Length` is [`DialError::Truncated`], never an answer. Bytes that
+/// open any other way are no HTTP response, [`DialError::Response`]. Neither
+/// text quotes a byte of `got` (SP-15).
+fn closed_before_head(origin: &Origin, got: &[u8]) -> DialError {
+    let opening = STATUS_LINE_OPENING.as_bytes();
+    if opening.starts_with(&got[..got.len().min(opening.len())]) {
+        let closed = format!("the connection closed after {} bytes, before the answer's head was whole", got.len());
+        DialError::Io(PlainHttp::fail(origin, "read", closed))
+    } else {
+        DialError::Response(PlainHttp::fail(origin, "response", "no header terminator"))
+    }
+}
+
+/// Parses one response head's status and headers.
+///
+/// `head` is the head through its blank line, as `head_len` measures it.
 ///
 /// # Errors
 ///
-/// The fault in words where the bytes hold no header terminator, a head
-/// that is not UTF-8, a status line that is not `HTTP/1.x`, or a status
-/// that does not parse.
-fn parse_head(raw: &[u8]) -> Result<(u16, Headers, usize), String> {
-    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| String::from("no header terminator"))?;
-    let head = std::str::from_utf8(&raw[..sep]).map_err(|_| String::from("non-UTF-8 response head"))?;
+/// The fault in words where the head is not UTF-8, its status line is not
+/// `HTTP/1.x`, or its status does not parse.
+fn parse_head(head: &[u8]) -> Result<(u16, Headers), String> {
+    let head = std::str::from_utf8(head).map_err(|_| String::from("non-UTF-8 response head"))?;
     let mut lines = head.split("\r\n");
     let status_line = lines.next().ok_or_else(|| String::from("no status line"))?;
-    if !status_line.starts_with("HTTP/1.") {
+    if !status_line.starts_with(STATUS_LINE_OPENING) {
         return Err(format!("not an HTTP status line: {status_line:?}"));
     }
     let status: u16 = status_line
@@ -739,7 +779,7 @@ fn parse_head(raw: &[u8]) -> Result<(u16, Headers, usize), String> {
             .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
             .collect(),
     );
-    Ok((status, headers, sep + 4))
+    Ok((status, headers))
 }
 
 /// A head reader over a connection.
@@ -763,22 +803,24 @@ impl HeadReader {
     ///
     /// # Errors
     ///
-    /// The fault in words where the head runs past 64 KiB, a read fails,
-    /// the connection closes before the head, or `parse_head` refuses it.
-    fn head(&mut self) -> Result<(u16, Headers), String> {
+    /// [`DialError::Timeout`] or [`DialError::Io`] where a read fails, as
+    /// `io_fault` names it; `closed_before_head`'s error where the connection
+    /// closes before the head is whole; and [`DialError::Response`] where the
+    /// head runs past 64 KiB or `parse_head` refuses it.
+    fn head(&mut self, origin: &Origin) -> Result<(u16, Headers), DialError> {
         let mut chunk = [0u8; 4096];
         loop {
-            if let Some(sep) = self.buffered.windows(4).position(|w| w == b"\r\n\r\n") {
-                let head_bytes: Vec<u8> = self.buffered.drain(..sep + 4).collect();
-                let (status, headers, _) = parse_head(&head_bytes)?;
-                return Ok((status, headers));
+            if let Some(len) = head_len(&self.buffered) {
+                let head = parse_head(&self.buffered[..len]).map_err(|e| DialError::Response(PlainHttp::fail(origin, "response", e)));
+                self.buffered.drain(..len);
+                return head;
             }
             if self.buffered.len() > 64 * 1024 {
-                return Err("response head past 64 KiB".into());
+                return Err(DialError::Response(PlainHttp::fail(origin, "response", "response head past 64 KiB")));
             }
-            let n = self.conn.read(&mut chunk).map_err(|e| format!("read: {e}"))?;
+            let n = self.conn.read(&mut chunk).map_err(|e| io_fault(origin, "read", e))?;
             if n == 0 {
-                return Err("connection closed before the response head".into());
+                return Err(closed_before_head(origin, &self.buffered));
             }
             self.buffered.extend_from_slice(&chunk[..n]);
         }

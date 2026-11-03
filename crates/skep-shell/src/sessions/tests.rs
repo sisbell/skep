@@ -17,9 +17,11 @@
 //! frame no attest is owed for borrowed as it stands, never copied, and the
 //! board term a signed write signs over read only where the board's head record
 //! reads: one that stands and cannot be read, or a claimed board that serves
-//! none, refused `head_unreadable` and never read as no record (SP-14).
+//! none, refused `head_unreadable` and never read as no record (SP-14); a head
+//! read answered garbled `head_unreadable` too, and one the board hangs up on
+//! `unreachable`.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
@@ -795,4 +797,49 @@ fn a_garbled_head_answer_is_head_unreadable_and_an_unanswered_read_unreachable()
         let entry = Sessions::new(None, Arc::new(|_: &str| {})).register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
         assert_eq!(entry.signing_term().map_err(|r| r.name().to_string()), classified.map_err(|r| r.name().to_string()), "{cell}: the attest reads the one classifier");
     }
+}
+
+/// A board over the real dialer that answers every read with `answer`.
+///
+/// Its listener reads each request whole, so its close is a clean end of
+/// stream and never a reset, then writes `answer` and hangs up.
+fn hanging_up(answer: &'static [u8]) -> Board {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let declared = head.lines().filter_map(|line| line.split_once(':')).find(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok()).unwrap_or(0);
+            let _ = stream.read_exact(&mut vec![0u8; declared]);
+            let _ = stream.write_all(answer);
+        }
+    });
+    Board::new(origin, PlainHttp::new())
+}
+
+/// Checks that a board that hangs up on the head read is away, and one that
+/// answers no HTTP served garbled (skep #758).
+///
+/// Over the real dialer, a board that takes the head record's read and
+/// closes with nothing sent is a connection broken, `unreachable` with the
+/// dial's `Io` — never its head record's fault — and one that answers bytes
+/// that open as no status line served the record garbled, `head_unreadable`
+/// (the mutant that reads a hang-up as a garbled answer points the person at
+/// the board's operator for a connection that broke, and the probe skips the
+/// held lines a lost connection would retry).
+#[test]
+fn a_board_that_hangs_up_on_the_head_read_is_away_and_one_answering_no_http_served_garbled() {
+    match board_head(&hanging_up(b"")) {
+        Err(Refusal::Unreachable(DialError::Io(_))) => {}
+        answered => panic!("a board that hung up: {answered:?}"),
+    }
+    let garbled = board_head(&hanging_up(b"SSH-2.0-OpenSSH_9.6\r\n")).unwrap_err();
+    let v = garbled.to_value();
+    assert_eq!((garbled.name(), v["kind"].as_str()), ("head_unreadable", Some("halt")), "{v}");
+    assert!(v["cause"].as_str().is_some_and(|cause| cause.contains("head record (`H.1`) served garbled")), "{v}");
 }

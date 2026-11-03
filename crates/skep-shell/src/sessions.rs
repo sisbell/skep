@@ -308,14 +308,16 @@ impl SessionEntry {
 /// §3c.1). Every other answer is a failure, never an absence (SP-14).
 ///
 /// **A garbled answer is the board's** (skep #728). An `H.1` read, or the
-/// claimant arm's `/health` read, that the board answered with a body that
-/// is no JSON or past the client's answer cap (`DialError::Response`,
-/// `DialError::TooLarge`) is `head_unreadable`, its cause "served garbled"
-/// and the error: the board was reached and answered, so the fault is its
-/// head record's to repair, never the network's — and the burst so held is
-/// skipped at each probe until the head reads, not retried as a lost
-/// connection would be. Every other dial error — a connection never made,
-/// a timeout, an answer cut short — is the board away, `unreachable`.
+/// claimant arm's `/health` read, that the board answered with bytes that
+/// are no HTTP response, a body that is no JSON, or an answer past the
+/// client's answer cap (`DialError::Response`, `DialError::TooLarge`) is
+/// `head_unreadable`, its cause "served garbled" and the error: the board was
+/// reached and answered, so the fault is its head record's to repair, never
+/// the network's — and the burst so held is skipped at each probe until the
+/// head reads, not retried as a lost connection would be. Every other dial
+/// error — a connection never made, a timeout, a connection the board closed
+/// before its answer's head was whole, an answer cut short — is the board
+/// away, `unreachable` (skep #758).
 ///
 /// # Errors
 ///
@@ -345,8 +347,9 @@ pub(crate) fn board_head(board: &Board) -> Result<Option<BoardTerm>, Refusal> {
 /// the board away (skep #728).
 ///
 /// `read` names what was read, for the garbled face's cause: the board
-/// answered, and its answer was no JSON or past the cap, so the fault is
-/// `head_unreadable`'s; a connection never made, a timeout or an answer cut
+/// answered, and its answer was no HTTP, no JSON or past the cap, so the
+/// fault is `head_unreadable`'s; a connection never made, a timeout, a
+/// connection closed before the answer's head was whole or an answer cut
 /// short says nothing of the head, and is `unreachable`.
 fn garbled_or_away(e: DialError, read: &str) -> Refusal {
     match e {

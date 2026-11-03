@@ -203,8 +203,8 @@ fn transport_act(d: &DialError) -> String {
                 .to_string()
         }
         DialError::Response(_) | DialError::TooLarge { .. } => format!(
-            "that origin's answer was no skep board's — none at all where the connection closed first: check that skepd serves it, \
-             and {WHICH_BOARD}; the request was written, so read back what a write did before acting again"
+            "that origin's answer was no skep board's: check that skepd serves it, and {WHICH_BOARD}; the request was written, so \
+             read back what a write did before acting again"
         ),
         // A phase the library names later: both acts, since where it broke is
         // not known here.

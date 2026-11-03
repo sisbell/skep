@@ -8,10 +8,13 @@ use super::*;
 /// `Content-Length` is a broken connection; garbage is no response.
 #[test]
 fn a_response_parses_and_a_short_body_is_a_break() {
-    let (st, headers, at) = parse_head(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nSkepd-Session: closed\r\n\r\n{}").expect("parse");
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nSkepd-Session: closed\r\n\r\n{}";
+    let at = head_len(raw).expect("a whole head");
+    let (st, headers) = parse_head(&raw[..at]).expect("parse");
     assert_eq!((st, at), (200, 61));
     assert_eq!(headers.get("skepd-session"), Some("closed"));
-    assert!(parse_head(b"garbage").is_err());
+    assert_eq!(head_len(b"garbage"), None);
+    assert!(parse_head(b"garbage\r\n\r\n").is_err());
     let resp = Response { status: 200, headers, body: b"{}".to_vec() };
     assert!(resp.session_closed());
 }
@@ -213,6 +216,76 @@ fn a_trickling_board_is_cut_off_at_the_exchanges_deadline() {
     let err = dialer.exchange(&origin, &Request::get("/health")).expect_err("the deadline passed");
     assert!(matches!(err, DialError::Timeout(_)), "{err}");
     assert!(began.elapsed() < Duration::from_secs(2), "cut off after {:?}", began.elapsed());
+    server.join().unwrap();
+}
+
+/// A board for one connection that reads the request and hangs up.
+///
+/// It reads the request whole, so its close is a clean end of stream and
+/// never a reset, then writes `answer` and drops the connection.
+fn hanging_up(answer: &'static [u8]) -> (Origin, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        read_request(&mut s);
+        s.write_all(answer).unwrap();
+    });
+    (origin, server)
+}
+
+/// A board that hangs up before its answer's head is whole — with nothing
+/// sent, or a status line begun and cut off — is a broken connection,
+/// `DialError::Io`, in both forms of the dial, its text quoting none of what
+/// arrived; bytes that open as no status line are no HTTP response,
+/// `DialError::Response` (the mutant that reads every close before the head
+/// as no HTTP tells the shell a board that hung up answered garbled, and
+/// points the person at the board's operator for a connection that broke).
+#[test]
+fn a_board_that_hangs_up_is_a_broken_connection_and_bytes_that_are_no_http_are_garbled() {
+    let cut: &'static [u8] = b"HTTP/1.1 200 OK\r\nContent-Le";
+    let ssh: &'static [u8] = b"SSH-2.0-OpenSSH_9.6\r\n";
+    let judged = |form: &str, answer: &[u8], hung_up: bool, err: DialError| match (err, hung_up) {
+        (DialError::Io(text), true) => {
+            assert!(!text.contains("200 OK") && !text.contains("Content-Le"), "{form} {answer:?}: the text quotes what arrived: {text}");
+        }
+        (DialError::Response(_), false) => {}
+        (err, _) => panic!("{form} {:?}: a hang-up {hung_up}, answered {err:?}", String::from_utf8_lossy(answer)),
+    };
+    for (answer, hung_up) in [(&b""[..], true), (&b"HTTP/1"[..], true), (cut, true), (ssh, false)] {
+        let (origin, server) = hanging_up(answer);
+        let err = PlainHttp::new().exchange(&origin, &Request::post("/op", b"{}".to_vec())).unwrap_err();
+        server.join().unwrap();
+        judged("exchange", answer, hung_up, err);
+    }
+    let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };
+    for (answer, hung_up) in [(&b""[..], true), (cut, true), (ssh, false)] {
+        let (origin, server) = hanging_up(answer);
+        let err = PlainHttp::new().stream(&origin, &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err();
+        server.join().unwrap();
+        judged("stream", answer, hung_up, err);
+    }
+}
+
+/// A streamed head that waits past its read bound is `DialError::Timeout`,
+/// as a frame exchange's read is: the board took the request and sends
+/// nothing (the mutant that names every failed head read a malformed
+/// response tells the person a board answered that never did).
+#[test]
+fn a_streamed_head_that_waits_past_its_bound_is_a_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        read_request(&mut s);
+        // Silent until the client gives up and closes.
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let _ = s.read(&mut [0u8; 1]);
+    });
+    let dialer = PlainHttp { io_timeout: Duration::from_millis(300), ..PlainHttp::new() };
+    let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };
+    let err = dialer.stream(&origin, &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err();
+    assert!(matches!(err, DialError::Timeout(_)), "{err}");
     server.join().unwrap();
 }
 

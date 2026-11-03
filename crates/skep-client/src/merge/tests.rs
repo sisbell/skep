@@ -1104,9 +1104,17 @@ mod scripted {
         owner: String,
         placed: Option<u64>,
         base_extent: Option<u64>,
-        /// The source a `version` minted the document sharing — its
-        /// `doc_metadata` `source`; `None` where none did.
+        /// The source a `version` minted the document sharing, or a `stage`
+        /// copied into it — its `doc_metadata` `source`; `None` where
+        /// neither did.
         source: Option<String>,
+        /// The base the board records for a staged draft — its
+        /// `doc_metadata` `base`, moved by each `publish` naming the draft as
+        /// its rendering `draft` (wire.md §Namespace, `stage`); `None` where
+        /// the board records none.
+        base: Option<String>,
+        /// Beside `base`, the extent the copy took of it — `base_copied`.
+        base_copied: Option<u64>,
         /// The arrangement as of each position it changed at, for `/op-at`.
         history: BTreeMap<u64, Vec<Run>>,
     }
@@ -1202,9 +1210,22 @@ mod scripted {
                     placed: None,
                     base_extent: None,
                     source: None,
+                    base: None,
+                    base_copied: None,
                     history,
                 },
             );
+        }
+
+        /// Records `text`, a draft of the world, as STAGED from `base` with
+        /// `copied` positions taken of it — its `doc_metadata` `base`,
+        /// `base_copied` and `source`, as the board's `stage` records them
+        /// (wire.md §Namespace). The draft's arrangement is the cell's.
+        fn staged(&mut self, text: &str, base: &str, copied: u64) {
+            let d = self.docs.get_mut(text).expect("a draft of the world");
+            d.base = Some(base.to_string());
+            d.base_copied = Some(copied);
+            d.source = Some(base.to_string());
         }
 
         /// A member of a chain with its shot terms.
@@ -1263,8 +1284,9 @@ mod scripted {
         }
 
         /// Shape (2) with a window: the head `D.2` `[(D,1,4),(Z,1,5),(D,5,7)]`
-        /// — "hello" windowed from `Z` — and the staging draft `S`, a copy
-        /// of the base with "!!!" typed at its end.
+        /// — "hello" windowed from `Z` — and the staging draft `S`, staged
+        /// from the base `D.1` (its recorded base) with "!!!" typed at its
+        /// end.
         fn window_and_draft() -> World {
             let mut w = World::new();
             w.text(D, 1, "the cat sat");
@@ -1277,6 +1299,7 @@ mod scripted {
             w.member(&format!("{D}.2"), head, Some(11));
             w.trunk_head.insert(D.to_string(), format!("{D}.2"));
             w.doc(S, false, ACCOUNT, vec![run(D, 1, 11), run(S, 1, 3)]);
+            w.staged(S, &format!("{D}.1"), 11);
             w.position += 1;
             let at = w.position;
             w.docs.get_mut(S).unwrap().history.insert(at, vec![run(D, 1, 11), run(S, 1, 3)]);
@@ -1387,7 +1410,7 @@ mod scripted {
                         return Ok(rejected("withheld"));
                     }
                     let Some(d) = self.docs.get(doc) else { return Ok(rejected("doc_not_registered")) };
-                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source})))
+                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": d.base, "base_copied": d.base_copied.map(|c| c.to_string())})))
                 }
                 "retrieve_doc_v_span_set" => {
                     let doc = frame["doc"].as_str().unwrap();
@@ -1647,6 +1670,13 @@ mod scripted {
                     if !member.strip_prefix(&format!("{doc}.")).unwrap().contains('.') {
                         self.trunk_head.insert(doc.clone(), member.clone());
                         self.docs.get_mut(&doc).unwrap().runs = runs;
+                    }
+                    // THE BASE MOVES: the rendering draft's recorded base
+                    // becomes the member the shot minted, `base_copied` its
+                    // whole count (wire.md §Namespace, `stage`).
+                    if let Some(s) = draft.as_ref().and_then(|s| self.docs.get_mut(s)) {
+                        s.base = Some(member.clone());
+                        s.base_copied = Some(placed);
                     }
                     let at = self.commit("publish", vec![member.clone()]);
                     json!({"resp": "ack_addr", "addr": member, "at": at})
@@ -1921,18 +1951,24 @@ mod scripted {
 
     /// The fence on sides whose base the board does not serve: a member of
     /// another document and a draft of another account each refuse
-    /// `BaseUnknown` before any `image`; two drafts refuse `TwoDrafts`; a
-    /// draft with no named base refuses `BaseUnknown`. A FORK is read before
-    /// it is judged — its `doc_metadata`, for the source it was born sharing
-    /// — and refuses, still before any `image`: `BaseUnknown` where no
-    /// `version` minted it (no source) or where its source lies in another
-    /// document; `BareSource`, with its own reason, where its source is the
-    /// bare document — a fork taken before the document's first version;
-    /// `Unreadable` where the merger may not read the fork at all. A base
-    /// the caller names beside a fork side refuses `ForkBaseNamed` before
-    /// any read.
+    /// `BaseUnknown` before any `image`; two drafts refuse `TwoDrafts`. A
+    /// DRAFT is read before it is judged — its `doc_metadata`, for the base
+    /// the board records for it (skep #743) — and composes with no base
+    /// named where one is recorded, refusing, still before any `image`:
+    /// `BaseUnknown` where the board records none (a draft never staged) or
+    /// where its recorded base lies in another document; `BareSource`, with
+    /// its own reason, where its recorded base is the bare document — a
+    /// draft staged before the document's first version. A FORK is read
+    /// before it is judged — its `doc_metadata`, for the source it was born
+    /// sharing — and refuses, still before any `image`: `BaseUnknown` where
+    /// no `version` minted it (no source) or where its source lies in
+    /// another document; `BareSource`, with its own reason, where its source
+    /// is the bare document — a fork taken before the document's first
+    /// version; `Unreadable` where the merger may not read the fork at all.
+    /// A base the caller names beside a fork side refuses `ForkBaseNamed`
+    /// before any read.
     #[test]
-    fn a_foreign_side_or_a_fork_without_a_served_base_refuses_before_any_image() {
+    fn a_foreign_side_or_a_side_without_a_served_base_refuses_before_any_image() {
         let mut w = World::race();
         // Another published document `Z` with a member, and four forks in
         // another account: one no `version` minted, one of `Z`'s member, one
@@ -1946,6 +1982,19 @@ mod scripted {
         w.fork(of_bare, "1.0.2", D, vec![run(D, 1, 11)]);
         w.fork(hidden, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
         w.withheld.insert(hidden.to_string());
+        // Four drafts of the merger's account: `S` staged from the base
+        // `D.1` with "!!!" typed at its end; one never staged, so the board
+        // records no base; one staged from `Z`'s member; one staged from the
+        // bare `D`.
+        let (unstaged, of_z_draft, of_bare_draft) = ("1.0.1.0.5", "1.0.1.0.6", "1.0.1.0.8");
+        w.text(S, 1, "!!!");
+        w.doc(S, false, ACCOUNT, vec![run(D, 1, 11), run(S, 1, 3)]);
+        w.staged(S, &format!("{D}.1"), 11);
+        w.doc(unstaged, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.doc(of_z_draft, false, ACCOUNT, vec![run(Z, 1, 5)]);
+        w.staged(of_z_draft, &format!("{Z}.1"), 5);
+        w.doc(of_bare_draft, false, ACCOUNT, vec![run(D, 1, 11)]);
+        w.staged(of_bare_draft, D, 11);
         let (dialer, board, _) = open(w);
         let with =
             |sides: Vec<Side>, base: Option<Address>| Inputs { sides, base, ..race_inputs() };
@@ -1987,8 +2036,33 @@ mod scripted {
             Some(a(&format!("{D}.1"))),
             Refusal::BaseUnknown(other_account),
         );
-        let unbased = Side::Draft { at: a(S), position: None };
-        refuses(unbased.clone(), None, Refusal::BaseUnknown(unbased));
+        // The drafts: the staged one composes with no base named, its base
+        // read off the board right after the trunk's metadata; the others
+        // refuse after that read and before any image.
+        let draft = |text: &str| Side::Draft { at: a(text), position: None };
+        dialer.clear();
+        let merged =
+            compose(&board, Some(&token()), &with(vec![draft(S)], None)).expect("composed");
+        assert_eq!(merged.key.base, a(&format!("{D}.1")), "the base the board records for the draft");
+        assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(S, 1, 3)]);
+        assert_eq!(
+            dialer.frames("doc_metadata")[1]["doc"],
+            S,
+            "the draft's metadata, for its base: {:?}",
+            dialer.ops()
+        );
+        refuses(draft(unstaged), None, Refusal::BaseUnknown(draft(unstaged)));
+        assert_eq!(
+            dialer.ops(),
+            ["doc_metadata", "doc_metadata"],
+            "the trunk's metadata, then the draft's for its base, and nothing after"
+        );
+        refuses(draft(of_z_draft), None, Refusal::BaseUnknown(draft(of_z_draft)));
+        refuses(
+            draft(of_bare_draft),
+            None,
+            Refusal::BareSource { side: draft(of_bare_draft), source: a(D) },
+        );
         let two = vec![
             Side::Draft { at: a(S), position: None },
             Side::Draft { at: a("1.0.1.0.5"), position: None },
@@ -2247,6 +2321,144 @@ mod scripted {
         );
         dialer.world().busy = 10;
         assert_eq!(compose(&board, Some(&token()), &inputs), Err(Refusal::HistoryBusy));
+    }
+
+    /// A DRAFT SIDE's BASE IS READ OFF THE BOARD (skep #743): the draft's
+    /// `doc_metadata` is read for the base the board records for it — right
+    /// after the trunk's, as a fork's is for its source — and the merge's
+    /// base is derived from it, so the caller names none; the reads then run
+    /// in the record's order and nothing is written. A base the caller names
+    /// is checked, never trusted: one equal to the derived base is taken; a
+    /// different one refuses `DraftBaseDisagrees`, naming both, before any
+    /// `image`.
+    #[test]
+    fn a_draft_sides_base_is_read_off_the_board_and_a_named_one_must_agree() {
+        let (dialer, board, _) = open(World::window_and_draft());
+        let rows = dialer.world().rows.len();
+        let side = Side::Draft { at: a(S), position: None };
+        let inputs = Inputs { sides: vec![side.clone()], ..race_inputs() };
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        assert_eq!(
+            dialer.ops(),
+            [
+                "doc_metadata",
+                "doc_metadata",
+                "retrieve_doc_v_span_set",
+                "retrieve_doc_v_span_set",
+                "image",
+                "image",
+                "retrieve_doc_v_span_set",
+                "image",
+                "find_links_ftt",
+                "find_links_ftt"
+            ]
+        );
+        let metadata: Vec<String> = dialer
+            .frames("doc_metadata")
+            .iter()
+            .map(|f| f["doc"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(metadata, [D.to_string(), S.to_string()], "the trunk's, then the draft's");
+        let imaged: Vec<String> =
+            dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
+        assert_eq!(
+            imaged,
+            [format!("{D}.1"), format!("{D}.2"), S.to_string()],
+            "the base the board records for the draft, the head, the draft"
+        );
+        assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(Z, 1, 5), run(D, 5, 7), run(S, 1, 3)]);
+        assert_eq!(
+            merged.families,
+            vec![Family::Own, Family::Window, Family::Own, Family::DraftNative]
+        );
+        assert_eq!(
+            (merged.key.base.clone(), merged.record.base.clone()),
+            (a(&format!("{D}.1")), a(&format!("{D}.1"))),
+            "the base the board records for the draft, never named"
+        );
+        assert_eq!(
+            merged.record.sides.iter().map(SideAt::role).collect::<Vec<_>>(),
+            [Role::Head, Role::Draft]
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "nothing written");
+        // A named base equal to the derived one is taken; a different one is
+        // refused by name, with the base the records derive, before any image.
+        let named = |b: &str| Inputs { base: Some(a(b)), ..inputs.clone() };
+        let agreed = compose(&board, Some(&token()), &named(&format!("{D}.1"))).expect("composed");
+        assert_eq!((agreed.key.base.clone(), m_runs(&agreed)), (merged.key.base.clone(), m_runs(&merged)));
+        dialer.clear();
+        assert_eq!(
+            compose(&board, Some(&token()), &named(&format!("{D}.2"))),
+            Err(Refusal::DraftBaseDisagrees {
+                side: side.clone(),
+                named: a(&format!("{D}.2")),
+                served: a(&format!("{D}.1")),
+            })
+        );
+        assert!(
+            !dialer.ops().iter().any(|o| o == "image"),
+            "no image before the refusal: {:?}",
+            dialer.ops()
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "nothing written");
+    }
+
+    /// THE MERGE's BASE IS DERIVED FROM THE DRAFT's RECORDED BASE, never the
+    /// recorded base itself: a draft staged from the daughter `D.1.1`, "!"
+    /// typed at its end, merged with the head `D.2` composes over `D.1` —
+    /// the nearest common ancestor of the head and the daughter — with no
+    /// base named, so the daughter's removal of " sat" is the draft's and
+    /// never an addition of the head's: "the big cat!". Naming the recorded
+    /// base `D.1.1` is refused `DraftBaseDisagrees` with `D.1` as the base
+    /// the board's record derives — the comparison is with the derived base
+    /// — while naming `D.1` is taken.
+    #[test]
+    fn a_draft_staged_from_a_daughter_composes_over_the_daughters_base() {
+        let mut w = World::race();
+        let t = "1.0.1.0.5";
+        w.text(t, 1, "!");
+        w.doc(t, false, ACCOUNT, vec![run(D, 1, 7), run(t, 1, 1)]);
+        w.staged(t, &format!("{D}.1.1"), 7);
+        let (dialer, board, _) = open(w);
+        let side = Side::Draft { at: a(t), position: None };
+        let inputs = Inputs { sides: vec![side.clone()], ..race_inputs() };
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        assert_eq!(
+            merged.key.base,
+            a(&format!("{D}.1")),
+            "the nearest common ancestor of the head and the recorded base"
+        );
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3), run(t, 1, 1)],
+            "the big cat!"
+        );
+        assert_eq!(
+            merged.families,
+            vec![Family::Own, Family::Own, Family::Own, Family::DraftNative]
+        );
+        assert!(merged.composed.gaps.is_empty(), "{:?}", merged.composed.gaps);
+        let imaged: Vec<String> =
+            dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
+        assert_eq!(
+            imaged,
+            [format!("{D}.1"), format!("{D}.2"), t.to_string()],
+            "the derived base imaged, never the daughter"
+        );
+        let named = |b: &str| Inputs { base: Some(a(b)), ..inputs.clone() };
+        assert_eq!(
+            compose(&board, Some(&token()), &named(&format!("{D}.1.1"))),
+            Err(Refusal::DraftBaseDisagrees {
+                side: side.clone(),
+                named: a(&format!("{D}.1.1")),
+                served: a(&format!("{D}.1")),
+            }),
+            "the comparison is with the derived base, not the recorded one"
+        );
+        assert_eq!(
+            compose(&board, Some(&token()), &named(&format!("{D}.1"))).expect("composed").key.base,
+            a(&format!("{D}.1"))
+        );
     }
 
     // ── the landing ──────────────────────────────────────────────────────

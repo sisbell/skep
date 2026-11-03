@@ -6,11 +6,14 @@
 //! `client.md` §2.1 lists the thirteen it stands beside, none touching
 //! content — this one does, which is why the library's `merge` feature is
 //! on for this crate alone. The board, the document and one side are named
-//! — an alternative member, a draft with the member it was staged from, or
-//! a fork of one of the document's published versions, whose base is the
-//! source the board serves for it (`doc_metadata`'s `source`; a fork taken
-//! from the bare document before its first version is refused with that
-//! reason) — and the head where the feed walk should not supply it; the
+//! — an alternative member; a draft, whose base is the member the board
+//! records it was staged from (`doc_metadata`'s `base`, read by the library;
+//! `--base` names it only to be checked, and one the board's record does not
+//! derive is refused); or a fork of one of the document's published
+//! versions, whose base is the source the board serves for it
+//! (`doc_metadata`'s `source`) — a draft staged from, or a fork taken from,
+//! the bare document before its first version is refused with that reason —
+//! and the head where the feed walk should not supply it; the
 //! command composes the merge under the rules and prints the `Merged`
 //! report as one JSON document on stdout, exit 0. With `--publish` it lands
 //! the merge as the document's next version with its record, with `--into`
@@ -193,12 +196,11 @@ impl Asked {
     ///
     /// # Errors
     ///
-    /// In this order: `--doc` absent or no address; no side, two sides,
-    /// `--draft` without `--base`, a side no address, or `--base` no
-    /// address; `--head`, `--kind` (or `SKEP_MERGE_KIND`, required, a
-    /// variable that is not UTF-8 text refused too), `--journal` no address;
-    /// `--retries` no count; a `--resolve` outside its grammar; `--into` no
-    /// address.
+    /// In this order: `--doc` absent or no address; no side, two sides, a
+    /// side no address, or `--base` no address; `--head`, `--kind` (or
+    /// `SKEP_MERGE_KIND`, required, a variable that is not UTF-8 text
+    /// refused too), `--journal` no address; `--retries` no count; a
+    /// `--resolve` outside its grammar; `--into` no address.
     fn of(c: &CommandLine, by: &ResolvedBy) -> Result<Asked, Usage> {
         let doc = match c.value("--doc") {
             Some(d) => address("--doc", d)?,
@@ -210,18 +212,18 @@ impl Asked {
         };
         let (side, base) = match (c.value("--alternative"), c.value("--draft"), c.value("--fork")) {
             (Some(a), None, None) => (Side::Member(address("--alternative", a)?), None),
-            (None, Some(s), None) => {
-                // The library refuses an unbased draft (`BaseUnknown`, the
-                // merge record's decision 15); the command refuses the form
-                // first.
-                let Some(b) = c.value("--base") else {
-                    return Err(Usage("--base <D.k> is required with --draft <S>: the version the draft was staged from, which no read of the board answers".into()));
-                };
-                (Side::Draft { at: address("--draft", s)?, position: None }, Some(address("--base", b)?))
-            }
+            // A draft's base is the board's to serve (`doc_metadata`'s
+            // `base`, read by the library); `--base` names it only to be
+            // checked — the library refuses one the board's record does not
+            // derive (`DraftBaseDisagrees`) and a draft the board records no
+            // base for (`BaseUnknown`, the merge record's decision 15).
+            (None, Some(s), None) => (
+                Side::Draft { at: address("--draft", s)?, position: None },
+                c.value("--base").map(|b| address("--base", b)).transpose()?,
+            ),
             (None, None, Some(f)) => (Side::Fork(address("--fork", f)?), None),
             (None, None, None) => {
-                return Err(Usage("one side is required: --alternative <D.k.m>, --draft <S> --base <D.k>, or --fork <F>".into()))
+                return Err(Usage("one side is required: --alternative <D.k.m>, --draft <S> [--base <D.k>], or --fork <F>".into()))
             }
             // The grammar's forms refuse two sides ahead of this; said again
             // rather than assumed.
@@ -328,16 +330,18 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// The exit is "the board refused": a halt the library faced keeps its own
 /// code; every typed refusal is the board's verdict under the wire code the
 /// refusal is named for, its detail the refusal's own words — the side
-/// whose base cannot be read, the second draft, a fork's bare source and a
-/// base named for a fork, which the library refuses before any image, among
-/// them, under their own names; the unowned draft side under `not_owner`,
-/// its detail naming the draft.
+/// whose base cannot be read, the second draft, a fork's bare source or a
+/// draft's bare base, a base named for a fork and a base named for a draft
+/// that the board's record does not derive, which the library refuses
+/// before any image, among them, under their own names; the unowned draft
+/// side under `not_owner`, its detail naming the draft.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
         Refusal::BaseUnknown(_) => "base_unknown",
         Refusal::BareSource { .. } => "bare_source",
         Refusal::ForkBaseNamed { .. } => "fork_base_named",
+        Refusal::DraftBaseDisagrees { .. } => "draft_base_disagrees",
         Refusal::TwoDrafts => "two_drafts",
         Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => "withheld",
         Refusal::NoSuchDocument(_) => "doc_not_registered",

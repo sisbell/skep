@@ -9,10 +9,13 @@
 //! against another member; `current` returns the record; a second `compose`
 //! reports it as prior; a second `land` writes nothing; `head_of` follows
 //! the trunk; and `in_claims` at the daughter answers what this wire admits —
-//! no claim over version members (the landing's doc). And ONE CROSS-ACCOUNT
+//! no claim over version members (the landing's doc). ONE CROSS-ACCOUNT
 //! FORK merged back (case (j)): a second account's private fork of a
 //! published version, its base the source the board serves for it, composed
-//! and landed.
+//! and landed. And ONE DRAFT SIDE (skep #743): a draft `stage` minted off
+//! the base version, its base the one the board records for it and never
+//! named — a named base the record does not derive refused — composed and
+//! landed as the shot, the draft's fresh text re-minted.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -526,5 +529,151 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
     assert_eq!(record.base, base);
     assert_eq!(record.link, Some(link));
     assert_eq!(verify(&board, Some(&token), &record).expect("verified"), Verdict::Equal);
+    session.close().expect("close");
+}
+
+/// A DRAFT SIDE ON THE REAL DAEMON (skep #743; the merge record's §1.2
+/// shape (2)): the draft `stage` minted off the base version `D.1` — the
+/// board recording `D.1` as its base — with "!!!" typed at its end, merged
+/// with the head `D.2`, which added "big ". The library reads the base off
+/// the draft's `doc_metadata`, never named, and composes "the big cat
+/// sat!!!" with the draft's fresh text as its own family; a base named
+/// beside the draft is checked against the one the record derives — the
+/// head refused by name, the base taken; the shot lands as the trunk's next
+/// member, the draft's text re-minted under the document, with its record
+/// found from the draft; and the board moves the draft's recorded base to
+/// the member the merge minted.
+#[test]
+fn a_draft_side_merges_from_the_base_the_board_records() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session)
+        .expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+
+    // The document, its base version and the head.
+    let d = published_document(&board, &session, &device);
+    let base = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        None,
+        &[Staged::Fresh { text: "the cat sat" }],
+    );
+    let head = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        Some((&base, 11)),
+        &[
+            Staged::Own { from: 1, text: "the " },
+            Staged::Fresh { text: "big " },
+            Staged::Own { from: 5, text: "cat sat" },
+        ],
+    );
+    assert_eq!((base.to_string(), head.to_string()), (format!("{d}.1"), format!("{d}.2")));
+
+    // THE STAGED DRAFT: `stage` off the base from the bare session — the
+    // board records the base and what the copy took — and "!!!" typed at
+    // its end.
+    let staged = acked(board.op(Some(&bare_token), &frames::stage(&base.to_string(), None)));
+    let draft = addr(acked_addr(&staged).expect("the staged draft's address"));
+    insert_text(&board, &bare_token, &draft.to_string(), 12, "!!!");
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
+    assert_eq!(
+        (meta["base"].as_str(), meta["base_copied"].as_str()),
+        (Some(base.to_string().as_str()), Some("11")),
+        "the premise — the board records the draft's base: {meta}"
+    );
+    assert_eq!(
+        image(&board, &token, &draft, 14),
+        vec![(format!("{d}.0.1.1"), 11), (format!("{draft}.0.1.1"), 3)],
+        "the base's text by identity, the draft's own after it"
+    );
+    let kind = addr(&mint(&board, &bare_token, ACCOUNT, false));
+
+    // COMPOSE with no base named: the base is read off the draft's metadata.
+    let before = board.health().unwrap().log_position();
+    let side = Side::Draft { at: draft.clone(), position: None };
+    let inputs = Inputs {
+        doc: d.clone(),
+        head: head.clone(),
+        base: None,
+        sides: vec![side.clone()],
+        options: Default::default(),
+        kind: kind.clone(),
+    };
+    let merged = compose(&board, Some(&token), &inputs).expect("composed");
+    assert_eq!(
+        merged.composed.runs.iter().map(|p| p.run.clone()).collect::<Vec<_>>(),
+        vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 7), Run::new(draft.clone(), 1, 3)],
+        "the big cat sat!!!"
+    );
+    assert_eq!(merged.key.base, base, "the base the board records for the draft, never named");
+    assert_eq!(merged.composed.counts, RunCounts { a: 3, b: 2, m: 4 });
+    assert!(merged.composed.gaps.is_empty(), "{:?}", merged.composed.gaps);
+    assert_eq!(
+        merged.record.sides.iter().map(|s| s.role()).collect::<Vec<_>>(),
+        [Role::Head, Role::Draft]
+    );
+    assert_eq!(board.health().unwrap().log_position(), before, "compose writes nothing");
+    // A NAMED BASE is checked against the one the record derives: the head
+    // refused by name, the base itself taken.
+    let named = |b: &Address| Inputs { base: Some(b.clone()), ..inputs.clone() };
+    assert_eq!(
+        compose(&board, Some(&token), &named(&head)),
+        Err(Refusal::DraftBaseDisagrees {
+            side: side.clone(),
+            named: head.clone(),
+            served: base.clone()
+        })
+    );
+    assert_eq!(compose(&board, Some(&token), &named(&base)).expect("composed").key.base, base);
+    assert_eq!(board.health().unwrap().log_position(), before, "nothing written");
+
+    // LAND as the shot: the draft's text re-minted under the document at its
+    // next fresh ordinals, the trunk's next member holding M, the record
+    // found FROM the draft by the kind.
+    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
+    let landed = land(&board, &merged, Landing::Shot { merger, draft: None, journal: None })
+        .expect("landed");
+    let Landed::Member { address: member, record: link, .. } = landed else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.3"), "the trunk's next member");
+    assert_eq!(
+        image(&board, &token, &member, 18),
+        vec![
+            (format!("{d}.0.1.1"), 4),
+            (format!("{d}.0.1.12"), 4),
+            (format!("{d}.0.1.5"), 7),
+            (format!("{d}.0.1.16"), 3)
+        ],
+        "the draft's text re-minted under D at D·16"
+    );
+    let found =
+        read(&board, Some(&token), &frames::find_links_ftt(&kind.to_string(), &draft.to_string()));
+    assert_eq!(found["addrs"], json!([link.to_string()]), "the record is found FROM the draft");
+    let record = current(&board, Some(&token), &kind, &merged.key)
+        .expect("the lookup")
+        .expect("a current record");
+    assert_eq!((record.base.clone(), record.link.clone()), (base.clone(), Some(link)));
+    // THE BASE MOVES with the shot that rendered the draft (wire.md
+    // §Namespace, `stage`): the board now records the member the merge
+    // minted as the draft's base.
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
+    assert_eq!(
+        meta["base"].as_str(),
+        Some(member.to_string().as_str()),
+        "the draft's recorded base moved to the merge's member: {meta}"
+    );
     session.close().expect("close");
 }

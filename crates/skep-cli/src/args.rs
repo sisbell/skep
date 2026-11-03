@@ -448,9 +448,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
             decline (--no-anchors); or --reprint  [--anchor <path>]...
   merge:    --doc <D>  --kind <address> (env SKEP_MERGE_KIND; the merge
             record kind's type address)  and one side: --alternative
-            <D.k.m>, or --draft <S> --base <D.k>, or --fork <F> (a fork
-            of a published version of D, readable to you; its base is
-            the version it was forked from, which the board serves)
+            <D.k.m>, or --draft <S> [--base <D.k>], or --fork <F> (a
+            fork of a published version of D, readable to you; its base
+            is the version it was forked from, which the board serves)
             [--head <D.h>] (else the
             feed's last trunk version)  [--journal <J>] (else the
             account's private one)  [--resolve <gap>=<choice>]... (a

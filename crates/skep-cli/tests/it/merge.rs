@@ -1,10 +1,11 @@
 //! THE FOURTEENTH COMMAND through the binary (the merge record's §6, "The
 //! CLI and the agent adapter"; `client.md` §2.1's thirteen stand beside
 //! it): THE USAGE FORMS refused before any socket opens, exit 2 — no
-//! `--doc`, two sides, `--draft` without `--base`, `--base` outside
-//! `--draft`, `--publish` with `--into`, a malformed `--resolve`, no
-//! `--kind` and no `SKEP_MERGE_KIND`, a value that is no address — while
-//! the variable stands in for the flag; THE WHOLE WALK on the real daemon —
+//! `--doc`, two sides, `--base` outside `--draft`, `--publish` with
+//! `--into`, a malformed `--resolve`, no `--kind` and no `SKEP_MERGE_KIND`,
+//! a value that is no address — while `--draft` without `--base` is a whole
+//! form and the variable stands in for the flag; THE WHOLE WALK on the real
+//! daemon —
 //! a document seeded with a base version, a head and a daughter as the
 //! library's own daemon walk seeds them, the merge composed and printed as
 //! one JSON document with nothing else on stdout, then `--publish` landing
@@ -21,7 +22,10 @@
 //! second account's fork of a published version merged from the source the
 //! board serves for it and published — while a fork of the bare document,
 //! taken before its first version, is refused with its own reason, exit 1,
-//! nothing on stdout.
+//! nothing on stdout; and `--draft` WITHOUT `--base` — a draft `stage`
+//! minted off the base version merged over the base the board records for
+//! it, a `--base` that agrees taken, and one the board's record does not
+//! derive refused by name, exit 1, nothing on stdout.
 
 use std::path::{Path, PathBuf};
 
@@ -184,6 +188,14 @@ impl Rig {
         addr(acked_addr(&v).expect("a minted address"))
     }
 
+    /// A private draft STAGED from `from` by the bare session — the board's
+    /// `stage`, which copies `from` by identity and records the draft's base
+    /// (wire.md §Namespace).
+    fn stage(&self, from: &Address) -> Address {
+        let v = Rig::acked(self.board.op(Some(&self.bare), &frames::stage(&from.to_string(), None)));
+        addr(acked_addr(&v).expect("the staged draft's address"))
+    }
+
     /// The forker's bare session: its account delegated from the claimant's
     /// full-scope session first.
     fn forker(&self) -> Token {
@@ -292,8 +304,10 @@ impl Rig {
 
 /// THE USAGE FORMS are judged whole before any socket opens (§2.3's exit 2;
 /// the fence): each refusal names what is wrong with the help beneath it,
-/// stdout empty, against a dead port — and `SKEP_MERGE_KIND` stands in for
-/// `--kind`, so that line is no usage refusal and reaches the dead board.
+/// stdout empty, against a dead port — `--draft` without `--base` is a
+/// whole form, the base the board's to serve, and reaches the dead board —
+/// and `SKEP_MERGE_KIND` stands in for `--kind`, so that line is no usage
+/// refusal and reaches the dead board.
 #[test]
 fn the_usage_forms_are_refused_before_any_socket() {
     let dir = tempfile::tempdir().unwrap();
@@ -309,10 +323,9 @@ fn the_usage_forms_are_refused_before_any_socket() {
         assert!(r.out.is_empty(), "{extra:?}: {}", r.out);
     };
     refused(&["--alternative", alt, "--kind", kind], "--doc <D> is required");
-    refused(&["--doc", doc, "--kind", kind], "one side is required: --alternative <D.k.m>, --draft <S> --base <D.k>, or --fork <F>");
+    refused(&["--doc", doc, "--kind", kind], "one side is required: --alternative <D.k.m>, --draft <S> [--base <D.k>], or --fork <F>");
     refused(&["--doc", doc, "--alternative", alt, "--draft", draft, "--base", base, "--kind", kind], "`--alternative` and `--draft` belong to two forms of `merge`: give one");
     refused(&["--doc", doc, "--alternative", alt, "--fork", draft, "--kind", kind], "`--alternative` and `--fork` belong to two forms of `merge`: give one");
-    refused(&["--doc", doc, "--draft", draft, "--kind", kind], "--base <D.k> is required with --draft <S>");
     refused(&["--doc", doc, "--alternative", alt, "--base", base, "--kind", kind], "`--base` belongs to `merge --draft` and is refused without `--draft`");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--publish", "--into", draft], "`--publish` and `--into` belong to two forms of `merge`: give one");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--resolve", "1=frob"], "--resolve: '1=frob' is not <gap>=<choice>");
@@ -323,7 +336,9 @@ fn the_usage_forms_are_refused_before_any_socket() {
     refused(&["--doc", doc, "--alternative", alt], "--kind <address> (or SKEP_MERGE_KIND) is required");
     refused(&["--doc", "not-an-address", "--alternative", alt, "--kind", kind], "--doc: 'not-an-address' is not an address");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--retries", "x"], "--retries: 'x' is not a count");
-    for form in [&["--doc", doc, "--alternative", alt, "--kind", kind][..], &["--doc", doc, "--draft", draft, "--base", base, "--kind", kind], &["--doc", doc, "--fork", draft, "--kind", kind]] {
+    // Every whole form reaches the dead board — `--draft` with and without
+    // `--base`, the base being the board's to serve.
+    for form in [&["--doc", doc, "--alternative", alt, "--kind", kind][..], &["--doc", doc, "--draft", draft, "--base", base, "--kind", kind], &["--doc", doc, "--draft", draft, "--kind", kind], &["--doc", doc, "--fork", draft, "--kind", kind]] {
         let mut args = vec!["merge", "--board", DEAD, "--dir", s(&store), "--principal", "1"];
         args.extend_from_slice(form);
         let r = skep(&args, &[], None);
@@ -582,6 +597,66 @@ fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: bare_source:the fork {bare_fork} was taken from {d2} itself, before it had a version (a bare source)")), "{}", r.err);
     assert!(r.err.contains(&format!("merging the fork {bare_fork} with {base2}, the head of {d2}")), "the entry line, the head off the feed: {}", r.err);
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// `--draft` WITHOUT `--base` (skep #743): the draft `stage` minted off the
+/// base version `D.1`, "!!!" typed at its end; the command composes it with
+/// the head over the base the board records for the draft — nothing named,
+/// the talk naming the draft alone — and prints "the big cat sat!!!" with
+/// the draft's fresh run as its own family, nothing written. `--base` naming
+/// the recorded base is taken, and said in the talk; `--base` naming the
+/// head is refused by name, exit 1, nothing on stdout, nothing written.
+#[test]
+fn a_draft_is_merged_over_the_base_the_board_records_and_a_disagreeing_base_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, base, head, _daughter) = rig.race(&session);
+    // THE STAGED DRAFT off the base, "!!!" typed at its end, typed against
+    // the board's head as the shots type their fresh text.
+    let staged = rig.stage(&base);
+    let as_of = rig.board.health().unwrap().log_position();
+    Rig::acked(rig.board.op(Some(&rig.bare), &json!({"op": "insert", "doc": staged.to_string(), "at": {"subspace": "1", "ordinal": "12"}, "values": ["!!!"], "as_of": as_of})));
+    let meta = rig.read(&token, &frames::doc_metadata(&staged.to_string()));
+    assert_eq!(meta["base"].as_str(), Some(base.to_string().as_str()), "the premise — the board records the draft's base: {meta}");
+    let (d_s, staged_s, base_s, head_s) = (d.to_string(), staged.to_string(), base.to_string(), head.to_string());
+    let expected = vec![(format!("{d}.0.1.1"), "4".into()), (format!("{d}.0.1.12"), "4".into()), (format!("{d}.0.1.5"), "7".into()), (format!("{staged}.0.1.1"), "3".into())];
+
+    // COMPOSE with no --base: the base off the board, the head off the feed.
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d_s, "--draft", &staged_s, "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!(v["head"].as_str(), Some(head_s.as_str()), "the head off the feed walk");
+    assert_eq!(v["base"].as_str(), Some(base_s.as_str()), "the base the board records for the draft, never named");
+    assert_eq!(runs_of(&v), expected, "the big cat sat!!!");
+    assert_eq!((v["runs"][3]["family"].clone(), v["runs"][3]["side"].clone()), (json!("draft"), json!(1)), "the draft's fresh run, its own family");
+    assert_eq!(v["sides"][1]["role"], json!("draft"));
+    assert_eq!(v["sides"][1]["at"]["draft"], json!(staged_s), "{}", v["sides"]);
+    assert_eq!(v["counts"], json!({"a": 3, "b": 2, "m": 4}));
+    assert_eq!(v["gaps"], json!([]), "different material on each side: no gap");
+    assert!(v["landed"].is_null(), "{v}");
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "composing writes nothing");
+    assert!(r.err.contains(&format!("merging the draft {staged} with {head}, the head of {d}, at {}", rig.origin)), "the entry line names the draft alone: {}", r.err);
+    assert!(!r.err.contains("staged from"), "no base named, none claimed: {}", r.err);
+    assert!(r.err.contains(&format!("composed over the base {base}: 4 runs from the head's 3 and the side's 2, 0 gaps")), "{}", r.err);
+
+    // --BASE naming the recorded base is taken, and the talk says it.
+    let r = rig.merge(&["--doc", &d_s, "--draft", &staged_s, "--base", &base_s, "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!(v["base"].as_str(), Some(base_s.as_str()));
+    assert_eq!(runs_of(&v), expected);
+    assert!(r.err.contains(&format!("merging the draft {staged} (staged from {base}) with {head}")), "{}", r.err);
+
+    // --BASE naming the head is refused by name: exit 1, nothing on stdout,
+    // nothing written.
+    let r = rig.merge(&["--doc", &d_s, "--draft", &staged_s, "--base", &head_s, "--kind", &kind]);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(r.err.contains(&format!("the board refused: draft_base_disagrees:the base {head} was named for the draft {staged}, whose recorded base (doc_metadata's base) derives the base {base}")), "{}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
     session.close().expect("close");
 }

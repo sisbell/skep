@@ -429,6 +429,11 @@ pub struct PublishFrame<'a> {
     /// The kept places, parallel to `runs` — each a [`place`] or `null`;
     /// sent only where some entry is a place.
     pub places: &'a [Value],
+    /// Each `also` draft's own kept places (wire.md §Arrangement, `publish`,
+    /// `also_places`; skep #739), in `also`'s order — each entry's `places`
+    /// parallel to `runs` as `places` is; an entry carrying no place is left
+    /// out, and the member is sent only where some entry remains.
+    pub also_places: &'a [AlsoPlacesFrame<'a>],
     /// The `links` entries, each as [`link_entry`] spells it.
     pub links: &'a [Value],
     /// The `retract` entries: link addresses.
@@ -441,13 +446,25 @@ pub struct PublishFrame<'a> {
     pub id: Option<&'a str>,
 }
 
+/// One `also_places` entry of a `publish` request: a draft `also` names and
+/// its own kept places, parallel to `runs` — each a [`place`] or `null`.
+#[derive(Debug, Clone, Default)]
+pub struct AlsoPlacesFrame<'a> {
+    /// The draft `also` names.
+    pub draft: &'a str,
+    /// Its kept places, parallel to `runs`.
+    pub places: &'a [Value],
+}
+
 /// Builds a `publish` request with every member [`PublishFrame`] names.
 ///
 /// The members are spelled as `tools.json`'s `publish` entry and wire.md
 /// §Arrangement spell them; `places` is sent only where an entry is a place
-/// (a list of `null`s is the shot as before, so it is left out), `also`,
-/// `links`, `retract` and `read_with` only where non-empty, `mint` and
-/// `claim` only where true.
+/// (a list of `null`s is the shot as before, so it is left out),
+/// `also_places` only with the entries whose list carries a place, in
+/// `also`'s order, and only where one remains (the canonical form the codec
+/// writes), `also`, `links`, `retract` and `read_with` only where
+/// non-empty, `mint` and `claim` only where true.
 pub fn publication(p: &PublishFrame<'_>) -> Value {
     let mut frame = with_id(json!({"op": "publish", "runs": p.runs}), p.id);
     if let Some(doc) = p.doc {
@@ -474,6 +491,10 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     }
     if p.places.iter().any(|place| !place.is_null()) {
         frame["places"] = Value::Array(p.places.to_vec());
+    }
+    let also_places: Vec<Value> = p.also_places.iter().filter(|entry| entry.places.iter().any(|place| !place.is_null())).map(|entry| json!({"draft": entry.draft, "places": entry.places})).collect();
+    if !also_places.is_empty() {
+        frame["also_places"] = Value::Array(also_places);
     }
     if !p.links.is_empty() {
         frame["links"] = Value::Array(p.links.to_vec());

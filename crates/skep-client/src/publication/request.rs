@@ -10,15 +10,19 @@
 //! re-ordered since the panel's reads is a DIFFERENCE. Any difference is
 //! answered as a [`Restatement`], data for the caller to confirm again over
 //! what is left; nothing is sent on it. The image's places are the kept
-//! places the request then carries per draft-native run. The base's
-//! standing is the caller's to read again beside it ([`super::standing`]),
-//! a moved one riding the same re-statement.
+//! places the request then carries per run of a named draft's identity; the
+//! `also` drafts' images, read again beside it, give each its own list. The
+//! base's standing is the caller's to read again beside it
+//! ([`super::standing`]), a moved one riding the same re-statement.
 //!
 //! **The request.** From the confirmed rows: the runs from the held
 //! selection as the re-read placed them — a split run as its pieces in the
-//! draft's order, the rendering draft's each with its own kept place, a
-//! named `also` draft's re-minted with no place (the rendering draft alone
-//! is re-windowed; the Nelson way, B3-S10) — every window onto the
+//! draft's order, every named draft's run with the rendering draft's kept
+//! place beside it (its own words and an `also` draft's alike, which the
+//! rendering draft holds by identity), and, per draft `also` names, THAT
+//! draft's own kept places in `also_places`, read off its image, so the one
+//! commit re-windows every named draft at its own places (skep #739; the
+//! Nelson way, B3-S10) — every window onto the
 //! person's own unpublished origin answered first (THE THREE ANSWERS:
 //! publish-first is NOT this request, which stays inert; DROP leaves the
 //! run out; KEEP PRIVATE sends it as a window with no place beside it) and
@@ -40,10 +44,11 @@
 //! free-standing draft, or at the document form where `doc` is an edition
 //! holding no member yet (the owner's ruling (i); skep #692), the claim row
 //! then homed in `doc`'s trunk by address, first in that home's group;
-//! `places` beside `runs`; the signed body through the one body builder,
+//! `places` and `also_places` beside `runs`, neither in the signed body;
+//! the signed body through the one body builder,
 //! `entry_body_publication`, from the request AS BUILT; a fresh `id`. INERT
-//! where the request changes nothing against its base. The price is
-//! computed on the request as built.
+//! where the request changes nothing against its base — a place in either
+//! list is a change. The price is computed on the request as built.
 //!
 //! THE CLIENT DOES NOT DECIDE whether the edition is empty: it sends the
 //! claim where asked, and the board refuses `claim_refused` where a member
@@ -58,11 +63,11 @@ use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind,
 
 use crate::address::parse_address;
 use crate::board::answers::LinkSpan;
-use crate::board::frames::{self, PublishFrame, T_EDITION, T_READ_WITH};
+use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
 use super::base::Standing;
-use super::enumerate::{enumerate_with, Enumeration, Placement, Record};
+use super::enumerate::{enumerate_with, place_selection, Enumeration, Placement, Record};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, RowKind};
 use super::price::{self, EndShape, EntryShape, Price, Shape};
@@ -121,8 +126,8 @@ pub struct Restatement {
     pub removals_undone: Vec<Address>,
     /// Held removals on the job list now that were not before.
     pub removals_came: Vec<Address>,
-    /// Held runs whose placement changed: the run's index and where it
-    /// stands now.
+    /// Held runs whose placement in the rendering draft changed: the run's
+    /// index and where it stands now.
     pub selection: Vec<(usize, Placement)>,
     /// The base's standing where it moved since the panel — a sibling's shot
     /// landing while the panel stood — as the caller typed it again; `None`
@@ -164,6 +169,16 @@ pub fn reread(p: &Publisher<'_>, inputs: &Inputs, first: &Enumeration, first_pan
 }
 
 /// Diffs two answers of the enumeration and the panel.
+///
+/// The placements diffed are the RENDERING draft's — the held selection
+/// against its one image — and no member is added for an `also` draft's: a
+/// run an `also` draft moved since the panel takes no place in that draft's
+/// list (`also_places`, composed off its re-read image), the draft left as
+/// it stands there; and a move the re-read did not see — between the
+/// re-read and the commit — is the board's `kept_place_moved` naming that
+/// draft (`site.addr`), answered as the rendering draft's is: the re-read
+/// again, then the re-statement where it finds a difference, or the
+/// refusal, naming the draft, where it finds none.
 pub fn restate(first: &Enumeration, first_panel: &Panel, now: &Enumeration, now_panel: &Panel) -> Option<Restatement> {
     let offered = |e: &Enumeration| -> BTreeSet<Address> { e.offered().into_iter().map(|i| e.candidates[i].link.clone()).collect() };
     let (before, after) = (offered(first), offered(now));
@@ -270,6 +285,27 @@ pub enum Piece {
     },
 }
 
+/// The kept places of one draft `also` names (the wire's `also_places`
+/// entry; skep #739): the request's own spelling of the board's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlsoPlaces {
+    /// The draft `also` names.
+    pub draft: Address,
+    /// Its kept places, parallel to the request's `runs`: at a run of this
+    /// draft's identity the V-position its image arranged the run at when
+    /// the request was composed, `None` where it did not arrange it whole
+    /// and in order, and `None` at every run of another origin.
+    pub places: Vec<Option<u64>>,
+}
+
+impl AlsoPlaces {
+    /// Returns whether any entry carries a place: the draft is re-windowed,
+    /// and the entry is sent.
+    pub fn carries_a_place(&self) -> bool {
+        self.places.iter().any(Option::is_some)
+    }
+}
+
 /// The one request, as built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -289,8 +325,26 @@ pub struct Request {
     pub also: Vec<Address>,
     /// The runs, in V-order.
     pub runs: Vec<Run>,
-    /// The kept places, parallel to the runs.
+    /// The RENDERING draft's kept places, parallel to the runs: at a run of
+    /// any named draft's identity — its own, or an `also` draft's it holds
+    /// by identity — the rendering draft's own V-position of it; at a stray
+    /// run re-composed by reference, the place of the words it stood for;
+    /// `None` at a window.
     pub places: Vec<Option<u64>>,
+    /// Each `also` draft's OWN kept places (the wire's `also_places`; skep
+    /// #739), one entry per draft `also` names in its order, each list
+    /// parallel to the runs: at a run of that draft's identity the
+    /// V-position its image arranged the run at when the request was
+    /// composed; `None` where it did not arrange it whole and in order —
+    /// moved, split or deleted since the panel — the draft then left as it
+    /// stands at that run and healed at its own next shot; `None` at every
+    /// other run; a piece the twin pre-check re-composed by reference
+    /// carries the draft's place at the piece's offset, a stray place the
+    /// commit re-windows the draft at through its own record. An entry
+    /// carrying no place is not sent. The one commit re-windows the
+    /// rendering draft at `places`, then each `also` draft at its entry, in
+    /// `also`'s order.
+    pub also_places: Vec<AlsoPlaces>,
     /// Per run, the records covering a run re-composed by reference with a
     /// place — a stray run the twin pre-check re-composed, or a counterpart's
     /// covered piece, one record each; zero elsewhere.
@@ -362,6 +416,8 @@ impl Request {
         let read_with: Vec<String> = self.read_with.iter().map(ToString::to_string).collect();
         let (doc, account, base, draft) = (self.doc.as_ref().map(ToString::to_string), self.mint.as_ref().map(ToString::to_string), self.base.as_ref().map(|(m, e)| (m.to_string(), *e)), self.draft.as_ref().map(ToString::to_string));
         let also: Vec<String> = self.also.iter().map(ToString::to_string).collect();
+        let also_places: Vec<(String, Vec<Value>)> = self.also_places.iter().map(|a| (a.draft.to_string(), a.places.iter().map(|p| p.map_or(Value::Null, frames::place)).collect())).collect();
+        let also_entries: Vec<AlsoPlacesFrame<'_>> = also_places.iter().map(|(draft, places)| AlsoPlacesFrame { draft, places }).collect();
         frames::publication(&PublishFrame {
             doc: doc.as_deref(),
             account: account.as_deref(),
@@ -372,6 +428,7 @@ impl Request {
             also: &also.iter().map(String::as_str).collect::<Vec<_>>(),
             runs: &runs,
             places: &places,
+            also_places: &also_entries,
             links: &links,
             retract: &retract.iter().map(String::as_str).collect::<Vec<_>>(),
             read_with: &read_with.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -429,9 +486,11 @@ impl Request {
         self.entries.iter().map(|e| EntryShape { from: e.from.shape(), to: e.to.shape(), ty: e.ty.shape(), old: e.old.is_some() }).collect()
     }
 
-    /// Prices the request as it stands, with the caller's home count and the
-    /// rendering draft's run count.
-    pub fn priced(&self, homes: usize, draft_runs: usize) -> Price {
+    /// Prices the request as it stands, with the caller's home count, the
+    /// rendering draft's content run count and each `also` draft's in
+    /// `also`'s order (`Enumeration::also_run_counts`): the price counts a
+    /// draft's runs only where its list places it.
+    pub fn priced(&self, homes: usize, draft_runs: usize, also_runs: &[usize]) -> Price {
         let entries = self.entry_shapes();
         let term = self.term().clone();
         // The named drafts — the rendering draft, then each of `also` — whose
@@ -445,6 +504,8 @@ impl Request {
             mint: self.mint.is_some(),
             claim: self.claim,
             places: &self.places,
+            also_places: &self.also_places,
+            also_runs,
             stray_records: &self.stray_records,
             entries: &entries,
             retract: self.retract.len(),
@@ -606,15 +667,18 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             Some(Placement::Absent) | None => Vec::new(),
         };
         // A named draft's run — the rendering draft's or an `also` draft's —
-        // is the document's own words, re-minted; a kept place is sent for
-        // the rendering draft's alone, the one draft the commit re-windows.
+        // is the document's own words, re-minted, and the rendering draft's
+        // kept place is sent for EVERY such run: its own position of the
+        // run, which the commit re-windows it at whichever named draft's
+        // identity the run was (skep #739; an `also` draft's own place for
+        // its run rides that draft's `also_places` entry, composed below).
+        // The trunk's own words, held by reference, take no place.
         let native = inputs.is_named_draft(&run.origin);
         let own = trunk.as_ref() == Some(&run.origin);
         if native || own {
-            let rendering = run.origin == inputs.draft;
             for (piece, ordinal) in pieces {
                 runs.push(piece);
-                places.push(rendering.then_some(ordinal));
+                places.push(native.then_some(ordinal));
                 draft_places.push(Some(ordinal));
             }
             continue;
@@ -679,9 +743,12 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         return Ok(Built::Inert(Inert::PublishFirst(publish_first)));
     }
 
-    // The twin pre-check: what the draft's records already name, by reference.
-    let recomposed = twin_precheck_with(door, p, inputs, &runs, &places, &draft_places)?;
-    let (runs, places, draft_places, stray_records) = (recomposed.runs, recomposed.places, recomposed.draft_places, recomposed.stray_records);
+    // Each `also` draft's own kept places off its image, beside the rendering
+    // draft's; then the twin pre-check: what each named draft's records
+    // already name, by reference, every list carried beside the pieces.
+    let also_places = also_places_of(e, &runs);
+    let recomposed = twin_precheck_with(door, p, inputs, &runs, &places, &draft_places, &also_places)?;
+    let (runs, places, draft_places, stray_records, also_places) = (recomposed.runs, recomposed.places, recomposed.draft_places, recomposed.stray_records, recomposed.also_places);
     let mut records: Vec<Record> = e.records.clone();
     for r in recomposed.records {
         if !records.iter().any(|k| k.link == r.link) {
@@ -721,10 +788,13 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     let count = count(panel, &confirmed.switches, inputs);
     let read_with = count.read_with.clone();
 
-    // Inert where nothing changes against the base.
+    // Inert where nothing changes against the base: a place in either list
+    // — the rendering draft's, or an `also` draft's re-window alone — is a
+    // change to that draft.
     door.step("base");
     let fresh = runs.iter().any(|r| inputs.is_named_draft(&r.origin));
-    if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && inputs.mint.is_none() && places.iter().all(Option::is_none) {
+    let placed = places.iter().any(Option::is_some) || also_places.iter().any(AlsoPlaces::carries_a_place);
+    if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && inputs.mint.is_none() && !placed {
         if let Some((base, extent)) = &inputs.base {
             let image = door.image(&base.to_string(), 1, *extent)?;
             let same = image.len() == runs.len() && image.iter().zip(&runs).all(|(a, r)| a.prefix == r.chain() && a.first == r.i_start && a.width == r.width);
@@ -758,6 +828,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         also: inputs.also.clone(),
         runs,
         places,
+        also_places,
         stray_records,
         pieces,
         entries,
@@ -771,8 +842,44 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         as_of: door.as_of().max(e.as_of),
     };
     let homes = e.homes.len() + inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();
-    request.price = request.priced(homes, e.image.len());
+    request.price = request.priced(homes, e.image.len(), &e.also_run_counts());
     Ok(Built::Request(Box::new(request)))
+}
+
+/// Composes each `also` draft's own kept places over `runs`, off its image
+/// (the wire's `also_places`; skep #739), in `also`'s order.
+///
+/// At a run of THAT draft's identity: the V-ordinal its image arranges the
+/// run at, found as the rendering draft's places are (`place_selection`:
+/// whole and in order, the k-th equal run the k-th occurrence); `None`
+/// where its image does not arrange it whole — moved, split or deleted
+/// since the panel, a place the client is not sure of, so the draft is left
+/// as it stands at that run and the board's fence meets it at the draft's
+/// own next shot. `None` at every other run — the rendering draft's own,
+/// the trunk's, a window's, another `also` draft's — whose place is no
+/// business of this draft's list; a stray of the draft's own (published
+/// words it arranges that a record names) is not composed here, and heals
+/// at its own shot. THE ONE-PLACE LIMIT: where a draft arranges a run's
+/// identity twice, the board's `image` yields one place for it (it dedupes
+/// on `(i_start, width)`), so the list names that one and the other is
+/// left standing until skep #753 (keep every placement) lands — the
+/// rendering draft's own limit today.
+pub(crate) fn also_places_of(e: &Enumeration, runs: &[Run]) -> Vec<AlsoPlaces> {
+    e.also
+        .iter()
+        .map(|a| {
+            let placed = place_selection(&a.image, runs);
+            let places = runs
+                .iter()
+                .zip(&placed)
+                .map(|(run, placement)| match placement {
+                    Placement::Whole { ordinal } if run.origin == a.draft => Some(*ordinal),
+                    _ => None,
+                })
+                .collect();
+            AlsoPlaces { draft: a.draft.clone(), places }
+        })
+        .collect()
 }
 
 /// What spelling an end needs.

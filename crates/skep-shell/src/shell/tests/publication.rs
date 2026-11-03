@@ -451,13 +451,17 @@ fn the_familys_members_are_read_in_their_form_before_the_session() {
 /// (skep #744) — every member declared; its `confirm` is acknowledged E.2 —
 /// the member reads A's whole text as E's own words — with one record homed
 /// in D for its six words and one in A for its five, each `to` the member's
-/// fresh identity, and the feed row's `docs` `[E.2, A, D]`. Then a SECOND
+/// fresh identity, the feed row's `docs` `[E.2, A, D]`, and D RE-WINDOWED in
+/// the same write at its own place, which the library read off D's image
+/// (skep #739): its six words the member's identity, no private copy left.
+/// Then a SECOND
 /// DEVICE's shell — a fresh shell over the same board and store, holding no
 /// index and no panel of the first's — opens D, a draft BEHIND the head, the
 /// page sending `base: E.2`, which nothing reads: the shell reads D's base
-/// off the board's record, E.1 — A's publication moved A's base, never D's
-/// — tells it `standing: behind`, and the `confirm` lands the DAUGHTER E.1.1
-/// under it, never a trunk member that drops A's words. A draft the board
+/// off the board's record, E.1 — A's publication moved A's base, never D's,
+/// re-windowed or not — tells it `standing: behind`, and the `confirm` lands
+/// the DAUGHTER E.1.1 under it, holding the words D now windows by
+/// reference, never a trunk member that drops A's words. A draft the board
 /// records no base for is refused `base_unrecorded` naming it, the edition
 /// and the reason, `no_record`, at the document form, and opens at the mint
 /// form, which has no chain and no standing.
@@ -512,6 +516,11 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
     let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
     assert_eq!(row["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {row}");
+    // D, named `also`, re-windowed in the same write at its own place: its
+    // six words the member's identity.
+    let d_image = g.op(skep_client::board::frames::image(&d, 20, 6));
+    let d_runs: Vec<(String, String)> = d_image["runs"].as_array().expect("runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().to_string())).collect();
+    assert_eq!(d_runs, vec![(format!("{edition}.0.1.20"), "6".to_string())], "D re-windowed onto E.2's words, no private copy left: {d_image}");
     // A SECOND DEVICE: a fresh shell over the same board and store, D behind
     // the head, the page's `base` read by nothing — the daughter landing.
     g.shell.shutdown();
@@ -545,6 +554,76 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     assert_eq!(g.call("publication.cancel", json!({"session": g.session})).unwrap(), json!({}));
     g.shell.shutdown();
     sd.shutdown();
+}
+
+/// Checks a family confirm over a draft `also` names that moved since the
+/// panel, against the daemon (skep #739).
+///
+/// A's panel names D among `also`; D's six own words are swapped about
+/// after the panel's reads (a raw `rearrange` under the session). A's
+/// `confirm` re-reads D's image — a run D no longer arranges whole takes
+/// no place in D's list, and the list, all `null`, is not sent — re-states
+/// nothing (A's placements stand; D's move is none of the rendering
+/// draft's) and is acknowledged E.2: A re-windowed whole, D LEFT AS IT
+/// STANDS — its words its own, swapped, with the record A's shot homed in
+/// it — to be healed at its own next publication. The board's
+/// `kept_place_moved` naming D meets a move between this re-read and the
+/// commit, a window no test holds open: its answer's shape is
+/// `the_refusals_that_name_a_draft_carry_it`'s.
+#[test]
+fn a_family_confirm_over_an_also_draft_moved_since_the_panel_sends_no_place_for_it_and_leaves_it_as_it_stands() {
+    use skep_client::board::frames::image;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let d = g.staged(&edition, "the quick brown fox");
+    g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "20"}, "values": [" again"], "as_of": g.position()}));
+    let staged = g.op(skep_client::board::frames::stage(&d, None));
+    let a_draft = staged["addr"].as_str().expect("an ack_addr").to_string();
+    g.op(json!({"op": "insert", "doc": a_draft, "at": {"subspace": "1", "ordinal": "26"}, "values": [" more"], "as_of": staged["at"]}));
+    g.call("publication.open", json!({"session": g.session, "draft": a_draft, "doc": edition, "also": [d], "readable_drafts": [a_draft, d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    // D's six own words swapped about after the panel: the first three and
+    // the last three.
+    g.op(json!({"op": "rearrange", "doc": d, "cuts": [{"subspace": "1", "ordinal": "20"}, {"subspace": "1", "ordinal": "23"}, {"subspace": "1", "ordinal": "26"}], "as_of": g.position()}));
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    let e2 = format!("{edition}.2");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str()), (Some("acknowledged"), Some(e2.as_str()), Some("answer")), "the move absorbed at the re-read, nothing re-stated: {acked}");
+    let runs_of = |frame: Value| -> Vec<(String, String)> { g.op(frame)["runs"].as_array().expect("runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().to_string())).collect() };
+    assert_eq!(runs_of(image(&a_draft, 1, 30)), vec![(format!("{edition}.0.1.1"), "30".to_string())], "A re-windowed whole onto E.2, D's run among its own");
+    assert_eq!(runs_of(image(&d, 20, 6)), vec![(format!("{d}.0.1.23"), "3".to_string()), (format!("{d}.0.1.20"), "3".to_string())], "D left as it stands: its own words, swapped, healed at its own next publication");
+    let entry = g.shell.sessions.get(&g.session).unwrap();
+    let at = acked["at"].as_u64().unwrap();
+    let rows = changes_under(&entry.board, &entry.token, &edition, at - 1);
+    let row = rows.iter().find(|r| r["at"] == at && r["op"] == "publish").unwrap_or_else(|| panic!("the publish row at {at}: {rows:?}"));
+    assert_eq!(row["docs"], json!([e2, a_draft, d]), "D named for the record homed in it: {row}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks the refused answers that name a draft, as `confirm` composes
+/// them and as the declaration spells them (skep #739): `kept_place_moved
+/// {index, draft, race}` — `draft` the draft that no longer honours the
+/// place, the rendering draft or one `also` names, `race` the key read
+/// under it — and the own fault `stray_place {index, draft}`. The board
+/// gives the first to a move between `confirm`'s re-read and its commit, a
+/// window no test holds open, so the composition is pinned here.
+#[test]
+fn the_refusals_that_name_a_draft_carry_it() {
+    use skep_client::publication::{OwnFault, RaceKey, Refusal as PubRefusal};
+    let d = skep_client::address::parse_address("1.0.1.0.5").expect("an address");
+    let race = RaceKey { at: 999, key: Some("bare".into()), signed: false };
+    let (arm, members) = super::super::publication::refusal_arm(&PubRefusal::KeptPlaceMoved { index: 1, draft: d.clone(), race: Some(race) });
+    let answer = super::super::publication::refused_json(arm, members);
+    crate::shapes::assert_declared("PublicationRefused", &answer);
+    crate::shapes::assert_declared("RaceKey", &answer["race"]);
+    assert_eq!(answer, json!({"outcome": "refused", "arm": "kept_place_moved", "index": 1, "draft": "1.0.1.0.5", "race": {"at": 999, "key": "bare", "signed": false}}));
+    let (arm, members) = super::super::publication::refusal_arm(&PubRefusal::OwnFault(OwnFault::StrayPlace { index: 2, draft: d }));
+    let answer = super::super::publication::refused_json(arm, members);
+    crate::shapes::assert_declared("PublicationRefused", &answer);
+    assert_eq!(answer, json!({"outcome": "refused", "arm": "own_fault", "fault": {"kind": "stray_place", "index": 2, "draft": "1.0.1.0.5"}}));
 }
 
 /// Checks that a publication that only removes published words leaves the

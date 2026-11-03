@@ -534,6 +534,8 @@ fn the_publication_cards_state_the_shells_shapes() {
     let confirm = entry("publication_confirm")["description"].as_str().expect("the confirm card");
     assert!(confirm.contains(&format!("{superseded} {{first}}")), "the confirm card names the library's base_superseded arm: {confirm}");
     assert!(confirm.contains("superseded_first where version 1 was"), "the confirm card re-states a first draft's standing moved: {confirm}");
+    assert!(confirm.contains("kept_place_moved {index, draft, race}"), "the confirm card names kept_place_moved's members, the draft that moved among them: {confirm}");
+    assert!(confirm.contains("each of also — is re-windowed") && confirm.contains("stray_place {index, draft}"), "the confirm card says every named draft is re-windowed in the one write, and names the own fault's draft: {confirm}");
     let selection = &entry("publication_open")["inputSchema"]["properties"]["selection"]["items"];
     assert_eq!(schema_fields(selection), fields("Run"), "the selection's runs are the shell's Run");
     let answers: BTreeSet<String> = alias("OriginAnswer").iter().map(|arm| arm.trim_matches('\'').to_string()).collect();

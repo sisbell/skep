@@ -8,7 +8,11 @@
 //! body against the frame routes' request-body cap, 8 MiB; THE VALUES — the
 //! distinct draft-native positions against the shot's re-insert budget; THE
 //! IN-LOCK READS — the person's link-holding home count × (`links` +
-//! `read_with` entries) + the draft's content run count × the request's
+//! `read_with` entries) + the content run count of EVERY DRAFT A LIST
+//! PLACES (the rendering draft where `places` carries a place, each `also`
+//! draft where its `also_places` entry does, summed; a draft no list
+//! places is not re-windowed, not read, and adds none — the board's
+//! `price_publication_reads` since skep #739) × the request's
 //! runs, against `MAX_PUBLICATION_READS` = 65,536; THE STAGED BYTES — the
 //! bytes the one commit would stage, from the table, against the kernel's
 //! transaction budget, 64 MiB. The table's figures are MIRRORED from the
@@ -30,6 +34,7 @@
 use skep_address::Address;
 
 use super::enumerate::MAX_WIRE_LIST;
+use super::request::AlsoPlaces;
 use super::{ISpan, Run};
 
 /// The most spans one link slot may resolve to: M7's `MAX_SLOT_SPANS`.
@@ -146,8 +151,16 @@ pub struct Shape<'a> {
     pub mint: bool,
     /// Whether it carries the edition claim, at either form.
     pub claim: bool,
-    /// The kept places, parallel to the runs.
+    /// The rendering draft's kept places, parallel to the runs.
     pub places: &'a [Option<u64>],
+    /// Each `also` draft's own kept places, one entry per draft `also`
+    /// names in its order, each list parallel to the runs: a list carrying
+    /// a place re-windows its draft, priced as `places` is — the draft's run
+    /// count into the reads, a kept place's bytes per piece it places.
+    pub also_places: &'a [AlsoPlaces],
+    /// Each `also` draft's content run count — its image's runs — parallel
+    /// to `also_places`; counted where that draft's list carries a place.
+    pub also_runs: &'a [usize],
     /// Per run, the records covering it where it is a run re-composed by
     /// reference with a place — a stray run of the document's own identity
     /// the twin pre-check re-composed, or a counterpart's covered piece in
@@ -167,8 +180,11 @@ pub struct Shape<'a> {
     /// them; the design names no read for the daemon's exact count, so this
     /// is the caller's figure.
     pub homes: usize,
-    /// The rendering draft's content run count — its image's runs; the
-    /// `also` drafts, never re-windowed, add none.
+    /// The rendering draft's content run count — its image's runs; counted
+    /// where `places` carries a place, as each `also` draft's `also_runs`
+    /// entry is where its list does: the price's draft term is the SUM over
+    /// every draft a list places, zero for a draft no list places (the
+    /// board's `price_publication_reads` since skep #739).
     pub draft_runs: usize,
 }
 
@@ -298,7 +314,26 @@ pub fn price(shape: &Shape<'_>) -> Price {
     let is_draft = |run: &Run| drafts.contains(&run.origin);
     let lists = [shape.runs.len(), shape.places.iter().filter(|p| p.is_some()).count(), shape.entries.len(), shape.retract, shape.read_with];
     let values = distinct_draft_positions(shape.runs, drafts);
-    let reads = shape.homes.saturating_mul(shape.entries.len() + shape.read_with).saturating_add(shape.draft_runs.saturating_mul(shape.runs.len()));
+    // The draft term: the run count of every draft a list places, summed —
+    // the rendering draft where `places` carries a place, each `also` draft
+    // where its entry does — and none for a draft no list places.
+    let rendering_placed = shape.places.iter().any(Option::is_some);
+    let draft_runs = shape
+        .also_places
+        .iter()
+        .zip(shape.also_runs)
+        .filter(|(entry, _)| entry.carries_a_place())
+        .map(|(_, runs)| *runs)
+        .fold(if rendering_placed { shape.draft_runs } else { 0 }, usize::saturating_add);
+    let reads = shape.homes.saturating_mul(shape.entries.len() + shape.read_with).saturating_add(draft_runs.saturating_mul(shape.runs.len()));
+    // The lists that place an entry: the rendering draft's and each `also`
+    // draft's — one re-window per list that carries a place at it, each
+    // priced a kept place's bytes per piece (the board's `placed_in`).
+    let placed_in = |index: usize| -> u64 {
+        let rendering = u64::from(shape.places.get(index).is_some_and(Option::is_some));
+        let also = shape.also_places.iter().filter(|entry| entry.places.get(index).is_some_and(Option::is_some)).count() as u64;
+        rendering.saturating_add(also)
+    };
 
     // The staged bytes, the daemon's `price_staged_bytes` term by term.
     let mut bytes = SHOT_BYTES;
@@ -329,18 +364,16 @@ pub fn price(shape: &Shape<'_>) -> Price {
         1 + past.saturating_sub(first) as u64
     };
     for (index, run) in shape.runs.iter().enumerate() {
-        let placed = shape.places.get(index).is_some_and(Option::is_some);
+        let placed = placed_in(index);
         if is_draft(run) {
             let pieces = pieces_bound(run);
             bytes = bytes.saturating_add(pieces.saturating_mul(PLACED_RUN_BYTES + CORRESPONDENCE_RECORD_BYTES));
-            if placed {
-                bytes = bytes.saturating_add(pieces.saturating_mul(KEPT_PLACE_BYTES));
-            }
+            bytes = bytes.saturating_add(placed.saturating_mul(pieces.saturating_mul(KEPT_PLACE_BYTES)));
         } else {
             bytes = bytes.saturating_add(PLACED_RUN_BYTES);
-            if placed {
+            if placed > 0 {
                 let records = shape.stray_records.get(index).copied().unwrap_or(0) as u64;
-                bytes = bytes.saturating_add(records.max(1).saturating_mul(KEPT_PLACE_BYTES));
+                bytes = bytes.saturating_add(placed.saturating_mul(records.max(1).saturating_mul(KEPT_PLACE_BYTES)));
             }
         }
     }

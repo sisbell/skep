@@ -7,11 +7,12 @@
 //! fence's own read — each hit read once and kept by the exact type; a
 //! draft-native run a record's `from` overlaps is RE-COMPOSED by reference
 //! to the record's `to` at the run's offset into the `from`, in pieces where
-//! a record covers it in part, each piece of the rendering draft's with its
-//! kept place beside it as a draft-native run's — the stray places the
-//! commit re-windows — and a piece of an `also` draft's with none, so the
-//! request never meets `already_published` for words any draft of the
-//! family already published. A run of no named draft's identity passes
+//! a record covers it in part, each piece with EVERY named draft's kept
+//! place beside it at the piece's offset — the rendering draft's in
+//! `places`, each `also` draft's in its own `also_places` list (skep #739)
+//! — the stray places the commit re-windows each draft at through the
+//! record, so the request never meets `already_published` for words any
+//! draft of the family already published. A run of no named draft's identity passes
 //! through as given: with its place where the request's counterpart arm
 //! sent one beside a record's covered piece — counted as the one record the
 //! commit reads for that piece — and with none otherwise.
@@ -60,7 +61,7 @@ use crate::board::frames::{self, Slot, T_CORRESPONDENCE, T_EDITION};
 use crate::board::{ChangesAnswer, ChangesQuery, T_RETRACTION};
 
 use super::enumerate::Record;
-use super::request::{End, EntryHome, Request};
+use super::request::{AlsoPlaces, End, EntryHome, Request};
 use super::send::{Ack, AckVia};
 use super::{home_of_link, owned_by, resolve_member_spans, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
 
@@ -71,8 +72,13 @@ pub struct Recomposed {
     /// The runs, in order — a draft-native run a record covers in part split
     /// into its pieces.
     pub runs: Vec<Run>,
-    /// The kept places, parallel to the runs.
+    /// The rendering draft's kept places, parallel to the runs.
     pub places: Vec<Option<u64>>,
+    /// Each `also` draft's own kept places, one entry per draft in the
+    /// request's order, each list parallel to the runs — a piece
+    /// re-composed by reference carrying the draft's place at the piece's
+    /// offset, as `places` does the rendering draft's.
+    pub also_places: Vec<AlsoPlaces>,
     /// The runs' places in the draft, parallel — the value reads' addresses
     /// — a window's `None`.
     pub draft_places: Vec<Option<u64>>,
@@ -88,16 +94,16 @@ pub struct Recomposed {
 }
 
 /// Reads each named draft's records constrained by the spans of `runs` of
-/// its identity, each run with its kept place in `places` and its place in
-/// the draft in `draft_places`, and re-composes what they cover by
-/// reference.
+/// its identity, each run with the rendering draft's kept place in
+/// `places`, each `also` draft's own in `also_places` and its place in the
+/// draft in `draft_places`, and re-composes what they cover by reference.
 ///
 /// # Errors
 ///
 /// The reads' faults.
-pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>]) -> Result<Recomposed, Fault> {
+pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>], also_places: &[AlsoPlaces]) -> Result<Recomposed, Fault> {
     let door = Door::new(p.board, p.token);
-    twin_precheck_with(&door, p, inputs, runs, places, draft_places)
+    twin_precheck_with(&door, p, inputs, runs, places, draft_places, also_places)
 }
 
 /// Reads the named drafts' records through `door` and re-composes.
@@ -108,8 +114,12 @@ pub fn twin_precheck(p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &
 /// identity in `runs` is not read. A run of no named draft's identity is
 /// passed through as given, its record count `1` where it carries a place
 /// — the counterpart's covered piece, re-composed by the request's arm by
-/// reference to a record the panel read — and `0` otherwise.
-pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>]) -> Result<Recomposed, Fault> {
+/// reference to a record the panel read — and `0` otherwise. Every list is
+/// carried beside the pieces: a piece re-composed by reference, or left as
+/// given, takes the rendering draft's place and each `also` draft's at the
+/// piece's offset into the run, so a draft that arranges the recorded words
+/// is re-windowed there through the record whichever list places it.
+pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, runs: &[Run], places: &[Option<u64>], draft_places: &[Option<u64>], also_places: &[AlsoPlaces]) -> Result<Recomposed, Fault> {
     door.step("twin_precheck");
     let subtype = frames::unit_span(T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
     let mut records: Vec<Record> = Vec::new();
@@ -131,14 +141,26 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
             }
         }
     }
-    let mut out = Recomposed { runs: Vec::new(), places: Vec::new(), draft_places: Vec::new(), stray_records: Vec::new(), records: Vec::new(), frames: Vec::new() };
+    let mut out = Recomposed {
+        runs: Vec::new(),
+        places: Vec::new(),
+        also_places: also_places.iter().map(|a| AlsoPlaces { draft: a.draft.clone(), places: Vec::new() }).collect(),
+        draft_places: Vec::new(),
+        stray_records: Vec::new(),
+        records: Vec::new(),
+        frames: Vec::new(),
+    };
     for (k, run) in runs.iter().enumerate() {
         let place = places.get(k).copied().flatten();
         let in_draft = draft_places.get(k).copied().flatten();
+        // Each `also` draft's place at this run, carried at a piece's offset
+        // as the rendering draft's is.
+        let also_at: Vec<Option<u64>> = also_places.iter().map(|a| a.places.get(k).copied().flatten()).collect();
+        let also_from = |offset: u64| -> Vec<Option<u64>> { also_at.iter().map(|p| p.map(|p| p + offset)).collect() };
         if !inputs.is_named_draft(&run.origin) {
             // A placed run of no named draft's identity is a counterpart's
             // covered piece: the one record the commit reads for it.
-            out.push(run.clone(), place, in_draft, usize::from(place.is_some()));
+            out.push(run.clone(), place, in_draft, usize::from(place.is_some()), &also_at);
             continue;
         }
         // The pieces: each ordinal of the run either covered by one record
@@ -157,9 +179,9 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
                 Some(r) => {
                     let to = r.map(&chain, cursor, end).expect("the record covers the piece");
                     let origin = to.document().and_then(|d| parse_address(&d)).expect("a record's to is a content span");
-                    out.push(Run::new(origin, to.first, width), place.map(|p| p + offset), in_draft.map(|p| p + offset), 1);
+                    out.push(Run::new(origin, to.first, width), place.map(|p| p + offset), in_draft.map(|p| p + offset), 1, &also_from(offset));
                 }
-                None => out.push(Run::new(run.origin.clone(), cursor, width), place.map(|p| p + offset), in_draft.map(|p| p + offset), 0),
+                None => out.push(Run::new(run.origin.clone(), cursor, width), place.map(|p| p + offset), in_draft.map(|p| p + offset), 0, &also_from(offset)),
             }
             cursor = end;
         }
@@ -170,11 +192,17 @@ pub(crate) fn twin_precheck_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &In
 }
 
 impl Recomposed {
-    fn push(&mut self, run: Run, place: Option<u64>, in_draft: Option<u64>, stray: usize) {
+    /// Pushes one run with its places: the rendering draft's, its place in
+    /// the draft, its record count and each `also` draft's, parallel to
+    /// `also_places`.
+    fn push(&mut self, run: Run, place: Option<u64>, in_draft: Option<u64>, stray: usize, also: &[Option<u64>]) {
         self.runs.push(run);
         self.places.push(place);
         self.draft_places.push(in_draft);
         self.stray_records.push(stray);
+        for (entry, place) in self.also_places.iter_mut().zip(also) {
+            entry.places.push(*place);
+        }
     }
 }
 

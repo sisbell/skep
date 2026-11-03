@@ -33,7 +33,7 @@ use skep_client::address::{document_of, parse_address};
 use skep_client::board::frames::{self, T_HELD_REMOVAL, T_READ_WITH};
 use skep_client::board::{acked_addr, Answer, Board, ChangesAnswer, ChangesQuery, Scope, Token, T_RETRACTION};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
-use skep_client::publication::{self, build, count, enumerate, landed, panel, reread, send, AckVia, Base, Built, Confirmed, Destination, Inputs, OriginAnswer, Publisher, Refusal, RowKind, Run, Sent, Switches, Verdict};
+use skep_client::publication::{self, build, count, enumerate, landed, panel, reread, send, AckVia, AlsoPlaces, Base, Built, Confirmed, Destination, Inputs, OriginAnswer, Publisher, Refusal, RowKind, Run, Sent, Switches, Verdict};
 use skep_client::sign::{sig_hex, Signer};
 use skep_identity::{entry_body_empty, entry_body_make_link, entry_body_publish, entry_frame, unit_span, ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots, ShotSegmentPiece};
 use skep_signature::HybridSigner;
@@ -530,8 +530,8 @@ fn a_moved_place_is_refused_with_its_entry_and_the_reread_restates_the_selection
     let as_of = crate::common::typed_at(&board, &bare_token, &d);
     acked(board.op(Some(&bare_token), &json!({"op": "rearrange", "doc": d, "cuts": [{"subspace": "1", "ordinal": "1"}, {"subspace": "1", "ordinal": "2"}, {"subspace": "1", "ordinal": "3"}], "as_of": as_of})));
     let sent = send(&p, &inputs, &mut request).expect("sent");
-    let Sent::Refused(Refusal::KeptPlaceMoved { index, race }) = sent else { panic!("{sent:?}") };
-    assert_eq!(index, 0);
+    let Sent::Refused(Refusal::KeptPlaceMoved { index, draft, race }) = sent else { panic!("{sent:?}") };
+    assert_eq!((index, draft), (0, addr(&d)), "the entry, and the rendering draft the board names");
     let race = race.expect("the race's key off the feed");
     assert_eq!(race.key.as_deref(), Some("bare"), "the move was the bare session's own write: {race:?}");
     // The re-read: "y z" now stands as two pieces around the moved "x" — a
@@ -618,10 +618,14 @@ fn cost_of_the_enumeration_and_the_panel_over_many_links() {
 /// alternative of `D`'s holding `E`'s words and `D`'s own ten by identity
 /// (two copies) and six words of its own, publishes with `also: [D]` — the
 /// panel lists no window for `D`'s words and counts its one inherited
-/// passage; the request carries `also`; the acknowledgment names `E.2`,
-/// whose text is `A`'s whole; and the records are read back in BOTH drafts,
+/// passage; the request carries `also`, `A`'s kept place for every run of
+/// a named draft's identity and `D`'s own place for its run in
+/// `also_places`, off `D`'s image; the acknowledgment names `E.2`,
+/// whose text is `A`'s whole; the records are read back in BOTH drafts,
 /// `D`'s for its ten words and `A`'s for its six, each `to` the member's
-/// fresh identity; the feed row names the member, `A` and `D`.
+/// fresh identity; the feed row names the member, `A` and `D`; and BOTH
+/// drafts are re-windowed in the one commit (skep #739) — `D`'s image at
+/// its ten words the member's identity, no counterpart left in it.
 #[test]
 fn a_family_publication_re_mints_two_drafts_words_and_homes_a_record_in_each() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -656,7 +660,8 @@ fn a_family_publication_re_mints_two_drafts_words_and_homes_a_record_in_each() {
     assert_eq!(pn.inherited, vec![publication::Inherited { draft: addr(d), passages: 1 }]);
     let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
     assert_eq!(request.also, vec![addr(d)]);
-    assert_eq!(request.places, vec![None, None, Some(30)], "a kept place for the rendering draft's run alone");
+    assert_eq!(request.places, vec![None, Some(20), Some(30)], "the rendering draft's kept place for every run of a named draft's identity: D's ten at 20, its own six at 30");
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None, Some(20), None] }], "D's own place for its run, off D's image");
     assert!(request.price.admits(), "{:?}", request.price);
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).expect("sent") else { panic!("refused") };
     let e2 = format!("{e}.2");
@@ -684,6 +689,69 @@ fn a_family_publication_re_mints_two_drafts_words_and_homes_a_record_in_each() {
     let page = board.changes(Some(&token), &ChangesQuery { since: ack.at - 1, under: Some(e), drafts: false, limit: Some(1) }).expect("the feed");
     let ChangesAnswer::Page(page) = page else { panic!("a page") };
     assert_eq!(page.changes[0]["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then the draft `also` named: {:?}", page.changes);
-    assert_eq!(image(&board, &bare_token, d, 20, 10), vec![(format!("{d}.0.1.1"), 10)], "D is not re-windowed: its words stay its own, a counterpart through its record");
+    assert_eq!(image(&board, &bare_token, d, 20, 10), vec![(format!("{e}.0.1.20"), 10)], "D re-windowed in the one commit at its own place: its ten words the member's identity, no counterpart left");
+    assert_eq!(image(&board, &bare_token, &a_draft, 1, 35), vec![(format!("{e}.0.1.1"), 35)], "A re-windowed whole, D's run among its own");
+    sd.shutdown();
+}
+
+/// A MOVED `also` DRAFT against the daemon (skep #739): `A` publishes with
+/// `also: [D]`; after the request is built, `D` swaps its own ten words
+/// about — the bare session's write — and the board refuses
+/// `kept_place_moved` naming the entry AND `D` (`site.addr`), the race's
+/// key read under `D`, the bare session's own; the re-read re-states
+/// nothing (`A` still arranges `D`'s run whole, and `D`'s move is no
+/// difference of the rendering draft's); the request built over it carries
+/// `None` for `D`'s run in its list — `D` is sure of no place — and no
+/// `also_places` at all, and lands `E.2`: `A` re-windowed whole, `D` LEFT AS
+/// IT STANDS with its record homed in it, healed at its own next shot; the
+/// row names `D` after `A` for that record.
+#[test]
+fn a_moved_also_draft_is_refused_naming_it_and_left_as_it_stands_once_its_place_is_dropped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, e1, d, n, .. } = &seeded;
+    let a_draft = mint(&board, &bare_token, ACCOUNT, false);
+    copy(&board, &bare_token, &a_draft, 1, e1, 1, 19);
+    copy(&board, &bare_token, &a_draft, 20, d, 20, 10);
+    insert_text(&board, &bare_token, &a_draft, 30, " extra");
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let inputs = Inputs { draft: addr(&a_draft), also: vec![addr(d)], selection: vec![run(e, 1, 19), run(d, 1, 10), run(&a_draft, 1, 6)], readable_drafts: vec![addr(&a_draft), addr(d), addr(n)], ..inputs(&seeded) };
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    let pn = panel(&p, &inputs, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None, Some(20), None] }]);
+    // D's move after the place was read: its first five own words and its
+    // last five swapped.
+    let as_of = crate::common::typed_at(&board, &bare_token, d);
+    acked(board.op(Some(&bare_token), &json!({"op": "rearrange", "doc": d, "cuts": [{"subspace": "1", "ordinal": "20"}, {"subspace": "1", "ordinal": "25"}, {"subspace": "1", "ordinal": "30"}], "as_of": as_of})));
+    let sent = send(&p, &inputs, &mut request).expect("sent");
+    let Sent::Refused(Refusal::KeptPlaceMoved { index, draft, race }) = sent else { panic!("{sent:?}") };
+    assert_eq!((index, &draft), (1, &addr(d)), "the entry of D's run, and D named");
+    assert_eq!(race.expect("the race's key off the feed under D").key.as_deref(), Some("bare"), "read under D: the bare session's own write");
+    assert_eq!(image(&board, &bare_token, &a_draft, 20, 10), vec![(format!("{d}.0.1.1"), 10)], "nothing committed: A as it was");
+    let rr = reread(&p, &inputs, &en, &pn).expect("re-read");
+    assert_eq!(rr.restatement, None, "A's placements stand; D's move is none of the rendering draft's");
+    let Built::Request(mut again) = build(&p, &inputs, &rr.enumeration, &rr.panel, &Confirmed::default()).expect("built") else { panic!("inert") };
+    assert_eq!(again.places, vec![None, Some(20), Some(30)]);
+    assert_eq!(again.also_places, vec![AlsoPlaces { draft: addr(d), places: vec![None; 3] }], "D no longer arranges its run whole: no place for it");
+    assert!(again.frame(None).get("also_places").is_none(), "an all-None entry is not sent");
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut again).expect("sent") else { panic!("refused") };
+    let e2 = format!("{e}.2");
+    assert_eq!((ack.member.to_string(), ack.via), (e2.clone(), AckVia::Answer));
+    assert_eq!(image(&board, &token, &e2, 1, 35), vec![(format!("{e}.0.1.1"), 35)], "the member: fresh identity for every re-minted run");
+    assert_eq!(image(&board, &bare_token, &a_draft, 1, 35), vec![(format!("{e}.0.1.1"), 35)], "A re-windowed whole");
+    assert_eq!(image(&board, &bare_token, d, 20, 10), vec![(format!("{d}.0.1.6"), 5), (format!("{d}.0.1.1"), 5)], "D left as it stands: its own words, swapped, a counterpart through its record");
+    let page = board.changes(Some(&token), &ChangesQuery { since: ack.at - 1, under: Some(e), drafts: false, limit: Some(1) }).expect("the feed");
+    let ChangesAnswer::Page(page) = page else { panic!("a page") };
+    assert_eq!(page.changes[0]["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then D for the record homed in it: {:?}", page.changes);
     sd.shutdown();
 }

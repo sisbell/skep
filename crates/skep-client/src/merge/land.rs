@@ -489,7 +489,7 @@ impl Writer<'_> {
             }
         }
         // THE REQUEST BUILDER, bare: the merge's delta from a publication is
-        // no member and no place.
+        // no member and no place, in either list.
         let n = runs.len();
         let request = publication::Request {
             doc: Some(doc.clone()),
@@ -500,6 +500,7 @@ impl Writer<'_> {
             also: Vec::new(),
             runs,
             places: vec![None; n],
+            also_places: Vec::new(),
             stray_records: vec![0; n],
             pieces,
             entries: Vec::new(),

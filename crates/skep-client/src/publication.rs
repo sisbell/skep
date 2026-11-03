@@ -22,7 +22,8 @@
 //! [`left_behind`]. The order:
 //!
 //! 1. [`enumerate`](mod@enumerate) — THE ENUMERATION (§5.1): one `image` of the draft
-//!    inverted over the held selection, one `find_links_v` over the
+//!    inverted over the held selection, one of each draft `also` names for
+//!    its own kept places, one `find_links_v` over the
 //!    selection's V-spans as one region array, each address kept where its
 //!    home's account is the person's exactly, each kept link read once and
 //!    kept where its STORED endset touches the selection through a content
@@ -98,11 +99,11 @@ pub mod send;
 mod tests;
 
 pub use base::{draft_base, left_behind, standing, Standing, Unrecorded};
-pub use enumerate::{enumerate, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
+pub use enumerate::{enumerate, AlsoImage, Candidate, Enumeration, Placement, Record, Successor, Via, MAX_WIRE_LIST};
 pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
 pub use price::{price, Price, Term};
-pub use request::{build, reread, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
+pub use request::{build, reread, AlsoPlaces, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
 pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent};
 
 /// One run of permanent content I-addresses — the selection's unit, and a
@@ -302,9 +303,11 @@ pub struct Inputs {
     /// document or capture's container), in the request's order, each
     /// keeping its own correspondence records. The board judges each by
     /// registration and ω alone; the library treats a run of any of them as
-    /// the document's own words — re-minted, not windowed — and sends no
-    /// kept place for it (the rendering draft alone is re-windowed). Empty
-    /// is the one-draft publication.
+    /// the document's own words — re-minted, not windowed — sends the
+    /// rendering draft's kept place beside it, and images each of them for
+    /// its OWN kept places, sent in its `also_places` entry, so the one
+    /// commit re-windows every named draft at its own places (skep #739).
+    /// Empty is the one-draft publication.
     pub also: Vec<Address>,
     /// THE SELECTION, held as I-runs in V-order (P51): the runs the client
     /// composes the shot from.
@@ -342,8 +345,9 @@ impl Inputs {
     /// Returns whether `origin` is a named draft — the rendering draft or
     /// one `also` names — so a run of it is the document's own words,
     /// re-minted as fresh identity: no window, no row of P2 (i), its values
-    /// signed by value, and a kept place for it only where it is the
-    /// rendering draft's.
+    /// signed by value, the rendering draft's kept place beside it, and —
+    /// for an `also` draft's run — that draft's own place in its
+    /// `also_places` entry.
     pub fn is_named_draft(&self, origin: &Address) -> bool {
         self.draft == *origin || self.also.contains(origin)
     }

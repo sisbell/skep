@@ -81,13 +81,18 @@ fn the_builders_spell_the_wires_own_examples() {
     assert_eq!((out["op"].as_str(), out["x"].as_str(), out["view"].as_str()), (Some("out_claims"), Some("1.0.1.0.1.0.2.2"), Some("active")));
     let runs = [frames::shot_run("1.0.1.0.1", "1.0.1.0.1.0.1.1", 3), frames::shot_run("1.0.1.0.7", "1.0.1.0.7.0.1.1", 2)];
     let places = [Value::Null, frames::place(4)];
+    // Two `also` drafts' own places: one carrying a place, one all null —
+    // dropped, as a `places` list of nulls is.
+    let also_places = [frames::AlsoPlacesFrame { draft: "1.0.1.0.8", places: &[Value::Null, frames::place(9)] }, frames::AlsoPlacesFrame { draft: "1.0.1.0.9", places: &[Value::Null, Value::Null] }];
     let links = [frames::link_entry("member", frames::member_end(&[(4, 2)]), frames::addrs_end(&["1.0.1.0.2"]), frames::addrs_end(&["1.1.0.1.0.1.0.3.13"]), Some("1.0.1.0.7.0.2.1"))];
     let frame = frames::publication(&frames::PublishFrame {
         doc: Some("1.0.1.0.1"),
         base: Some(("1.0.1.0.1.2", 3)),
         draft: Some("1.0.1.0.7"),
+        also: &["1.0.1.0.8", "1.0.1.0.9"],
         runs: &runs,
         places: &places,
+        also_places: &also_places,
         links: &links,
         retract: &["1.0.1.0.1.0.2.1"],
         read_with: &["1.0.1.0.2"],
@@ -95,15 +100,16 @@ fn the_builders_spell_the_wires_own_examples() {
     });
     assert_eq!(
         frame,
-        json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]})
+        json!({"also":["1.0.1.0.8","1.0.1.0.9"],"also_places":[{"draft":"1.0.1.0.8","places":[null,{"ordinal":"9","subspace":"1"}]}],"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","links":[{"from":{"member":[{"ordinal":"4","width":"2"}]},"home":"member","old":"1.0.1.0.7.0.2.1","to":{"addrs":["1.0.1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.13"]}}],"op":"publish","places":[null,{"ordinal":"4","subspace":"1"}],"read_with":["1.0.1.0.2"],"retract":["1.0.1.0.1.0.2.1"],"runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]})
     );
     // A frame carrying no optional member is the bare shot — byte for byte.
     let bare = frames::publication(&frames::PublishFrame { doc: Some("1.0.1.0.1"), base: Some(("1.0.1.0.1.2", 3)), draft: Some("1.0.1.0.7"), runs: &runs, id: Some("k"), ..frames::PublishFrame::default() });
     assert_eq!(bare, json!({"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","id":"k","op":"publish","runs":runs}));
     // The mint form: `account` with `mint` and `claim`, no `doc`; a list of
-    // nulls is no `places` member.
-    let mint = frames::publication(&frames::PublishFrame { account: Some("1.0.1"), mint: true, claim: true, draft: Some("1.0.1.0.7"), runs: &runs[1..], places: &[Value::Null], ..frames::PublishFrame::default() });
-    assert_eq!(mint, json!({"account":"1.0.1","claim":true,"draft":"1.0.1.0.7","mint":true,"op":"publish","runs":runs[1..]}));
+    // nulls is no `places` member, and `also_places` entries all null are
+    // no member either.
+    let mint = frames::publication(&frames::PublishFrame { account: Some("1.0.1"), mint: true, claim: true, draft: Some("1.0.1.0.7"), also: &["1.0.1.0.9"], runs: &runs[1..], places: &[Value::Null], also_places: &also_places[1..], ..frames::PublishFrame::default() });
+    assert_eq!(mint, json!({"account":"1.0.1","also":["1.0.1.0.9"],"claim":true,"draft":"1.0.1.0.7","mint":true,"op":"publish","runs":runs[1..]}));
 }
 
 /// The four type constants the publication reads by, each the wire's own

@@ -7,7 +7,13 @@
 //! held selection: each held run placed at the V-ordinal the draft arranges
 //! it at (a run absent, split or arranged at a second place is a fault at
 //! the first enumeration and a DIFFERENCE at the re-read, `request`'s), the
-//! placed runs' V-spans the selection's REGION; (2) `find_links_v` — ONE
+//! placed runs' V-spans the selection's REGION — and, per draft `also`
+//! names, one `retrieve_doc_v_span_set` and one `image` of THAT draft whole,
+//! in `also`'s order, held for the kept places the request sends in its
+//! own list (`also_places`, skep #739: every named draft re-windowed in the
+//! one commit), read again at the re-read and never diffed there — a run
+//! an `also` draft no longer arranges whole takes no place in its list, and
+//! the board's fence meets it at that draft's own next shot; (2) `find_links_v` — ONE
 //! read over the region as one array; (3) `links` — each answered address
 //! read for its HOME off the address and kept where the home's account is
 //! the person's EXACTLY, never nested under theirs, and never a home in the
@@ -180,6 +186,17 @@ impl Candidate {
     }
 }
 
+/// One draft `also` names, imaged whole for its own kept places.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlsoImage {
+    /// The draft, as `also` names it.
+    pub draft: Address,
+    /// Its content extent.
+    pub extent: u64,
+    /// Its image, whole, in V-order.
+    pub image: Vec<IRun>,
+}
+
 /// What the enumeration answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enumeration {
@@ -187,6 +204,9 @@ pub struct Enumeration {
     pub extent: u64,
     /// The draft's image, whole, in V-order.
     pub image: Vec<IRun>,
+    /// Each draft `also` names, in `also`'s order, with its extent and its
+    /// image — the places its own list carries are read off it.
+    pub also: Vec<AlsoImage>,
     /// Where each held run stands, parallel to the selection.
     pub placed: Vec<Placement>,
     /// The selection's V-spans in the draft, merged where adjacent.
@@ -208,6 +228,12 @@ impl Enumeration {
     /// Returns the offered candidates' indices, in order.
     pub fn offered(&self) -> Vec<usize> {
         self.candidates.iter().enumerate().filter(|(_, c)| c.offered()).map(|(i, _)| i).collect()
+    }
+
+    /// Returns each `also` draft's content run count — its image's runs —
+    /// in `also`'s order: the price's term for a draft its list places.
+    pub fn also_run_counts(&self) -> Vec<usize> {
+        self.also.iter().map(|a| a.image.len()).collect()
     }
 
     /// Returns the offered links grouped by home — the oracle's grouping.
@@ -325,7 +351,8 @@ fn selection_spans(selection: &[Run]) -> Vec<Value> {
 ///
 /// [`Fault::SelectionNotArranged`] where a held run is not arranged whole at
 /// one place — the first enumeration's answer, the re-read's a difference;
-/// the reads' faults: `withheld` and `doc_not_registered` on the draft, the
+/// the reads' faults: `withheld` and `doc_not_registered` on the draft or on
+/// a draft `also` names (each is imaged for its own kept places), the
 /// death signal, `scan_busy` past the reissues, a shape this client cannot
 /// read, the board's other refusals and transport faults verbatim.
 pub fn enumerate(p: &Publisher<'_>, inputs: &Inputs) -> Result<Enumeration, Fault> {
@@ -342,6 +369,15 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     door.step("image");
     let extent = door.extent(&d)?;
     let image = door.image(&d, 1, extent)?;
+    // Each `also` draft whole, for the kept places its own list carries:
+    // one extent and one image apiece, no other read.
+    let mut also: Vec<AlsoImage> = Vec::with_capacity(inputs.also.len());
+    for draft in &inputs.also {
+        let text = draft.to_string();
+        let extent = door.extent(&text)?;
+        let image = door.image(&text, 1, extent)?;
+        also.push(AlsoImage { draft: draft.clone(), extent, image });
+    }
     let placed = place_selection(&image, &inputs.selection);
     if strict {
         if let Some(index) = placed.iter().position(|pl| !matches!(pl, Placement::Whole { .. })) {
@@ -481,5 +517,5 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
             None => homes.push((c.home.clone(), vec![i])),
         }
     }
-    Ok(Enumeration { extent, image, placed, region, candidates, records, homes, frames: door.counts(), as_of: door.as_of() })
+    Ok(Enumeration { extent, image, also, placed, region, candidates, records, homes, frames: door.counts(), as_of: door.as_of() })
 }

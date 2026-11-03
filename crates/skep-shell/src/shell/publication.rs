@@ -61,8 +61,15 @@
 //! reads `also` as it reads every member — addresses by §1.6's grammar, a
 //! repeat or the `draft` among them `malformed_args` naming `also` — and
 //! hands the list to the library, which treats a run of any named draft as
-//! the document's own words: no window, no kept place for it, the
-//! statement's count answered as `inherited` in its place. The panel is
+//! the document's own words: no window, the rendering draft's kept place
+//! beside it and, per draft `also` names, that draft's own kept places off
+//! its image (the wire's `also_places`), so the one write re-windows every
+//! named draft at its own places (skep #739) — the shell composes nothing
+//! of it — the statement's count answered as `inherited` in its place. A
+//! named draft that moved a run since the panel is left as it stands at
+//! that run and heals at its own next publication; one that moves it
+//! between the re-read and the commit is the board's `kept_place_moved`
+//! naming it. The panel is
 //! keyed by the rendering draft alone (one standing panel per draft); a
 //! draft named `also` may hold a panel of its own in the family, standing
 //! or held, which this open leaves untouched.
@@ -746,9 +753,11 @@ impl Shell {
     /// `head_unreadable` with the refusal that says why (SP-14); then
     /// `sent`, the library's send with its one re-ask, its re-sign and its
     /// landed test, a lost answer the board holds nothing of re-sent once;
-    /// the outcome's event; and at the board's `kept_place_moved` the re-read
-    /// run again in this call, its difference answered as the re-statement
-    /// with the race's key, the refusal crossing only where it finds none. A
+    /// the outcome's event; and at the board's `kept_place_moved` — naming
+    /// the draft that moved, the rendering draft or one `also` names — the
+    /// re-read run again in this call, its difference answered as the
+    /// re-statement with the race's key, the refusal, naming the draft,
+    /// crossing only where it finds none. A
     /// death at the write ends the session: where the restart arm re-opens
     /// it the landed test runs under the new session before any re-send,
     /// else the `session_ended` arm, the panels gone with the session.
@@ -867,7 +876,7 @@ impl Shell {
                     self.publication_event(&current, &draft, "refused", json!({"arm": "other"}));
                     return Ok(refused_json("other", json!({"refusal": refusal})));
                 }
-                Sent::Refused(PubRefusal::KeptPlaceMoved { index, race }) => {
+                Sent::Refused(PubRefusal::KeptPlaceMoved { index, draft: moved, race }) => {
                     let p = signed.publisher(&current);
                     let again = lib::reread(&p, inputs, &state.enumeration, &state.panel).map_err(|f| self.fault(&current, "publication.confirm", f))?;
                     return Ok(match again.restatement {
@@ -880,10 +889,7 @@ impl Shell {
                             self.publication_event(&current, &draft, "restated", json!({}));
                             restated_json(&restatement, race.as_ref())
                         }
-                        None => {
-                            self.publication_event(&current, &draft, "refused", json!({"arm": "kept_place_moved"}));
-                            refused_json("kept_place_moved", json!({"index": index, "race": race.as_ref().map(race_json)}))
-                        }
+                        None => self.refused(&current, &draft, PubRefusal::KeptPlaceMoved { index, draft: moved, race }),
                     });
                 }
                 Sent::Refused(PubRefusal::SessionEnded) if !reopened => {
@@ -999,7 +1005,7 @@ fn local_price(state: &PanelState) -> lib::Price {
     request.read_with = count.read_with.clone();
     request.count = count;
     let homes = e.homes.len() + state.inputs.published.iter().filter(|s| !e.homes.iter().any(|(h, _)| h == *s)).count();
-    request.priced(homes, e.image.len())
+    request.priced(homes, e.image.len(), &e.also_run_counts())
 }
 
 // ── The shapes, as the page reads them ───────────────────────────────────
@@ -1207,7 +1213,7 @@ fn missing_json(m: &Missing) -> Value {
 
 fn own_fault_json(f: &OwnFault) -> Value {
     match f {
-        OwnFault::StrayPlace { index } => json!({"kind": "stray_place", "index": index}),
+        OwnFault::StrayPlace { index, draft } => json!({"kind": "stray_place", "index": index, "draft": draft.to_string()}),
         OwnFault::Deposit { code, index, detail } => json!({"kind": "deposit", "code": code, "index": index, "detail": detail}),
         OwnFault::Shot { code } => json!({"kind": "shot", "code": code}),
         OwnFault::Attest { detail } => json!({"kind": "attest", "detail": detail}),
@@ -1216,10 +1222,10 @@ fn own_fault_json(f: &OwnFault) -> Value {
 }
 
 /// Returns a refusal's arm as the page faces it, and the arm's members.
-fn refusal_arm(refusal: &PubRefusal) -> (&'static str, Value) {
+pub(super) fn refusal_arm(refusal: &PubRefusal) -> (&'static str, Value) {
     match refusal {
         PubRefusal::Twin { member, missing } => ("twin", json!({"member": member.to_string(), "missing": missing.as_ref().map(missing_json)})),
-        PubRefusal::KeptPlaceMoved { index, race } => ("kept_place_moved", json!({"index": index, "race": race.as_ref().map(race_json)})),
+        PubRefusal::KeptPlaceMoved { index, draft, race } => ("kept_place_moved", json!({"index": index, "draft": draft.to_string(), "race": race.as_ref().map(race_json)})),
         PubRefusal::UnownedDraft { draft } => ("unowned_draft", json!({"draft": draft.to_string()})),
         PubRefusal::NotOwner { addr } => ("not_owner", json!({"addr": addr.as_ref().map(ToString::to_string)})),
         PubRefusal::ClaimRefused { edition } => ("claim_refused", json!({"edition": edition.as_ref().map(ToString::to_string)})),
@@ -1239,7 +1245,7 @@ fn refusal_arm(refusal: &PubRefusal) -> (&'static str, Value) {
 
 /// Returns a refusal as `publication.confirm` answers it: `{outcome:
 /// refused, arm, …}`, the arm's members beside it.
-fn refused_json(arm: &str, members: Value) -> Value {
+pub(super) fn refused_json(arm: &str, members: Value) -> Value {
     let mut v = json!({"outcome": "refused", "arm": arm});
     if let Value::Object(members) = members {
         for (k, value) in members {

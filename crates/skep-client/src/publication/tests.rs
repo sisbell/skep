@@ -545,6 +545,26 @@ impl World {
         let named: Vec<String> = draft.iter().cloned().chain(also.iter().cloned()).collect();
         let runs: Vec<Run> = frame["runs"].as_array().unwrap().iter().map(|r| Run::new(a(r["origin"].as_str().unwrap()), r["i_start"].as_str().unwrap().rsplit('.').next().unwrap().parse().unwrap(), r["width"].as_str().unwrap().parse().unwrap())).collect();
         let places: Vec<Option<u64>> = frame["places"].as_array().map(|p| p.iter().map(|x| x["ordinal"].as_str().and_then(|o| o.parse().ok())).collect()).unwrap_or_else(|| vec![None; runs.len()]);
+        // Each `also` draft's own kept places (the wire's `also_places`): one
+        // entry per draft `also` names, its list parallel to the runs, a
+        // shorter list padded with `None` — the codec's shape, a stranger's
+        // fault there this board's own bug.
+        let also_places: Vec<(String, Vec<Option<u64>>)> = frame["also_places"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| {
+                        let d = entry["draft"].as_str().unwrap().to_string();
+                        assert!(also.contains(&d), "the composition sent an also_places entry for a draft `also` does not name: {d}");
+                        let mut list: Vec<Option<u64>> = entry["places"].as_array().unwrap().iter().map(|x| x["ordinal"].as_str().and_then(|o| o.parse().ok())).collect();
+                        assert!(list.len() <= runs.len(), "the composition sent an also_places list longer than runs");
+                        list.resize(runs.len(), None);
+                        (d, list)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let (trunk, edition) = if mint {
             let account = frame["account"].as_str().unwrap();
             let e = format!("{account}.0.{}", self.next_doc);
@@ -590,40 +610,54 @@ impl World {
             }
             None => format!("{trunk}.1"),
         };
-        // The kept places: the draft arranges the run's words at the place.
-        let draft_positions: Vec<(Address, u64)> = draft.as_ref().and_then(|d| self.arrangement(d)).map(|r| Self::expand(&r)).unwrap_or_default();
-        let mut stray_froms: Vec<(usize, Vec<(Address, u64)>)> = Vec::new();
-        for (k, (run, place)) in runs.iter().zip(&places).enumerate() {
-            let Some(place) = place else { continue };
-            let at_place: Vec<(Address, u64)> = draft_positions.iter().skip(*place as usize - 1).take(run.width as usize).cloned().collect();
-            if draft.as_deref() == Some(run.origin.to_string().as_str()) {
-                let want: Vec<(Address, u64)> = (run.i_start..run.reach()).map(|n| (run.origin.clone(), n)).collect();
-                if at_place != want {
-                    return refused("kept_place_moved", json!({"index": k}));
+        // The kept places, per list — the rendering draft's `places`, then
+        // each `also` draft's entry in `also`'s order: the draft arranges
+        // the run's words at the place, by identity — in the rendering
+        // draft's list a run of ANY named draft's identity, in an `also`
+        // draft's its own alone — or, at a stray run, the from-words of a
+        // correspondence record the caller may read, wherever homed, naming
+        // the run whole as its to; a refusal names the entry and the draft.
+        if draft.is_none() {
+            if let Some(k) = places.iter().position(Option::is_some) {
+                return refused("stray_place_unrecorded", json!({"index": k}));
+            }
+        }
+        let mut lists: Vec<(String, Vec<Option<u64>>)> = draft.iter().map(|d| (d.clone(), places.clone())).collect();
+        lists.extend(also_places.iter().cloned());
+        let mut stray_froms: Vec<(String, usize, Vec<(Address, u64)>)> = Vec::new();
+        for (d, list) in &lists {
+            let positions: Vec<(Address, u64)> = self.arrangement(d).map(|r| Self::expand(&r)).unwrap_or_default();
+            for (k, (run, place)) in runs.iter().zip(list).enumerate() {
+                let Some(place) = place else { continue };
+                let at_place: Vec<(Address, u64)> = positions.iter().skip(*place as usize - 1).take(run.width as usize).cloned().collect();
+                let origin = run.origin.to_string();
+                let own = if draft.as_deref() == Some(d.as_str()) { named.contains(&origin) } else { origin == *d };
+                if own {
+                    let want: Vec<(Address, u64)> = (run.i_start..run.reach()).map(|n| (run.origin.clone(), n)).collect();
+                    if at_place != want {
+                        return refused("kept_place_moved", json!({"index": k, "addr": d}));
+                    }
+                } else if named.contains(&origin) {
+                    panic!("the composition sent a place in {d}'s list beside a run of another named draft's identity, {origin}, which the codec refuses malformed");
+                } else {
+                    let covering = self
+                        .links
+                        .iter()
+                        .filter(|l| !l.retracted && self.readable(&l.home) && l.ty.first().is_some_and(|t| t.0 == T_CORRESPONDENCE))
+                        .find(|rec| {
+                            let to = addresses(&rec.to[0]);
+                            (run.i_start..run.reach()).all(|n| to.contains(&format!("{}.0.1.{n}", run.origin)))
+                        })
+                        .cloned();
+                    let Some(rec) = covering else { return refused("stray_place_unrecorded", json!({"index": k, "addr": d})) };
+                    let to = addresses(&rec.to[0]);
+                    let offset = to.iter().position(|x| *x == run.i_start_text()).unwrap();
+                    let from: Vec<(Address, u64)> = addresses(&rec.from[0]).iter().skip(offset).take(run.width as usize).map(|x| { let (p, n) = x.rsplit_once('.').unwrap(); (a(&trunk_of(p).unwrap()), n.parse().unwrap()) }).collect();
+                    if at_place != from {
+                        return refused("kept_place_moved", json!({"index": k, "addr": d}));
+                    }
+                    stray_froms.push((d.clone(), k, from));
                 }
-            } else {
-                // A stray run: a correspondence record the caller may read,
-                // wherever homed, naming the run whole as its to.
-                if draft.is_none() {
-                    return refused("stray_place_unrecorded", json!({"index": k}));
-                }
-                let covering = self
-                    .links
-                    .iter()
-                    .filter(|l| !l.retracted && self.readable(&l.home) && l.ty.first().is_some_and(|t| t.0 == T_CORRESPONDENCE))
-                    .find(|rec| {
-                        let to = addresses(&rec.to[0]);
-                        (run.i_start..run.reach()).all(|n| to.contains(&format!("{}.0.1.{n}", run.origin)))
-                    })
-                    .cloned();
-                let Some(rec) = covering else { return refused("stray_place_unrecorded", json!({"index": k})) };
-                let to = addresses(&rec.to[0]);
-                let offset = to.iter().position(|x| *x == run.i_start_text()).unwrap();
-                let from: Vec<(Address, u64)> = addresses(&rec.from[0]).iter().skip(offset).take(run.width as usize).map(|x| { let (p, n) = x.rsplit_once('.').unwrap(); (a(&trunk_of(p).unwrap()), n.parse().unwrap()) }).collect();
-                if at_place != from {
-                    return refused("kept_place_moved", json!({"index": k}));
-                }
-                stray_froms.push((k, from));
             }
         }
         // The claim's precondition at the document form (skep #692): the
@@ -723,7 +757,7 @@ impl World {
         // The records, each homed in the draft whose identity the piece was;
         // the row names the rendering draft always, whether or not the
         // commit wrote it, then each `also` draft where a record landed in
-        // it, in the request's order.
+        // it or its list re-windows it, in the request's order.
         for (home, ds, fs, w) in &records {
             push_link(self, home, vec![ispan(home, *ds, *w)], vec![ispan(&trunk, *fs, *w)], vec![unit(T_CORRESPONDENCE)]);
         }
@@ -731,7 +765,7 @@ impl World {
             homes.push(d.clone());
         }
         for other in &also {
-            if records.iter().any(|(home, ..)| home == other) {
+            if records.iter().any(|(home, ..)| home == other) || also_places.iter().any(|(d, list)| d == other && list.iter().any(Option::is_some)) {
                 homes.push(other.clone());
             }
         }
@@ -812,15 +846,20 @@ impl World {
                 homes.push(set);
             }
         }
-        // The re-window at the kept places.
-        if let Some(d) = &draft {
-            let mut positions = draft_positions;
-            for (k, (run, place)) in runs.iter().zip(&places).enumerate() {
+        // The re-window at the kept places, last: the rendering draft at
+        // `places`, then each `also` draft at its own entry, in `also`'s
+        // order — a run of a named draft's identity replaced by the fresh
+        // identity it became, a stray by the published identity its record
+        // names, each at the place its list carries.
+        for (d, list) in &lists {
+            let mut positions: Vec<(Address, u64)> = self.arrangement(d).map(|r| Self::expand(&r)).unwrap_or_default();
+            for (k, (run, place)) in runs.iter().zip(list).enumerate() {
                 let Some(place) = place else { continue };
-                let replacement: Vec<(Address, u64)> = if draft.as_deref() == Some(run.origin.to_string().as_str()) {
-                    (run.i_start..run.reach()).map(|n| (a(&trunk), fresh_of[&(d.clone(), n)])).collect()
+                let origin = run.origin.to_string();
+                let replacement: Vec<(Address, u64)> = if named.contains(&origin) {
+                    (run.i_start..run.reach()).map(|n| (a(&trunk), fresh_of[&(origin.clone(), n)])).collect()
                 } else {
-                    let _ = stray_froms.iter().find(|(i, _)| *i == k);
+                    let _ = stray_froms.iter().find(|(home, i, _)| home == d && *i == k);
                     (run.i_start..run.reach()).map(|n| (run.origin.clone(), n)).collect()
                 };
                 positions.splice(*place as usize - 1..*place as usize - 1 + run.width as usize, replacement);
@@ -1255,7 +1294,7 @@ fn the_document_form_sends_the_claim_homed_in_the_trunk_and_maps_its_refusal() {
     assert!(borrowed[first_in_e + 1..].iter().all(|r| r.kind != DepositKind::EditionClaim), "one claim row");
     let mut plain = request.clone();
     plain.claim = false;
-    assert_eq!(request.priced(3, 2).bytes - plain.priced(3, 2).bytes, price::EDITION_CLAIM_BYTES, "the claim's bytes at the document form");
+    assert_eq!(request.priced(3, 2, &[]).bytes - plain.priced(3, 2, &[]).bytes, price::EDITION_CLAIM_BYTES, "the claim's bytes at the document form");
     assert!(request.body().as_bytes().len() > plain.body().as_bytes().len(), "the row is in the signed body");
     // The board: `E` holds `E.1`, so the claim is refused naming `E`.
     dialer.clear();
@@ -1318,7 +1357,7 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     let draft = a(D);
     let term = a(E);
     let one = vec![run(D, 1, 1)];
-    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[Some(1)], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 };
+    let shape = price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[Some(1)], also_places: &[], also_runs: &[], stray_records: &[0], entries: &[], retract: 0, read_with: 0, body_bytes: 100, homes: 3, draft_runs: 2 };
     let within = price::price(&shape);
     assert!(within.admits(), "{within:?}");
     assert_eq!((within.lists, within.values, within.reads), ([1, 1, 0, 0, 0], 1, 2));
@@ -1330,21 +1369,21 @@ fn each_term_past_its_cap_is_refused_before_any_frame() {
     assert_eq!(named.bytes, within.bytes + price::stored_tumbler_bytes(&comps), "{named:?}");
     let over = |shape: &price::Shape<'_>| price::price(shape).over.iter().map(|(t, _)| *t).collect::<Vec<_>>();
     let many: Vec<Run> = (0..4097).map(|k| run(E, 1 + k, 1)).collect();
-    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
-    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
+    assert_eq!(over(&price::Shape { runs: &many, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Runs]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 4097, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 }), [price::Term::Retract]);
+    assert_eq!(over(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: price::REQUEST_BODY_BYTES + 1, homes: 0, draft_runs: 0 }), [price::Term::Body]);
     let wide = vec![run(D, 1, price::MAX_REINSERTED_VALUES + 1)];
-    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
+    let values = price::price(&price::Shape { runs: &wide, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 0, draft_runs: 0 });
     assert!(values.over.iter().any(|(t, by)| *t == price::Term::Values && *by == 1), "{values:?}");
-    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
+    let reads = price::price(&price::Shape { runs: &one, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &[], retract: 0, read_with: 4096, body_bytes: 0, homes: 17, draft_runs: 0 });
     assert_eq!(reads.over, vec![(price::Term::Reads, (17 * 4096 - price::MAX_PUBLICATION_READS) as u64)]);
     let entry = price::EntryShape { from: price::EndShape::Member(vec![(1, 4096)]), to: price::EndShape::Addrs(vec![]), ty: price::EndShape::Addrs(vec![T_CITATION.into()]), old: false };
     let runs4096: Vec<Run> = (0..4096).map(|k| run(D, 1 + k, 1)).collect();
     let entries = vec![entry; 100];
-    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
+    let bytes = price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 });
     assert_eq!(bytes.over.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [price::Term::Bytes], "a hundred member-position slots over 4096 runs stage past the budget: {bytes:?}");
     let entries = vec![entries[0].clone()];
-    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
+    assert!(price::price(&price::Shape { runs: &runs4096, drafts: std::slice::from_ref(&draft), draft: None, term: &term, mint: false, claim: false, places: &[], also_places: &[], also_runs: &[], stray_records: &[], entries: &entries, retract: 0, read_with: 0, body_bytes: 0, homes: 1, draft_runs: 1 }).admits(), "one such entry is inside both budgets");
 }
 
 // ── THE RE-READ ──────────────────────────────────────────────────────────
@@ -1569,8 +1608,8 @@ fn the_counterpart_arm_sends_the_covered_pieces_place_in_this_document_or_anothe
         (unplaced.places[2], unplaced.stray_records[2]) = (None, 0);
         let mut twice = (*taken).clone();
         twice.stray_records[2] = 2;
-        assert_eq!(taken.priced(0, 0).bytes, unplaced.priced(0, 0).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the piece, at its one record");
-        assert_eq!(twice.priced(0, 0).bytes, taken.priced(0, 0).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
+        assert_eq!(taken.priced(0, 0, &[]).bytes, unplaced.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: the kept place beside the piece, at its one record");
+        assert_eq!(twice.priced(0, 0, &[]).bytes, taken.priced(0, 0, &[]).bytes + super::price::KEPT_PLACE_BYTES, "{what}: per record");
         assert!(taken.price.admits(), "{what}: {:?}", taken.price);
         // Sent: the board finds the record in O by its `to`, checks D
         // arranges O's words at 30, and re-windows D there.
@@ -1598,9 +1637,10 @@ fn the_twin_precheck_recomposes_the_recorded_words_by_reference() {
     let tok = token();
     let p = publisher(&board, &tok, &signer);
     let inputs = inputs();
-    let re = twin_precheck(&p, &inputs, &[run(D, 1, 10)], &[Some(20)], &[Some(20)]).unwrap();
+    let re = twin_precheck(&p, &inputs, &[run(D, 1, 10)], &[Some(20)], &[Some(20)], &[]).unwrap();
     assert_eq!(re.runs, vec![run(D, 1, 3), run(E, 20, 3), run(D, 7, 4)]);
     assert_eq!(re.places, vec![Some(20), Some(23), Some(26)]);
+    assert_eq!(re.also_places, vec![], "no `also` draft, no list");
     assert_eq!(re.stray_records, vec![0, 1, 0]);
     assert_eq!(re.frames, vec![("twin_precheck", 2)], "the records read and the one record's read_link");
 }
@@ -1726,8 +1766,10 @@ fn a_damaged_head_record_sends_nothing_claimed_or_not() {
 }
 
 /// THE REFUSAL FAMILY's arms, each from the board's own refusal with its
-/// site: `kept_place_moved` with the entry and the race's key off the feed;
-/// `stray_place_unrecorded` the library's own; `publication_over_budget` a
+/// site: `kept_place_moved` with the entry, the draft `site.addr` names
+/// and the race's key off the feed under it — the rendering draft where an
+/// older board names none; `stray_place_unrecorded` the library's own,
+/// naming the draft alike; `publication_over_budget` a
 /// race where this price admitted; `not_owner` naming the draft;
 /// `claim_refused` naming the edition; the six
 /// deposit tokens with their entry and detail; `unparseable` on a request
@@ -1750,13 +1792,15 @@ fn every_refusal_arm_carries_its_face_data() {
         dialer.world().refuse_next = Some(rej);
     };
     dialer.world().rows.push(FeedRow { at: 999, op: "insert", docs: vec![D.to_string()], key: Some("ab".repeat(32).leak()) });
-    refuse("kept_place_moved", json!({"site": {"index": 1}}));
+    refuse("kept_place_moved", json!({"site": {"index": 1, "addr": D}}));
     let sent = send(&p, &inputs(), &mut request).unwrap();
-    let Sent::Refused(Refusal::KeptPlaceMoved { index, race }) = sent else { panic!("{sent:?}") };
-    assert_eq!(index, 1);
+    let Sent::Refused(Refusal::KeptPlaceMoved { index, draft, race }) = sent else { panic!("{sent:?}") };
+    assert_eq!((index, draft), (1, a(D)), "the entry and the draft the board names");
     assert_eq!(race, Some(RaceKey { at: 999, key: Some("ab".repeat(32)), signed: false }), "whose write moved the words");
-    refuse("stray_place_unrecorded", json!({"site": {"index": 0}}));
-    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::StrayPlace { index: 0 })));
+    refuse("kept_place_moved", json!({"site": {"index": 1}}));
+    assert!(matches!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::KeptPlaceMoved { draft, .. }) if draft == a(D)), "an older board naming no draft: the rendering draft");
+    refuse("stray_place_unrecorded", json!({"site": {"index": 0, "addr": D}}));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::StrayPlace { index: 0, draft: a(D) })));
     refuse("publication_over_budget", json!({"detail": "70000 in-lock reads priced over the budget of 65536"}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::BudgetRace { detail: Some("70000 in-lock reads priced over the budget of 65536".into()) }));
     refuse("not_owner", json!({"site": {"addr": D}}));
@@ -1981,12 +2025,16 @@ fn family_confirmed() -> Confirmed {
 }
 
 /// THE FAMILY PUBLICATION: the panel excludes `A`'s run from the windows and
-/// counts its passages as `inherited`; the request carries `also`, a kept
-/// place for the rendering draft's run alone, `A`'s run signed by value, and
-/// the price counts both drafts' positions; the twin pre-check reads `A`'s
+/// counts its passages as `inherited`; the request carries `also`, the
+/// rendering draft's kept place for EVERY run of a named draft's identity —
+/// its own ten and `A`'s five — and `A`'s own place for its run in
+/// `also_places`, read off `A`'s image (skep #739), `A`'s run signed by
+/// value, and the price counts both drafts' positions and, in its reads,
+/// `A`'s run count where its list places it; the twin pre-check reads `A`'s
 /// records too; the acknowledgment names `E.2`, the records are homed each
-/// in its draft — `D`'s for its ten words, `A`'s for its five — and the
-/// feed row names the member, `D`, then `A`.
+/// in its draft — `D`'s for its ten words, `A`'s for its five — the feed
+/// row names the member, `D`, then `A`, and BOTH drafts are re-windowed in
+/// the one commit: `D` at every named run, `A` at its own.
 #[test]
 fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_homes_its_record_in_it() {
     let (world, _) = family_world();
@@ -2010,10 +2058,16 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     );
     assert_eq!(request.also, vec![a(A)]);
     assert_eq!(request.runs, vec![run(E, 1, 19), run(D, 1, 10), run(A, 1, 5), run(O, 1, 5)]);
-    assert_eq!(request.places, vec![None, Some(20), None, None], "a kept place for the rendering draft's run alone");
+    assert_eq!(request.places, vec![None, Some(20), Some(30), None], "the rendering draft's kept place for every run of a named draft's identity — its own and A's — none for the trunk's words or the window");
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: a(A), places: vec![None, None, Some(1), None] }], "A's own place for its run, off A's image; none at every other run");
     assert!(matches!(&request.pieces[2], Piece::Values(v) if v.len() == 5), "A's run signed by value: {:?}", request.pieces[2]);
-    assert_eq!(request.frame(None)["also"], json!([A]), "the frame carries `also`");
+    let frame = request.frame(None);
+    assert_eq!(frame["also"], json!([A]), "the frame carries `also`");
+    assert_eq!(frame["also_places"], json!([{"draft": A, "places": [null, null, {"subspace": "1", "ordinal": "1"}, null]}]), "and A's entry, in also's order");
     assert_eq!(request.price.values, 15, "both drafts' distinct positions");
+    let mut unplaced = (*request).clone();
+    unplaced.also_places[0].places = vec![None; 4];
+    assert_eq!(request.priced(0, 4, &[1]).reads, unplaced.priced(0, 4, &[1]).reads + 4, "A's one run enters the reads' draft term where its list places it, once per run of the request");
     dialer.clear();
     let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
     assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Answer));
@@ -2024,14 +2078,17 @@ fn a_family_publication_re_mints_the_also_drafts_words_counts_its_passages_and_h
     assert_eq!(records(A), vec![(ispan(A, 1, 5), ispan(E, 30, 5))], "A's record homed in A, `to` the member's fresh identity");
     let row = w.rows.iter().find(|r| r.at == ack.at).expect("the publish row");
     assert_eq!(row.docs[..3], [format!("{E}.2"), D.to_string(), A.to_string()], "the member, the rendering draft, then the also draft");
-    assert_eq!(w.docs[A].runs, vec![run(A, 1, 5)], "A is not re-windowed: its words stay its own, a counterpart through its record");
+    assert_eq!(w.docs[D].runs, vec![run(E, 1, 34), run(O, 1, 5)], "D re-windowed at every named draft's run — its own ten and A's five — onto the fresh identity, I-adjacent to E's");
+    assert_eq!(w.docs[A].runs, vec![run(E, 30, 5)], "A re-windowed at its own place in the same commit: its words the member's identity, no counterpart left");
 }
 
 /// THE TWIN PRE-CHECK over the family: a run of `A`'s identity that a record
 /// of `A` already names is re-composed by reference to the record's `to`, in
-/// pieces where the record covers it in part, with no kept place for any
-/// piece of it — only the rendering draft's runs carry places — and the
-/// records are read per draft, `D`'s then `A`'s.
+/// pieces where the record covers it in part, EVERY named draft's kept
+/// place carried beside each piece at its offset — the rendering draft's in
+/// `places`, `A`'s own in its `also_places` entry, the recorded piece's a
+/// stray place each draft is re-windowed at through the record (skep #739)
+/// — and the records are read per draft, `D`'s then `A`'s.
 #[test]
 fn the_twin_precheck_re_composes_an_also_drafts_recorded_words_by_reference() {
     let (mut world, _) = family_world();
@@ -2039,9 +2096,11 @@ fn the_twin_precheck_re_composes_an_also_drafts_recorded_words_by_reference() {
     let (dialer, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
-    let re = twin_precheck(&p, &family_inputs(), &[run(D, 1, 10), run(A, 1, 5)], &[Some(20), None], &[Some(20), Some(30)]).unwrap();
+    let a_list = [AlsoPlaces { draft: a(A), places: vec![None, Some(1)] }];
+    let re = twin_precheck(&p, &family_inputs(), &[run(D, 1, 10), run(A, 1, 5)], &[Some(20), Some(30)], &[Some(20), Some(30)], &a_list).unwrap();
     assert_eq!(re.runs, vec![run(D, 1, 10), run(A, 1, 1), run(E, 40, 2), run(A, 4, 2)]);
-    assert_eq!(re.places, vec![Some(20), None, None, None], "no place for an also draft's pieces");
+    assert_eq!(re.places, vec![Some(20), Some(30), Some(31), Some(33)], "the rendering draft's place beside every piece of A's run, at the piece's offset");
+    assert_eq!(re.also_places, vec![AlsoPlaces { draft: a(A), places: vec![None, Some(1), Some(2), Some(4)] }], "A's own place beside each piece of its run at the piece's offset, the recorded piece's a stray place");
     assert_eq!(re.draft_places, vec![Some(20), Some(30), Some(31), Some(33)]);
     assert_eq!(re.stray_records, vec![0, 0, 1, 0]);
     let homes: Vec<String> = dialer.frames("find_links_ftt").iter().filter_map(|f| f["q"]["home"][0]["start"].as_str().map(str::to_string)).collect();
@@ -2088,11 +2147,15 @@ fn a_lost_family_acknowledgment_is_read_back_through_the_rendering_drafts_record
 }
 
 /// `not_owner` naming a draft `also` names is the unowned-draft arm, as it
-/// is for the rendering draft — the board's own ω per home.
+/// is for the rendering draft — the board's own ω per home: `A` a
+/// sub-account's draft the person reads but does not own, imaged for its
+/// places and refused at the write. A draft `also` names the person cannot
+/// read at all is the enumeration's own fault — it is imaged for its kept
+/// places as the rendering draft is — ahead of any frame.
 #[test]
 fn an_unowned_also_draft_is_the_unowned_draft_arm() {
     let (mut world, _) = family_world();
-    world.docs.get_mut(A).unwrap().owner = "1.0.2".to_string();
+    world.docs.get_mut(A).unwrap().owner = "1.0.1.2".to_string();
     let (dialer, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
@@ -2103,6 +2166,120 @@ fn an_unowned_also_draft_is_the_unowned_draft_arm() {
     let before = dialer.world().position;
     assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::UnownedDraft { draft: a(A) }));
     assert_eq!(dialer.world().position, before, "nothing committed");
+    let (mut world, _) = family_world();
+    world.docs.get_mut(A).unwrap().owner = "1.0.2".to_string();
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    assert_eq!(enumerate(&p, &inputs).unwrap_err(), Fault::Unreadable(a(A)), "an also draft withheld from the reader: the image read's fault");
+    assert!(dialer.frames("publish").is_empty(), "no frame");
+}
+
+/// AN `also` DRAFT MOVED SINCE THE PANEL (skep #739): `A` re-arranges its
+/// five words after the panel's reads, so at the re-read its image no
+/// longer arranges its run whole — its `also_places` entry carries `None`
+/// at that run (a place the client is not sure of is never guessed) and,
+/// all `None`, is not sent; the re-read re-states nothing, the rendering
+/// draft's placements being the diff's and `D` still arranging `A`'s run
+/// whole; the request is sent and lands — `D` re-windowed at `A`'s run as
+/// at its own, `A` LEFT AS IT STANDS, its words its own and a counterpart
+/// through the record the shot homed in it, healed at its own next shot —
+/// and the row names `A` for that record.
+#[test]
+fn an_also_draft_that_moved_its_run_since_the_panel_takes_no_place_and_is_left_as_it_stands() {
+    let (world, _) = family_world();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    assert_eq!(e.also.len(), 1);
+    assert_eq!((e.also[0].draft.to_string(), e.also[0].extent, e.also[0].image.len()), (A.to_string(), 5, 1), "A imaged whole at the panel");
+    let panel = panel(&p, &inputs, &e).unwrap();
+    // A's words swapped about: its last two, then its first three.
+    dialer.world().docs.get_mut(A).unwrap().runs = vec![run(A, 4, 2), run(A, 1, 3)];
+    let rr = reread(&p, &inputs, &e, &panel).unwrap();
+    assert_eq!(rr.restatement, None, "the rendering draft's placements are the diff's; A's move is no difference");
+    assert_eq!(rr.enumeration.also[0].image, vec![IRun { prefix: format!("{A}.0.1"), first: 4, width: 2, ordinal: 1 }, IRun { prefix: format!("{A}.0.1"), first: 1, width: 3, ordinal: 3 }], "A's image read again at the re-read");
+    let Built::Request(mut request) = build(&p, &inputs, &rr.enumeration, &rr.panel, &family_confirmed()).unwrap() else { panic!("inert") };
+    assert_eq!(request.places, vec![None, Some(20), Some(30), None], "D's places as before, A's run among them");
+    assert_eq!(request.also_places, vec![AlsoPlaces { draft: a(A), places: vec![None; 4] }], "no place A is sure of: None at its run");
+    assert!(request.frame(None).get("also_places").is_none(), "an all-None entry is not sent");
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).unwrap() else { panic!("refused") };
+    let frames = dialer.frames("publish");
+    assert!(frames[0].get("also_places").is_none() && frames[0]["places"].is_array(), "{}", frames[0]);
+    let w = dialer.world();
+    assert_eq!(w.docs[D].runs, vec![run(E, 1, 34), run(O, 1, 5)], "D re-windowed at A's run as at its own");
+    assert_eq!(w.docs[A].runs, vec![run(A, 4, 2), run(A, 1, 3)], "A left as it stands");
+    assert!(w.links.iter().any(|l| l.home == A && l.ty[0].0 == T_CORRESPONDENCE && l.at == ack.at), "A's record homed in A all the same");
+    let row = w.rows.iter().find(|r| r.at == ack.at).expect("the publish row");
+    assert_eq!(row.docs[..3], [format!("{E}.2"), D.to_string(), A.to_string()], "A named for the record homed in it");
+}
+
+/// THE READS' DRAFT TERM IS THE BOARD's (`price_publication_reads` since
+/// skep #739): the content run count of every draft a list places, summed
+/// — the rendering draft where `places` carries a place, each `also` draft
+/// where its `also_places` entry does — times the request's runs, and NONE
+/// for a draft no list places. A family request placing the rendering
+/// draft and one of two `also` drafts prices `(D's runs + A's runs) ×
+/// runs`, the unplaced `B` adding nothing; one placing no draft has no
+/// draft term; one placing `A` alone reads `A` alone. `also_places` is no
+/// sixth list — bounded by `runs`, it needs no cap of its own — and the
+/// staged bytes count a kept place per LIST that places a run (the
+/// board's `placed_in`).
+#[test]
+fn the_reads_draft_term_sums_every_draft_a_list_places_as_the_boards_does() {
+    const B: &str = "1.0.1.0.11";
+    let (d, a_draft, b, term) = (a(D), a(A), a(B), a(E));
+    let drafts = vec![d.clone(), a_draft.clone(), b.clone()];
+    let runs = vec![run(D, 1, 10), run(A, 1, 5), run(B, 1, 7)];
+    let also = |a_places: Vec<Option<u64>>, b_places: Vec<Option<u64>>| vec![AlsoPlaces { draft: a_draft.clone(), places: a_places }, AlsoPlaces { draft: b.clone(), places: b_places }];
+    let none: [Option<u64>; 3] = [None; 3];
+    let no_also = also(vec![None; 3], vec![None; 3]);
+    let base = price::Shape { runs: &runs, drafts: &drafts, draft: Some(&d), term: &term, mint: false, claim: false, places: &none, also_places: &no_also, also_runs: &[1, 9], stray_records: &[0, 0, 0], entries: &[], retract: 0, read_with: 0, body_bytes: 0, homes: 3, draft_runs: 4 };
+    assert_eq!(price::price(&base).reads, 0, "no list places a draft: no draft is read");
+    let placed = [Some(20), Some(30), None];
+    let family = also(vec![None, Some(1), None], vec![None; 3]);
+    let priced = price::price(&price::Shape { places: &placed, also_places: &family, ..base.clone() });
+    assert_eq!(priced.reads, (4 + 1) * 3, "D's four runs and A's one, once per run of the request; B, unplaced, adds none");
+    assert_eq!(priced.lists, [3, 2, 0, 0, 0], "places counts its two entries; also_places is no sixth list");
+    let also_alone = price::price(&price::Shape { also_places: &family, ..base.clone() });
+    assert_eq!(also_alone.reads, 3, "an also draft's re-window alone reads that draft");
+    let b_too = also(vec![None, Some(1), None], vec![None, None, Some(4)]);
+    assert_eq!(price::price(&price::Shape { places: &placed, also_places: &b_too, ..base.clone() }).reads, (4 + 1 + 9) * 3, "every draft a list places");
+    let in_places_alone = price::price(&price::Shape { places: &placed, ..base.clone() });
+    assert_eq!(priced.bytes, in_places_alone.bytes + price::KEPT_PLACE_BYTES, "A's run placed by two lists stages a kept place per list, one piece each");
+}
+
+/// `kept_place_moved` NAMING AN `also` DRAFT: `site.addr` is the draft that
+/// no longer honours the place, and the race's key is read off the feed
+/// under THAT draft — the newest row under `A`, not `D`'s — so the face
+/// names whose write moved `A`'s run; naming `D`, the newest row under `D`;
+/// `stray_place_unrecorded` names the draft alike.
+#[test]
+fn a_kept_place_moved_in_an_also_draft_names_it_and_reads_the_race_under_it() {
+    let (world, _) = family_world();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let inputs = family_inputs();
+    let e = enumerate(&p, &inputs).unwrap();
+    let panel = panel(&p, &inputs, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &family_confirmed()).unwrap() else { panic!("inert") };
+    let refuse = |code: &str, site: Value| {
+        dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": code, "disposition": "permanent", "op": "publish", "site": site}));
+    };
+    dialer.world().rows.push(FeedRow { at: 998, op: "insert", docs: vec![D.to_string()], key: Some("cd".repeat(32).leak()) });
+    dialer.world().rows.push(FeedRow { at: 999, op: "rearrange", docs: vec![A.to_string()], key: Some("ab".repeat(32).leak()) });
+    refuse("kept_place_moved", json!({"index": 2, "addr": A}));
+    let sent = send(&p, &inputs, &mut request).unwrap();
+    assert_eq!(sent, Sent::Refused(Refusal::KeptPlaceMoved { index: 2, draft: a(A), race: Some(RaceKey { at: 999, key: Some("ab".repeat(32)), signed: false }) }), "A named, the race A's newest row");
+    refuse("kept_place_moved", json!({"index": 1, "addr": D}));
+    assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::KeptPlaceMoved { index: 1, draft: a(D), race: Some(RaceKey { at: 998, key: Some("cd".repeat(32)), signed: false }) }), "D named, the race D's newest row");
+    refuse("stray_place_unrecorded", json!({"index": 2, "addr": A}));
+    assert_eq!(send(&p, &inputs, &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::StrayPlace { index: 2, draft: a(A) })));
+    let before = dialer.world().position;
+    assert_eq!(dialer.world().position, before, "nothing committed by a refusal");
 }
 
 // ── THE DRAFT'S BASE ─────────────────────────────────────────────────────

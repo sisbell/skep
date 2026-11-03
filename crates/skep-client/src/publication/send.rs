@@ -24,10 +24,13 @@
 //! **The refusal family**, each a typed arm with its `site`:
 //! `already_published` → the landed test on the member it names — pass, the
 //! acknowledgment (the twin read as the ack); fail, the twin face's data;
-//! `kept_place_moved` → the entry and the race's key, the feed's newest row
-//! under the draft since the request's reads and its `key`, for the caller's
-//! re-read and re-statement; `stray_place_unrecorded` → this library's own
-//! bug; `publication_over_budget` → the price's verdict re-run: a race where
+//! `kept_place_moved` → the entry, THE DRAFT that no longer honours the
+//! place (`site.addr`: the rendering draft, or a draft `also` names — each
+//! re-windowed in the one commit, skep #739 — and the rendering draft where
+//! an older board names none) and the race's key, the feed's newest row
+//! under THAT draft since the request's reads and its `key`, for the
+//! caller's re-read and re-statement; `stray_place_unrecorded`, naming the
+//! draft alike → this library's own bug; `publication_over_budget` → the price's verdict re-run: a race where
 //! this price admitted the request, the library's own bug where it did not;
 //! `not_owner` naming the draft → the unowned draft, named; `not_owner` on
 //! `doc` or the account → named too; `claim_refused` → the edition named
@@ -53,13 +56,13 @@ use skep_identity::{entry_frame, DocTerm};
 
 use crate::address::parse_address;
 use crate::board::frames;
-use crate::board::{acked_addr, acked_at, Answer, ChangesAnswer, ChangesQuery, Rejection, T_RETRACTION};
+use crate::board::{acked_addr, acked_at, Answer, ChangesAnswer, ChangesQuery, Rejection, Site, T_RETRACTION};
 use crate::halt::Halt;
 use crate::sign::sig_hex;
 
 use super::landed::{landed_with, Base, Missing, Verdict};
 use super::panel::read_with_stands;
-use super::request::Request;
+use super::request::{AlsoPlaces, Request};
 use super::{trunk_of, Door, Fault, Inputs, Publisher};
 
 /// How the acknowledgment was reached.
@@ -96,7 +99,8 @@ pub struct Ack {
 }
 
 /// The race's key at `kept_place_moved`: the feed's newest row under the
-/// draft since the request's reads, and whose it was.
+/// draft the refusal names — the rendering draft, or a draft `also` names —
+/// since the request's reads, and whose it was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RaceKey {
     /// The row's position.
@@ -112,10 +116,14 @@ pub struct RaceKey {
 /// act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnFault {
-    /// `stray_place_unrecorded` at the `runs` entry.
+    /// `stray_place_unrecorded` at the `runs` entry, in the draft named.
     StrayPlace {
         /// The entry.
         index: u64,
+        /// The draft being re-windowed at the place — the rendering draft,
+        /// or one `also` names (`site.addr`; the rendering draft where an
+        /// older board names none).
+        draft: Address,
     },
     /// One of the six deposit tokens at an entry.
     Deposit {
@@ -155,12 +163,18 @@ pub enum Refusal {
         /// What the member lacks of this request, where it holds the runs.
         missing: Option<Missing>,
     },
-    /// `kept_place_moved`: the draft moved the entry's words since the
-    /// place was read — the caller re-reads and re-states.
+    /// `kept_place_moved`: a draft the commit re-windows moved the entry's
+    /// words since its place was read — the caller re-reads and re-states.
     KeptPlaceMoved {
         /// The `runs` entry.
         index: u64,
-        /// Whose write moved them, where the feed tells.
+        /// The draft that no longer honours the place — the rendering
+        /// draft, or one `also` names, each re-windowed in the one commit
+        /// (`site.addr`; the rendering draft where an older board names
+        /// none).
+        draft: Address,
+        /// Whose write moved them, where the feed tells: the newest row
+        /// under `draft` since the request's reads.
         race: Option<RaceKey>,
     },
     /// `not_owner` naming a draft the request names — the rendering draft,
@@ -314,8 +328,12 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
                     Verdict::NotFound | Verdict::MayAlreadyStand => Refusal::Twin { member, missing: None },
                 }
             }
-            "kept_place_moved" => Refusal::KeptPlaceMoved { index: site.index.unwrap_or(0), race: race_key(p, inputs, request.as_of)? },
-            "stray_place_unrecorded" => Refusal::OwnFault(OwnFault::StrayPlace { index: site.index.unwrap_or(0) }),
+            "kept_place_moved" => {
+                let draft = named_draft(&site, inputs);
+                let race = race_key(p, &draft, request.as_of)?;
+                Refusal::KeptPlaceMoved { index: site.index.unwrap_or(0), draft, race }
+            }
+            "stray_place_unrecorded" => Refusal::OwnFault(OwnFault::StrayPlace { index: site.index.unwrap_or(0), draft: named_draft(&site, inputs) }),
             "publication_over_budget" => {
                 if request.price.admits() {
                     Refusal::BudgetRace { detail }
@@ -363,7 +381,15 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
 /// a `claim` at the document form among them, which a board before skep
 /// #692 refused `malformed`.
 fn carries_members(request: &Request) -> bool {
-    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || request.places.iter().any(Option::is_some) || request.mint.is_some() || request.claim
+    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || request.places.iter().any(Option::is_some) || request.also_places.iter().any(AlsoPlaces::carries_a_place) || request.mint.is_some() || request.claim
+}
+
+/// Returns the draft a re-window refusal names — `site.addr`, the draft
+/// that no longer honours the place at the entry, the rendering draft or
+/// one `also` names — and the rendering draft where the board names none
+/// (an older board, before every named draft was re-windowed).
+fn named_draft(site: &Site, inputs: &Inputs) -> Address {
+    site.addr.as_deref().and_then(parse_address).unwrap_or_else(|| inputs.draft.clone())
 }
 
 /// A lost answer: the board read first, through the landed test from the
@@ -408,10 +434,11 @@ fn skipped(door: &Door<'_>, p: &Publisher<'_>, request: &Request) -> Result<(Vec
     Ok((retract, read_with))
 }
 
-/// Reads the race's key: the newest row under the draft since `since` on the
-/// drafts page, under the token.
-fn race_key(p: &Publisher<'_>, inputs: &Inputs, since: u64) -> Result<Option<RaceKey>, Fault> {
-    let draft = inputs.draft.to_string();
+/// Reads the race's key: the newest row under `draft` — the draft the
+/// refusal names, whose run moved — since `since` on the drafts page, under
+/// the token.
+fn race_key(p: &Publisher<'_>, draft: &Address, since: u64) -> Result<Option<RaceKey>, Fault> {
+    let draft = draft.to_string();
     let mut newest: Option<RaceKey> = None;
     let mut cursor = since;
     loop {

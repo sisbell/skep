@@ -1474,10 +1474,9 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_on_the_wire
     assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(fresh.clone(), "2".to_string())], "E's identity at the place");
     assert_eq!(image_as(port, Some(&bare), &d, 2, 2), vec![(fresh.clone(), "2".to_string())], "and where S2 put it");
     assert_eq!(text(port, &second, 1, 4), "bcbc");
-    // `image` answers a SET of distinct runs, so the run held twice is read
-    // at each place.
-    assert_eq!(image(port, &second, 1, 2), vec![(fresh.clone(), "2".to_string())], "the member holds the run by reference");
-    assert_eq!(image(port, &second, 3, 2), vec![(fresh.clone(), "2".to_string())], "twice");
+    // `image` answers every placement, so one read over the member's whole
+    // extent shows the run by reference at each place.
+    assert_eq!(image(port, &second, 1, 4), vec![(fresh.clone(), "2".to_string()), (fresh.clone(), "2".to_string())], "the member holds the run by reference, twice");
     let record = read_link(port, Some(&bare), &format!("{d}.0.2.1"));
     assert_eq!(record["slots"][0][0]["start"].as_str(), Some(b.as_str()), "the S1 record stands: {record}");
     let none = read_link(port, Some(&bare), &format!("{d}.0.2.2"));

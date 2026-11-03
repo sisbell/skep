@@ -680,8 +680,8 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
     let edition = create_edition(&fx);
     let draft = create_doc(&fx);
     let (draft_start, _) = insert3(&fx, &draft); // a b c, one run
-    // The image of `[from, from + width)`: a SET of distinct runs, so a run
-    // the draft holds twice is read at each place.
+    // The image of `[from, from + width)`: every placement, in V-order, so a
+    // run the member holds twice is answered twice.
     let image_at = |d: &skep_address::Address, from: u32, width: u32| {
         runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, from, width)] }))
     };
@@ -704,12 +704,11 @@ fn a_stray_run_re_composed_by_reference_to_its_record_is_re_windowed_and_an_unre
     let (second, at) = ack_addr(ex(&fx.febe, fx.user, Op::Publish { target: into_e.clone(), shot: second, places: vec![None, Some(vp(1, 4))], also_places: vec![], deposits: PublishDeposits::default() }));
     assert_eq!(at, fx.febe.log_position(), "the ack names the one commit's position");
     assert!(at > before);
-    assert_eq!(image(&draft, 5), vec![a, fresh.clone()], "the draft holds its own `a` and E's identity, nothing else");
+    assert_eq!(image(&draft, 5), vec![a, fresh.clone(), fresh.clone()], "the draft holds its own `a` and E's identity at both places, nothing else");
     assert_eq!(image_at(&draft, 4, 2), vec![fresh.clone()], "E's identity at the place");
     assert_eq!(image_at(&draft, 2, 2), vec![fresh.clone()], "and where S2 put it");
     assert_eq!(image_at(&draft, 6, 1), vec![], "five positions: the draft's own words nowhere");
-    assert_eq!(image_at(&second, 1, 2), vec![fresh.clone()], "the member holds the run by reference");
-    assert_eq!(image_at(&second, 3, 2), vec![fresh.clone()], "twice");
+    assert_eq!(image_at(&second, 1, 4), vec![fresh.clone(), fresh.clone()], "the member holds the run by reference, twice");
     // Recorded elsewhere: another draft's words minted into E, recorded
     // there alone — found by the widened read, and then the draft arranges
     // its own `a` where the other's words are asked for.

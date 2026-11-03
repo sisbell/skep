@@ -236,9 +236,9 @@ fn a_reinstate_is_withheld_naming_its_first_unreadable_origin_and_admits_a_reada
         vec![readable_a.clone(), readable_b.clone()],
         "once per distinct origin, the destination's own I-space excepted"
     );
-    // Position by position (an image is a SET of I-spans, so the repeated
-    // address would collapse in one region's answer): every position under
-    // its ORIGIN's own address, the duplicates kept.
+    // Position by position (one region over the whole would join `a₁ a₂`,
+    // I-adjacent, into one run): every position under its ORIGIN's own
+    // address, the duplicates kept.
     let element = |doc: &Address, ordinal: u32| {
         elem_addr(ElemPos { doc: doc.clone(), subspace: nat(1), ordinal: nat(ordinal) })
             .unwrap_or_else(|_| panic!("valid element position"))

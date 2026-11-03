@@ -1,10 +1,10 @@
-//! §1 — content-region discovery: `image_on`'s gates, order, dedup and
-//! budgets — its walk priced on a published address's trunk head, and each
-//! budget refusing before the work it exists to refuse — and the six region
-//! reads that inherit them, with the document gate asked, where it is one
-//! rule, of every read that names a document; and the retracted-links read's
-//! own law beside the active family's. Which arrangement the reads resolve
-//! is `head_float`'s.
+//! §1 — content-region discovery: `image_on`'s gates, order, every placement
+//! answered, and budgets — its walk priced on a published address's trunk
+//! head, and each budget refusing before the work it exists to refuse — and
+//! the six region reads that inherit them, with the document gate asked,
+//! where it is one rule, of every read that names a document; and the
+//! retracted-links read's own law beside the active family's. Which
+//! arrangement the reads resolve is `head_float`'s.
 
 use crate::common;
 use crate::heap::settled_heap_bytes;
@@ -257,7 +257,7 @@ fn every_document_gate_refuses_an_allocated_address_that_is_no_document() {
 }
 
 #[test]
-fn image_resolves_dedups_and_clips() {
+fn image_resolves_and_clips() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let reads = Reads(&k);
@@ -267,14 +267,8 @@ fn image_resolves_dedups_and_clips() {
         reads.image(&doc1(), &[vspan(1, 1, 2)]),
         Ok(vec![run(&ca(1), 2)])
     );
-    // Exact-equal repeats are deduped at the boundary (Run: Eq).
-    assert_eq!(
-        reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
-        Ok(vec![run(&ca(1), 2)])
-    );
-    // Overlapping INPUT spans may still yield partially-overlapping runs —
-    // the dedup claim is exact-equality only, not an address-disjoint
-    // partition.
+    // Overlapping INPUT spans yield partially-overlapping runs — the answer
+    // is the region's positions in order, not an address-disjoint partition.
     assert_eq!(
         reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 2, 2)]),
         Ok(vec![run(&ca(1), 2), run(&ca(2), 2)])
@@ -316,25 +310,108 @@ fn image_returns_runs_in_region_span_order_then_v_order() {
     );
 }
 
-/// §1 — the dedup keys on the whole run, `(i_start, width)`, which is exactly
-/// `Run`'s equality and not one component of it. Two runs sharing a start and
-/// differing in width are two runs, and a key that dropped the width would
-/// collapse them. `resolve` clips to the span asked for, so two nested region
-/// spans over one arranged run produce exactly that pair.
+/// §1 — the image is the region's POSITIONS in order and never a set (skep
+/// #753): a run the surface places twice is answered at each place, and a
+/// span the region names twice is answered twice, so a reader walking the
+/// runs end to end — the shell's shift, the attest's read-back, the
+/// conformance harness's V-ordinals — finds each position where the surface
+/// arranges it. doc2 is one COPY placing doc1's two positions twice over, so
+/// its surface holds one run at two places: the whole-document image is that
+/// run twice, and a region naming one span twice answers the span's run
+/// twice. Nested spans over one run are two runs, each clipped to its span —
+/// `resolve` clips to the span asked for. AND NO LINK ANSWER MOVES on the
+/// repeat: the region family lifts the runs to its query as a set, and M7
+/// answers each `(link, slot)` pair once, so one link FROM the doubled run
+/// is answered once by every region read over doc2 — found, counted, counted
+/// by home, windowed, its endset one pair, its history one row — and the
+/// delete preview, which lifts both sides the same way, keeps it while
+/// either placement survives and reports it when neither does.
 #[test]
-fn image_dedups_on_a_runs_whole_identity_not_its_start() {
+fn image_answers_every_placement_of_a_run_the_surface_places_twice() {
     let k = kernel();
-    seed_content(&k, &doc1(), 3); // V 1..3 → one run at ca(1)
+    seed_content(&k, &doc1(), 2); // V 1..2 → one run at ca(1)
+    Vstream::new(&k)
+        .copy(
+            SYS,
+            &doc2(),
+            vp(1, 1),
+            &[spec(&doc1(), 1, 1, 2), spec(&doc1(), 1, 1, 2)],
+            AsOf::Typed(k.current_seq()),
+        )
+        .expect("copy succeeds");
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let from_the_run = link(&store, &doc1(), &[ca(1)], &[ca(9)]);
     let reads = Reads(&k);
+    let twice = run(&ca(1), 2);
+    let whole = [vspan(1, 1, 4)];
 
+    // The surface holds the run at two places, and the image answers both.
+    assert_eq!(k.snapshot().world().m5().content_runs(&doc2()).len(), 2);
     assert_eq!(
-        reads.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 1, 2)]),
-        Ok(vec![run(&ca(1), 1), run(&ca(1), 2)])
+        reads.image(&doc2(), &whole),
+        Ok(vec![twice.clone(), twice.clone()]),
+        "each placement at its place"
     );
-    // The collapse the same key MUST still make: an exact repeat is one run.
+    // A span named twice is answered twice …
     assert_eq!(
         reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
-        Ok(vec![run(&ca(1), 2)])
+        Ok(vec![twice.clone(), twice.clone()])
+    );
+    // … and nested spans over one run are two runs, each clipped to its span.
+    assert_eq!(
+        reads.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 1, 2)]),
+        Ok(vec![run(&ca(1), 1), twice])
+    );
+
+    // No link answer moves on the repeat.
+    assert_eq!(
+        reads.findlinks_v(&doc2(), &whole),
+        Ok(vec![from_the_run.clone()]),
+        "findlinks_v"
+    );
+    assert_eq!(reads.count_v(&doc2(), &whole), Ok(1), "count_v");
+    assert_eq!(
+        reads
+            .count_v_by_home(&doc2(), &whole, usize::MAX, &[])
+            .map(|counts| counts.homes),
+        Ok(vec![(doc1(), 1)]),
+        "count_v_by_home"
+    );
+    assert_eq!(
+        drain_window(1, 2, |cur| reads
+            .window_v(&doc2(), &whole, cur, 1)
+            .expect("window_v")),
+        vec![from_the_run.clone()],
+        "window_v"
+    );
+    assert_eq!(
+        reads.retrieve_endsets(&doc2(), &whole),
+        Ok(vec![(FROM, enc(&[ca(1)]))]),
+        "retrieve_endsets"
+    );
+    assert_eq!(
+        rows_window(
+            &reads
+                .find_links_v_history(&doc2(), &whole, None, 64)
+                .expect("find_links_v_history")
+        )
+        .batch,
+        vec![from_the_run.clone()],
+        "find_links_v_history"
+    );
+    // The preview: a delete of the first place leaves the second, and the
+    // link with it; a delete of both places strands it.
+    assert_eq!(
+        reads.delete_orphans(&doc2(), &vp(1, 1), &n(2)),
+        Ok(OrphanReport { orphaned: vec![] }),
+        "the second placement keeps the link"
+    );
+    assert_eq!(
+        reads.delete_orphans(&doc2(), &vp(1, 1), &n(4)),
+        Ok(OrphanReport {
+            orphaned: vec![from_the_run]
+        }),
+        "neither placement survives"
     );
 }
 
@@ -435,9 +512,12 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
         past.iter().cloned().chain([vspan(2, 1, 1)]).collect();
     let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_SLOT_SPANS];
     assert_eq!(reads.image(&doc1(), &at_budget[..1]).map(|r| r.len()), Ok(4));
-    // At the budget the answer is still those four distinct runs — the dedup
-    // is not what the budget counts.
-    assert_eq!(reads.image(&doc1(), &at_budget).map(|r| r.len()), Ok(4));
+    // At the budget the answer is every run resolved — the four runs once per
+    // span, `MAX` in all — which is what the budget counts.
+    assert_eq!(
+        reads.image(&doc1(), &at_budget).map(|r| r.len()),
+        Ok(MAX_IMAGE_RUNS)
+    );
 
     for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
@@ -470,8 +550,8 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
 /// a surface holding more runs than the budget — a span of `2 × MAX`
 /// positions resolves `MAX` runs and is answered at the budget exactly, and
 /// one position more resolves `MAX + 1` and is refused, not truncated. The
-/// budget-exact span keeps two distinct runs, so the count is of runs
-/// resolved, never of runs kept.
+/// budget-exact span's answer is the wide run and then `MAX − 1` of width 1:
+/// every run resolved, answered.
 ///
 /// What no verdict shows is what M8 HOLDS while it counts — the budget and
 /// the run that trips it, never the span's whole image; the heap shows that,
@@ -506,10 +586,18 @@ fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
         Ok(vec![run(&ca(1), wide)]),
         "`MAX + 1` positions, one run resolved"
     );
+    let at_budget = reads
+        .image(&doc2(), &[vspan(1, 1, 2 * max)])
+        .expect("`MAX` runs resolved is the budget exactly");
     assert_eq!(
-        reads.image(&doc2(), &[vspan(1, 1, 2 * max)]),
-        Ok(vec![run(&ca(1), wide), run(&ca(1), 1)]),
-        "`MAX` runs resolved, two kept"
+        at_budget.len(),
+        MAX_IMAGE_RUNS,
+        "`MAX` runs resolved, every one answered"
+    );
+    assert_eq!(at_budget[0], run(&ca(1), wide), "the wide run first");
+    assert!(
+        at_budget[1..].iter().all(|r| *r == run(&ca(1), 1)),
+        "then `MAX − 1` of width 1"
     );
     for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(

@@ -10,8 +10,6 @@
 //! [`content_vspan`]/`check_region` — the module that judges a region is the
 //! module that publishes how to build one.
 
-use std::collections::HashSet;
-
 use num_traits::ToPrimitive;
 use skep_address::{Address, Nat, Span};
 use skep_arrangement::{as_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
@@ -94,14 +92,18 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// published `d` that has a member answers from its trunk head, whatever its
 /// own arrangement holds.
 ///
-/// The result is the I-runs of the image, in region-span order and V-order
-/// within each span, deduped on `(i_start, width)` — the pair a `Run`
-/// publishes, and exactly its equality.
+/// The result is EVERY RUN the region resolves, in region-span order and
+/// V-order within each span: the region's positions in order, never a set.
+/// A run the surface places twice is answered at each place, and a span the
+/// region names twice is answered twice, so a reader walking the runs end
+/// to end finds each position where the surface arranges it. The region
+/// family lifts the runs to its query as a set (`sets`' `extents`), a repeat
+/// one span of it, so no link answer moves on one.
 ///
-/// Exact-`Run` equality is the extent of the set claim: overlapping INPUT
-/// region spans may still yield partially-overlapping runs (not an
-/// address-disjoint partition — don't sum widths for |image|; coalescing
-/// would need the run-level span algebra M8 deliberately avoids).
+/// Within one span the runs tile the positions it arranges, so their widths
+/// sum to that count; across spans they need not, since overlapping INPUT
+/// spans yield overlapping runs (not an address-disjoint partition —
+/// coalescing would need the run-level span algebra M8 deliberately avoids).
 ///
 /// Refuses with `ImageTooLarge` when the RUN-LIST WALK is past the square of
 /// [`MAX_IMAGE_RUNS`], before the first pull: M5 reaches each span by walking
@@ -112,8 +114,8 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// that holds few runs is never refused for its reach.
 ///
 /// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over the
-/// runs the region RESOLVES — summed across its spans, never the distinct
-/// runs kept — as they are PULLED from M5's lazy `iter_resolve`, the form M5
+/// runs the region RESOLVES — summed across its spans, each of them answered
+/// — as they are PULLED from M5's lazy `iter_resolve`, the form M5
 /// publishes for a consumer that carries a budget of its own. The run past the
 /// budget is refused as it is pulled, before the next is built, so what a
 /// request makes M8 hold is the budget and the one run that trips it — never
@@ -152,25 +154,17 @@ pub fn image_on<W: DiscoveryWorld>(
         return Err(QueryError::ImageTooLarge);
     }
     let mut runs: Vec<Run> = Vec::new();
-    // Keyed on the run itself — its start AND its width, which is what `Run`'s
-    // `Eq` and `Hash` compare — and keying rather than scanning is what keeps
-    // the dedup one probe per resolved run, so the cost is linear in an image
-    // size the caller's region chooses rather than square in it.
-    let mut seen: HashSet<Run> = HashSet::new();
-    let mut runs_resolved: usize = 0;
     for span in region {
         // Pulled, and counted as it is pulled: M5's `iter_resolve` builds each
         // run only when asked for it, so the run past the budget is refused
         // before the next exists, and M8 holds at most the budget and the run
-        // that trips it.
+        // that trips it. Every run pulled is answered, so the answer's length
+        // is the count.
         for r in w.m5().iter_resolve(&surface, span) {
-            runs_resolved += 1;
-            if runs_resolved > MAX_IMAGE_RUNS {
+            if runs.len() == MAX_IMAGE_RUNS {
                 return Err(QueryError::ImageTooLarge);
             }
-            if seen.insert(r.clone()) {
-                runs.push(r);
-            }
+            runs.push(r);
         }
     }
     Ok(runs)

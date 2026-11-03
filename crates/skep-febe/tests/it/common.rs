@@ -711,9 +711,10 @@ pub fn linked_doc(fx: &Fixture) -> (Address, Address) {
 /// power of two from 2: three elements with the middle one deleted — `a` and
 /// `c`, at I-addresses no run joins — and then its whole extent copied onto
 /// its own tail until it holds `run_count` positions, each copy doubling the
-/// runs. Checked rather than trusted: the image is `a`'s and `c`'s two
-/// one-position I-runs and the delivery alternates them, so no two
-/// neighbouring positions are I-adjacent and every position is its own run.
+/// runs. Checked rather than trusted: the image is `run_count` one-position
+/// runs, `a`'s and `c`'s I-addresses alternating, so no two neighbouring
+/// positions are I-adjacent and every position is its own run, and the
+/// delivery alternates their values.
 pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
     assert!(run_count >= 2 && run_count.is_power_of_two(), "a power of two from 2: {run_count}");
     let d = create_doc(fx);
@@ -730,7 +731,13 @@ pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
     }
     let whole = || vspan(1, 1, extent);
     let image = runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![whole()] }));
-    assert!(image.len() == 2 && image.iter().all(|r| *r.width() == nat(1)), "{image:?}");
+    assert_eq!(image.len(), run_count as usize, "every position its own run: {image:?}");
+    assert!(
+        image.iter().all(|r| *r.width() == nat(1))
+            && image[0].i_start() != image[1].i_start()
+            && image.iter().enumerate().all(|(i, r)| r.i_start() == image[i % 2].i_start()),
+        "a's and c's one-position runs, alternating: {image:?}"
+    );
     let retrieve = Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span: whole() }] };
     let (items, _) = delivery(ex(&fx.febe, fx.user, retrieve));
     let text: Vec<u8> = items

@@ -83,9 +83,9 @@ use crate::wire::{delivered_values, values_of};
 /// The board clips an `image` region to the arrangement (M5's resolution
 /// clips silently, and a natural rides the wire unbounded), so one read over
 /// this window answers the document's whole content image — its runs in
-/// V-order, a run the document places twice identical in start and width
-/// answered once ([`Image`]) — whatever its extent, and the anchors are found
-/// wherever they now stand; a document past the board's run budget answers
+/// V-order, a run the document places twice answered at each place
+/// ([`Image`]) — whatever its extent, and the anchors are found wherever
+/// they now stand; a document past the board's run budget answers
 /// `image_too_large`, and the shift is not made.
 const IMAGE_WINDOW: u64 = u64::MAX;
 
@@ -245,12 +245,11 @@ fn ordinal(position: &Value) -> Option<u64> {
 ///
 /// It is the runs one `image` read answered, in V-order from the first
 /// position: the board's run decomposition (M5's runs tile the content prefix
-/// contiguously), save that the board answers each run once — deduped on its
-/// start and width — so a run the document places twice, identical in start and
-/// width, stands here at its first place alone. Made by [`Image::of`] alone,
-/// which admits each run only where its every position is within a `u64`, and
-/// the runs only where their positions end within one at `past_end`, so no sum
-/// the shift makes over them passes a `u64`.
+/// contiguously), a run the document places twice answered at each place, so
+/// every position stands here where the document arranges it. Made by
+/// [`Image::of`] alone, which admits each run only where its every position
+/// is within a `u64`, and the runs only where their positions end within one
+/// at `past_end`, so no sum the shift makes over them passes a `u64`.
 #[derive(Debug)]
 struct Image<'a> {
     /// The runs, each its I-prefix, its first position and its width.
@@ -361,17 +360,11 @@ fn joined<'a>(runs: impl IntoIterator<Item = (&'a str, u64, u64)>) -> Vec<(&'a s
 /// runs. A placement's span holds nothing, so its anchors stand adjacent
 /// still; a delete's or a rearrange's span another write cut, filled,
 /// emptied and filled again with as many other units, or rearranged, is not
-/// whole; and the shift is not made. What the test cannot tell, named: a
-/// document the board images as fewer runs than it arranges — an I-run
-/// placed twice, identical in start and width, imaged once ([`Image`]) — is
-/// counted short past the run's second place, which neither the search nor
-/// the clip sees, so an anchor past it is found short by the run's width,
-/// its count and its units passing the test and the burst landing that far
-/// early. The displacement is one for every position: the `before` anchor's
-/// V-position plus one, less the first position the burst named — so a
-/// change that sat wholly before the span moves it by its width, one wholly
-/// after by nothing — applied to every position the frame names
-/// ([`EditedSpan::displaced`]).
+/// whole; and the shift is not made. The displacement is one for every
+/// position: the `before` anchor's V-position plus one, less the first
+/// position the burst named — so a change that sat wholly before the span
+/// moves it by its width, one wholly after by nothing — applied to every
+/// position the frame names ([`EditedSpan::displaced`]).
 fn shifted_frame(frame: &Value, anchors: &Anchors, image: &Value, as_of: u64) -> Result<Value, Unshiftable> {
     let span = EditedSpan::of(frame).ok_or_else(|| Unshiftable::Malformed("the frame names no content positions the anchors could bound".into()))?;
     if anchors.before.is_none() != (span.first == 1) {

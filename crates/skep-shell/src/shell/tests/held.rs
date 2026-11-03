@@ -839,6 +839,83 @@ fn a_stale_delete_or_rearrange_is_shifted_by_its_spans_own_units_and_lands_once(
     sd.shutdown();
 }
 
+/// Checks that the shift reads a run placed twice at each place (skep #753).
+///
+/// A second draft reads `z`, the unit another writer copies — one `copy`,
+/// its specs naming that unit twice — so the document arranges one
+/// I-address at two places and the board's image answers both. Two arms. A
+/// draft reads `abcd`; an insert of `x` before `d`, carrying `c` and `d` as
+/// its anchors, is typed against that state; the other writer copies `z`
+/// twice at the front, `zzabcd`; the stale insert is shifted within the call
+/// by both units and lands once, the draft reading `zzabcxd` (the mutant
+/// that images the doubled run once finds `c` a position early and lands
+/// `zzabxcd`). A draft reads `zabcd`, its one `z` copied in before the
+/// anchors are read — `a` and `d`, with the run of `b` and `c`; the other
+/// writer copies `z` again between `b` and `c`, `zabzcd`; a delete of `b`
+/// and `c` typed against the older state is held moved and nothing of it
+/// lands (the mutant that images the doubled run once counts the span
+/// whole, `b` and `c` again, and deletes `b` and the other writer's `z`).
+#[test]
+fn a_stale_burst_is_shifted_through_a_run_the_document_places_twice() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, session, .. } = held_ground(&dir, &sd);
+    let op = |frame: Value, anchors: Option<&Value>| {
+        let mut args = json!({"session": session, "frame": frame});
+        if let Some(anchors) = anchors {
+            args["anchors"] = anchors.clone();
+        }
+        shell.call("op", &args).unwrap()
+    };
+    let at = |answer: &Value| answer["at"].as_u64().unwrap_or_else(|| panic!("acked: {answer}"));
+    let text = |draft: &str| text_of(&op(skep_client::board::frames::retrieve_v(draft, 1, 8), None));
+    let position = |n: u64| json!({"subspace": "1", "ordinal": n.to_string()});
+    // A draft reading `text`, and the state it was written at.
+    let draft = |text: &str| -> (String, u64) {
+        let minted = op(json!({"op": "create_new_document", "account": "1.0.1"}), None);
+        let draft = minted["addr"].as_str().unwrap().to_string();
+        let written = at(&op(json!({"op": "insert", "doc": draft, "at": position(1), "values": [text], "as_of": minted["at"]}), None));
+        (draft, written)
+    };
+    // The anchors a page sends, read off the board's own image: the unit at
+    // position `v` of `draft`, and the span of `width` units from `from`.
+    let image = |draft: &str, from: u64, width: u64| op(skep_client::board::frames::image(draft, from, width), None)["runs"].clone();
+    let unit = |draft: &str, v: u64| image(draft, v, 1)[0]["i_start"].as_str().unwrap_or_else(|| panic!("the identity of position {v}")).to_string();
+    let span = |draft: &str, from: u64, width: u64| -> Vec<Value> { image(draft, from, width).as_array().unwrap().iter().map(|run| json!({"start": run["i_start"], "width": run["width"]})).collect() };
+    // The other writer's copy of `z` into `draft` at `v`, `times` over in one
+    // frame, typed against `as_of`: the position it is acked at.
+    let (z, _) = draft("z");
+    let copy_z = |draft: &str, v: u64, times: usize, as_of: u64| {
+        let spec = json!({"source": z, "span": {"start": "1.1", "width": "0.1"}});
+        at(&op(json!({"op": "copy", "doc": draft, "at": position(v), "specs": vec![spec; times], "as_of": as_of}), None))
+    };
+
+    // The insert: `c` and `d` found past both copies, the burst landing
+    // between them.
+    let (abcd, typed) = draft("abcd");
+    let anchors = json!({"before": unit(&abcd, 3), "after": unit(&abcd, 4)});
+    let moved = copy_z(&abcd, 1, 2, typed);
+    assert_eq!(text(&abcd), "zzabcd");
+    let shifted = op(json!({"op": "insert", "doc": abcd, "at": position(4), "values": ["x"], "as_of": typed}), Some(&anchors));
+    assert!(at(&shifted) > moved, "the shifted burst is acked within the call, above the other write: {shifted}");
+    assert_eq!(text(&abcd), "zzabcxd", "the burst lands once, two positions later than typed");
+    assert!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "no line stands");
+
+    // The delete: the span between `a` and `d` holds one unit more than it
+    // held, the other writer's `z`.
+    let (zabcd, written) = draft("abcd");
+    let typed = copy_z(&zabcd, 1, 1, written);
+    assert_eq!(text(&zabcd), "zabcd");
+    let anchors = json!({"before": unit(&zabcd, 2), "after": unit(&zabcd, 5), "span": span(&zabcd, 3, 2)});
+    copy_z(&zabcd, 4, 1, typed);
+    assert_eq!(text(&zabcd), "zabzcd");
+    let held = op(json!({"op": "delete", "doc": zabcd, "p": position(3), "width": "2", "as_of": typed}), Some(&anchors));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("moved")), "a delete whose span the other writer's copy cut is held moved: {held}");
+    assert_eq!(text(&zabcd), "zabzcd", "nothing of it lands: the other writer's unit stands");
+    shell.shutdown();
+    sd.shutdown();
+}
+
 /// Checks that the person's `send` on a moved document acknowledges the
 /// changes that moved it (§3c.4; skep #757).
 ///

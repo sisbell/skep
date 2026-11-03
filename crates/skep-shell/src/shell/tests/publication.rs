@@ -872,3 +872,33 @@ fn a_siblings_shot_between_the_open_and_the_confirm_is_restated_and_nothing_land
     g.shell.shutdown();
     sd.shutdown();
 }
+
+/// Checks that a draft placing one run twice publishes whole (skep #753).
+///
+/// A draft staged from the memberless edition reads `abcd`; its four words
+/// are copied after themselves — `abcdabcd`, one run of the draft's own
+/// identity at two places. `publication.open` and `confirm`: the shot
+/// composed off the draft's image names the run at both places, the confirm
+/// is acknowledged, and the member reads `abcdabcd` (the mutant that images
+/// the doubled run once composes a shot of the first place alone, and the
+/// member reads `abcd`).
+#[test]
+fn a_draft_placing_a_run_of_its_own_words_twice_publishes_whole() {
+    use skep_client::board::frames::retrieve_v;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let draft = g.staged(&edition, "abcd");
+    let text = |read: &Value| -> String { read["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect() };
+    g.op(json!({"op": "copy", "doc": draft, "at": {"subspace": "1", "ordinal": "5"}, "specs": [{"source": draft, "span": {"start": "1.1", "width": "0.4"}}], "as_of": g.position()}));
+    assert_eq!(text(&g.op(retrieve_v(&draft, 1, 9))), "abcdabcd");
+    g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let acked = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("the shot over the doubled run is composed and acknowledged: {r}"));
+    let e1 = format!("{edition}.1");
+    assert_eq!((acked["outcome"].as_str(), acked["member"].as_str()), (Some("acknowledged"), Some(e1.as_str())), "{acked}");
+    let member = g.call("op", json!({"guest": true, "board": g.board, "frame": retrieve_v(&e1, 1, 9)})).unwrap();
+    assert_eq!(text(&member), "abcdabcd", "the member holds the run at both places: {member}");
+    g.shell.shutdown();
+    sd.shutdown();
+}

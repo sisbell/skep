@@ -17,14 +17,14 @@
 //! retraction's.
 //!
 //! The family's composition is homes-first (PUB-7.18, at every slot): the
-//! image's extents are lifted to one query, M7's `homes_touching` names the
-//! candidate homes of that query at every v1 slot in address order, the
-//! reader is asked of each once ahead of its links, and an admitted home is
-//! stabbed once, at every slot together, over the spans that named it at
-//! each and at the parts of the stab whose ranges named it — M7's
-//! `stab_in_slots`, which answers the home's `(link, slot)` pairs in address
-//! order and builds no set per slot, so a home holding no hit on the query
-//! costs those parts and nothing else; or, for the count by home, M7's
+//! image's distinct extents are lifted to one query, M7's `homes_touching`
+//! names the candidate homes of that query at every v1 slot in address
+//! order, the reader is asked of each once ahead of its links, and an
+//! admitted home is stabbed once, at every slot together, over the spans
+//! that named it at each and at the parts of the stab whose ranges named it
+//! — M7's `stab_in_slots`, which answers the home's `(link, slot)` pairs in
+//! address order and builds no set per slot, so a home holding no hit on the
+//! query costs those parts and nothing else; or, for the count by home, M7's
 //! `count_in_slots`, the same probes counted and never lifted. The per-home
 //! answers concatenated in home order are the selection index in address
 //! order, so nothing is merged, a window resumes in its cursor's home and a

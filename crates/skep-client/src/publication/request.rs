@@ -859,11 +859,10 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
 /// the trunk's, a window's, another `also` draft's — whose place is no
 /// business of this draft's list; a stray of the draft's own (published
 /// words it arranges that a record names) is not composed here, and heals
-/// at its own shot. THE ONE-PLACE LIMIT: where a draft arranges a run's
-/// identity twice, the board's `image` yields one place for it (it dedupes
-/// on `(i_start, width)`), so the list names that one and the other is
-/// left standing until skep #753 (keep every placement) lands — the
-/// rendering draft's own limit today.
+/// at its own shot. Where a draft arranges a run's identity twice, its image
+/// answers each place and the k-th equal run in `runs` takes the k-th
+/// (`place_selection`); a place no run in `runs` takes is left standing, as
+/// a stray is.
 pub(crate) fn also_places_of(e: &Enumeration, runs: &[Run]) -> Vec<AlsoPlaces> {
     e.also
         .iter()

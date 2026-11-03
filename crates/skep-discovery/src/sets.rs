@@ -23,6 +23,7 @@
 //! holds no hit on the query costs the parts of the stab that named it and
 //! nothing else.
 
+use std::collections::HashSet;
 use std::ops::Bound::{Excluded, Unbounded};
 
 use im::OrdSet;
@@ -41,9 +42,18 @@ use crate::types::{Cursor, Window};
 /// this list.
 pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 
-/// Lifts arrangement runs to M7's query endset: each run's I-extent, whose
-/// coverage holds the run's addresses and every address extending one of
-/// them (the crate header's one shape).
+/// Lifts arrangement runs to M7's query endset: each DISTINCT run's I-extent,
+/// whose coverage holds the run's addresses and every address extending one
+/// of them (the crate header's one shape).
+///
+/// The lift reads the runs as a SET, keyed on the run itself — its start and
+/// its width, which is what `Run`'s `Eq` and `Hash` compare — one probe per
+/// run: an image answers every placement (`image_on`), so a run the surface
+/// places twice, or two region spans resolve, comes twice and lifts once,
+/// and the directory is stepped and a home probed once for it. The set is a
+/// cost rule and never a correctness one: M7 names each candidate home once
+/// and answers each `(link, slot)` pair once whatever a query repeats, so
+/// every link answer would stand without it.
 ///
 /// Every homes-first region-shaped query reaches the spanfilade through
 /// this reading of its I-extents. The query aggregates iextents across
@@ -53,13 +63,18 @@ pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 /// empty endset, for which M7 names no candidate home, so an empty image
 /// costs no probe.
 ///
-/// The runs are taken as a SEQUENCE rather than a slice, because that is all
+/// The runs are passed as a SEQUENCE rather than a slice, because that is all
 /// the lift reads: a caller whose runs are already contiguous passes the
 /// `&Vec<Run>` it holds, and one whose runs come from two arrangements —
 /// the preview's surviving content beside `d`'s link runs — chains M5's loan
 /// on rather than copying it into a vector to be read once.
 pub(crate) fn extents<'r>(runs: impl IntoIterator<Item = &'r Run>) -> Endset {
-    Endset::from_spans(runs.into_iter().map(Run::iextent))
+    let mut seen: HashSet<&Run> = HashSet::new();
+    Endset::from_spans(
+        runs.into_iter()
+            .filter(|r| seen.insert(*r))
+            .map(Run::iextent),
+    )
 }
 
 /// One candidate home's probes at every v1 slot: `(slot, query)` pairs, slot

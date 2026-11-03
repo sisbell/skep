@@ -324,11 +324,11 @@ fn origin_values(port: u16, token: &str, origin: &str) -> Option<HashMap<String,
         if image["resp"].as_str() != Some("runs") {
             return None;
         }
-        // The image is a SET of distinct runs — a run the document holds
-        // twice (a stray run re-windowed beside the place S2 put it, a member
-        // placing one identity twice) is answered once — so each run's values
-        // are read by its own I-span, never zipped against the V-ordered
-        // delivery of the whole.
+        // Each run's values are read by its own I-span, never zipped against
+        // the V-ordered delivery of the whole: a run the document holds twice
+        // (a stray run re-windowed beside the place S2 put it, a member
+        // placing one identity twice) is answered at each place, and enters
+        // the map once per address either way.
         for (start, width) in runs_in(&image) {
             let frame = format!(r#"{{"op":"retrieve_i","spans":[{{"start":"{start}","width":"{width}"}}]}}"#);
             let delivery = op_as_written(port, Some(token), &frame);

@@ -1284,7 +1284,8 @@ full: an active link beside one retracted at position 8:
 {"as_of":9,"pairs":[{"endset":[{"start":"1.1","width":"0.5"}],"slot":1}],"resp":"endsets"}
 ```
 
-**`runs`** — image: the V→I image of the region.
+**`runs`** — image: the V→I image of the region — its positions in order,
+never a set: a run the document places twice appears twice, at each place.
 
 <!-- wire: response runs -->
 ```json

@@ -543,7 +543,13 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
 /// says what frames reached it. The client reads the close as
 /// `DialError::Io`, a connection broken before the answer's head and never
 /// an answer, so every dial through it — a signed write's read of the
-/// board's head record among them — is `unreachable` (skep #758).
+/// board's head record among them — is `unreachable` (skep #758). It keeps
+/// the shell's own frames as it keeps a call's: the board's feed thread
+/// reads `H.1` through `/op` at its consumer's open, at the thread's start
+/// and at each session's widen, on its own clock, so a cell that asserts
+/// nothing was dialed measures from a count taken once those have landed —
+/// after a call the feed thread answers behind the widen — never from
+/// empty.
 pub(super) fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());

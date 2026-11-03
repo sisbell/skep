@@ -111,7 +111,13 @@ pub enum SideAt {
     Draft {
         /// The draft.
         at: Address,
-        /// The position it was read at; `None` the head.
+        /// The position the draft was read at (§4: "for a draft read at N").
+        ///
+        /// Every record `compose` builds names one — the input's, else the
+        /// one the draft's image answered — and [`verify`] reads the draft
+        /// and its recorded base as of it, whatever the publication that
+        /// rendered the draft has made of either since. A record naming
+        /// none reads them at the head.
         position: Option<u64>,
     },
 }
@@ -526,7 +532,7 @@ pub fn current(
     key: &RecordKey,
 ) -> Result<Option<Record>, Halt> {
     let reader = Reader::new(board, token);
-    let owner_home = match reader.metadata(&key.doc) {
+    let owner_home = match reader.metadata(&key.doc, None) {
         Ok(meta) => Some(doc_1_of(&meta.owner)),
         Err(Refusal::Halt(h)) => return Err(h),
         Err(_) => None,
@@ -665,8 +671,12 @@ pub enum Verdict {
 /// M is recomputed from the record's inputs — its base, its sides, its
 /// value switches and the choices its gaps record — and compared with the
 /// landed member's image over its first `placed` positions, or the draft's
-/// whole image at the position recorded. The daemon's `compare` is asked
-/// once as the oracle of the client's join (§1.3 step 4), in parts past its
+/// whole image at the position recorded. A draft side, and the base the
+/// board records for it, are read as of the position the record names for
+/// the side (wire.md §Reading history), so the testimony is checked against
+/// the state the merge composed from, whatever the landing that rendered
+/// the draft has made of either since. The daemon's `compare` is asked once
+/// as the oracle of the client's join (§1.3 step 4), in parts past its
 /// budgets.
 ///
 /// # Errors
@@ -700,7 +710,7 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     reads::check_join(&reader, &readings)?;
     let (target, at, placed) = match &record.landed {
         Some(RecordLanding::Member { member, .. }) => {
-            let meta = match reader.metadata(member) {
+            let meta = match reader.metadata(member, None) {
                 Ok(m) => m,
                 Err(Refusal::Unreadable(_)) | Err(Refusal::NoSuchDocument(_)) => {
                     return Ok(Verdict::Unreadable(member.clone()))

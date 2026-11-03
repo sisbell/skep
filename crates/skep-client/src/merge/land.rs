@@ -401,7 +401,7 @@ impl Writer<'_> {
     /// what it holds; an `image` run that is no content I-address; the feed
     /// walk's halts.
     fn holds(&self, merged: &Merged, member: &Address) -> Result<Holds, Refusal> {
-        let meta = match self.reader.metadata(member) {
+        let meta = match self.reader.metadata(member, None) {
             Ok(m) => m,
             Err(Refusal::NoSuchDocument(_)) => return Ok(Holds::Nothing),
             Err(Refusal::Unreadable(_)) => return Ok(Holds::Other),

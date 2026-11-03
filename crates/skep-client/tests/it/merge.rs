@@ -15,16 +15,18 @@
 //! and landed. And ONE DRAFT SIDE (skep #743): a draft `stage` minted off
 //! the base version, its base the one the board records for it and never
 //! named — a named base the record does not derive refused — composed and
-//! landed as the shot, the draft's fresh text re-minted.
+//! landed as the shot, the draft's fresh text re-minted; its record naming
+//! the position the draft was read at and verifying Equal as of it once
+//! the shot has moved the draft's base and the draft is edited (skep #453).
 
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_client::address::{document_of, parse_address};
-use skep_client::board::{acked_addr, frames, Answer, Board, Scope, Token};
+use skep_client::board::{acked_addr, frames, Answer, AtAnswer, Board, Scope, Token};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::merge::{
     compose, current, head_of, land, verify, Inputs, Landed, Landing, Merger, RecordLanding,
-    Refusal, Role, Run, RunCounts, Side, Verdict,
+    Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
 };
 use skep_client::sign::{sig_hex, Signer};
 use skep_identity::{
@@ -85,6 +87,16 @@ fn acked(answer: Result<Answer, skep_client::Halt>) -> Value {
 /// A guest read's document, not a rejection.
 fn read(board: &Board, token: Option<&Token>, frame: &Value) -> Value {
     let Answer::Document(v) = board.op(token, frame).expect("the read") else { panic!("closed") };
+    assert_ne!(v["resp"].as_str(), Some("rejected"), "{v}");
+    v
+}
+
+/// A read as of `at` through `/op-at`: its document, not a rejection.
+fn read_at(board: &Board, token: Option<&Token>, at: u64, frame: &Value) -> Value {
+    let AtAnswer::Document(v) = board.op_at(token, at, frame).expect("the read at a position")
+    else {
+        panic!("no document as of {at}")
+    };
     assert_ne!(v["resp"].as_str(), Some("rejected"), "{v}");
     v
 }
@@ -674,6 +686,39 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
         meta["base"].as_str(),
         Some(member.to_string().as_str()),
         "the draft's recorded base moved to the merge's member: {meta}"
+    );
+    // THE RECORD NAMES THE POSITION the draft was read at (skep #453) — the
+    // board's position when `compose` imaged it — and `verify` reads the
+    // draft and its recorded base as of it: the premise, `doc_metadata` on
+    // `/op-at` at that position answers the base that stood; then Equal, and
+    // Equal still once the draft is edited past the shot, where a record
+    // naming no position reads the draft as it stands and is refused by name
+    // against the moved base.
+    let SideAt::Draft { position: Some(at), .. } = &record.sides[1] else {
+        panic!("the record's draft side names no position: {:?}", record.sides)
+    };
+    assert_eq!(*at, before, "the position the draft was imaged at");
+    let meta_at = read_at(&board, Some(&token), *at, &frames::doc_metadata(&draft.to_string()));
+    assert_eq!(
+        meta_at["base"].as_str(),
+        Some(base.to_string().as_str()),
+        "the premise — as of the record's position, the base that stood: {meta_at}"
+    );
+    assert_eq!(verify(&board, Some(&token), &record), Ok(Verdict::Equal));
+    insert_text(&board, &bare_token, &draft.to_string(), 1, "?");
+    assert_eq!(
+        verify(&board, Some(&token), &record),
+        Ok(Verdict::Equal),
+        "the testimony is of the state the merge composed from"
+    );
+    let mut headless = record.clone();
+    headless.sides[1] = SideAt::Draft { at: draft.clone(), position: None };
+    assert!(
+        matches!(
+            verify(&board, Some(&token), &headless),
+            Err(Refusal::DraftBaseDisagrees { ref named, .. }) if *named == base
+        ),
+        "a record naming no position reads the draft as it stands"
     );
     session.close().expect("close");
 }

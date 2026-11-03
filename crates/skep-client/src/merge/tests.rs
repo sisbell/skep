@@ -1000,7 +1000,7 @@ mod scripted {
     use skep_signature::HybridSigner;
 
     use crate::address::parse_address;
-    use crate::board::{frames, Board, Scope, HEAD_MEMBER_1};
+    use crate::board::{frames, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1};
     use crate::ceremony::handshake::{handshake, Session, Site};
     use crate::dial::{
         DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse,
@@ -1108,13 +1108,13 @@ mod scripted {
         /// copied into it — its `doc_metadata` `source`; `None` where
         /// neither did.
         source: Option<String>,
-        /// The base the board records for a staged draft — its
-        /// `doc_metadata` `base`, moved by each `publish` naming the draft as
-        /// its rendering `draft` (wire.md §Namespace, `stage`); `None` where
-        /// the board records none.
-        base: Option<String>,
-        /// Beside `base`, the extent the copy took of it — `base_copied`.
-        base_copied: Option<u64>,
+        /// The base the board records for a staged draft as of each
+        /// position it changed at, with the extent the copy took of it — its
+        /// `doc_metadata` `base` and `base_copied`, recorded by `stage` and
+        /// moved by each `publish` naming the draft as its rendering `draft`
+        /// (wire.md §Namespace, `stage`), served as of `at` on `/op-at`;
+        /// empty where the board records none.
+        staged: BTreeMap<u64, (String, u64)>,
         /// The arrangement as of each position it changed at, for `/op-at`.
         history: BTreeMap<u64, Vec<Run>>,
     }
@@ -1210,8 +1210,7 @@ mod scripted {
                     placed: None,
                     base_extent: None,
                     source: None,
-                    base: None,
-                    base_copied: None,
+                    staged: BTreeMap::new(),
                     history,
                 },
             );
@@ -1220,11 +1219,11 @@ mod scripted {
         /// Records `text`, a draft of the world, as STAGED from `base` with
         /// `copied` positions taken of it — its `doc_metadata` `base`,
         /// `base_copied` and `source`, as the board's `stage` records them
-        /// (wire.md §Namespace). The draft's arrangement is the cell's.
+        /// (wire.md §Namespace), standing from the world's first position.
+        /// The draft's arrangement is the cell's.
         fn staged(&mut self, text: &str, base: &str, copied: u64) {
             let d = self.docs.get_mut(text).expect("a draft of the world");
-            d.base = Some(base.to_string());
-            d.base_copied = Some(copied);
+            d.staged.insert(0, (base.to_string(), copied));
             d.source = Some(base.to_string());
         }
 
@@ -1391,7 +1390,9 @@ mod scripted {
 
         fn op(&mut self, frame: &Value, at: Option<u64>) -> Result<Response, DialError> {
             let op = frame["op"].as_str().unwrap_or("?").to_string();
-            let position = self.position;
+            // Every answer names where it sits: `at` on `/op-at`, the head
+            // on `/op` (wire.md §Reading history).
+            let position = at.unwrap_or(self.position);
             let rejected = |code: &str| {
                 reply(
                     200,
@@ -1410,7 +1411,9 @@ mod scripted {
                         return Ok(rejected("withheld"));
                     }
                     let Some(d) = self.docs.get(doc) else { return Ok(rejected("doc_not_registered")) };
-                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": d.base, "base_copied": d.base_copied.map(|c| c.to_string())})))
+                    // The recorded base as it stood at `position`.
+                    let staged = d.staged.range(..=position).next_back().map(|(_, s)| s);
+                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source, "base": staged.map(|(b, _)| b.clone()), "base_copied": staged.map(|(_, c)| c.to_string())})))
                 }
                 "retrieve_doc_v_span_set" => {
                     let doc = frame["doc"].as_str().unwrap();
@@ -1671,14 +1674,15 @@ mod scripted {
                         self.trunk_head.insert(doc.clone(), member.clone());
                         self.docs.get_mut(&doc).unwrap().runs = runs;
                     }
-                    // THE BASE MOVES: the rendering draft's recorded base
-                    // becomes the member the shot minted, `base_copied` its
-                    // whole count (wire.md §Namespace, `stage`).
-                    if let Some(s) = draft.as_ref().and_then(|s| self.docs.get_mut(s)) {
-                        s.base = Some(member.clone());
-                        s.base_copied = Some(placed);
-                    }
                     let at = self.commit("publish", vec![member.clone()]);
+                    // THE BASE MOVES at the shot's position: the rendering
+                    // draft's recorded base becomes the member the shot
+                    // minted, `base_copied` its whole count (wire.md
+                    // §Namespace, `stage`); a read as of an earlier position
+                    // answers the base that stood.
+                    if let Some(s) = draft.as_ref().and_then(|s| self.docs.get_mut(s)) {
+                        s.staged.insert(at, (member.clone(), placed));
+                    }
                     json!({"resp": "ack_addr", "addr": member, "at": at})
                 }
                 "delete" | "reinstate" => {
@@ -1752,14 +1756,35 @@ mod scripted {
                 .collect()
         }
 
-        /// The frames of one op, in order.
+        /// The frames of one op, in order — an `/op-at` read's inner frame.
         fn frames(&self, op: &str) -> Vec<Value> {
+            let at_line = format!("at:{op}");
             self.served
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(line, _)| line == op || line == &format!("at:{op}"))
-                .map(|(_, f)| f.clone())
+                .filter_map(|(line, f)| {
+                    if line == op {
+                        Some(f.clone())
+                    } else if *line == at_line {
+                        Some(f["frame"].clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+
+        /// The positions the `/op-at` reads of one op were asked as of, in
+        /// order — a read answered `history_busy` counted with its position.
+        fn positions(&self, op: &str) -> Vec<u64> {
+            let at_line = format!("at:{op}");
+            self.served
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(line, _)| *line == at_line)
+                .map(|(_, f)| f["at"].as_u64().expect("an `/op-at` body names its position"))
                 .collect()
         }
 
@@ -1775,15 +1800,15 @@ mod scripted {
     impl Dialer for Scripted {
         fn exchange(&self, _origin: &Origin, req: &Request) -> Result<Response, DialError> {
             let frame: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-            let (line, inner) = match req.path.as_str() {
+            // The body kept whole: an `/op-at` read's `at` beside its frame.
+            let (line, body) = match req.path.as_str() {
                 "/op" => (frame["op"].as_str().unwrap_or("?").to_string(), frame.clone()),
-                "/op-at" => (
-                    format!("at:{}", frame["frame"]["op"].as_str().unwrap_or("?")),
-                    frame["frame"].clone(),
-                ),
+                "/op-at" => {
+                    (format!("at:{}", frame["frame"]["op"].as_str().unwrap_or("?")), frame.clone())
+                }
                 p => (format!("{} {p}", req.method.as_str()), Value::Null),
             };
-            self.served.lock().unwrap().push((line, inner));
+            self.served.lock().unwrap().push((line, body));
             let mut w = self.world.lock().unwrap();
             match req.path.as_str() {
                 "/health" => Ok(reply(200, w.health())),
@@ -2294,9 +2319,11 @@ mod scripted {
         assert_eq!(merged.record.gaps[0].resolved_by, Some(ResolvedBy::Person));
     }
 
-    /// A draft side at a position is read through `/op-at`: one
-    /// `history_busy` is retried and the read answers; past the bounded
-    /// retries the composition refuses `HistoryBusy`.
+    /// A draft side at a position is read through `/op-at` — its recorded
+    /// base first, then its extent and its image, each as of the position —
+    /// and the record's side names that position: one `history_busy` is
+    /// retried and the read answers; past the bounded retries the
+    /// composition refuses `HistoryBusy`.
     #[test]
     fn a_draft_at_a_position_retries_history_busy_then_refuses() {
         let (dialer, board, _) = open(World::window_and_draft());
@@ -2314,13 +2341,116 @@ mod scripted {
             vec![Family::Own, Family::Window, Family::Own, Family::DraftNative]
         );
         assert_eq!(
-            dialer.ops().iter().filter(|o| *o == "at:retrieve_doc_v_span_set").count(),
-            2,
-            "one busy, one answered: {:?}",
+            dialer.positions("doc_metadata"),
+            [at, at],
+            "the draft's base as of the position, one busy, one answered: {:?}",
             dialer.ops()
+        );
+        assert_eq!(dialer.positions("retrieve_doc_v_span_set"), [at]);
+        assert_eq!(dialer.positions("image"), [at]);
+        assert_eq!(
+            merged.record.sides[1],
+            SideAt::Draft { at: a(S), position: Some(at) },
+            "the record's side names the position named"
         );
         dialer.world().busy = 10;
         assert_eq!(compose(&board, Some(&token()), &inputs), Err(Refusal::HistoryBusy));
+    }
+
+    /// THE RECORD NAMES THE POSITION A DRAFT SIDE WAS READ AT (skep #453): a
+    /// draft side named with no position is read at the head, and the
+    /// record's side carries the position the draft's image answered, the
+    /// inputs as given. `verify` then reads the draft AND its recorded base
+    /// as of that position — its `doc_metadata`, its extent, its image and
+    /// the join's `compare` each through `/op-at` at it — so once the shot
+    /// that rendered the draft has moved its base to the member minted, and
+    /// once the draft is edited past the shot, the record still verifies
+    /// Equal; the premise, the board's `doc_metadata` as of the position
+    /// answering the base that stood. A record naming no position reads the
+    /// draft as it stands, and is refused by name against the moved base.
+    #[test]
+    fn a_draft_sides_record_names_the_position_read_and_verifies_as_of_it() {
+        let (dialer, board, signer) = open(World::window_and_draft());
+        let session = sign_in(&board, &signer);
+        let read_at = dialer.world().position;
+        let inputs =
+            Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        assert_eq!(
+            merged.record.sides[1],
+            SideAt::Draft { at: a(S), position: Some(read_at) },
+            "the position the draft's image answered"
+        );
+        assert_eq!(merged.inputs, inputs, "the inputs as given");
+        assert!(
+            dialer.ops().iter().all(|o| !o.starts_with("at:")),
+            "a draft named with no position is read at the head: {:?}",
+            dialer.ops()
+        );
+        // The shot renders the draft, and the board moves its recorded base
+        // to the member minted; the record read back names the position.
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let Landed::Member { address, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(address.to_string(), format!("{D}.3"));
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(record.sides[1], SideAt::Draft { at: a(S), position: Some(read_at) });
+        let base_as_of = |at: Option<u64>| -> Option<String> {
+            let frame = frames::doc_metadata(S);
+            let v = match at {
+                None => match board.op(Some(&token()), &frame).expect("the read") {
+                    Answer::Document(v) => v,
+                    Answer::Closed => panic!("closed"),
+                },
+                Some(at) => match board.op_at(Some(&token()), at, &frame).expect("the read") {
+                    AtAnswer::Document(v) => v,
+                    other => panic!("{other:?}"),
+                },
+            };
+            v["base"].as_str().map(str::to_string)
+        };
+        assert_eq!(base_as_of(None), Some(format!("{D}.3")), "the base moved with the shot");
+        assert_eq!(
+            base_as_of(Some(read_at)),
+            Some(format!("{D}.1")),
+            "the premise: as of the record's position, the base that stood"
+        );
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+        for op in ["doc_metadata", "retrieve_doc_v_span_set", "image", "compare"] {
+            assert_eq!(
+                dialer.positions(op),
+                [read_at],
+                "`{op}` read as of the record's position: {:?}",
+                dialer.ops()
+            );
+        }
+        assert_eq!(
+            dialer.frames("doc_metadata").iter().map(|f| f["doc"].clone()).collect::<Vec<_>>(),
+            [json!(D), json!(S), json!(format!("{D}.3"))],
+            "the trunk's, the draft's as of the position, the landed member's"
+        );
+        // The draft edited past the shot — its "!!!" deleted — and the record
+        // still testifies to the state it composed from.
+        let typed = dialer.world().position;
+        match board.op(Some(session.token()), &frames::delete(S, 12, 3, typed, None)) {
+            Ok(Answer::Document(v)) => assert_eq!(v["resp"], "ack", "{v}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(dialer.world().docs.get(S).unwrap().runs, vec![run(D, 1, 11)]);
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+        let mut headless = record.clone();
+        headless.sides[1] = SideAt::Draft { at: a(S), position: None };
+        assert_eq!(
+            verify(&board, Some(&token()), &headless),
+            Err(Refusal::DraftBaseDisagrees {
+                side: Side::Draft { at: a(S), position: None },
+                named: a(&format!("{D}.1")),
+                served: a(&format!("{D}.2")),
+            }),
+            "a record naming no position reads the draft as it stands"
+        );
     }
 
     /// A DRAFT SIDE's BASE IS READ OFF THE BOARD (skep #743): the draft's

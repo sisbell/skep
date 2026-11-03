@@ -6,11 +6,13 @@
 //! `client.md` §2.1 lists the thirteen it stands beside, none touching
 //! content — this one does, which is why the library's `merge` feature is
 //! on for this crate alone. The board, the document and one side are named
-//! — an alternative member; a draft, whose base is the member the board
-//! records it was staged from (`doc_metadata`'s `base`, read by the library;
-//! `--base` names it only to be checked, and one the board's record does not
-//! derive is refused); or a fork of one of the document's published
-//! versions, whose base is the source the board serves for it
+//! — an alternative member; a draft, read at the board's head, whose base is
+//! the member the board records it was staged from (`doc_metadata`'s
+//! `base`, read by the library; `--base` names it only to be checked, and
+//! one the board's record does not derive is refused), the report's `sides`
+//! carrying the position the draft was read at, which a verifier reads the
+//! draft and its recorded base as of; or a fork of one of the document's
+//! published versions, whose base is the source the board serves for it
 //! (`doc_metadata`'s `source`) — a draft staged from, or a fork taken from,
 //! the bare document before its first version is refused with that reason —
 //! and the head where the feed walk should not supply it; the

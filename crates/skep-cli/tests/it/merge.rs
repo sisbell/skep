@@ -636,6 +636,7 @@ fn a_draft_is_merged_over_the_base_the_board_records_and_a_disagreeing_base_is_r
     assert_eq!((v["runs"][3]["family"].clone(), v["runs"][3]["side"].clone()), (json!("draft"), json!(1)), "the draft's fresh run, its own family");
     assert_eq!(v["sides"][1]["role"], json!("draft"));
     assert_eq!(v["sides"][1]["at"]["draft"], json!(staged_s), "{}", v["sides"]);
+    assert_eq!(v["sides"][1]["at"]["position"], json!(before), "the position the draft was read at, carried in the record's side (skep #453): {}", v["sides"]);
     assert_eq!(v["counts"], json!({"a": 3, "b": 2, "m": 4}));
     assert_eq!(v["gaps"], json!([]), "different material on each side: no gap");
     assert!(v["landed"].is_null(), "{v}");

@@ -19,7 +19,9 @@
 //! client's join is checked against (§1.3 step 4), and answers `Equal`,
 //! `Differs` or `Unreadable`, never a verdict manufactured for a document
 //! it may not read (D14): the trunk, the head, the base, a side or the
-//! landed document withheld from the reader answers `Unreadable` naming it.
+//! landed document withheld from the reader answers `Unreadable` naming it,
+//! as does the origin of a run a side windows whose values the value rule
+//! reads, masked as a `withheld` item.
 //! A position the record names is read as named or not at all: one whose
 //! history the board has reclaimed withholds the verdict (`Unreadable`),
 //! and one past the board's head or inside one commit is refused as the
@@ -709,11 +711,12 @@ pub enum Verdict {
     /// A document the verdict needs is not readable to this reader.
     ///
     /// It is the trunk, the head, the base or a side, withheld at any read
-    /// the recomputation makes, the join's `compare` included; the landed
-    /// member, or the draft, withheld or not registered; or the draft side,
-    /// or the draft landed in, as of the position the record names for it,
-    /// whose history the board has reclaimed: the verdict withheld, never
-    /// made up (D14).
+    /// the recomputation makes, the join's `compare` included; the origin of
+    /// a run a side windows, met as a `withheld` item where the value rule
+    /// reads the run's values; the landed member, or the draft, withheld or
+    /// not registered; or the draft side, or the draft landed in, as of the
+    /// position the record names for it, whose history the board has
+    /// reclaimed: the verdict withheld, never made up (D14).
     Unreadable(Address),
 }
 
@@ -737,8 +740,11 @@ pub enum Verdict {
 /// side — that the reader may not read withholds the verdict (§4,
 /// testimony; D14): the board's `withheld` at any of its reads, the join's
 /// `compare` included, answers [`Verdict::Unreadable`] naming the document
-/// the board refused. A document the board has never registered is no
-/// withheld one (wire.md §The read predicate): it is refused.
+/// the board refused, and so does a `withheld` item a value read meets —
+/// a run a side windows from a document the reader may not read, masked
+/// at its own position (wire.md §Value encodings) — naming the item's
+/// origin. A document the board has never registered is no withheld one
+/// (wire.md §The read predicate): it is refused.
 ///
 /// A position the record names — its draft side's, its draft landing's —
 /// is read as named or not at all (skep #761): where the board has
@@ -750,19 +756,20 @@ pub enum Verdict {
 ///
 /// The reads' refusals ([`Refusal`]) on the trunk, the head, the base and
 /// the sides — a document the board has not registered,
-/// [`Refusal::NoSuchDocument`], among them — but `withheld` and a reclaimed
-/// position the record names, which answer [`Verdict::Unreadable`]; a
-/// position the record names past the board's head or inside one commit,
-/// [`Refusal::BeyondHead`] or [`Refusal::NotAPosition`] naming the draft as
-/// the record's — the record was not written against this board's history
-/// as it stands; a record with no head side or with `landed` none is faced
-/// — there is nothing to verify against — and so is one naming more sides
-/// besides the head than a merge numbers, before any read; a client join
-/// the oracle disagrees with is this library's own fault, faced; a landed
-/// member with no `placed` term is faced; the landed document's reads'
-/// refusals but `withheld`, `doc_not_registered` and a reclaimed landing
-/// position, which answer [`Verdict::Unreadable`]; an `image` run that is
-/// no content I-address.
+/// [`Refusal::NoSuchDocument`], among them — but `withheld`, a rejection
+/// or an item a value read meets, and a reclaimed position the record
+/// names, which answer [`Verdict::Unreadable`]; a position the record names
+/// past the board's head or inside one commit, [`Refusal::BeyondHead`] or
+/// [`Refusal::NotAPosition`] naming the draft as the record's — the record
+/// was not written against this board's history as it stands; a record
+/// with no head side or with `landed` none is faced — there is nothing to
+/// verify against — and so is one naming more sides besides the head than
+/// a merge numbers, before any read; a client join the oracle disagrees
+/// with is this library's own fault, faced; a landed member with no
+/// `placed` term is faced; the landed document's reads' refusals but
+/// `withheld`, `doc_not_registered` and a reclaimed landing position, which
+/// answer [`Verdict::Unreadable`]; an `image` run that is no content
+/// I-address.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
     let reader = Reader::new(board, token);
     let head = record.head().ok_or_else(|| {

@@ -74,7 +74,11 @@
 //! bytes added by two sides at one spot are kept once, the earlier side's
 //! identity, and a gap left with one side's material is settled by it; a
 //! retype beside an edit keeps the retyping side's identity unless the
-//! caller asks the base's back.
+//! caller asks the base's back. The rule reads the values of the runs it
+//! compares, a run a side windows from another document among them; where
+//! the reader may not read that document the composition refuses naming it
+//! ([`Refusal::Unreadable`]; [`verify`] answers [`Verdict::Unreadable`]),
+//! and the rule switched off reads no value.
 
 mod compose;
 pub mod journal;

@@ -6,17 +6,17 @@
 //! link's age, [`LinkValue`]), a `delivery`'s first value, a `span_set`'s
 //! content extent and a `runs` answer's I-map, the count by home's `homes`,
 //! the retracted-links read's `links` window and an `edition_claims`
-//! answer's rows, and behind `search` and `merge` a `delivery`'s typed items
-//! and its values, a `doc_metadata`'s terms, a `universal_grants` answer's
-//! rows, a head member's pair, a `compare` answer's pairs, a `claims`
-//! answer's rows and an answer's `as_of`. Pure functions of a document the
-//! caller already holds: the
-//! dial stays the caller's — under its token or as a guest — and with it
-//! what the death signal means. The ack and refusal readers (`acked_at`,
-//! `acked_addr`, [`Rejection`](super::Rejection)) and the registry reads'
-//! decoding stay at `board`'s root, where `Board` itself and the suites
-//! read them, and a caller reads an envelope member such as `as_of` in
-//! place.
+//! answer's rows, and behind `search` and `merge` a `delivery`'s typed items,
+//! its values and the origin of its first `withheld` item, a
+//! `doc_metadata`'s terms, a `universal_grants` answer's rows, a head
+//! member's pair, a `compare` answer's pairs, a `claims` answer's rows and
+//! an answer's `as_of`. Pure functions of a document the caller already
+//! holds: the dial stays the caller's — under its token or as a guest — and
+//! with it what the death signal means. The ack and refusal readers
+//! (`acked_at`, `acked_addr`, [`Rejection`](super::Rejection)) and the
+//! registry reads' decoding stay at `board`'s root, where `Board` itself
+//! and the suites read them, and a caller reads an envelope member such as
+//! `as_of` in place.
 
 // Every reader but `first_atom` — the board term's — is in the acting half;
 // the feature-free build decodes the board term alone.
@@ -429,8 +429,8 @@ pub(crate) fn compare_pairs(v: &Value) -> Option<Vec<Correspondence>> {
 /// one composite value at its position — the values a `publish` body
 /// spells, and the value rule compares, one item a position. `None` for a
 /// document that is no delivery, and for an item that is no value a caller
-/// can spell: a `withheld` run, a `ref`, a hex that does not decode, a kind
-/// this crate does not know.
+/// can spell: a `withheld` run, whose origin [`withheld_origin`] answers, a
+/// `ref`, a hex that does not decode, a kind this crate does not know.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
     if v["resp"].as_str() != Some("delivery") {
@@ -451,6 +451,21 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
         }
     }
     Some(out)
+}
+
+/// Returns the origin of a `delivery`'s first `withheld` item.
+///
+/// The item is a run the reader may not read inside a document it may,
+/// masked at the run's own position (wire.md §Value encodings; §The read
+/// predicate: "a delivery masks per run"), and its origin is the document
+/// the run was minted under. `None` for a document that is no delivery, or
+/// one that holds no such item.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+pub(crate) fn withheld_origin(v: &Value) -> Option<&str> {
+    if v["resp"].as_str() != Some("delivery") {
+        return None;
+    }
+    v["items"].as_array()?.iter().find_map(|item| item.get("withheld")?["origin"].as_str())
 }
 
 /// A `doc_metadata` answer's terms (wire.md §The response envelope).
@@ -750,6 +765,24 @@ mod tests {
         assert_eq!(first_atom(&json!({"as_of":9,"items":[{"atom_hex":"00ff"}],"resp":"delivery"})).as_deref(), Some(&[0x00, 0xff][..]));
         assert_eq!(first_atom(&json!({"as_of":9,"items":[{"ref":"1.0.1.0.1.0.2.1"}],"resp":"delivery"})), None);
         assert_eq!(first_atom(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected"})), None);
+    }
+
+    /// A `withheld` item spells no value, and its origin is read off it.
+    ///
+    /// The examples are wire.md's own, `<!-- wire: response
+    /// delivery_withheld -->` and `<!-- wire: response delivery -->`: a
+    /// `ref` spells no value either, and names no origin, nor does a
+    /// `withheld` rejection, which is no delivery.
+    #[test]
+    fn a_withheld_item_spells_no_value_and_names_its_origin() {
+        let masked = json!({"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.2","width":"3"}}],"resp":"delivery"});
+        assert_eq!((delivery_values(&masked), withheld_origin(&masked)), (None, Some("1.0.1.0.2")));
+        let with_ref = json!({"as_of":9,"items":[{"content":"hello"},{"ref":"1.0.1.0.1.0.2.1"}],"resp":"delivery"});
+        assert_eq!((delivery_values(&with_ref), withheld_origin(&with_ref)), (None, None));
+        assert_eq!(withheld_origin(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected","site":{"addr":"1.0.1.0.2"}})), None);
+        let readable = json!({"as_of":9,"items":[{"content":"hi"},{"atom":"chunk"}],"resp":"delivery"});
+        assert_eq!(delivery_values(&readable).map(|v| v.len()), Some(3), "two bytes and one atom");
+        assert_eq!(withheld_origin(&readable), None);
     }
 
     /// The `runs` example maps its five I-positions to ordinals 1–5.

@@ -1157,10 +1157,14 @@ mod scripted {
     }
 
     /// One position's value as the world holds it.
+    ///
+    /// A `Ref` is a link position's, delivered `{"ref": …}`: no value a
+    /// content read spells, which a cell plants to meet a board fault.
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Val {
         Byte(u8),
         Atom(String),
+        Ref(String),
     }
 
     /// The merge marker a draft carries (wire.md §The response envelope,
@@ -1288,6 +1292,11 @@ mod scripted {
         /// Every shot lands as its base's daughter: the head moved.
         head_moved: bool,
         /// Documents this reader may not read.
+        ///
+        /// A read naming one is refused `withheld`; a `retrieve_v` of a
+        /// readable document delivers each run whose origin is one as a
+        /// `withheld` item at its own position (wire.md §Value encodings),
+        /// the one predicate asked of both (wire.md §The read predicate).
         withheld: BTreeSet<String>,
         /// `/health` names the merger's account the board's claimant.
         claimed: bool,
@@ -1482,30 +1491,44 @@ mod scripted {
         }
 
         /// The delivery items over clipped runs: adjacent bytes one
-        /// `content` item, an atom its own.
+        /// `content` item, an atom and a reference each its own, and a run
+        /// whose origin this reader may not read one `withheld` item of its
+        /// width at its own position, never coalesced with a neighbour
+        /// (wire.md §Value encodings).
         fn items(&self, clipped: &[(u64, Run)]) -> Vec<Value> {
+            fn flush(out: &mut Vec<Value>, text: &mut String) {
+                if !text.is_empty() {
+                    out.push(json!({"content": std::mem::take(text)}));
+                }
+            }
             let mut out = Vec::new();
             let mut text = String::new();
             for (_, r) in clipped {
+                let origin = r.origin.to_string();
+                if self.withheld.contains(&origin) {
+                    flush(&mut out, &mut text);
+                    out.push(json!({"withheld": {"origin": origin, "width": r.width.to_string()}}));
+                    continue;
+                }
                 for n in r.i_start..r.reach() {
                     match self
                         .values
-                        .get(&(r.origin.to_string(), n))
+                        .get(&(origin.clone(), n))
                         .unwrap_or_else(|| panic!("no value at {}", i_addr(&r.origin, n)))
                     {
                         Val::Byte(b) => text.push(*b as char),
                         Val::Atom(s) => {
-                            if !text.is_empty() {
-                                out.push(json!({"content": std::mem::take(&mut text)}));
-                            }
+                            flush(&mut out, &mut text);
                             out.push(json!({"atom": s}));
+                        }
+                        Val::Ref(link) => {
+                            flush(&mut out, &mut text);
+                            out.push(json!({"ref": link}));
                         }
                     }
                 }
             }
-            if !text.is_empty() {
-                out.push(json!({"content": text}));
-            }
+            flush(&mut out, &mut text);
             out
         }
 
@@ -5796,6 +5819,74 @@ mod scripted {
             verify(&board, Some(&token()), &naming),
             Err(Refusal::NoSuchDocument(unregistered))
         );
+    }
+
+    /// A run a readable side windows from a document the reader may not
+    /// read refuses where the value rule reads it, naming that document.
+    ///
+    /// The race shape with a second daughter `D.1.2` adding "big " at
+    /// `D·4|D·5` as a window onto `W`, another account's draft, beside the
+    /// head's own fresh "big ": the dedup reads both groups, keeps the
+    /// head's and drops the daughter's copy, and a record of it landed on the
+    /// head verifies Equal. With `W` withheld the daughter stays readable and
+    /// is imaged whole, and its delivery masks the window as a `withheld`
+    /// item at its own position (wire.md §Value encodings): `compose` refuses
+    /// `Unreadable(W)` at the value read through the daughter, and `verify`
+    /// answers `Unreadable(W)`, the verdict withheld (merge record §4; D14).
+    /// A reference in the window's place is no withheld run: it is faced as
+    /// a board fault.
+    #[test]
+    fn a_withheld_run_in_a_readable_side_refuses_naming_its_origin() {
+        const W: &str = "1.0.2.0.8";
+        let daughter = format!("{D}.1.2");
+        let mut w = World::race();
+        w.text(W, 1, "big ");
+        w.doc(W, false, "1.0.2", vec![run(W, 1, 4)]);
+        w.member(&daughter, vec![run(D, 1, 4), run(W, 1, 4), run(D, 5, 7)], Some(11));
+        let (dialer, board, _) = open(w);
+        let inputs = Inputs { sides: vec![Side::Member(a(&daughter))], ..race_inputs() };
+        // The premise, `W` readable: the dedup fires at the order gap.
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)],
+            "the head's 'big ' kept, the daughter's copy dropped"
+        );
+        assert_eq!(merged.composed.values.applied, vec![GapId(1)]);
+        let mut record = merged.record.clone();
+        record.landed = Some(RecordLanding::Member { member: a(&format!("{D}.2")), position: 0 });
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+        // `W` withheld: the daughter readable, its window masked.
+        dialer.world().withheld.insert(W.to_string());
+        dialer.clear();
+        assert_eq!(compose(&board, Some(&token()), &inputs), Err(Refusal::Unreadable(a(W))));
+        let ops = dialer.ops();
+        assert!(
+            dialer.frames("image").iter().any(|f| f["d"].as_str() == Some(daughter.as_str())),
+            "the daughter imaged whole: {ops:?}"
+        );
+        assert_eq!(
+            ops.last().map(String::as_str),
+            Some("at:retrieve_v"),
+            "the masked value read is the last: {ops:?}"
+        );
+        let masked = dialer.frames("retrieve_v").pop().expect("a value read");
+        assert_eq!(
+            masked["specs"][0]["doc"].as_str(),
+            Some(daughter.as_str()),
+            "read through the daughter, which the board answered"
+        );
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(W))));
+        // A reference in the window's place: no withheld run, a board fault.
+        dialer.world().withheld.clear();
+        dialer.world().values.insert((W.to_string(), 1), Val::Ref(format!("{W}.0.2.1")));
+        match compose(&board, Some(&token()), &inputs) {
+            Err(Refusal::Halt(Halt::Halt(face))) => {
+                assert!(face.cause.contains("a reference"), "{face}");
+                assert!(face.act.contains("board fault"), "{face}");
+            }
+            other => panic!("a reference is a board fault: {other:?}"),
+        }
     }
 
     /// A gap of two groups the merger moved lands, and its record verifies.

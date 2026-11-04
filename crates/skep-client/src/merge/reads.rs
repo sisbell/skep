@@ -51,7 +51,12 @@
 //! before the first `image`, as does a fork of a BARE source or a draft
 //! staged from one, a side taken from the document before its first
 //! version, whose base is history the board does not serve; a side the
-//! reader may not read refuses at its own read.
+//! reader may not read refuses at its own read. A run a readable side
+//! windows from a document the reader may not read is answered whole by
+//! `image` and `compare` and masked by `retrieve_v` (wire.md §The read
+//! predicate, "a delivery masks per run"), so it refuses where a value is
+//! read, naming that document ([`Refusal::Unreadable`]); the value rule
+//! switched off reads no value of it.
 //!
 //! The reads go through [`Board::op`] under the caller's token, or with no
 //! token where none is given, for the first read and the journal's, and
@@ -396,7 +401,10 @@ pub enum Refusal {
     /// It is a document the reads need — the trunk, the head, the base or a
     /// side, and at the landing the landed document or the journal — that
     /// the reader may not read; at the reads nothing is composed, at the
-    /// landing nothing further is written.
+    /// landing nothing further is written. It is as well the origin of a
+    /// `withheld` item a value read met: a run a readable side windows from
+    /// a document the reader may not read, which the board masks at its own
+    /// position (wire.md §Value encodings).
     ///
     /// Where the reads are a merge record's recomputation, [`record::verify`]
     /// answers [`Verdict::Unreadable`](record::Verdict::Unreadable) naming
@@ -1063,11 +1071,15 @@ impl<'a> Reader<'a> {
     ///
     /// # Errors
     ///
-    /// A delivery holding an item no value can be spelled from — a withheld
-    /// run, a reference — is faced: the merge reads the document's own
-    /// positions, which its reader may read whole. A delivery short of, or
-    /// past, the span asked is faced; another refusal is mapped by
-    /// [`Reader::refuse`]; otherwise [`Reader::read`]'s errors.
+    /// A delivery holding a `withheld` item is [`Refusal::Unreadable`] naming
+    /// the item's origin: `doc` is readable, but a run it windows from a
+    /// document the reader may not read is masked at its own position
+    /// (wire.md §Value encodings), and the value rule reads such runs as it
+    /// reads a side's own. A delivery holding another item no value can be
+    /// spelled from — a reference, a hex that does not decode, a kind this
+    /// client does not know — is faced, as is one short of, or past, the
+    /// span asked; another refusal is mapped by [`Reader::refuse`];
+    /// otherwise [`Reader::read`]'s errors.
     pub(super) fn values(
         &self,
         doc: &Address,
@@ -1109,13 +1121,19 @@ impl<'a> Reader<'a> {
             }
             return Err(self.refuse(doc, &r, &v));
         }
-        let items = answers::delivery_values(&v).ok_or_else(|| {
-            Halt::face(
+        let Some(items) = answers::delivery_values(&v) else {
+            // A run of `doc` whose origin the reader may not read, masked at
+            // its own position: `doc` stays readable, its origin does not.
+            if let Some(origin) = answers::withheld_origin(&v).and_then(parse_address) {
+                return Err(Refusal::Unreadable(origin));
+            }
+            return Err(Halt::face(
                 format!("a position of {doc} cannot be read as a value"),
-                format!("the delivery at {from} holds an item no value is spelled from — a withheld run, a reference, or a kind this client does not know: {}", crate::halt::clipped(&v.to_string(), 200)),
-                "this is a board fault, or a window the merge should have signed by address; nothing was written",
+                format!("the delivery at {from} holds an item no value is spelled from — a reference, a hex that does not decode, or a kind this client does not know: {}", crate::halt::clipped(&v.to_string(), 200)),
+                "this is a board fault, or an item kind newer than this client — update the client where the kind is new; nothing was written",
             )
-        })?;
+            .into());
+        };
         if items.len() as u64 != width {
             return Err(Halt::face(
                 format!("{doc} delivered {} positions where {width} were asked", items.len()),
@@ -1294,8 +1312,10 @@ pub(super) struct Readings {
 /// - a named base beside a draft side that is not the one the anchors
 ///   derive, [`Refusal::DraftBaseDisagrees`];
 /// - a base that is no member of `doc`'s chain, faced;
-/// - then each image and value read's own refusals, and an `image` run that
-///   is no content I-address.
+/// - then each image and value read's own refusals — a run a readable side
+///   windows from a document the reader may not read,
+///   [`Refusal::Unreadable`] naming that document where the value rule
+///   reads its values — and an `image` run that is no content I-address.
 pub(super) fn read_shape(
     reader: &Reader<'_>,
     doc: &Address,

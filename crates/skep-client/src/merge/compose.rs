@@ -12,7 +12,8 @@
 //! shared gap (the dedup) and, switched on, before the walk (the retype).
 //! Beside the core stand the two other pure functions §7 names: [`base_of`],
 //! the nearest common ancestor of two members by §1.2's address forms, and
-//! [`script`], the in-place edit script §1.5's draft landing applies.
+//! [`script`], the in-place edit script that turns a draft's list into a
+//! target — a preview; the draft landing sends one `set_arrangement`.
 //!
 //! The vocabulary is the record's. A run is `(origin, i_start, width)`. The
 //! base is the member every side descends from. The spine is the surviving
@@ -29,13 +30,17 @@
 //! The lists are never expanded to positions. The walk is made over the
 //! fragments of the lists' common refinement — every run cut at every
 //! other run's edges, so a fragment lies wholly inside or wholly outside each
-//! list — and a fragment stands for its positions in every rule below. The
-//! cost is in runs, not in width.
+//! list — and a fragment stands for its positions in every rule below. A
+//! run a list places twice is two placements, each its own position in
+//! every rule (skep #763): the second placement of a fragment is a fragment
+//! of its own, the same across the lists, so a copy every list holds is
+//! shared material and a copy one list adds is its addition. The cost is in
+//! runs, not in width.
 //!
 //! Nothing here dials, reads or writes. The one crate this file links is
 //! `skep-address`, for the address form the anchors are reported in.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Level, Nat, Tumbler};
 
@@ -344,10 +349,13 @@ pub struct Composed {
     pub ignored: Vec<Resolution>,
 }
 
-/// One in-place edit of a draft (merge record §1.5, the draft landing).
+/// One in-place edit of a draft, as [`script`] spells it.
 ///
-/// The edits are the wire's `delete` and `reinstate`, positions in the
-/// draft's content ordinals, counted from 1.
+/// The edits take the form of the wire's `delete` and `reinstate`, positions
+/// in the draft's content ordinals, counted from 1. They are a preview of
+/// what turning the draft into its target would take as in-place edits; the
+/// draft landing sends none of them — it is one `set_arrangement` — so no
+/// frame is built from one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InPlaceOp {
     /// Removes `width` positions from position `p` of the draft.
@@ -398,14 +406,15 @@ pub enum InPlaceOp {
 /// and reads the report again. Under a `spine_hint` that resolution is not
 /// applied and stands in `ignored`.
 ///
-/// **Precondition.** Every run has a width above 0, and no position stands
-/// twice in one list. A release build skips a run of width 0 and the later
-/// of two placements of one position, and composes the rest.
+/// **Precondition.** Every run has a width above 0. A release build skips a
+/// run of width 0 and composes the rest. A list that places one run twice
+/// is admitted: each placement is its own position (skep #763), so both
+/// placements survive where every side keeps them and a side that removes
+/// one removes that one alone.
 ///
 /// # Panics
 ///
-/// Panics in a debug build on a run of width 0 and on a position placed
-/// twice in one list.
+/// Panics in a debug build on a run of width 0.
 pub fn compose_runs(
     base: &[Run],
     sides: &[(SideIx, Vec<Run>)],
@@ -517,12 +526,17 @@ impl Refinement {
     /// Returns the refinement of the base and the sides.
     ///
     /// Every run is cut at every other run's edges, each list then a
-    /// sequence of fragment ids.
+    /// sequence of fragment ids. A position a list places twice is two
+    /// placements (skep #763): the `k`-th placement of a fragment in one
+    /// list is the fragment's `k`-th copy, a fragment id of its own with the
+    /// same origin, start and width, and the same id for the `k`-th
+    /// placement in every list — so a copy every list holds is one shared
+    /// position and a copy one list adds is that list's addition — and no
+    /// id stands twice in one sequence.
     ///
     /// # Panics
     ///
-    /// Panics in a debug build on a run of width 0 and on a position placed
-    /// twice in one list.
+    /// Panics in a debug build on a run of width 0.
     fn of(base: &[Run], sides: &[(SideIx, Vec<Run>)]) -> Refinement {
         let mut origins: Vec<Address> = Vec::new();
         let mut points: Vec<Vec<u64>> = Vec::new();
@@ -553,8 +567,11 @@ impl Refinement {
                 frags.push(Frag { origin: o, start: pair[0], width: pair[1] - pair[0] });
             }
         }
-        let sequence = |runs: &[Run]| -> Vec<usize> {
-            let mut seen = HashSet::new();
+        // The copies: `(fragment, k)` → the id of its `k`-th repeat, shared
+        // by every list, minted as a list first places the fragment again.
+        let mut copies: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut sequence = |runs: &[Run]| -> Vec<usize> {
+            let mut placed: HashMap<usize, usize> = HashMap::new();
             let mut out = Vec::new();
             for run in runs.iter().filter(|run| run.width > 0) {
                 let Some(o) = origins.iter().position(|x| *x == run.origin) else { continue };
@@ -563,18 +580,26 @@ impl Refinement {
                     continue;
                 };
                 for id in first[o] + i..first[o] + j {
-                    let fresh = seen.insert(id);
-                    debug_assert!(fresh, "a position placed twice in one list: {run:?}");
-                    if fresh {
-                        out.push(id);
-                    }
+                    let k = placed.entry(id).or_insert(0);
+                    let placement = if *k == 0 {
+                        id
+                    } else {
+                        *copies.entry((id, *k)).or_insert_with(|| {
+                            frags.push(frags[id]);
+                            frags.len() - 1
+                        })
+                    };
+                    *k += 1;
+                    out.push(placement);
                 }
             }
             out
         };
+        let base_seq = sequence(base);
+        let side_seqs: Vec<Vec<usize>> = sides.iter().map(|(_, runs)| sequence(runs)).collect();
         Refinement {
-            base: sequence(base),
-            sides: sides.iter().map(|(_, runs)| sequence(runs)).collect(),
+            base: base_seq,
+            sides: side_seqs,
             side_ix: sides.iter().map(|(ix, _)| *ix).collect(),
             side_runs: sides.iter().map(|(_, runs)| runs.len()).collect(),
             origins,
@@ -1493,23 +1518,25 @@ fn ancestry(mut versions: Vec<Nat>) -> Vec<Vec<Nat>> {
 
 /// Returns the edit script from a draft arranged as `current` to `target`.
 ///
-/// The script turns the draft into `target` by identity (merge record §1.5,
-/// the draft landing). The longest part of `current` that stands in
-/// `target`'s order is kept; every other stretch of `current` is one
-/// `delete`, the deletes listed last-to-first so each position holds when
-/// the one before it has been applied; then every stretch of `target` not
-/// kept is one `reinstate`, first-to-last, at the position it takes once
-/// the ones before it are applied. A run that moved is deleted before it is
-/// placed again, so a draft never holds it twice. Each op is one commit on
-/// the draft.
+/// The script turns the draft into `target` by identity, edit by edit. The
+/// longest part of `current` that stands in `target`'s order is kept; every
+/// other stretch of `current` is one `delete`, the deletes listed
+/// last-to-first so each position holds when the one before it has been
+/// applied; then every stretch of `target` not kept is one `reinstate`,
+/// first-to-last, at the position it takes once the ones before it are
+/// applied. A run that moved is deleted before it is placed again. It is a
+/// PREVIEW of the change, a pure function the suite's `apply` reads back:
+/// the draft landing sends none of its ops — it sets the draft's whole
+/// arrangement in one `set_arrangement` (merge record §1.5 as the landing
+/// lane ruled it), so no edit is one commit on the draft.
 ///
-/// **Precondition.** As [`compose_runs`]'s: no run of width 0, no position
-/// twice in one list.
+/// **Precondition.** As [`compose_runs`]'s: no run of width 0. A draft or a
+/// target that places one run twice is admitted, each placement its own
+/// position (skep #763).
 ///
 /// # Panics
 ///
-/// Panics in a debug build on a run of width 0 and on a position placed
-/// twice in one list, as [`compose_runs`] does.
+/// Panics in a debug build on a run of width 0, as [`compose_runs`] does.
 pub fn script(current: &[Run], target: &[Run]) -> Vec<InPlaceOp> {
     let r = Refinement::of(current, &[(SideIx(0), target.to_vec())]);
     let (cur, tgt) = (&r.base, &r.sides[0]);

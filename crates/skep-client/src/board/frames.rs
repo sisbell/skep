@@ -352,9 +352,10 @@ pub fn insert_plain_atom(doc: &str, ordinal: u64, atom: &str, as_of: u64, id: Op
 /// §Arrangement).
 ///
 /// It removes `width` content positions of the draft `doc` from ordinal `p`
-/// — one in-place edit of the merge's draft landing (the merge record's
-/// §1.5) — typed against the draft state `as_of`, the position the landing
-/// read the draft at, raised by each of its own acks.
+/// — one of the five in-place edits — typed against the draft state
+/// `as_of`, the position the writer read the draft at, raised by each of
+/// its own acks. The merge's draft landing sends none of these: it is one
+/// [`set_arrangement`].
 pub fn delete(doc: &str, p: u64, width: u64, as_of: u64, id: Option<&str>) -> Value {
     with_id(
         json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": p.to_string()}, "width": width.to_string(), "as_of": as_of}),
@@ -366,8 +367,8 @@ pub fn delete(doc: &str, p: u64, width: u64, as_of: u64, id: Option<&str>) -> Va
 ///
 /// It places `runs` by identity before content ordinal `at` of the draft
 /// `doc` (wire.md §Arrangement, `reinstate`), each as [`shot_run`] spells it
-/// — the other in-place edit of the merge's draft landing — typed against
-/// the draft state `as_of`, as [`delete`]'s is.
+/// — another of the in-place edits — typed against the draft state `as_of`,
+/// as [`delete`]'s is.
 pub fn reinstate(doc: &str, at: u64, runs: &[Value], as_of: u64, id: Option<&str>) -> Value {
     with_id(
         json!({"op": "reinstate", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "runs": runs, "as_of": as_of}),
@@ -375,7 +376,40 @@ pub fn reinstate(doc: &str, at: u64, runs: &[Value], as_of: u64, id: Option<&str
     )
 }
 
-/// Builds one run of a `publish` or a `reinstate` frame.
+/// Builds `{"op":"set_arrangement","doc":…,"runs":[…],"as_of":…}` with its
+/// three optional members (wire.md §Arrangement, `set_arrangement`).
+///
+/// It sets the draft `doc`'s WHOLE content arrangement by identity in one
+/// commit — `runs` each as [`shot_run`] spells it, placed from content
+/// ordinal 1 — typed against the draft state `as_of`, the one position the
+/// merge read the draft at, which the board refuses `arrangement_moved`
+/// with nothing changed where the draft's arrangement has moved since. The
+/// members: `head`, the version the merge was composed on with its content
+/// count AS READ at the compose, `{"at": …, "extent": "6"}`, the extent a
+/// decimal string; `base`, the base to record in the same pair form — a
+/// landing sends the head's pair, and only where the board records a base
+/// for `doc` (N4: a baseless document and a fork record none, and the
+/// board refuses one named for them `no_base_to_record`); `merge`, the
+/// sides the draft is to carry, `{"sides": [addresses]}`, possibly empty,
+/// recorded as the marker beside the base. Each is left out where `None`.
+/// The merge's one draft landing goes through this builder.
+pub fn set_arrangement(doc: &str, runs: &[Value], as_of: u64, head: Option<(&str, u64)>, base: Option<(&str, u64)>, merge: Option<&[&str]>, id: Option<&str>) -> Value {
+    let pair = |(at, extent): (&str, u64)| json!({"at": at, "extent": extent.to_string()});
+    let mut frame = with_id(json!({"op": "set_arrangement", "doc": doc, "runs": runs, "as_of": as_of}), id);
+    if let Some(head) = head {
+        frame["head"] = pair(head);
+    }
+    if let Some(base) = base {
+        frame["base"] = pair(base);
+    }
+    if let Some(sides) = merge {
+        frame["merge"] = json!({"sides": sides});
+    }
+    frame
+}
+
+/// Builds one run of a `publish`, a `reinstate` or a `set_arrangement`
+/// frame.
 ///
 /// It holds `origin`, `i_start`, `width` (wire.md §Arrangement, `publish`):
 /// `origin` the document that minted the run's addresses, `i_start` the

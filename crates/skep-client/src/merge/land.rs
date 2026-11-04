@@ -3,9 +3,10 @@
 //! The landing is the one `publish` of the merged list from the head with
 //! its signed body, then the claim's read and the record in the journal with
 //! its public link, each step idempotent by reading first (P4, P14); the
-//! draft landing, the core's edit script applied in place (decision 16);
-//! and [`resume`], the residue walk that completes what a lost
-//! acknowledgment left, writing nothing twice.
+//! draft landing, ONE `set_arrangement` of the merged list into the draft
+//! (the landing lane's rulings R1, R4, R5; skep #764); and [`resume`], the
+//! residue walk that completes what a lost acknowledgment left, writing
+//! nothing twice.
 //!
 //! **The order, and what each step reads first.** The cap: `counts.m`
 //! against the shot's run cap before any frame (decision 13; P13). The shot:
@@ -28,6 +29,31 @@
 //! merger's doc 1 to the member and every side besides the head under the
 //! kind.
 //!
+//! **The draft landing is one write.** M is sent whole as one
+//! `set_arrangement` of the draft (wire.md §Arrangement), TYPED against the
+//! one position the merge was composed at — `Merged::as_of`, the position
+//! every read of the composition was made at (skep #762) — so an edit made
+//! to the draft after the merge was composed is refused `arrangement_moved`
+//! with nothing changed, and the draft holds M or what it held, never a
+//! state between. The frame carries the head the merge composed on with
+//! its extent AS READ (`head`), the same pair as the base to record where
+//! the board records a base for the draft — read off the draft's
+//! `doc_metadata` at that position; a baseless draft and a fork get none,
+//! so the library never sends a `base` the board refuses `no_base_to_record`
+//! (N4) — and the merge the draft is to carry (`merge`, every side but the
+//! draft itself). The board re-records the base on the head and sets the
+//! marker in the same commit (R4); a newer version published since the
+//! compose is not refused: the write lands against the head it composed on
+//! and the ack names the trunk's current head as `head_moved`, which the
+//! landing carries out (R5, "land and tell"). The write is sent where the
+//! draft already holds M too, so the base and the marker are recorded. With
+//! no draft named ([`Landing::Draft`]'s `into` none), a fresh draft is
+//! staged from the head first — `stage {from: the head}`, two commits, the
+//! state between a plain staged draft (R3) — and the write is typed against
+//! the stage's own position; where the standing record for the key already
+//! names a draft landing, that landing is reported and nothing is staged.
+//! The record follows, its draft landing's position the write's `at`.
+//!
 //! **The claim, as this wire admits it.** The record's step (i) files
 //! `assert_sup{home: the merger's doc 1, old: the daughter, new: the member}`
 //! over two version members. The wire's `assert_sup` takes resident links
@@ -49,12 +75,14 @@ use skep_identity::{
 };
 
 use crate::address::{doc_1_of, parse_address};
-use crate::board::{acked_addr, acked_at, answers, frames, Answer, Board, Rejection, Token};
-use crate::halt::Halt;
+use crate::board::{
+    acked_addr, acked_at, acked_head_moved, answers, frames, Answer, Board, Rejection, Token,
+};
+use crate::halt::{Halt, Refused};
 use crate::publication::{self, Piece};
 use crate::sign::{sig_hex, Signer};
 
-use super::compose::{script, InPlaceOp, Run};
+use super::compose::Run;
 use super::journal;
 use super::reads::{
     daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of, runs_of,
@@ -113,15 +141,23 @@ pub enum Landing<'a> {
         /// record went to, or a private one minted (decision 7).
         journal: Option<Address>,
     },
-    /// The core's edit script applied into `into` by identity.
+    /// M set as the whole arrangement of a draft in one `set_arrangement`.
     ///
-    /// The record follows, with `landed` the draft — no claim: the person's
-    /// own shot is the claim's moment (decision 16).
+    /// The write is typed against the position the merge was composed at
+    /// (the module's doc); the record follows, with `landed` the draft — no
+    /// claim: the person's own shot is the claim's moment (decision 16).
     Draft {
         /// The merger's signed session and hand.
         merger: Merger<'a>,
-        /// The staging draft M is landed into.
-        into: Address,
+        /// The draft M is landed into.
+        ///
+        /// `None` lands it in a FRESH draft staged from the head the merge
+        /// was composed on (R3): `stage {from: the head}`, then the write
+        /// typed against the stage's position, the base the stage recorded
+        /// re-recorded on the head — unless the standing record for the key
+        /// already names a draft landing, which is reported with nothing
+        /// staged.
+        into: Option<Address>,
         /// The merge journal, or the account's default.
         journal: Option<Address>,
     },
@@ -166,19 +202,30 @@ pub enum Landed {
         /// mint, it is the highest `as_of` the reads answered.
         position: u64,
     },
-    /// M landed into the staging draft.
+    /// M landed into a draft.
     ///
-    /// It carries the draft, how many in-place edits it took, and the
-    /// record's public link.
+    /// It carries the draft — the one named, or the fresh one staged — the
+    /// write's position, the record's public link, and the newer head where
+    /// the board told one.
     Draft {
         /// The draft.
         into: Address,
-        /// The `delete` and `reinstate` ops applied.
+        /// The `set_arrangement`'s commit position, the write's `at`.
         ///
-        /// It is 0 where the draft already held M.
-        ops: usize,
+        /// Where the landing was found standing — a `resume` that found the
+        /// draft holding M, a fresh landing the standing record names — it
+        /// is the position that landing recorded.
+        position: u64,
         /// The record's public link.
         record: Address,
+        /// The trunk's current head, where it is no longer the head the
+        /// merge was composed on (R5, "land and tell").
+        ///
+        /// The write landed all the same, recorded on the head it composed
+        /// on; the embedder tells that a newer version stands, and a merge
+        /// composed again on it includes it. `None` where the head used is
+        /// the trunk's, and where the landing was found standing.
+        head_moved: Option<Address>,
     },
 }
 
@@ -199,24 +246,35 @@ impl<'a> Landing<'a> {
 /// Lands a composed merge (the merge record's §7, `land`).
 ///
 /// The shot is followed by the claim's read and the record, the draft
-/// landing by the record alone, each step read first, so a second call over
-/// the same `merged` writes nothing twice.
+/// landing by the record alone, each step read first — the draft's one
+/// write under a per-session id the board answers again — so a second call
+/// over the same `merged` in one session writes nothing twice.
 ///
 /// # Errors
 ///
 /// In this order:
 ///
 /// - [`Refusal::OverCap`], before any frame;
-/// - the reads' refusals, for a member or a draft already holding M;
+/// - the reads' refusals, for a member already holding M, or for the
+///   draft's `doc_metadata` at the position the write is typed against;
 /// - the shot's: the value reads' refusals, [`Refusal::WindowWithheld`],
 ///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
 ///   board's `not_owner` naming the draft side as [`Refusal::UnownedDraft`],
 ///   `already_published` and `publication_over_budget` verbatim as
 ///   [`Refusal::Halt`] (never the library's fault), and a lost
 ///   acknowledgment as the dialer's halt after
-///   one re-ask, for [`resume`] to complete — or the draft landing's edits':
-///   [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`], and a
-///   lost acknowledgment as the dialer's halt, with no re-ask;
+///   one re-ask, for [`resume`] to complete — or the draft landing's: the
+///   stage's refusals where a fresh draft is staged ([`Refusal::Unreadable`]
+///   and [`Refusal::NoSuchDocument`] naming the head), then the one write's
+///   — `arrangement_moved` as the board's verdict, [`Refusal::Halt`] with
+///   `Refused` naming the draft that changed after the merge was composed
+///   and that nothing was merged; [`Refusal::ForkBaseMoved`];
+///   [`Refusal::BaseNotInChain`]; [`Refusal::WindowWithheld`];
+///   [`Refusal::NeedsSignedSession`]; [`Refusal::NoSuchDocument`] naming
+///   the draft; `no_base_to_record`, `base_extent_too_large` and
+///   `source_not_registered` as the library's own faults, since it read the
+///   base and the extent at the position it typed the write against — and
+///   a lost acknowledgment as the dialer's halt, with no re-ask;
 /// - the claim's and the record's reads' refusals, then the record's
 ///   writes': [`Refusal::NeedsSignedSession`].
 ///
@@ -238,14 +296,16 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// merge record's §1.5, P14) finds the member whose first `placed`
 /// positions equal M — the trunk's next member, else a daughter of the
 /// head, which it reports as [`Landed::AsDaughter`] — or the draft already
-/// holding M, and completes the record, after the claim's read for the
-/// trunk's member, writing nothing twice; `None` where nothing landed, with
-/// nothing written.
+/// holding M, read as it stands, with the position its marker carries, and
+/// completes the record, after the claim's read for the trunk's member,
+/// writing nothing twice; `None` where nothing landed, with nothing
+/// written. A fresh landing names no draft to read: the standing record
+/// for the key is its answer, else `None`.
 ///
 /// # Errors
 ///
-/// As [`land`]'s but the shot's and the draft landing's edits', which it
-/// never sends.
+/// As [`land`]'s but the shot's, the stage's and the draft's write's, which
+/// it never sends.
 pub fn resume(
     board: &Board,
     merged: &Merged,
@@ -307,7 +367,35 @@ fn walk(
             }))
         }
         Landing::Draft { into, .. } => {
-            let Some((ops, position)) = writer.land_into_draft(merged, into, shoot)? else {
+            // The draft and the position the write is typed against: the
+            // merge's one position for a draft named; for a fresh draft,
+            // the stage's own position — unless the standing record for the
+            // key names a draft landing already, which is the answer, read
+            // through the composition's own prior-record lookup.
+            let (into, as_of) = match into {
+                Some(into) => (into.clone(), merged.as_of),
+                None => {
+                    if let Some(prior) = &merged.prior {
+                        if let (Some(RecordLanding::Draft { draft, position }), Some(link)) =
+                            (&prior.landed, &prior.link)
+                        {
+                            return Ok(Some(Landed::Draft {
+                                into: draft.clone(),
+                                position: *position,
+                                record: link.clone(),
+                                head_moved: None,
+                            }));
+                        }
+                    }
+                    if !shoot {
+                        return Ok(None);
+                    }
+                    writer.stage(merged)?
+                }
+            };
+            let Some((position, head_moved)) =
+                writer.land_into_draft(merged, &into, as_of, shoot)?
+            else {
                 return Ok(None);
             };
             let landed = RecordLanding::Draft { draft: into.clone(), position };
@@ -315,7 +403,7 @@ fn walk(
                 Some(link) => link,
                 None => writer.write_record(merged, landed, &[], landing.journal())?,
             };
-            Ok(Some(Landed::Draft { into: into.clone(), ops, record }))
+            Ok(Some(Landed::Draft { into, position, record, head_moved }))
         }
     }
 }
@@ -756,104 +844,199 @@ impl Writer<'_> {
         })
     }
 
-    /// Lands M into the draft, answering the ops applied and a position.
+    /// Stages a fresh draft from the head, answering it and its position.
     ///
-    /// The draft is imaged at the head and the core's script from its runs
-    /// to M applied op by op — each `delete` and `reinstate` one commit —
-    /// where the draft does not hold M already. The answer is the ops
-    /// applied and the last commit's position — 0 and the reads' highest
-    /// `as_of` where the draft already holds M — or `None` where it holds
-    /// another list and `shoot` is off.
+    /// It is `stage {from: the head the merge composed on}` under the
+    /// per-session id `<stem>.stage` (R3): the board mints a private draft of
+    /// the merger's account holding the head by identity and records the
+    /// head as its base, so the write that follows re-records that base on
+    /// the same head.
     ///
     /// # Errors
     ///
-    /// The draft's reads' refusals; [`Refusal::WindowWithheld`] where an
-    /// edit names an origin the merger may not read;
-    /// [`Refusal::NeedsSignedSession`]; a run with no address and the
-    /// board's refusal of an edit's substance, as the library's own faults;
-    /// an answer of a shape this client does not know, faced; the death
-    /// signal; a dial fault; the board's other refusals verbatim.
+    /// [`Refusal::Unreadable`] and [`Refusal::NoSuchDocument`] naming the
+    /// head, as the board's `withheld` and `source_not_registered` on the
+    /// stage's source; an answer of a shape this client does not know,
+    /// faced; the death signal; a dial fault; the board's other refusals
+    /// verbatim — `mint_home_first` among them.
+    fn stage(&self, merged: &Merged) -> Result<(Address, u64), Refusal> {
+        let head = &merged.inputs.head;
+        let frame = frames::stage(&head.to_string(), Some(&format!("{}.stage", merged.key.text())));
+        let v = self.answered_write(&frame, "staging a fresh draft")?;
+        if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
+            let fresh = parse_address(addr).ok_or_else(|| shape_face("stage", &v))?;
+            return Ok((fresh, at));
+        }
+        let Some(r) = Rejection::of(&v) else { return Err(shape_face("stage", &v).into()) };
+        Err(match r.key() {
+            "withheld" => Refusal::Unreadable(head.clone()),
+            "source_not_registered" => Refusal::NoSuchDocument(head.clone()),
+            _ => Refusal::Halt(r.refused(&v)),
+        })
+    }
+
+    /// Lands M into the draft in one write, answering its position and the
+    /// newer head where the board told one.
+    ///
+    /// The one frame is `set_arrangement` (the module's doc): M's runs,
+    /// typed against `as_of` — the merge's one position for a draft named,
+    /// the stage's position for a fresh one — with the head the merge
+    /// composed on and its extent as read, the same pair as the base to
+    /// record where the draft's `doc_metadata`, read at `as_of`, records a
+    /// base, and the merge's sides but the draft itself; its id
+    /// `<stem>.draft`, which the board answers again in the same session.
+    /// It is sent where the draft already holds M too, so the base and the
+    /// marker are recorded. With `shoot` off nothing is sent: the draft is
+    /// read as it stands, and holding M it answers the position its marker
+    /// carries for this merge's head — else the read's `as_of` — or `None`
+    /// where it holds another list.
+    ///
+    /// # Errors
+    ///
+    /// The draft's reads' refusals — a draft that did not exist at `as_of`,
+    /// faced, naming the way out; the board's `arrangement_moved` as its
+    /// verdict, [`Refusal::Halt`] with the `Refused` re-said to the draft
+    /// that changed after the merge was composed and nothing merged;
+    /// [`Refusal::ForkBaseMoved`] and [`Refusal::BaseNotInChain`], the two
+    /// refusals a person meets; [`Refusal::WindowWithheld`] where a run
+    /// names an origin the merger may not read; [`Refusal::NeedsSignedSession`];
+    /// [`Refusal::NoSuchDocument`] naming the draft; a run with no address
+    /// and the board's refusal of the frame's substance — the base and the
+    /// extent it read at `as_of` (`no_base_to_record`,
+    /// `base_extent_too_large`), a run's origin (`source_not_registered`,
+    /// `bad_run`, `dangling_source`, `too_many_runs`), the draft's standing
+    /// (`published_target`, `not_owner`) — as the library's own faults; an
+    /// answer of a shape this client does not know, faced; the death signal;
+    /// a dial fault; the board's other refusals verbatim.
     fn land_into_draft(
         &self,
         merged: &Merged,
         into: &Address,
+        as_of: u64,
         shoot: bool,
-    ) -> Result<Option<(usize, u64)>, Refusal> {
-        let current = runs_of(&self.reader.imaged(into, None)?.runs)?;
+    ) -> Result<Option<(u64, Option<Address>)>, Refusal> {
+        let head = &merged.inputs.head;
         let target: Vec<Run> = merged.composed.runs.iter().map(|p| p.run.clone()).collect();
-        let as_own: Vec<(Run, Family)> = target.iter().cloned().map(|r| (r, Family::Own)).collect();
-        if first_difference(&as_own, &current, &merged.inputs.doc).is_none() {
-            return Ok(Some((0, self.reader.as_of())));
-        }
         if !shoot {
-            return Ok(None);
-        }
-        let ops = script(&current, &target);
-        let stem = merged.key.text();
-        let doc = into.to_string();
-        // Each edit of the script is typed against `position` (skep #442):
-        // the state the draft was imaged at, raised by each edit's own ack,
-        // so a draft another hand moved under the landing is refused
-        // `arrangement_moved` at the first edit, with nothing of the script
-        // landed off.
-        let mut position = self.reader.as_of();
-        for (k, op) in ops.iter().enumerate() {
-            let id = format!("{stem}.draft.{}", k + 1);
-            let frame = match op {
-                InPlaceOp::Delete { p, width } => frames::delete(&doc, *p, *width, position, Some(&id)),
-                InPlaceOp::Reinstate { at, runs } => {
-                    let runs: Vec<Value> = runs
-                        .iter()
-                        .map(|r| {
-                            let i_start = r.address_at(0).ok_or_else(|| {
-                                own_fault_face(
-                                    "a run of the script names no address",
-                                    format!("{r:?}"),
-                                )
-                            })?;
-                            Ok(frames::shot_run(
-                                &r.origin.to_string(),
-                                &i_start.to_string(),
-                                r.width,
-                            ))
-                        })
-                        .collect::<Result<_, Refusal>>()?;
-                    frames::reinstate(&doc, *at, &runs, position, Some(&id))
-                }
-            };
-            let v = self.answered_write(&frame, "editing the draft")?;
-            match acked_at(&v) {
-                Some(at) => position = at,
-                None => {
-                    let Some(r) = Rejection::of(&v) else {
-                        return Err(shape_face("the draft's edit", &v).into());
-                    };
-                    return Err(match r.key() {
-                        "withheld" => Refusal::WindowWithheld(
-                            v["site"]["addr"]
-                                .as_str()
-                                .and_then(parse_address)
-                                .unwrap_or_else(|| into.clone()),
-                        ),
-                        "signed_session_required" => Refusal::NeedsSignedSession,
-                        "published_target"
-                        | "not_owner"
-                        | "bad_run"
-                        | "dangling_source"
-                        | "source_not_registered"
-                        | "not_arranged"
-                        | "out_of_bounds" => own_fault("the draft landing", &r),
-                        // The draft moved under the landing — another hand's
-                        // edit since it was imaged, a race and never this
-                        // client's fault: the board's verdict, faced, and the
-                        // merge run again over a fresh read.
-                        "arrangement_moved" => Refusal::Halt(r.refused(&v)),
-                        _ => Refusal::Halt(r.refused(&v)),
-                    });
-                }
+            // The residue walk: the draft as it stands, read first.
+            let meta = self.reader.metadata(into, None)?;
+            let current = runs_of(&self.reader.imaged(into, None)?.runs)?;
+            let as_own: Vec<(Run, Family)> =
+                target.iter().cloned().map(|r| (r, Family::Own)).collect();
+            if first_difference(&as_own, &current, &merged.inputs.doc).is_some() {
+                return Ok(None);
             }
+            let position = meta
+                .merge
+                .as_ref()
+                .filter(|m| m.head == head.to_string())
+                .and_then(|m| m.at)
+                .unwrap_or_else(|| self.reader.as_of());
+            return Ok(Some((position, None)));
         }
-        Ok(Some((ops.len(), position)))
+        // The base to record: the head's pair, only where the board records
+        // a base for the draft at the position the write is typed against
+        // (N4) — a baseless draft and a fork get none.
+        let meta = match self.reader.metadata(into, Some(as_of)) {
+            Ok(meta) => meta,
+            Err(Refusal::NoSuchDocument(_)) => {
+                return Err(Halt::face(
+                    format!("{into} did not exist at position {as_of}, the position this merge was composed at"),
+                    "the merge reads every draft it uses at one board position and types its landing against it, so the draft it lands into must stand there: a draft minted after the composition changed after it",
+                    "run the merge again naming the draft, or land it in a fresh draft (`into` none; the command's --new)",
+                )
+                .into())
+            }
+            Err(e) => return Err(e),
+        };
+        let head_text = head.to_string();
+        let pair = Some((head_text.as_str(), merged.head_extent));
+        let base = if meta.base.is_some() { pair } else { None };
+        let runs: Vec<Value> = target
+            .iter()
+            .map(|r| {
+                let i_start = r
+                    .address_at(0)
+                    .ok_or_else(|| own_fault_face("a run of M names no address", format!("{r:?}")))?;
+                Ok(frames::shot_run(&r.origin.to_string(), &i_start.to_string(), r.width))
+            })
+            .collect::<Result<_, Refusal>>()?;
+        let sides: Vec<String> = merged
+            .inputs
+            .sides
+            .iter()
+            .map(|s| s.address())
+            .filter(|s| *s != into)
+            .map(ToString::to_string)
+            .collect();
+        let side_refs: Vec<&str> = sides.iter().map(String::as_str).collect();
+        let id = format!("{}.draft", merged.key.text());
+        let frame = frames::set_arrangement(
+            &into.to_string(),
+            &runs,
+            as_of,
+            pair,
+            base,
+            Some(&side_refs),
+            Some(&id),
+        );
+        let v = self.answered_write(&frame, "landing the merge in the draft")?;
+        if let Some(at) = acked_at(&v) {
+            let head_moved = match acked_head_moved(&v) {
+                Some(h) => Some(parse_address(h).ok_or_else(|| shape_face("set_arrangement", &v))?),
+                None => None,
+            };
+            return Ok(Some((at, head_moved)));
+        }
+        let Some(r) = Rejection::of(&v) else {
+            return Err(shape_face("set_arrangement", &v).into());
+        };
+        let site = r.site().addr.as_deref().and_then(parse_address);
+        Err(match r.key() {
+            "withheld" => Refusal::WindowWithheld(site.unwrap_or_else(|| into.clone())),
+            "signed_session_required" => Refusal::NeedsSignedSession,
+            "doc_not_registered" => Refusal::NoSuchDocument(into.clone()),
+            // The draft changed after the merge was composed — another
+            // hand's edit past the one position the merge read it at, a race
+            // and never this client's fault: the board's verdict, its words
+            // the person's, and nothing was merged (the one write wipes
+            // nothing).
+            "arrangement_moved" => {
+                let current = v["site"]["current"].as_u64();
+                Refusal::Halt(Halt::Refused(Refused {
+                    status: 200,
+                    code: r.code().to_string(),
+                    detail: Some(format!(
+                        "{into} changed after the merge was composed{} — nothing was merged; run the merge again, which reads the draft as it stands",
+                        match current {
+                            Some(c) => format!(" (composed at position {as_of}, the draft changed at {c})"),
+                            None => format!(" at position {as_of}"),
+                        }
+                    )),
+                    op: r.op().map(str::to_string),
+                    body: v.clone(),
+                }))
+            }
+            "fork_base_moved" => Refusal::ForkBaseMoved {
+                fork: into.clone(),
+                source: site.unwrap_or_else(|| into.clone()),
+                head: head.clone(),
+            },
+            "base_not_in_chain" => Refusal::BaseNotInChain { into: into.clone(), head: head.clone() },
+            // The library read the base and the extent at the position it
+            // typed the write against, and composed every run from images
+            // read there: a refusal of them is its own fault.
+            "no_base_to_record"
+            | "base_extent_too_large"
+            | "source_not_registered"
+            | "published_target"
+            | "not_owner"
+            | "bad_run"
+            | "dangling_source"
+            | "too_many_runs"
+            | "malformed" => own_fault("the draft landing", &r),
+            _ => Refusal::Halt(r.refused(&v)),
+        })
     }
 
     /// Sends one write under the merger's token.

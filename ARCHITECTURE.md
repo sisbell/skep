@@ -1157,7 +1157,8 @@ tumbler order, and `run_list.rs` the run-list, in V-order — two modules
 that share no private item. `ops.rs` is the `Vstream` handle and what its
 operations share; beneath it, `ops/insert.rs`, `ops/publish.rs`,
 `ops/copy.rs`, `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`,
-`ops/version.rs` and `ops/stage.rs` each hold one operation's `impl` block.
+`ops/set_arrangement.rs`, `ops/version.rs` and `ops/stage.rs` each hold
+one operation's `impl` block.
 Its `test-hooks`
 feature (default off) compiles in `seat_link`, the test-only twin of the
 link seat; `scripts/gate-full.sh` checks the library and its docs without

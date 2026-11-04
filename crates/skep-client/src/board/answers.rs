@@ -459,10 +459,11 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
 /// member carries — `placed`, the positions the client's runs cover, and
 /// `base_extent` — `source`, the address a `version`- or `stage`-minted
 /// document was born sharing (the member or bare document its snapshot
-/// took), and a staged draft's recorded base — `base`, the member or bare
+/// took), a staged draft's recorded base — `base`, the member or bare
 /// document its next publication lands after, and `base_copied`, the
-/// extent the copy took of it (the staging act, B3-S10) — each `None` where
-/// the address carries none.
+/// extent the copy took of it (the staging act, B3-S10) — and the merge
+/// marker beside the base, `merge` — each `None` where the address carries
+/// none.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
@@ -473,14 +474,36 @@ pub(crate) struct Metadata {
     pub(crate) source: Option<String>,
     /// The draft base the board records for the address named: the member
     /// or bare document its next publication lands after, moved by each
-    /// publication the draft renders; `None` where the board records none.
+    /// publication the draft renders and by each `set_arrangement` naming a
+    /// base to record; `None` where the board records none.
     pub(crate) base: Option<String>,
     /// Beside `base`, the extent the draft's copy took of it.
     pub(crate) base_copied: Option<u64>,
+    /// The merge the draft carries, the marker beside its base (wire.md
+    /// §The response envelope, `doc_metadata`'s `merge`): set by a
+    /// `set_arrangement` that names a base and a merge, cleared by the
+    /// `publish` that moves the base; `None` where the draft carries none.
+    pub(crate) merge: Option<MergeMarker>,
     /// The position of the commit that minted the address named — a version
     /// member its own mint (wire.md §The response envelope, `doc_metadata`,
     /// "the age of the address named"); `None` where the board serves
     /// `null`, an address a build before the position map minted.
+    pub(crate) at: Option<u64>,
+}
+
+/// The merge marker a draft carries (wire.md §The response envelope,
+/// `doc_metadata`'s `merge`).
+///
+/// It is the merge's sides by address, possibly empty, the version the merge
+/// was composed on and that version's content count as read at the compose
+/// — what the base beside it records — and the position of the commit that
+/// put the marker on the document.
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeMarker {
+    pub(crate) sides: Vec<String>,
+    pub(crate) head: String,
+    pub(crate) head_copied: Option<u64>,
     pub(crate) at: Option<u64>,
 }
 
@@ -489,13 +512,27 @@ pub(crate) struct Metadata {
 /// `None` for a document that is no such answer — a rejection among them —
 /// or one without its owner or its `published` bit. A `source` or a `base`
 /// that is neither a string nor absent reads as absent: the merge checks the
-/// address it names itself.
+/// address it names itself. A `merge` that is no object naming its head
+/// reads as absent too.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
         return None;
     }
     let count = |member: &str| v[member].as_str().and_then(natural);
+    let merge = v["merge"].as_object().and_then(|m| {
+        Some(MergeMarker {
+            sides: m
+                .get("sides")?
+                .as_array()?
+                .iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect(),
+            head: m.get("head")?.as_str()?.to_string(),
+            head_copied: m.get("head_copied").and_then(Value::as_str).and_then(natural),
+            at: m.get("at").and_then(Value::as_u64),
+        })
+    });
     Some(Metadata {
         published: v["published"].as_bool()?,
         owner: v["owner"].as_str()?.to_string(),
@@ -504,6 +541,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         source: v["source"].as_str().map(str::to_string),
         base: v["base"].as_str().map(str::to_string),
         base_copied: count("base_copied"),
+        merge,
         at: v["at"].as_u64(),
     })
 }

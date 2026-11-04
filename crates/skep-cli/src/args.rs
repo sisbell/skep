@@ -247,8 +247,8 @@ impl Form {
 /// (`--no-anchors`) or `--reprint` (§4c.1), whose synopsis requires the
 /// `--account` it reads nowhere, `merge`'s three sides, two apart
 /// (`--alternative`, `--draft` with `--base` inside it, `--fork`) and its
-/// two landings apart (`--publish`, `--into`), the merge record's §6
-/// synopsis, and `share`'s four forms apart — a share (`--doc` or
+/// three landings apart (`--publish`, `--into`, `--new`), the merge
+/// record's §6 synopsis, and `share`'s four forms apart — a share (`--doc` or
 /// `--whole-account`, two apart, with `--to` or `--privash`, two apart),
 /// `--revoke` and `--list`, each apart from every flag of the others.
 /// `--payload` takes a value where it names a file or `-`, and is a switch
@@ -320,13 +320,15 @@ const GRAMMAR: [Row<Command>; 15] = [
         command: Command::Merge,
         once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries"],
         repeated: &["--resolve"],
-        switches: &["--publish", "--no-dedup", "--retype"],
+        switches: &["--publish", "--new", "--no-dedup", "--retype"],
         forms: &[
             Form::Apart("--alternative", "--draft"),
             Form::Apart("--alternative", "--fork"),
             Form::Apart("--draft", "--fork"),
             Form::Within("--base", "--draft"),
             Form::Apart("--publish", "--into"),
+            Form::Apart("--publish", "--new"),
+            Form::Apart("--into", "--new"),
         ],
     },
     Row {
@@ -390,11 +392,14 @@ usage: skep <command> [flags]
                key and the anchor pair, the record for the giver (a
                person door); --reprint re-composes the record, no write
   merge        merge an alternative into its document's head: the base,
-               the head and the side read, the merged list and its gaps
-               composed under the rules and reported as one JSON document
-               on stdout; --publish lands it as the next version with its
-               record, --into lands it in a draft; a side of another
-               account is refused; no person door
+               the head and the side read at one position, the merged
+               list and its gaps composed under the rules and reported as
+               one JSON document on stdout; --publish lands it as the next
+               version with its record, --into lands it in a draft in one
+               write (refused whole where the draft changed since), --new
+               in a fresh draft staged from the head; a newer version
+               published since is told; a side of another account is
+               refused; no person door
   share        share a draft (--doc <D>) or your whole account
                (--whole-account) with ONE account (--to <account>); or
                --privash one draft: open it to every account on this
@@ -457,8 +462,8 @@ flags (a flag beats its env variable; a variable set empty is unset):
             choice: order:<side>,<side>...  after:<address>
             before:<address>  keep:<side>  both  omit; a side is its
             index as the report numbers it)  [--no-dedup]  [--retype]
-            [--retries <n>]  [--publish, or --into <draft>]; with
-            neither it composes and prints
+            [--retries <n>]  [--publish, or --into <draft>, or --new];
+            with none it composes and prints
   share:    --doc <D> --to <account>; or --whole-account --to <account>;
             or --doc <D> --privash; or --revoke <grant>; or --list; and
             [--yes] at a share, a privash or a revoke, required where

@@ -2,10 +2,10 @@
 //! CLI and the agent adapter"; `client.md` §2.1's thirteen stand beside
 //! it): THE USAGE FORMS refused before any socket opens, exit 2 — no
 //! `--doc`, two sides, `--base` outside `--draft`, `--publish` with
-//! `--into`, a malformed `--resolve`, no `--kind` and no `SKEP_MERGE_KIND`,
-//! a value that is no address — while `--draft` without `--base` is a whole
-//! form and the variable stands in for the flag; THE WHOLE WALK on the real
-//! daemon —
+//! `--into`, `--new` with either, a malformed `--resolve`, no `--kind` and
+//! no `SKEP_MERGE_KIND`, a value that is no address — while `--draft`
+//! without `--base` is a whole form and the variable stands in for the
+//! flag; THE WHOLE WALK on the real daemon —
 //! a document seeded with a base version, a head and a daughter as the
 //! library's own daemon walk seeds them, the merge composed and printed as
 //! one JSON document with nothing else on stdout, then `--publish` landing
@@ -14,8 +14,11 @@
 //! twice with the prior named, a gap both sides added at reported
 //! unsettled with its default and then `--resolve`d the other way round as
 //! the AGENT's choice (the runner has no terminal), a resolution naming no
-//! gap reported as not applied, and `--into` landing the merged list in a
-//! draft; A DAUGHTER — the head moved before `--publish`, the shot landing
+//! gap reported as not applied, `--into` landing the merged list in a
+//! draft in one write with the newer version told, and `--new` staging a
+//! fresh draft from the head and landing there, the base and the merge
+//! recorded, a re-run reporting the standing landing and staging nothing;
+//! A DAUGHTER — the head moved before `--publish`, the shot landing
 //! as the head's daughter, reported with the re-run line and never retried,
 //! one `publish` in the feed, and the re-run with `--retries 1` landing on
 //! the new head with the count in its record; and `--fork` ADMITTED — a
@@ -328,6 +331,8 @@ fn the_usage_forms_are_refused_before_any_socket() {
     refused(&["--doc", doc, "--alternative", alt, "--fork", draft, "--kind", kind], "`--alternative` and `--fork` belong to two forms of `merge`: give one");
     refused(&["--doc", doc, "--alternative", alt, "--base", base, "--kind", kind], "`--base` belongs to `merge --draft` and is refused without `--draft`");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--publish", "--into", draft], "`--publish` and `--into` belong to two forms of `merge`: give one");
+    refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--publish", "--new"], "`--publish` and `--new` belong to two forms of `merge`: give one");
+    refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--into", draft, "--new"], "`--into` and `--new` belong to two forms of `merge`: give one");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--resolve", "1=frob"], "--resolve: '1=frob' is not <gap>=<choice>");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--resolve", "both"], "--resolve: 'both' is not <gap>=<choice>");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--resolve", "0=omit"], "--resolve: '0=omit' is not <gap>=<choice>");
@@ -337,8 +342,8 @@ fn the_usage_forms_are_refused_before_any_socket() {
     refused(&["--doc", "not-an-address", "--alternative", alt, "--kind", kind], "--doc: 'not-an-address' is not an address");
     refused(&["--doc", doc, "--alternative", alt, "--kind", kind, "--retries", "x"], "--retries: 'x' is not a count");
     // Every whole form reaches the dead board — `--draft` with and without
-    // `--base`, the base being the board's to serve.
-    for form in [&["--doc", doc, "--alternative", alt, "--kind", kind][..], &["--doc", doc, "--draft", draft, "--base", base, "--kind", kind], &["--doc", doc, "--draft", draft, "--kind", kind], &["--doc", doc, "--fork", draft, "--kind", kind]] {
+    // `--base`, the base being the board's to serve, and each landing alone.
+    for form in [&["--doc", doc, "--alternative", alt, "--kind", kind][..], &["--doc", doc, "--draft", draft, "--base", base, "--kind", kind], &["--doc", doc, "--draft", draft, "--kind", kind], &["--doc", doc, "--fork", draft, "--kind", kind], &["--doc", doc, "--alternative", alt, "--kind", kind, "--new"], &["--doc", doc, "--alternative", alt, "--kind", kind, "--into", draft]] {
         let mut args = vec!["merge", "--board", DEAD, "--dir", s(&store), "--principal", "1"];
         args.extend_from_slice(form);
         let r = skep(&args, &[], None);
@@ -421,15 +426,26 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(rig.publishes_under(&token, &d), publishes, "no second publish");
 
     // --INTO a draft, against the head the merge was composed from: the
-    // merged list landed by identity, the draft's image M.
+    // merged list landed by identity IN ONE WRITE, the draft's image M, the
+    // report without an edit count; the draft is baseless, so nothing is
+    // recorded on it (N4); the trunk's head is the merge, so the newer
+    // version is told.
     let into = rig.draft();
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind_s, "--head", &head_s, "--into", &into.to_string()]);
     let v = report(&r);
     assert_eq!(v["landed"]["draft"].as_str(), Some(into.to_string().as_str()));
-    assert!(v["landed"]["ops"].as_u64().is_some_and(|n| n >= 1), "{}", v["landed"]);
+    assert!(v["landed"].get("ops").is_none(), "no edit count: the landing is one write: {}", v["landed"]);
+    assert!(v["landed"]["position"].as_u64().is_some_and(|p| p > before), "the write's position: {}", v["landed"]);
     assert!(v["landed"]["record"].as_str().is_some());
+    assert_eq!(v["landed"]["fresh"], json!(false));
+    assert_eq!(v["landed"]["head_moved"].as_str(), Some(member.as_str()), "composed on {head}, the trunk's head is the merge: told: {}", v["landed"]);
     assert_eq!(rig.image(&token, &into, 11), runs_of(&v), "the draft holds M");
-    assert!(r.err.contains(&format!("landed in the draft {into} in")), "{}", r.err);
+    let meta = rig.read(&token, &frames::doc_metadata(&into.to_string()));
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "a baseless draft: no base, no marker: {meta}");
+    assert!(r.err.contains(&format!("landed in the draft {into} at position")), "{}", r.err);
+    assert!(!r.err.contains("fresh draft"), "{}", r.err);
+    assert!(r.err.contains(&format!("a newer version of {d} was published since this merge was composed: {member}")), "{}", r.err);
+    assert!(r.err.contains(&format!("merge again to include {member}")), "{}", r.err);
 
     // A GAP BOTH SIDES ADDED AT (§9's case (b)): the head "big " and the
     // daughter "fat " at `D·4|D·5` — an `order` gap, unsettled, the commit
@@ -478,6 +494,37 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     assert_eq!(v["ignored"], json!([9]));
     assert!(r.err.contains("not applied: the resolution of gap 9"), "{}", r.err);
     assert_eq!(v["prior"]["landed"]["member"].as_str(), Some(member2), "the prior for the key stands");
+
+    // --NEW: a fresh draft staged from the head the merge composed on and
+    // the merged list landed in it in one write — the base re-recorded on
+    // that head, the merge marked beside it with the daughter as its side,
+    // the newer version (the merge published above) told. The key's
+    // standing record names a member landing, so a draft is staged.
+    let (head2_s, member2_s) = (head2.to_string(), member2.to_string());
+    let r = rig.merge(&["--doc", &d2_s, "--alternative", &daughter2_s, "--kind", &kind_s, "--head", &head2_s, "--new"]);
+    let v = report(&r);
+    let fresh = addr(v["landed"]["draft"].as_str().expect("the fresh draft"));
+    assert_eq!(v["landed"]["fresh"], json!(true), "{}", v["landed"]);
+    assert!(v["landed"].get("ops").is_none());
+    let at = v["landed"]["position"].as_u64().expect("the write's position");
+    assert_eq!(v["landed"]["head_moved"].as_str(), Some(member2_s.as_str()), "the newer version told: {}", v["landed"]);
+    assert!(v["landed"]["record"].as_str().is_some());
+    assert_eq!(rig.image(&token, &fresh, 19), runs_of(&v), "the fresh draft holds M");
+    let meta = rig.read(&token, &frames::doc_metadata(&fresh.to_string()));
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["source"].as_str()), (Some(head2_s.as_str()), Some("15"), Some(head2_s.as_str())), "staged from the head, the base re-recorded on it: {meta}");
+    assert_eq!(meta["merge"], json!({"at": at, "head": head2_s, "head_copied": "15", "sides": [daughter2_s]}), "the merge recorded: {meta}");
+    assert!(r.err.contains(&format!("landed in the draft {fresh} at position {at}, a fresh draft staged from {head2}")), "{}", r.err);
+    assert!(r.err.contains(&format!("a newer version of {d2} was published since this merge was composed: {member2}")), "{}", r.err);
+    // Run again: the standing record for the key names the landing, which
+    // is reported — nothing staged, nothing written.
+    let before = position();
+    let r = rig.merge(&["--doc", &d2_s, "--alternative", &daughter2_s, "--kind", &kind_s, "--head", &head2_s, "--new"]);
+    let v = report(&r);
+    assert_eq!(v["landed"]["draft"].as_str(), Some(fresh.to_string().as_str()), "the standing landing: {}", v["landed"]);
+    assert_eq!((v["landed"]["fresh"].clone(), v["landed"]["position"].as_u64(), v["landed"]["head_moved"].is_null()), (json!(false), Some(at), true), "{}", v["landed"]);
+    assert_eq!(position(), before, "nothing staged, nothing written");
+    assert!(r.err.contains(&format!("landed in the draft {fresh} at position {at};")), "{}", r.err);
+    assert!(!r.err.contains("fresh draft"), "{}", r.err);
     session.close().expect("close");
 }
 

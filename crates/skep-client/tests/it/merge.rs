@@ -18,12 +18,21 @@
 //! landed as the shot, the draft's fresh text re-minted; its record naming
 //! the position the draft was read at and verifying Equal as of it once
 //! the shot has moved the draft's base and the draft is edited (skep #453).
+//! And ONE DRAFT LANDING (the landing lane's brief B; skep #762, #764): the
+//! merge composed at one position, the draft edited after it and the
+//! landing refused `arrangement_moved` whole; composed again and landed in
+//! ONE `set_arrangement` — the draft holding M, its base re-recorded on the
+//! head at the extent read and `doc_metadata`'s `merge` read back with the
+//! write's position, the record naming that position and verifying Equal;
+//! land and tell against a real newer member, `head_moved`; and a fresh
+//! draft staged from the head and landed in, a re-run staging nothing.
 
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_client::address::{document_of, parse_address};
 use skep_client::board::{acked_addr, frames, Answer, AtAnswer, Board, Scope, Token};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
+use skep_client::halt::Halt;
 use skep_client::merge::{
     compose, current, head_of, land, verify, Inputs, Landed, Landing, Merger, RecordLanding,
     Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
@@ -720,5 +729,162 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
         ),
         "a record naming no position reads the draft as it stands"
     );
+    session.close().expect("close");
+}
+
+/// M's runs as `image` spells them, `(i_start, width)`.
+fn as_image(runs: &[Run]) -> Vec<(String, u64)> {
+    runs.iter().map(|r| (format!("{}.0.1.{}", r.origin, r.i_start), r.width)).collect()
+}
+
+/// THE DRAFT LANDING ON THE REAL DAEMON (the landing lane's brief B; skep
+/// #762, #764): the staged draft `S` off `D.1` with "!!!" typed, merged with
+/// the head `D.2` — every read at ONE position, the record's draft side
+/// naming it. An edit to `S` after the composition makes the landing refuse
+/// `arrangement_moved` whole, nothing written and nothing wiped. Composed
+/// again, the landing is ONE write: `S` holds M, its base is re-recorded on
+/// `D.2` at the fifteen positions read, `doc_metadata`'s `merge` names the
+/// head, no side (the draft was the side) and the write's position, the
+/// record names that position and verifies Equal. LAND AND TELL: version 3
+/// published, a second draft `T` staged off `D.2` and merged with `D.2`
+/// named as the head lands and carries `head_moved` = `D.3`, its base
+/// recorded on `D.2`. A FRESH DRAFT: `into` none stages from the head and
+/// lands there, the base and the marker recorded; composed again, the
+/// standing record names the landing and nothing is staged.
+#[test]
+fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_a_newer_head() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session)
+        .expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let position = || board.health().unwrap().log_position();
+
+    let d = published_document(&board, &session, &device);
+    let base = shot(&board, &session, &device, &bare_token, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+    let head = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        Some((&base, 11)),
+        &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }],
+    );
+    assert_eq!((base.to_string(), head.to_string()), (format!("{d}.1"), format!("{d}.2")));
+    let staged = acked(board.op(Some(&bare_token), &frames::stage(&base.to_string(), None)));
+    let draft = addr(acked_addr(&staged).expect("the staged draft's address"));
+    insert_text(&board, &bare_token, &draft.to_string(), 12, "!!!");
+    let kind = addr(&mint(&board, &bare_token, ACCOUNT, false));
+    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
+    let into = |draft: &Address| Landing::Draft { merger, into: Some(draft.clone()), journal: None };
+
+    // COMPOSE at one position: the head when it began.
+    let before = position();
+    let inputs = Inputs {
+        doc: d.clone(),
+        head: head.clone(),
+        base: None,
+        sides: vec![Side::Draft { at: draft.clone(), position: None }],
+        options: Default::default(),
+        kind: kind.clone(),
+    };
+    let merged = compose(&board, Some(&token), &inputs).expect("composed");
+    assert_eq!(merged.as_of, before, "the one position every read was made at");
+    assert_eq!(merged.record.sides[1], SideAt::Draft { at: draft.clone(), position: Some(before) });
+    assert_eq!(merged.head_extent, 15);
+    // ANOTHER HAND's edit after the composition: the landing is refused
+    // whole, nothing written, nothing wiped.
+    insert_text(&board, &bare_token, &draft.to_string(), 1, "?");
+    let edited = image(&board, &token, &draft, 15);
+    assert_eq!(edited.len(), 3, "?the cat sat!!!: {edited:?}");
+    let untouched = position();
+    let err = land(&board, &merged, into(&draft)).expect_err("the draft changed after the merge was composed");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    let detail = refused.detail.as_deref().expect("the person's words");
+    assert!(detail.contains(&draft.to_string()) && detail.contains("nothing was merged"), "{detail}");
+    assert_eq!(position(), untouched, "nothing written");
+    assert_eq!(image(&board, &token, &draft, 15), edited, "nothing wiped");
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
+    assert_eq!((meta["base"].as_str(), meta["merge"].is_null()), (Some(base.to_string().as_str()), true), "the base and no marker, as they stood: {meta}");
+
+    // COMPOSED AGAIN and landed: one write.
+    let merged = compose(&board, Some(&token), &inputs).expect("composed again");
+    let m = merged.composed.runs.iter().map(|p| p.run.clone()).collect::<Vec<_>>();
+    assert_eq!(m.len(), 5, "?the big cat sat!!!: {m:?}");
+    let landed = land(&board, &merged, into(&draft)).expect("landed");
+    let Landed::Draft { into: landed_in, position: at, record: link, head_moved } = landed.clone() else { panic!("{landed:?}") };
+    assert_eq!((landed_in, head_moved), (draft.clone(), None));
+    let extent: u64 = m.iter().map(|r| r.width).sum();
+    assert_eq!(extent, 19, "?the big cat sat!!!");
+    assert_eq!(image(&board, &token, &draft, extent), as_image(&m), "the draft holds M, whole");
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&draft.to_string()));
+    assert_eq!(
+        (meta["base"].as_str(), meta["base_copied"].as_str()),
+        (Some(head.to_string().as_str()), Some("15")),
+        "the base re-recorded on the head at the extent read: {meta}"
+    );
+    assert_eq!(meta["merge"], json!({"at": at, "head": head.to_string(), "head_copied": "15", "sides": []}), "the marker, at the write's position: {meta}");
+    let record = current(&board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(record.landed, Some(RecordLanding::Draft { draft: draft.clone(), position: at }), "the write's position");
+    assert_eq!(record.link, Some(link));
+    assert_eq!(verify(&board, Some(&token), &record), Ok(Verdict::Equal));
+    // The same landing again in this session: the board answers the id
+    // again, and nothing is written twice.
+    let standing = position();
+    assert_eq!(land(&board, &merged, into(&draft)).expect("landed again"), landed);
+    assert_eq!(position(), standing, "nothing written twice");
+
+    // LAND AND TELL: version 3 published since; a draft off version 2 merged
+    // with version 2 named lands and is told the newer head.
+    let third = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        Some((&head, 15)),
+        &[Staged::Own { from: 1, text: "the " }, Staged::Own { from: 12, text: "big " }, Staged::Own { from: 5, text: "cat sat" }, Staged::Fresh { text: "?" }],
+    );
+    assert_eq!(third.to_string(), format!("{d}.3"));
+    let t = addr(acked_addr(&acked(board.op(Some(&bare_token), &frames::stage(&head.to_string(), None)))).expect("the second draft"));
+    insert_text(&board, &bare_token, &t.to_string(), 16, "...");
+    let inputs_t = Inputs { sides: vec![Side::Draft { at: t.clone(), position: None }], ..inputs.clone() };
+    let merged_t = compose(&board, Some(&token), &inputs_t).expect("composed on version 2");
+    let landed_t = land(&board, &merged_t, into(&t)).expect("landed");
+    let Landed::Draft { position: at_t, head_moved, .. } = landed_t else { panic!("{landed_t:?}") };
+    assert_eq!(head_moved, Some(third.clone()), "the trunk's current head, told");
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&t.to_string()));
+    assert_eq!(meta["base"].as_str(), Some(head.to_string().as_str()), "recorded on the head used: {meta}");
+    assert_eq!(meta["merge"]["head"].as_str(), Some(head.to_string().as_str()));
+    assert_eq!(meta["merge"]["at"].as_u64(), Some(at_t));
+
+    // A FRESH DRAFT: staged from the head, landed in; composed again, the
+    // standing record names the landing and nothing is staged.
+    let inputs_fresh = Inputs { head: third.clone(), sides: vec![Side::Draft { at: t.clone(), position: None }], ..inputs.clone() };
+    let merged_fresh = compose(&board, Some(&token), &inputs_fresh).expect("composed on version 3");
+    let fresh_landing = || Landing::Draft { merger, into: None, journal: None };
+    let landed_fresh = land(&board, &merged_fresh, fresh_landing()).expect("landed in a fresh draft");
+    let Landed::Draft { into: fresh, position: at_fresh, head_moved, .. } = landed_fresh.clone() else { panic!("{landed_fresh:?}") };
+    assert!(fresh != t && fresh != draft, "a fresh draft: {fresh}");
+    assert_eq!(head_moved, None);
+    let m = merged_fresh.composed.runs.iter().map(|p| p.run.clone()).collect::<Vec<_>>();
+    let extent: u64 = m.iter().map(|r| r.width).sum();
+    assert_eq!(image(&board, &token, &fresh, extent), as_image(&m), "the fresh draft holds M");
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&fresh.to_string()));
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["source"].as_str()), (Some(third.to_string().as_str()), Some("16"), Some(third.to_string().as_str())), "staged from the head, the base re-recorded on it: {meta}");
+    assert_eq!(meta["merge"], json!({"at": at_fresh, "head": third.to_string(), "head_copied": "16", "sides": [t.to_string()]}), "{meta}");
+    let standing = position();
+    let again = compose(&board, Some(&token), &inputs_fresh).expect("composed again");
+    assert!(matches!(again.prior.as_ref().and_then(|p| p.landed.as_ref()), Some(RecordLanding::Draft { draft, .. }) if *draft == fresh), "the standing record names the landing: {:?}", again.prior);
+    assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), landed_fresh);
+    assert_eq!(position(), standing, "nothing staged, nothing written");
     session.close().expect("close");
 }

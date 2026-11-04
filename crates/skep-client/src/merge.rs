@@ -22,18 +22,22 @@
 //! This build holds the library whole but its surfaces: [`compose_runs`],
 //! the pure core, with [`base_of`] and [`script`] beside it; [`compose()`],
 //! the reads of §1.3 in order over a board but step 6's, the shot's bytes,
-//! which the landing reads, writing nothing; [`land()`] and [`resume`], the
-//! one `publish` of the merged list from the head with its signed body, the
-//! claim's read, the record in a merge journal with its public link, the
-//! draft landing, and the residue walk over a lost acknowledgment;
-//! [`verify`], the record's testimony recomputed; the record kind and the
-//! journal under [`record`] and [`journal`]; and [`Refusal`], every refusal
-//! the reads and the landing can meet. Absent, by name: every surface — the
-//! `skep merge` command, which skep-cli builds over this module, the
-//! attendant's call, skep-mcp's compose-and-report tool, the editor's scene
-//! and its copy — and the supersession claim over version members, which
-//! this wire's `assert_sup` does not admit (`land`'s doc says what stands in
-//! its place).
+//! which the landing reads — every read at ONE board position, which the
+//! result carries as `as_of` — writing nothing; [`land()`] and [`resume`],
+//! the one `publish` of the merged list from the head with its signed body,
+//! the claim's read, the record in a merge journal with its public link,
+//! the draft landing — one `set_arrangement` typed against the position the
+//! merge was composed at, into the draft named or into a fresh draft staged
+//! from the head, the draft's base re-recorded on that head and the merge
+//! marked, a newer head told — and the residue walk over a lost
+//! acknowledgment; [`verify`], the record's testimony recomputed; the
+//! record kind and the journal under [`record`] and [`journal`]; and
+//! [`Refusal`], every refusal the reads and the landing can meet. Absent,
+//! by name: every surface — the `skep merge` command, which skep-cli builds
+//! over this module, the attendant's call, skep-mcp's compose-and-report
+//! tool, the editor's scene and its copy — and the supersession claim over
+//! version members, which this wire's `assert_sup` does not admit (`land`'s
+//! doc says what stands in its place).
 //!
 //! **The one rule** (merge record §2): a case is safe when the two sides
 //! touched different material; a conflict when they touched the same

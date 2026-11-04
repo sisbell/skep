@@ -113,11 +113,12 @@ pub enum SideAt {
         at: Address,
         /// The position the draft was read at (§4: "for a draft read at N").
         ///
-        /// Every record `compose` builds names one — the input's, else the
-        /// one the draft's image answered — and [`verify`] reads the draft
-        /// and its recorded base as of it, whatever the publication that
-        /// rendered the draft has made of either since. A record naming
-        /// none reads them at the head.
+        /// Every record `compose` builds names one — the one position P
+        /// every read of the composition was made at: the input's, else the
+        /// one the composition's first read answered — and [`verify`] reads
+        /// the draft and its recorded base as of it, whatever the landing
+        /// that rendered the draft has made of either since. A record naming
+        /// none reads them at the position its own first read answers.
         position: Option<u64>,
     },
 }
@@ -183,11 +184,10 @@ impl SideAt {
 /// Where a record's merge landed (§4, `landed`).
 ///
 /// It is the member minted and the ack's position, or the draft the merged
-/// list was landed into and the position of its last edit; where the
-/// landing found the member standing with no feed row of its mint, or the
-/// draft already holding M, the position is the reads' highest `as_of`.
-/// `None` in the record is the question — a merger that chose not to land
-/// (§3).
+/// list was landed into and the position of the one `set_arrangement` that
+/// landed it; where the landing found the member standing with no feed row
+/// of its mint, the position is the reads' highest `as_of`. `None` in the
+/// record is the question — a merger that chose not to land (§3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordLanding {
     /// `{"member": …, "position": N}`.
@@ -204,9 +204,13 @@ pub enum RecordLanding {
     Draft {
         /// The staging draft.
         draft: Address,
-        /// The last edit's commit position.
+        /// The `set_arrangement`'s commit position — the write's ack `at`.
         ///
-        /// It is the reads' highest `as_of` where the draft already held M.
+        /// It is the position the merge marker on the draft carries
+        /// (`doc_metadata`'s `merge.at`), so a `resume` that finds the draft
+        /// holding M with the marker of this merge's head takes the marker's
+        /// `at`; where the draft carries no such marker — a baseless draft,
+        /// an admitted fork — it is the resume's own read's `as_of`.
         position: u64,
     },
 }
@@ -671,13 +675,16 @@ pub enum Verdict {
 /// M is recomputed from the record's inputs — its base, its sides, its
 /// value switches and the choices its gaps record — and compared with the
 /// landed member's image over its first `placed` positions, or the draft's
-/// whole image at the position recorded. A draft side, and the base the
-/// board records for it, are read as of the position the record names for
-/// the side (wire.md §Reading history), so the testimony is checked against
-/// the state the merge composed from, whatever the landing that rendered
-/// the draft has made of either since. The daemon's `compare` is asked once
-/// as the oracle of the client's join (§1.3 step 4), in parts past its
-/// budgets.
+/// whole image at the position recorded. A member is compared as the shot
+/// minted it, a draft side's fresh text re-minted under the trunk; a draft
+/// is compared by identity, every run of M as the sides hold it, since the
+/// one `set_arrangement` that landed it re-mints nothing. A draft side, and
+/// the base the board records for it, are read as of the position the
+/// record names for the side (wire.md §Reading history), so the testimony
+/// is checked against the state the merge composed from, whatever the
+/// landing that rendered the draft has made of either since. The daemon's
+/// `compare` is asked once as the oracle of the client's join (§1.3 step
+/// 4), in parts past its budgets.
 ///
 /// # Errors
 ///
@@ -747,12 +754,15 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
         Err(e) => return Err(e),
     };
     let actual = reads::runs_of(&image)?;
+    // A member holds a draft side's text re-minted under the trunk, which
+    // its family says; a draft holds every run of M by identity.
+    let by_identity = matches!(record.landed, Some(RecordLanding::Draft { .. }));
     let expected: Vec<(Run, reads::Family)> = readings
         .composed
         .runs
         .iter()
         .map(|p| p.run.clone())
-        .zip(readings.families.iter().copied())
+        .zip(readings.families.iter().map(|f| if by_identity { reads::Family::Own } else { *f }))
         .collect();
     Ok(match reads::first_difference(&expected, &actual, &record.doc) {
         None => Verdict::Equal,

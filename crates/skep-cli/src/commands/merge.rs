@@ -16,14 +16,20 @@
 //! (`doc_metadata`'s `source`) — a draft staged from, or a fork taken from,
 //! the bare document before its first version is refused with that reason —
 //! and the head where the feed walk should not supply it; the
-//! command composes the merge under the rules and prints the `Merged`
-//! report as one JSON document on stdout, exit 0. With `--publish` it lands
-//! the merge as the document's next version with its record, with `--into`
-//! it lands the merged list in a draft, and the report then carries the
-//! landing. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules left open;
-//! `--journal` names the merge journal (decision 7), `--kind` the record
-//! kind's type address (decision 9's row is interim and unpinned, so the
-//! caller names it). The board's refusal is exit 1, a halt exit 3.
+//! command composes the merge under the rules — every read at one board
+//! position, the report's `as_of` — and prints the `Merged` report as one
+//! JSON document on stdout, exit 0. With `--publish` it lands the merge as
+//! the document's next version with its record; with `--into` it lands the
+//! merged list in a draft as ONE `set_arrangement` typed against that
+//! position — refused whole where the draft changed since, the draft's base
+//! re-recorded on the head and the merge marked beside it; with `--new` it
+//! stages a fresh draft from the head and lands there; and the report then
+//! carries the landing, naming a newer version published since where the
+//! board tells one. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules
+//! left open; `--journal` names the merge journal (decision 7), `--kind`
+//! the record kind's type address (decision 9's row is interim and
+//! unpinned, so the caller names it). The board's refusal is exit 1, a halt
+//! exit 3.
 //!
 //! The session is the command's own: the selected signing key (the file
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
@@ -45,11 +51,14 @@
 //! The report's members take the record's §4 names where they coincide
 //! (`doc`, `base`, `sides`, `gaps`, `values`, `record`); the report adds
 //! `head`, `runs` (M as `origin`, `i_start`, `width`, `side`, `family`),
-//! `counts`, `cap`, `over_cap`, `prior`, `ignored`, `as_of`, `landed`, and
-//! to each gap a `default` — its placement as this run composed it, in
-//! `--resolve`'s own spelling, so a merger copies it and varies it.
-//! `--json` is every command's flag and changes nothing here: the report
-//! is JSON always.
+//! `counts`, `cap`, `over_cap`, `prior`, `ignored`, `as_of` — the one
+//! position every read of the composition was made at — `landed`, and to
+//! each gap a `default` — its placement as this run composed it, in
+//! `--resolve`'s own spelling, so a merger copies it and varies it. A draft
+//! landing's `landed` carries the draft, the write's `position`, the
+//! `record`, `head_moved` (the newer head told, else null) and `fresh`
+//! (whether this run staged the draft). `--json` is every command's flag
+//! and changes nothing here: the report is JSON always.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -60,7 +69,8 @@ use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
     compose, head_of, land, Choice, Family, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged,
-    Merger, Options, Placement, Record, Refusal, Resolution, ResolvedBy, Side, SideIx,
+    Merger, Options, Placement, Record, RecordLanding, Refusal, Resolution, ResolvedBy, Side,
+    SideIx,
 };
 use skep_client::sign::Signer;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
@@ -75,8 +85,11 @@ use crate::args::{CommandLine, Usage};
 enum Land {
     /// `--publish`: one shot from the head, the record beside it.
     Publish,
-    /// `--into ⟨draft⟩`: the merged list landed in this draft by identity.
+    /// `--into ⟨draft⟩`: the merged list set as this draft's whole
+    /// arrangement in one write, typed against the composition's position.
     Into(Address),
+    /// `--new`: a fresh draft staged from the head, then the same write.
+    New,
 }
 
 /// What the command line asks, judged whole before any socket opens.
@@ -180,14 +193,31 @@ fn run(
         let journal = asked.journal.clone();
         let landing = match landing {
             Land::Publish => Landing::Shot { merger, draft: None, journal },
-            Land::Into(into) => Landing::Draft { merger, into: into.clone(), journal },
+            Land::Into(into) => Landing::Draft { merger, into: Some(into.clone()), journal },
+            Land::New => Landing::Draft { merger, into: None, journal },
         };
         let landed = land(board, &merged, landing).map_err(refused)?;
-        say_landed(&merged, &landed);
-        report["landed"] = landed_value(&merged, &landed);
+        let fresh = matches!(asked.landing, Some(Land::New)) && staged_here(&merged, &landed);
+        say_landed(&merged, &landed, fresh);
+        report["landed"] = landed_value(&merged, &landed, fresh);
     }
     data_verbatim(report.to_string().as_bytes())?;
     Ok(())
+}
+
+/// Returns whether a `--new` landing staged its draft in this run.
+///
+/// The library stages nothing where the standing record for the key already
+/// names a draft landing, and reports that landing instead (its `Landing`
+/// doc); the standing record is the composition's `prior`, so a landing
+/// into the draft it names was found, not staged.
+fn staged_here(merged: &Merged, landed: &Landed) -> bool {
+    let Landed::Draft { into, .. } = landed else { return false };
+    let standing = merged.prior.as_ref().and_then(|p| match &p.landed {
+        Some(RecordLanding::Draft { draft, .. }) => Some(draft),
+        _ => None,
+    });
+    standing != Some(into)
 }
 
 impl Asked {
@@ -202,7 +232,9 @@ impl Asked {
     /// side no address, or `--base` no address; `--head`, `--kind` (or
     /// `SKEP_MERGE_KIND`, required, a variable that is not UTF-8 text
     /// refused too), `--journal` no address; `--retries` no count; a
-    /// `--resolve` outside its grammar; `--into` no address.
+    /// `--resolve` outside its grammar; `--into` no address. The three
+    /// landings apart — `--publish`, `--into`, `--new` — are the grammar's
+    /// forms, refused ahead of this.
     fn of(c: &CommandLine, by: &ResolvedBy) -> Result<Asked, Usage> {
         let doc = match c.value("--doc") {
             Some(d) => address("--doc", d)?,
@@ -257,6 +289,7 @@ impl Asked {
         let landing = match c.value("--into") {
             Some(into) => Some(Land::Into(address("--into", into)?)),
             None if c.switch("--publish") => Some(Land::Publish),
+            None if c.switch("--new") => Some(Land::New),
             None => None,
         };
         Ok(Asked { doc, side, base, head, kind, journal, options, landing })
@@ -336,7 +369,11 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// draft's bare base, a base named for a fork and a base named for a draft
 /// that the board's record does not derive, which the library refuses
 /// before any image, among them, under their own names; the unowned draft
-/// side under `not_owner`, its detail naming the draft.
+/// side under `not_owner`, its detail naming the draft; the draft landing's
+/// two — a fork composed on another head than its source under
+/// `fork_base_moved`, a draft of another document under
+/// `base_not_in_chain`; and a composition position the board no longer
+/// answers under `history_reclaimed`.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -349,9 +386,12 @@ fn refused(r: Refusal) -> Stop {
         Refusal::NoSuchDocument(_) => "doc_not_registered",
         Refusal::TooFragmented { .. } => "image_too_large",
         Refusal::HistoryBusy => "history_busy",
+        Refusal::HistoryReclaimed { .. } => "history_reclaimed",
         Refusal::OverCap { .. } => "too_many_runs",
         Refusal::NeedsSignedSession => "signed_session_required",
         Refusal::UnownedDraft { .. } => "not_owner",
+        Refusal::ForkBaseMoved { .. } => "fork_base_moved",
+        Refusal::BaseNotInChain { .. } => "base_not_in_chain",
     };
     match r {
         Refusal::Halt(h) => Stop::Halt(h),
@@ -411,8 +451,12 @@ fn say_composed(merged: &Merged) {
     }
 }
 
-/// Says the talk after a landing: what landed, or the daughter and the re-run.
-fn say_landed(merged: &Merged, landed: &Landed) {
+/// Says the talk after a landing: what landed, or the daughter and the
+/// re-run; at a draft landing the draft — the fresh one staged where `fresh`
+/// — and, where the board told a newer head, that a newer version was
+/// published since the merge was composed and the merge landed against the
+/// head it composed on, so a merge composed again includes it.
+fn say_landed(merged: &Merged, landed: &Landed, fresh: bool) {
     match landed {
         Landed::Member { address, position, claims, record, .. } => {
             talk(format!(
@@ -429,11 +473,21 @@ fn say_landed(merged: &Merged, landed: &Landed) {
                 merged.inputs.options.retries + 1
             ));
         }
-        Landed::Draft { into, ops, record } => {
+        Landed::Draft { into, position, record, head_moved } => {
             talk(format!(
-                "landed in the draft {into} in {ops} edit{}; the record's link is {record}",
-                if *ops == 1 { "" } else { "s" }
+                "landed in the draft {into} at position {position}{}; the record's link is {record}",
+                if fresh {
+                    format!(", a fresh draft staged from {}", merged.inputs.head)
+                } else {
+                    String::new()
+                }
             ));
+            if let Some(newer) = head_moved {
+                talk(format!(
+                    "a newer version of {} was published since this merge was composed: {newer} — the merge landed against {}, the head it was composed on; merge again to include {newer}",
+                    merged.inputs.doc, merged.inputs.head
+                ));
+            }
         }
     }
 }
@@ -509,7 +563,11 @@ fn prior_of(prior: &Record) -> Value {
 }
 
 /// Returns the landing as the report carries it.
-fn landed_value(merged: &Merged, landed: &Landed) -> Value {
+///
+/// A draft landing carries the draft, the write's position, the record,
+/// `head_moved` — the newer head the board told, else null — and `fresh`,
+/// whether this run staged the draft.
+fn landed_value(merged: &Merged, landed: &Landed, fresh: bool) -> Value {
     match landed {
         Landed::Member { address, position, claims, record, retries } => json!({
             "member": address.to_string(),
@@ -523,10 +581,12 @@ fn landed_value(merged: &Merged, landed: &Landed) -> Value {
             "position": position,
             "retries": merged.inputs.options.retries,
         }),
-        Landed::Draft { into, ops, record } => json!({
+        Landed::Draft { into, position, record, head_moved } => json!({
             "draft": into.to_string(),
-            "ops": ops,
+            "position": position,
             "record": record.to_string(),
+            "head_moved": head_moved.as_ref().map(ToString::to_string),
+            "fresh": fresh,
         }),
     }
 }

@@ -293,10 +293,11 @@ impl<'a> Landing<'a> {
 ///   and that nothing was merged; [`Refusal::ForkBaseMoved`];
 ///   [`Refusal::BaseNotInChain`]; [`Refusal::WindowWithheld`];
 ///   [`Refusal::NeedsSignedSession`]; [`Refusal::NoSuchDocument`] naming
-///   the draft; `no_base_to_record`, `base_extent_too_large` and
-///   `source_not_registered` as the library's own faults, since it read the
-///   base and the extent at the position it typed the write against — and
-///   a lost acknowledgment as the dialer's halt, with no re-ask;
+///   the draft; `source_not_registered`, `no_base_to_record` and
+///   `base_extent_too_large` as the library's own faults, since it names
+///   the head and the extent the merge read, and a base only where the
+///   draft records one at the position the write is typed against — and a
+///   lost acknowledgment as the dialer's halt, with no re-ask;
 /// - the claim's and the record's reads' refusals, then the record's
 ///   writes': [`Refusal::NeedsSignedSession`], and at its link
 ///   `attestation_invalid:board_unavailable` faced as the head the board
@@ -954,8 +955,9 @@ impl Writer<'_> {
     /// [`Refusal::WindowWithheld`] where a run names an origin the merger may
     /// not read; [`Refusal::NeedsSignedSession`];
     /// [`Refusal::NoSuchDocument`] naming the draft; a run with no address
-    /// and the board's refusal of the frame's substance — the base and the
-    /// extent it read at `as_of` (`no_base_to_record`,
+    /// and the board's refusal of the frame's substance — the head and the
+    /// extent the merge read and the base the draft records at `as_of`
+    /// (`source_not_registered`, `no_base_to_record`,
     /// `base_extent_too_large`), a run's origin (`source_not_registered`,
     /// `bad_run`, `dangling_source`, `too_many_runs`), the draft's standing
     /// (`published_target`, `not_owner`) — as the library's own faults; an
@@ -1078,9 +1080,11 @@ impl Writer<'_> {
                 head: head.clone(),
             },
             "base_not_in_chain" => Refusal::BaseNotInChain { into: into.clone(), head: head.clone() },
-            // The library read the base and the extent at the position it
-            // typed the write against, and composed every run from images
-            // read there: a refusal of them is its own fault.
+            // The head and its extent are the merge's own reads — a member
+            // registered for good, whose count never falls (PUB-2.43) — the
+            // base is sent only where the draft records one at the position
+            // the write is typed against, and every run was composed from
+            // the merge's images: a refusal of them is its own fault.
             "no_base_to_record"
             | "base_extent_too_large"
             | "source_not_registered"

@@ -1921,13 +1921,25 @@ mod scripted {
             }
         }
 
-        /// `set_arrangement` as the store judges it (wire.md §Arrangement;
-        /// `crates/skep-arrangement/src/ops/set_arrangement.rs`): the
-        /// destination's own four refusals, the head's two and the fork
-        /// gate, the base's three, then the runs; the whole arrangement
-        /// replaced in one commit, the base re-recorded and the marker set or
-        /// cleared where a base is named, and `head_moved` on the ack where
-        /// the trunk has moved past the head named.
+        /// Answers `set_arrangement` as the store judges it.
+        ///
+        /// The order is wire.md §Arrangement's and
+        /// `crates/skep-arrangement/src/ops/set_arrangement.rs`'s: the
+        /// destination's own four refusals; the head's registration on
+        /// every draft, then its chain and its extent where the draft has a
+        /// chain — its recorded base's, else its fork source's; the fork
+        /// gate; the base's `no_base_to_record`, then its registration, its
+        /// chain and its extent; then each run's origin registered and a
+        /// value at every address it names. The whole arrangement is
+        /// replaced in one commit, the base re-recorded and the marker set
+        /// or cleared where a base is named, and `head_moved` rides the ack
+        /// where the trunk has moved past the head named.
+        ///
+        /// It judges no `bad_run` or `too_many_runs`: the landing spells
+        /// each run's start from its own origin and refuses a list past
+        /// `SHOT_RUN_CAP` before any frame. The door's answers — `malformed`,
+        /// `withheld` — are no judgment of it either: a test that needs one
+        /// plants it in `memo` under the frame's id.
         fn set_arrangement(&mut self, frame: &Value) -> Value {
             let reject = |code: &str, site: Value| permanent("set_arrangement", code, site);
             let doc = frame["doc"].as_str().unwrap().to_string();
@@ -1958,11 +1970,19 @@ mod scripted {
                 _ => None,
             };
             let chain = standing.as_ref().map(|(b, _)| trunk(b)).or_else(|| fork_source.as_ref().map(|s| trunk(s)));
+            // A pair as the store judges it (`judge_pair`,
+            // `judge_registration`): its registration first, on every draft;
+            // then, on a draft with a chain, its address against the chain
+            // and its extent against its own count.
             let judge = |p: &(String, u64), chain: Option<&String>| -> Option<&'static str> {
-                if chain.is_some_and(|c| trunk(&p.0) != *c && p.0 != *c) {
+                let Some(member) = self.docs.get(&p.0) else {
+                    return Some("source_not_registered");
+                };
+                let chain = chain?;
+                if trunk(&p.0) != *chain && p.0 != *chain {
                     return Some("base_not_in_chain");
                 }
-                let count: u64 = self.docs.get(&p.0).map_or(0, |m| m.runs.iter().map(|r| r.width).sum());
+                let count: u64 = member.runs.iter().map(|r| r.width).sum();
                 (p.1 > count).then_some("base_extent_too_large")
             };
             if let Some(h) = &head {
@@ -3871,6 +3891,90 @@ mod scripted {
         assert_eq!(dialer.world().standing(fresh), (None, None), "no base, no marker gained");
     }
 
+    /// The scripted board judges `set_arrangement` in the store's order.
+    ///
+    /// A head's registration is asked on every draft, ahead of its chain,
+    /// its extent and the fork gate, and is all a plain draft's head meets;
+    /// a base's follows `no_base_to_record`, ahead of its chain and its
+    /// extent (wire.md §Arrangement) — cell by cell over the staged draft
+    /// `S`, the merger's fork of `D.1` and a plain draft. Every refused
+    /// frame carries a run of no value, so `dangling_source` answers where
+    /// no judgment ahead of the runs spoke, and leaves the feed, the draft
+    /// and its base as they stood; the admitted frames, last, commit once
+    /// each and record no base.
+    #[test]
+    fn the_scripted_board_judges_set_arrangement_as_the_store_does() {
+        let (plain, fork) = ("1.0.1.0.5", "1.0.1.0.7");
+        let mut w = draft_landing_world();
+        w.doc(plain, false, ACCOUNT, Vec::new());
+        w.fork(fork, ACCOUNT, &format!("{D}.1"), vec![run(D, 1, 7)]);
+        let v1: &str = &format!("{D}.1");
+        let v2: &str = &format!("{D}.2");
+        // Addresses no mint made: a member, a daughter and a document.
+        let no_member: &str = &format!("{D}.9");
+        let no_daughter: &str = &format!("{D}.1.9");
+        let no_document = "1.0.1.0.99";
+        let cells = [
+            // `S`, whose chain is `D`'s: the head's three checks, then the
+            // base's.
+            (S, Some((no_member, 0)), Some((v1, 11)), "source_not_registered"),
+            (S, Some((no_document, 99)), None, "source_not_registered"),
+            (S, Some((Z, 5)), None, "base_not_in_chain"),
+            (S, Some((v2, 16)), None, "base_extent_too_large"),
+            (S, None, Some((no_daughter, 0)), "source_not_registered"),
+            (S, None, Some((no_document, 99)), "source_not_registered"),
+            (S, None, Some((Z, 5)), "base_not_in_chain"),
+            (S, None, Some((v1, 12)), "base_extent_too_large"),
+            // The fork, whose chain is its source's: the head judged ahead
+            // of the gate.
+            (fork, Some((no_member, 0)), None, "source_not_registered"),
+            (fork, Some((D, 99)), None, "base_extent_too_large"),
+            (fork, Some((v2, 15)), None, "fork_base_moved"),
+            // The plain draft, with no chain: the head's registration
+            // alone, ahead of the base's `no_base_to_record`.
+            (plain, Some((no_member, 5)), None, "source_not_registered"),
+            (plain, Some((no_document, 99)), Some((v2, 15)), "source_not_registered"),
+            (plain, Some((v2, 99)), None, "dangling_source"),
+            (plain, None, Some((no_document, 99)), "no_base_to_record"),
+        ];
+        let dangling = [frames::shot_run(D, &i_addr(&a(D), 99), 1)];
+        for (doc, head, base, code) in cells {
+            let cell = format!("{doc}, head {head:?}, base {base:?}");
+            let before = (w.rows.len(), w.docs[doc].runs.clone(), w.standing(doc));
+            let frame = frames::set_arrangement(doc, &dangling, w.position, head, base, None, None);
+            let answer = w.set_arrangement(&frame);
+            assert_eq!(answer["code"].as_str(), Some(code), "{cell}: {answer}");
+            assert_eq!(
+                (w.rows.len(), w.docs[doc].runs.clone(), w.standing(doc)),
+                before,
+                "{cell}: nothing written"
+            );
+        }
+        // Admitted: the trunk's head told where the head named is not it,
+        // and no base or marker recorded for a draft that records none.
+        let whole = [frames::shot_run(D, &i_addr(&a(D), 1), 11)];
+        for (doc, head, told) in
+            [(plain, (v2, 99), None), (plain, (v1, 11), Some(v2)), (fork, (v1, 11), Some(v2))]
+        {
+            let cell = format!("{doc}, head {head:?}");
+            let rows = w.rows.len();
+            let frame =
+                frames::set_arrangement(doc, &whole, w.position, Some(head), None, None, None);
+            let answer = w.set_arrangement(&frame);
+            assert_eq!(
+                (answer["resp"].as_str(), answer["head_moved"].as_str()),
+                (Some("ack"), told),
+                "{cell}: {answer}"
+            );
+            assert_eq!(w.rows.len(), rows + 1, "{cell}: one commit");
+            assert_eq!(
+                (w.docs[doc].runs.clone(), w.standing(doc)),
+                (vec![run(D, 1, 11)], (None, None)),
+                "{cell}: the runs placed, nothing recorded"
+            );
+        }
+    }
+
     /// A FRESH DRAFT (R3 (i)): with no draft named, `stage {from: the head}`
     /// under the id `<stem>.stage`, then the one write into the staged draft
     /// typed against the stage's position, the base sent — the stage
@@ -4017,6 +4121,88 @@ mod scripted {
             dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
             "nothing after a refused shot"
         );
+    }
+
+    /// Every refusal the draft landing's one write can answer is mapped.
+    ///
+    /// A draft staged from another document's member meets the board's own
+    /// `base_not_in_chain` as `Refusal::BaseNotInChain`. Planted under the
+    /// write's id, `withheld` names the origin, `signed_session_required`
+    /// and `doc_not_registered` answer theirs, every refusal of the frame's
+    /// substance is the library's own fault and any other code rides
+    /// verbatim. Each leaves the feed as it stood, the refused write the
+    /// last frame sent: no journal and no record.
+    #[test]
+    fn the_draft_landings_refusals_are_mapped() {
+        // `T`, a draft staged from `Z`'s first member: its chain is `Z`'s.
+        let t = "1.0.1.0.5";
+        let mut w = draft_landing_world();
+        w.member(&format!("{Z}.1"), vec![run(Z, 1, 5)], None);
+        w.doc(t, false, ACCOUNT, vec![run(Z, 1, 5)]);
+        w.staged(t, &format!("{Z}.1"), 5);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let rows = dialer.world().rows.len();
+        let stopped = |cell: &str| {
+            let ops = dialer.ops();
+            assert_eq!(ops.last().map(String::as_str), Some("set_arrangement"), "{cell}: {ops:?}");
+            assert_eq!(dialer.world().rows.len(), rows, "{cell}: nothing committed");
+        };
+        dialer.clear();
+        assert_eq!(
+            land(&board, &merged, draft_landing(&session, &signer, Some(a(t)))),
+            Err(Refusal::BaseNotInChain { into: a(t), head: a(&format!("{D}.2")) })
+        );
+        assert_eq!(
+            dialer.frames("set_arrangement")[0]["base"],
+            json!({"at": format!("{D}.2"), "extent": "15"}),
+            "the head's pair, the base to record: the board records one for T"
+        );
+        stopped("base_not_in_chain");
+        assert_eq!(
+            dialer.world().standing(t),
+            (Some((format!("{Z}.1"), 5)), None),
+            "T's base as it stood"
+        );
+        // The codes planted under the write's id, each answered to a landing
+        // into `S`.
+        let id = format!("{}.draft", merged.key.text());
+        let refused = |code: &str, site: Option<&str>| -> Refusal {
+            let site = site.map_or(Value::Null, |s| json!({"addr": s}));
+            dialer.world().memo.insert(id.clone(), permanent("set_arrangement", code, site));
+            dialer.clear();
+            let err = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))))
+                .expect_err(code);
+            stopped(code);
+            err
+        };
+        assert_eq!(refused("withheld", Some(Z)), Refusal::WindowWithheld(a(Z)));
+        assert_eq!(refused("signed_session_required", None), Refusal::NeedsSignedSession);
+        assert_eq!(refused("doc_not_registered", None), Refusal::NoSuchDocument(a(S)));
+        for code in [
+            "source_not_registered",
+            "no_base_to_record",
+            "base_extent_too_large",
+            "published_target",
+            "not_owner",
+            "bad_run",
+            "dangling_source",
+            "too_many_runs",
+            "malformed",
+        ] {
+            let err = refused(code, None);
+            let Refusal::Halt(halt) = &err else { panic!("{code}: {err:?}") };
+            assert_eq!(halt.exit_code(), 3, "{code}: {err:?}");
+            let Halt::Halt(face) = halt else { panic!("{code}: {err:?}") };
+            assert!(
+                face.cause.contains(code) && face.act.contains("fault in this library"),
+                "{code}: {face}"
+            );
+        }
+        let err = refused("txn_over_budget", None);
+        let Refusal::Halt(Halt::Refused(verbatim)) = &err else { panic!("{err:?}") };
+        assert_eq!(verbatim.code, "txn_over_budget");
     }
 
     /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NOTHING (SP-14): `/health`

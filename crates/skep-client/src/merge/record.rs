@@ -91,8 +91,10 @@ impl RecordKey {
     ///
     /// The text is `merge:<doc>:<base>:<side>+<side>…`. It is the stem of
     /// the per-session idempotency ids the shot's writes carry, and it
-    /// opens the draft landing's and the stage's, which name the draft and
-    /// the position too (the `land` module's doc).
+    /// opens the draft landing's, which name the draft and the position
+    /// too, and the stage's, which names the position and, where one
+    /// stands, the record the landing will replace (the `land` module's
+    /// doc).
     pub fn text(&self) -> String {
         let sides: Vec<String> = self.sides.iter().map(ToString::to_string).collect();
         format!("merge:{}:{}:{}", self.doc, self.base, sides.join("+"))

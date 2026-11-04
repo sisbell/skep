@@ -27,7 +27,9 @@
 //! head at the extent read and `doc_metadata`'s `merge` read back with the
 //! write's position, the record naming that position and verifying Equal;
 //! land and tell against a real newer member, `head_moved`; and a fresh
-//! draft staged from the head and landed in, a re-run staging nothing.
+//! draft staged from the head and landed in, a re-run staging nothing, and
+//! once it is undone the same composition landed fresh again in the same
+//! session, a draft and a record of its own.
 //! THE TWO TAKE-BACKS (skep #783): a landing undone — the pre-landing
 //! state read at `/op-at`'s `nearest` for `at − 1`, which the daemon
 //! answers `not_a_position` inside the landing's commit — the draft's text
@@ -53,8 +55,8 @@ use skep_client::board::{
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::halt::Halt;
 use skep_client::merge::{
-    compose, current, head_of, land, undo, verify, withdraw, Inputs, Landed, Landing, Merger,
-    NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
+    compose, current, head_of, land, resume, undo, verify, withdraw, Inputs, Landed, Landing,
+    Merger, NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
 };
 use skep_client::sign::{sig_hex, signer_from_seed, Signer};
 use skep_identity::{
@@ -799,7 +801,10 @@ fn as_image(runs: &[Run]) -> Vec<(String, u64)> {
 /// named as the head lands and carries `head_moved` = `D.3`, its base
 /// recorded on `D.2`. A FRESH DRAFT: `into` none stages from the head and
 /// lands there, the base and the marker recorded; composed again, the
-/// standing record names the landing and nothing is staged.
+/// standing record names the landing and nothing is staged. Undone, the
+/// composition that landed it lands fresh again in the same session — a
+/// draft, a write and a record of its own, replacing the undo's — and the
+/// later composition answers that landing.
 #[test]
 fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_a_newer_head() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -934,6 +939,28 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     let again = compose(&board, Some(&token), &inputs_fresh).expect("composed again");
     assert!(matches!(again.prior.as_ref().and_then(|p| p.landed.as_ref()), Some(RecordLanding::Draft { draft, .. }) if *draft == fresh), "the standing record names the landing: {:?}", again.prior);
     assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), landed_fresh);
+    assert_eq!(position(), standing, "nothing staged, nothing written");
+
+    // UNDONE, then the composition that landed it landed fresh again in
+    // this session: the undo's record is the merger's newest for the key,
+    // so nothing stands for `again`, and the stage's id names the undo's
+    // record — a draft and a write of their own, never the board's memo of
+    // the first landing — the record replacing the undo's; `again` then
+    // answers that landing, nothing written.
+    let undone = undo(&board, merger, &fresh, &kind, None).expect("the fresh landing undone");
+    let replacing = undone.record.clone().expect("the landing's record stood, so one replaces it");
+    assert_eq!(resume(&board, &again, fresh_landing()).expect("resumed"), None, "nothing stands for the key");
+    let relanded = land(&board, &merged_fresh, fresh_landing()).expect("landed fresh again");
+    let Landed::Draft { into: fresh_again, position: at_again, record: link_again, head_moved } = relanded.clone() else { panic!("{relanded:?}") };
+    assert!(fresh_again != fresh && at_again > undone.position && head_moved.is_none(), "a draft and a write of its own: {relanded:?}");
+    assert_eq!(image(&board, &token, &fresh_again, extent), as_image(&m), "the new draft holds M");
+    let record = current(&board, Some(&token), &kind, &merged_fresh.key).expect("the lookup").expect("a current record");
+    assert_eq!(
+        (record.landed, record.replaces, record.link),
+        (Some(RecordLanding::Draft { draft: fresh_again.clone(), position: at_again }), Some(replacing), Some(link_again))
+    );
+    let standing = position();
+    assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), relanded);
     assert_eq!(position(), standing, "nothing staged, nothing written");
     session.close().expect("close");
 }

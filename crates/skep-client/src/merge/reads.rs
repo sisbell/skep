@@ -287,7 +287,9 @@ pub struct Merged {
     ///
     /// Its `landed` is none, its `claims` none, its `replaces` the prior
     /// record's link where one stands, and its draft side at `as_of`, the
-    /// one position the draft was read at.
+    /// one position the draft was read at. The landing fills `landed` and
+    /// `claims`, and sets `replaces` from its own read of the merger's
+    /// newest record for the key (the `land` module's doc; P20).
     pub record: Record,
     /// The one position the shape's reads were taken at, P.
     ///
@@ -299,7 +301,10 @@ pub struct Merged {
     pub as_of: u64,
     /// The standing record for the key, where one is current.
     ///
-    /// It is §3's "What a second agent sees".
+    /// It is §3's "What a second agent sees", under the reader's currency
+    /// (the trunk owner's home first) at the composition. The landing never
+    /// lands by it: it reads the merger's own newest record for the key
+    /// when it lands (the `land` module's doc).
     pub prior: Option<Record>,
     /// The head's content extent as read — the shot's `base_extent`.
     pub head_extent: u64,

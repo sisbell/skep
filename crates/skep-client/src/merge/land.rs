@@ -24,15 +24,20 @@
 //! the acknowledgment is reported at once ([`Landed::AsDaughter`]): the head
 //! moved under the merge, the library never re-runs, the embedder does with
 //! `retries` one higher (decision 17). The record: the merger's current
-//! record for the key, read where the composition reads the prior records
-//! (the merge record's §1.5 (ii), §1.3's step 7) — the links of the kind to
-//! each side of the key, kept to the merger's own doc 1, the newest there —
-//! standing where it names this landing's member or draft; else the
-//! journal found or minted, the atom appended at its end, the link from the
-//! merger's doc 1 to the member and every side besides the head under the
-//! kind. A newer record of the key — an undo's, a withdrawal's, a landing
-//! of it elsewhere — replaces this landing's, so a landing after it writes
-//! its own, naming that record in `replaces`.
+//! record for the key, read by the landing itself as the composition reads
+//! the prior records (the merge record's §1.5 (ii), §1.3's step 7) — the
+//! links of the kind to each side of the key, kept to the merger's own
+//! doc 1, the newest there — standing where it names this landing's member
+//! or draft; else the journal found or minted, the atom appended at its
+//! end, the link from the merger's doc 1 to the member and every side
+//! besides the head under the kind, the record naming that newest record in
+//! `replaces` (P20: a later record from the same home names the one it
+//! replaces). A newer record of the key — an undo's, a withdrawal's, a
+//! landing of it elsewhere — replaces this landing's, so a landing after it
+//! writes its own. The composition's `Merged::prior` is what the
+//! composition saw, under the reader's currency, and never the landing's
+//! answer: a composition kept across a take-back, or one made before its
+//! own landing, lands by the board as it stands.
 //!
 //! **The head, before any write.** Each write of the landing — the shot,
 //! the stage, the draft's one write, the record's journal, atom and link —
@@ -70,16 +75,20 @@
 //! no draft named ([`Landing::Draft`]'s `into` none), a fresh draft is
 //! staged from the head first — `stage {from: the head}`, two commits, the
 //! state between a plain staged draft (R3) — and the write is typed against
-//! the stage's own position; where the standing record for the key already
-//! names a draft landing, that landing is reported and nothing is staged.
-//! The record follows, its draft landing's position the write's `at`. The
-//! draft landing's per-session ids share one stem naming the key, the draft
-//! and the position the write is typed against — `<stem>.draft`, then the
-//! record's `<stem>.record` and `<stem>.link` — and the stage's is
-//! `<key>@<P>.stage`, P the composition's position: the board answers a
-//! second call over one composition from its ids, and a landing composed
-//! after a take-back, or landed into another draft, is a write of its own.
-//! The shot's are the key's: `<key>.publish`, `<key>.record`, `<key>.link`.
+//! the stage's own position; where the merger's newest record for the key,
+//! read before the stage, names a draft landing, that landing is reported
+//! and nothing is staged. The record follows, its draft landing's position
+//! the write's `at`. The draft landing's per-session ids share one stem
+//! naming the key, the draft and the position the write is typed against —
+//! `<stem>.draft`, then the record's `<stem>.record` and `<stem>.link` —
+//! and the stage's is `<key>@<P>.stage`, P the composition's position, or
+//! `<key>@<P>~<link>.stage` where a record of the key stands in the
+//! merger's doc 1, `<link>` the newest one's, which the landing's record
+//! will replace: the board answers a second call over one composition from
+//! its ids, and a landing composed after a take-back, landed into another
+//! draft, or landed fresh again after its own landing was taken back, is a
+//! write of its own. The shot's are the key's: `<key>.publish`,
+//! `<key>.record`, `<key>.link`.
 //!
 //! **The claim, as this wire admits it.** The record's step (i) files
 //! `assert_sup{home: the merger's doc 1, old: the daughter, new: the member}`
@@ -183,9 +192,9 @@ pub enum Landing<'a> {
         /// `None` lands it in a FRESH draft staged from the head the merge
         /// was composed on (R3): `stage {from: the head}`, then the write
         /// typed against the stage's position, the base the stage recorded
-        /// re-recorded on the head — unless the standing record for the key
-        /// already names a draft landing, which is reported with nothing
-        /// staged.
+        /// re-recorded on the head — unless the merger's newest record for
+        /// the key, read at the landing, names a draft landing, which is
+        /// reported with nothing staged.
         into: Option<Address>,
         /// The merge journal, or the account's default.
         journal: Option<Address>,
@@ -242,8 +251,8 @@ pub enum Landed {
         /// The `set_arrangement`'s commit position, the write's `at`.
         ///
         /// Where the landing was found standing — a `resume` that found the
-        /// draft holding M, a fresh landing the standing record names — it
-        /// is the position that landing recorded.
+        /// draft holding M, a fresh landing the merger's newest record for
+        /// the key names — it is the position that landing recorded.
         position: u64,
         /// The record's public link.
         record: Address,
@@ -281,15 +290,20 @@ impl<'a> Landing<'a> {
 /// composed again after an undo or a withdrawal lands as a write of its
 /// own, in the same session or another: its ids name the position it was
 /// composed at, and the take-back's record leaves no record standing for
-/// it, so it writes its own.
+/// it, so it writes its own. With no draft named, the merger's newest
+/// record for the key is read before anything is staged, whatever the
+/// composition saw: a draft landing it names is the answer, in any session;
+/// a take-back's record leaves the key open, so the same `merged` landed
+/// again stages a draft of its own, the stage's id naming that record.
 ///
 /// # Errors
 ///
 /// In this order:
 ///
 /// - [`Refusal::OverCap`], before any frame;
-/// - the reads' refusals, for a member already holding M, or for the
-///   draft's `doc_metadata` at the position the write is typed against;
+/// - the reads' refusals, for a member already holding M, for the merger's
+///   newest record for the key where no draft is named, or for the draft's
+///   `doc_metadata` at the position the write is typed against;
 /// - a claimed board serving no head record, as [`Refusal::Halt`] naming
 ///   `H.1`, before the first write the landing would make — the shot, the
 ///   stage, the draft's one write or the record's first — with nothing
@@ -340,10 +354,11 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// holding M, read as it stands, with the position its marker carries, and
 /// completes the record, after the claim's read for the trunk's member,
 /// writing nothing twice; `None` where nothing landed, with nothing
-/// written. A fresh landing names no draft to read: the standing record
-/// for the key is its answer, else `None`. The board's head is read only
-/// before the record's writes, so a walk that finds nothing landed answers
-/// `None` whatever the head.
+/// written. A fresh landing names no draft to read: the merger's newest
+/// record for the key, read now, is its answer where it names a draft
+/// landing, else `None`. The board's head is read only before the record's
+/// writes, so a walk that finds nothing landed answers `None` whatever the
+/// head.
 ///
 /// # Errors
 ///
@@ -397,11 +412,13 @@ fn walk(
             };
             let claims = writer.claims_standing(merged, &member)?;
             let landed = RecordLanding::Member { member: member.clone(), position };
-            let record = match writer.record_standing(merged, &landed)? {
-                Some(link) => link,
+            let newest = writer.newest_record(merged)?;
+            let record = match newest.naming(&landed) {
+                Some(link) => link.clone(),
                 None => {
                     let stem = merged.key.text();
-                    writer.write_landing_record(merged, landed, &claims, &stem, landing.journal())?
+                    let journal = landing.journal();
+                    writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal)?
                 }
             };
             Ok(Some(Landed::Member {
@@ -415,35 +432,30 @@ fn walk(
         Landing::Draft { into, .. } => {
             // The draft and the position the write is typed against: the
             // merge's one position for a draft named; for a fresh draft,
-            // the stage's own position — unless the standing record for the
-            // key names a draft landing already, which is the answer, read
-            // through the composition's own prior-record lookup.
-            let (into, as_of) = match into {
-                Some(into) => (into.clone(), merged.as_of),
+            // the stage's own position — unless the merger's newest record
+            // for the key, read here from the board, names a draft landing,
+            // which is the answer. The stage and the one write write no
+            // record, so that read is the record step's too.
+            let (into, as_of, newest) = match into {
+                Some(into) => (into.clone(), merged.as_of, None),
                 None => {
-                    if let Some(prior) = &merged.prior {
-                        if let (Some(RecordLanding::Draft { draft, position }), Some(link)) =
-                            (&prior.landed, &prior.link)
-                        {
-                            return Ok(Some(Landed::Draft {
-                                into: draft.clone(),
-                                position: *position,
-                                record: link.clone(),
-                                head_moved: None,
-                            }));
-                        }
+                    let newest = writer.newest_record(merged)?;
+                    if let Some(standing) = newest.draft_landing() {
+                        return Ok(Some(standing));
                     }
                     if !shoot {
                         return Ok(None);
                     }
-                    writer.stage(merged)?
+                    let (fresh, at) = writer.stage(merged, &newest)?;
+                    (fresh, at, Some(newest))
                 }
             };
             // The stem of the landing's per-session ids: the key, the draft
             // and the position the write is typed against, so the board
             // answers a second call over one composition from its ids, and a
-            // landing composed after a take-back, or into another draft, is
-            // a write of its own.
+            // landing composed after a take-back, into another draft, or into
+            // the fresh draft a stage after a take-back mints, is a write of
+            // its own.
             let stem = format!("{}:{into}@{as_of}", merged.key.text());
             let Some((position, head_moved)) =
                 writer.land_into_draft(merged, &into, as_of, &stem, shoot)?
@@ -451,9 +463,16 @@ fn walk(
                 return Ok(None);
             };
             let landed = RecordLanding::Draft { draft: into.clone(), position };
-            let record = match writer.record_standing(merged, &landed)? {
-                Some(link) => link,
-                None => writer.write_landing_record(merged, landed, &[], &stem, landing.journal())?,
+            let newest = match newest {
+                Some(newest) => newest,
+                None => writer.newest_record(merged)?,
+            };
+            let record = match newest.naming(&landed) {
+                Some(link) => link.clone(),
+                None => {
+                    let journal = landing.journal();
+                    writer.write_landing_record(merged, landed, &[], &newest, &stem, journal)?
+                }
             };
             Ok(Some(Landed::Draft { into, position, record, head_moved }))
         }
@@ -484,6 +503,59 @@ enum Holds {
     /// Where the feed holds no row of the mint, the position is the reads'
     /// highest `as_of`.
     Merged(u64),
+}
+
+/// The merger's newest record for the key, as the landing read it.
+///
+/// Only [`Writer::newest_record`] builds one, from the board, so what a
+/// landing finds standing and what the record it writes replaces are the
+/// board's state at the landing (P20), never what the composition saw.
+/// Empty where no record of the key stands in the merger's doc 1.
+struct Newest(Option<(Address, Record)>);
+
+impl Newest {
+    /// Returns the newest record's link: what a record written now replaces.
+    fn link(&self) -> Option<&Address> {
+        self.0.as_ref().map(|(link, _)| link)
+    }
+
+    /// Returns the newest record's link where it names `landed`.
+    ///
+    /// It does where both land in the same member, or both in the same
+    /// draft, whatever either's position. An undo's or a withdrawal's
+    /// record names no landing and a landing of the key elsewhere names
+    /// another, so either leaves nothing standing for `landed`.
+    fn naming(&self, landed: &RecordLanding) -> Option<&Address> {
+        let (link, record) = self.0.as_ref()?;
+        let same = match (record.landed.as_ref()?, landed) {
+            (RecordLanding::Member { member: a, .. }, RecordLanding::Member { member: b, .. }) => {
+                a == b
+            }
+            (RecordLanding::Draft { draft: a, .. }, RecordLanding::Draft { draft: b, .. }) => {
+                a == b
+            }
+            _ => false,
+        };
+        same.then_some(link)
+    }
+
+    /// Returns the draft landing the newest record names, found standing.
+    ///
+    /// It is a fresh landing's answer with nothing staged: the draft, the
+    /// position the record names and the record's link, with no newer head
+    /// told. `None` where the newest names no draft landing or none stands.
+    fn draft_landing(&self) -> Option<Landed> {
+        let (link, record) = self.0.as_ref()?;
+        let Some(RecordLanding::Draft { draft, position }) = &record.landed else {
+            return None;
+        };
+        Some(Landed::Draft {
+            into: draft.clone(),
+            position: *position,
+            record: link.clone(),
+            head_moved: None,
+        })
+    }
 }
 
 /// The landing's writer: the merger and a reader under its token.
@@ -759,39 +831,38 @@ impl Writer<'_> {
         Ok(out)
     }
 
-    /// Returns the record's read: a standing record's public link.
+    /// Returns the record's read: the merger's newest record for the key.
     ///
-    /// The standing record is the merger's current record for the key (the
-    /// merge record's §1.5 (ii), read first by §1.3's step 7; §4's currency,
-    /// newest per key), where it names this landing. It is found as the
+    /// It is the merger's current record for the key (the merge record's
+    /// §1.5 (ii), read first as §1.3's step 7 reads; §4's currency, newest
+    /// per key), read by the landing from the board. It is found as the
     /// composition's prior records are, by the links of the kind to each
     /// side of the key, and kept to the merger's own home, its doc 1, where
     /// a link's ordinal is the order it was minted in: the newest there is
-    /// the record. It names this landing where it lands in the same member
-    /// or the same draft, whatever either's position. `None` where no record
-    /// of the key stands in that home, or where the newest names no landing
-    /// or another one: an undo's or a withdrawal's record, or a landing of
-    /// the key elsewhere, which replaced the record of this landing.
+    /// the record. A record of the key in another account's home is never
+    /// the merger's — its landing is another's, and a record names in
+    /// `replaces` one from its own home (P20). It stands for a landing it
+    /// names ([`Newest::naming`]); one naming no landing or another — an
+    /// undo's or a withdrawal's, or a landing of the key elsewhere —
+    /// replaced the record of this landing.
     ///
     /// # Errors
     ///
     /// A halt reading the links or a record.
-    fn record_standing(
-        &self,
-        merged: &Merged,
-        landed: &RecordLanding,
-    ) -> Result<Option<Address>, Refusal> {
+    fn newest_record(&self, merged: &Merged) -> Result<Newest, Refusal> {
         let home = doc_1_of(self.merger.account);
         let newest = records_of(&self.reader, &merged.inputs.kind, &merged.key)?
             .into_iter()
             .filter(|(link, _)| document_of(&link.to_string()).as_deref() == Some(home.as_str()))
             .max_by_key(|(link, _)| comps(link));
-        Ok(newest.and_then(|(link, record)| names(record.landed.as_ref(), landed).then_some(link)))
+        Ok(Newest(newest))
     }
 
     /// Writes a landing's record, answering its link's address.
     ///
-    /// The record is the composition's with `landed` and `claims` filled,
+    /// The record is the composition's with `landed` and `claims` filled
+    /// and `replaces` the link of `newest`, the merger's newest record for
+    /// the key as the landing read it — none where none stands (P20). It is
     /// written through [`Writer::write_record`] under `stem` — the key's
     /// text for the shot, and for a draft landing the key's with the draft
     /// and the position its write is typed against — the link's first end
@@ -806,6 +877,7 @@ impl Writer<'_> {
         merged: &Merged,
         landed: RecordLanding,
         claims: &[Address],
+        newest: &Newest,
         stem: &str,
         journal: Option<&Address>,
     ) -> Result<Address, Refusal> {
@@ -816,6 +888,7 @@ impl Writer<'_> {
         let mut record = merged.record.clone();
         record.landed = Some(landed.clone());
         record.claims = claims.to_vec();
+        record.replaces = newest.link().cloned();
         let owed = |cause: String| record_owed(&landed, cause);
         self.write_record(&merged.inputs.kind, &record, &target, stem, journal, &owed)
     }
@@ -988,13 +1061,17 @@ impl Writer<'_> {
     ///
     /// It is `stage {from: the head the merge composed on}` (R3) under the
     /// per-session id `<key>@<P>.stage`, P the position the merge was
-    /// composed at, so the same composition is answered its stage again and
-    /// one composed after a take-back stages afresh. The board mints a
-    /// private draft of the merger's account holding the head by identity
-    /// and records the head as its base, so the write that follows
-    /// re-records that base on the same head. The board's head is read
-    /// first: the stage begins a landing whose record's link signs over it
-    /// (the module's doc).
+    /// composed at, or `<key>@<P>~<link>.stage` where `newest`, the
+    /// merger's newest record for the key, stands — `<link>` its link, the
+    /// record the landing's own will replace. A retry of the same landing
+    /// reads the same newest record, so it is answered its stage again; one
+    /// composed after a take-back stages afresh, and so does the same
+    /// composition landed again after its landing was taken back, whose
+    /// newest record is the take-back's. The board mints a private draft of
+    /// the merger's account holding the head by identity and records the
+    /// head as its base, so the write that follows re-records that base on
+    /// the same head. The board's head is read first: the stage begins a
+    /// landing whose record's link signs over it (the module's doc).
     ///
     /// # Errors
     ///
@@ -1004,10 +1081,13 @@ impl Writer<'_> {
     /// stage's source; an answer of a shape this client does not know,
     /// faced; the death signal; a dial fault; the board's other refusals
     /// verbatim — `mint_home_first` among them.
-    fn stage(&self, merged: &Merged) -> Result<(Address, u64), Refusal> {
+    fn stage(&self, merged: &Merged, newest: &Newest) -> Result<(Address, u64), Refusal> {
         self.signing_term(&head_owed)?;
         let head = &merged.inputs.head;
-        let id = format!("{}@{}.stage", merged.key.text(), merged.as_of);
+        let id = match newest.link() {
+            None => format!("{}@{}.stage", merged.key.text(), merged.as_of),
+            Some(link) => format!("{}@{}~{link}.stage", merged.key.text(), merged.as_of),
+        };
         let frame = frames::stage(&head.to_string(), Some(&id));
         let v = self.answered_write(&frame, "staging a fresh draft")?;
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
@@ -1310,23 +1390,6 @@ fn record_owed(landed: &RecordLanding, cause: String) -> Halt {
         cause,
         act,
     )
-}
-
-/// Returns whether a record's `landed` names the landing `landed` is.
-///
-/// It does where both land in the same member, or both in the same draft,
-/// whatever either's position.
-fn names(record: Option<&RecordLanding>, landed: &RecordLanding) -> bool {
-    match (record, landed) {
-        (
-            Some(RecordLanding::Member { member: a, .. }),
-            RecordLanding::Member { member: b, .. },
-        ) => a == b,
-        (Some(RecordLanding::Draft { draft: a, .. }), RecordLanding::Draft { draft: b, .. }) => {
-            a == b
-        }
-        _ => false,
-    }
 }
 
 /// Faces a board refusal of this library's own frame (A-288's own-bug class).

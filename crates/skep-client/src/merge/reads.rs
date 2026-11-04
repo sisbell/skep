@@ -382,6 +382,10 @@ pub enum Refusal {
     /// side, and at the landing the landed document or the journal — that
     /// the reader may not read; at the reads nothing is composed, at the
     /// landing nothing further is written.
+    ///
+    /// Where the reads are a merge record's recomputation, [`record::verify`]
+    /// answers [`Verdict::Unreadable`](record::Verdict::Unreadable) naming
+    /// the document instead: the verdict withheld (D14).
     Unreadable(Address),
     /// `doc_not_registered` on the document named.
     NoSuchDocument(Address),
@@ -799,13 +803,17 @@ impl<'a> Reader<'a> {
 
     /// Maps the refusal a read of `doc` answered.
     ///
-    /// `withheld` is [`Refusal::Unreadable`], `doc_not_registered`
-    /// [`Refusal::NoSuchDocument`], the rest the board's own, surfaced
-    /// verbatim.
+    /// `withheld` is [`Refusal::Unreadable`] and `doc_not_registered`
+    /// [`Refusal::NoSuchDocument`], each naming the document the rejection's
+    /// `site.addr` names — of a read naming several, the first the board
+    /// refused in declaration order (wire.md §Rejections) — and `doc` where
+    /// it names none; the rest the board's own, surfaced verbatim.
     pub(super) fn refuse(&self, doc: &Address, r: &Rejection, v: &Value) -> Refusal {
+        let refused =
+            || r.site().addr.as_deref().and_then(parse_address).unwrap_or_else(|| doc.clone());
         match r.key() {
-            "withheld" => Refusal::Unreadable(doc.clone()),
-            "doc_not_registered" => Refusal::NoSuchDocument(doc.clone()),
+            "withheld" => Refusal::Unreadable(refused()),
+            "doc_not_registered" => Refusal::NoSuchDocument(refused()),
             _ => Refusal::Halt(r.refused(v)),
         }
     }
@@ -1560,9 +1568,11 @@ fn coalesced(ranges: &mut Vec<(u64, u64)>) -> Vec<(u64, u64)> {
 ///
 /// # Errors
 ///
-/// A refusal other than a budget's, mapped by [`Reader::refuse`]; a budget
-/// refusal down to one position each, faced; an answer that is no `compare`
-/// answer, faced; [`Reader::read`]'s errors.
+/// A refusal other than a budget's, mapped by [`Reader::refuse`] — a
+/// `withheld` or `doc_not_registered` naming the region's document the
+/// board refused, the base's or a side's; a budget refusal down to one
+/// position each, faced; an answer that is no `compare` answer, faced;
+/// [`Reader::read`]'s errors.
 fn compare_parts(
     reader: &Reader<'_>,
     base: &Address,

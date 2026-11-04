@@ -18,8 +18,8 @@
 //! landed as the shot, the draft's fresh text re-minted; its record naming
 //! the position the draft was read at and verifying Equal as of it once
 //! the shot has moved the draft's base and the draft is edited (skep #453),
-//! and refused as the record's where it names a position past the board's
-//! head (skep #761).
+//! Unreadable to a guest the draft is withheld from, and refused as the
+//! record's where it names a position past the board's head (skep #761).
 //! And ONE DRAFT LANDING (the landing lane's brief B; skep #762, #764): the
 //! merge composed at one position, the draft edited after it and the
 //! landing refused `arrangement_moved` whole; composed again and landed in
@@ -566,8 +566,9 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
 /// member, the draft's text re-minted under the document, with its record
 /// found from the draft; and the board moves the draft's recorded base to
 /// the member the merge minted. The record verifies Equal as of the
-/// position it names for the draft, and one naming a position past the
-/// board's head is refused as the record's, the daemon's head carried.
+/// position it names for the draft, Unreadable naming the draft to a guest
+/// the board withholds it from, and one naming a position past the board's
+/// head is refused as the record's, the daemon's head carried.
 #[test]
 fn a_draft_side_merges_from_the_base_the_board_records() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -718,6 +719,22 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
         "the premise — as of the record's position, the base that stood: {meta_at}"
     );
     assert_eq!(verify(&board, Some(&token), &record), Ok(Verdict::Equal));
+    // A GUEST may not read the draft: the verdict is withheld, naming the
+    // draft, never refused (the merge record's §4, testimony; D14). The
+    // premise: as of the record's position, the board answers a guest's read
+    // of the draft `withheld`.
+    let AtAnswer::Document(masked) = board
+        .op_at(None, *at, &frames::doc_metadata(&draft.to_string()))
+        .expect("the read at a position")
+    else {
+        panic!("no document as of {at}")
+    };
+    assert_eq!(
+        masked["code"].as_str(),
+        Some("withheld"),
+        "the premise — the draft is withheld from a guest: {masked}"
+    );
+    assert_eq!(verify(&board, None, &record), Ok(Verdict::Unreadable(draft.clone())));
     insert_text(&board, &bare_token, &draft.to_string(), 1, "?");
     assert_eq!(
         verify(&board, Some(&token), &record),

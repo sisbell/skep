@@ -1271,6 +1271,11 @@ mod scripted {
         /// Before the N-th frame the dialer serves is answered, `floor`
         /// becomes this position.
         reclaim: Option<(usize, u64)>,
+        /// A grant withdrawn in the middle of a walk.
+        ///
+        /// Before the N-th frame the dialer serves is answered, this
+        /// document joins `withheld`.
+        withhold: Option<(usize, String)>,
         /// Every shot lands as its base's daughter: the head moved.
         head_moved: bool,
         /// Documents this reader may not read.
@@ -1525,6 +1530,14 @@ mod scripted {
                     json!({"resp": "rejected", "code": code, "disposition": "reorder", "op": op}),
                 )
             };
+            // A document argument this reader may not read: `withheld`,
+            // `site.addr` the document (wire.md §The read predicate).
+            let masked = |doc: &str| {
+                reply(
+                    200,
+                    json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": op, "site": {"addr": doc}}),
+                )
+            };
             match op.as_str() {
                 "principal_prefix" => Ok(reply(200, json!({"resp": "addr", "as_of": position, "addr": ACCOUNT}))),
                 "key_set" => {
@@ -1534,7 +1547,7 @@ mod scripted {
                 "doc_metadata" => {
                     let doc = frame["doc"].as_str().unwrap();
                     if self.withheld.contains(doc) {
-                        return Ok(rejected("withheld"));
+                        return Ok(masked(doc));
                     }
                     let Some(d) = self.docs.get(doc) else { return Ok(rejected("doc_not_registered")) };
                     // A document minted after `position` did not exist then
@@ -1553,7 +1566,7 @@ mod scripted {
                 "retrieve_doc_v_span_set" => {
                     let doc = frame["doc"].as_str().unwrap();
                     if self.withheld.contains(doc) {
-                        return Ok(rejected("withheld"));
+                        return Ok(masked(doc));
                     }
                     let Some(runs) = self.arrangement(doc, at) else { return Ok(rejected("doc_not_registered")) };
                     let extent: u64 = runs.iter().map(|r| r.width).sum();
@@ -1563,7 +1576,7 @@ mod scripted {
                 "image" => {
                     let doc = frame["d"].as_str().unwrap();
                     if self.withheld.contains(doc) {
-                        return Ok(rejected("withheld"));
+                        return Ok(masked(doc));
                     }
                     let (from, width) = span(&frame["region"][0]);
                     let Some(runs) = self.arrangement(doc, at) else { return Ok(rejected("doc_not_registered")) };
@@ -1583,7 +1596,7 @@ mod scripted {
                         return Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})));
                     }
                     if self.withheld.contains(doc) {
-                        return Ok(rejected("withheld"));
+                        return Ok(masked(doc));
                     }
                     let (from, width) = span(&spec["span"]);
                     if width > self.delivery_cap {
@@ -1594,6 +1607,12 @@ mod scripted {
                     Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})))
                 }
                 "compare" => {
+                    // Every region's document consulted in declaration
+                    // order, ρ₁'s before ρ₂'s, before the read runs.
+                    let regions = frame["rho1"].as_array().unwrap().iter().chain(frame["rho2"].as_array().unwrap());
+                    if let Some(doc) = regions.filter_map(|r| r["doc"].as_str()).find(|d| self.withheld.contains(*d)) {
+                        return Ok(masked(doc));
+                    }
                     let operand = |rho: &Value| -> Result<Vec<(String, Vec<(u64, Run)>)>, Response> {
                         let mut out = Vec::new();
                         let mut blocks = 0;
@@ -2109,6 +2128,11 @@ mod scripted {
             if w.reclaim.is_some_and(|(n, _)| n == served) {
                 let (_, floor) = w.reclaim.take().unwrap();
                 w.floor = Some(floor);
+            }
+            // A grant withdrawn before this frame is answered.
+            if w.withhold.as_ref().is_some_and(|(n, _)| *n == served) {
+                let (_, doc) = w.withhold.take().unwrap();
+                w.withheld.insert(doc);
             }
             match req.path.as_str() {
                 "/health" => Ok(reply(200, w.health())),
@@ -3585,6 +3609,35 @@ mod scripted {
         assert_eq!(dialer.positions("doc_metadata"), [read_at]);
     }
 
+    /// A draft side the reader may not read withholds the verdict.
+    ///
+    /// The draft side's record verifies Equal; once the draft is withheld
+    /// from the reader, `verify` answers Unreadable naming the draft — never
+    /// the composition's refusal — after the trunk's metadata and the
+    /// draft's own, each at the record's position, with nothing read past
+    /// the refused one (merge record §4, testimony; D14).
+    #[test]
+    fn a_withheld_draft_side_withholds_the_verdict() {
+        let (dialer, board, signer) = open(World::window_and_draft());
+        let (record, read_at) = landed_draft_side_record(&dialer, &board, &signer);
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+        dialer.world().withheld.insert(S.to_string());
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(S))));
+        assert_eq!(
+            dialer.ops(),
+            ["at:doc_metadata", "at:doc_metadata"],
+            "the trunk's metadata, then the draft's, refused"
+        );
+        let read: Vec<String> = dialer
+            .frames("doc_metadata")
+            .iter()
+            .map(|f| f["doc"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(read, [D, S]);
+        assert_eq!(dialer.positions("doc_metadata"), [read_at, read_at]);
+    }
+
     /// A reclaimed draft landing position withholds the verdict.
     ///
     /// The race shape landed into a fresh draft verifies Equal by identity
@@ -4278,6 +4331,71 @@ mod scripted {
         dialer.clear();
         assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
         assert!(dialer.frames("compare").len() > 1, "{:?}", dialer.ops());
+    }
+
+    /// A withheld input withholds the verdict; an unregistered one is refused.
+    ///
+    /// The race shape landed by a shot verifies Equal; with the trunk, the
+    /// head, the base or the daughter withheld alone, `verify` answers
+    /// Unreadable naming it. A grant withdrawn between the daughter's image
+    /// and the join's `compare` refuses the compare naming the daughter in
+    /// its `site.addr`, and the verdict names the daughter, not the base the
+    /// compare's first region holds. A side the board has never registered
+    /// is no withheld document: it is refused `NoSuchDocument` (merge record
+    /// §4, testimony; D14; wire.md §The read predicate).
+    #[test]
+    fn a_withheld_input_withholds_the_verdict_and_an_unregistered_one_is_refused() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+        let compare_at = dialer
+            .served
+            .lock()
+            .unwrap()
+            .iter()
+            .position(|(line, _)| line == "at:compare")
+            .expect("the join's compare");
+        let daughter = format!("{D}.1.1");
+        for hidden in [D.to_string(), format!("{D}.2"), format!("{D}.1"), daughter.clone()] {
+            dialer.world().withheld = BTreeSet::from([hidden.clone()]);
+            assert_eq!(
+                verify(&board, Some(&token()), &record),
+                Ok(Verdict::Unreadable(a(&hidden))),
+                "{hidden} withheld"
+            );
+        }
+        // The daughter's grant withdrawn after its image, before the compare.
+        dialer.world().withheld.clear();
+        dialer.world().withhold = Some((compare_at + 1, daughter.clone()));
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(&daughter))));
+        assert!(dialer.world().withhold.is_none(), "the grant withdrawn mid-walk");
+        let ops = dialer.ops();
+        assert!(
+            dialer.frames("image").iter().any(|f| f["d"].as_str() == Some(daughter.as_str())),
+            "the daughter imaged before its grant was withdrawn: {ops:?}"
+        );
+        assert_eq!(
+            ops.last().map(String::as_str),
+            Some("at:compare"),
+            "the refused compare is the last read: {ops:?}"
+        );
+        // A side the board has never registered: refused, no verdict.
+        dialer.world().withheld.clear();
+        assert_eq!(record.sides[1], SideAt::Member { at: a(&daughter), role: Role::Alternative });
+        let unregistered = a(&format!("{D}.1.7"));
+        let mut naming = record.clone();
+        naming.sides[1] = SideAt::Member { at: unregistered.clone(), role: Role::Alternative };
+        assert_eq!(
+            verify(&board, Some(&token()), &naming),
+            Err(Refusal::NoSuchDocument(unregistered))
+        );
     }
 
     /// A gap of two groups the merger moved lands, and its record verifies.

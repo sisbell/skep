@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::json;
@@ -5,6 +6,7 @@ use serde_json::json;
 use super::*;
 use crate::board::fake::{self, Fake};
 use crate::board::HEAD_MEMBER_1;
+use crate::dial::{Request as DialRequest, Response};
 
 /// The issuer `1.0.1`, whose doc 1 is `1.0.1.0.1`; its link subspace mints
 /// `1.0.1.0.1.0.2.k`.
@@ -191,24 +193,50 @@ const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
 /// `head` holds; `/health` names `claimant`; every `make_link` is answered
 /// `link`.
 fn ledger_board(head: bool, claimant: Option<&'static str>, link: Value) -> Arc<Fake> {
+    Fake::new(move |req| ledger_answer(req, head, claimant, &link))
+}
+
+/// Returns a board over the issuer's ledger that a claim reaches mid-write.
+///
+/// It is [`ledger_board`]'s with no head record and no claimant until a
+/// `make_link` carrying no `attest` is judged: the claim lands ahead of
+/// it, its head written, so that link is refused `attestation_required`
+/// (a reorder), applied not, and from then on `/health` names `ISSUER` and
+/// `H.1` serves its record. A signed `make_link` is answered `signed`.
+fn racing_board(signed: Value) -> Arc<Fake> {
+    let claimed = AtomicBool::new(false);
     Fake::new(move |req| {
-        if req.path == "/health" {
-            return fake::json(200, json!({"auth": {"claimant": claimant, "local_trust": false, "origins": [], "signed_origins": []}, "log_position": 9}));
-        }
         let frame = fake::frame(req);
-        let record = json!({"type": "skep-head", "position": 1, "chain": "00".repeat(32)}).to_string();
-        let items = if head { json!([{"atom": record}]) } else { json!([]) };
-        let answer = match frame["op"].as_str().unwrap_or("?") {
-            "retrieve_v" if frame["specs"][0]["doc"] == HEAD_MEMBER_1 => json!({"resp": "delivery", "as_of": 9, "items": items}),
-            "doc_metadata" => json!({"resp": "doc_metadata", "as_of": 9, "doc": DOC, "published": false, "owner": ISSUER}),
-            "find_links_ftt" if frame["q"]["ty"][0]["start"] == T_GRANT => json!({"resp": "addrs", "as_of": 9, "addrs": [at(1).to_string()]}),
-            "find_links_ftt" => json!({"resp": "addrs", "as_of": 9, "addrs": []}),
-            "read_link" => json!({"resp": "link_value", "as_of": 9, "link": {"slots": [[{"start": DOC, "width": "0.1"}], [{"start": GRANTEE, "width": "0.1"}], [{"start": T_GRANT, "width": "0.1"}]]}}),
-            "make_link" => link.clone(),
-            op => panic!("the share sent an op this board does not answer: {op}"),
-        };
-        fake::json(200, answer)
+        if frame["op"] == "make_link" {
+            if frame.get("attest").is_some() {
+                return fake::json(200, signed.clone());
+            }
+            claimed.store(true, Ordering::SeqCst);
+            return fake::json(200, json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_required", "disposition": "reorder", "op": "make_link"}));
+        }
+        let claimed = claimed.load(Ordering::SeqCst);
+        ledger_answer(req, claimed, claimed.then_some(ISSUER), &signed)
     })
+}
+
+/// Returns the ledger board's answer to `req` (see [`ledger_board`]).
+fn ledger_answer(req: &DialRequest, head: bool, claimant: Option<&str>, link: &Value) -> Response {
+    if req.path == "/health" {
+        return fake::json(200, json!({"auth": {"claimant": claimant, "local_trust": false, "origins": [], "signed_origins": []}, "log_position": 9}));
+    }
+    let frame = fake::frame(req);
+    let record = json!({"type": "skep-head", "position": 1, "chain": "00".repeat(32)}).to_string();
+    let items = if head { json!([{"atom": record}]) } else { json!([]) };
+    let answer = match frame["op"].as_str().unwrap_or("?") {
+        "retrieve_v" if frame["specs"][0]["doc"] == HEAD_MEMBER_1 => json!({"resp": "delivery", "as_of": 9, "items": items}),
+        "doc_metadata" => json!({"resp": "doc_metadata", "as_of": 9, "doc": DOC, "published": false, "owner": ISSUER}),
+        "find_links_ftt" if frame["q"]["ty"][0]["start"] == T_GRANT => json!({"resp": "addrs", "as_of": 9, "addrs": [at(1).to_string()]}),
+        "find_links_ftt" => json!({"resp": "addrs", "as_of": 9, "addrs": []}),
+        "read_link" => json!({"resp": "link_value", "as_of": 9, "link": {"slots": [[{"start": DOC, "width": "0.1"}], [{"start": GRANTEE, "width": "0.1"}], [{"start": T_GRANT, "width": "0.1"}]]}}),
+        "make_link" => link.clone(),
+        op => panic!("the share sent an op this board does not answer: {op}"),
+    };
+    fake::json(200, answer)
 }
 
 /// Returns the grant-class links a board was sent, in order.
@@ -255,4 +283,61 @@ fn a_claimed_board_serving_no_head_record_sends_no_grant_and_an_unclaimed_one_se
     assert!(face.state.contains("H.1") && face.cause.contains("attestation_invalid:board_unavailable"), "{face}");
     assert!(face.act.contains("retry once the board has written its head") && !face.act.contains("fault in this library"), "{face}");
     assert!(links(&raced)[0]["attest"]["sig"].is_string(), "the premise: the link went signed: {:?}", raced.log());
+}
+
+/// A CLAIM PAST THE HEAD'S READ IS MET BY ONE SIGNED SEND: the link goes
+/// unsigned to a board read as no one's, a claim lands ahead of it with its
+/// head written, and the board refuses it `attestation_required` before
+/// its transaction; `privash` and `revoke` each read the head again and
+/// send the same link once more, signed over the pair now read, and answer
+/// the record it wrote. That send's answer is a signed write's —
+/// `attestation_required` again this library's own fault and
+/// `signed_session_required` its own arm, never a third link — and where
+/// the head read again serves no record, the refusal halts naming `H.1`,
+/// one link sent and never as this library's fault.
+#[test]
+fn a_claim_past_the_head_read_sends_the_link_once_more_signed() {
+    let token = Token::parse(TOKEN).expect("a token");
+    let signer = crate::sign::signer_from_seed(&[42; 32]);
+    let issuer = Issuer { token: &token, account: ISSUER, signer: &signer };
+    let acked = json!({"resp": "ack_addr", "addr": at(2).to_string(), "at": 10});
+    let standing = Grant { at: at(1), issuer: a(ISSUER), prefix: a(DOC), grantee: grantee(), replaces: None };
+    let cells = [("the grant", grant_frame(&a(HOME), &a(DOC), &Grantee::Privashed, None).1), ("the revocation", revocation_frame(&a(HOME), &standing).1)];
+    for (what, body) in cells {
+        let racing = racing_board(acked.clone());
+        let board = fake::board(&racing);
+        let answer = match what {
+            "the grant" => privash(&board, &issuer, &a(DOC)).map(|g| g.at),
+            _ => revoke(&board, &issuer, &at(1)).map(|r| r.at),
+        };
+        assert_eq!(answer, Ok(at(2)), "{what}");
+        let sent = links(&racing);
+        assert_eq!(sent.len(), 2, "{what}: one signed send after the unsigned one: {:?}", racing.log());
+        assert!(sent[0].get("attest").is_none(), "{what}: the first went unsigned: {}", sent[0]);
+        let mut resent = sent[1].clone();
+        let attest = resent.as_object_mut().unwrap().remove("attest").expect("the second send signed");
+        assert_eq!(resent, sent[0], "{what}: the same link, signed");
+        let term = board.board_term().unwrap().expect("the pair read after the claim");
+        let alg = Signer::public_key(&signer).alg();
+        let expected = entry_frame(alg, term, &a(ISSUER), DocTerm::One(&a(HOME)), &body);
+        let sig = crate::hex::decode(attest["sig"].as_str().unwrap()).unwrap();
+        assert_eq!(skep_signature::verify(Signer::tag(&signer), Signer::public_key(&signer), &expected, &sig), Ok(()), "{what}: signed over the pair read after the claim");
+    }
+    // The signed send's answer is a signed write's, and never sent again.
+    let required = json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_required", "disposition": "reorder", "op": "make_link"});
+    let racing = racing_board(required.clone());
+    let answer = privash(&fake::board(&racing), &issuer, &a(DOC));
+    let Err(Refusal::Halt(Halt::Halt(face))) = &answer else { panic!("{answer:?}") };
+    assert!(face.state.contains("the record's attest") && face.act.contains("fault in this library"), "{face}");
+    assert_eq!(links(&racing).len(), 2, "never a third link: {:?}", racing.log());
+    let racing = racing_board(json!({"resp": "rejected", "code": "signed_session_required", "disposition": "permanent", "op": "make_link"}));
+    assert_eq!(privash(&fake::board(&racing), &issuer, &a(DOC)), Err(Refusal::NeedsSignedSession));
+    assert_eq!(links(&racing).len(), 2, "{:?}", racing.log());
+    // No head the second read finds: the refusal halts naming `H.1`.
+    let unclaimed = ledger_board(false, None, required);
+    let answer = privash(&fake::board(&unclaimed), &issuer, &a(DOC));
+    let Err(Refusal::Halt(Halt::Halt(face))) = &answer else { panic!("{answer:?}") };
+    assert!(face.state.contains("H.1") && face.cause.contains("attestation_required"), "{face}");
+    assert!(face.act.contains("nothing was written") && !face.act.contains("fault in this library"), "{face}");
+    assert_eq!(links(&unclaimed).len(), 1, "nothing sent after the second read: {:?}", unclaimed.log());
 }

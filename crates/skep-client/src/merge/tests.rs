@@ -1322,6 +1322,12 @@ mod scripted {
         claimed: bool,
         /// `H.1` answers its record.
         head: bool,
+        /// A claim landing before the first `/op` frame of this op is
+        /// answered: from then on the board is claimed and serves `H.1`.
+        claim_before: Option<&'static str>,
+        /// The next write carrying an `attest` is answered this document,
+        /// applied not.
+        refuse_signed: Option<Value>,
         /// The merger's enrolled key.
         key: Option<PublicKey>,
     }
@@ -1781,14 +1787,36 @@ mod scripted {
             }
         }
 
-        /// A write: the id's memo answered where one stands, else the write
-        /// applied and its acknowledgment kept; the next `drop_acks`
-        /// acknowledgments lost at the transport.
+        /// A write: the id's memo answered where one stands, else the board's
+        /// check — a publish-class write carrying no `attest` refused on a
+        /// claimed board serving `H.1`, the next signed write refused where
+        /// `refuse_signed` holds — else the write applied and its
+        /// acknowledgment kept; the next `drop_acks` acknowledgments lost at
+        /// the transport.
         fn write(&mut self, frame: &Value) -> Result<Response, DialError> {
             let id = frame["id"].as_str().map(str::to_string);
             let ack = match id.as_ref().and_then(|id| self.memo.get(id)).cloned() {
                 Some(ack) => ack,
                 None => {
+                    // Before the transaction, applied not and memoized not
+                    // (wire.md §Credential refusals, a reorder): a `publish`,
+                    // or a link homed in a published document.
+                    let op = frame["op"].as_str().unwrap_or("?");
+                    let published_home = frame["home"]
+                        .as_str()
+                        .is_some_and(|h| self.docs.get(h).is_some_and(|d| d.published));
+                    let publish_class = op == "publish" || (op == "make_link" && published_home);
+                    if self.claimed && self.head && publish_class && frame.get("attest").is_none() {
+                        return Ok(reply(
+                            200,
+                            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_required", "disposition": "reorder", "op": op}),
+                        ));
+                    }
+                    if frame.get("attest").is_some() {
+                        if let Some(rejection) = self.refuse_signed.take() {
+                            return Ok(reply(200, rejection));
+                        }
+                    }
                     let ack = self.apply(frame);
                     if let (Some(id), true) = (&id, ack["resp"] != "rejected") {
                         self.memo.insert(id.clone(), ack.clone());
@@ -2273,6 +2301,12 @@ mod scripted {
             if w.withhold.as_ref().is_some_and(|(n, _)| *n == served) {
                 let (_, doc) = w.withhold.take().unwrap();
                 w.withheld.insert(doc);
+            }
+            // A claim landing before this frame is answered, its head written.
+            if req.path == "/op" && w.claim_before.is_some_and(|op| frame["op"] == op) {
+                w.claim_before = None;
+                w.claimed = true;
+                w.head = true;
             }
             match req.path.as_str() {
                 "/health" => Ok(reply(200, w.health())),
@@ -4231,7 +4265,8 @@ mod scripted {
     /// Every refusal the shot can answer, each mapped: `withheld` naming the
     /// origin, `signed_session_required`, `doc_not_registered`, the
     /// library's own faults as halts, the board's `board_unavailable` as the
-    /// head it owes — and nothing after the refusal.
+    /// head it owes — and nothing after the refusal; `attestation_required`
+    /// at the signed shot the library's own fault, never sent again.
     #[test]
     fn the_shots_refusals_are_mapped() {
         let (dialer, board, signer) = open(World::race());
@@ -4317,6 +4352,20 @@ mod scripted {
             dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
             "nothing after a refused shot"
         );
+        // A signed shot refused `attestation_required`: the library's own
+        // fault, never sent again.
+        dialer.world().memo.insert(
+            landing_id(&merged.key.text(), "publish"),
+            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_required", "disposition": "reorder", "op": "publish"}),
+        );
+        let shots = dialer.frames("publish").len();
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("own fault");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(
+            face.state.contains("the shot's attest") && face.cause.contains("attestation_required"),
+            "{face}"
+        );
+        assert_eq!(dialer.frames("publish").len(), shots + 1, "one signed shot, never sent again");
     }
 
     /// Every refusal the draft landing's one write can answer is mapped.
@@ -4560,6 +4609,179 @@ mod scripted {
             links[0]["attest"]["sig"].is_string(),
             "signed over the head written: {}",
             links[0]
+        );
+    }
+
+    /// A CLAIM PAST THE HEAD'S READ IS MET BY ONE SIGNED SEND UNDER THE
+    /// FRAME'S OWN ID: the landing reads a board no one has claimed and
+    /// sends the shot, or the record's link, unsigned; a claim lands ahead of
+    /// it with its head written, and the board refuses it
+    /// `attestation_required` before its transaction. The head is read again
+    /// and the same frame sent once more, signed, under the same id, which
+    /// the refusal left unmemoized — over the shot, the record's link after
+    /// the shot, and the record's link after a landing into `S` — and the
+    /// landing completes, the member minted once and the record linked once;
+    /// a second `land` meets it, writing nothing. That send's answer is a
+    /// signed frame's: `attestation_required` again this library's own fault
+    /// and `signed_session_required` its own arm, never a third frame. Where
+    /// the head read again serves none, the shot's refusal is the head the
+    /// board owes, one frame sent and nothing after it.
+    #[test]
+    fn a_claim_past_the_head_read_re_sends_the_shot_and_the_records_link_once_signed() {
+        let unclaimed = |mut world: World, claim_before: Option<&'static str>| {
+            world.claimed = false;
+            world.head = false;
+            world.claim_before = claim_before;
+            open(world)
+        };
+        // The frame sent unsigned, then the same frame signed, under `id`.
+        let resent = |frames: &[Value], id: &str| {
+            assert_eq!(frames.len(), 2, "one signed send after the unsigned one: {frames:?}");
+            assert!(frames[0].get("attest").is_none(), "the first went unsigned: {}", frames[0]);
+            let mut signed = frames[1].clone();
+            let attest =
+                signed.as_object_mut().unwrap().remove("attest").expect("the second signed");
+            assert!(attest["sig"].is_string(), "{attest}");
+            assert_eq!(signed, frames[0], "the same frame, signed");
+            assert_eq!(frames[0]["id"].as_str(), Some(id), "under the frame's own id");
+        };
+        let record_links =
+            |w: &World| w.links.iter().filter(|l| l.home == DOC1 && l.ty == K).count();
+        let minted = |w: &World| w.rows.iter().filter(|r| r.op == "publish").count();
+
+        // The shot.
+        let (dialer, board, signer) = unclaimed(World::race(), Some("publish"));
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let shots = minted(&dialer.world());
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(
+            matches!(&landed, Landed::Member { address, .. } if address.to_string() == format!("{D}.3")),
+            "{landed:?}"
+        );
+        resent(&dialer.frames("publish"), &landing_id(&merged.key.text(), "publish"));
+        let links = dialer.frames("make_link");
+        assert_eq!(links.len(), 1, "the record's link, once: {:?}", dialer.ops());
+        assert!(links[0]["attest"]["sig"].is_string(), "signed: {}", links[0]);
+        let w = dialer.world();
+        assert_eq!(minted(&w), shots + 1, "one shot committed");
+        assert!(
+            !w.docs.contains_key(&format!("{D}.2.1")),
+            "never applied again as the head's daughter"
+        );
+        drop(w);
+
+        // The record's link, after the shot and after a landing into `S`.
+        for cell in ["the shot", "a landing into S"] {
+            let (world, inputs) = match cell {
+                "the shot" => (World::race(), race_inputs()),
+                _ => (draft_landing_world(), draft_inputs()),
+            };
+            let (dialer, board, signer) = unclaimed(world, Some("make_link"));
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+            let (landing, stem) = match cell {
+                "the shot" => (shot(&session, &signer), merged.key.text()),
+                _ => (
+                    draft_landing(&session, &signer, Some(a(S))),
+                    format!("{}:{S}@{}", merged.key.text(), merged.as_of),
+                ),
+            };
+            dialer.clear();
+            let landed = land(&board, &merged, landing).unwrap_or_else(|e| panic!("{cell}: {e}"));
+            let record = match &landed {
+                Landed::Member { address, record, .. }
+                    if address.to_string() == format!("{D}.3") =>
+                {
+                    record.clone()
+                }
+                Landed::Draft { into, record, .. } if *into == a(S) => record.clone(),
+                other => panic!("{cell}: {other:?}"),
+            };
+            assert!(
+                dialer.frames("publish").iter().all(|f| f.get("attest").is_none()),
+                "{cell}: the shot went before the claim, unsigned"
+            );
+            resent(&dialer.frames("make_link"), &landing_id(&stem, "link"));
+            assert_eq!(dialer.frames("insert").len(), 1, "{cell}: one atom: {:?}", dialer.ops());
+            assert_eq!(record_links(&dialer.world()), 1, "{cell}: one record linked");
+            let again = match cell {
+                "the shot" => shot(&session, &signer),
+                _ => draft_landing(&session, &signer, Some(a(S))),
+            };
+            dialer.clear();
+            let second = land(&board, &merged, again).unwrap_or_else(|e| panic!("{cell}: {e}"));
+            assert!(
+                matches!(&second, Landed::Member { record: r, .. } | Landed::Draft { record: r, .. } if *r == record),
+                "{cell}: the same record: {second:?}"
+            );
+            for op in ["publish", "create_new_document", "insert", "make_link"] {
+                assert!(
+                    dialer.frames(op).is_empty(),
+                    "{cell}: no `{op}` again: {:?}",
+                    dialer.ops()
+                );
+            }
+        }
+
+        // The signed send's answer is a signed frame's.
+        let required = |op: &str| json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_required", "disposition": "reorder", "op": op});
+        let (dialer, board, signer) = unclaimed(World::race(), Some("publish"));
+        dialer.world().refuse_signed = Some(required("publish"));
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err =
+            land(&board, &merged, shot(&session, &signer)).expect_err("the library's own fault");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(
+            face.state.contains("the shot's attest") && face.act.contains("fault in this library"),
+            "{face}"
+        );
+        assert_eq!(dialer.frames("publish").len(), 2, "never a third shot: {:?}", dialer.ops());
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "nothing after the shot"
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+        let (dialer, board, signer) = unclaimed(World::race(), Some("make_link"));
+        dialer.world().refuse_signed =
+            Some(permanent("make_link", "signed_session_required", Value::Null));
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.clear();
+        assert_eq!(
+            land(&board, &merged, shot(&session, &signer)),
+            Err(Refusal::NeedsSignedSession)
+        );
+        assert_eq!(dialer.frames("make_link").len(), 2, "never a third link: {:?}", dialer.ops());
+        assert_eq!(record_links(&dialer.world()), 0, "no record linked");
+
+        // No head the second read finds: the head the board owes.
+        let (dialer, board, signer) = unclaimed(World::race(), None);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.world().memo.insert(landing_id(&merged.key.text(), "publish"), required("publish"));
+        dialer.clear();
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the head is owed");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(face.state.contains("H.1") && face.state.contains("cannot land"), "{face}");
+        assert!(
+            face.cause.contains("attestation_required")
+                && !face.act.contains("fault in this library"),
+            "{face}"
+        );
+        assert_eq!(
+            dialer.frames("publish").len(),
+            1,
+            "nothing sent after the second read: {:?}",
+            dialer.ops()
+        );
+        assert!(
+            dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+            "nothing after the shot"
         );
     }
 
@@ -4916,11 +5138,12 @@ mod scripted {
         let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
         landed_in_s(&board, &session, &signer);
-        // The merge published from the draft.
+        // The merge published from the draft: the shot committed as the
+        // board commits one it admitted.
         let runs = shot_runs(&draft_m());
         let head = format!("{D}.2");
         let frame = frames::publication(&frames::PublishFrame { doc: Some(D), base: Some((&head, 15)), draft: Some(S), runs: &runs, ..frames::PublishFrame::default() });
-        let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the shot") else { panic!("closed") };
+        let ack = dialer.world().apply(&frame);
         assert_eq!(acked_addr(&ack), Some(format!("{D}.3").as_str()), "{ack}");
         assert_eq!(dialer.world().standing(S), (Some((format!("{D}.3"), 18)), None), "the premise: the base moved, the marker cleared");
         let rows = dialer.world().rows.len();

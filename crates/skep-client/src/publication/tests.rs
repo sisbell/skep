@@ -2,7 +2,8 @@
 //! `Dialer` whose answers come from a `World` the test writes — the
 //! documents' arrangements and bytes, every link with its slots and age, the
 //! claims as supersession links, the feed's rows, the drafts' recorded bases
-//! — which APPLIES a publication as the daemon does (the twin fence, the
+//! — which APPLIES a publication as the daemon does (a frame with no
+//! `attest` refused at a claimed board serving `H.1`, the twin fence, the
 //! kept places, one fresh identity per draft identity, the records, the
 //! copies resolved from the member's positions, the claims, the retractions,
 //! the read-withs, the re-window, the base's move, the memo) and keeps every
@@ -28,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use skep_address::Address;
-use skep_identity::{unit_span, DepositHome, DepositKind, DepositSlot, PublicKey, SlotElement};
+use skep_identity::{entry_frame, unit_span, DepositHome, DepositKind, DepositSlot, DocTerm, PublicKey, SlotElement};
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
@@ -173,6 +174,9 @@ struct World {
     head: bool,
     /// `H.1` answers a record that stands and cannot be read.
     damaged_head: bool,
+    /// A claim lands before the next publish is judged: from then on
+    /// `/health` names a claimant and `H.1` answers its record.
+    claim_at_publish: bool,
     key: Option<PublicKey>,
 }
 
@@ -510,10 +514,20 @@ impl World {
         }
     }
 
-    /// The write: the memo answered where one stands, else the publication
-    /// applied and its acknowledgment kept; the next `drop_acks`
+    /// The write: a frame with no `attest` refused where a claimed board
+    /// serves `H.1`, else the memo answered where one stands, else the
+    /// publication applied and its acknowledgment kept; the next `drop_acks`
     /// acknowledgments lost at the transport.
     fn publish(&mut self, frame: &Value) -> Result<Response, DialError> {
+        if std::mem::take(&mut self.claim_at_publish) {
+            self.claimed = true;
+            self.head = true;
+        }
+        // The board's check, before its transaction: applied not, memoized
+        // not (wire.md §Credential refusals, a reorder).
+        if self.claimed && self.head && frame.get("attest").is_none() {
+            return Ok(reply(200, json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_required", "disposition": "reorder", "op": "publish"})));
+        }
         if let Some(r) = self.refuse_next.take() {
             return Ok(reply(200, r));
         }
@@ -1765,6 +1779,97 @@ fn the_boards_own_board_unavailable_is_head_unreadable_signed_or_not() {
     }
 }
 
+/// Checks that a claim landing past the send's head read is met by one
+/// signed send under a fresh `id`.
+///
+/// The send reads a board no one has claimed and sends the frame unsigned; a
+/// claim lands, its head written, before the frame's turn, and the board
+/// refuses the frame `attestation_required` before its transaction. The
+/// head is read again and the same request sent once more, signed over the
+/// pair now read, under a fresh `id`, and acknowledged: one publication
+/// committed. That send's answer is a signed frame's — `attestation_required`
+/// again the library's own fault and `signed_session_required` its own arm,
+/// never a third send — and where the head read again serves none, the
+/// board's refusal of the unsigned frame answers `Refusal::HeadUnreadable`,
+/// nothing sent after it.
+#[test]
+fn a_claim_past_the_head_read_is_re_sent_once_signed_under_a_fresh_id() {
+    let tok = token();
+    let unclaimed = |claim_at_publish: bool| {
+        open({
+            let (mut w, _) = World::base();
+            w.claimed = false;
+            w.head = false;
+            w.claim_at_publish = claim_at_publish;
+            w
+        })
+    };
+    let rejected = |code: &str, detail: Option<&str>| {
+        let mut rej = json!({"resp": "rejected", "code": code, "disposition": "reorder", "op": "publish"});
+        if let Some(d) = detail {
+            rej["detail"] = json!(d);
+        }
+        rej
+    };
+    let (dialer, board, signer) = unclaimed(true);
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let p = publisher(&board, &tok, &signer);
+    let first_id = request.id.clone();
+    let committed = dialer.world().rows.iter().filter(|r| r.op == "publish").count();
+    dialer.clear();
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    let Sent::Acknowledged(ack) = &sent else { panic!("{sent:?}") };
+    assert_eq!((ack.member.to_string(), ack.via), (format!("{E}.2"), AckVia::Answer));
+    let frames = dialer.frames("publish");
+    assert_eq!(frames.len(), 2, "one signed send after the unsigned one: {:?}", dialer.ops());
+    assert!(frames[0].get("attest").is_none(), "the first went unsigned: {}", frames[0]);
+    assert_ne!(request.id, first_id, "a fresh id");
+    assert_eq!((frames[0]["id"].as_str(), frames[1]["id"].as_str()), (Some(first_id.as_str()), Some(request.id.as_str())));
+    let mut resent = frames[1].clone();
+    let attest = resent.as_object_mut().unwrap().remove("attest").expect("the second send signed");
+    resent["id"] = frames[0]["id"].clone();
+    assert_eq!(resent, frames[0], "the same request, signed");
+    let term = board.board_term().unwrap().expect("the pair read after the claim");
+    let alg = Signer::public_key(&signer).alg();
+    assert_eq!(attest["alg"].as_str(), Some(alg));
+    let expected = entry_frame(alg, term, &a(ACCOUNT), DocTerm::One(request.term()), &request.body());
+    let sig = crate::hex::decode(attest["sig"].as_str().unwrap()).unwrap();
+    assert_eq!(skep_signature::verify(Signer::tag(&signer), Signer::public_key(&signer), &expected, &sig), Ok(()), "signed over the pair read after the claim");
+    let heads = dialer.frames("retrieve_v").iter().filter(|f| f["specs"][0]["doc"] == HEAD_MEMBER_1).count();
+    assert_eq!(heads, 2, "`H.1` read before the frame and again after the claim");
+    let w = dialer.world();
+    assert_eq!(w.rows.iter().filter(|r| r.op == "publish").count(), committed + 1, "one publication committed");
+    assert!(w.docs.contains_key(&format!("{E}.2")) && !w.docs.contains_key(&format!("{E}.3")), "nothing applied twice");
+    drop(w);
+    // The signed send's answer is a signed frame's, and never sent again.
+    let answers = [
+        (rejected("credential_refused", Some("attestation_required")), Sent::Refused(Refusal::OwnFault(OwnFault::Attest { detail: Some("attestation_required".into()) }))),
+        (rejected("signed_session_required", None), Sent::Refused(Refusal::NeedsSignedSession)),
+    ];
+    for (refusal, answer) in answers {
+        let (dialer, board, signer) = unclaimed(true);
+        let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+        let p = publisher(&board, &tok, &signer);
+        let rows = dialer.world().rows.len();
+        dialer.world().refuse_next = Some(refusal.clone());
+        dialer.clear();
+        assert_eq!(send(&p, &inputs(), &mut request).unwrap(), answer, "{refusal}");
+        let frames = dialer.frames("publish");
+        assert_eq!(frames.len(), 2, "{refusal}: never a third send: {:?}", dialer.ops());
+        assert!(frames[0].get("attest").is_none() && frames[1]["attest"]["sig"].is_string(), "{refusal}: unsigned, then signed");
+        assert_eq!(dialer.world().rows.len(), rows, "{refusal}: nothing committed");
+    }
+    // The board refuses the unsigned frame so, and the head read again
+    // serves no record to sign over: the head arm, one frame.
+    let (dialer, board, signer) = unclaimed(false);
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let p = publisher(&board, &tok, &signer);
+    dialer.world().refuse_next = Some(rejected("credential_refused", Some("attestation_required")));
+    dialer.clear();
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::HeadUnreadable));
+    assert_eq!(dialer.frames("publish").len(), 1, "nothing sent after the second read: {:?}", dialer.ops());
+}
+
 /// Checks that a head record that stands and cannot be read sends nothing.
 ///
 /// The read halts naming why (SP-14), on a claimed board and on one no one
@@ -1803,7 +1908,9 @@ fn a_damaged_head_record_sends_nothing_claimed_or_not() {
 /// carrying members the older-board arm; `base_superseded` its own arm
 /// naming the trunk's first member, out of the shot's table, whose other
 /// codes are the library's own; an `attestation_*` token but the
-/// signature's and `board_unavailable` the library's own too; `withheld`
+/// signature's and `board_unavailable` the library's own too,
+/// `attestation_required` at the signed frame among them and never sent
+/// again; `withheld`
 /// the window's origin; `signed_session_required`; and the board's other
 /// refusals verbatim.
 #[test]
@@ -1850,6 +1957,10 @@ fn every_refusal_arm_carries_its_face_data() {
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Shot { code: "base_not_in_chain".into() })));
     refuse("credential_refused", json!({"detail": "attestation_invalid:malformed"}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Attest { detail: Some("attestation_invalid:malformed".into()) })), "the library's own");
+    let sent_before = dialer.frames("publish").len();
+    refuse("credential_refused", json!({"detail": "attestation_required"}));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Attest { detail: Some("attestation_required".into()) })), "signed: the library's own");
+    assert_eq!(dialer.frames("publish").len(), sent_before + 1, "a signed frame is never sent again for it");
     refuse("withheld", json!({"site": {"addr": O}}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::WindowWithheld { origin: Some(a(O)) }));
     refuse("signed_session_required", json!({}));

@@ -36,7 +36,14 @@
 //! one, and a claimed board serving none halts the write naming `H.1` with
 //! nothing sent. The board's own `attestation_invalid:board_unavailable` —
 //! a head owed past that read — is faced the same, never as this library's
-//! fault: the act is a retry once the board has written its head.
+//! fault: the act is a retry once the board has written its head. A record
+//! sent unsigned to a board read as no one's and refused
+//! `attestation_required` met a claim that landed past that read, its head
+//! written, and was refused before its transaction (wire.md §Credential
+//! refusals, a reorder): the head is read again and the record sent once
+//! more, signed over that pair, its answer the write's; a second read that
+//! finds no head to sign over halts naming `H.1`, and a signed record
+//! refused so is this library's own fault.
 //!
 //! **No retract, and no automatic re-issue.** A share is withdrawn by
 //! revoking it, never by retracting its record — the board refuses a
@@ -46,7 +53,10 @@
 //! grant where it landed, the transport halt where nothing did — because a
 //! blind re-issue after an issuer's deliberate revocation would return a
 //! withdrawn share as a third permanent record (the PUB spec's part 08,
-//! RES-246). A re-share happens only on a fresh, explicit call.
+//! RES-246). A re-share happens only on a fresh, explicit call. The one
+//! signed send after a claim is none of these: the board answered the first
+//! frame, refusing it before its transaction, so nothing of it stands to be
+//! issued twice.
 //!
 //! **The three lists.** [`issued`], the grant-class links homed in the
 //! caller's doc 1 with the `replaces` links beside them, each grant paired
@@ -757,7 +767,8 @@ pub fn privashed(board: &Board, token: Option<&Token>) -> Result<Vec<Privashed>,
 /// read first, then one grant-class link is written, homed in the issuer's
 /// doc 1, with `replaces` naming the revocation it follows where one is the
 /// key's latest record, and its entry signature over `H.1`'s pair (the
-/// module's doc). Never a duplicate: a live grant for the key is refused,
+/// module's doc) — sent once more, signed, where a claim landed past the
+/// head's read. Never a duplicate: a live grant for the key is refused,
 /// naming it. A lost acknowledgement is never re-sent: the key's state is
 /// read again, and the grant answered where it landed.
 ///
@@ -766,7 +777,8 @@ pub fn privashed(board: &Board, token: Option<&Token>) -> Result<Vec<Privashed>,
 /// In this order: [`Refusal::NoSuchAccount`], [`Refusal::ToYourself`];
 /// [`Refusal::NotAPrefix`], [`Refusal::NoSuchDocument`],
 /// [`Refusal::NotOwner`]; [`Refusal::AlreadyShared`]; a claimed board
-/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent;
+/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent
+/// past the read before the frame or before its signed re-send;
 /// the board's [`Refusal::NeedsSignedSession`]; every other refusal and
 /// halt as [`Refusal::Halt`], a lost acknowledgement whose read-back finds
 /// no grant standing with the `replaces` it sent among them.
@@ -806,15 +818,16 @@ pub fn share(board: &Board, issuer: &Issuer<'_>, prefix: &Address, grantee: &Add
 /// any-principal grant, a grant-class link with an empty `to` (PUB-5.7,
 /// PUB-5.8), composed here and nowhere else — with the same read of the
 /// key's state, the same `replaces` and the same entry signature as
-/// [`share`]. An account prefix is refused: privashing a whole account is
-/// not available.
+/// [`share`], the same signed re-send after a claim among it. An account
+/// prefix is refused: privashing a whole account is not available.
 ///
 /// # Errors
 ///
 /// In this order: [`Refusal::NotADocument`], [`Refusal::NotAPrefix`];
 /// [`Refusal::NoSuchDocument`], [`Refusal::NotOwner`],
 /// [`Refusal::NotADraft`]; [`Refusal::AlreadyShared`]; a claimed board
-/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent;
+/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent
+/// past the read before the frame or before its signed re-send;
 /// the board's [`Refusal::NeedsSignedSession`]; every other refusal and
 /// halt as [`Refusal::Halt`].
 pub fn privash(board: &Board, issuer: &Issuer<'_>, document: &Address) -> Result<Grant, Refusal> {
@@ -838,7 +851,8 @@ pub fn privash(board: &Board, issuer: &Issuer<'_>, document: &Address) -> Result
 ///
 /// It writes one grant-class link homed in the issuer's doc 1 whose `from`
 /// names the grant, with its entry signature over `H.1`'s pair as a
-/// grant's (the module's doc) — the one way a share is withdrawn, never a
+/// grant's (the module's doc), sent once more, signed, where a claim landed
+/// past the head's read — the one way a share is withdrawn, never a
 /// retract of its record. The grant must be the issuer's own and standing.
 /// A lost acknowledgement is never re-sent: the record is read again, and
 /// the revocation answered where it landed.
@@ -847,7 +861,8 @@ pub fn privash(board: &Board, issuer: &Issuer<'_>, document: &Address) -> Result
 ///
 /// In this order: [`Refusal::NotYours`]; [`Refusal::NotAGrant`];
 /// [`Refusal::AlreadyRevoked`], [`Refusal::NotStanding`]; a claimed board
-/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent;
+/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent
+/// past the read before the frame or before its signed re-send;
 /// the board's [`Refusal::NeedsSignedSession`]; every other refusal and
 /// halt as [`Refusal::Halt`].
 pub fn revoke(board: &Board, issuer: &Issuer<'_>, grant: &Address) -> Result<Revocation, Refusal> {
@@ -862,11 +877,8 @@ pub fn revoke(board: &Board, issuer: &Issuer<'_>, grant: &Address) -> Result<Rev
         Some((g, GrantState::Live)) => g.clone(),
     };
     let home = home_of(&account);
-    let (mut frame, body) = revocation_frame(&home, &standing);
-    if let Some(a) = attest(board, issuer, &account, &home, &body, "the revocation")? {
-        frame["attest"] = a;
-    }
-    match board.op(Some(issuer.token), &frame) {
+    let (frame, body) = revocation_frame(&home, &standing);
+    match send_link(board, issuer, &account, &home, frame, &body, "the revocation")? {
         Ok(Answer::Document(v)) => match acked_addr(&v) {
             Some(at) => Ok(Revocation { at: address_of(at)?, revokes: grant.clone(), issuer: account }),
             None => Err(refused_write(&v, "the revocation")),
@@ -886,17 +898,19 @@ pub fn revoke(board: &Board, issuer: &Issuer<'_>, grant: &Address) -> Result<Rev
 /// Makes the one grant write.
 ///
 /// It reads the key's state, sends the frame with its `replaces` and its
-/// attest, and reads the answer — or, after a lost acknowledgement, the
-/// read-back.
+/// attest through `send_link` — once more, signed, where a claim landed
+/// past the head's read — and reads the answer, or, after a lost
+/// acknowledgement, the read-back.
 ///
 /// # Errors
 ///
 /// [`Refusal::AlreadyShared`] where a live grant stands for the key, before
 /// anything is written; a claimed board serving no head record, faced,
-/// with nothing sent; the write's refusal as `refused_write` dispatches
-/// it; a lost acknowledgement whose read-back finds no grant standing with
-/// the `replaces` it sent, and the death signal, each faced; every halt of
-/// the reads and of the write as [`Refusal::Halt`].
+/// with nothing sent, before the frame or before its signed re-send; the
+/// write's refusal as `refused_write` dispatches it; a lost acknowledgement
+/// whose read-back finds no grant standing with the `replaces` it sent, and
+/// the death signal, each faced; every halt of the reads and of the write
+/// as [`Refusal::Halt`].
 fn grant(board: &Board, issuer: &Issuer<'_>, account: &Address, prefix: &Address, grantee: Grantee) -> Result<Grant, Refusal> {
     let replaces = match ledger(board, Some(issuer.token), issuer.account)?.key_state(prefix, &grantee) {
         KeyState::Live(g) => return Err(Refusal::AlreadyShared(Box::new(g))),
@@ -904,12 +918,9 @@ fn grant(board: &Board, issuer: &Issuer<'_>, account: &Address, prefix: &Address
         KeyState::Empty => None,
     };
     let home = home_of(account);
-    let (mut frame, body) = grant_frame(&home, prefix, &grantee, replaces.as_ref());
-    if let Some(a) = attest(board, issuer, account, &home, &body, "the grant")? {
-        frame["attest"] = a;
-    }
+    let (frame, body) = grant_frame(&home, prefix, &grantee, replaces.as_ref());
     let standing = |at: Address| Grant { at, issuer: account.clone(), prefix: prefix.clone(), grantee: grantee.clone(), replaces: replaces.clone() };
-    match board.op(Some(issuer.token), &frame) {
+    match send_link(board, issuer, account, &home, frame, &body, "the grant")? {
         Ok(Answer::Document(v)) => match acked_addr(&v) {
             Some(at) => Ok(standing(address_of(at)?)),
             None => Err(refused_write(&v, "the grant")),
@@ -923,6 +934,41 @@ fn grant(board: &Board, issuer: &Issuer<'_>, account: &Address, prefix: &Address
             }
         }
         Err(h) => Err(h.into()),
+    }
+}
+
+/// Sends one grant-class link homed in `home`, answering the board's answer.
+///
+/// The frame carries its `attest` over `body` where `H.1` stands, and none on
+/// a board no one has claimed. A frame sent unsigned and refused
+/// `attestation_required` met a claim that landed between the head's read
+/// and its turn, its head written: the board refused the link before its
+/// transaction (wire.md §Credential refusals, a reorder), so the head is
+/// read again and the link sent ONCE more, signed over that pair, its
+/// answer the write's. Nothing of the first frame was written, so the
+/// re-send is no re-issue after a lost answer (the module's doc).
+///
+/// # Errors
+///
+/// The outer error is the head's, nothing sent past it: `attest`'s, before
+/// the frame or before the re-send, and a board that refused the frame for
+/// want of its signature and whose head the second read does not find,
+/// faced as the head it owes, naming `what`. The inner result is
+/// [`Board::op`]'s answer to the last frame sent.
+fn send_link(board: &Board, issuer: &Issuer<'_>, account: &Address, home: &Address, mut frame: Value, body: &EntryBody, what: &str) -> Result<Result<Answer, Halt>, Halt> {
+    if let Some(a) = attest(board, issuer, account, home, body, what)? {
+        frame["attest"] = a;
+        return Ok(board.op(Some(issuer.token), &frame));
+    }
+    let answer = board.op(Some(issuer.token), &frame);
+    let Ok(Answer::Document(v)) = &answer else { return Ok(answer) };
+    let Some(r) = Rejection::of(v).filter(|r| r.key() == "attestation_required") else { return Ok(answer) };
+    match attest(board, issuer, account, home, body, what)? {
+        Some(a) => {
+            frame["attest"] = a;
+            Ok(board.op(Some(issuer.token), &frame))
+        }
+        None => Err(head_owed(what, format!("{}: the board refused {what} for want of its entry signature and serves no head record (`H.1`) to sign it over", r.token()))),
     }
 }
 

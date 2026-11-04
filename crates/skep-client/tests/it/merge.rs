@@ -46,6 +46,10 @@
 //! committed. And ONE MERGE OF MANY DAUGHTERS (skep #792): twenty daughters
 //! off the base version merged with the head, a record key whose text alone
 //! passes the daemon's 256-byte id cap, landed on the trunk with its record.
+//! And THE ID A REFUSED FRAME LEAVES (skep #779), the daemon's side of the
+//! landing's one signed send after a claim: a publish-class frame refused
+//! `attestation_required` under an id, the same frame signed under that id
+//! admitted, then answered from the memo with nothing committed.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -1427,5 +1431,55 @@ fn a_merge_of_many_daughters_lands_on_the_trunk_with_its_record() {
     let standing = rig.position();
     assert_eq!(land(&rig.board, &merged, shot_landing()), Ok(landed), "the board answers the landing's ids again");
     assert_eq!(rig.position(), standing, "nothing written twice");
+    session.close().expect("close");
+}
+
+/// A FRAME REFUSED FOR WANT OF ITS SIGNATURE LEAVES ITS ID TO THE SIGNED
+/// SEND (wire.md §Correlation and idempotency): a landing whose shot or
+/// record's link went unsigned past a claim sends that frame once more,
+/// signed, under the frame's own id, so the daemon must judge the id afresh
+/// once it refused the first frame before its transaction, and answer it
+/// from the memo once it commits. A publish-class mint sent unsigned under
+/// an id is refused `attestation_required`; the same frame signed under the
+/// same id is admitted; sent again, it is answered the same acknowledgment,
+/// nothing committed.
+#[test]
+fn a_frame_refused_for_want_of_its_signature_leaves_its_id_to_the_signed_send() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session)
+        .expect("a content session");
+    let account = addr(ACCOUNT);
+    let unsigned = json!({"op": "create_new_document", "account": ACCOUNT, "published": true, "id": "merge:resent.publish"});
+    let Answer::Document(refused) = session.op(&unsigned).expect("the exchange") else {
+        panic!("closed")
+    };
+    assert_eq!(
+        (refused["code"].as_str(), refused["detail"].as_str()),
+        (Some("credential_refused"), Some("attestation_required")),
+        "{refused}"
+    );
+    let mut signed = unsigned.clone();
+    signed["attest"] = attest(
+        &board,
+        &device,
+        &account,
+        &account,
+        &entry_body_empty(ContentFreeOp::CreateNewDocument),
+    );
+    let first = acked(session.op(&signed));
+    let committed = board.health().unwrap().log_position();
+    let again = acked(session.op(&signed));
+    assert_eq!(
+        (&again["addr"], &again["at"]),
+        (&first["addr"], &first["at"]),
+        "the memo's acknowledgment"
+    );
+    assert_eq!(board.health().unwrap().log_position(), committed, "nothing committed twice");
     session.close().expect("close");
 }

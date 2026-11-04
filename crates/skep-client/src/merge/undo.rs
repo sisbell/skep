@@ -85,7 +85,10 @@
 //! SP-14) is read before the one write, as the landing reads it: a claimed
 //! board serving no head record halts with nothing sent, since the record's
 //! link could not be signed. A lost acknowledgment of the one write is the
-//! dialer's halt, with no re-ask: each act reads first on a re-run.
+//! dialer's halt, with no re-ask: each act reads first on a re-run. The
+//! record's link is the landing's, sent once more, signed, under its own id
+//! where it went unsigned and a claim landed past the head's read
+//! (`Writer::write_record`).
 
 use serde_json::Value;
 use skep_address::Address;

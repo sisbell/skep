@@ -16,12 +16,19 @@
 //! or a record its own build does not read (wire.md §Credential refusals) —
 //! answers [`Refusal::HeadUnreadable`] too, never this library's fault: the
 //! frame was refused, nothing was published, and a retry is admitted once
-//! the board holds a head it reads.
+//! the board holds a head it reads. A frame sent unsigned to a board read
+//! as no one's and refused `attestation_required` met a claim that landed
+//! past that read, its head written: the board refused it before its
+//! transaction (wire.md §Credential refusals, a reorder), so the head is
+//! read again and the same request sent ONCE more, signed over that pair,
+//! its answer a signed frame's; a second read that finds no head to sign
+//! over answers [`Refusal::HeadUnreadable`], nothing sent.
 //!
 //! **The `id` policy.** The same `id` on the same session for a lost answer:
 //! one re-ask after a transport fault, which a pending frame answers when its
 //! turn comes and a committed write answers from its memo. A refusal is not
-//! memoized, so a request re-composed or re-signed takes a fresh `id`. After
+//! memoized, so a request re-composed or re-signed — the one re-sign, and
+//! the one signed send after a claim — takes a fresh `id`. After
 //! `500 internal_panic`, a dead session or a second transport fault the board
 //! is read first — the landed test — before any re-send, never the memo
 //! alone.
@@ -44,8 +51,11 @@
 //! → own-bug arms with their entry and detail; `attestation_invalid:signature`
 //! → one re-sign with the skipped deposits dropped — presence re-read for
 //! every `retract` and `read_with` entry — under a fresh `id`;
+//! `attestation_required` at a frame sent unsigned → the one signed send
+//! above, under a fresh `id`;
 //! `attestation_invalid:board_unavailable` → the board's own state, the head
-//! arm above; every other `attestation_*` token → the library's own fault;
+//! arm above; every other `attestation_*` token, `attestation_required` at a
+//! signed frame among them → the library's own fault;
 //! `unparseable` on a request carrying an optional member → the older-board
 //! arm; `base_superseded` → the board's refusal of a request naming NO base
 //! while `doc` holds a member — a shape this library never sends at the
@@ -59,7 +69,7 @@
 
 use serde_json::Value;
 use skep_address::Address;
-use skep_identity::{entry_frame, DocTerm};
+use skep_identity::{entry_frame, BoardTerm, DocTerm};
 
 use crate::address::parse_address;
 use crate::board::frames;
@@ -148,9 +158,10 @@ pub enum OwnFault {
         code: String,
     },
     /// The frame's attest refused: the signature twice, or with no skipped
-    /// deposit to drop, or any other `attestation_*` token —
-    /// `board_unavailable` aside, the board's own state
-    /// ([`Refusal::HeadUnreadable`]).
+    /// deposit to drop, or any other `attestation_*` token but two —
+    /// `board_unavailable`, the board's own state
+    /// ([`Refusal::HeadUnreadable`]), and `attestation_required` at a frame
+    /// sent unsigned, which is sent once more, signed.
     Attest {
         /// The detail.
         detail: Option<String>,
@@ -225,11 +236,13 @@ pub enum Refusal {
     /// The board holds no head record it signs against: never sent unsigned,
     /// and nothing published.
     ///
-    /// It answers a claimed board serving no head record, no frame sent, and
-    /// the board's own refusal of the frame,
+    /// It answers a claimed board serving no head record, no frame sent; the
+    /// board's own refusal of the frame,
     /// `attestation_invalid:board_unavailable` — its head owed past this
-    /// library's read, or a record its own build does not read (SP-14). A
-    /// record that stands and this library cannot read is the read's halt
+    /// library's read, or a record its own build does not read (SP-14); and
+    /// a frame sent unsigned and refused `attestation_required` where the
+    /// head read again serves no record to sign over, nothing sent after it.
+    /// A record that stands and this library cannot read is the read's halt
     /// ([`Fault::Halt`]), never sent either.
     HeadUnreadable,
     /// The death signal: the session ended before or at the write. The
@@ -282,14 +295,15 @@ const DEPOSIT_CODES: [&str; 6] = ["link_home_refused", "old_refused", "duplicate
 
 /// Sends the request, once, with its arms.
 ///
-/// `request` is re-composed in place at the one re-sign, under a fresh
-/// `id`.
+/// `request` is re-composed in place at the one re-sign, and takes a fresh
+/// `id` there and at the one signed send after a claim (the module's doc).
 ///
 /// # Errors
 ///
-/// The reads' faults; the `H.1` and `/health` reads' halts, a head record
-/// that stands and cannot be read among them, which sends nothing (SP-14);
-/// and a transport fault the landed test could not read past.
+/// The reads' faults; the `H.1` and `/health` reads' halts — the read
+/// before the frame and the one after a claim — a head record that stands
+/// and cannot be read among them, which sends nothing (SP-14); and a
+/// transport fault the landed test could not read past.
 pub fn send(p: &Publisher<'_>, inputs: &Inputs, request: &mut Request) -> Result<Sent, Fault> {
     let door = Door::new(p.board, p.token);
     send_with(&door, p, inputs, request)
@@ -298,13 +312,15 @@ pub fn send(p: &Publisher<'_>, inputs: &Inputs, request: &mut Request) -> Result
 /// Sends through `door`.
 pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, request: &mut Request) -> Result<Sent, Fault> {
     door.step("send");
-    let term = match p.board.board_head()? {
+    // The pair the frame signs over: none on a board read as no one's, until
+    // the head is read again after the board answers `attestation_required`.
+    let mut term = match p.board.board_head()? {
         BoardHead::Term(term) => Some(term),
         BoardHead::Unclaimed => None,
         BoardHead::Owed { .. } => return Ok(Sent::Refused(Refusal::HeadUnreadable)),
     };
     let account = parse_address(p.account).ok_or_else(|| Fault::Halt(Halt::face("the account cannot be spelled", p.account.to_string(), "this is a fault in this library; nothing was written")))?;
-    let attest = |request: &Request| -> Option<Value> {
+    let attest = |request: &Request, term: Option<BoardTerm>| -> Option<Value> {
         let term = term?;
         let alg = p.signer.public_key().alg();
         let bytes = entry_frame(alg, term, &account, DocTerm::One(request.term()), &request.body());
@@ -312,7 +328,7 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
     };
     let mut resigned = false;
     loop {
-        let frame = request.frame(attest(request));
+        let frame = request.frame(attest(request, term));
         let answer = match p.board.op(Some(p.token), &frame) {
             // One re-ask under the same id on the same session.
             Err(Halt::Dial(_)) => match p.board.op(Some(p.token), &frame) {
@@ -376,6 +392,20 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
                 }
             }
             "attestation_invalid:signature" => Refusal::OwnFault(OwnFault::Attest { detail }),
+            // A claim landed between the head's read and this frame's turn:
+            // the frame went unsigned, and the board refused it before its
+            // transaction (a reorder). The head is read again and the request
+            // sent once more, signed, under a fresh `id`; the pair read is
+            // what makes it once — a signed frame refused so is the arm
+            // below, the library's own fault.
+            "attestation_required" if term.is_none() => match p.board.board_head()? {
+                BoardHead::Term(read) => {
+                    term = Some(read);
+                    request.id = super::fresh_id();
+                    continue;
+                }
+                BoardHead::Unclaimed | BoardHead::Owed { .. } => Refusal::HeadUnreadable,
+            },
             "malformed" if r.op() == Some("unparseable") && carries_members(request) => Refusal::OlderBoard { detail },
             "withheld" => Refusal::WindowWithheld { origin: site.addr.as_deref().and_then(parse_address) },
             "signed_session_required" => Refusal::NeedsSignedSession,

@@ -52,7 +52,15 @@
 //! the read-first steps, so a [`resume`] that finds nothing landed answers
 //! with no head read. The board's own `attestation_invalid:board_unavailable`
 //! at the shot or the record's link — a head owed past that read — is faced
-//! the same, never as this library's fault.
+//! the same, never as this library's fault. A shot or a record's link sent
+//! unsigned to a board read as no one's and refused `attestation_required`
+//! met a claim that landed past that read, its head written, and was
+//! refused before its transaction (wire.md §Credential refusals, a
+//! reorder): the head is read again and the frame sent ONCE more, signed
+//! over that pair, under its own id, its answer a signed frame's. A second
+//! read that finds no head to sign over is faced as the head the board
+//! owes, nothing sent; a signed frame refused `attestation_required` is
+//! this library's own fault.
 //!
 //! **The journal, at the record.** The journal is first read at the record,
 //! after the shot or the draft's one write: its extent, the end the atom is
@@ -103,7 +111,11 @@
 //! landing's record will replace, for `<stem>.stage`. The board answers a
 //! second call over one composition from its ids, and a landing composed
 //! after a take-back, landed into another draft, or landed fresh again
-//! after its own landing was taken back, is a write of its own.
+//! after its own landing was taken back, is a write of its own. The one
+//! signed send of a shot or a record's link after a claim keeps its frame's
+//! id: the board never memoizes a refusal, so it judges that id afresh
+//! (wire.md §Correlation and idempotency), and only that id lets a second
+//! call over the composition meet the write it made, never make another.
 //!
 //! **The claim, as this wire admits it.** The record's step (i) files
 //! `assert_sup{home: the merger's doc 1, old: the daughter, new: the member}`
@@ -330,8 +342,11 @@ impl<'a> Landing<'a> {
 ///   `already_published` and `publication_over_budget` verbatim as
 ///   [`Refusal::Halt`] (never the library's fault),
 ///   `attestation_invalid:board_unavailable` faced as the head the board
-///   owes, nothing landed, and a lost acknowledgment as the dialer's halt
-///   after one re-ask, for [`resume`] to complete — or the draft landing's: the
+///   owes, nothing landed, `attestation_required` at a shot sent unsigned
+///   answered by its one signed re-send, a head the second read does not
+///   find faced as the head the board owes, nothing landed, and a lost
+///   acknowledgment as the dialer's halt after one re-ask, for [`resume`]
+///   to complete — or the draft landing's: the
 ///   stage's refusals where a fresh draft is staged ([`Refusal::Unreadable`]
 ///   and [`Refusal::NoSuchDocument`] naming the head, the first never met at
 ///   a version member, which is published), then the one write's
@@ -351,7 +366,9 @@ impl<'a> Landing<'a> {
 ///   [`resume`] to record into another; then the record's writes':
 ///   [`Refusal::NeedsSignedSession`], and at its link
 ///   `attestation_invalid:board_unavailable` faced as the head the board
-///   owes, the landing standing for [`resume`] to record.
+///   owes, the landing standing for [`resume`] to record, and
+///   `attestation_required` at a link sent unsigned answered by its one
+///   signed re-send, a head the second read does not find faced the same.
 ///
 /// At any step the library's own faults, the board's other refusals
 /// verbatim, transport halts and the death signal are [`Refusal::Halt`].
@@ -712,12 +729,15 @@ impl Writer<'_> {
     /// through the side that holds them, every window by address, the base
     /// group the head and its extent as read — then the frame with its
     /// `attest` and its id, one re-ask under the same id on a lost
-    /// acknowledgment.
+    /// acknowledgment, and the frame sent once more, signed, under the same
+    /// id where it went unsigned and a claim landed past the head's read
+    /// ([`Writer::attest_after_claim`]).
     ///
     /// # Errors
     ///
     /// The head's refusal and halts ([`Writer::signing_term`]), read before
-    /// the values, nothing sent; [`Refusal::WindowWithheld`],
+    /// the values, nothing sent, and read again after a claim, nothing sent
+    /// past it; [`Refusal::WindowWithheld`],
     /// [`Refusal::NeedsSignedSession`] and [`Refusal::NoSuchDocument`] as the
     /// board answers them; `not_owner` naming the draft side as
     /// [`Refusal::UnownedDraft`], `already_published` and
@@ -795,18 +815,14 @@ impl Writer<'_> {
         if body.as_bytes().len() > SHOT_BODY_BUDGET {
             return Err(own_fault_face("the shot's body cannot be composed", format!("the merged list's values pass what one shot's body may carry ({SHOT_BODY_BUDGET} bytes)")));
         }
-        let attest = self.attest(term, doc, &body)?;
-        let frame = request.frame(attest);
-        // A lost acknowledgment is re-asked once under the same id in the same
-        // session (§1.5: the per-session idempotency key), else `resume`.
-        let answer = match self.board.op(Some(self.merger.token), &frame) {
-            Err(Halt::Dial(_)) => self.board.op(Some(self.merger.token), &frame)?,
-            other => other?,
-        };
-        let v = match answer {
-            Answer::Closed => return Err(closed("publishing the merge").into()),
-            Answer::Document(v) => v,
-        };
+        let mut v = self.shoot(&request.frame(self.attest(term, doc, &body)?))?;
+        // A claim landed past the head's read: the shot once more, signed,
+        // under its own id (the module's doc).
+        if let Some(attest) =
+            self.attest_after_claim(term, &v, doc, &body, &head_owed, "the shot")?
+        {
+            v = self.shoot(&request.frame(Some(attest)))?;
+        }
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
             let member = parse_address(addr).ok_or_else(|| shape_face("publish", &v))?;
             return Ok((member, at));
@@ -853,6 +869,74 @@ impl Writer<'_> {
             k if k.starts_with("attestation_") => own_fault("the shot's attest", &r),
             _ => Refusal::Halt(r.refused(&v)),
         })
+    }
+
+    /// Sends the shot's frame, answering the board's document.
+    ///
+    /// A lost acknowledgment is re-asked once under the same id in the same
+    /// session (§1.5: the per-session idempotency key), else `resume`.
+    ///
+    /// # Errors
+    ///
+    /// The death signal, faced; a dial fault after the one re-ask; the
+    /// frame's other halts.
+    fn shoot(&self, frame: &Value) -> Result<Value, Refusal> {
+        let answer = match self.board.op(Some(self.merger.token), frame) {
+            Err(Halt::Dial(_)) => self.board.op(Some(self.merger.token), frame)?,
+            other => other?,
+        };
+        match answer {
+            Answer::Closed => Err(closed("publishing the merge").into()),
+            Answer::Document(v) => Ok(v),
+        }
+    }
+
+    /// Returns the `attest` a frame sent unsigned is sent again with, where
+    /// a claim landed past the head's read.
+    ///
+    /// The frame went out with `sent_with`, the term [`Writer::signing_term`]
+    /// read before it; where that was none — a board read as no one's — and
+    /// the board answered `v` refusing it `attestation_required`, a claim
+    /// landed between the read and the frame's turn, its head written, and
+    /// the board refused the frame before its transaction (wire.md
+    /// §Credential refusals, a reorder). The head is read again and the
+    /// `attest` composed over `body`, the frame's `doc` row `doc`, for the
+    /// frame's one re-send under its own id: the refusal left the id
+    /// unmemoized (wire.md §Correlation and idempotency). `None` where the
+    /// frame went signed, or `v` is another answer: a signed frame refused
+    /// so is the caller's own fault arm.
+    ///
+    /// # Errors
+    ///
+    /// The second read's: a head that stands and cannot be read; a claimed
+    /// board serving no head record, faced by `owed`; and one serving none
+    /// with no claimant named, faced by `owed` naming `what` and the board's
+    /// token — the board refused the frame for want of a signature this read
+    /// finds no head to make. Then the attest's fault. Nothing is sent past
+    /// any of them.
+    fn attest_after_claim(
+        &self,
+        sent_with: Option<BoardTerm>,
+        v: &Value,
+        doc: &Address,
+        body: &EntryBody,
+        owed: &dyn Fn(String) -> Halt,
+        what: &str,
+    ) -> Result<Option<Value>, Refusal> {
+        if sent_with.is_some() {
+            return Ok(None);
+        }
+        let Some(r) = Rejection::of(v).filter(|r| r.key() == "attestation_required") else {
+            return Ok(None);
+        };
+        let Some(term) = self.signing_term(owed)? else {
+            return Err(owed(format!(
+                "{}: the board refused {what} for want of its signature and serves no head record (`H.1`) to sign it over",
+                r.token()
+            ))
+            .into());
+        };
+        self.attest(Some(term), doc, body)
     }
 
     /// Returns the claim's read: the active claims whose `new` is the member.
@@ -950,12 +1034,14 @@ impl Writer<'_> {
     /// atom appended at its end as a plain insert, and the public link made
     /// from the merger's doc 1 to `target` — the landed address, or the
     /// draft an undo or a withdrawal names — and every side of the record
-    /// besides its head under the kind, attested over `H.1`'s pair. The two
-    /// writes carry the per-session ids `<stem>.record` and `<stem>.link`;
-    /// `owed` faces the act standing with its record unwritten, for the
-    /// [`Unwritten`] reason it is given: the head owed before the first write
-    /// or at the link, or a journal whose extent read answers `withheld` or
-    /// `doc_not_registered`.
+    /// besides its head under the kind, attested over `H.1`'s pair — sent
+    /// once more, signed, under the same id where it went unsigned and a
+    /// claim landed past the head's read ([`Writer::attest_after_claim`]).
+    /// The two writes carry the per-session ids `<stem>.record` and
+    /// `<stem>.link`; `owed` faces the act standing with its record
+    /// unwritten, for the [`Unwritten`] reason it is given: the head owed
+    /// before the first write or at the link, or a journal whose extent read
+    /// answers `withheld` or `doc_not_registered`.
     ///
     /// # Errors
     ///
@@ -968,9 +1054,12 @@ impl Writer<'_> {
     /// an account this client cannot spell, and an attest the board refuses,
     /// as the library's own faults, but
     /// `attestation_invalid:board_unavailable` at the link, faced as the head
-    /// the board owes with the act standing; an answer of a shape this
-    /// client does not know, faced; [`Refusal::NeedsSignedSession`] at the
-    /// link; the death signal; the board's other refusals verbatim.
+    /// the board owes with the act standing; after a claim, the second head
+    /// read's halts, and a head it does not find faced as the head the board
+    /// owes with the act standing, the link not sent again; an answer of a
+    /// shape this client does not know, faced;
+    /// [`Refusal::NeedsSignedSession`] at the link; the death signal; the
+    /// board's other refusals verbatim.
     pub(super) fn write_record(
         &self,
         kind: &Address,
@@ -980,7 +1069,8 @@ impl Writer<'_> {
         journal: Option<&Address>,
         owed: &dyn Fn(Unwritten, String) -> Halt,
     ) -> Result<Address, Refusal> {
-        let term = self.signing_term(&|cause| owed(Unwritten::HeadOwed, cause))?;
+        let owed_head = |cause: String| owed(Unwritten::HeadOwed, cause);
+        let term = self.signing_term(&owed_head)?;
         let journal = journal::of(self.board, &self.merger, kind, journal.cloned())?;
         let text = record.to_value().to_string();
         // The journal's first read, after the act it records: a journal the
@@ -1059,7 +1149,14 @@ impl Writer<'_> {
         if let Some(a) = attest {
             frame["attest"] = a;
         }
-        let v = self.answered_write(&frame, "linking the record")?;
+        let mut v = self.answered_write(&frame, "linking the record")?;
+        // A claim landed past the head's read: the link once more, signed,
+        // under its own id (the module's doc).
+        let what = "the record's link from doc 1";
+        if let Some(a) = self.attest_after_claim(term, &v, &home, &body, &owed_head, what)? {
+            frame["attest"] = a;
+            v = self.answered_write(&frame, "linking the record")?;
+        }
         if let Some(link) = acked_addr(&v) {
             return parse_address(link).ok_or_else(|| shape_face("make_link", &v).into());
         }

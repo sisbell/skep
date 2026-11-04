@@ -1,6 +1,10 @@
+use std::sync::Arc;
+
 use serde_json::json;
 
 use super::*;
+use crate::board::fake::{self, Fake};
+use crate::board::HEAD_MEMBER_1;
 
 /// The issuer `1.0.1`, whose doc 1 is `1.0.1.0.1`; its link subspace mints
 /// `1.0.1.0.1.0.2.k`.
@@ -176,4 +180,79 @@ fn a_refusal_names_the_act_and_a_grantee_spells_itself() {
     let text = Refusal::NotYours { grant: at(1), issuer: Some(a(ISSUER)) }.to_string();
     assert!(text.contains("only the issuer revokes a share"), "{text}");
     assert!(Refusal::NotStanding(at(6)).to_string().contains("revoke the grant that stands for its key"));
+}
+
+const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+
+/// Returns a board over the issuer's ledger.
+///
+/// The issuer's doc 1 holds one live grant at `at(1)`, `DOC` shared with
+/// `GRANTEE`; `DOC` is the issuer's draft; `H.1` serves its record where
+/// `head` holds; `/health` names `claimant`; every `make_link` is answered
+/// `link`.
+fn ledger_board(head: bool, claimant: Option<&'static str>, link: Value) -> Arc<Fake> {
+    Fake::new(move |req| {
+        if req.path == "/health" {
+            return fake::json(200, json!({"auth": {"claimant": claimant, "local_trust": false, "origins": [], "signed_origins": []}, "log_position": 9}));
+        }
+        let frame = fake::frame(req);
+        let record = json!({"type": "skep-head", "position": 1, "chain": "00".repeat(32)}).to_string();
+        let items = if head { json!([{"atom": record}]) } else { json!([]) };
+        let answer = match frame["op"].as_str().unwrap_or("?") {
+            "retrieve_v" if frame["specs"][0]["doc"] == HEAD_MEMBER_1 => json!({"resp": "delivery", "as_of": 9, "items": items}),
+            "doc_metadata" => json!({"resp": "doc_metadata", "as_of": 9, "doc": DOC, "published": false, "owner": ISSUER}),
+            "find_links_ftt" if frame["q"]["ty"][0]["start"] == T_GRANT => json!({"resp": "addrs", "as_of": 9, "addrs": [at(1).to_string()]}),
+            "find_links_ftt" => json!({"resp": "addrs", "as_of": 9, "addrs": []}),
+            "read_link" => json!({"resp": "link_value", "as_of": 9, "link": {"slots": [[{"start": DOC, "width": "0.1"}], [{"start": GRANTEE, "width": "0.1"}], [{"start": T_GRANT, "width": "0.1"}]]}}),
+            "make_link" => link.clone(),
+            op => panic!("the share sent an op this board does not answer: {op}"),
+        };
+        fake::json(200, answer)
+    })
+}
+
+/// Returns the grant-class links a board was sent, in order.
+fn links(fake: &Fake) -> Vec<Value> {
+    fake.sent.lock().unwrap().iter().map(|(_, req)| fake::frame(req)).filter(|f| f["op"] == "make_link").collect()
+}
+
+/// A CLAIMED BOARD WHOSE HEAD IS OWED IS SENT NO GRANT-CLASS LINK (SP-14):
+/// where `H.1` serves no record and `/health` names a claimant, `privash`
+/// and `revoke` each halt naming `H.1` after their reads and before the
+/// write — no `make_link` sent, and never as this library's fault; the
+/// same board with no claimant takes each link without an `attest`; and
+/// the board's own `attestation_invalid:board_unavailable` is faced as the
+/// head it owes, never as this library's frame.
+#[test]
+fn a_claimed_board_serving_no_head_record_sends_no_grant_and_an_unclaimed_one_sends_it_unsigned() {
+    let token = Token::parse(TOKEN).expect("a token");
+    let signer = crate::sign::signer_from_seed(&[42; 32]);
+    let issuer = Issuer { token: &token, account: ISSUER, signer: &signer };
+    let acked = json!({"resp": "ack_addr", "addr": at(2).to_string(), "at": 10});
+    let owed = ledger_board(false, Some(ISSUER), acked.clone());
+    let board = fake::board(&owed);
+    for (what, answer) in [("the grant", privash(&board, &issuer, &a(DOC)).map(|_| ())), ("the revocation", revoke(&board, &issuer, &at(1)).map(|_| ()))] {
+        let Err(Refusal::Halt(Halt::Halt(face))) = &answer else { panic!("{what}: {answer:?}") };
+        assert!(face.state.contains("H.1") && face.state.contains(what), "{face}");
+        assert!(face.cause.contains(&format!("names {ISSUER} its claimant")) && face.act.contains("nothing was written"), "{face}");
+        assert!(!face.act.contains("fault in this library"), "{face}");
+    }
+    assert!(links(&owed).is_empty(), "no grant-class link: {:?}", owed.log());
+    // No one the board's claimant: each link sent, unsigned.
+    let unclaimed = ledger_board(false, None, acked);
+    let board = fake::board(&unclaimed);
+    assert_eq!(privash(&board, &issuer, &a(DOC)).map(|g| g.at), Ok(at(2)));
+    assert_eq!(revoke(&board, &issuer, &at(1)).map(|r| r.at), Ok(at(2)));
+    let sent = links(&unclaimed);
+    assert_eq!(sent.len(), 2, "{:?}", unclaimed.log());
+    assert!(sent.iter().all(|f| f.get("attest").is_none()), "unsigned where no one claimed the board: {sent:?}");
+    // The head owed past the read: the board's own refusal, faced as such.
+    let unavailable = json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"});
+    let raced = ledger_board(true, Some(ISSUER), unavailable);
+    let board = fake::board(&raced);
+    let answer = privash(&board, &issuer, &a(DOC));
+    let Err(Refusal::Halt(Halt::Halt(face))) = &answer else { panic!("{answer:?}") };
+    assert!(face.state.contains("H.1") && face.cause.contains("attestation_invalid:board_unavailable"), "{face}");
+    assert!(face.act.contains("retry once the board has written its head") && !face.act.contains("fault in this library"), "{face}");
+    assert!(links(&raced)[0]["attest"]["sig"].is_string(), "the premise: the link went signed: {:?}", raced.log());
 }

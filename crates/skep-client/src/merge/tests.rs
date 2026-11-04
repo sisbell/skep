@@ -1275,13 +1275,17 @@ mod scripted {
         head_moved: bool,
         /// Documents this reader may not read.
         withheld: BTreeSet<String>,
+        /// `/health` names the merger's account the board's claimant.
+        claimed: bool,
+        /// `H.1` answers its record.
+        head: bool,
         /// The merger's enrolled key.
         key: Option<PublicKey>,
     }
 
     impl World {
         /// A claimed permissive board with the merger's doc 1 and `K`, the
-        /// kind's document.
+        /// kind's document, serving its head record.
         fn new() -> World {
             let mut w = World {
                 position: 10,
@@ -1289,6 +1293,8 @@ mod scripted {
                 delivery_cap: 1 << 17,
                 compare_cap: 1 << 12,
                 next_doc: 10,
+                claimed: true,
+                head: true,
                 ..World::default()
             };
             w.doc(DOC1, true, ACCOUNT, Vec::new());
@@ -1477,7 +1483,8 @@ mod scripted {
 
         fn health(&self) -> Value {
             let origin = "http://127.0.0.1:8642";
-            json!({"ok": true, "log_position": self.position, "chain_head": chain_hex(self.position), "auth": {"claimant": ACCOUNT, "local_trust": true, "origins": [origin], "signed_origins": [origin]}})
+            let claimant = if self.claimed { json!(ACCOUNT) } else { Value::Null };
+            json!({"ok": true, "log_position": self.position, "chain_head": chain_hex(self.position), "auth": {"claimant": claimant, "local_trust": true, "origins": [origin], "signed_origins": [origin]}})
         }
 
         fn changes(&self, path: &str) -> Response {
@@ -1572,7 +1579,8 @@ mod scripted {
                     let doc = spec["doc"].as_str().unwrap();
                     if doc == HEAD_MEMBER_1 {
                         let record = json!({"type": "skep-head", "position": 1, "chain": chain_hex(1)}).to_string();
-                        return Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": [{"atom": record}]})));
+                        let items = if self.head { json!([{"atom": record}]) } else { json!([]) };
+                        return Ok(reply(200, json!({"resp": "delivery", "as_of": position, "items": items})));
                     }
                     if self.withheld.contains(doc) {
                         return Ok(rejected("withheld"));
@@ -3869,7 +3877,8 @@ mod scripted {
 
     /// Every refusal the shot can answer, each mapped: `withheld` naming the
     /// origin, `signed_session_required`, `doc_not_registered`, the
-    /// library's own faults as halts — and nothing after the refusal.
+    /// library's own faults as halts, the board's `board_unavailable` as the
+    /// head it owes — and nothing after the refusal.
     #[test]
     fn the_shots_refusals_are_mapped() {
         let (dialer, board, signer) = open(World::race());
@@ -3933,9 +3942,148 @@ mod scripted {
         refuse("kept_place_moved", None);
         let err = land(&board, &merged, drafted()).expect_err("own fault");
         assert!(matches!(&err, Refusal::Halt(h) if h.to_string().contains("kept_place_moved")), "{err}");
+        // The head the board owes past the landing's read of it: the board's
+        // state, a retry its act — never this library's fault.
+        dialer.world().memo.insert(
+            format!("{}.publish", merged.key.text()),
+            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "publish"}),
+        );
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the head owed");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(
+            face.state.contains("H.1")
+                && face.cause.contains("attestation_invalid:board_unavailable"),
+            "{face}"
+        );
+        assert!(
+            face.act.contains("retry once the board has written its head")
+                && !face.act.contains("fault in this library"),
+            "{face}"
+        );
         assert!(
             dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
             "nothing after a refused shot"
+        );
+    }
+
+    /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NOTHING (SP-14): `/health`
+    /// names a claimant and `H.1` serves no record, so the shot, a draft
+    /// landing into `S` and a fresh draft each halt naming `H.1` before
+    /// their first write — no `publish`, `stage`, `set_arrangement`,
+    /// journal mint, `insert` or `make_link` sent, no commit made — and a
+    /// `resume` that finds nothing landed answers none with no head read.
+    /// The same board unclaimed lands each, the shot and the record's link
+    /// carrying no `attest`.
+    #[test]
+    fn a_claimed_board_serving_no_head_record_lands_nothing_and_an_unclaimed_one_lands_unsigned() {
+        let writes =
+            ["publish", "stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+        for cell in ["the shot", "a landing into S", "a fresh draft"] {
+            let (mut world, inputs) = match cell {
+                "the shot" => (World::race(), race_inputs()),
+                _ => (draft_landing_world(), draft_inputs()),
+            };
+            world.head = false;
+            let (dialer, board, signer) = open(world);
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+            let landing = || match cell {
+                "the shot" => shot(&session, &signer),
+                "a landing into S" => draft_landing(&session, &signer, Some(a(S))),
+                _ => draft_landing(&session, &signer, None),
+            };
+            let rows = dialer.world().rows.len();
+            dialer.clear();
+            let err = land(&board, &merged, landing()).expect_err("the head is owed");
+            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{cell}: {err:?}") };
+            assert!(
+                face.state.contains("H.1") && face.state.contains("cannot land"),
+                "{cell}: {face}"
+            );
+            assert!(
+                face.cause.contains(&format!("names {ACCOUNT} its claimant")),
+                "{cell}: {face}"
+            );
+            assert!(face.act.contains("nothing was written"), "{cell}: {face}");
+            for op in writes {
+                assert!(dialer.frames(op).is_empty(), "{cell}: no `{op}`: {:?}", dialer.ops());
+            }
+            assert_eq!(dialer.world().rows.len(), rows, "{cell}: no commit");
+            dialer.clear();
+            assert_eq!(resume(&board, &merged, landing()), Ok(None), "{cell}: nothing landed");
+            assert!(
+                dialer.frames("retrieve_v").iter().all(|f| f["specs"][0]["doc"] != HEAD_MEMBER_1),
+                "{cell}: a resume with nothing to write reads no head: {:?}",
+                dialer.ops()
+            );
+            // The same board, no one its claimant: landed, unsigned.
+            dialer.world().claimed = false;
+            dialer.clear();
+            land(&board, &merged, landing()).unwrap_or_else(|e| panic!("{cell}: {e}"));
+            let links = dialer.frames("make_link");
+            assert_eq!(links.len(), 1, "{cell}: the record's link: {:?}", dialer.ops());
+            for frame in dialer.frames("publish").iter().chain(&links) {
+                assert!(frame.get("attest").is_none(), "{cell}: unsigned: {frame}");
+            }
+        }
+    }
+
+    /// A LANDING THAT STANDS WITH ITS RECORD OWED (SP-14): the shot lands
+    /// and the record's link is refused `attestation_invalid:board_unavailable`
+    /// — the head owed past the landing's read — faced as the merge standing
+    /// with `resume` its act, never the library's fault. Read afresh with the
+    /// head still owed, the residue walk halts before the record's first
+    /// write — no journal mint, `insert` or `make_link` — and once the head
+    /// is written it writes the record, signed.
+    #[test]
+    fn a_landing_that_stands_writes_its_record_only_once_the_head_is_written() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let link_id = format!("{}.link", merged.key.text());
+        dialer.world().memo.insert(
+            link_id.clone(),
+            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"}),
+        );
+        let member = format!("{D}.3");
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("the link refused");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(
+            face.state.contains(&format!("the merge stands at {member}"))
+                && face.state.contains("H.1"),
+            "{face}"
+        );
+        assert!(face.cause.contains("attestation_invalid:board_unavailable"), "{face}");
+        assert!(
+            face.act.starts_with("resume") && !face.act.contains("fault in this library"),
+            "{face}"
+        );
+        assert!(dialer.world().docs.contains_key(&member), "the premise: the shot landed");
+        // A board read afresh, its head still owed: no write of the record.
+        dialer.world().memo.remove(&link_id);
+        dialer.world().head = false;
+        let afresh = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), dialer.clone());
+        dialer.clear();
+        let err = resume(&afresh, &merged, shot(&session, &signer)).expect_err("the head is owed");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(face.state.contains(&format!("the merge stands at {member}")), "{face}");
+        assert!(face.cause.contains(&format!("names {ACCOUNT} its claimant")), "{face}");
+        for op in ["publish", "create_new_document", "insert", "make_link"] {
+            assert!(dialer.frames(op).is_empty(), "no `{op}`: {:?}", dialer.ops());
+        }
+        // The head written: the residue walk writes the record, signed.
+        dialer.world().head = true;
+        let resumed = resume(&afresh, &merged, shot(&session, &signer)).expect("resumed");
+        assert!(
+            matches!(&resumed, Some(Landed::Member { address, .. }) if address.to_string() == member),
+            "{resumed:?}"
+        );
+        let links = dialer.frames("make_link");
+        assert_eq!(links.len(), 1, "{:?}", dialer.ops());
+        assert!(
+            links[0]["attest"]["sig"].is_string(),
+            "signed over the head written: {}",
+            links[0]
         );
     }
 

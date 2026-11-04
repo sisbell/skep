@@ -29,6 +29,15 @@
 //! already. [`Ledger::fold`] is the fold's own walk over a doc 1's records,
 //! pure, so a test pins it with no board.
 //!
+//! **The signature.** Every record this module writes is homed in the
+//! issuer's published doc 1 and carries its entry signature over `H.1`'s
+//! pair, read before the write (`Board::board_head`; SP-14): a board no one
+//! has claimed, serving no head record, alone takes the record without
+//! one, and a claimed board serving none halts the write naming `H.1` with
+//! nothing sent. The board's own `attestation_invalid:board_unavailable` —
+//! a head owed past that read — is faced the same, never as this library's
+//! fault: the act is a retry once the board has written its head.
+//!
 //! **No retract, and no automatic re-issue.** A share is withdrawn by
 //! revoking it, never by retracting its record — the board refuses a
 //! `nullify` of a grant-typed link (`nullify_not_revocation`), and this
@@ -60,7 +69,7 @@ use skep_address::{document_of, Address, Level};
 use skep_identity::{entry_body_make_link, entry_body_make_link_replacing, entry_frame, unit_span, DocTerm, EntryBody, EntrySlot, LinkSlots};
 
 use crate::address::{doc_1_of, first_child, parent_account, parse_address};
-use crate::board::{acked_addr, answers, frames, Answer, Board, Rejection, Token};
+use crate::board::{acked_addr, answers, frames, Answer, Board, BoardHead, Rejection, Token};
 use crate::halt::Halt;
 use crate::sign::{sig_hex, Signer};
 
@@ -747,19 +756,20 @@ pub fn privashed(board: &Board, token: Option<&Token>) -> Result<Vec<Privashed>,
 /// owns under it, those minted later included (PUB-5.9). The key's state is
 /// read first, then one grant-class link is written, homed in the issuer's
 /// doc 1, with `replaces` naming the revocation it follows where one is the
-/// key's latest record, and its entry signature on a board with `H.1`. Never
-/// a duplicate: a live grant for the key is refused, naming it. A lost
-/// acknowledgement is never re-sent: the key's state is read again, and the
-/// grant answered where it landed.
+/// key's latest record, and its entry signature over `H.1`'s pair (the
+/// module's doc). Never a duplicate: a live grant for the key is refused,
+/// naming it. A lost acknowledgement is never re-sent: the key's state is
+/// read again, and the grant answered where it landed.
 ///
 /// # Errors
 ///
 /// In this order: [`Refusal::NoSuchAccount`], [`Refusal::ToYourself`];
 /// [`Refusal::NotAPrefix`], [`Refusal::NoSuchDocument`],
-/// [`Refusal::NotOwner`]; [`Refusal::AlreadyShared`]; the board's
-/// [`Refusal::NeedsSignedSession`]; every other refusal and halt as
-/// [`Refusal::Halt`], a lost acknowledgement whose read-back finds no grant
-/// standing with the `replaces` it sent among them.
+/// [`Refusal::NotOwner`]; [`Refusal::AlreadyShared`]; a claimed board
+/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent;
+/// the board's [`Refusal::NeedsSignedSession`]; every other refusal and
+/// halt as [`Refusal::Halt`], a lost acknowledgement whose read-back finds
+/// no grant standing with the `replaces` it sent among them.
 pub fn share(board: &Board, issuer: &Issuer<'_>, prefix: &Address, grantee: &Address) -> Result<Grant, Refusal> {
     let account = address_of(issuer.account)?;
     if grantee.level() != Level::Account {
@@ -803,9 +813,10 @@ pub fn share(board: &Board, issuer: &Issuer<'_>, prefix: &Address, grantee: &Add
 ///
 /// In this order: [`Refusal::NotADocument`], [`Refusal::NotAPrefix`];
 /// [`Refusal::NoSuchDocument`], [`Refusal::NotOwner`],
-/// [`Refusal::NotADraft`]; [`Refusal::AlreadyShared`]; the board's
-/// [`Refusal::NeedsSignedSession`]; every other refusal and halt as
-/// [`Refusal::Halt`].
+/// [`Refusal::NotADraft`]; [`Refusal::AlreadyShared`]; a claimed board
+/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent;
+/// the board's [`Refusal::NeedsSignedSession`]; every other refusal and
+/// halt as [`Refusal::Halt`].
 pub fn privash(board: &Board, issuer: &Issuer<'_>, document: &Address) -> Result<Grant, Refusal> {
     let account = address_of(issuer.account)?;
     match document.level() {
@@ -826,18 +837,19 @@ pub fn privash(board: &Board, issuer: &Issuer<'_>, document: &Address) -> Result
 /// Revokes the grant at `grant` (PUB-5.13, PUB-5.14).
 ///
 /// It writes one grant-class link homed in the issuer's doc 1 whose `from`
-/// names the grant, with its entry signature on a board with `H.1` — the
-/// one way a share is withdrawn, never a retract of its record. The grant
-/// must be the issuer's own and standing. A lost acknowledgement is never
-/// re-sent: the record is read again, and the revocation answered where it
-/// landed.
+/// names the grant, with its entry signature over `H.1`'s pair as a
+/// grant's (the module's doc) — the one way a share is withdrawn, never a
+/// retract of its record. The grant must be the issuer's own and standing.
+/// A lost acknowledgement is never re-sent: the record is read again, and
+/// the revocation answered where it landed.
 ///
 /// # Errors
 ///
 /// In this order: [`Refusal::NotYours`]; [`Refusal::NotAGrant`];
-/// [`Refusal::AlreadyRevoked`], [`Refusal::NotStanding`]; the board's
-/// [`Refusal::NeedsSignedSession`]; every other refusal and halt as
-/// [`Refusal::Halt`].
+/// [`Refusal::AlreadyRevoked`], [`Refusal::NotStanding`]; a claimed board
+/// serving no head record, as [`Refusal::Halt`] naming `H.1`, nothing sent;
+/// the board's [`Refusal::NeedsSignedSession`]; every other refusal and
+/// halt as [`Refusal::Halt`].
 pub fn revoke(board: &Board, issuer: &Issuer<'_>, grant: &Address) -> Result<Revocation, Refusal> {
     let account = address_of(issuer.account)?;
     if issuer_of_record(grant).as_ref() != Some(&account) {
@@ -851,13 +863,13 @@ pub fn revoke(board: &Board, issuer: &Issuer<'_>, grant: &Address) -> Result<Rev
     };
     let home = home_of(&account);
     let (mut frame, body) = revocation_frame(&home, &standing);
-    if let Some(a) = attest(board, issuer, &account, &home, &body)? {
+    if let Some(a) = attest(board, issuer, &account, &home, &body, "the revocation")? {
         frame["attest"] = a;
     }
     match board.op(Some(issuer.token), &frame) {
         Ok(Answer::Document(v)) => match acked_addr(&v) {
             Some(at) => Ok(Revocation { at: address_of(at)?, revokes: grant.clone(), issuer: account }),
-            None => Err(refused_write(&v)),
+            None => Err(refused_write(&v, "the revocation")),
         },
         Ok(Answer::Closed) => Err(closed("revoking").into()),
         Err(Halt::Dial(e)) => {
@@ -880,7 +892,8 @@ pub fn revoke(board: &Board, issuer: &Issuer<'_>, grant: &Address) -> Result<Rev
 /// # Errors
 ///
 /// [`Refusal::AlreadyShared`] where a live grant stands for the key, before
-/// anything is written; the write's refusal as `refused_write` dispatches
+/// anything is written; a claimed board serving no head record, faced,
+/// with nothing sent; the write's refusal as `refused_write` dispatches
 /// it; a lost acknowledgement whose read-back finds no grant standing with
 /// the `replaces` it sent, and the death signal, each faced; every halt of
 /// the reads and of the write as [`Refusal::Halt`].
@@ -892,14 +905,14 @@ fn grant(board: &Board, issuer: &Issuer<'_>, account: &Address, prefix: &Address
     };
     let home = home_of(account);
     let (mut frame, body) = grant_frame(&home, prefix, &grantee, replaces.as_ref());
-    if let Some(a) = attest(board, issuer, account, &home, &body)? {
+    if let Some(a) = attest(board, issuer, account, &home, &body, "the grant")? {
         frame["attest"] = a;
     }
     let standing = |at: Address| Grant { at, issuer: account.clone(), prefix: prefix.clone(), grantee: grantee.clone(), replaces: replaces.clone() };
     match board.op(Some(issuer.token), &frame) {
         Ok(Answer::Document(v)) => match acked_addr(&v) {
             Some(at) => Ok(standing(address_of(at)?)),
-            None => Err(refused_write(&v)),
+            None => Err(refused_write(&v, "the grant")),
         },
         Ok(Answer::Closed) => Err(closed("sharing").into()),
         Err(Halt::Dial(e)) => {
@@ -918,13 +931,21 @@ fn grant(board: &Board, issuer: &Issuer<'_>, account: &Address, prefix: &Address
 /// It is the entry frame under `H.1`'s pair, the issuer's account and the
 /// home's row, signed by the issuer's signer (signed ops;
 /// `skep_identity::entry_frame`, the one composer). The answer is `None` on
-/// a board with no `H.1`, where the member is dropped unread.
+/// a board no one has claimed that serves no head record, where the member
+/// would be dropped unread (`Board::board_head`).
 ///
 /// # Errors
 ///
-/// [`Board::board_term`]'s errors.
-fn attest(board: &Board, issuer: &Issuer<'_>, account: &Address, home: &Address, body: &EntryBody) -> Result<Option<Value>, Halt> {
-    let Some(term) = board.board_term()? else { return Ok(None) };
+/// A claimed board serving no head record, faced naming `what`, the record
+/// it would sign never sent; `Board::board_head`'s errors.
+fn attest(board: &Board, issuer: &Issuer<'_>, account: &Address, home: &Address, body: &EntryBody, what: &str) -> Result<Option<Value>, Halt> {
+    let term = match board.board_head()? {
+        BoardHead::Term(term) => term,
+        BoardHead::Unclaimed => return Ok(None),
+        BoardHead::Owed { claimant } => {
+            return Err(head_owed(what, format!("the board names {claimant} its claimant and serves no head record (`H.1`), and {what} carries its entry signature over that record's pair (signed ops), so it is never sent unsigned to a claimed board")))
+        }
+    };
     let alg = issuer.signer.public_key().alg().to_string();
     let bytes = entry_frame(&alg, term, account, DocTerm::One(home), body);
     Ok(Some(json!({"alg": alg, "sig": sig_hex(&issuer.signer.sign(&bytes))})))
@@ -1034,10 +1055,11 @@ fn issuer_of_record(at: &Address) -> Option<Address> {
 
 /// Returns a write's refusal, dispatched on the one token.
 ///
-/// Its arms are the session's grade, a home not yet registered, this
-/// library's own frame faults, and the rest verbatim (wire.md §Rejections);
-/// an answer that is no rejection is faced as one without the wire's shape.
-fn refused_write(v: &Value) -> Refusal {
+/// Its arms are the session's grade, a home not yet registered, the head
+/// the board owes, this library's own frame faults, and the rest verbatim
+/// (wire.md §Rejections); an answer that is no rejection is faced as one
+/// without the wire's shape. `what` names the record refused.
+fn refused_write(v: &Value, what: &str) -> Refusal {
     let Some(r) = Rejection::of(v) else { return shape_face("make_link", v).into() };
     match r.key() {
         "signed_session_required" => Refusal::NeedsSignedSession,
@@ -1047,6 +1069,10 @@ fn refused_write(v: &Value) -> Refusal {
             format!("{}: the record is homed in your doc 1 (PUB-5.17), which is not registered", r.token()),
             "an account's first signed session mints its doc 1 (AUTH-2.109); open one, then share again",
         )),
+        // The board's state, never this library's frame (a reorder).
+        "attestation_invalid:board_unavailable" => {
+            Refusal::Halt(head_owed(what, format!("{}: the board refused {what}, serving no head record (`H.1`) to verify its entry signature over — a head the board owes, not your keys", r.token())))
+        }
         k if k.starts_with("attestation_") => own_fault("the record's attest", &r),
         _ => Refusal::Halt(r.refused(v)),
     }
@@ -1057,6 +1083,14 @@ fn refused_write(v: &Value) -> Refusal {
 /// It is nothing a person can act on.
 fn own_fault(what: &str, r: &Rejection) -> Refusal {
     Refusal::Halt(Halt::face(format!("the board refused {what}"), format!("{}: the frame this library composed is wrong in substance — its home, its slots or its attest", r.token()), "this is a fault in this library, not in your keys or your act; nothing was written"))
+}
+
+/// Faces a claimed board whose head is owed (SP-14).
+///
+/// `what` — the grant, the revocation — was not written, and `cause` says
+/// why: the board serves no `H.1` yet for its entry signature to sign over.
+fn head_owed(what: &str, cause: String) -> Halt {
+    Halt::face(format!("this board has no H.1 yet, so {what} was not written"), cause, "retry once the board has written its head — this reads what stands before it writes; nothing was written")
 }
 
 /// Faces the death signal under the session.

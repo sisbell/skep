@@ -8,7 +8,7 @@
 //!
 //! **Never unsigned where a signature is owed.** A board whose head record
 //! stands and cannot be read halts the send naming why, claimed or not
-//! (`Board::board_term`; SP-14), and a claimed board serving no head record
+//! (`Board::board_head`; SP-14), and a claimed board serving no head record
 //! answers [`Refusal::HeadUnreadable`], the halt's data, never a warning: no
 //! frame leaves either. A board no one has claimed, serving no head record,
 //! alone takes the frame without an `attest`.
@@ -56,7 +56,7 @@ use skep_identity::{entry_frame, DocTerm};
 
 use crate::address::parse_address;
 use crate::board::frames;
-use crate::board::{acked_addr, acked_at, Answer, ChangesAnswer, ChangesQuery, Rejection, Site, T_RETRACTION};
+use crate::board::{acked_addr, acked_at, Answer, BoardHead, ChangesAnswer, ChangesQuery, Rejection, Site, T_RETRACTION};
 use crate::halt::Halt;
 use crate::sign::sig_hex;
 
@@ -283,10 +283,11 @@ pub fn send(p: &Publisher<'_>, inputs: &Inputs, request: &mut Request) -> Result
 /// Sends through `door`.
 pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, request: &mut Request) -> Result<Sent, Fault> {
     door.step("send");
-    let term = p.board.board_term()?;
-    if term.is_none() && p.board.health()?.claimant().is_some() {
-        return Ok(Sent::Refused(Refusal::HeadUnreadable));
-    }
+    let term = match p.board.board_head()? {
+        BoardHead::Term(term) => Some(term),
+        BoardHead::Unclaimed => None,
+        BoardHead::Owed { .. } => return Ok(Sent::Refused(Refusal::HeadUnreadable)),
+    };
     let account = parse_address(p.account).ok_or_else(|| Fault::Halt(Halt::face("the account cannot be spelled", p.account.to_string(), "this is a fault in this library; nothing was written")))?;
     let attest = |request: &Request| -> Option<Value> {
         let term = term?;

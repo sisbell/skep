@@ -326,6 +326,36 @@ fn a_head_record_present_but_unreadable_halts_and_only_an_absent_one_is_none() {
     assert!(matches!(&refused, Err(Halt::Refused(r)) if r.token() == "out_of_bounds"), "{refused:?}");
 }
 
+/// Checks that a board serving no head record is told apart by its claimant.
+///
+/// `board_head` answers `H.1`'s pair with no `/health` read where the record
+/// stands; where none is served, a claimant named is the owed head, never a
+/// board no one has claimed, and none named is that board; a record that
+/// stands and cannot be read halts before `/health` is asked (SP-14).
+#[test]
+fn the_board_head_tells_an_owed_head_from_a_board_no_one_has_claimed() {
+    let board_over = |items: Value, claimant: Value| {
+        let fake = fake::Fake::new(move |req| match req.path.as_str() {
+            "/health" => fake::json(200, json!({"auth": {"claimant": claimant.clone()}, "log_position": 12})),
+            _ => fake::json(200, json!({"as_of": 12, "items": items.clone(), "resp": "delivery"})),
+        });
+        (fake::board(&fake), fake)
+    };
+    let record = json!([{"atom": json!({"chain": "07".repeat(32), "position": 12, "type": "skep-head"}).to_string()}]);
+    let (board, fake) = board_over(record, json!("1.0.1"));
+    assert_eq!(board.board_head(), Ok(BoardHead::Term(BoardTerm { log_position: 12, chain: [7; 32] })));
+    assert_eq!(fake.log(), ["POST /op retrieve_v"], "no `/health` read where the record stands");
+    let (board, fake) = board_over(json!([]), json!("1.0.1"));
+    assert_eq!(board.board_head(), Ok(BoardHead::Owed { claimant: "1.0.1".into() }));
+    assert_eq!(fake.log(), ["POST /op retrieve_v", "GET /health"]);
+    assert_eq!(board_over(json!([]), Value::Null).0.board_head(), Ok(BoardHead::Unclaimed));
+    for claimant in [json!("1.0.1"), Value::Null] {
+        let (board, fake) = board_over(json!([{"atom": "not json"}]), claimant.clone());
+        assert!(matches!(board.board_head(), Err(Halt::Halt(face)) if face.cause.contains("no JSON")), "{claimant}");
+        assert_eq!(fake.log(), ["POST /op retrieve_v"], "{claimant}: a damaged record halts before `/health` is asked");
+    }
+}
+
 /// AUTH-6.15: the `key` of the row at one position, as the feed writes it —
 /// absent on a signed row, `null` where lost, `bare`, `system`, a
 /// fingerprint, and anything else lost — a row at another position no

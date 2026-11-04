@@ -33,12 +33,15 @@
 //! child `answers` decodes, but for the registry reads' answers, which
 //! `Board` decodes itself, and an envelope member a caller reads in place.
 //! [`Board::board_term`] reads `H.1`'s pair, once per board
-//! (signed-ops D13). [`Board::changes`] — the feed's page — and
-//! [`Board::chain_at`] are the feed consumer's two reads (`client.md`
-//! §4e.2, §4e.3), the consumer standing behind the `search` feature, and
-//! `changes` is the merge's feed walk's too, behind `merge`: in the default
-//! build nothing in this crate calls either, and §1.1's "no `/changes`
-//! feed consumer" holds of that build as written.
+//! (signed-ops D13), and `Board::board_head`, behind `acting`, is what
+//! every signed write of this crate reads before it is sent: that pair, a
+//! board no one has claimed, or a claimed board whose head is owed, which
+//! is never read as unclaimed (SP-14). [`Board::changes`] — the feed's
+//! page — and [`Board::chain_at`] are the feed consumer's two reads
+//! (`client.md` §4e.2, §4e.3), the consumer standing behind the `search`
+//! feature, and `changes` is the merge's feed walk's too, behind `merge`:
+//! in the default build nothing in this crate calls either, and §1.1's "no
+//! `/changes` feed consumer" holds of that build as written.
 
 use std::fmt;
 use std::sync::OnceLock;
@@ -181,6 +184,33 @@ impl Health {
     pub fn chain_head(&self) -> Option<[u8; 32]> {
         self.body["chain_head"].as_str().and_then(crate::hex::decode32)
     }
+}
+
+/// The board's head as a signed write reads it (SP-14).
+///
+/// It is what [`Board::board_head`] answers: `H.1`'s pair, or — where the
+/// board serves no head record — which of the two boards that serve none
+/// it is, by whether `/health` names a claimant.
+#[cfg(feature = "acting")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoardHead {
+    /// `H.1`'s pair, which a signed write's entry frame names.
+    Term(BoardTerm),
+    /// No head record, and no claimant named: a board no one has claimed.
+    ///
+    /// It is the one board that asks no write for its `attest`, dropping
+    /// one unread (wire.md §Sessions, `attestation_required`).
+    Unclaimed,
+    /// No head record at a board that names a claimant: its head is owed.
+    ///
+    /// The board writes `H.1` at the next write's turn, refusing that write
+    /// `attestation_invalid:board_unavailable`, or at its own try with no
+    /// write sent (wire.md §The other endpoints); until then no signed write
+    /// can be made at it.
+    Owed {
+        /// The account `/health` names as the board's claimant.
+        claimant: String,
+    },
 }
 
 /// The page a `GET /changes` serves where no `limit` is sent.
@@ -1212,6 +1242,31 @@ impl Board {
             let _ = self.term.set(term);
         }
         Ok(term)
+    }
+
+    /// Returns the board's head as a signed write reads it (SP-14).
+    ///
+    /// It is [`Board::board_term`]'s pair where `H.1` stands. Where the
+    /// board serves no head record, `/health` is read: no claimant named is
+    /// [`BoardHead::Unclaimed`], and a claimant named is [`BoardHead::Owed`]
+    /// — no head record is never read as a board no one has claimed. Every
+    /// signed write of this crate reads it before it is sent, and sends
+    /// nothing where the head is owed.
+    ///
+    /// # Errors
+    ///
+    /// [`Board::board_term`]'s, a head record that stands and cannot be read
+    /// among them; then, where the board serves no head record,
+    /// [`Board::health`]'s.
+    #[cfg(feature = "acting")]
+    pub(crate) fn board_head(&self) -> Result<BoardHead, Halt> {
+        if let Some(term) = self.board_term()? {
+            return Ok(BoardHead::Term(term));
+        }
+        Ok(match self.health()?.claimant() {
+            None => BoardHead::Unclaimed,
+            Some(claimant) => BoardHead::Owed { claimant: claimant.to_string() },
+        })
     }
 
     /// Reads the board term off `H.1`, as [`Board::board_term`] keeps it.

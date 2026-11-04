@@ -2217,15 +2217,20 @@ enum RowTerms {
     /// `ShotPlace`, folded per member), so the row and the member read
     /// cannot disagree.
     Publish,
-    /// `set_arrangement`'s base recorded and merge marked (the landing lane;
-    /// skep #764), from the request: `base` the base the frame named, which
-    /// the store recorded or refused the whole write; `merge` the marker's
-    /// sides and head where the frame named a base beside them — the store
-    /// records a marker only with a base, so a frame carrying `merge` with
-    /// no `base` carries none to the row. Each `None` where the frame named
-    /// none, which the row renders `null`, so a reader tells a landing
-    /// (`merge` present) from an undo (`merge` null, `base` present) from a
-    /// plain re-arrangement (both null).
+    /// `set_arrangement`'s base and merge (the landing lane; skep #764).
+    ///
+    /// Both come from the request: `base` the base the frame named, which
+    /// the store recorded or refused the whole write; `merge` the sides the
+    /// frame named and the head beside them, whether or not a `base` rides
+    /// them. The store records the marker only beside a base (the owner's
+    /// ruling N3), and a landing into a document with no recorded base
+    /// moves no record at all, so its row is where that landing's position
+    /// is found (N4). Each `None` where the frame named none, which the row
+    /// renders `null`, so a reader tells a landing (`merge` present) from an
+    /// undo or a withdrawal on a draft with a recorded base (`merge` null,
+    /// `base` present) from a plain re-arrangement (both null); an undo on a
+    /// document with no recorded base names neither, as a plain
+    /// re-arrangement does.
     SetArrangement { base: Option<Address>, merge: Option<(Vec<Address>, Address)> },
 }
 
@@ -2387,19 +2392,20 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // A draft's whole arrangement set in one write (the landing lane;
         // skep #764): REINSTATE's runs placed by identity, so no cell is
         // minted; its row names the draft and never a run's origin, as
-        // `reinstate`'s does, and carries the base recorded and the merge
-        // marked as its terms, off the request — the marker rides the base
-        // (the owner's ruling N3), so a merge named beside no base is no
-        // term of the row.
+        // `reinstate`'s does, and carries the request's base and merge as
+        // its terms. The merge is the request's beside its head whether or
+        // not a base rides it: the store records the marker only beside a
+        // base (the owner's ruling N3), and the row is what a landing into a
+        // document with no recorded base leaves of its position, which the
+        // undo of that landing finds it by (N4).
         Op::SetArrangement { doc, arrangement, .. } => meta(
             OpKind::SetArrangement,
             one(doc),
             RowTerms::SetArrangement {
                 base: arrangement.base.as_ref().map(|b| b.member.clone()),
                 merge: arrangement
-                    .base
+                    .head
                     .as_ref()
-                    .and(arrangement.head.as_ref())
                     .zip(arrangement.merge.as_ref())
                     .map(|(head, sides)| (sides.clone(), head.member.clone())),
             },

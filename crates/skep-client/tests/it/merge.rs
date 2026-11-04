@@ -35,10 +35,11 @@
 //! record current; a landing withdrawn — the words kept, the marker
 //! cleared; an undo after an edit refused with the edit kept. And THE TWO
 //! LANDINGS THE FAKE ALONE CHECKED (skep #775's note): into a free-standing
-//! draft, admitted with no base and no marker — whose feed row at HEAD
-//! carries neither term, so the undo's row lookup finds no landing — and
-//! into a fork whose source is not the head, refused `fork_base_moved` with
-//! nothing committed.
+//! draft, admitted with no base and no marker — its feed row carrying the
+//! request's merge beside a null base, by which the undo finds the landing
+//! and takes it back in one write (skep #784) — and into a fork whose
+//! source is not the head, refused `fork_base_moved` with nothing
+//! committed.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -1165,16 +1166,22 @@ fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
     session.close().expect("close");
 }
 
-/// A FREE-STANDING DRAFT (skep #775's note; N4): a plain mint holding
-/// "hello", merged into — the head `D.2` against the daughter `D.1.1` — is
-/// admitted: the draft holds M, `doc_metadata`'s `base` and `merge` are
-/// null, and the landing is one commit of two records, `at − 1` inside it.
-/// Its feed row AT HEAD carries both terms null — the daemon writes the
-/// `merge` term only beside a `base` (skep-core's `write_meta`) — so the
-/// undo's lookup of a baseless landing by its row finds no landing: nothing
-/// to undo, nothing sent, the draft untouched.
+/// A FREE-STANDING DRAFT (skep #775's note; N4; skep #784): a plain mint
+/// holding "hello", merged into — the head `D.2` against the daughter
+/// `D.1.1` — is admitted: the draft holds M, `doc_metadata`'s `base` and
+/// `merge` are null, and the landing is one commit of two records, `at − 1`
+/// inside it. Its feed row carries the request's merge beside a null base —
+/// the one place the board keeps the landing's position — so the undo finds
+/// the landing by it: one write typed against the row's `at`, C read before
+/// the landing sent back with no base, no head and no merge. The draft reads
+/// C again, nothing is recorded, the undo's row names neither term, and the
+/// replacing record is current for the key. A re-run finds the landing's
+/// row again: in the same session the board answers its ids again, the same
+/// undo with nothing written twice; in a fresh session the board refuses it
+/// `arrangement_moved`, the undo having moved the arrangement, nothing
+/// written.
 #[test]
-fn a_landing_into_a_free_standing_draft_is_admitted_with_no_base_and_no_marker() {
+fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_undone_by_its_row() {
     let rig = Rig::new();
     let session = rig.session();
     let token = session.token().clone();
@@ -1188,13 +1195,13 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_no_base_and_no_marker()
     assert!(meta["base"].is_null() && meta["source"].is_null() && meta["merge"].is_null(), "the premise: free-standing, no base and no source: {meta}");
     let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
     let merger = merger(&rig, &session);
-    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter)], options: Default::default(), kind: kind.clone() };
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter.clone())], options: Default::default(), kind: kind.clone() };
     let before = rig.position();
     let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
     let m = m_of(&merged);
     assert_eq!(m, vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 3)], "the big cat");
     let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(plain.clone()), journal: None }).expect("admitted");
-    let Landed::Draft { into, position: at, head_moved, .. } = landed else { panic!("{landed:?}") };
+    let Landed::Draft { into, position: at, head_moved, record: link, .. } = landed else { panic!("{landed:?}") };
     assert_eq!((into, head_moved), (plain.clone(), None));
     assert_eq!(image(&rig.board, &token, &plain, 11), as_image(&m), "the draft holds M");
     let meta = rig.metadata(&token, &plain);
@@ -1203,17 +1210,41 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_no_base_and_no_marker()
         panic!("at − 1 answered a document or another refusal")
     };
     assert_eq!(nearest, Some(before), "one commit of two records: at − 1 inside it, nearest the position before");
-    // The row at HEAD, and the undo's lookup against it.
+    // The landing's row: the request's merge beside no base.
     let rows = rig.rows_under(&token, &plain);
     let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the landing's row");
     assert_eq!(row["at"].as_u64(), Some(at));
-    assert!(row["base"].is_null() && row["merge"].is_null(), "the row's terms at HEAD, both null: {row}");
+    assert!(row["base"].is_null(), "no base named: {row}");
+    assert_eq!(row["merge"], json!({"head": head.to_string(), "sides": [daughter.to_string()]}), "the request's merge beside no base: {row}");
+    // THE UNDO, by the row: one write.
+    let undone = undo(&rig.board, merger, &plain, &kind, None).expect("undone");
+    assert_eq!(undone.draft, plain);
+    assert_eq!(undone.restored, None, "no base to restore");
+    assert!(undone.position > at, "{undone:?}");
+    let replacing = undone.record.clone().expect("a record of the landing stood, so one replaces it");
+    assert_ne!(replacing, link);
+    assert_eq!(image(&rig.board, &token, &plain, 5), c, "C again");
+    let meta = rig.metadata(&token, &plain);
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "nothing recorded: {meta}");
+    let rows = rig.rows_under(&token, &plain);
+    let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the undo's row");
+    assert_eq!((row["at"].as_u64(), row["base"].is_null(), row["merge"].is_null()), (Some(undone.position), true, true), "the undo's row names neither term: {row}");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
+    // A re-run: the same undo in this session, nothing written twice.
     let standing = rig.position();
-    assert_eq!(undo(&rig.board, merger, &plain, &kind, None), Err(Refusal::NoMerge { draft: plain.clone() }), "no row carries a merge term, so no landing is found");
-    assert_eq!(rig.position(), standing, "nothing written");
-    assert_eq!(image(&rig.board, &token, &plain, 11), as_image(&m), "nothing changed");
-    let _ = c;
+    assert_eq!(undo(&rig.board, merger, &plain, &kind, None), Ok(undone.clone()), "the board answers the undo's ids again");
+    assert_eq!(rig.position(), standing, "nothing written twice");
     session.close().expect("close");
+    // In a fresh session: refused, the arrangement moved at the undo.
+    let fresh = rig.session();
+    let again = Merger { token: fresh.token(), account: fresh.account(), signer: &rig.device };
+    let err = undo(&rig.board, again, &plain, &kind, None).expect_err("the undo moved the arrangement");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    assert_eq!(rig.position(), standing, "nothing written");
+    assert_eq!(image(&rig.board, fresh.token(), &plain, 5), c, "C stands");
+    fresh.close().expect("close");
 }
 
 /// A FORK WHOSE SOURCE IS NOT THE HEAD (skep #775's note; N4, P5). The

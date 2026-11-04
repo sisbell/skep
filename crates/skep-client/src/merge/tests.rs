@@ -1223,9 +1223,10 @@ mod scripted {
         op: &'static str,
         docs: Vec<String>,
         /// A `set_arrangement` row's two terms — the base it recorded and
-        /// the merge it marked, each `null` where it recorded none (wire.md
-        /// §The change feed); `None` on every other op's row, which carries
-        /// neither member.
+        /// the request's merge beside its head, whether or not a marker was
+        /// recorded, each `null` where none rides (wire.md §The change
+        /// feed); `None` on every other op's row, which carries neither
+        /// member.
         terms: Option<(Option<String>, Option<Value>)>,
     }
 
@@ -1973,8 +1974,9 @@ mod scripted {
         /// chain and its extent; then each run's origin registered and a
         /// value at every address it names. The whole arrangement is
         /// replaced in one commit, the base re-recorded and the marker set
-        /// or cleared where a base is named, and `head_moved` rides the ack
-        /// where the trunk has moved past the head named.
+        /// or cleared where a base is named, the row carrying the request's
+        /// merge whatever the base, and `head_moved` rides the ack where the
+        /// trunk has moved past the head named.
         ///
         /// It judges no `bad_run` or `too_many_runs`: the landing spells
         /// each run's start from its own origin and refuses a list past
@@ -2070,19 +2072,19 @@ mod scripted {
             let d = self.docs.get_mut(&doc).unwrap();
             d.runs = runs.clone();
             d.history.insert(at, runs);
-            let mut marked = None;
+            // The request's merge beside its head: the marker where a base
+            // is recorded, and the row's term whatever the base.
+            let merge = match (&head, frame["merge"].as_object()) {
+                (Some((h, e)), Some(m)) => Some((m["sides"].as_array().expect("`merge.sides`").iter().map(|s| s.as_str().unwrap().to_string()).collect::<Vec<_>>(), h.clone(), *e)),
+                _ => None,
+            };
             if let Some(b) = &recorded {
                 d.staged.insert(at, b.clone());
-                let marker = match (&head, frame["merge"].as_object()) {
-                    (Some((h, e)), Some(m)) => Some(Marker { sides: m["sides"].as_array().expect("`merge.sides`").iter().map(|s| s.as_str().unwrap().to_string()).collect(), head: h.clone(), head_copied: *e, at }),
-                    _ => None,
-                };
-                marked = marker.as_ref().map(|m| json!({"sides": m.sides, "head": m.head}));
-                d.markers.insert(at, marker);
+                d.markers.insert(at, merge.clone().map(|(sides, head, head_copied)| Marker { sides, head, head_copied, at }));
             }
-            // The row's two terms: the base recorded and the merge marked.
+            // The row's two terms: the base recorded, and the request's merge.
             let row = self.rows.last_mut().expect("the commit's row");
-            row.terms = Some((recorded.map(|(b, _)| b), marked));
+            row.terms = Some((recorded.map(|(b, _)| b), merge.map(|(sides, head, _)| json!({"sides": sides, "head": head}))));
             let mut ack = json!({"resp": "ack", "at": at});
             if let Some(h) = head_moved {
                 ack["head_moved"] = json!(h);
@@ -4583,18 +4585,14 @@ mod scripted {
 
     /// NO BASE RECORD (N4's baseless case): the landing's position is the
     /// draft's own latest `set_arrangement` row on the supplement that
-    /// carries a `merge` term, and the undo sends C read before it with no
-    /// `base`, no `head` and no `merge`, `as_of` the row's `at`. THE BOARD
-    /// AT HEAD writes no such row: a merge named beside no base is no term
-    /// of the row (skep-core's `write_meta`, pinned by its
-    /// `a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named`
-    /// and skepd's free-standing landing cell), so against the row as the
-    /// board writes it — both terms null — the undo finds no landing and
-    /// answers nothing to undo, nothing sent. The row the wire's N4
-    /// sentence promises ("finds the latest landing on a document the board
-    /// records no base for by its row") is planted on the world to pin the
-    /// path; a re-run against it is refused `arrangement_moved` by the
-    /// board, nothing committed.
+    /// carries a `merge` term — the request's merge beside a null base, the
+    /// row being the one place the board keeps a baseless landing's
+    /// position (wire.md §The change feed; skep #784) — and the undo sends C
+    /// read before it with no `base`, no `head` and no `merge`, `as_of` the
+    /// row's `at`. A re-run finds the landing's row again: in the same
+    /// session the board answers the ids again, the same undo with nothing
+    /// written twice; in a fresh session it is refused `arrangement_moved`
+    /// by the board, nothing committed.
     #[test]
     fn undo_of_a_baseless_landing_goes_by_its_feed_row_with_no_base_sent() {
         let plain = "1.0.1.0.5";
@@ -4608,19 +4606,16 @@ mod scripted {
         let (at, link) = landing_of(&landed);
         assert_eq!(at, before + 2, "the premise: a baseless landing is one commit of two records, the removal and the placement");
         let feed_row = |w: &World| w.rows.iter().rev().find(|r| r.op == "set_arrangement").map(|r| (r.at, r.terms.clone())).expect("the row");
-        assert_eq!(feed_row(&dialer.world()), (at, Some((None, None))), "the premise: the row as the board writes it at HEAD, both terms null");
-        // The row as the board writes it: no landing found, nothing sent.
-        let rows = dialer.world().rows.len();
-        dialer.clear();
-        assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None), Err(Refusal::NoMerge { draft: a(plain) }));
-        let ops = dialer.ops();
-        assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={plain}")) && o.contains("drafts=true")), "the lookup walks the draft's own rows on the supplement: {ops:?}");
-        assert!(dialer.frames("set_arrangement").is_empty() && dialer.positions("doc_metadata").is_empty(), "nothing sent, nothing read at a position: {ops:?}");
-        assert_eq!(dialer.world().rows.len(), rows);
-        // The row the wire's N4 sentence promises: the landing found by it.
-        dialer.world().rows.iter_mut().rev().find(|r| r.op == "set_arrangement").unwrap().terms = Some((None, Some(json!({"sides": [S], "head": format!("{D}.2")}))));
+        assert_eq!(
+            feed_row(&dialer.world()),
+            (at, Some((None, Some(json!({"sides": [S], "head": format!("{D}.2")}))))),
+            "the premise: the landing's row, the request's merge beside no base"
+        );
+        assert_eq!(dialer.world().standing(plain), (None, None), "the premise: nothing recorded");
         dialer.clear();
         let undone = undo(&board, merger(&session, &signer), &a(plain), &a(K), None).expect("undone");
+        let ops = dialer.ops();
+        assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={plain}")) && o.contains("drafts=true")), "the lookup walks the draft's own rows on the supplement: {ops:?}");
         assert_eq!(undone.restored, None, "no base to restore");
         assert!(undone.record.is_some(), "the landing's record stood, so one replaces it");
         assert_eq!(dialer.positions("doc_metadata"), [at - 1, before], "the pre-landing read at nearest");

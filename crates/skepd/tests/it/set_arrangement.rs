@@ -303,10 +303,12 @@ fn a_free_standing_drafts_head_tells_nothing_of_a_draft_its_caller_may_not_read(
 
 /// A BASELESS DRAFT (N4): a plain draft — minted and written, never staged
 /// — takes a landing whose head names a registered document, nothing moved,
-/// no base and no marker gained; a head naming no registered document is
-/// `source_not_registered`, reorder, and naming a `base` for it is
-/// `no_base_to_record`, each with nothing written; an empty `runs` empties
-/// it; and the wire's documented example is answered as the op.
+/// no base and no marker gained, its feed row carrying the request's merge
+/// beside a null base — the one place the landing's position is kept; a
+/// head naming no registered document is `source_not_registered`, reorder,
+/// and naming a `base` for it is `no_base_to_record`, each with nothing
+/// written; an empty `runs` empties it; and the wire's documented example
+/// is answered as the op.
 #[test]
 fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -324,7 +326,8 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), Some(&[]), None)), "no_base_to_record");
     assert_eq!(head_position(port), head, "nothing written");
     assert_eq!(text_of(port, Some(&owner), &plain, 1, 2), "xy");
-    // Admitted with the head and a merge, nothing recorded.
+    // Admitted with the head and a merge, nothing recorded; the row carries
+    // the merge all the same.
     let ack = op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&runs), Some((&v1, 3)), None, Some(&[]), None));
     expect_resp(&ack, "ack");
     assert_eq!(text_of(port, Some(&owner), &plain, 1, 3), "abc");
@@ -332,7 +335,9 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     assert!(meta["base"].is_null() && meta["merge"].is_null(), "nothing moved: {meta}");
     let row = changes_since(port, &owner, head).remove(0);
     assert_eq!(row["op"].as_str(), Some("set_arrangement"));
-    assert!(row["base"].is_null() && row["merge"].is_null(), "the row's terms, both null: {row}");
+    assert_eq!(row["at"].as_u64(), Some(acked_at(&ack)));
+    assert!(row["base"].is_null(), "no base named: {row}");
+    assert_eq!(row["merge"], serde_json::json!({"head": v1, "sides": []}), "the request's merge beside no base: {row}");
     // A head naming no registered document — the edition's ninth member,
     // which no mint has made — is refused by its registration, reorder, as
     // on a draft with a chain, nothing written.

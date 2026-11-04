@@ -649,7 +649,7 @@ const TERMS: [&str; 7] = ["new_prefix", "new_id", "link", "placed", "base_extent
 /// Every other term is absent on its row — `emit`, `assert_sup` and
 /// `edit_link` mint links too and carry none (r6-2a and link-sets sweep 5
 /// S3 name `make_link` alone); a `set_arrangement` row carries its pair
-/// always, each `null` where the write recorded none (skep #764).
+/// always, each `null` where the frame named none (skep #764).
 fn terms_of(op: &str) -> &'static [&'static str] {
     match op {
         "delegate" => &["new_prefix", "new_id"],
@@ -782,10 +782,13 @@ fn the_testimony_names_the_key_that_signed_the_session() {
 /// with a well-formed feed and no error anywhere.
 ///
 /// And since wire v7.11 the OP'S OWN TERMS, per kind: a `delegate` row's
-/// minted pair, a `make_link` row's minted link address, and NOTHING on any
-/// other row — `emit`'s among them, which mints a link too and carries no
-/// `link` (r6-2a names `make_link` alone). Every write here is a bare
-/// session's, so every row carries `key: "bare"` and no `attest`.
+/// minted pair, a `make_link` row's minted link address, a
+/// `set_arrangement` row's `base` and `merge` — the request's, each null
+/// where the frame names none, a landing into a plain draft carrying its
+/// merge beside a null base — and NOTHING on any other row — `emit`'s among
+/// them, which mints a link too and carries no `link` (r6-2a names
+/// `make_link` alone). Every write here is a bare session's, so every row
+/// carries `key: "bare"` and no `attest`.
 #[test]
 fn the_affected_docs_convention_holds_for_every_write_kind() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -898,12 +901,21 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             serde_json::json!([doc_a]),
         ),
         (
-            // The landing (skep #764): the draft set, never a run's origin —
-            // doc_a's second address placed by identity as doc_b's whole
-            // arrangement; a plain draft, so no base and no merge recorded,
-            // the row's two terms null.
+            // The whole arrangement set (skep #764): the draft, never a
+            // run's origin — doc_a's second address placed by identity as
+            // doc_b's whole arrangement; the frame names neither term, so
+            // the row's two are null.
             "set_arrangement",
             set_arrangement_frame(&doc_b, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], None, None, None, None),
+            serde_json::json!([doc_b]),
+        ),
+        (
+            // A landing into the same plain draft: its head doc_a — on a
+            // draft with no chain, asked its registration alone — and an
+            // empty side list, no base; the board records nothing, and the
+            // row carries the request's merge beside a null base (N4).
+            "set_arrangement (a landing)",
+            set_arrangement_frame(&doc_b, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], Some((&doc_a, 0)), None, Some(&[]), None),
             serde_json::json!([doc_b]),
         ),
         (
@@ -966,11 +978,17 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         assert_eq!(entry["op"].as_str(), Some(op_of(what)), "{what}: the entry's op kind");
         assert_eq!(entry["docs"], docs, "{what}: the affected-docs convention");
         // The terms: `emit` and `assert_sup` mint a link and carry no
-        // `link`, `nullify` deposits a record and carries none; the
-        // landing into a plain draft carries its pair, both null.
+        // `link`, `nullify` deposits a record and carries none; a
+        // `set_arrangement` carries its pair — both null where the frame
+        // names neither, and on a landing the request's merge beside a
+        // null base.
         assert_terms_by_op(&entry, what);
         if what == "set_arrangement" {
-            assert!(entry["base"].is_null() && entry["merge"].is_null(), "{what}: nothing recorded, both null: {entry}");
+            assert!(entry["base"].is_null() && entry["merge"].is_null(), "{what}: the frame names neither, both null: {entry}");
+        }
+        if what == "set_arrangement (a landing)" {
+            assert!(entry["base"].is_null(), "{what}: no base named: {entry}");
+            assert_eq!(entry["merge"], serde_json::json!({"head": doc_a, "sides": []}), "{what}: the request's merge: {entry}");
         }
         assert_eq!(entry["key"].as_str(), Some("bare"), "{what}: a bare session's write");
         assert_absent(&entry, &["attest"], what);

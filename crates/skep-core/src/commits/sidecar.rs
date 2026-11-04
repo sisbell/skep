@@ -297,23 +297,27 @@ pub(super) enum OpTerms {
     /// copy took, `None` in the birth shape (the absence is the birth bit).
     /// Both decimal strings, `Nat`'s wire form.
     Publish { placed: String, base_extent: Option<String> },
-    /// `set_arrangement`: the base recorded and the merge marked (the
-    /// landing lane; skep #764).
+    /// `set_arrangement`: the request's base and merge (the landing lane;
+    /// skep #764).
     ///
     /// `base` is the address the draft's recorded base moved to, `None`
-    /// where the write moved none; `merge` the marker's sides and head where
-    /// the write recorded one, `None` where it recorded none or cleared one
-    /// — so a reader tells a landing from an undo from a plain
-    /// re-arrangement. Addresses in the board's local form, as the row's
-    /// `docs` are.
+    /// where the write moved none; `merge` the sides and head the request
+    /// named, `None` where it named no merge — so a reader tells a landing
+    /// from an undo from a plain re-arrangement. `merge` is present on every
+    /// landing whether or not the store recorded a marker, which it records
+    /// only beside a base (the owner's ruling N3), so the row is where a
+    /// landing into a document with no recorded base is found (N4).
+    /// Addresses in the board's local form, as the row's `docs` are.
     SetArrangement { base: Option<String>, merge: Option<MergeTerms> },
 }
 
-/// A `set_arrangement` row's merge term: the marker's sides and head, as the
-/// row renders them (the landing lane; skep #764).
+/// A `set_arrangement` row's merge term: the request's sides and head, as
+/// the row renders them (the landing lane; skep #764).
 ///
-/// The head's extent and the marker's position are `doc_metadata`'s to
-/// serve; the row carries what tells the act apart and the sides it named.
+/// They are the request's whether or not the store recorded a marker of
+/// them. The head's extent and the marker's position are `doc_metadata`'s
+/// to serve, where a marker stands; the row carries what tells the act
+/// apart and the sides it named.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MergeTerms {
     /// The sides merged, by address; empty for the draft-side shape.
@@ -360,7 +364,7 @@ impl OpTerms {
     /// They render so on the wire's row and in the file's line alike, one
     /// spelling for both, which [`parse_line`] reads back: a `publish`'s
     /// birth extent is `null`, the absence being the birth bit; a
-    /// `set_arrangement`'s two are each `null` where the write recorded
+    /// `set_arrangement`'s two are each `null` where the request named
     /// none, the pair always present on its row.
     fn members(&self) -> Vec<(&'static str, Value)> {
         match self {
@@ -3428,9 +3432,9 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
 /// without the other is torn), a `make_link` line's `link`, a `publish`
 /// line's `placed` with `base_extent` beside it, `null` there being the
 /// birth shape and not an absence, a `set_arrangement` line's `base` and
-/// `merge`, each `null` where the write recorded none — and absent
-/// altogether on a line written before they were recorded, which reads as
-/// an op carrying none. A term on
+/// `merge`, each read alone and `null` where the request named none — and
+/// absent altogether on a line written before they were recorded, which
+/// reads as an op carrying none. A term on
 /// a line of another op is an unknown key, ignored. A bare line's `journal`
 /// member is the journal's answer ([`JournalTerms::parse`]): absent on a
 /// line written before it was derived, or where the journal answered
@@ -3483,9 +3487,11 @@ pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
                         },
                     }),
                 },
-                // The landing's pair: each `null` where the write recorded
-                // none, so a line is read as carrying the pair whatever each
-                // holds; a present member of the wrong shape is torn.
+                // The landing's pair, each member read alone: each `null`
+                // where the request named none, a `merge` beside a `null`
+                // `base` among them, so a line is read as carrying the pair
+                // whatever each holds; a present member of the wrong shape
+                // is torn.
                 "set_arrangement" => Some(OpTerms::SetArrangement {
                     base: match field("base") {
                         None => None,

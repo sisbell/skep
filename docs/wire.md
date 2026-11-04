@@ -3516,6 +3516,9 @@ Three optional members, each absent or `null` alike absent:
   head at its extent and the landing's position): present, the marker is
   set; absent beside a `base`, the marker is CLEARED — the undo's shape;
   beside no `base`, nothing is recorded and a marker that stood stands.
+  The write's feed row carries the `merge` whatever the board recorded
+  (§The change feed), so a landing into a document with no recorded base
+  is found by its row.
 
 THE FORK GATE. A document the board records no base for is one of two
 things. A FORK — minted by `version` off a published surface, which
@@ -5914,14 +5917,19 @@ Each entry:
   (below); absent on every other op's row.
 * `base`, `merge` — on a `set_arrangement` row (§Arrangement): the base
   the write recorded, an address, or `null` where it recorded none; and
-  the merge it marked, `{"sides": [addresses], "head": <address>}`, or
-  `null` where it recorded none or cleared one — so a reader tells a
-  merge's LANDING (`merge` present) from an UNDO (`merge` null, `base`
-  present) from a plain re-arrangement (both null) without reading the
-  draft, and finds the latest landing on a document the board records no
-  base for by its row. Both present on every `set_arrangement` row, each
-  the request's own term; on a bare row both `null`, the journal naming
-  neither (below); absent on every other op's row.
+  the request's `merge` beside its `head`, `{"sides": [addresses], "head":
+  <address>}`, present on EVERY landing whether or not the board recorded
+  a marker of it, or `null` where the request named no `merge` — an undo,
+  a withdrawal, a plain re-arrangement. So a reader tells a merge's
+  LANDING (`merge` present) from an UNDO or a withdrawal on a draft with a
+  recorded base (`merge` null, `base` present) from a plain
+  re-arrangement (both null) without reading the draft, and finds the
+  latest landing on a document the board records no base for by its row,
+  the one place the board keeps that landing's position; an undo on such
+  a document names neither and reads as a plain re-arrangement does. Both
+  present on every `set_arrangement` row, each the request's own term; on
+  a bare row both `null`, the journal naming neither (below); absent on
+  every other op's row.
 
 A client MUST ignore an entry member it does not know, and a member of
 the page object likewise: an entry gains members by later deltas (the

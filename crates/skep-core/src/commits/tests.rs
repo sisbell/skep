@@ -365,9 +365,11 @@ fn each_write_states_the_terms_its_row_carries() {
 /// The landing's row (the landing lane; skep #764): `op` `set_arrangement`,
 /// `docs` the draft alone — never a run's origin, as `reinstate`'s row — no
 /// cell, and its two terms off the request: `base` the base named, `merge`
-/// the sides and head named beside a base, each `None` where the frame
-/// named none — a merge named beside no base is no term, the marker riding
-/// the base; and the terms complete with nothing of the ack or the world.
+/// the sides and the head named beside them, each `None` where the frame
+/// named none — a merge named beside no base a term all the same, the row
+/// being where a landing into a document with no recorded base is found
+/// (N4) though the store records no marker of it (N3); and the terms
+/// complete with nothing of the ack or the world.
 #[test]
 fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named() {
     use skep_address::Nat;
@@ -401,11 +403,11 @@ fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named
     assert!(matches!(&undo.terms, RowTerms::SetArrangement { base: Some(b), merge: None } if b == &head), "{:?}", undo.terms);
     let plain = write_meta(&request(None, None, None)).expect("a write");
     assert!(matches!(&plain.terms, RowTerms::SetArrangement { base: None, merge: None }), "{:?}", plain.terms);
-    let unrecorded = write_meta(&request(Some(&head), None, Some(vec![]))).expect("a write");
+    let baseless = write_meta(&request(Some(&head), None, Some(vec![]))).expect("a write");
     assert!(
-        matches!(&unrecorded.terms, RowTerms::SetArrangement { base: None, merge: None }),
-        "a merge named beside no base is no term of the row: {:?}",
-        unrecorded.terms
+        matches!(&baseless.terms, RowTerms::SetArrangement { base: None, merge: Some((sides, h)) } if sides.is_empty() && h == &head),
+        "a merge named beside no base is the row's term, its head the frame's: {:?}",
+        baseless.terms
     );
     // Completed off nothing: the request's own, rendered as the row spells
     // them.
@@ -421,6 +423,13 @@ fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named
     assert_eq!(
         undo.terms.complete(None, &world),
         Some(OpTerms::SetArrangement { base: Some("1.0.1.0.1.2".into()), merge: None })
+    );
+    assert_eq!(
+        baseless.terms.complete(None, &world),
+        Some(OpTerms::SetArrangement {
+            base: None,
+            merge: Some(MergeTerms { sides: vec![], head: "1.0.1.0.1.2".into() }),
+        })
     );
 }
 
@@ -1948,6 +1957,115 @@ fn a_supersession_claims_row_reads_alike_after_a_restart_and_below_the_window() 
     );
     assert_eq!(claim_row(&wp), recorded, "below the window, the row is the recorded one");
     assert!(recorded.get("link").is_none(), "the claim's row carries no link: {recorded}");
+}
+
+/// Checks that a baseless landing's row reads alike after a restart and
+/// below the window.
+///
+/// A landing into a document with no recorded base names a `head` and a
+/// `merge` beside no `base`: the store records neither (the owner's ruling
+/// N3), and the row keeps the request's `merge` beside a `null` `base`, the
+/// one place the landing's position is kept (N4) — a line the open's scan
+/// and the reader below the window read back as it was written. Over this
+/// suite's own kernel config ([`fsync_engine`]), the window set to four
+/// positions for this board alone: two drafts as the system principal, one
+/// value typed into the second, and the landing that sets the second's
+/// arrangement to that value, one commit of two records, naming the first
+/// draft as its head — on a draft with no chain the head is asked its
+/// registration alone — and an empty side list; its row and its line read
+/// at once, the row again after a reopen over the same engine, and again
+/// once four more drafts carry it below the window.
+#[test]
+fn a_baseless_landings_row_reads_alike_after_a_restart_and_below_the_window() {
+    use skep_address::Nat;
+    use skep_arrangement::Caller;
+    use skep_febe::{Base, Deposit, Run, SetArrangement, ShotRun, VPos};
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    set_feed_resident_window(dir.path(), 4);
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let caller = Caller::Principal(SYSTEM_PRINCIPAL);
+    let (head, _) = mint_a_draft(&wp, &stores);
+    let (draft, _) = mint_a_draft(&wp, &stores);
+    // One value typed into the draft through the session door.
+    let first = VPos::content(Nat::from(1u32));
+    let values = vec![Val::new(b"x".as_slice())];
+    let op = Op::Insert {
+        doc: draft.clone(),
+        at: first.clone(),
+        values: values.clone(),
+        deposit: Deposit::Undeclared,
+        as_of: Seq(7),
+    };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let serial = wp.serial_lock();
+    let resp = wp.commit_under(&serial, meta, || {
+        let (addr, at) = stores
+            .vstream()
+            .insert(caller, &draft, first, values, Deposit::Undeclared, AsOf::Unchecked)
+            .expect("the insert commits");
+        Response::AckAddr { addr, at }
+    });
+    let Response::AckAddr { addr: typed, .. } = resp else { panic!("the insert is acked") };
+    // The landing: the head and an empty side list, no base.
+    let arrangement = SetArrangement {
+        runs: vec![ShotRun {
+            origin: draft.clone(),
+            run: Run::new(typed, Nat::from(1u32)).expect("a content run"),
+        }],
+        head: Some(Base { member: head.clone(), extent: Nat::from(0u32) }),
+        base: None,
+        merge: Some(Vec::new()),
+    };
+    let op =
+        Op::SetArrangement { doc: draft.clone(), arrangement: arrangement.clone(), as_of: Seq(7) };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let before = engine.kernel().current_seq().0;
+    let resp = wp.commit_under(&serial, meta, || {
+        let (at, head_moved) = stores
+            .vstream()
+            .set_arrangement(caller, &draft, &arrangement, AsOf::Unchecked)
+            .expect("the landing commits");
+        Response::Ack { at, head_moved }
+    });
+    drop(serial);
+    let Response::Ack { at, .. } = resp else { panic!("the landing is acked") };
+    let at = at.0;
+    assert_eq!(at, before + 2, "the premise: one commit of two records, nothing recorded");
+    assert_eq!(engine.kernel().current_seq().0, at, "the premise: the landing is the head");
+    let landing_row = |wp: &Commits| {
+        let snap = engine.kernel().snapshot();
+        let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+        served(page_from(wp, &class, 0)).remove(&at).expect("the landing's row is served")
+    };
+    let recorded = landing_row(&wp);
+    let merge = serde_json::json!({"head": head.to_string(), "sides": []});
+    assert_eq!(recorded["op"], "set_arrangement", "{recorded}");
+    assert_eq!(recorded["docs"], serde_json::json!([draft.to_string()]), "{recorded}");
+    assert_eq!(recorded["base"], serde_json::Value::Null, "no base named: {recorded}");
+    assert_eq!(recorded["merge"], merge, "the request's merge beside no base: {recorded}");
+    let line = commits_log_entry(dir.path(), at).expect("the landing has a line");
+    assert_eq!(
+        (&line["base"], &line["merge"]),
+        (&serde_json::Value::Null, &merge),
+        "the file's line spells the pair as the row does: {line}"
+    );
+
+    drop(wp);
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(landing_row(&wp), recorded, "after the reopen, the row is the recorded one");
+
+    for _ in 0..4 {
+        mint_a_draft(&wp, &stores);
+    }
+    assert!(
+        engine.kernel().current_seq().0 >= at + 4,
+        "the premise: four positions above the landing carry it below the window"
+    );
+    assert_eq!(landing_row(&wp), recorded, "below the window, the row is the recorded one");
 }
 
 /// Checks that a principal's page merges one stream per owner account.

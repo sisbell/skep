@@ -268,7 +268,7 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   answering `None` — which would admit every stale edit — the map
 ///   carrying no default.
 /// * **BASE★ — a draft's recorded base is the surface it was staged from,
-///   moved to each member it renders and to each head a landing names, and
+///   moved to each member it renders and to each base a landing names, and
 ///   its marker travels with it.** `draft_bases` gains or replaces `draft`'s
 ///   entry at every [`DraftBase`](M5Rec::DraftBase) record — the staging
 ///   operation's, journaled beside the snapshot that shares the source, and
@@ -412,9 +412,14 @@ pub struct DraftBase {
     pub base: Address,
     /// How many content positions of `base` the copy took.
     ///
-    /// It is `base`'s whole content count at the commit that set it — the
-    /// staging's copy, measured, or the member's count at the shot that
-    /// minted it — and so the `base_extent` a shot off this base carries.
+    /// It is set beside `base`: the staging's measure of `base`'s whole
+    /// count, or for an alternative its source draft's extent, inherited;
+    /// the count a shot left the member it minted holding; or the extent a
+    /// landing named — its head's as read at the compose, or an undo's old
+    /// base's — which the landing refuses past `base`'s current count. So it
+    /// is never past `base`'s count, at the commit that set it or after,
+    /// since a published document's count never falls (PUB-2.43); and it is
+    /// the `base_extent` a shot off this base carries.
     pub extent: Nat,
     /// The surface the draft was copied from.
     ///

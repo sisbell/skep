@@ -331,16 +331,19 @@ pub enum StageError {
 /// change, and nothing is wiped). Then the head's two, the shot's spellings
 /// over the head the merge was composed on: `BaseNotInChain` — the head is
 /// no member of the chain the draft's recorded base lies in, or of the
-/// fork's source's document; a base to record off that chain answers it
-/// too — and `BaseExtentTooLarge`, the head's extent as read past the head's
-/// current count. Then the fork gate's `ForkBaseMoved`: the destination is a
-/// fork (no recorded base, its source a published surface) whose source is
-/// not the frame's head — a landing would make the source the board
-/// records false (the owner's ruling N4); it carries the source, the
-/// refusal's `site.addr`. Then `NoBaseToRecord`: the frame names a base to
-/// record and the board records none for the draft, so there is no record
-/// to move. Then, per run and in the order given as REINSTATE judges them,
-/// `BadRun`, `SourceNotRegistered`, `DanglingSource` and `TooManyRuns` —
+/// fork's source's document — and `BaseExtentTooLarge`, the head's extent
+/// as read past the head's current count. Then the fork gate's
+/// `ForkBaseMoved`: the destination is a fork (no recorded base, its source
+/// a published surface) whose source is not the frame's head — a landing
+/// would make the source the board records false (the owner's ruling N4);
+/// it carries the source, the refusal's `site.addr`. Then the base's three:
+/// `NoBaseToRecord` — the frame names a base to record and the board
+/// records none for the draft, so there is no record to move — then the
+/// head's two over the base to record, off the recorded base's chain or its
+/// extent past its member's current count, so no record the landing writes
+/// claims more of its base than the base holds (N4). Then, per run and in
+/// the order given as REINSTATE judges them, `BadRun`,
+/// `SourceNotRegistered`, `DanglingSource` and `TooManyRuns` —
 /// [`ReinstateError`]'s, the placement being REINSTATE's own body. No
 /// `EmptyResult`: an empty `runs` sets an empty arrangement, which a draft
 /// may hold. No `Withheld`: the origins' readability is the caller's,
@@ -359,7 +362,8 @@ pub enum SetArrangementError {
     ArrangementMoved { as_of: Seq, current: Seq },
     /// The head, or the base to record, is no member of the draft's chain.
     BaseNotInChain,
-    /// The head's extent as read exceeds the head's current content count.
+    /// The head's extent as read, or the base's to record, exceeds its
+    /// member's current content count.
     BaseExtentTooLarge,
     /// The destination is a fork whose source is not the frame's head;
     /// carries the source.
@@ -740,7 +744,7 @@ impl fmt::Display for SetArrangementError {
                 "set_arrangement: the head, or the base to record, is no member of the draft's chain"
             }
             SetArrangementError::BaseExtentTooLarge => {
-                "set_arrangement: the head's extent exceeds the head's current content count"
+                "set_arrangement: the extent of the head, or of the base to record, exceeds that member's current content count"
             }
             SetArrangementError::ForkBaseMoved(_) => {
                 "set_arrangement: the document is a fork whose source is not the head named — fork afresh from the head and land there"

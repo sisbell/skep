@@ -2,11 +2,13 @@
 //! slices the op and its fixtures touch — M3 for the mints, M4 for the
 //! bytes, M5 for the arrangement — a state built by the ops themselves
 //! (`version`, `stage`, `insert`) over a seeded edition: the refusal order
-//! the op states, each refusal writing nothing; the landing's one commit —
-//! the arrangement set, the base moved, the marker stamped — and the tell of
-//! a moved head; a base absent moving nothing and a base without a merge
-//! clearing the marker; the empty draft and the empty `runs`; the fork gate's
-//! two answers and the free-standing draft admitted with nothing moved.
+//! the op states, each refusal writing nothing; the base's extent judged
+//! against its own member's count, refused past it and recorded at it; the
+//! landing's one commit — the arrangement set, the base moved, the marker
+//! stamped — and the tell of a moved head; a base absent moving nothing and
+//! a base without a merge clearing the marker; the empty draft and the empty
+//! `runs`; the fork gate's two answers and the free-standing draft admitted
+//! with nothing moved.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
@@ -149,7 +151,7 @@ fn base_of(k: &Kernel<LandWorld>, doc: &Address) -> Option<DraftBase> {
 }
 
 /// THE REFUSAL ORDER, each refusal writing nothing: the destination's own
-/// four, then the head's two, the fork gate, the base's two, then the runs
+/// four, then the head's two, the fork gate, the base's three, then the runs
 /// — each pinned against the next by a request defective in both ways, so
 /// a later verdict never speaks ahead of an earlier one; a defective run is
 /// refused past the staged removal with nothing of the transaction kept.
@@ -193,13 +195,14 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     ));
     unchanged("the destination's four");
     // The head: off the chain the recorded base lies in, ahead of its
-    // extent; its extent past the head's count, ahead of the fork gate.
+    // extent; its extent past the head's count, ahead of the fork gate and
+    // of a base off the chain.
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&doc1(), 99)), None, None), now(&k))),
         E::BaseNotInChain
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&member, 4)), None, None), now(&k))),
+        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&member, 4)), Some(pair(&doc1(), 1)), None), now(&k))),
         E::BaseExtentTooLarge
     ));
     // The fork gate: the fork's source is the member, the head the trunk —
@@ -214,17 +217,22 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         E::BaseExtentTooLarge
     ), "the extent ahead of the gate");
     unchanged("the head's three");
-    // The base to record: none recorded, ahead of the runs; off the chain,
-    // ahead of the runs.
+    // The base to record: none recorded, ahead of its extent; off the
+    // chain, ahead of its extent — `doc1` holds two; its extent past its
+    // member's count, the head passing, ahead of the runs.
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 3)), None), now(&k))),
+        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 99)), None), now(&k))),
         E::NoBaseToRecord
     ));
     assert!(matches!(
-        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&doc1(), 1)), None), now(&k))),
+        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&doc1(), 99)), None), now(&k))),
         E::BaseNotInChain
     ));
-    unchanged("the base's two");
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![])), now(&k))),
+        E::BaseExtentTooLarge
+    ));
+    unchanged("the base's three");
     // The runs, as REINSTATE judges them — each refused past the removal
     // the body staged first, the transaction discarded whole.
     assert!(matches!(
@@ -249,6 +257,47 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     // The control: the same draft takes a sound request.
     vs.set_arrangement(P1, &draft, &request(good(), None, None, None), now(&k)).expect("a sound request lands");
     assert_eq!(runs_of(&k, &draft), vec![run(&pca(2), 2)]);
+}
+
+/// THE BASE IS JUDGED AS THE HEAD IS (the owner's ruling N4): a base to
+/// record whose extent passes its member's count is refused
+/// `BaseExtentTooLarge` with nothing written — beside a head that passes,
+/// the landing's shape, and alone, the undo's — judged against the base
+/// member's count and never the draft's, which holds one more; an extent
+/// AT the count records, the marker beside it.
+#[test]
+fn a_base_extent_past_its_members_count_is_refused_and_one_at_the_count_records() {
+    let k = seeded();
+    let (member, draft) = staged(&k);
+    let vs = Vstream::new(&k);
+    vs.insert(P1, &draft, vp(1, 4), vec![Val::new(&b"z"[..])], Deposit::Undeclared, now(&k)).expect("the draft's own word");
+    assert_eq!(k.snapshot().world().m5().content_count(&draft), n(4), "the draft one past its base");
+    let before = k.current_seq();
+    let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None });
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![vca(1)])), now(&k))),
+        E::BaseExtentTooLarge
+    ), "the landing's shape: the head at its count, the base past it");
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(1, 3)], None, Some(pair(&member, 4)), None), now(&k))),
+        E::BaseExtentTooLarge
+    ), "the undo's shape: the base alone, past its count");
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    assert_eq!(base_of(&k, &draft), recorded, "the record stands");
+    assert_eq!(k.snapshot().world().m5().content_count(&draft), n(4), "the arrangement stands");
+    let (at, _) = vs
+        .set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(&member, 3)), Some(pair(&member, 3)), Some(vec![vca(1)])), now(&k))
+        .expect("an extent at the count");
+    assert_eq!(
+        base_of(&k, &draft),
+        Some(DraftBase {
+            base: member.clone(),
+            extent: n(3),
+            source: member.clone(),
+            merge: Some(Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at }),
+        }),
+        "recorded at the count, the marker beside it"
+    );
 }
 
 /// THE LANDING IS ONE COMMIT: the whole arrangement set by identity, the

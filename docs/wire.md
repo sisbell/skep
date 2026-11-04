@@ -1780,7 +1780,8 @@ minted it), `base_not_in_chain` (a shot's base; a set_arrangement's head,
 or the base it names to record, off the chain the draft's recorded base
 lies in — or, for a fork, off its source's document),
 `base_superseded`, `base_extent_too_large` (a shot's base extent; a
-set_arrangement's head extent as read, past the head's current count),
+set_arrangement's head extent as read, or the extent of the base it
+names to record, past that member's current count),
 `fork_base_moved` (set_arrangement into a FORK — a document with no
 recorded base whose source is a published surface — whose source is not
 the frame's head: the source the board records is immutable, and a
@@ -3486,9 +3487,13 @@ Three optional members, each absent or `null` alike absent:
   position before the landing (§Reading history); a plain re-arrangement
   sends none. Present, the draft's recorded base moves to it in the same
   commit (`doc_metadata`'s `base` and `base_copied`), its `source` kept:
-  the draft must have one — `no_base_to_record` otherwise — and `at` must
-  lie in the same chain (`base_not_in_chain`). Absent, NOTHING of the
-  record moves, the marker included.
+  the draft must have one — `no_base_to_record` otherwise — `at` must lie
+  in the same chain (`base_not_in_chain`), and `extent` must not pass
+  `at`'s current count (`base_extent_too_large`), as the head's must not.
+  So the board never records more of a base than the base holds: a
+  published document's count never falls, and the draft's next `publish`,
+  carrying `base_copied` as its `base_extent`, never meets that code.
+  Absent, NOTHING of the record moves, the marker included.
 * `merge` — `{"sides": [addresses]}`: the merge the draft is to carry,
   its sides by address, possibly empty (the command's draft-side shape
   names no daughter); its head is the frame's `head`, so a `merge`
@@ -3518,12 +3523,12 @@ them: the destination's own refusals first (`doc_not_registered`,
 `not_owner`, `published_target`, `arrangement_moved`), then the head's
 (`base_not_in_chain`, `base_extent_too_large`), the fork gate
 (`fork_base_moved`), the base's (`no_base_to_record`,
-`base_not_in_chain`), then per run in the order given the FIRST
-defective run deciding — `bad_run`, `source_not_registered`,
-`dangling_source` (every address probed), `too_many_runs` past
-`MAX_PLACED_RUNS`; the run list itself is one wire list under the list
-cap. Every refusal writes nothing. A write: refused `write_at_history`
-on `/op-at`. On the change feed its row carries `op:
+`base_not_in_chain`, `base_extent_too_large`), then per run in the
+order given the FIRST defective run deciding — `bad_run`,
+`source_not_registered`, `dangling_source` (every address probed),
+`too_many_runs` past `MAX_PLACED_RUNS`; the run list itself is one wire
+list under the list cap. Every refusal writes nothing. A write: refused
+`write_at_history` on `/op-at`. On the change feed its row carries `op:
 "set_arrangement"`, `docs` the draft, and the two terms `base` and
 `merge` (§The change feed). Never held by the shell's burst machine
 (an unholdable write, with `stage` and `publish`). This example lands a

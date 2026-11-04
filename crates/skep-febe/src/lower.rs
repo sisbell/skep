@@ -337,7 +337,7 @@ impl Lower for SetArrangementError {
     ///
     /// The destination's four are COPY's; the head's two are the shot's
     /// (`base_not_in_chain`, `base_extent_too_large`), the base to record
-    /// answering the first of them too; the per-run four are the shot's and
+    /// answering both of them too; the per-run four are the shot's and
     /// REINSTATE's. Its own two: `fork_base_moved`, the fork's source riding
     /// `site.addr` as a withheld document does, and `no_base_to_record`.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {

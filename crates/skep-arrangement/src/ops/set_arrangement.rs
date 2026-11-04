@@ -21,7 +21,7 @@ use crate::chain::{published_target, trunk_head, trunk_of};
 use crate::error::{DeleteError, ReinstateError, SetArrangementError};
 use crate::ownership::{gate_write, Caller};
 use crate::shot::{Base, ShotRun};
-use crate::state::{M5Rec, Merge};
+use crate::state::{M5Rec, M5State, Merge};
 use crate::vspace::VPos;
 use crate::HasM5;
 
@@ -43,8 +43,8 @@ use crate::HasM5;
 /// head; the marker is recorded where `base` is recorded, and nowhere else
 /// (the owner's ruling N3: the marker travels with the base). The members a
 /// landing composes are the client's statement, as the shot's `base` is:
-/// the store checks the head and the base against the draft's chain and
-/// nothing against `runs`.
+/// the store checks the head and the base against the draft's chain, each
+/// extent against its member's current count, and nothing against `runs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetArrangement {
     /// The runs the draft is set to, in order; empty for an empty arrangement.
@@ -104,6 +104,18 @@ where
     /// recorded base nor a published source — a free-standing draft, an
     /// alternative of one — is admitted, nothing moved.
     ///
+    /// **The base, judged as the head is** (N4). Where `base` is present it
+    /// must lie in the chain the recorded base lies in and its extent must
+    /// not pass its member's current count — the head's two checks — so the
+    /// record never claims more of its base than the base holds. A published
+    /// document's count never falls (PUB-2.43: it changes only by deposits
+    /// appended at fresh positions), so the extent stays within the count
+    /// after the commit, and the draft's next shot carrying it as its base
+    /// extent never meets `BaseExtentTooLarge`. A frame sending the base the
+    /// wire asks for meets neither check: a landing's is its head, judged
+    /// the same way, and an undo's a record read before the landing, kept
+    /// within its count by the same never-falling count.
+    ///
     /// **What moves and what stands** (N3). Where `base` is present the
     /// base record is replaced whole: `base` and `extent` the request's,
     /// `source` kept, the marker the request's `merge` beside its `head` or
@@ -117,7 +129,8 @@ where
     /// for the tell and the chain is read for the checks, neither written.
     ///
     /// **Cost.** The removal's, one record; REINSTATE's probe over every
-    /// address of every run; and one base record. The wire caps the run
+    /// address of every run; the content count of each pair's member, a sum
+    /// over that member's runs; and one base record. The wire caps the run
     /// count at the parse; [`MAX_PLACED_RUNS`](super::MAX_PLACED_RUNS)
     /// binds the placement as it binds REINSTATE's.
     ///
@@ -135,7 +148,8 @@ where
     /// unchecked) → `BaseExtentTooLarge` (the head's extent past its current
     /// count) → `ForkBaseMoved` (the fork gate) → where `base` is present,
     /// `NoBaseToRecord` → `BaseNotInChain` (the base to record off the
-    /// recorded base's chain) → per run, in the order given, the first
+    /// recorded base's chain) → `BaseExtentTooLarge` (the base's extent past
+    /// its current count) → per run, in the order given, the first
     /// defective run deciding: `BadRun` → `SourceNotRegistered` →
     /// `DanglingSource` → `TooManyRuns`. The removal is staged ahead of the
     /// runs' judgment, so a defective run is refused past one staged record
@@ -213,15 +227,7 @@ where
                 .as_ref()
                 .map(|b| trunk_of(&b.base))
                 .or_else(|| fork_source.as_ref().map(trunk_of));
-            if chain.is_some_and(|trunk| !in_chain(&head.member, &trunk)) {
-                return Err(SetArrangementError::BaseNotInChain);
-            }
-            // The extent as read, checked against the head's own arrangement
-            // (P1): `content_count` answers the address named, a bare
-            // document's pre-chain arrangement included.
-            if head.extent > m5.content_count(&head.member) {
-                return Err(SetArrangementError::BaseExtentTooLarge);
-            }
+            judge_pair(m5, head, chain.as_ref())?;
             // The fork gate (N4): admitted where the source IS the head.
             if let Some(source) = &fork_source {
                 if *source != head.member {
@@ -233,9 +239,9 @@ where
             let Some(standing) = &standing else {
                 return Err(SetArrangementError::NoBaseToRecord);
             };
-            if !in_chain(&base.member, &trunk_of(&standing.base)) {
-                return Err(SetArrangementError::BaseNotInChain);
-            }
+            // Judged as the head is, so no record claims more of its base
+            // than the base holds (N4).
+            judge_pair(m5, base, Some(&trunk_of(&standing.base)))?;
         }
         // The tell (R5): the trunk's current head where it is not the one
         // named — read, never locked.
@@ -287,6 +293,34 @@ where
         );
     }
     Ok(head_moved)
+}
+
+/// Judges a pair the request names as the shot judges its base (PUB-2.37).
+///
+/// The pair is the head or the base to record, and `trunk` the document
+/// whose chain it must lie in, `None` where there is none to check. The
+/// extent — the head's as read at the compose (P1) — is checked against
+/// the member's own arrangement: `content_count` answers the address named,
+/// a bare document's pre-chain arrangement included, and never floats to
+/// the head.
+///
+/// # Errors
+///
+/// `BaseNotInChain` where `pair.member` lies outside `trunk`'s chain, then
+/// `BaseExtentTooLarge` where `pair.extent` exceeds the member's current
+/// content count.
+fn judge_pair(
+    m5: &M5State,
+    pair: &Base,
+    trunk: Option<&Address>,
+) -> Result<(), SetArrangementError> {
+    if trunk.is_some_and(|trunk| !in_chain(&pair.member, trunk)) {
+        return Err(SetArrangementError::BaseNotInChain);
+    }
+    if pair.extent > m5.content_count(&pair.member) {
+        return Err(SetArrangementError::BaseExtentTooLarge);
+    }
+    Ok(())
 }
 
 /// Returns whether `member` is `trunk` or a member of its chain (PUB-2.15).

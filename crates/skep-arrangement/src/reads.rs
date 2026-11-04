@@ -515,12 +515,13 @@ impl M5State {
     /// extent the copy took, or an alternative's inherited base with its
     /// source draft and its inherited marker — as the shots the draft has
     /// rendered and the landings that named a base since moved it: `base`
-    /// the member the draft last rendered, or the head a landing told, and
-    /// `extent` that member's whole count at the shot, or the head's extent
-    /// as the landing read it (B3-S10; the landing lane), and `merge` the
-    /// marker the last landing set, `None` where it set none or a shot
-    /// cleared it — which the doc-metadata read serves as `base`,
-    /// `base_copied` and `merge` to every reader of the draft.
+    /// the member the draft last rendered, or the base a landing named — its
+    /// head, or the old base an undo restores — and `extent` that member's
+    /// whole count at the shot, or the extent the landing named, never past
+    /// its member's count (B3-S10; the landing lane), and `merge` the marker
+    /// the last landing set, `None` where it set none or a shot cleared it —
+    /// which the doc-metadata read serves as `base`, `base_copied` and
+    /// `merge` to every reader of the draft.
     ///
     /// **The invariant** it answers under is BASE★, stated on [`M5State`]:
     /// the entry is written by the staging record and the landing's, moved

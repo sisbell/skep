@@ -6,11 +6,11 @@
 //! nothing; land and tell (`head_moved`); the fork gate's refusal
 //! (`fork_base_moved`) and admission (the source is the head); a baseless
 //! draft admitted with nothing moved, and `no_base_to_record`; the head's
-//! two refusals; `doc_metadata` and `image` on `/op-at` at `at − 1`
-//! answering the pre-landing state; `write_at_history` on `/op-at`; the
-//! feed row and its two terms; the wire's example frame answered as the
-//! op. The door's consult is `source_gate.rs`'s pattern; the marker's
-//! inheritance and the shot's clear are `stage.rs`'s.
+//! two refusals and the base's; `doc_metadata` and `image` on `/op-at` at
+//! `at − 1` answering the pre-landing state; `write_at_history` on
+//! `/op-at`; the feed row and its two terms; the wire's example frame
+//! answered as the op. The door's consult is `source_gate.rs`'s pattern;
+//! the marker's inheritance and the shot's clear are `stage.rs`'s.
 //!
 //! Every suite runs post-claim on a CLAIMED-PERMISSIVE board (`spawn`).
 
@@ -178,14 +178,16 @@ fn a_landing_composed_on_an_older_head_lands_and_tells_the_newer_one() {
     let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v2, 3)), Some((&v2, 3)), Some(&[]), None));
     assert!(ack.get("head_moved").is_none(), "{ack}");
     assert_eq!(standing(port, &owner, &draft).0, some(&v2));
-    // The head's two refusals: a head off the chain — another edition's
-    // member — and an extent past the head's count; each commits nothing.
+    // The head's two refusals — a head off the chain, another edition's
+    // member, and an extent past the head's count — and the base's same
+    // two, version 2 holding three; each commits nothing.
     let other = edition_with(port, &signed, "xy");
     let other_v1 = acked_addr(&version_of(port, &signed, &other, None));
     let head = head_position(port);
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&other_v1, 1)), None, None, None)), "base_not_in_chain");
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v2, 4)), None, None, None)), "base_extent_too_large");
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&other_v1, 1)), None, None)), "base_not_in_chain");
+    assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&v2, 4)), None, None)), "base_extent_too_large");
     // The edition itself: the store's `published_target` from the signed
     // owner; from the bare session the daemon's publish-class gate stands
     // ahead of it, as on the five in-place edits.

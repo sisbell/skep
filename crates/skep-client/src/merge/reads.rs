@@ -35,11 +35,15 @@
 //! through the sides, the join's `compare` — goes through `/op-at` at P, so
 //! the record describes a state the board held at one moment and never one
 //! that an edit landing between two reads composed; the record carries P
-//! for its draft side (§4: "for a draft read at N") and as its `as_of`, and
-//! the draft landing is typed against P. A P the board has reclaimed the
-//! history at is refused by name ([`Refusal::HistoryReclaimed`]), never
-//! read at the head instead. The prior records' lookup after the shape's
-//! reads reads the journal, not a draft, and stays at the head. A side
+//! for its draft side (§4: "for a draft read at N"), the result carries it
+//! as its `as_of`, and the draft landing is typed against P. A P the board
+//! does not answer is refused by name — its history reclaimed
+//! ([`Refusal::HistoryReclaimed`]), past the board's head
+//! ([`Refusal::BeyondHead`]) or inside one commit
+//! ([`Refusal::NotAPosition`]) — never read at the head instead; where P is
+//! the position a merge record names, [`record::verify`] answers for it
+//! (skep #761). The prior records' lookup after the shape's reads reads the
+//! journal, not a draft, and stays at the head. A side
 //! whose base the library cannot read — a member of another document or the
 //! bare document itself, a draft of an account other than the trunk
 //! owner's, a draft the board records no base for, a fork no `version`
@@ -396,11 +400,47 @@ pub enum Refusal {
     /// `history_reclaimed` on a read at the one position P: the board no
     /// longer answers P, and nothing is read at another position in its
     /// place (skep #762).
+    ///
+    /// Where P is a position a merge record names, [`record::verify`]
+    /// answers [`Verdict::Unreadable`](record::Verdict::Unreadable) instead:
+    /// the verdict withheld (skep #761).
     HistoryReclaimed {
         /// The position refused.
         at: u64,
         /// The oldest position the board still answers, where it said.
         floor: Option<u64>,
+    },
+    /// `beyond_head` on a read at a position past the board's head.
+    ///
+    /// The board has committed no position as late as `at`, and nothing is
+    /// read at another position in its place (wire.md §Reading history).
+    BeyondHead {
+        /// The position refused.
+        at: u64,
+        /// The board's committed head, where it said.
+        head: Option<u64>,
+        /// The document a merge record names `at` for.
+        ///
+        /// It is the record's draft side, or the draft it landed in, where
+        /// [`record::verify`] read a position the record names (skep #761);
+        /// `None` where the position is the caller's — a draft side's named
+        /// position, or the one a composition or a landing read at.
+        recorded: Option<Address>,
+    },
+    /// `not_a_position` on a read at a number inside one commit.
+    ///
+    /// No answer carries such a number, and nothing is read at another
+    /// position in its place (wire.md §Reading history).
+    NotAPosition {
+        /// The position refused.
+        at: u64,
+        /// The greatest position at or below `at`, where the board said.
+        nearest: Option<u64>,
+        /// The document a merge record names `at` for.
+        ///
+        /// As [`Refusal::BeyondHead`]'s: `None` where the position is the
+        /// caller's.
+        recorded: Option<Address>,
     },
     /// `fork_base_moved` on the draft landing: `into` is a FORK — a document
     /// the board records no base for, born sharing a published version, its
@@ -489,6 +529,32 @@ impl fmt::Display for Refusal {
                     write!(f, "; the oldest it answers is {floor}")?;
                 }
                 f.write_str("): every read of this merge is made at that one position, and nothing was read at another — compose the merge again, which reads at the board's current position")
+            }
+            Refusal::BeyondHead { at, head, recorded } => {
+                match recorded {
+                    Some(doc) => write!(f, "the merge record names position {at} for {doc}, past the board's head")?,
+                    None => write!(f, "position {at} is past the board's head")?,
+                }
+                if let Some(head) = head {
+                    write!(f, " at position {head}")?;
+                }
+                match recorded {
+                    Some(_) => f.write_str(" (beyond_head): the record was not written against this board's history as it stands, so it cannot be checked here, and nothing was read at another position"),
+                    None => f.write_str(" (beyond_head), and nothing was read there: read at a position the board has answered, or at the head"),
+                }
+            }
+            Refusal::NotAPosition { at, nearest, recorded } => {
+                match recorded {
+                    Some(doc) => write!(f, "the merge record names position {at} for {doc}, which falls inside one commit and is no position the board answers (not_a_position")?,
+                    None => write!(f, "position {at} falls inside one commit and is no position the board answers (not_a_position")?,
+                }
+                if let Some(nearest) = nearest {
+                    write!(f, "; the greatest position at or below it is {nearest}")?;
+                }
+                match recorded {
+                    Some(_) => f.write_str("): the record was not written against this board's history, so it cannot be checked here, and nothing was read at another position"),
+                    None => f.write_str("), and nothing was read there: read at a position the board has answered, or at the head"),
+                }
             }
             Refusal::ForkBaseMoved { fork, source, head } => write!(f, "{fork} was forked from {source}, and this merge was composed on {head} — fork {head} afresh and land the merge there; nothing was merged"),
             Refusal::BaseNotInChain { into, head } => write!(f, "{into} is a draft of another document: its recorded base is no version of the document {head} heads — land the merge in a draft staged from that document; nothing was merged"),
@@ -690,10 +756,11 @@ impl<'a> Reader<'a> {
     /// The death signal under the token is the session's end, faced, and
     /// with no token so is one at the head, where one at a position halts as
     /// [`Board::op_at`] halts it; a position the board has reclaimed the
-    /// history at is [`Refusal::HistoryReclaimed`], never read at the head
-    /// instead; another position fault of `/op-at` is the caller's position,
-    /// faced; [`Refusal::HistoryBusy`] past the retries; [`Board::op`]'s and
-    /// [`Board::op_at`]'s other errors.
+    /// history at is [`Refusal::HistoryReclaimed`], one past its head
+    /// [`Refusal::BeyondHead`] and one inside a commit
+    /// [`Refusal::NotAPosition`], each the caller's position and never read
+    /// at the head instead; [`Refusal::HistoryBusy`] past the retries;
+    /// [`Board::op`]'s and [`Board::op_at`]'s other errors.
     pub(super) fn read(&self, frame: &Value, at: Option<u64>) -> Result<Value, Refusal> {
         let Some(at) = at else {
             return match self.board.op(self.token, frame)? {
@@ -719,13 +786,11 @@ impl<'a> Reader<'a> {
                 AtAnswer::HistoryReclaimed { floor } => {
                     return Err(Refusal::HistoryReclaimed { at, floor });
                 }
-                other => {
-                    return Err(Halt::face(
-                        format!("the draft cannot be read as of position {at}"),
-                        format!("`/op-at` answered {other:?}: the position is below the board's retention floor, past its head, or no position"),
-                        "read the draft at a position the board still answers, or at the head",
-                    )
-                    .into())
+                AtAnswer::BeyondHead { head } => {
+                    return Err(Refusal::BeyondHead { at, head, recorded: None });
+                }
+                AtAnswer::NotAPosition { nearest } => {
+                    return Err(Refusal::NotAPosition { at, nearest, recorded: None });
                 }
             }
         }

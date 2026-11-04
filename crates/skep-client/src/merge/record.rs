@@ -16,9 +16,13 @@
 //! value switches are in the body — so `verify` recomputes M and compares it
 //! with the landed member's image over its first `placed` positions, or the
 //! draft's at the position recorded, the daemon's `compare` the oracle the
-//! client's join is checked against (§1.3 step 4),
-//! and answers `Equal`, `Differs` or `Unreadable`, never a verdict
-//! manufactured for a side it may not read (D14).
+//! client's join is checked against (§1.3 step 4), and answers `Equal`,
+//! `Differs` or `Unreadable`, never a verdict manufactured for a side it
+//! may not read (D14). A position the record names is read as named or not
+//! at all: one whose history the board has reclaimed withholds the verdict
+//! (`Unreadable`), and one past the board's head or inside one commit is
+//! refused as the record's, its face advising no read elsewhere (skep
+//! #761).
 //!
 //! **One schema**, kind `merge`: `type` fixed, `v` the schema's version,
 //! `rules` the rule set's, then `doc`, `base`, `sides`, `landed`, `claims`,
@@ -665,8 +669,10 @@ pub enum Verdict {
     },
     /// A document the verdict needs is not readable to this reader.
     ///
-    /// It is the landed member, or the draft, withheld or not registered:
-    /// the verdict withheld, never made up.
+    /// It is the landed member, or the draft, withheld or not registered; or
+    /// the draft side, or the draft landed in, as of the position the record
+    /// names for it, whose history the board has reclaimed: the verdict
+    /// withheld, never made up (D14).
     Unreadable(Address),
 }
 
@@ -686,15 +692,26 @@ pub enum Verdict {
 /// `compare` is asked once as the oracle of the client's join (§1.3 step
 /// 4), in parts past its budgets.
 ///
+/// A position the record names — its draft side's, its draft landing's —
+/// is read as named or not at all (skep #761): where the board has
+/// reclaimed the history there the verdict is withheld,
+/// [`Verdict::Unreadable`] naming the draft, and nothing is read at
+/// another position in its place (D14).
+///
 /// # Errors
 ///
-/// The reads' refusals ([`Refusal`]) on the base and the sides; a record
+/// The reads' refusals ([`Refusal`]) on the base and the sides, but a
+/// reclaimed position the record names, which answers
+/// [`Verdict::Unreadable`]; a position the record names past the board's
+/// head or inside one commit, [`Refusal::BeyondHead`] or
+/// [`Refusal::NotAPosition`] naming the draft as the record's — the record
+/// was not written against this board's history as it stands; a record
 /// with no head side or with `landed` none is faced — there is nothing to
 /// verify against; a client join the oracle disagrees with is this
 /// library's own fault, faced; a landed member with no `placed` term is
-/// faced; the landed document's reads' refusals but `withheld` and
-/// `doc_not_registered`, which answer [`Verdict::Unreadable`]; an `image`
-/// run that is no content I-address.
+/// faced; the landed document's reads' refusals but `withheld`,
+/// `doc_not_registered` and a reclaimed landing position, which answer
+/// [`Verdict::Unreadable`]; an `image` run that is no content I-address.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
     let reader = Reader::new(board, token);
     let head = record.head().ok_or_else(|| {
@@ -706,15 +723,25 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
     })?;
     let sides: Vec<Side> = record.sides.iter().filter_map(SideAt::side).collect();
     let options = record.options();
-    let readings = reads::read_shape(
+    // The position the record names for its draft side: every read of the
+    // recomputation, the join's oracle included, is made at it.
+    let composed_at = record.sides.iter().find_map(|s| match s {
+        SideAt::Draft { at, position: Some(p) } => Some((at, *p)),
+        SideAt::Draft { .. } | SideAt::Member { .. } => None,
+    });
+    let recomputed = reads::read_shape(
         &reader,
         &record.doc,
         head.address(),
         Some(record.base.clone()),
         &sides,
         &options,
-    )?;
-    reads::check_join(&reader, &readings)?;
+    )
+    .and_then(|readings| reads::check_join(&reader, &readings).map(|()| readings));
+    let readings = match recomputed {
+        Ok(readings) => readings,
+        Err(e) => return at_record(e, composed_at),
+    };
     let (target, at, placed) = match &record.landed {
         Some(RecordLanding::Member { member, .. }) => {
             let meta = match reader.metadata(member, None) {
@@ -733,7 +760,7 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
                 Err(Refusal::Unreadable(_)) | Err(Refusal::NoSuchDocument(_)) => {
                     return Ok(Verdict::Unreadable(draft.clone()))
                 }
-                Err(e) => return Err(e),
+                Err(e) => return at_record(e, Some((draft, *position))),
             };
             (draft.clone(), Some(*position), extent)
         }
@@ -751,7 +778,7 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
         Err(Refusal::Unreadable(_)) | Err(Refusal::NoSuchDocument(_)) => {
             return Ok(Verdict::Unreadable(target))
         }
-        Err(e) => return Err(e),
+        Err(e) => return at_record(e, at.map(|p| (&target, p))),
     };
     let actual = reads::runs_of(&image)?;
     // A member holds a draft side's text re-minted under the trunk, which
@@ -768,4 +795,36 @@ pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<V
         None => Verdict::Equal,
         Some(at) => Verdict::Differs { at },
     })
+}
+
+/// Returns what a refused read answers where the record named its position.
+///
+/// `recorded` is the document the record names a position for and that
+/// position (§4: "for a draft read at N"; `landed`'s `position`). A read
+/// refused there because the board has reclaimed the history is the
+/// verdict withheld, [`Verdict::Unreadable`] naming the document; one past
+/// the board's head or inside one commit is [`Refusal::BeyondHead`] or
+/// [`Refusal::NotAPosition`] naming the document as the record's, whose
+/// face advises no read elsewhere (skep #761). Nothing is read at another
+/// position in its place (D14). Every other refusal, and one at a position
+/// the record does not name, is the read's own.
+///
+/// # Errors
+///
+/// The refusal given, relabelled as the record's where it is a position
+/// fault at the position recorded.
+fn at_record(e: Refusal, recorded: Option<(&Address, u64)>) -> Result<Verdict, Refusal> {
+    let Some((doc, position)) = recorded else { return Err(e) };
+    match e {
+        Refusal::HistoryReclaimed { at, .. } if at == position => {
+            Ok(Verdict::Unreadable(doc.clone()))
+        }
+        Refusal::BeyondHead { at, head, .. } if at == position => {
+            Err(Refusal::BeyondHead { at, head, recorded: Some(doc.clone()) })
+        }
+        Refusal::NotAPosition { at, nearest, .. } if at == position => {
+            Err(Refusal::NotAPosition { at, nearest, recorded: Some(doc.clone()) })
+        }
+        e => Err(e),
+    }
 }

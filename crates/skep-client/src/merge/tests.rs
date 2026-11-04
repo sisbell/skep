@@ -1256,10 +1256,21 @@ mod scripted {
         /// `/op-at` answers `history_reclaimed` below this position, where
         /// one is set: the journal reclaimed there.
         floor: Option<u64>,
+        /// Numbers inside one multi-record commit, each `not_a_position`.
+        ///
+        /// `/op-at` answers each with `nearest` the greatest number below it
+        /// that is none of them (wire.md §Reading history); a number past
+        /// `position` answers `beyond_head`.
+        inside_commits: BTreeSet<u64>,
         /// Another hand's edit landing in the middle of a walk: before the
         /// N-th frame the dialer serves is answered, the document's
         /// arrangement becomes these runs, one commit.
         interleave: Option<(usize, String, Vec<Run>)>,
+        /// The journal reclaimed in the middle of a walk.
+        ///
+        /// Before the N-th frame the dialer serves is answered, `floor`
+        /// becomes this position.
+        reclaim: Option<(usize, u64)>,
         /// Every shot lands as its base's daughter: the head moved.
         head_moved: bool,
         /// Documents this reader may not read.
@@ -2086,6 +2097,11 @@ mod scripted {
                 let (_, doc, runs) = w.interleave.take().unwrap();
                 w.change(&doc, runs);
             }
+            // The journal reclaimed before this frame is answered.
+            if w.reclaim.is_some_and(|(n, _)| n == served) {
+                let (_, floor) = w.reclaim.take().unwrap();
+                w.floor = Some(floor);
+            }
             match req.path.as_str() {
                 "/health" => Ok(reply(200, w.health())),
                 "/op" => w.op(&frame, None),
@@ -2095,6 +2111,22 @@ mod scripted {
                         return Ok(reply(503, json!({"error": "history_busy"})));
                     }
                     let at = frame["at"].as_u64();
+                    // A number past the committed head, or inside one commit.
+                    if let Some(at) = at {
+                        if at > w.position {
+                            return Ok(reply(
+                                400,
+                                json!({"error": "beyond_head", "head": w.position}),
+                            ));
+                        }
+                        if w.inside_commits.contains(&at) {
+                            let nearest = (0..at).rev().find(|n| !w.inside_commits.contains(n));
+                            return Ok(reply(
+                                400,
+                                json!({"error": "not_a_position", "nearest": nearest}),
+                            ));
+                        }
+                    }
                     if let (Some(floor), Some(at)) = (w.floor, at) {
                         if at < floor {
                             return Ok(reply(410, json!({"error": "history_reclaimed", "floor": floor})));
@@ -3449,6 +3481,234 @@ mod scripted {
         assert_eq!(dialer.ops(), ["at:doc_metadata"], "the one read, at the position; nothing at the head");
         let said = Refusal::HistoryReclaimed { at: p, floor }.to_string();
         assert!(said.contains(&format!("position {p}")) && said.contains("nothing was read at another"), "{said}");
+    }
+
+    /// A named position the board never answered is refused as the caller's.
+    ///
+    /// A draft side named past the board's head refuses `BeyondHead` with
+    /// the head, and one inside a commit `NotAPosition` with the nearest
+    /// position, each at the first read with no record named, nothing read
+    /// at the head, and the face advising a position the board has answered
+    /// (skep #761).
+    #[test]
+    fn a_named_position_past_the_head_or_inside_a_commit_is_refused_as_the_callers() {
+        let (dialer, board, _) = open(draft_landing_world());
+        let head = dialer.world().position;
+        let named = |p: u64| Inputs {
+            sides: vec![Side::Draft { at: a(S), position: Some(p) }],
+            ..draft_inputs()
+        };
+        let refused = compose(&board, Some(&token()), &named(head + 5));
+        assert_eq!(
+            refused,
+            Err(Refusal::BeyondHead { at: head + 5, head: Some(head), recorded: None })
+        );
+        assert_eq!(
+            dialer.ops(),
+            ["at:doc_metadata"],
+            "the one read, at the position; nothing at the head"
+        );
+        let said = refused.unwrap_err().to_string();
+        assert!(
+            said.contains(&format!("position {}", head + 5))
+                && said.contains(&format!("head at position {head}")),
+            "{said}"
+        );
+        assert!(
+            said.contains("beyond_head") && said.contains("or at the head"),
+            "the caller's advice: {said}"
+        );
+        dialer.world().inside_commits.insert(head - 1);
+        dialer.clear();
+        let refused = compose(&board, Some(&token()), &named(head - 1));
+        assert_eq!(
+            refused,
+            Err(Refusal::NotAPosition { at: head - 1, nearest: Some(head - 2), recorded: None })
+        );
+        assert_eq!(dialer.ops(), ["at:doc_metadata"]);
+        let said = refused.unwrap_err().to_string();
+        assert!(
+            said.contains(&format!("position {}", head - 1))
+                && said.contains(&format!("at or below it is {}", head - 2)),
+            "{said}"
+        );
+        assert!(said.contains("not_a_position") && said.contains("or at the head"), "{said}");
+    }
+
+    /// Returns the draft side's record and the position its side names.
+    ///
+    /// `S` is read at the composition's first position, and the merge is
+    /// landed as the shot and its record read back.
+    fn landed_draft_side_record(
+        dialer: &Scripted,
+        board: &Board,
+        signer: &HybridSigner,
+    ) -> (Record, u64) {
+        let session = sign_in(board, signer);
+        let read_at = dialer.world().position;
+        let inputs =
+            Inputs { sides: vec![Side::Draft { at: a(S), position: None }], ..race_inputs() };
+        let merged = compose(board, Some(session.token()), &inputs).expect("composed");
+        land(board, &merged, shot(&session, signer)).expect("landed");
+        let record = current(board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(record.sides[1], SideAt::Draft { at: a(S), position: Some(read_at) });
+        (record, read_at)
+    }
+
+    /// A reclaimed position a record names withholds the verdict.
+    ///
+    /// The draft side's record verifies Equal as of the position it names;
+    /// once the journal's floor passes that position, `verify` answers
+    /// Unreadable naming the draft — never the composition's refusal, whose
+    /// advice is to compose again — after the one refused read, with
+    /// nothing read at the head or at another position in its place (skep
+    /// #761; D14).
+    #[test]
+    fn a_reclaimed_position_a_record_names_withholds_the_verdict() {
+        let (dialer, board, signer) = open(World::window_and_draft());
+        let (record, read_at) = landed_draft_side_record(&dialer, &board, &signer);
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+        dialer.world().floor = Some(read_at + 1);
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(a(S))));
+        assert_eq!(dialer.ops(), ["at:doc_metadata"], "the one read, at the record's position");
+        assert_eq!(dialer.positions("doc_metadata"), [read_at]);
+    }
+
+    /// A reclaimed draft landing position withholds the verdict.
+    ///
+    /// The race shape landed into a fresh draft verifies Equal by identity
+    /// as of the landing's position. Once the journal's floor passes that
+    /// position — the recomputation's own reads, at the head, still answered
+    /// — `verify` answers Unreadable naming the draft, the draft read no
+    /// further than the refused read; and so it does where the floor passes
+    /// the position between the draft's extent and its image (skep #761;
+    /// D14).
+    #[test]
+    fn a_reclaimed_draft_landing_position_withholds_the_verdict() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let landed = land(&board, &merged, draft_landing(&session, &signer, None)).expect("landed");
+        let Landed::Draft { into: fresh, position, .. } = &landed else { panic!("{landed:?}") };
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        assert_eq!(
+            record.landed,
+            Some(RecordLanding::Draft { draft: fresh.clone(), position: *position })
+        );
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal), "the premise");
+        assert!(
+            *position < dialer.world().position,
+            "the premise: the head the recomputation reads at stands above the floor"
+        );
+        dialer.world().floor = Some(position + 1);
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(fresh.clone())));
+        let ops = dialer.ops();
+        assert_eq!(
+            ops.last().map(String::as_str),
+            Some("at:retrieve_doc_v_span_set"),
+            "the refused read is the last: {ops:?}"
+        );
+        assert_eq!(dialer.positions("retrieve_doc_v_span_set").last(), Some(position));
+        let fresh_text = fresh.to_string();
+        assert!(
+            dialer.frames("image").iter().all(|f| f["d"].as_str() != Some(fresh_text.as_str())),
+            "no image of the draft: {ops:?}"
+        );
+        // The floor passing the landing's position after the draft's extent
+        // was read there and before its image: the image's refusal withholds
+        // the verdict too.
+        dialer.world().floor = None;
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+        let image_at = dialer
+            .served
+            .lock()
+            .unwrap()
+            .iter()
+            .position(|(line, f)| {
+                line == "at:image" && f["frame"]["d"].as_str() == Some(fresh_text.as_str())
+            })
+            .expect("the draft's image");
+        dialer.world().reclaim = Some((image_at + 1, position + 1));
+        dialer.clear();
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Unreadable(fresh.clone())));
+        assert!(dialer.world().reclaim.is_none(), "the journal reclaimed mid-walk");
+        let ops = dialer.ops();
+        assert_eq!(
+            ops.last().map(String::as_str),
+            Some("at:image"),
+            "the refused image is the last read: {ops:?}"
+        );
+        assert_eq!(
+            dialer.positions("retrieve_doc_v_span_set").last(),
+            Some(position),
+            "the extent answered at the landing's position"
+        );
+        assert_eq!(dialer.positions("image").last(), Some(position));
+    }
+
+    /// A position a record names that the board never answered is refused.
+    ///
+    /// A draft side's record naming a position past the board's head
+    /// refuses `BeyondHead`, and one naming a number inside one commit
+    /// `NotAPosition`, each carrying the board's head or nearest position
+    /// and naming the draft as the record's. The face says the record
+    /// cannot be checked here and advises no read elsewhere; after the one
+    /// refused read nothing is read at another position (skep #761).
+    #[test]
+    fn a_position_a_record_names_past_the_head_or_inside_a_commit_is_refused_as_the_records() {
+        let (dialer, board, signer) = open(World::window_and_draft());
+        let (record, _) = landed_draft_side_record(&dialer, &board, &signer);
+        let head = dialer.world().position;
+        let naming = |p: u64| {
+            let mut r = record.clone();
+            r.sides[1] = SideAt::Draft { at: a(S), position: Some(p) };
+            r
+        };
+        dialer.clear();
+        let refused = verify(&board, Some(&token()), &naming(head + 5));
+        assert_eq!(
+            refused,
+            Err(Refusal::BeyondHead { at: head + 5, head: Some(head), recorded: Some(a(S)) })
+        );
+        assert_eq!(dialer.ops(), ["at:doc_metadata"], "the one read, at the record's position");
+        let said = refused.unwrap_err().to_string();
+        assert!(
+            said.contains(&format!("position {} for {S}", head + 5))
+                && said.contains(&format!("head at position {head}")),
+            "{said}"
+        );
+        assert!(said.contains("beyond_head") && said.contains("cannot be checked here"), "{said}");
+        assert!(!said.contains("or at the head"), "no read elsewhere advised: {said}");
+        dialer.world().inside_commits.insert(head - 1);
+        dialer.clear();
+        let refused = verify(&board, Some(&token()), &naming(head - 1));
+        assert_eq!(
+            refused,
+            Err(Refusal::NotAPosition {
+                at: head - 1,
+                nearest: Some(head - 2),
+                recorded: Some(a(S))
+            })
+        );
+        assert_eq!(dialer.ops(), ["at:doc_metadata"]);
+        let said = refused.unwrap_err().to_string();
+        assert!(
+            said.contains(&format!("position {} for {S}", head - 1))
+                && said.contains(&format!("at or below it is {}", head - 2)),
+            "{said}"
+        );
+        assert!(
+            said.contains("not_a_position") && said.contains("cannot be checked here"),
+            "{said}"
+        );
+        assert!(!said.contains("or at the head"), "no read elsewhere advised: {said}");
     }
 
     /// LAND AND TELL (R5, P1): version 3 published after the merge was

@@ -17,7 +17,9 @@
 //! named — a named base the record does not derive refused — composed and
 //! landed as the shot, the draft's fresh text re-minted; its record naming
 //! the position the draft was read at and verifying Equal as of it once
-//! the shot has moved the draft's base and the draft is edited (skep #453).
+//! the shot has moved the draft's base and the draft is edited (skep #453),
+//! and refused as the record's where it names a position past the board's
+//! head (skep #761).
 //! And ONE DRAFT LANDING (the landing lane's brief B; skep #762, #764): the
 //! merge composed at one position, the draft edited after it and the
 //! landing refused `arrangement_moved` whole; composed again and landed in
@@ -563,7 +565,9 @@ fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
 /// head refused by name, the base taken; the shot lands as the trunk's next
 /// member, the draft's text re-minted under the document, with its record
 /// found from the draft; and the board moves the draft's recorded base to
-/// the member the merge minted.
+/// the member the merge minted. The record verifies Equal as of the
+/// position it names for the draft, and one naming a position past the
+/// board's head is refused as the record's, the daemon's head carried.
 #[test]
 fn a_draft_side_merges_from_the_base_the_board_records() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -728,6 +732,16 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
             Err(Refusal::DraftBaseDisagrees { ref named, .. }) if *named == base
         ),
         "a record naming no position reads the draft as it stands"
+    );
+    // A RECORD NAMING A POSITION PAST THE BOARD'S HEAD is refused as the
+    // record's, the daemon's head carried and nothing read at another
+    // position in its place (skep #761).
+    let now = board.health().unwrap().log_position();
+    let mut ahead = record.clone();
+    ahead.sides[1] = SideAt::Draft { at: draft.clone(), position: Some(now + 1000) };
+    assert_eq!(
+        verify(&board, Some(&token), &ahead),
+        Err(Refusal::BeyondHead { at: now + 1000, head: Some(now), recorded: Some(draft.clone()) })
     );
     session.close().expect("close");
 }

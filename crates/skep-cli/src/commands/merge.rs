@@ -372,8 +372,9 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// side under `not_owner`, its detail naming the draft; the draft landing's
 /// two — a fork composed on another head than its source under
 /// `fork_base_moved`, a draft of another document under
-/// `base_not_in_chain`; and a composition position the board no longer
-/// answers under `history_reclaimed`.
+/// `base_not_in_chain`; and a composition position the board does not
+/// answer under its own fault's code — no longer, `history_reclaimed`; past
+/// its head, `beyond_head`; inside one commit, `not_a_position`.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -387,6 +388,8 @@ fn refused(r: Refusal) -> Stop {
         Refusal::TooFragmented { .. } => "image_too_large",
         Refusal::HistoryBusy => "history_busy",
         Refusal::HistoryReclaimed { .. } => "history_reclaimed",
+        Refusal::BeyondHead { .. } => "beyond_head",
+        Refusal::NotAPosition { .. } => "not_a_position",
         Refusal::OverCap { .. } => "too_many_runs",
         Refusal::NeedsSignedSession => "signed_session_required",
         Refusal::UnownedDraft { .. } => "not_owner",

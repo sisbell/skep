@@ -45,7 +45,9 @@ use crate::HasM5;
 /// landing composes are the client's statement, as the shot's `base` is:
 /// the store checks the head and the base against the draft's chain, as
 /// registered members of it, each extent against its member's current
-/// count, and nothing against `runs`.
+/// count, and nothing against `runs`. A draft with no chain — no recorded
+/// base and no published source — has nothing of its head checked, the
+/// extent included, and no base to record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetArrangement {
     /// The runs the draft is set to, in order; empty for an empty arrangement.
@@ -86,16 +88,23 @@ where
     /// excepted.
     ///
     /// **The head, and the tell** (R5, P1). Where the request carries the
-    /// head the merge was composed on, it is checked against the chain — a
-    /// registered member of it, its registration asked first, as the shot
-    /// asks its base's (PUB-6.37) — and not against the trunk's current
-    /// head: a version published since the compose is NOT refused — the op
-    /// lands, records what it was told, and answers the trunk's current head
-    /// beside the position where that head is not the one named, so the
-    /// caller learns a newer version stands. The head is read, never
-    /// written: no head key is taken, and a shot landing between the read
-    /// and the commit makes the tell stale by one member, which the next
-    /// read corrects.
+    /// head the merge was composed on and the draft has a chain — the one
+    /// its recorded base lies in, else its fork's source's — the head is
+    /// checked against that chain: a registered member of it, its
+    /// registration asked first, as the shot asks its base's (PUB-6.37),
+    /// its extent within its current count. It is not checked against the
+    /// trunk's current head: a version published since the compose is NOT
+    /// refused — the op lands, records what it was told, and answers the
+    /// trunk's current head beside the position where that head is not the
+    /// one named, so the caller learns a newer version stands. A draft with
+    /// no chain has its head judged by nothing — registration, chain and
+    /// count alike — since nothing of it is recorded (N4) and a count read
+    /// of a document the caller may not read would answer that document's
+    /// size (PUB-1.13). Only the tell reads the head's trunk there, and it
+    /// answers a published chain's head alone, a private document being
+    /// versionless (PUB-2.9). The head is read, never written: no head key
+    /// is taken, and a shot landing between the read and the commit makes
+    /// the tell stale by one member, which the next read corrects.
     ///
     /// **The fork gate** (N4, P5). A destination with no recorded base
     /// whose fork source is a published surface is a fork: landing into it
@@ -105,7 +114,8 @@ where
     /// landing composed on another head would make it false. An admitted
     /// fork gains no base and no marker. A destination with neither a
     /// recorded base nor a published source — a free-standing draft, an
-    /// alternative of one — is admitted, nothing moved.
+    /// alternative of one — is admitted, its head unchecked and nothing
+    /// moved.
     ///
     /// **The base, judged as the head is** (N4). Where `base` is present it
     /// must be a registered member of the chain the recorded base lies in
@@ -134,8 +144,9 @@ where
     /// for the tell and the chain is read for the checks, neither written.
     ///
     /// **Cost.** The removal's, one record; REINSTATE's probe over every
-    /// address of every run; the content count of each pair's member, a sum
-    /// over that member's runs; and one base record. The wire caps the run
+    /// address of every run; the content count of each pair judged — the
+    /// head on a draft with a chain, the base to record — a sum over that
+    /// member's runs; and one base record. The wire caps the run
     /// count at the parse; [`MAX_PLACED_RUNS`](super::MAX_PLACED_RUNS)
     /// binds the placement as it binds REINSTATE's.
     ///
@@ -147,13 +158,13 @@ where
     /// Each refusal comes as `TxnError::Rejected`, in this order (which error
     /// wins), the first refusing with nothing written: `DocNotRegistered` →
     /// `NotOwner` → `PublishedTarget` → `ArrangementMoved` (the destination's
-    /// own four, as the in-place edits judge them) → where `head` is present,
-    /// `SourceNotRegistered` (the head names no registered document) →
-    /// `BaseNotInChain` (the head off the chain the recorded base lies in, or
-    /// the fork's source's document) — those two asked only of a draft with
-    /// one of the two chains, a draft with neither unchecked — →
-    /// `BaseExtentTooLarge` (the head's extent past its current count) →
-    /// `ForkBaseMoved` (the fork gate) → where `base` is present,
+    /// own four, as the in-place edits judge them) → where `head` is present
+    /// and the draft has one of the two chains, `SourceNotRegistered` (the
+    /// head names no registered document) → `BaseNotInChain` (the head off
+    /// the chain the recorded base lies in, or the fork's source's document)
+    /// → `BaseExtentTooLarge` (the head's extent past its current count) — a
+    /// draft with neither chain asked none of the three — → `ForkBaseMoved`
+    /// (the fork gate) → where `base` is present,
     /// `NoBaseToRecord` → `SourceNotRegistered` (the base to record names no
     /// registered document) → `BaseNotInChain` (the base off the recorded
     /// base's chain) → `BaseExtentTooLarge` (the base's extent past its
@@ -230,12 +241,17 @@ where
         };
         if let Some(head) = &request.head {
             // The chain the head must lie in: the recorded base's, else the
-            // fork's source's; a document with neither has none to check.
+            // fork's source's. A document with neither has none, and its
+            // head is judged by nothing: nothing of it is recorded (N4), and
+            // a count read of a document the caller may not read would
+            // answer that document's size (PUB-1.13).
             let chain = standing
                 .as_ref()
                 .map(|b| trunk_of(&b.base))
                 .or_else(|| fork_source.as_ref().map(trunk_of));
-            judge_pair(m3, m5, head, chain.as_ref())?;
+            if let Some(chain) = &chain {
+                judge_pair(m3, m5, head, chain)?;
+            }
             // The fork gate (N4): admitted where the source IS the head.
             if let Some(source) = &fork_source {
                 if *source != head.member {
@@ -249,7 +265,7 @@ where
             };
             // Judged as the head is, so no record names a member no mint
             // made or claims more of its base than the base holds (N4).
-            judge_pair(m3, m5, base, Some(&trunk_of(&standing.base)))?;
+            judge_pair(m3, m5, base, &trunk_of(&standing.base))?;
         }
         // The tell (R5): the trunk's current head where it is not the one
         // named — read, never locked.
@@ -306,35 +322,47 @@ where
 /// Judges a pair the request names as the shot judges its base (PUB-2.37).
 ///
 /// The pair is the head or the base to record, and `trunk` the document
-/// whose chain it must lie in, `None` where there is none to check. Where
-/// there is one, the member must be a registered document of it: its
-/// registration asked first — an unregistered argument answers registration
-/// and nothing later (PUB-6.37), as the shot's base does — then its address
-/// against the chain. The extent — the head's as read at the compose (P1)
-/// — is checked against the member's own arrangement: `content_count`
-/// answers the address named, a bare document's pre-chain arrangement
-/// included, and never floats to the head.
+/// whose chain it must lie in. The member must be a registered document of
+/// it: its registration asked first — an unregistered argument answers
+/// registration and nothing later (PUB-6.37), as the shot's base does —
+/// then its address against the chain. The extent — the head's as read at
+/// the compose (P1) — is checked against the member's own arrangement:
+/// `content_count` answers the address named, a bare document's pre-chain
+/// arrangement included, and never floats to the head.
+///
+/// **Precondition.** `trunk` is a published document. The count is read
+/// of a member of its chain alone, and every member of a published trunk
+/// reads as the trunk does, so the count answers nothing a caller may not
+/// read (PUB-1.13). Both calls keep it: a recorded base lies in a published
+/// chain, and a fork's source is a published surface.
 ///
 /// # Errors
 ///
-/// Where `trunk` is present, `SourceNotRegistered` where `pair.member`
-/// names no registered document, then `BaseNotInChain` where it lies
-/// outside `trunk`'s chain; then `BaseExtentTooLarge` where `pair.extent`
-/// exceeds the member's current content count.
+/// `SourceNotRegistered` where `pair.member` names no registered document,
+/// then `BaseNotInChain` where it lies outside `trunk`'s chain, then
+/// `BaseExtentTooLarge` where `pair.extent` exceeds the member's current
+/// content count.
+///
+/// # Panics
+///
+/// Panics in a debug build where the member passes both checks and
+/// `trunk` is not published: the precondition broken.
 fn judge_pair(
     m3: &M3State,
     m5: &M5State,
     pair: &Base,
-    trunk: Option<&Address>,
+    trunk: &Address,
 ) -> Result<(), SetArrangementError> {
-    if let Some(trunk) = trunk {
-        if !m3.is_registered_document(&pair.member) {
-            return Err(SetArrangementError::SourceNotRegistered);
-        }
-        if !in_chain(&pair.member, trunk) {
-            return Err(SetArrangementError::BaseNotInChain);
-        }
+    if !m3.is_registered_document(&pair.member) {
+        return Err(SetArrangementError::SourceNotRegistered);
     }
+    if !in_chain(&pair.member, trunk) {
+        return Err(SetArrangementError::BaseNotInChain);
+    }
+    debug_assert!(
+        published_target(m3, &pair.member),
+        "a pair is judged against a published chain alone: {trunk:?}"
+    );
     if pair.extent > m5.content_count(&pair.member) {
         return Err(SetArrangementError::BaseExtentTooLarge);
     }

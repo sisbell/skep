@@ -10,7 +10,10 @@
 //! moved head; a base absent moving nothing and a base without a merge
 //! clearing the marker; the empty draft and the empty `runs`; the fork
 //! gate's two answers and the free-standing draft admitted with nothing
-//! moved, its head unchecked.
+//! moved, nothing of its head read — an extent past the count of another
+//! principal's draft, or of an address no mint has made, admitted; and a
+//! pair judged against a private chain, a world no op builds, stopping a
+//! debug build before that chain's count is read.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
@@ -155,8 +158,10 @@ fn base_of(k: &Kernel<LandWorld>, doc: &Address) -> Option<DraftBase> {
 /// THE REFUSAL ORDER, each refusal writing nothing: the destination's own
 /// four, then the head's three, the fork gate, the base's four, then the
 /// runs — each pinned against the next by a request defective in both ways,
-/// so a later verdict never speaks ahead of an earlier one; a defective run
-/// is refused past the staged removal with nothing of the transaction kept.
+/// so a later verdict never speaks ahead of an earlier one, and a
+/// free-standing draft's head asked none of the three, so its runs speak;
+/// a defective run is refused past the staged removal with nothing of the
+/// transaction kept.
 #[test]
 fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     let k = seeded();
@@ -233,6 +238,12 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
         E::SourceNotRegistered
     ), "the registration ahead of the gate");
+    // A free-standing draft's head, its extent past the member's count:
+    // no chain to judge it against, so the bad run is the verdict.
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 99)), None, None), now(&k))),
+        E::BadRun
+    ), "nothing of a free-standing draft's head judged");
     unchanged("the head's three");
     // The base to record: none recorded, ahead of its extent and of its
     // registration; naming no registered document, ahead of its chain, its
@@ -501,7 +512,10 @@ fn an_empty_draft_takes_a_placement_and_an_empty_runs_empties_the_draft() {
 /// ruling N4, its precision P5): a fork whose source IS the head named is
 /// admitted, gaining no base and no marker; a document with neither a
 /// recorded base nor a published source — a plain draft, an alternative of
-/// one — is admitted with its head unchecked and nothing moved.
+/// one — is admitted with nothing moved and nothing of its head read, an
+/// extent past the count of another principal's draft or of an address no
+/// mint has made admitted, so the answer tells nothing of the document the
+/// head names (PUB-1.13).
 #[test]
 fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gains_nothing() {
     let k = seeded();
@@ -522,9 +536,17 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k)).expect("free-standing: admitted");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 1)]);
     assert_eq!(base_of(&k, &doc1()), None);
-    // A head no mint has made is unchecked there too: no chain to judge it
-    // against, and nothing recorded of it.
-    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&a(&[1, 0, 1, 0, 3, 9]), 0)), None, None), now(&k))
+    // The stranger's private fork, holding one, named as the head at 99:
+    // nothing of it is read — its count would answer the fork's size.
+    assert_eq!(k.snapshot().world().m5().content_count(&fork), n(1), "the fork holds one");
+    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 2)], Some(pair(&fork, 99)), None, None), now(&k))
+        .expect("free-standing: another's draft past its count, unread");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 2)]);
+    assert_eq!(base_of(&k, &doc1()), None);
+    // A head no mint has made is unchecked there too, past the zero its
+    // count answers: no chain to judge it against, and nothing recorded of
+    // it.
+    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&a(&[1, 0, 1, 0, 3, 9]), 5)), None, None), now(&k))
         .expect("free-standing: the head unchecked");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 1)]);
     assert_eq!(base_of(&k, &doc1()), None);
@@ -541,4 +563,18 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
         rejected(vs.set_arrangement(P1, &alternative, &request(vec![ShotRun { origin: doc1(), run: run(&la(1), 1) }], None, None, None), now(&k))),
         E::BadRun
     ));
+}
+
+/// A PAIR IS JUDGED AGAINST A PUBLISHED CHAIN ALONE (PUB-1.13): a world no
+/// op builds — a draft whose recorded base is the private draft `doc1` —
+/// breaks `judge_pair`'s precondition, and a debug build stops before the
+/// private draft's count is read.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a pair is judged against a published chain alone")]
+fn a_pair_judged_against_a_private_chain_is_the_stores_bug_and_stops() {
+    let world = seeded().snapshot().world().clone();
+    let m5 = world.m5.apply_m5(Seq(0), &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(2), source: doc1(), merge: None });
+    let k = mem_kernel_of(LandWorld { m5, ..world });
+    let _ = Vstream::new(&k).set_arrangement(P1, &doc2(), &request(vec![], None, Some(pair(&doc1(), 1)), None), now(&k));
 }

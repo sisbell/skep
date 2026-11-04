@@ -5,10 +5,12 @@
 //! marker served by `doc_metadata` — with `arrangement_moved` wiping
 //! nothing; land and tell (`head_moved`); the fork gate's refusal
 //! (`fork_base_moved`) and admission (the source is the head); a baseless
-//! draft admitted with nothing moved, and `no_base_to_record`; the head's
-//! three refusals and the base's; `doc_metadata` and `image` on `/op-at` at
-//! `at − 1` answering the pre-landing state; `write_at_history` on
-//! `/op-at`; the feed row and its two terms; the wire's example frame
+//! draft admitted with nothing moved, and `no_base_to_record`; a
+//! free-standing draft's head naming a draft its caller may not read,
+//! acked at any extent, and the runs naming that draft `withheld`; the
+//! head's three refusals and the base's; `doc_metadata` and `image` on
+//! `/op-at` at `at − 1` answering the pre-landing state; `write_at_history`
+//! on `/op-at`; the feed row and its two terms; the wire's example frame
 //! answered as the op. The door's consult is `source_gate.rs`'s pattern;
 //! the marker's inheritance and the shot's clear are `stage.rs`'s.
 //!
@@ -251,6 +253,50 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_refused_by_name_where_it_
     // A base named for the fork: nothing to record.
     assert_permanent(&op(port, Some(&stranger), &set_arrangement_frame(&fork, &borrowed(&runs), Some((&v1, 3)), Some((&v1, 3)), None, None)), "no_base_to_record");
     assert_eq!(head_position(port), head);
+    sd.shutdown();
+}
+
+/// A FREE-STANDING DRAFT'S HEAD TELLS NOTHING (PUB-1.13): a stranger's own
+/// draft — a mint after their home, no base and no source — takes a landing
+/// whose head names the owner's private draft at its count and past it, each
+/// acked with no `head_moved` and nothing recorded, so the answer says
+/// nothing of the size of a document the stranger may not read; the runs,
+/// which the op does read, are consulted: runs naming that draft are
+/// `withheld` naming it, nothing written.
+#[test]
+fn a_free_standing_drafts_head_tells_nothing_of_a_draft_its_caller_may_not_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let edition = edition_with(port, &signed, "abc");
+    let plain = draft_with(port, &owner, "xy");
+    assert_eq!(content_extent(port, Some(&owner), &plain), 2, "the owner's draft holds two");
+    // The stranger's home, then a draft of their own: free-standing.
+    let stranger = seat_stranger(port, 932);
+    let own = create_doc(port, &stranger.session, &stranger.account);
+    let v = doc_metadata(port, Some(&stranger.session), &own);
+    let meta = expect_resp(&v, "doc_metadata");
+    assert!(meta["base"].is_null() && meta["source"].is_null(), "free-standing: {v}");
+    assert_withheld(&doc_metadata(port, Some(&stranger.session), &plain), &plain);
+    let runs = runs_of(port, &stranger.session, &edition, 1, 3);
+    for extent in [2, 3, 1_000_000] {
+        let ack = op(port, Some(&stranger.session), &set_arrangement_frame(&own, &borrowed(&runs), Some((&plain, extent)), None, None, None));
+        assert_eq!(ack["resp"].as_str(), Some("ack"), "extent {extent}: {ack}");
+        assert!(ack.get("head_moved").is_none(), "extent {extent}: {ack}");
+        let v = doc_metadata(port, Some(&stranger.session), &own);
+        let meta = expect_resp(&v, "doc_metadata");
+        assert!(meta["base"].is_null() && meta["merge"].is_null(), "extent {extent}, nothing recorded: {v}");
+    }
+    assert_eq!(text_of(port, Some(&stranger.session), &own, 1, 3), "abc");
+    // The runs are what the op reads: naming the owner's draft, refused.
+    let head = head_position(port);
+    let theirs = runs_of(port, &owner, &plain, 1, 2);
+    let refused = op(port, Some(&stranger.session), &set_arrangement_frame(&own, &borrowed(&theirs), None, None, None, None));
+    assert_withheld(&refused, &plain);
+    assert_eq!(head_position(port), head, "nothing written");
+    assert_eq!(text_of(port, Some(&stranger.session), &own, 1, 3), "abc");
     sd.shutdown();
 }
 

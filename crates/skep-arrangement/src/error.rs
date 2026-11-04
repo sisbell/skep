@@ -329,13 +329,14 @@ pub enum StageError {
 /// refusal, [`InsertError::ArrangementMoved`]'s, skep #442: the frame was
 /// typed against a state of the draft older than its arrangement's last
 /// change, and nothing is wiped). Then the head's three, the shot's
-/// spellings over the head the merge was composed on: `SourceNotRegistered`
-/// — the head names no registered document, asked first as the shot asks
-/// its base's registration (PUB-6.37) — and `BaseNotInChain` — the head
-/// lies off the chain the draft's recorded base lies in, or the fork's
-/// source's document — the two asked only of a draft with one of those
-/// chains; and `BaseExtentTooLarge`, the head's extent as read past the
-/// head's current count. Then the fork gate's `ForkBaseMoved`: the
+/// spellings over the head the merge was composed on, asked only of a
+/// draft with a chain — the one its recorded base lies in, or its fork's
+/// source's document — and a draft with neither asked none:
+/// `SourceNotRegistered` — the head names no registered document, asked
+/// first as the shot asks its base's registration (PUB-6.37) — then
+/// `BaseNotInChain` — the head lies off that chain — then
+/// `BaseExtentTooLarge`, the head's extent as read past the head's current
+/// count. Then the fork gate's `ForkBaseMoved`: the
 /// destination is a fork (no recorded base, its source a published
 /// surface) whose source is not the frame's head — a landing would make
 /// the source the board records false (the owner's ruling N4); it carries

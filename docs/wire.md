@@ -1782,8 +1782,9 @@ minted it), `base_not_in_chain` (a shot's base; a set_arrangement's head,
 or the base it names to record, off the chain the draft's recorded base
 lies in — or, for a fork, off its source's document),
 `base_superseded`, `base_extent_too_large` (a shot's base extent; a
-set_arrangement's head extent as read, or the extent of the base it
-names to record, past that member's current count),
+set_arrangement's head extent as read, on a draft with a chain, or the
+extent of the base it names to record, past that member's current
+count),
 `fork_base_moved` (set_arrangement into a FORK — a document with no
 recorded base whose source is a published surface — whose source is not
 the frame's head: the source the board records is immutable, and a
@@ -3474,17 +3475,20 @@ Three optional members, each absent or `null` alike absent:
   The board checks it against the draft's chain — `source_not_registered`
   where `at` names no registered document, then `base_not_in_chain` where
   it lies off the chain the draft's recorded base lies in (or, for a fork,
-  its source's document; a draft with neither is unchecked) — and
-  `extent` against `at`'s current count (`base_extent_too_large`), and
-  NEVER against the trunk's current head: a version published since the
-  compose refuses nothing. The write lands, records what it was told, and
-  the ack carries `head_moved`, the trunk's current head, where it is no
-  longer `at` — LAND AND TELL — so the draft's next `publish` lands as
-  the head's daughter (§The publish shot and head-float) unless the merge
-  is composed again on the newer head. The extent as read is what the
-  record beside it keeps, so a deposit the head took between the compose
-  and the landing lies past it and is carried as the next shot's tail,
-  never dropped.
+  its source's document), then `extent` against `at`'s current count
+  (`base_extent_too_large`) — and NEVER against the trunk's current head:
+  a version published since the compose refuses nothing. The write lands,
+  records what it was told, and the ack carries `head_moved`, the trunk's
+  current head, where it is no longer `at` — LAND AND TELL — so the
+  draft's next `publish` lands as the head's daughter (§The publish shot
+  and head-float) unless the merge is composed again on the newer head.
+  The extent as read is what the record beside it keeps, so a deposit the
+  head took between the compose and the landing lies past it and is
+  carried as the next shot's tail, never dropped. On a draft with neither
+  chain NOTHING of `head` is checked, `extent` included: nothing of it is
+  recorded, and the board compares no count of a document the caller may
+  not read (PUB-1.13), so naming another's draft as `head` tells nothing
+  of it.
 * `base` — `{"at": <address>, "extent": <nat>}`: THE BASE TO RECORD. A
   landing sends the head pair; an undo sends the base read at the
   position before the landing (§Reading history); a plain re-arrangement
@@ -3517,16 +3521,17 @@ where `head.at` is another member the frame is refused
 another head would make the recorded source false — the way out is a
 fresh fork from the head, landed into. A FREE-STANDING draft — a
 `create_new_document` or `fork` mint, an alternative of one — is
-admitted with its `head` unchecked, gaining no base and no marker, and
-refuses a `base` `no_base_to_record`. A draft WITH a recorded base is
-the staged draft the ruling is for: its base moves where `base` says.
+admitted with its `head` unchecked, `extent` included, gaining no base
+and no marker, and refuses a `base` `no_base_to_record`. A draft WITH a
+recorded base is the staged draft the ruling is for: its base moves
+where `base` says.
 
 The runs' origins are consulted as `reinstate`'s are — per DISTINCT
 origin in run order, `withheld` naming the first unreadable one, `doc`'s
 own I-space excepted — and judged in the store as `reinstate` judges
 them: the destination's own refusals first (`doc_not_registered`,
 `not_owner`, `published_target`, `arrangement_moved`), then the head's
-(`source_not_registered`, `base_not_in_chain`,
+on a draft with a chain (`source_not_registered`, `base_not_in_chain`,
 `base_extent_too_large`), the fork gate (`fork_base_moved`), the base's
 (`no_base_to_record`, `source_not_registered`, `base_not_in_chain`,
 `base_extent_too_large`), then per run in the

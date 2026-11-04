@@ -42,16 +42,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   (`arrangement_moved`, nothing wiped). It is the board's half of a
   merge's landing into a draft: the request carries the HEAD the merge
   was composed on at the extent read, which the store checks against
-  the draft's chain and never against the trunk's current head — a
-  version published since lands all the same and the answer names the
-  newer head (`head_moved`) — and, where the request names a BASE to
-  record, the draft's recorded base moves to it in the same commit,
-  carrying the request's MERGE as the marker the draft now carries
-  (`DraftBase::merge`: the sides, the head at the extent read, and the
-  position the marker was put on the document, stamped by the fold),
-  or clearing one. The marker travels with the base: copied by a stage
-  of a marked draft at the stage's own position, cleared by the shot
-  that moves the base, untouched by a write that leaves the base
+  the draft's chain where it has one (a draft with no chain has nothing
+  of it checked, the extent included) and never against the trunk's
+  current head — a version published since lands all the same and the
+  answer names the newer head (`head_moved`) — and, where the request
+  names a BASE to record, the draft's recorded base moves to it in the
+  same commit, carrying the request's MERGE as the marker the draft now
+  carries (`DraftBase::merge`: the sides, the head at the extent read,
+  and the position the marker was put on the document, stamped by the
+  fold), or clearing one. The marker travels with the base: copied by a
+  stage of a marked draft at the stage's own position, cleared by the
+  shot that moves the base, untouched by a write that leaves the base
   untouched. A document with no recorded base gains none; a FORK whose
   source is not the request's head is refused by name
   (`fork_base_moved`), its recorded source never made false.

@@ -972,7 +972,7 @@ mod tests {
         };
         assert_eq!(whole.in_place_destination(), Some(&d));
         assert_eq!(whole.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
-        assert_eq!(whole.source_arguments(), vec![&src], "the runs' origin alone: the head, the base and the sides are names");
+        assert_eq!(whole.source_arguments(), vec![&src], "the runs' origin alone: the head, the base and the sides are names, M5 reading nothing of one but a published chain's");
     }
 
     /// PUB-6.6: the third pairing `consult_write` depends on.

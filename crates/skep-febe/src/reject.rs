@@ -399,7 +399,8 @@ pub enum RejectCode {
     /// The base extent exceeds the base's current content count.
     ///
     /// Also `set_arrangement`'s: the head's extent as read at the compose,
-    /// or the base's to record, past that member's current count.
+    /// on a draft with a chain, or the base's to record, past that member's
+    /// current count.
     BaseExtentTooLarge,
     /// A `set_arrangement` into a fork whose source is not the head named
     /// (the landing lane; the owner's ruling N4 and its precision P5; skep

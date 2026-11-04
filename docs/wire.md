@@ -1716,8 +1716,8 @@ Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered` (a copy spec's source, a version's source, a
 shot's base, a draft it names — the rendering draft, or one of the
 family's other drafts — or run origin, a reinstate's run origin, a
-set_arrangement's head or the base it names to record, asked ahead of
-the chain, or run origin),
+set_arrangement's head, on every draft, or the base it names to record,
+asked ahead of the chain, or run origin),
 `parent_not_registered`, `not_registered`, `original_not_resident`,
 `endpoint_not_resident`.
 
@@ -3485,10 +3485,13 @@ Three optional members, each absent or `null` alike absent:
   The extent as read is what the record beside it keeps, so a deposit the
   head took between the compose and the landing lies past it and is
   carried as the next shot's tail, never dropped. On a draft with neither
-  chain NOTHING of `head` is checked, `extent` included: nothing of it is
+  chain `at` is checked for its registration ALONE —
+  `source_not_registered` where it names no registered document, a
+  document's existence being visible to every caller (PUB-1.14) — and
+  nothing else of `head` is, `extent` included: nothing of it is
   recorded, and the board compares no count of a document the caller may
   not read (PUB-1.13), so naming another's draft as `head` tells nothing
-  of it.
+  of it beyond its existence.
 * `base` — `{"at": <address>, "extent": <nat>}`: THE BASE TO RECORD. A
   landing sends the head pair; an undo sends the base read at the
   position before the landing (§Reading history); a plain re-arrangement
@@ -3521,20 +3524,21 @@ where `head.at` is another member the frame is refused
 another head would make the recorded source false — the way out is a
 fresh fork from the head, landed into. A FREE-STANDING draft — a
 `create_new_document` or `fork` mint, an alternative of one — is
-admitted with its `head` unchecked, `extent` included, gaining no base
-and no marker, and refuses a `base` `no_base_to_record`. A draft WITH a
-recorded base is the staged draft the ruling is for: its base moves
-where `base` says.
+admitted where `head.at` names a registered document, its `extent`
+unchecked, gaining no base and no marker, and refuses a `base`
+`no_base_to_record`. A draft WITH a recorded base is the staged draft
+the ruling is for: its base moves where `base` says.
 
 The runs' origins are consulted as `reinstate`'s are — per DISTINCT
 origin in run order, `withheld` naming the first unreadable one, `doc`'s
 own I-space excepted — and judged in the store as `reinstate` judges
 them: the destination's own refusals first (`doc_not_registered`,
 `not_owner`, `published_target`, `arrangement_moved`), then the head's
-on a draft with a chain (`source_not_registered`, `base_not_in_chain`,
-`base_extent_too_large`), the fork gate (`fork_base_moved`), the base's
-(`no_base_to_record`, `source_not_registered`, `base_not_in_chain`,
-`base_extent_too_large`), then per run in the
+(`source_not_registered` on every draft, then `base_not_in_chain` and
+`base_extent_too_large` on a draft with a chain), the fork gate
+(`fork_base_moved`), the base's (`no_base_to_record`,
+`source_not_registered`, `base_not_in_chain`, `base_extent_too_large`),
+then per run in the
 order given the FIRST defective run deciding — `bad_run`,
 `source_not_registered`, `dangling_source` (every address probed),
 `too_many_runs` past `MAX_PLACED_RUNS`; the run list itself is one wire

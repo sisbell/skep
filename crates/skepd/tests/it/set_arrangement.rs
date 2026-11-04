@@ -5,7 +5,8 @@
 //! marker served by `doc_metadata` — with `arrangement_moved` wiping
 //! nothing; land and tell (`head_moved`); the fork gate's refusal
 //! (`fork_base_moved`) and admission (the source is the head); a baseless
-//! draft admitted with nothing moved, and `no_base_to_record`; a
+//! draft admitted with nothing moved, its head naming no registered
+//! document refused `source_not_registered`, and `no_base_to_record`; a
 //! free-standing draft's head naming a draft its caller may not read,
 //! acked at any extent, and the runs naming that draft `withheld`; the
 //! head's three refusals and the base's; `doc_metadata` and `image` on
@@ -301,10 +302,11 @@ fn a_free_standing_drafts_head_tells_nothing_of_a_draft_its_caller_may_not_read(
 }
 
 /// A BASELESS DRAFT (N4): a plain draft — minted and written, never staged
-/// — takes a landing with its head unchecked and nothing moved, no base and
-/// no marker gained; naming a `base` for it is `no_base_to_record`, nothing
-/// written; an empty `runs` empties it; and the wire's documented example
-/// is answered as the op.
+/// — takes a landing whose head names a registered document, nothing moved,
+/// no base and no marker gained; a head naming no registered document is
+/// `source_not_registered`, reorder, and naming a `base` for it is
+/// `no_base_to_record`, each with nothing written; an empty `runs` empties
+/// it; and the wire's documented example is answered as the op.
 #[test]
 fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -331,6 +333,16 @@ fn a_baseless_draft_is_admitted_with_nothing_moved_and_refuses_a_base_by_name() 
     let row = changes_since(port, &owner, head).remove(0);
     assert_eq!(row["op"].as_str(), Some("set_arrangement"));
     assert!(row["base"].is_null() && row["merge"].is_null(), "the row's terms, both null: {row}");
+    // A head naming no registered document — the edition's ninth member,
+    // which no mint has made — is refused by its registration, reorder, as
+    // on a draft with a chain, nothing written.
+    let before = head_position(port);
+    let unminted = format!("{edition}.9");
+    let v = op(port, Some(&owner), &set_arrangement_frame(&plain, &borrowed(&runs), Some((&unminted, 0)), None, None, None));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["disposition"].as_str()), (Some("source_not_registered"), Some("reorder")), "{v}");
+    assert_eq!(head_position(port), before, "nothing written");
+    assert_eq!(text_of(port, Some(&owner), &plain, 1, 3), "abc");
     // The empty arrangement.
     let ack = op(port, Some(&owner), &set_arrangement_frame(&plain, &[], None, None, None, None));
     expect_resp(&ack, "ack");

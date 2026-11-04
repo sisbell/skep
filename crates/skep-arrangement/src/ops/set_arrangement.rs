@@ -46,8 +46,8 @@ use crate::HasM5;
 /// the store checks the head and the base against the draft's chain, as
 /// registered members of it, each extent against its member's current
 /// count, and nothing against `runs`. A draft with no chain — no recorded
-/// base and no published source — has nothing of its head checked, the
-/// extent included, and no base to record.
+/// base and no published source — has its head asked its registration
+/// alone, the extent unchecked, and no base to record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetArrangement {
     /// The runs the draft is set to, in order; empty for an empty arrangement.
@@ -96,15 +96,18 @@ where
     /// trunk's current head: a version published since the compose is NOT
     /// refused — the op lands, records what it was told, and answers the
     /// trunk's current head beside the position where that head is not the
-    /// one named, so the caller learns a newer version stands. A draft with
-    /// no chain has its head judged by nothing — registration, chain and
-    /// count alike — since nothing of it is recorded (N4) and a count read
-    /// of a document the caller may not read would answer that document's
-    /// size (PUB-1.13). Only the tell reads the head's trunk there, and it
-    /// answers a published chain's head alone, a private document being
-    /// versionless (PUB-2.9). The head is read, never written: no head key
-    /// is taken, and a shot landing between the read and the commit makes
-    /// the tell stale by one member, which the next read corrects.
+    /// one named, so the caller learns a newer version stands. On a draft
+    /// with no chain the head meets the registration check alone — every
+    /// head names a registered document (PUB-6.37), and the refusal tells
+    /// nothing a caller may not learn, a document's existence being visible
+    /// (PUB-1.14) — and neither its chain nor its count is judged, since
+    /// nothing of it is recorded (N4) and a count read of a document the
+    /// caller may not read would answer that document's size (PUB-1.13).
+    /// Only the tell reads the head's trunk there, and it answers a
+    /// published chain's head alone, a private document being versionless
+    /// (PUB-2.9). The head is read, never written: no head key is taken, and
+    /// a shot landing between the read and the commit makes the tell stale
+    /// by one member, which the next read corrects.
     ///
     /// **The fork gate** (N4, P5). A destination with no recorded base
     /// whose fork source is a published surface is a fork: landing into it
@@ -114,8 +117,8 @@ where
     /// landing composed on another head would make it false. An admitted
     /// fork gains no base and no marker. A destination with neither a
     /// recorded base nor a published source — a free-standing draft, an
-    /// alternative of one — is admitted, its head unchecked and nothing
-    /// moved.
+    /// alternative of one — is admitted where its head is registered,
+    /// nothing moved.
     ///
     /// **The base, judged as the head is** (N4). Where `base` is present it
     /// must be a registered member of the chain the recorded base lies in
@@ -158,12 +161,12 @@ where
     /// Each refusal comes as `TxnError::Rejected`, in this order (which error
     /// wins), the first refusing with nothing written: `DocNotRegistered` →
     /// `NotOwner` → `PublishedTarget` → `ArrangementMoved` (the destination's
-    /// own four, as the in-place edits judge them) → where `head` is present
-    /// and the draft has one of the two chains, `SourceNotRegistered` (the
-    /// head names no registered document) → `BaseNotInChain` (the head off
-    /// the chain the recorded base lies in, or the fork's source's document)
-    /// → `BaseExtentTooLarge` (the head's extent past its current count) — a
-    /// draft with neither chain asked none of the three — → `ForkBaseMoved`
+    /// own four, as the in-place edits judge them) → where `head` is present,
+    /// `SourceNotRegistered` (the head names no registered document) → and
+    /// where the draft has one of the two chains, `BaseNotInChain` (the head
+    /// off the chain the recorded base lies in, or the fork's source's
+    /// document) → `BaseExtentTooLarge` (the head's extent past its current
+    /// count) — a draft with neither chain asked neither — → `ForkBaseMoved`
     /// (the fork gate) → where `base` is present,
     /// `NoBaseToRecord` → `SourceNotRegistered` (the base to record names no
     /// registered document) → `BaseNotInChain` (the base off the recorded
@@ -242,15 +245,17 @@ where
         if let Some(head) = &request.head {
             // The chain the head must lie in: the recorded base's, else the
             // fork's source's. A document with neither has none, and its
-            // head is judged by nothing: nothing of it is recorded (N4), and
-            // a count read of a document the caller may not read would
-            // answer that document's size (PUB-1.13).
+            // head meets the registration check alone: a document's
+            // existence is visible (PUB-1.14), while nothing of the head is
+            // recorded (N4) and a count read of a document the caller may
+            // not read would answer that document's size (PUB-1.13).
             let chain = standing
                 .as_ref()
                 .map(|b| trunk_of(&b.base))
                 .or_else(|| fork_source.as_ref().map(trunk_of));
-            if let Some(chain) = &chain {
-                judge_pair(m3, m5, head, chain)?;
+            match &chain {
+                Some(chain) => judge_pair(m3, m5, head, chain)?,
+                None => judge_registration(m3, head)?,
             }
             // The fork gate (N4): admitted where the source IS the head.
             if let Some(source) = &fork_source {
@@ -268,7 +273,8 @@ where
             judge_pair(m3, m5, base, &trunk_of(&standing.base))?;
         }
         // The tell (R5): the trunk's current head where it is not the one
-        // named — read, never locked.
+        // named — asked of a head the checks above found registered, as
+        // `trunk_head` requires, and read, never locked.
         let head_moved = request
             .head
             .as_ref()
@@ -323,12 +329,13 @@ where
 ///
 /// The pair is the head or the base to record, and `trunk` the document
 /// whose chain it must lie in. The member must be a registered document of
-/// it: its registration asked first — an unregistered argument answers
-/// registration and nothing later (PUB-6.37), as the shot's base does —
-/// then its address against the chain. The extent — the head's as read at
-/// the compose (P1) — is checked against the member's own arrangement:
-/// `content_count` answers the address named, a bare document's pre-chain
-/// arrangement included, and never floats to the head.
+/// it: its registration asked first, by `judge_registration` — an
+/// unregistered argument answers registration and nothing later
+/// (PUB-6.37), as the shot's base does — then its address against the
+/// chain. The extent — the head's as read at the compose (P1) — is checked
+/// against the member's own arrangement: `content_count` answers the
+/// address named, a bare document's pre-chain arrangement included, and
+/// never floats to the head.
 ///
 /// **Precondition.** `trunk` is a published document. The count is read
 /// of a member of its chain alone, and every member of a published trunk
@@ -353,9 +360,7 @@ fn judge_pair(
     pair: &Base,
     trunk: &Address,
 ) -> Result<(), SetArrangementError> {
-    if !m3.is_registered_document(&pair.member) {
-        return Err(SetArrangementError::SourceNotRegistered);
-    }
+    judge_registration(m3, pair)?;
     if !in_chain(&pair.member, trunk) {
         return Err(SetArrangementError::BaseNotInChain);
     }
@@ -367,6 +372,26 @@ fn judge_pair(
         return Err(SetArrangementError::BaseExtentTooLarge);
     }
     Ok(())
+}
+
+/// Refuses a pair whose member names no registered document.
+///
+/// It is `judge_pair`'s first check, and the only one a head meets on a
+/// draft with no chain: an unregistered argument answers registration and
+/// nothing later (PUB-6.37), and a document's existence is visible to every
+/// caller (PUB-1.14), so the refusal tells nothing a caller may not learn.
+/// It reads no chain and no count, so it holds no precondition on the
+/// pair's trunk.
+///
+/// # Errors
+///
+/// `SourceNotRegistered` where `pair.member` names no registered document.
+fn judge_registration(m3: &M3State, pair: &Base) -> Result<(), SetArrangementError> {
+    if m3.is_registered_document(&pair.member) {
+        Ok(())
+    } else {
+        Err(SetArrangementError::SourceNotRegistered)
+    }
 }
 
 /// Returns whether `member`'s address lies in `trunk`'s chain (PUB-2.15).

@@ -10,10 +10,11 @@
 //! moved head; a base absent moving nothing and a base without a merge
 //! clearing the marker; the empty draft and the empty `runs`; the fork
 //! gate's two answers and the free-standing draft admitted with nothing
-//! moved, nothing of its head read — an extent past the count of another
-//! principal's draft, or of an address no mint has made, admitted; and a
-//! pair judged against a private chain, a world no op builds, stopping a
-//! debug build before that chain's count is read.
+//! moved, its head asked its registration alone — an extent past the
+//! count of another principal's draft admitted, a head no mint has made
+//! refused — and told a moved head as any draft is; and a pair judged
+//! against a private chain, a world no op builds, stopping a debug build
+//! before that chain's count is read.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
@@ -159,9 +160,10 @@ fn base_of(k: &Kernel<LandWorld>, doc: &Address) -> Option<DraftBase> {
 /// four, then the head's three, the fork gate, the base's four, then the
 /// runs — each pinned against the next by a request defective in both ways,
 /// so a later verdict never speaks ahead of an earlier one, and a
-/// free-standing draft's head asked none of the three, so its runs speak;
-/// a defective run is refused past the staged removal with nothing of the
-/// transaction kept.
+/// free-standing draft's head asked its registration alone, ahead of the
+/// base's four, so past it its runs speak whatever its extent; a defective
+/// run is refused past the staged removal with nothing of the transaction
+/// kept.
 #[test]
 fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     let k = seeded();
@@ -238,12 +240,23 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
         E::SourceNotRegistered
     ), "the registration ahead of the gate");
-    // A free-standing draft's head, its extent past the member's count:
-    // no chain to judge it against, so the bad run is the verdict.
+    // A free-standing draft's head: its registration asked alone — naming
+    // an address no mint has made, refused ahead of the runs, and naming no
+    // registered document beside a base to record, ahead of the base's
+    // four — and, registered, its extent past the member's count unjudged,
+    // so the bad run is the verdict.
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
+        E::SourceNotRegistered
+    ), "a free-standing draft's head asked its registration");
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&ghost, 99)), Some(pair(&member, 3)), None), now(&k))),
+        E::SourceNotRegistered
+    ), "the head's registration ahead of nothing to record");
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 99)), None, None), now(&k))),
         E::BadRun
-    ), "nothing of a free-standing draft's head judged");
+    ), "nothing of a free-standing draft's head judged past its registration");
     unchanged("the head's three");
     // The base to record: none recorded, ahead of its extent and of its
     // registration; naming no registered document, ahead of its chain, its
@@ -512,10 +525,13 @@ fn an_empty_draft_takes_a_placement_and_an_empty_runs_empties_the_draft() {
 /// ruling N4, its precision P5): a fork whose source IS the head named is
 /// admitted, gaining no base and no marker; a document with neither a
 /// recorded base nor a published source — a plain draft, an alternative of
-/// one — is admitted with nothing moved and nothing of its head read, an
-/// extent past the count of another principal's draft or of an address no
-/// mint has made admitted, so the answer tells nothing of the document the
-/// head names (PUB-1.13).
+/// one — is admitted with nothing moved and its head asked its
+/// registration alone: an extent past the count of another principal's
+/// draft admitted, so the answer tells nothing of that draft's size
+/// (PUB-1.13), and a head naming no registered document refused
+/// `SourceNotRegistered` with nothing written (PUB-6.37), a document's
+/// existence being visible (PUB-1.14). The tell is answered there as on
+/// any draft: a head the trunk has moved past is told the trunk's head.
 #[test]
 fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gains_nothing() {
     let k = seeded();
@@ -532,26 +548,53 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     assert_eq!(base_of(&k, &fork), None, "no base, no marker");
     assert_eq!(k.snapshot().world().m5().fork_source(&fork), Some(&member), "the source stands, true");
     assert_eq!(k.snapshot().world().m5().arranged_at(&fork), Some(at));
-    // The plain draft: no base, no source — the head unchecked.
-    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k)).expect("free-standing: admitted");
+    // The plain draft: no base, no source — the head registered, admitted,
+    // and the trunk's head, so nothing told.
+    let (_, head_moved) = vs
+        .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k))
+        .expect("free-standing: admitted");
+    assert_eq!(head_moved, None, "the head named is the trunk's");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 1)]);
     assert_eq!(base_of(&k, &doc1()), None);
     // The stranger's private fork, holding one, named as the head at 99:
-    // nothing of it is read — its count would answer the fork's size.
+    // registered, and nothing else of it is read — its count would answer
+    // the fork's size.
     assert_eq!(k.snapshot().world().m5().content_count(&fork), n(1), "the fork holds one");
     vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 2)], Some(pair(&fork, 99)), None, None), now(&k))
         .expect("free-standing: another's draft past its count, unread");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 2)]);
     assert_eq!(base_of(&k, &doc1()), None);
-    // A head no mint has made is unchecked there too, past the zero its
-    // count answers: no chain to judge it against, and nothing recorded of
-    // it.
-    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&a(&[1, 0, 1, 0, 3, 9]), 5)), None, None), now(&k))
-        .expect("free-standing: the head unchecked");
-    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 1)]);
+    // A head naming no registered document is refused there by its
+    // registration, nothing written: an address of the edition's chain no
+    // mint has made, past the zero its count answers, and a document no
+    // mint has made.
+    let before = k.current_seq();
+    for unminted in [a(&[1, 0, 1, 0, 3, 9]), a(&[1, 0, 1, 0, 9])] {
+        assert!(matches!(
+            rejected(vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&unminted, 5)), None, None), now(&k))),
+            E::SourceNotRegistered
+        ), "{unminted:?}: free-standing, refused by its registration");
+    }
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 2)], "the arrangement stands");
     assert_eq!(base_of(&k, &doc1()), None);
+    // The tell, as on any draft: with the trunk's second member minted, a
+    // head of the first is told the second, and a head of the second tells
+    // nothing; neither is recorded.
+    let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
+    assert_eq!(second, a(&[1, 0, 1, 0, 3, 2]));
+    let (_, head_moved) = vs
+        .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&member, 3)), None, None), now(&k))
+        .expect("free-standing: a head the trunk has moved past");
+    assert_eq!(head_moved, Some(second.clone()), "the trunk's current head, told");
+    let (_, head_moved) = vs
+        .set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 3)], Some(pair(&second, 3)), None, None), now(&k))
+        .expect("free-standing: the trunk's head");
+    assert_eq!(head_moved, None, "the head named is the trunk's");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 3)]);
+    assert_eq!(base_of(&k, &doc1()), None, "nothing recorded of either head");
     // An alternative of the plain draft: its source a draft, so no fork —
-    // a head off any chain is unchecked, and nothing moves.
+    // its head asked its registration alone, and nothing moves.
     let (alternative, _) = vs.stage(PrincipalId(1), &doc1()).expect("an alternative of the plain draft");
     assert_eq!(k.snapshot().world().m5().fork_source(&alternative), Some(&doc1()));
     vs.set_arrangement(P1, &alternative, &request(vec![ShotRun { origin: doc1(), run: run(&ca(2), 1) }], Some(pair(&member, 3)), None, None), now(&k))

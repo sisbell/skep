@@ -1347,9 +1347,10 @@ impl Op {
             // REINSTATE's are; the head, the base and the sides are names,
             // not sources — an address is not secret (PUB-1.13). That holds
             // while M5 reads nothing of a named document but a published
-            // chain's: it judges the head and the base only against the
-            // draft's chain, a published document's, and reads nothing of
-            // the head of a draft with none.
+            // chain's and a registration: it judges the head and the base
+            // against the draft's chain, a published document's, and asks
+            // the head of a draft with none its registration alone, a
+            // document's existence being visible (PUB-1.14).
             Op::SetArrangement { doc, arrangement, .. } => distinct_origins(doc, &arrangement.runs),
             Op::Version { d_src, .. } => vec![d_src],
             Op::Stage { from } => vec![from],

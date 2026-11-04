@@ -513,7 +513,7 @@
           },
           "head": {
             "type": "object",
-            "description": "The version the merge was composed on, at the content count read of it (as doc_metadata's base_extent counts). Present on a merge's landing; absent on an undo and a plain re-arrangement. Checked against the draft's chain (base_not_in_chain) and the member's current count (base_extent_too_large), never against the current head: a newer head is told in the ack's head_moved.",
+            "description": "The version the merge was composed on, at the content count read of it (as doc_metadata's base_extent counts). Present on a merge's landing; absent on an undo and a plain re-arrangement. Checked against the draft's chain — a registered member of it (source_not_registered, then base_not_in_chain) — and the member's current count (base_extent_too_large), never against the current head: a newer head is told in the ack's head_moved.",
             "properties": {
               "at": {
                 "type": "string",
@@ -530,7 +530,7 @@
           },
           "base": {
             "type": "object",
-            "description": "The base to record for the draft, with the extent read of it: the head pair on a landing, the base read at the position before the landing on an undo. The draft's recorded base moves there in the same commit; absent, nothing of the record moves. A draft the board records no base for refuses it no_base_to_record; one off the draft's chain base_not_in_chain; an extent past the member's current count base_extent_too_large, as the head's is.",
+            "description": "The base to record for the draft, with the extent read of it: the head pair on a landing, the base read at the position before the landing on an undo. The draft's recorded base moves there in the same commit; absent, nothing of the record moves. A draft the board records no base for refuses it no_base_to_record; a base no mint has made source_not_registered; one off the draft's chain base_not_in_chain; an extent past the member's current count base_extent_too_large, as the head's is.",
             "properties": {
               "at": {
                 "type": "string",

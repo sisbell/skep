@@ -444,7 +444,8 @@ pub struct DraftBase {
 /// (the landing lane; the owner's rulings R2 and R6; skep #764).
 ///
 /// Its content is the client's statement, as the shot's `base` is: the
-/// store checks the head against the chain and nothing against `runs`.
+/// store checks that the head is a registered member of the chain and
+/// nothing against `runs`.
 /// `sides` are the sides merged, by address, possibly empty (the command's
 /// draft-side shape names no daughter); `head` the head the merge was
 /// composed on and `head_copied` that head's content count AS READ at the

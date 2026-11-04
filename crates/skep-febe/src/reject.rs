@@ -233,6 +233,11 @@ pub enum RejectCode {
     /// A document the request names is not a registered document.
     DocNotRegistered,
     /// A source the operation reads is not a registered document.
+    ///
+    /// Also `set_arrangement`'s (the landing lane; skep #764): the head the
+    /// merge was composed on, or the base to record, names no registered
+    /// document — asked ahead of the chain, as the shot asks its base's
+    /// (PUB-6.37).
     SourceNotRegistered,
     /// A delegated prefix's parent is not a registered entity.
     ParentNotRegistered,

@@ -328,19 +328,23 @@ pub enum StageError {
 /// [`InsertError::PublishedTarget`] — and `ArrangementMoved`, the stale-edit
 /// refusal, [`InsertError::ArrangementMoved`]'s, skep #442: the frame was
 /// typed against a state of the draft older than its arrangement's last
-/// change, and nothing is wiped). Then the head's two, the shot's spellings
-/// over the head the merge was composed on: `BaseNotInChain` — the head is
-/// no member of the chain the draft's recorded base lies in, or of the
-/// fork's source's document — and `BaseExtentTooLarge`, the head's extent
-/// as read past the head's current count. Then the fork gate's
-/// `ForkBaseMoved`: the destination is a fork (no recorded base, its source
-/// a published surface) whose source is not the frame's head — a landing
-/// would make the source the board records false (the owner's ruling N4);
-/// it carries the source, the refusal's `site.addr`. Then the base's three:
+/// change, and nothing is wiped). Then the head's three, the shot's
+/// spellings over the head the merge was composed on: `SourceNotRegistered`
+/// — the head names no registered document, asked first as the shot asks
+/// its base's registration (PUB-6.37) — and `BaseNotInChain` — the head
+/// lies off the chain the draft's recorded base lies in, or the fork's
+/// source's document — the two asked only of a draft with one of those
+/// chains; and `BaseExtentTooLarge`, the head's extent as read past the
+/// head's current count. Then the fork gate's `ForkBaseMoved`: the
+/// destination is a fork (no recorded base, its source a published
+/// surface) whose source is not the frame's head — a landing would make
+/// the source the board records false (the owner's ruling N4); it carries
+/// the source, the refusal's `site.addr`. Then the base's four:
 /// `NoBaseToRecord` — the frame names a base to record and the board
 /// records none for the draft, so there is no record to move — then the
-/// head's two over the base to record, off the recorded base's chain or its
-/// extent past its member's current count, so no record the landing writes
+/// head's three over the base to record, naming no registered document,
+/// off the recorded base's chain or its extent past its member's current
+/// count, so no record the landing writes names a member no mint made or
 /// claims more of its base than the base holds (N4). Then, per run and in
 /// the order given as REINSTATE judges them, `BadRun`,
 /// `SourceNotRegistered`, `DanglingSource` and `TooManyRuns` —
@@ -360,7 +364,7 @@ pub enum SetArrangementError {
     /// last arrangement change: `as_of` the typed state, `current` that
     /// change's position.
     ArrangementMoved { as_of: Seq, current: Seq },
-    /// The head, or the base to record, is no member of the draft's chain.
+    /// The head, or the base to record, lies off the draft's chain.
     BaseNotInChain,
     /// The head's extent as read, or the base's to record, exceeds its
     /// member's current content count.
@@ -372,7 +376,8 @@ pub enum SetArrangementError {
     NoBaseToRecord,
     /// A supplied run is not a content run of its stated origin.
     BadRun,
-    /// A run's origin document is not a registered document.
+    /// The head, the base to record, or a run's origin document is not a
+    /// registered document.
     SourceNotRegistered,
     /// An address a supplied run names holds no stored value.
     DanglingSource,
@@ -756,7 +761,7 @@ impl fmt::Display for SetArrangementError {
                 "set_arrangement: a supplied run is not a content run of its stated origin"
             }
             SetArrangementError::SourceNotRegistered => {
-                "set_arrangement: a run's origin is not a registered document"
+                "set_arrangement: the head, the base to record, or a run's origin is not a registered document"
             }
             SetArrangementError::DanglingSource => {
                 "set_arrangement: a supplied run names an I-address with no stored value (S3★)"

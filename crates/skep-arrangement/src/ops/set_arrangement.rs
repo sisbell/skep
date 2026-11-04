@@ -43,8 +43,9 @@ use crate::HasM5;
 /// head; the marker is recorded where `base` is recorded, and nowhere else
 /// (the owner's ruling N3: the marker travels with the base). The members a
 /// landing composes are the client's statement, as the shot's `base` is:
-/// the store checks the head and the base against the draft's chain, each
-/// extent against its member's current count, and nothing against `runs`.
+/// the store checks the head and the base against the draft's chain, as
+/// registered members of it, each extent against its member's current
+/// count, and nothing against `runs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetArrangement {
     /// The runs the draft is set to, in order; empty for an empty arrangement.
@@ -85,14 +86,16 @@ where
     /// excepted.
     ///
     /// **The head, and the tell** (R5, P1). Where the request carries the
-    /// head the merge was composed on, it is checked against the chain and
-    /// not against the trunk's current head: a version published since the
-    /// compose is NOT refused — the op lands, records what it was told, and
-    /// answers the trunk's current head beside the position where that head
-    /// is not the one named, so the caller learns a newer version stands.
-    /// The head is read, never written: no head key is taken, and a shot
-    /// landing between the read and the commit makes the tell stale by one
-    /// member, which the next read corrects.
+    /// head the merge was composed on, it is checked against the chain — a
+    /// registered member of it, its registration asked first, as the shot
+    /// asks its base's (PUB-6.37) — and not against the trunk's current
+    /// head: a version published since the compose is NOT refused — the op
+    /// lands, records what it was told, and answers the trunk's current head
+    /// beside the position where that head is not the one named, so the
+    /// caller learns a newer version stands. The head is read, never
+    /// written: no head key is taken, and a shot landing between the read
+    /// and the commit makes the tell stale by one member, which the next
+    /// read corrects.
     ///
     /// **The fork gate** (N4, P5). A destination with no recorded base
     /// whose fork source is a published surface is a fork: landing into it
@@ -105,16 +108,18 @@ where
     /// alternative of one — is admitted, nothing moved.
     ///
     /// **The base, judged as the head is** (N4). Where `base` is present it
-    /// must lie in the chain the recorded base lies in and its extent must
-    /// not pass its member's current count — the head's two checks — so the
-    /// record never claims more of its base than the base holds. A published
-    /// document's count never falls (PUB-2.43: it changes only by deposits
-    /// appended at fresh positions), so the extent stays within the count
-    /// after the commit, and the draft's next shot carrying it as its base
-    /// extent never meets `BaseExtentTooLarge`. A frame sending the base the
-    /// wire asks for meets neither check: a landing's is its head, judged
-    /// the same way, and an undo's a record read before the landing, kept
-    /// within its count by the same never-falling count.
+    /// must be a registered member of the chain the recorded base lies in
+    /// and its extent must not pass its member's current count — the head's
+    /// three checks — so the record never names a member no mint made, nor
+    /// claims more of its base than the base holds. A published document's
+    /// count never falls (PUB-2.43: it changes only by deposits appended at
+    /// fresh positions), so the extent stays within the count after the
+    /// commit, and the draft's next shot carrying it as its base extent
+    /// never meets `BaseExtentTooLarge`. A frame sending the base the wire
+    /// asks for meets none of the three: a landing's is its head, judged the
+    /// same way, and an undo's a record read before the landing, naming a
+    /// member a mint made — registered for good, M3 deleting nothing (B0) —
+    /// and kept within its count by the same never-falling count.
     ///
     /// **What moves and what stands** (N3). Where `base` is present the
     /// base record is replaced whole: `base` and `extent` the request's,
@@ -143,13 +148,16 @@ where
     /// wins), the first refusing with nothing written: `DocNotRegistered` →
     /// `NotOwner` → `PublishedTarget` → `ArrangementMoved` (the destination's
     /// own four, as the in-place edits judge them) → where `head` is present,
-    /// `BaseNotInChain` (the head no member of the chain the recorded base
-    /// lies in, or of the fork's source's document; a draft with neither is
-    /// unchecked) → `BaseExtentTooLarge` (the head's extent past its current
-    /// count) → `ForkBaseMoved` (the fork gate) → where `base` is present,
-    /// `NoBaseToRecord` → `BaseNotInChain` (the base to record off the
-    /// recorded base's chain) → `BaseExtentTooLarge` (the base's extent past
-    /// its current count) → per run, in the order given, the first
+    /// `SourceNotRegistered` (the head names no registered document) →
+    /// `BaseNotInChain` (the head off the chain the recorded base lies in, or
+    /// the fork's source's document) — those two asked only of a draft with
+    /// one of the two chains, a draft with neither unchecked — →
+    /// `BaseExtentTooLarge` (the head's extent past its current count) →
+    /// `ForkBaseMoved` (the fork gate) → where `base` is present,
+    /// `NoBaseToRecord` → `SourceNotRegistered` (the base to record names no
+    /// registered document) → `BaseNotInChain` (the base off the recorded
+    /// base's chain) → `BaseExtentTooLarge` (the base's extent past its
+    /// current count) → per run, in the order given, the first
     /// defective run deciding: `BadRun` → `SourceNotRegistered` →
     /// `DanglingSource` → `TooManyRuns`. The removal is staged ahead of the
     /// runs' judgment, so a defective run is refused past one staged record
@@ -227,7 +235,7 @@ where
                 .as_ref()
                 .map(|b| trunk_of(&b.base))
                 .or_else(|| fork_source.as_ref().map(trunk_of));
-            judge_pair(m5, head, chain.as_ref())?;
+            judge_pair(m3, m5, head, chain.as_ref())?;
             // The fork gate (N4): admitted where the source IS the head.
             if let Some(source) = &fork_source {
                 if *source != head.member {
@@ -239,9 +247,9 @@ where
             let Some(standing) = &standing else {
                 return Err(SetArrangementError::NoBaseToRecord);
             };
-            // Judged as the head is, so no record claims more of its base
-            // than the base holds (N4).
-            judge_pair(m5, base, Some(&trunk_of(&standing.base)))?;
+            // Judged as the head is, so no record names a member no mint
+            // made or claims more of its base than the base holds (N4).
+            judge_pair(m3, m5, base, Some(&trunk_of(&standing.base)))?;
         }
         // The tell (R5): the trunk's current head where it is not the one
         // named — read, never locked.
@@ -298,24 +306,34 @@ where
 /// Judges a pair the request names as the shot judges its base (PUB-2.37).
 ///
 /// The pair is the head or the base to record, and `trunk` the document
-/// whose chain it must lie in, `None` where there is none to check. The
-/// extent — the head's as read at the compose (P1) — is checked against
-/// the member's own arrangement: `content_count` answers the address named,
-/// a bare document's pre-chain arrangement included, and never floats to
-/// the head.
+/// whose chain it must lie in, `None` where there is none to check. Where
+/// there is one, the member must be a registered document of it: its
+/// registration asked first — an unregistered argument answers registration
+/// and nothing later (PUB-6.37), as the shot's base does — then its address
+/// against the chain. The extent — the head's as read at the compose (P1)
+/// — is checked against the member's own arrangement: `content_count`
+/// answers the address named, a bare document's pre-chain arrangement
+/// included, and never floats to the head.
 ///
 /// # Errors
 ///
-/// `BaseNotInChain` where `pair.member` lies outside `trunk`'s chain, then
-/// `BaseExtentTooLarge` where `pair.extent` exceeds the member's current
-/// content count.
+/// Where `trunk` is present, `SourceNotRegistered` where `pair.member`
+/// names no registered document, then `BaseNotInChain` where it lies
+/// outside `trunk`'s chain; then `BaseExtentTooLarge` where `pair.extent`
+/// exceeds the member's current content count.
 fn judge_pair(
+    m3: &M3State,
     m5: &M5State,
     pair: &Base,
     trunk: Option<&Address>,
 ) -> Result<(), SetArrangementError> {
-    if trunk.is_some_and(|trunk| !in_chain(&pair.member, trunk)) {
-        return Err(SetArrangementError::BaseNotInChain);
+    if let Some(trunk) = trunk {
+        if !m3.is_registered_document(&pair.member) {
+            return Err(SetArrangementError::SourceNotRegistered);
+        }
+        if !in_chain(&pair.member, trunk) {
+            return Err(SetArrangementError::BaseNotInChain);
+        }
     }
     if pair.extent > m5.content_count(&pair.member) {
         return Err(SetArrangementError::BaseExtentTooLarge);
@@ -323,7 +341,11 @@ fn judge_pair(
     Ok(())
 }
 
-/// Returns whether `member` is `trunk` or a member of its chain (PUB-2.15).
+/// Returns whether `member`'s address lies in `trunk`'s chain (PUB-2.15).
+///
+/// It is `trunk` itself or an address `trunk_of` projects to `trunk`:
+/// address arithmetic alone, reading no frontier, so an address no mint has
+/// made answers `true`. `judge_pair` asks the member's registration first.
 fn in_chain(member: &Address, trunk: &Address) -> bool {
     member == trunk || trunk_of(member) == *trunk
 }

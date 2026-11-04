@@ -3,12 +3,14 @@
 //! bytes, M5 for the arrangement — a state built by the ops themselves
 //! (`version`, `stage`, `insert`) over a seeded edition: the refusal order
 //! the op states, each refusal writing nothing; the base's extent judged
-//! against its own member's count, refused past it and recorded at it; the
-//! landing's one commit — the arrangement set, the base moved, the marker
-//! stamped — and the tell of a moved head; a base absent moving nothing and
-//! a base without a merge clearing the marker; the empty draft and the empty
-//! `runs`; the fork gate's two answers and the free-standing draft admitted
-//! with nothing moved.
+//! against its own member's count, refused past it and recorded at it; a
+//! head or a base naming a chain address no mint has made refused, and the
+//! base recorded once a mint makes it; the landing's one commit — the
+//! arrangement set, the base moved, the marker stamped — and the tell of a
+//! moved head; a base absent moving nothing and a base without a merge
+//! clearing the marker; the empty draft and the empty `runs`; the fork
+//! gate's two answers and the free-standing draft admitted with nothing
+//! moved, its head unchecked.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, ContentWrite, Val};
@@ -151,10 +153,10 @@ fn base_of(k: &Kernel<LandWorld>, doc: &Address) -> Option<DraftBase> {
 }
 
 /// THE REFUSAL ORDER, each refusal writing nothing: the destination's own
-/// four, then the head's two, the fork gate, the base's three, then the runs
-/// — each pinned against the next by a request defective in both ways, so
-/// a later verdict never speaks ahead of an earlier one; a defective run is
-/// refused past the staged removal with nothing of the transaction kept.
+/// four, then the head's three, the fork gate, the base's four, then the
+/// runs — each pinned against the next by a request defective in both ways,
+/// so a later verdict never speaks ahead of an earlier one; a defective run
+/// is refused past the staged removal with nothing of the transaction kept.
 #[test]
 fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     let k = seeded();
@@ -167,6 +169,10 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
     let before = k.current_seq();
     let good = || vec![of_edition(2, 2)];
     let bad_run = || vec![ShotRun { origin: doc1(), run: run(&pca(9), 1) }];
+    // A document no mint has made, and an address in the edition's chain
+    // that no mint has made either.
+    let ghost = a(&[1, 0, 1, 0, 9]);
+    let unminted = a(&[1, 0, 1, 0, 3, 9]);
     let unchanged = |what: &str| {
         assert_eq!(k.current_seq(), before, "{what}: a refusal commits nothing");
         assert_eq!(runs_of(&k, &draft), vec![run(&pca(1), 3)], "{what}: the draft's arrangement stands");
@@ -194,9 +200,14 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         E::ArrangementMoved { as_of: Seq(0), current } if current > Seq(0)
     ));
     unchanged("the destination's four");
-    // The head: off the chain the recorded base lies in, ahead of its
-    // extent; its extent past the head's count, ahead of the fork gate and
-    // of a base off the chain.
+    // The head: naming no registered document, ahead of its chain and its
+    // extent; off the chain the recorded base lies in, ahead of its extent;
+    // its extent past the head's count, ahead of the fork gate and of a base
+    // off the chain.
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&ghost, 99)), None, None), now(&k))),
+        E::SourceNotRegistered
+    ));
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&doc1(), 99)), None, None), now(&k))),
         E::BaseNotInChain
@@ -216,14 +227,34 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&pdoc(), 99)), None, None), now(&k))),
         E::BaseExtentTooLarge
     ), "the extent ahead of the gate");
+    // A head in the fork's chain that no mint has made: its registration
+    // ahead of the gate, which would name the source.
+    assert!(matches!(
+        rejected(vs.set_arrangement(P2, &fork, &request(bad_run(), Some(pair(&unminted, 0)), None, None), now(&k))),
+        E::SourceNotRegistered
+    ), "the registration ahead of the gate");
     unchanged("the head's three");
-    // The base to record: none recorded, ahead of its extent; off the
-    // chain, ahead of its extent — `doc1` holds two; its extent past its
-    // member's count, the head passing, ahead of the runs.
+    // The base to record: none recorded, ahead of its extent and of its
+    // registration; naming no registered document, ahead of its chain, its
+    // extent and the runs; off the chain, ahead of its extent — `doc1` holds
+    // two; its extent past its member's count, the head passing, ahead of
+    // the runs.
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 99)), None), now(&k))),
         E::NoBaseToRecord
     ));
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &doc1(), &request(bad_run(), None, Some(pair(&ghost, 99)), None), now(&k))),
+        E::NoBaseToRecord
+    ), "nothing to record, ahead of the registration");
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&ghost, 99)), None), now(&k))),
+        E::SourceNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&unminted, 0)), None), now(&k))),
+        E::SourceNotRegistered
+    ), "a base in the chain that no mint has made, ahead of the runs");
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, Some(pair(&doc1(), 99)), None), now(&k))),
         E::BaseNotInChain
@@ -232,14 +263,13 @@ fn the_refusals_come_in_the_stated_order_and_each_writes_nothing() {
         rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), Some(pair(&member, 3)), Some(pair(&member, 4)), Some(vec![])), now(&k))),
         E::BaseExtentTooLarge
     ));
-    unchanged("the base's three");
+    unchanged("the base's four");
     // The runs, as REINSTATE judges them — each refused past the removal
     // the body staged first, the transaction discarded whole.
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &draft, &request(bad_run(), None, None, None), now(&k))),
         E::BadRun
     ));
-    let ghost = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
         rejected(vs.set_arrangement(P1, &draft, &request(vec![ShotRun { origin: ghost.clone(), run: run(&a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1) }], None, None, None), now(&k))),
         E::SourceNotRegistered
@@ -297,6 +327,50 @@ fn a_base_extent_past_its_members_count_is_refused_and_one_at_the_count_records(
             merge: Some(Marker { sides: vec![vca(1)], head: member.clone(), head_copied: n(3), at }),
         }),
         "recorded at the count, the marker beside it"
+    );
+}
+
+/// A HEAD OR A BASE NAMING NO MEMBER (PUB-6.37): an address of the draft's
+/// chain that no mint has made — the trunk's next member, or a daughter of
+/// the base — lies in the chain by its address and passes an extent of
+/// zero, `content_count` answering zero for an address nothing arranges,
+/// yet is refused `SourceNotRegistered` as the head beside a base that
+/// passes and as the base to record, with nothing written; once `version`
+/// mints the trunk's next member, the same base frame records it — the
+/// reorder that refusal tells.
+#[test]
+fn a_head_or_base_naming_no_member_is_refused_and_one_minted_since_records() {
+    let k = seeded();
+    let (member, draft) = staged(&k);
+    let vs = Vstream::new(&k);
+    let next = a(&[1, 0, 1, 0, 3, 2]);
+    let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
+    let recorded = Some(DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None });
+    let before = k.current_seq();
+    for unminted in [&next, &daughter] {
+        assert!(!k.snapshot().world().m3().is_registered_document(unminted), "{unminted:?}: no mint has made it");
+        assert_eq!(trunk_of(unminted), pdoc(), "{unminted:?}: in the chain by its address");
+        assert!(matches!(
+            rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], Some(pair(unminted, 0)), Some(pair(&member, 3)), Some(vec![])), now(&k))),
+            E::SourceNotRegistered
+        ), "{unminted:?} as the head, the base passing");
+        assert!(matches!(
+            rejected(vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], None, Some(pair(unminted, 0)), None), now(&k))),
+            E::SourceNotRegistered
+        ), "{unminted:?} as the base to record");
+    }
+    assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+    assert_eq!(base_of(&k, &draft), recorded, "the record stands");
+    assert_eq!(runs_of(&k, &draft), vec![run(&pca(1), 3)], "the arrangement stands");
+    // The trunk's next member minted: the same base frame records it.
+    let (second, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
+    assert_eq!(second, next);
+    vs.set_arrangement(P1, &draft, &request(vec![of_edition(2, 2)], None, Some(pair(&next, 0)), None), now(&k))
+        .expect("the member a mint has made since");
+    assert_eq!(
+        base_of(&k, &draft),
+        Some(DraftBase { base: next, extent: n(0), source: member, merge: None }),
+        "the base recorded, the source kept"
     );
 }
 
@@ -447,6 +521,12 @@ fn a_fork_is_admitted_where_its_source_is_the_head_and_a_free_standing_draft_gai
     // The plain draft: no base, no source — the head unchecked.
     vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(1, 1)], Some(pair(&member, 3)), None, Some(vec![])), now(&k)).expect("free-standing: admitted");
     assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(1), 1)]);
+    assert_eq!(base_of(&k, &doc1()), None);
+    // A head no mint has made is unchecked there too: no chain to judge it
+    // against, and nothing recorded of it.
+    vs.set_arrangement(P1, &doc1(), &request(vec![of_edition(2, 1)], Some(pair(&a(&[1, 0, 1, 0, 3, 9]), 0)), None, None), now(&k))
+        .expect("free-standing: the head unchecked");
+    assert_eq!(runs_of(&k, &doc1()), vec![run(&pca(2), 1)]);
     assert_eq!(base_of(&k, &doc1()), None);
     // An alternative of the plain draft: its source a draft, so no fork —
     // a head off any chain is unchecked, and nothing moves.

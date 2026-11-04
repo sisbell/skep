@@ -6,7 +6,7 @@
 //! nothing; land and tell (`head_moved`); the fork gate's refusal
 //! (`fork_base_moved`) and admission (the source is the head); a baseless
 //! draft admitted with nothing moved, and `no_base_to_record`; the head's
-//! two refusals and the base's; `doc_metadata` and `image` on `/op-at` at
+//! three refusals and the base's; `doc_metadata` and `image` on `/op-at` at
 //! `at − 1` answering the pre-landing state; `write_at_history` on
 //! `/op-at`; the feed row and its two terms; the wire's example frame
 //! answered as the op. The door's consult is `source_gate.rs`'s pattern;
@@ -178,12 +178,24 @@ fn a_landing_composed_on_an_older_head_lands_and_tells_the_newer_one() {
     let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v2, 3)), Some((&v2, 3)), Some(&[]), None));
     assert!(ack.get("head_moved").is_none(), "{ack}");
     assert_eq!(standing(port, &owner, &draft).0, some(&v2));
-    // The head's two refusals — a head off the chain, another edition's
-    // member, and an extent past the head's count — and the base's same
-    // two, version 2 holding three; each commits nothing.
+    // The head's three refusals — a member no mint has made, a head off the
+    // chain, another edition's member, and an extent past the head's count
+    // — and the base's same three, version 2 holding three; each commits
+    // nothing. The edition's ninth member lies in the chain by its address
+    // and passes an extent of zero, and is refused by its registration,
+    // reorder: the same frame lands once a mint makes it.
     let other = edition_with(port, &signed, "xy");
     let other_v1 = acked_addr(&version_of(port, &signed, &other, None));
+    let unminted = format!("{edition}.9");
     let head = head_position(port);
+    for frame in [
+        set_arrangement_frame(&draft, &borrowed(&runs), Some((&unminted, 0)), None, None, None),
+        set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&unminted, 0)), None, None),
+    ] {
+        let v = op(port, Some(&owner), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!((rej["code"].as_str(), rej["disposition"].as_str()), (Some("source_not_registered"), Some("reorder")), "{v}");
+    }
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&other_v1, 1)), None, None, None)), "base_not_in_chain");
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), Some((&v2, 4)), None, None, None)), "base_extent_too_large");
     assert_permanent(&op(port, Some(&owner), &set_arrangement_frame(&draft, &borrowed(&runs), None, Some((&other_v1, 1)), None, None)), "base_not_in_chain");

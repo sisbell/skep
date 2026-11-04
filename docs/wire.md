@@ -1488,8 +1488,8 @@ the base (the merge is the member's now), and untouched by every write
 that leaves the base untouched, a plain `set_arrangement` naming no
 `base` and the publication's re-window of an `also` draft among them.
 Its content is the client's statement, as the shot's `base` is: the
-board checks the head against the draft's chain and nothing against the
-runs. Served as `base` is; a client that decodes neither `base` nor
+board checks that the head is a registered member of the draft's chain
+and nothing against the runs. Served as `base` is; a client that decodes neither `base` nor
 `merge` ignores both.
 
 `at`, `time` and `time_from` are THE AGE OF THE ADDRESS NAMED, exactly as
@@ -1715,7 +1715,9 @@ binding or endpoint answers it, spelled and tabled in §Registry under
 Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered` (a copy spec's source, a version's source, a
 shot's base, a draft it names — the rendering draft, or one of the
-family's other drafts — or run origin, a reinstate's run origin),
+family's other drafts — or run origin, a reinstate's run origin, a
+set_arrangement's head or the base it names to record, asked ahead of
+the chain, or run origin),
 `parent_not_registered`, `not_registered`, `original_not_resident`,
 `endpoint_not_resident`.
 
@@ -3469,31 +3471,34 @@ Three optional members, each absent or `null` alike absent:
 * `head` — `{"at": <address>, "extent": <nat>}`: the version the merge
   was composed on, and its content count AS READ at the compose — present
   on a merge's landing, absent on an undo and on a plain re-arrangement.
-  The board checks it against the draft's chain — `base_not_in_chain`
-  where `at` is no member of the chain the draft's recorded base lies in
-  (or, for a fork, of its source's document; a draft with neither is
-  unchecked) — and `extent` against `at`'s current count
-  (`base_extent_too_large`), and NEVER against the trunk's current head:
-  a version published since the compose refuses nothing. The write lands,
-  records what it was told, and the ack carries `head_moved`, the trunk's
-  current head, where it is no longer `at` — LAND AND TELL — so the
-  draft's next `publish` lands as the head's daughter (§The publish shot
-  and head-float) unless the merge is composed again on the newer head.
-  The extent as read is what the record beside it keeps, so a deposit the
-  head took between the compose and the landing lies past it and is
-  carried as the next shot's tail, never dropped.
+  The board checks it against the draft's chain — `source_not_registered`
+  where `at` names no registered document, then `base_not_in_chain` where
+  it lies off the chain the draft's recorded base lies in (or, for a fork,
+  its source's document; a draft with neither is unchecked) — and
+  `extent` against `at`'s current count (`base_extent_too_large`), and
+  NEVER against the trunk's current head: a version published since the
+  compose refuses nothing. The write lands, records what it was told, and
+  the ack carries `head_moved`, the trunk's current head, where it is no
+  longer `at` — LAND AND TELL — so the draft's next `publish` lands as
+  the head's daughter (§The publish shot and head-float) unless the merge
+  is composed again on the newer head. The extent as read is what the
+  record beside it keeps, so a deposit the head took between the compose
+  and the landing lies past it and is carried as the next shot's tail,
+  never dropped.
 * `base` — `{"at": <address>, "extent": <nat>}`: THE BASE TO RECORD. A
   landing sends the head pair; an undo sends the base read at the
   position before the landing (§Reading history); a plain re-arrangement
   sends none. Present, the draft's recorded base moves to it in the same
   commit (`doc_metadata`'s `base` and `base_copied`), its `source` kept:
-  the draft must have one — `no_base_to_record` otherwise — `at` must lie
-  in the same chain (`base_not_in_chain`), and `extent` must not pass
-  `at`'s current count (`base_extent_too_large`), as the head's must not.
-  So the board never records more of a base than the base holds: a
-  published document's count never falls, and the draft's next `publish`,
-  carrying `base_copied` as its `base_extent`, never meets that code.
-  Absent, NOTHING of the record moves, the marker included.
+  the draft must have one — `no_base_to_record` otherwise — `at` must be
+  registered (`source_not_registered`) and lie in the same chain
+  (`base_not_in_chain`), and `extent` must not pass `at`'s current count
+  (`base_extent_too_large`), as the head's must not. So the board never
+  records a base no mint has made, nor more of a base than the base
+  holds: a published document's count never falls, and the draft's next
+  `publish`, naming `base` and carrying `base_copied` as its
+  `base_extent`, meets neither code for it. Absent, NOTHING of the record
+  moves, the marker included.
 * `merge` — `{"sides": [addresses]}`: the merge the draft is to carry,
   its sides by address, possibly empty (the command's draft-side shape
   names no daughter); its head is the frame's `head`, so a `merge`
@@ -3521,9 +3526,10 @@ origin in run order, `withheld` naming the first unreadable one, `doc`'s
 own I-space excepted — and judged in the store as `reinstate` judges
 them: the destination's own refusals first (`doc_not_registered`,
 `not_owner`, `published_target`, `arrangement_moved`), then the head's
-(`base_not_in_chain`, `base_extent_too_large`), the fork gate
-(`fork_base_moved`), the base's (`no_base_to_record`,
-`base_not_in_chain`, `base_extent_too_large`), then per run in the
+(`source_not_registered`, `base_not_in_chain`,
+`base_extent_too_large`), the fork gate (`fork_base_moved`), the base's
+(`no_base_to_record`, `source_not_registered`, `base_not_in_chain`,
+`base_extent_too_large`), then per run in the
 order given the FIRST defective run deciding — `bad_run`,
 `source_not_registered`, `dangling_source` (every address probed),
 `too_many_runs` past `MAX_PLACED_RUNS`; the run list itself is one wire

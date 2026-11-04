@@ -32,8 +32,10 @@
 //! state read at `/op-at`'s `nearest` for `at − 1`, which the daemon
 //! answers `not_a_position` inside the landing's commit — the draft's text
 //! and base restored and the marker cleared in one write, the replacing
-//! record current; a landing withdrawn — the words kept, the marker
-//! cleared; an undo after an edit refused with the edit kept. And THE TWO
+//! record current, and the merge landed again after it, in the same session
+//! and in a fresh one, a write and a record of its own; a landing withdrawn
+//! — the words kept, the marker cleared; an undo after an edit refused with
+//! the edit kept. And THE TWO
 //! LANDINGS THE FAKE ALONE CHECKED (skep #775's note): into a free-standing
 //! draft, admitted with no base and no marker — its feed row carrying the
 //! request's merge beside a null base, by which the undo finds the landing
@@ -1041,7 +1043,8 @@ fn m_of(merged: &skep_client::merge::Merged) -> Vec<Run> {
 /// names the base restored and no merge, and the replacing record —
 /// `landed` none, `replaces` the landing's link — is current for the key.
 /// A second undo has nothing to undo, the merge already taken back, and
-/// writes nothing.
+/// writes nothing. The merge composed again and landed in the same session
+/// is a write of its own, whose record replaces the undo's.
 #[test]
 fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_clearing_the_marker() {
     let rig = Rig::new();
@@ -1084,11 +1087,34 @@ fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_cle
     assert_eq!((row["at"].as_u64(), row["base"].as_str(), row["merge"].is_null()), (Some(undone.position), Some(base.to_string().as_str()), true), "the undo's row: the base restored, no merge: {row}");
     // The replacing record, current for the key.
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
-    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
+    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link.clone()), Some(replacing.clone())));
     // A re-run: nothing to undo, nothing written.
     let standing = rig.position();
     assert_eq!(undo(&rig.board, merger, &draft, &kind, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
     assert_eq!(rig.position(), standing, "nothing written");
+    // Composed again — the undo restored the base, so the key is the first
+    // landing's — and landed again in this session: a write of its own, the
+    // draft holding M with the marker at the new position, and a record of
+    // its own replacing the undo's, current for the key. A re-run of it is
+    // answered by the board's ids, nothing written twice.
+    let again = compose(&rig.board, Some(&token), &inputs).expect("composed again");
+    assert_eq!(again.key, merged.key, "the premise: the first landing's key");
+    let into = || Landing::Draft { merger, into: Some(draft.clone()), journal: None };
+    let relanded = land(&rig.board, &again, into()).expect("landed again");
+    let Landed::Draft { position: again_at, record: again_link, .. } = relanded.clone() else { panic!("{relanded:?}") };
+    assert!(again_at > undone.position, "{relanded:?}");
+    assert_eq!(image(&rig.board, &token, &draft, 18), as_image(&m), "the draft holds M again");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!(meta["merge"]["at"].as_u64(), Some(again_at), "the marker at the new landing: {meta}");
+    assert!(again_link != link && again_link != replacing, "a record of its own: {again_link}");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(
+        (record.landed, record.replaces, record.link),
+        (Some(RecordLanding::Draft { draft: draft.clone(), position: again_at }), Some(replacing), Some(again_link))
+    );
+    let standing = rig.position();
+    assert_eq!(land(&rig.board, &again, into()), Ok(relanded), "the board answers the landing's ids again");
+    assert_eq!(rig.position(), standing, "nothing written twice");
     session.close().expect("close");
 }
 
@@ -1179,7 +1205,8 @@ fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
 /// row again: in the same session the board answers its ids again, the same
 /// undo with nothing written twice; in a fresh session the board refuses it
 /// `arrangement_moved`, the undo having moved the arrangement, nothing
-/// written.
+/// written. Composed again in that fresh session and landed, the merge
+/// writes a record of its own, replacing the undo's.
 #[test]
 fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_undone_by_its_row() {
     let rig = Rig::new();
@@ -1230,7 +1257,7 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_un
     let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the undo's row");
     assert_eq!((row["at"].as_u64(), row["base"].is_null(), row["merge"].is_null()), (Some(undone.position), true, true), "the undo's row names neither term: {row}");
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
-    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
+    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link.clone()), Some(replacing.clone())));
     // A re-run: the same undo in this session, nothing written twice.
     let standing = rig.position();
     assert_eq!(undo(&rig.board, merger, &plain, &kind, None), Ok(undone.clone()), "the board answers the undo's ids again");
@@ -1244,6 +1271,19 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_un
     assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
     assert_eq!(rig.position(), standing, "nothing written");
     assert_eq!(image(&rig.board, fresh.token(), &plain, 5), c, "C stands");
+    // Composed again in the fresh session and landed in the draft: a landing
+    // of its own, whose record replaces the undo's.
+    let composed = compose(&rig.board, Some(fresh.token()), &inputs).expect("composed again");
+    assert_eq!(composed.prior.as_ref().and_then(|p| p.link.clone()), Some(replacing.clone()), "the premise: the undo's record is the prior");
+    let relanded = land(&rig.board, &composed, Landing::Draft { merger: again, into: Some(plain.clone()), journal: None }).expect("landed again");
+    let Landed::Draft { position: again_at, record: again_link, .. } = relanded else { panic!("{relanded:?}") };
+    assert!(again_link != link && again_link != replacing, "a record of its own: {again_link}");
+    assert_eq!(image(&rig.board, fresh.token(), &plain, 11), as_image(&m), "the draft holds M again");
+    let record = current(&rig.board, Some(fresh.token()), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!(
+        (record.landed, record.replaces, record.link),
+        (Some(RecordLanding::Draft { draft: plain.clone(), position: again_at }), Some(replacing), Some(again_link))
+    );
     fresh.close().expect("close");
 }
 

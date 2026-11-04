@@ -74,7 +74,10 @@
 //! record stands none is written, and the act stands all the same. A
 //! re-run after either act finds no marker and writes nothing — so a lost
 //! acknowledgment at the record's writes leaves the landing's record
-//! standing alone, which the halt says.
+//! standing alone, which the halt says. A landing of the key made after
+//! either act writes a record of its own, which replaces this one: the
+//! landing's read-first takes the merger's newest record of the key, and
+//! this one names no landing (the `land` module's doc).
 //!
 //! **The head, before the write.** The board's head (`Board::board_head`;
 //! SP-14) is read before the one write, as the landing reads it: a claimed

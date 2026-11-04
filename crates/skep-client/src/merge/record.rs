@@ -89,8 +89,10 @@ impl RecordKey {
 
     /// Returns the key as one line of text.
     ///
-    /// The text is `merge:<doc>:<base>:<side>+<side>…`, the stem of the
-    /// per-session idempotency ids the landing's writes carry.
+    /// The text is `merge:<doc>:<base>:<side>+<side>…`. It is the stem of
+    /// the per-session idempotency ids the shot's writes carry, and it
+    /// opens the draft landing's and the stage's, which name the draft and
+    /// the position too (the `land` module's doc).
     pub fn text(&self) -> String {
         let sides: Vec<String> = self.sides.iter().map(ToString::to_string).collect();
         format!("merge:{}:{}:{}", self.doc, self.base, sides.join("+"))
@@ -567,6 +569,34 @@ pub(super) fn current_among(
     key: &RecordKey,
     owner_home: Option<&str>,
 ) -> Result<Option<Record>, Halt> {
+    let found = records_of(reader, kind, key)?;
+    let home_of = |link: &Address| document_of(&link.to_string());
+    let owned: Vec<&(Address, Record)> =
+        found.iter().filter(|(link, _)| home_of(link).as_deref() == owner_home).collect();
+    let pool: Vec<&(Address, Record)> =
+        if owned.is_empty() { found.iter().collect() } else { owned };
+    Ok(pool.into_iter().max_by_key(|(link, _)| reads::comps(link)).map(|(link, record)| {
+        let mut record = record.clone();
+        record.link = Some(link.clone());
+        record
+    }))
+}
+
+/// Returns every record naming `key` that the reader can read.
+///
+/// Each comes with the link it was found through, in the order the links
+/// were answered. They are found as [`current`] finds them: the links of
+/// `kind` to each side of the key, each link once, each record's atom read
+/// through its journal's arrangement and its key checked.
+///
+/// # Errors
+///
+/// As [`current`]'s.
+pub(super) fn records_of(
+    reader: &Reader<'_>,
+    kind: &Address,
+    key: &RecordKey,
+) -> Result<Vec<(Address, Record)>, Halt> {
     let mut seen: Vec<String> = Vec::new();
     let mut found: Vec<(Address, Record)> = Vec::new();
     for side in &key.sides {
@@ -586,16 +616,7 @@ pub(super) fn current_among(
             }
         }
     }
-    let home_of = |link: &Address| document_of(&link.to_string());
-    let owned: Vec<&(Address, Record)> =
-        found.iter().filter(|(link, _)| home_of(link).as_deref() == owner_home).collect();
-    let pool: Vec<&(Address, Record)> =
-        if owned.is_empty() { found.iter().collect() } else { owned };
-    Ok(pool.into_iter().max_by_key(|(link, _)| reads::comps(link)).map(|(link, record)| {
-        let mut record = record.clone();
-        record.link = Some(link.clone());
-        record
-    }))
+    Ok(found)
 }
 
 /// Returns the record a link of the kind names.

@@ -1714,28 +1714,55 @@ fn the_send_is_acknowledged_and_the_commit_holds_every_deposit() {
 /// takes the frame without an `attest`.
 #[test]
 fn a_claimed_board_serving_no_head_record_sends_nothing() {
-    let (world, _) = World::base();
-    let (dialer, board, signer) = open(world);
-    let tok = token();
-    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
-    dialer.world().head = false;
-    let (_, board, signer) = open(World::base().0);
-    let fresh_board = board;
-    let _ = fresh_board;
-    let (dialer2, board2, signer2) = open({
+    let (dialer, board, signer) = open({
         let (mut w, _) = World::base();
         w.head = false;
         w
     });
-    let p = publisher(&board2, &tok, &signer2);
-    dialer2.clear();
+    let tok = token();
+    let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let p = publisher(&board, &tok, &signer);
+    dialer.clear();
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::HeadUnreadable));
-    assert!(dialer2.frames("publish").is_empty(), "no frame: {:?}", dialer2.ops());
-    dialer2.world().claimed = false;
+    assert!(dialer.frames("publish").is_empty(), "no frame: {:?}", dialer.ops());
+    dialer.world().claimed = false;
     let sent = send(&p, &inputs(), &mut request).unwrap();
     assert!(matches!(sent, Sent::Acknowledged(_)), "{sent:?}");
-    assert!(dialer2.frames("publish")[0].get("attest").is_none(), "an unclaimed board takes the frame unsigned");
-    let _ = signer;
+    assert!(dialer.frames("publish")[0].get("attest").is_none(), "an unclaimed board takes the frame unsigned");
+}
+
+/// Checks that the board's own `attestation_invalid:board_unavailable` is
+/// the head arm, signed or not.
+///
+/// The frame signed over a record the board's own build does not read, or
+/// sent unsigned to a board a claim reached after the send's read, its first
+/// head refused, meets the board's state, never this library's frame: the
+/// refusal is answered `Refusal::HeadUnreadable`, never `OwnFault::Attest`,
+/// and the frame is never re-sent.
+#[test]
+fn the_boards_own_board_unavailable_is_head_unreadable_signed_or_not() {
+    let tok = token();
+    let unavailable = json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "publish"});
+    for claimed in [true, false] {
+        let (dialer, board, signer) = open({
+            let (mut w, _) = World::base();
+            w.claimed = claimed;
+            w.head = claimed;
+            w
+        });
+        let (_, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+        let p = publisher(&board, &tok, &signer);
+        dialer.clear();
+        dialer.world().refuse_next = Some(unavailable.clone());
+        assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::HeadUnreadable), "claimed {claimed}");
+        let frames = dialer.frames("publish");
+        assert_eq!(frames.len(), 1, "claimed {claimed}: one frame, never re-sent: {:?}", dialer.ops());
+        match (claimed, frames[0].get("attest")) {
+            (true, Some(attest)) => assert!(attest["sig"].is_string(), "signed over `H.1`'s pair: {attest}"),
+            (false, None) => {}
+            (_, attest) => panic!("claimed {claimed}: the frame's attest {attest:?}"),
+        }
+    }
 }
 
 /// Checks that a head record that stands and cannot be read sends nothing.
@@ -1775,8 +1802,10 @@ fn a_damaged_head_record_sends_nothing_claimed_or_not() {
 /// deposit tokens with their entry and detail; `unparseable` on a request
 /// carrying members the older-board arm; `base_superseded` its own arm
 /// naming the trunk's first member, out of the shot's table, whose other
-/// codes are the library's own; `withheld` the window's origin;
-/// `signed_session_required`; and the board's other refusals verbatim.
+/// codes are the library's own; an `attestation_*` token but the
+/// signature's and `board_unavailable` the library's own too; `withheld`
+/// the window's origin; `signed_session_required`; and the board's other
+/// refusals verbatim.
 #[test]
 fn every_refusal_arm_carries_its_face_data() {
     let (world, _) = World::base();
@@ -1819,6 +1848,8 @@ fn every_refusal_arm_carries_its_face_data() {
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::BaseSuperseded { first: a(&format!("{E}.1")) }), "its own arm, never the library's fault");
     refuse("base_not_in_chain", json!({}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Shot { code: "base_not_in_chain".into() })));
+    refuse("credential_refused", json!({"detail": "attestation_invalid:malformed"}));
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Attest { detail: Some("attestation_invalid:malformed".into()) })), "the library's own");
     refuse("withheld", json!({"site": {"addr": O}}));
     assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::WindowWithheld { origin: Some(a(O)) }));
     refuse("signed_session_required", json!({}));

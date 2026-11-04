@@ -11,7 +11,12 @@
 //! (`Board::board_head`; SP-14), and a claimed board serving no head record
 //! answers [`Refusal::HeadUnreadable`], the halt's data, never a warning: no
 //! frame leaves either. A board no one has claimed, serving no head record,
-//! alone takes the frame without an `attest`.
+//! alone takes the frame without an `attest`. The board's own
+//! `attestation_invalid:board_unavailable` — its head owed past that read,
+//! or a record its own build does not read (wire.md §Credential refusals) —
+//! answers [`Refusal::HeadUnreadable`] too, never this library's fault: the
+//! frame was refused, nothing was published, and a retry is admitted once
+//! the board holds a head it reads.
 //!
 //! **The `id` policy.** The same `id` on the same session for a lost answer:
 //! one re-ask after a transport fault, which a pending frame answers when its
@@ -38,9 +43,11 @@
 //! (skep #692) — the caller sends the shot without it; the six deposit tokens
 //! → own-bug arms with their entry and detail; `attestation_invalid:signature`
 //! → one re-sign with the skipped deposits dropped — presence re-read for
-//! every `retract` and `read_with` entry — under a fresh `id`; `unparseable`
-//! on a request carrying an optional member → the older-board arm;
-//! `base_superseded` → the board's refusal of a request naming NO base
+//! every `retract` and `read_with` entry — under a fresh `id`;
+//! `attestation_invalid:board_unavailable` → the board's own state, the head
+//! arm above; every other `attestation_*` token → the library's own fault;
+//! `unparseable` on a request carrying an optional member → the older-board
+//! arm; `base_superseded` → the board's refusal of a request naming NO base
 //! while `doc` holds a member — a shape this library never sends at the
 //! document form, where the request's base is the one `draft_base` read (a
 //! draft begun from the bare document lands as the first member's daughter,
@@ -140,7 +147,10 @@ pub enum OwnFault {
         /// The code.
         code: String,
     },
-    /// The signature refused twice, or with no skipped deposit to drop.
+    /// The frame's attest refused: the signature twice, or with no skipped
+    /// deposit to drop, or any other `attestation_*` token —
+    /// `board_unavailable` aside, the board's own state
+    /// ([`Refusal::HeadUnreadable`]).
     Attest {
         /// The detail.
         detail: Option<String>,
@@ -212,9 +222,14 @@ pub enum Refusal {
         /// The board's detail.
         detail: Option<String>,
     },
-    /// The board is claimed and serves no head record: never sent unsigned.
+    /// The board holds no head record it signs against: never sent unsigned,
+    /// and nothing published.
     ///
-    /// A record that stands and cannot be read is the read's halt
+    /// It answers a claimed board serving no head record, no frame sent, and
+    /// the board's own refusal of the frame,
+    /// `attestation_invalid:board_unavailable` — its head owed past this
+    /// library's read, or a record its own build does not read (SP-14). A
+    /// record that stands and this library cannot read is the read's halt
     /// ([`Fault::Halt`]), never sent either.
     HeadUnreadable,
     /// The death signal: the session ended before or at the write. The
@@ -371,6 +386,9 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
             },
             code if DEPOSIT_CODES.contains(&code) => Refusal::OwnFault(OwnFault::Deposit { code: code.to_string(), index: site.index, detail }),
             code if SHOT_CODES.contains(&code) || code == "malformed" => Refusal::OwnFault(OwnFault::Shot { code: code.to_string() }),
+            // The board's state, never this library's frame (a reorder): its
+            // head owed past the read, or a record its build does not read.
+            "attestation_invalid:board_unavailable" => Refusal::HeadUnreadable,
             k if k.starts_with("attestation_") => Refusal::OwnFault(OwnFault::Attest { detail }),
             _ => Refusal::Other(r.refused(&v)),
         };

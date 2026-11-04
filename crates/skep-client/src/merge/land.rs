@@ -78,17 +78,24 @@
 //! the stage's own position; where the merger's newest record for the key,
 //! read before the stage, names a draft landing, that landing is reported
 //! and nothing is staged. The record follows, its draft landing's position
-//! the write's `at`. The draft landing's per-session ids share one stem
-//! naming the key, the draft and the position the write is typed against —
-//! `<stem>.draft`, then the record's `<stem>.record` and `<stem>.link` —
-//! and the stage's is `<key>@<P>.stage`, P the composition's position, or
-//! `<key>@<P>~<link>.stage` where a record of the key stands in the
-//! merger's doc 1, `<link>` the newest one's, which the landing's record
-//! will replace: the board answers a second call over one composition from
-//! its ids, and a landing composed after a take-back, landed into another
-//! draft, or landed fresh again after its own landing was taken back, is a
-//! write of its own. The shot's are the key's: `<key>.publish`,
-//! `<key>.record`, `<key>.link`.
+//! the write's `at`.
+//!
+//! **The per-session ids.** Every write of a landing carries the id
+//! `<stem>.<frame>`, its stem `merge:` and the SHA-256, in lowercase hex,
+//! of the text naming the write — 70 bytes whatever the text, so a merge of
+//! any number of sides lands under ids inside the 256-byte id cap skepd
+//! holds at parse. `<key>` is the key's text (`RecordKey::text`). The
+//! shot's text is `<key>`, for `<stem>.publish`, then the record's
+//! `<stem>.record` and `<stem>.link`; the draft landing's names the key,
+//! the draft and the position the write is typed against,
+//! `<key>:<draft>@<at>`, for `<stem>.draft`, `<stem>.record` and
+//! `<stem>.link`; the stage's names the key and P, the composition's
+//! position, `<key>@<P>`, or `<key>@<P>~<link>` where a record of the key
+//! stands in the merger's doc 1, `<link>` the newest one's, which the
+//! landing's record will replace, for `<stem>.stage`. The board answers a
+//! second call over one composition from its ids, and a landing composed
+//! after a take-back, landed into another draft, or landed fresh again
+//! after its own landing was taken back, is a write of its own.
 //!
 //! **The claim, as this wire admits it.** The record's step (i) files
 //! `assert_sup{home: the merger's doc 1, old: the daughter, new: the member}`
@@ -105,6 +112,7 @@
 //! version members is the wire's to admit, not a frame this library sends.
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use skep_address::Address;
 use skep_identity::{
     entry_body_make_link, entry_frame, unit_span, BoardTerm, DocTerm, EntryBody, EntrySlot,
@@ -416,7 +424,7 @@ fn walk(
             let record = match newest.naming(&landed) {
                 Some(link) => link.clone(),
                 None => {
-                    let stem = merged.key.text();
+                    let stem = Stem::of(&merged.key.text());
                     let journal = landing.journal();
                     writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal)?
                 }
@@ -450,13 +458,13 @@ fn walk(
                     (fresh, at, Some(newest))
                 }
             };
-            // The stem of the landing's per-session ids: the key, the draft
-            // and the position the write is typed against, so the board
+            // The stem of the landing's per-session ids, over the key, the
+            // draft and the position the write is typed against, so the board
             // answers a second call over one composition from its ids, and a
             // landing composed after a take-back, into another draft, or into
             // the fresh draft a stage after a take-back mints, is a write of
             // its own.
-            let stem = format!("{}:{into}@{as_of}", merged.key.text());
+            let stem = Stem::of(&format!("{}:{into}@{as_of}", merged.key.text()));
             let Some((position, head_moved)) =
                 writer.land_into_draft(merged, &into, as_of, &stem, shoot)?
             else {
@@ -503,6 +511,36 @@ enum Holds {
     /// Where the feed holds no row of the mint, the position is the reads'
     /// highest `as_of`.
     Merged(u64),
+}
+
+/// The stem of a landing write's per-session ids (wire.md §Correlation and
+/// idempotency; the merge record's §1.5).
+///
+/// It is `merge:` and the lowercase hex of the SHA-256 of the text naming
+/// the write (the module's doc), 70 bytes whatever the text, so every id a
+/// landing sends stays inside the 256-byte id cap skepd holds at parse
+/// (skep-febe's `MAX_REQ_ID_BYTES`; a longer id is refused `malformed`),
+/// however many sides the key spells and however deep their addresses.
+/// Equal texts give equal stems and distinct texts distinct ones, so the
+/// board's memo answers a second call over one write and never another
+/// write's.
+pub(super) struct Stem(String);
+
+impl Stem {
+    /// Returns the stem of the write `text` names.
+    pub(super) fn of(text: &str) -> Stem {
+        Stem(format!("merge:{}", crate::hex::encode(&Sha256::digest(text.as_bytes()))))
+    }
+
+    /// Returns the id `<stem>.<suffix>` of one of the write's frames.
+    pub(super) fn id(&self, suffix: &str) -> String {
+        format!("{}.{suffix}", self.0)
+    }
+
+    /// Returns the stem's text.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// The merger's newest record for the key, as the landing read it.
@@ -736,7 +774,7 @@ impl Writer<'_> {
             read_with: Vec::new(),
             unspellable: Vec::new(),
             counterparts: Vec::new(),
-            id: format!("{}.publish", merged.key.text()),
+            id: Stem::of(&merged.key.text()).id("publish"),
             count: publication::Count::default(),
             price: publication::Price::default(),
             as_of: self.reader.as_of(),
@@ -863,11 +901,12 @@ impl Writer<'_> {
     /// The record is the composition's with `landed` and `claims` filled
     /// and `replaces` the link of `newest`, the merger's newest record for
     /// the key as the landing read it — none where none stands (P20). It is
-    /// written through [`Writer::write_record`] under `stem` — the key's
-    /// text for the shot, and for a draft landing the key's with the draft
-    /// and the position its write is typed against — the link's first end
-    /// the landed address, and a head owed at its writes faced as the
-    /// landing standing with its record unwritten ([`record_owed`]).
+    /// written through [`Writer::write_record`] under `stem` — the shot's,
+    /// over the key, or the draft landing's, over the key, the draft and
+    /// the position its write is typed against (the module's doc) — the
+    /// link's first end the landed address, and a head owed at its writes
+    /// faced as the landing standing with its record unwritten
+    /// ([`record_owed`]).
     ///
     /// # Errors
     ///
@@ -878,7 +917,7 @@ impl Writer<'_> {
         landed: RecordLanding,
         claims: &[Address],
         newest: &Newest,
-        stem: &str,
+        stem: &Stem,
         journal: Option<&Address>,
     ) -> Result<Address, Refusal> {
         let target = match &landed {
@@ -890,7 +929,7 @@ impl Writer<'_> {
         record.claims = claims.to_vec();
         record.replaces = newest.link().cloned();
         let owed = |cause: String| record_owed(&landed, cause);
-        self.write_record(&merged.inputs.kind, &record, &target, stem, journal, &owed)
+        self.write_record(&merged.inputs.kind, &record, &target, stem.as_str(), journal, &owed)
     }
 
     /// Writes `record` under `kind`, answering its link's address.
@@ -1060,18 +1099,19 @@ impl Writer<'_> {
     /// Stages a fresh draft from the head, answering it and its position.
     ///
     /// It is `stage {from: the head the merge composed on}` (R3) under the
-    /// per-session id `<key>@<P>.stage`, P the position the merge was
-    /// composed at, or `<key>@<P>~<link>.stage` where `newest`, the
-    /// merger's newest record for the key, stands — `<link>` its link, the
-    /// record the landing's own will replace. A retry of the same landing
-    /// reads the same newest record, so it is answered its stage again; one
-    /// composed after a take-back stages afresh, and so does the same
-    /// composition landed again after its landing was taken back, whose
-    /// newest record is the take-back's. The board mints a private draft of
-    /// the merger's account holding the head by identity and records the
-    /// head as its base, so the write that follows re-records that base on
-    /// the same head. The board's head is read first: the stage begins a
-    /// landing whose record's link signs over it (the module's doc).
+    /// per-session id `<stem>.stage`, its [`Stem`] over `<key>@<P>`, P the
+    /// position the merge was composed at, or over `<key>@<P>~<link>` where
+    /// `newest`, the merger's newest record for the key, stands — `<link>`
+    /// its link, the record the landing's own will replace. A retry of the
+    /// same landing reads the same newest record, so it is answered its
+    /// stage again; one composed after a take-back stages afresh, and so
+    /// does the same composition landed again after its landing was taken
+    /// back, whose newest record is the take-back's. The board mints a
+    /// private draft of the merger's account holding the head by identity
+    /// and records the head as its base, so the write that follows
+    /// re-records that base on the same head. The board's head is read
+    /// first: the stage begins a landing whose record's link signs over it
+    /// (the module's doc).
     ///
     /// # Errors
     ///
@@ -1084,10 +1124,11 @@ impl Writer<'_> {
     fn stage(&self, merged: &Merged, newest: &Newest) -> Result<(Address, u64), Refusal> {
         self.signing_term(&head_owed)?;
         let head = &merged.inputs.head;
-        let id = match newest.link() {
-            None => format!("{}@{}.stage", merged.key.text(), merged.as_of),
-            Some(link) => format!("{}@{}~{link}.stage", merged.key.text(), merged.as_of),
+        let text = match newest.link() {
+            None => format!("{}@{}", merged.key.text(), merged.as_of),
+            Some(link) => format!("{}@{}~{link}", merged.key.text(), merged.as_of),
         };
+        let id = Stem::of(&text).id("stage");
         let frame = frames::stage(&head.to_string(), Some(&id));
         let v = self.answered_write(&frame, "staging a fresh draft")?;
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
@@ -1111,8 +1152,9 @@ impl Writer<'_> {
     /// composed on and its extent as read, the same pair as the base to
     /// record where the draft's `doc_metadata`, read at `as_of`, records a
     /// base, and the merge's sides but the draft itself; its id
-    /// `<stem>.draft`, `stem` naming the key, the draft and `as_of`, which
-    /// the board answers again in the same session for the same composition.
+    /// `<stem>.draft`, `stem` the [`Stem`] over the key, the draft and
+    /// `as_of`, which the board answers again in the same session for the
+    /// same composition.
     /// It is sent where the draft already holds M too, so the base and the
     /// marker are recorded, and only after the board's head is read: the
     /// record's link that follows signs over it (the module's doc). With
@@ -1146,7 +1188,7 @@ impl Writer<'_> {
         merged: &Merged,
         into: &Address,
         as_of: u64,
-        stem: &str,
+        stem: &Stem,
         shoot: bool,
     ) -> Result<Option<(u64, Option<Address>)>, Refusal> {
         let head = &merged.inputs.head;
@@ -1204,7 +1246,7 @@ impl Writer<'_> {
             .map(ToString::to_string)
             .collect();
         let side_refs: Vec<&str> = sides.iter().map(String::as_str).collect();
-        let id = format!("{stem}.draft");
+        let id = stem.id("draft");
         let frame = frames::set_arrangement(
             &into.to_string(),
             &runs,

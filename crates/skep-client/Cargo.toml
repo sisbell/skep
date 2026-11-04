@@ -51,9 +51,10 @@ search = ["acting", "dep:skep-search"]
 # `merge` module. OFF BY DEFAULT, as `search` is: the default build of the
 # library holds no merge, so the thirteen content-free commands and the
 # fence stay true of it; the editor's shell, the `skep` command's merge and
-# the attendant turn it on. Implies `acting`: the landing signs. No
-# dependency of its own — `serde_json` is in every build already.
-merge = ["acting"]
+# the attendant turn it on. Implies `acting`: the landing signs. Its one
+# dependency of its own, `sha2`, compiles no crate a build would not:
+# skep-identity links it in every build.
+merge = ["acting", "dep:sha2"]
 
 [dependencies]
 # M1 — the address vocabulary the entry frame and the walks spell addresses
@@ -86,6 +87,11 @@ skep-search = { path = "../skep-search", optional = true }
 skep-util = { path = "../skep-util" }
 # The wire frames and the key file.
 serde_json.workspace = true
+# SHA-256, the merge landing's per-session ids: each is `merge:` and the
+# digest of the text naming its write, so it stays inside skepd's 256-byte
+# id cap however many sides the merge spells (`merge::land`). Behind
+# `merge`.
+sha2 = { workspace = true, optional = true }
 # OS entropy: seeds, the backup moment's per-run token, `new_id`.
 getrandom = { workspace = true, optional = true }
 # The wipe of the seed and of the sheet's text of it: `Zeroize` and
@@ -130,3 +136,7 @@ skep-namespace = { path = "../skep-namespace" }
 # three. Already in the graph through skepd; linked by no shipped build.
 skep-links = { path = "../skep-links" }
 skep-arrangement = { path = "../skep-arrangement" }
+# M10's idempotency-id cap, `MAX_REQ_ID_BYTES`, which the merge suite's
+# scripted board holds every frame to as skepd's parse does. Already in the
+# graph through skepd; linked by no shipped build.
+skep-febe = { path = "../skep-febe" }

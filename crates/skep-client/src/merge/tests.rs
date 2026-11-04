@@ -1061,6 +1061,7 @@ mod scripted {
         entry_body_publish, entry_frame, DocTerm, Fingerprint, PublicKey, ShotBase,
         ShotSegmentPiece,
     };
+    use skep_febe::MAX_REQ_ID_BYTES;
     use skep_signature::HybridSigner;
 
     use crate::address::parse_address;
@@ -1070,6 +1071,8 @@ mod scripted {
         DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse,
     };
     use crate::halt::Halt;
+    use crate::merge::land::Stem;
+    use crate::merge::reads::MAX_SIDES;
     use crate::merge::*;
     use crate::origin::Origin;
     use crate::sign::Signer;
@@ -1574,6 +1577,14 @@ mod scripted {
                     json!({"resp": "rejected", "code": "withheld", "disposition": "reorder", "op": op, "site": {"addr": doc}}),
                 )
             };
+            // An id past the wire's cap is refused at parse, as skepd's codec
+            // refuses it: `malformed` under `unparseable`, nothing applied.
+            if let Some(id) = frame["id"].as_str().filter(|id| id.len() > MAX_REQ_ID_BYTES) {
+                return Ok(reply(
+                    200,
+                    json!({"resp": "rejected", "code": "malformed", "detail": format!("id is {} bytes, past the {MAX_REQ_ID_BYTES}-byte wire cap", id.len()), "disposition": "permanent", "op": "unparseable"}),
+                ));
+            }
             match op.as_str() {
                 "principal_prefix" => Ok(reply(200, json!({"resp": "addr", "as_of": position, "addr": ACCOUNT}))),
                 "key_set" => {
@@ -2327,6 +2338,12 @@ mod scripted {
         Landing::Shot { merger: merger(session, signer), draft: None, journal: None }
     }
 
+    /// The id of one frame of a landing write: the [`Stem`] over `text`, the
+    /// text naming the write (the `land` module's doc), then the frame.
+    fn landing_id(text: &str, frame: &str) -> String {
+        Stem::of(text).id(frame)
+    }
+
     // ── compose ──────────────────────────────────────────────────────────
 
     /// §1.3's reads IN ORDER: the document's metadata at the head, then —
@@ -2538,6 +2555,52 @@ mod scripted {
             compose(&board, Some(&token()), &with(two, Some(a(&format!("{D}.1"))))),
             Err(Refusal::TwoDrafts)
         );
+    }
+
+    /// MORE SIDES THAN ONE BYTE NUMBERS REFUSE BEFORE ANY READ (skep #792):
+    /// every list the walk is given is numbered by its one-byte `SideIx`,
+    /// the head's 0 and each side's its place after it, so a 256th side
+    /// would be read and reported as the head. Two hundred and fifty-six
+    /// sides besides the head are refused by name with no frame sent, and
+    /// so is a record naming as many at `verify`; two hundred and fifty-five
+    /// pass the count, a foreign member among them refused `BaseUnknown`
+    /// before any read.
+    #[test]
+    fn more_sides_than_one_byte_numbers_refuse_before_any_read() {
+        let (dialer, board, _) = open(World::race());
+        let daughters = |n: usize| -> Vec<Side> {
+            (1..=n).map(|k| Side::Member(a(&format!("{D}.1.{k}")))).collect()
+        };
+        let refused = |err: Refusal| {
+            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+            assert!(
+                face.state.contains(&format!("{} sides besides the head", MAX_SIDES + 1))
+                    && face.state.contains(&format!("the {MAX_SIDES} ")),
+                "{face}"
+            );
+            assert!(
+                face.act.contains("nothing was read or written")
+                    && !face.act.contains("fault in this library"),
+                "{face}"
+            );
+            assert!(dialer.ops().is_empty(), "no frame before the refusal: {:?}", dialer.ops());
+        };
+        dialer.clear();
+        let past = Inputs { sides: daughters(MAX_SIDES + 1), ..race_inputs() };
+        refused(compose(&board, Some(&token()), &past).expect_err("refused"));
+        let mut record = compose(&board, Some(&token()), &race_inputs()).expect("composed").record;
+        record.sides.extend(daughters(MAX_SIDES + 1).iter().skip(1).map(SideAt::of));
+        dialer.clear();
+        refused(verify(&board, Some(&token()), &record).expect_err("refused"));
+        let foreign = Side::Member(a(&format!("{Z}.1")));
+        let mut sides = daughters(MAX_SIDES - 1);
+        sides.push(foreign.clone());
+        dialer.clear();
+        assert_eq!(
+            compose(&board, Some(&token()), &Inputs { sides, ..race_inputs() }),
+            Err(Refusal::BaseUnknown(foreign))
+        );
+        assert!(dialer.ops().is_empty(), "{:?}", dialer.ops());
     }
 
     /// CASE (j): a cross-owner fork of a PUBLISHED version merges from the
@@ -3078,7 +3141,7 @@ mod scripted {
             (frame["base"].as_str(), frame["base_extent"].as_str(), frame["draft"].as_str()),
             (Some(format!("{D}.2").as_str()), Some("16"), Some(S))
         );
-        assert_eq!(frame["id"].as_str(), Some(format!("{}.publish", merged.key.text()).as_str()));
+        assert_eq!(frame["id"].as_str(), Some(landing_id(&merged.key.text(), "publish").as_str()));
         let runs: Vec<(String, String, String)> = frame["runs"]
             .as_array()
             .unwrap()
@@ -3441,14 +3504,14 @@ mod scripted {
     /// runs, `as_of` the ONE position the merge was composed at, `head` the
     /// head and its extent as read, `base` the same pair since the board
     /// records a base for the draft, `merge` the sides but the draft itself
-    /// (none: the draft was the side), the id `<key>:<draft>@<P>.draft` —
-    /// the key, the draft and the position typed against — no `delete`,
-    /// no `reinstate`, no `publish`, no claim read; the draft holds M, its
-    /// base re-recorded on the head and the marker beside it at the write's
-    /// position; the record with `landed` the draft and THE WRITE's
-    /// position. A second landing over the same `merged` in the session is
-    /// answered by the board's memo for the id: the same landing, nothing
-    /// written twice.
+    /// (none: the draft was the side), the id `<stem>.draft`, its stem over
+    /// `<key>:<draft>@<P>` — the key, the draft and the position typed
+    /// against — no `delete`, no `reinstate`, no `publish`, no claim read;
+    /// the draft holds M, its base re-recorded on the head and the marker
+    /// beside it at the write's position; the record with `landed` the draft
+    /// and THE WRITE's position. A second landing over the same `merged` in
+    /// the session is answered by the board's memo for the id: the same
+    /// landing, nothing written twice.
     #[test]
     fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_the_record() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -3470,7 +3533,7 @@ mod scripted {
         assert_eq!(frame["head"], json!({"at": format!("{D}.2"), "extent": "15"}), "the head and its extent as read");
         assert_eq!(frame["base"], json!({"at": format!("{D}.2"), "extent": "15"}), "the base to record: the head's pair");
         assert_eq!(frame["merge"], json!({"sides": []}), "every side but the draft itself");
-        assert_eq!(frame["id"].as_str(), Some(format!("{}:{S}@{p}.draft", merged.key.text()).as_str()));
+        assert_eq!(frame["id"].as_str(), Some(landing_id(&format!("{}:{S}@{p}", merged.key.text()), "draft").as_str()));
         let ops = dialer.ops();
         assert!(
             !ops.iter().any(|o| ["publish", "in_claims", "delete", "reinstate", "stage"].contains(&o.as_str())),
@@ -4058,10 +4121,11 @@ mod scripted {
     }
 
     /// A FRESH DRAFT (R3 (i)): with no draft named, `stage {from: the head}`
-    /// under the id `<key>@<P>.stage`, then the one write into the staged draft
-    /// typed against the stage's position, the base sent — the stage
-    /// recorded one — and the merge's side; two commits, the state between a
-    /// plain staged draft. Over the same `merged` the memo answers both ids:
+    /// under the id `<stem>.stage`, its stem over `<key>@<P>`, then the one
+    /// write into the staged draft typed against the stage's position, the
+    /// base sent — the stage recorded one — and the merge's side; two
+    /// commits, the state between a plain staged draft. Over the same
+    /// `merged` the memo answers both ids:
     /// nothing twice. Composed again, the merger's newest record for the
     /// key, read at the landing, names the landing: it is reported, and
     /// NOTHING is staged or written; and the same record answers a `resume`
@@ -4079,12 +4143,12 @@ mod scripted {
         let writes: Vec<&str> = ops.iter().map(String::as_str).filter(|o| ["stage", "set_arrangement", "insert", "make_link", "create_new_document"].contains(o)).collect();
         assert_eq!(writes, ["stage", "set_arrangement", "create_new_document", "insert", "make_link"], "{ops:?}");
         let stage = &dialer.frames("stage")[0];
-        assert_eq!(stage, &json!({"op": "stage", "from": format!("{D}.2"), "id": format!("{}@{}.stage", merged.key.text(), merged.as_of)}));
+        assert_eq!(stage, &json!({"op": "stage", "from": format!("{D}.2"), "id": landing_id(&format!("{}@{}", merged.key.text(), merged.as_of), "stage")}));
         let stage_at = dialer.world().rows.iter().find(|r| r.op == "stage").unwrap().at;
         let frame = &dialer.frames("set_arrangement")[0];
         assert_eq!(frame["doc"].as_str(), Some(fresh.to_string().as_str()));
         assert_eq!(frame["as_of"].as_u64(), Some(stage_at), "typed against the stage's position: {frame}");
-        assert_eq!(frame["id"].as_str(), Some(format!("{}:{fresh}@{stage_at}.draft", merged.key.text()).as_str()), "the fresh draft and the stage's position");
+        assert_eq!(frame["id"].as_str(), Some(landing_id(&format!("{}:{fresh}@{stage_at}", merged.key.text()), "draft").as_str()), "the fresh draft and the stage's position");
         assert_eq!(frame["base"], json!({"at": format!("{D}.2"), "extent": "15"}), "the stage recorded a base, so it is re-recorded");
         assert_eq!(frame["merge"], json!({"sides": [S]}));
         assert_eq!(dialer.positions("doc_metadata"), [stage_at], "the fresh draft's base read at the stage's position");
@@ -4135,7 +4199,7 @@ mod scripted {
             if let Some(s) = site {
                 rej["site"] = json!({"addr": s});
             }
-            dialer.world().memo.insert(format!("{}.publish", merged.key.text()), rej);
+            dialer.world().memo.insert(landing_id(&merged.key.text(), "publish"), rej);
         };
         refuse("withheld", Some(Z));
         assert_eq!(
@@ -4180,7 +4244,7 @@ mod scripted {
         let twin = verbatim(land(&board, &merged, drafted()).unwrap_err(), "already_published");
         assert_eq!(twin.body["site"]["addr"].as_str(), Some(format!("{D}.3").as_str()));
         dialer.world().memo.insert(
-            format!("{}.publish", merged.key.text()),
+            landing_id(&merged.key.text(), "publish"),
             json!({"resp": "rejected", "code": "publication_over_budget", "detail": "70000 in-lock reads priced over the budget of 65536", "disposition": "permanent", "op": "publish"}),
         );
         let budget = verbatim(land(&board, &merged, drafted()).unwrap_err(), "publication_over_budget");
@@ -4191,7 +4255,7 @@ mod scripted {
         // The head the board owes past the landing's read of it: the board's
         // state, a retry its act — never this library's fault.
         dialer.world().memo.insert(
-            format!("{}.publish", merged.key.text()),
+            landing_id(&merged.key.text(), "publish"),
             json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "publish"}),
         );
         let err = land(&board, &merged, shot(&session, &signer)).expect_err("the head owed");
@@ -4256,7 +4320,7 @@ mod scripted {
         );
         // The codes planted under the write's id, each answered to a landing
         // into `S`.
-        let id = format!("{}:{S}@{}.draft", merged.key.text(), merged.as_of);
+        let id = landing_id(&format!("{}:{S}@{}", merged.key.text(), merged.as_of), "draft");
         let refused = |code: &str, site: Option<&str>| -> Refusal {
             let site = site.map_or(Value::Null, |s| json!({"addr": s}));
             dialer.world().memo.insert(id.clone(), permanent("set_arrangement", code, site));
@@ -4368,7 +4432,7 @@ mod scripted {
         let (dialer, board, signer) = open(World::race());
         let session = sign_in(&board, &signer);
         let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
-        let link_id = format!("{}.link", merged.key.text());
+        let link_id = landing_id(&merged.key.text(), "link");
         dialer.world().memo.insert(
             link_id.clone(),
             json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"}),
@@ -4413,6 +4477,122 @@ mod scripted {
             "signed over the head written: {}",
             links[0]
         );
+    }
+
+    /// A LANDING WRITE's ID IS ITS STEM AND ITS FRAME (skep #792): the stem
+    /// is `merge:` and the SHA-256 of the text naming the write in lowercase
+    /// hex — the empty text's the digest every SHA-256 gives it — 70 bytes
+    /// for ten bytes of text or ten thousand; one text gives one stem, and
+    /// another text another.
+    #[test]
+    fn a_landing_writes_stem_is_the_digest_of_its_text_at_one_width() {
+        assert_eq!(
+            Stem::of("").id("publish"),
+            "merge:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.publish"
+        );
+        let width = |text: &str| Stem::of(text).id("stage").len();
+        assert_eq!((width("0123456789"), width(&"0123456789".repeat(1000))), (76, 76));
+        let key = format!("merge:{D}:{D}.1:{D}.2+{D}.1.1");
+        assert_eq!(Stem::of(&key).id("draft"), Stem::of(&key.clone()).id("draft"));
+        assert_ne!(Stem::of(&key).id("draft"), Stem::of(&format!("{key}@11")).id("draft"));
+    }
+
+    /// A MERGE OF MANY SIDES LANDS IN EVERY ARM (skep #792). The head and
+    /// sixteen daughters of the base, each removing " sat", spell a record
+    /// key whose text alone passes the 256-byte id cap the scripted board
+    /// holds every frame to, as skepd's parse does — an id one byte past it
+    /// refused `malformed` with nothing applied, one at it admitted. Every
+    /// write of every arm carries `merge:`, sixty-four hex digits, a dot and
+    /// its frame: the shot lands the trunk's next member, a landing into `T`
+    /// and a fresh one each land M with its record, and a second call over
+    /// each writes nothing; the fresh draft undone, the fresh arm stages a
+    /// draft of its own under the id naming the undo's record.
+    #[test]
+    fn a_many_sided_merge_lands_in_every_arm_under_ids_the_wire_admits() {
+        // The premise: the cap, held at parse.
+        {
+            let (dialer, board, signer) = open(World::race());
+            let session = sign_in(&board, &signer);
+            let stage = |id: String| {
+                let frame = json!({"op": "stage", "from": format!("{D}.2"), "id": id});
+                match board.op(Some(session.token()), &frame).expect("answered") {
+                    Answer::Document(v) => v,
+                    Answer::Closed => panic!("closed"),
+                }
+            };
+            let rows = dialer.world().rows.len();
+            let past = stage("k".repeat(MAX_REQ_ID_BYTES + 1));
+            assert_eq!((past["code"].as_str(), past["op"].as_str()), (Some("malformed"), Some("unparseable")), "{past}");
+            assert_eq!(dialer.world().rows.len(), rows, "nothing applied");
+            assert_eq!(stage("k".repeat(MAX_REQ_ID_BYTES))["resp"].as_str(), Some("ack_addr"));
+        }
+        let t = "1.0.1.0.5";
+        let world = || {
+            let mut w = World::race();
+            for k in 2..=16 {
+                w.member(&format!("{D}.1.{k}"), vec![run(D, 1, 7)], Some(11));
+            }
+            w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+            w.staged(t, &format!("{D}.1"), 11);
+            w
+        };
+        let sides = (1..=16).map(|k| Side::Member(a(&format!("{D}.1.{k}")))).collect();
+        let inputs = Inputs { sides, ..race_inputs() };
+        // Every id a landing write sent: its stem, a dot and its frame.
+        let fixed_width = |dialer: &Scripted, cell: &str| {
+            let mut seen = 0;
+            for (op, frame) in [("publish", "publish"), ("stage", "stage"), ("set_arrangement", "draft"), ("insert", "record"), ("make_link", "link")] {
+                for f in dialer.frames(op) {
+                    let id = f["id"].as_str().unwrap_or_else(|| panic!("{cell}: `{op}` carries an id: {f}"));
+                    let hex = id.strip_prefix("merge:").and_then(|rest| rest.strip_suffix(&format!(".{frame}")));
+                    assert!(
+                        hex.is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))),
+                        "{cell}: {id}"
+                    );
+                    seen += 1;
+                }
+            }
+            assert!(seen >= 3, "{cell}: the landing's writes: {:?}", dialer.ops());
+        };
+        for cell in ["the shot", "into T", "a fresh draft"] {
+            let (dialer, board, signer) = open(world());
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+            let text = merged.key.text();
+            assert!(text.len() > MAX_REQ_ID_BYTES, "the premise: the key's text alone passes the cap, {} bytes", text.len());
+            let landing = || match cell {
+                "the shot" => shot(&session, &signer),
+                "into T" => draft_landing(&session, &signer, Some(a(t))),
+                _ => draft_landing(&session, &signer, None),
+            };
+            dialer.clear();
+            let landed = land(&board, &merged, landing()).unwrap_or_else(|e| panic!("{cell}: {e}"));
+            match (&landed, cell) {
+                (Landed::Member { address, .. }, "the shot") => assert_eq!(address.to_string(), format!("{D}.3")),
+                (Landed::Draft { into, .. }, "into T") => assert_eq!(into.to_string(), t),
+                (Landed::Draft { .. }, "a fresh draft") => assert_eq!(dialer.frames("stage").len(), 1),
+                other => panic!("{cell}: {other:?}"),
+            }
+            assert_eq!((dialer.frames("insert").len(), dialer.frames("make_link").len()), (1, 1), "{cell}: the record and its link");
+            fixed_width(&dialer, cell);
+            let rows = dialer.world().rows.len();
+            dialer.clear();
+            assert_eq!(land(&board, &merged, landing()).expect("landed again"), landed, "{cell}");
+            assert_eq!(dialer.world().rows.len(), rows, "{cell}: nothing written twice");
+            if let (Landed::Draft { into: f, .. }, "a fresh draft") = (&landed, cell) {
+                let undone = undo(&board, merger(&session, &signer), f, &a(K), None).expect("undone").record.expect("the undo's record");
+                dialer.clear();
+                let relanded = land(&board, &merged, landing()).expect("landed fresh again");
+                let Landed::Draft { into: f2, .. } = &relanded else { panic!("{relanded:?}") };
+                assert_ne!(f2, f, "a draft of its own");
+                assert_eq!(
+                    dialer.frames("stage")[0]["id"].as_str(),
+                    Some(landing_id(&format!("{text}@{}~{undone}", merged.as_of), "stage").as_str()),
+                    "the stage's id names the undo's record"
+                );
+                fixed_width(&dialer, "fresh again");
+            }
+        }
     }
 
     // ── the undo and the withdrawal ──────────────────────────────────────
@@ -4995,12 +5175,12 @@ mod scripted {
     }
 
     /// A LANDING AFTER A TAKE-BACK IN ONE SESSION IS A WRITE OF ITS OWN:
-    /// the draft landing's ids name the key, the draft and the position its
-    /// write is typed against, so a merge composed again after an undo —
-    /// the same key at a later position — is never answered by the board's
-    /// memo with the first landing's acknowledgment. The write commits, `S`
-    /// holds M again with the marker at the new position, and the record's
-    /// two writes carry ids of the same stem.
+    /// the draft landing's ids are spelled over the key, the draft and the
+    /// position its write is typed against, so a merge composed again after
+    /// an undo — the same key at a later position — is never answered by the
+    /// board's memo with the first landing's acknowledgment. The write
+    /// commits, `S` holds M again with the marker at the new position, and
+    /// the record's two writes carry ids of the same stem.
     #[test]
     fn a_landing_after_a_take_back_in_one_session_is_a_write_of_its_own() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -5016,10 +5196,10 @@ mod scripted {
         let relanded = land(&board, &again, draft_landing(&session, &signer, Some(a(S)))).expect("landed again");
         let (at, _) = landing_of(&relanded);
         assert!(at > first_at, "a commit of its own, never the first landing's acknowledgment: {relanded:?}");
-        let stem = format!("{}:{S}@{}", again.key.text(), again.as_of);
-        assert_eq!(dialer.frames("set_arrangement")[0]["id"].as_str(), Some(format!("{stem}.draft").as_str()));
-        assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(format!("{stem}.record").as_str()));
-        assert_eq!(dialer.frames("make_link")[0]["id"].as_str(), Some(format!("{stem}.link").as_str()));
+        let stem = Stem::of(&format!("{}:{S}@{}", again.key.text(), again.as_of));
+        assert_eq!(dialer.frames("set_arrangement")[0]["id"].as_str(), Some(stem.id("draft").as_str()));
+        assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(stem.id("record").as_str()));
+        assert_eq!(dialer.frames("make_link")[0]["id"].as_str(), Some(stem.id("link").as_str()));
         let w = dialer.world();
         assert!(w.rows.len() > rows, "committed");
         assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "S holds M again");
@@ -5184,12 +5364,12 @@ mod scripted {
     /// repeat of the identical request). The composition landed fresh in
     /// `F`, `F` undone, the same composition landed again with no draft
     /// named: the undo's record is the merger's newest for the key, so the
-    /// stage's id names it — `<key>@<P>~<link>.stage` — and the board's memo
-    /// never answers it with `F`. A stage and a landing commit, the new
-    /// draft holding M with its marker while `F` keeps the head's text the
-    /// undo restored; the record's ids carry the new draft's stem and its
-    /// `replaces` names the undo's record. A call after it answers that
-    /// landing, nothing written.
+    /// stage's id names it — its stem over `<key>@<P>~<link>` — and the
+    /// board's memo never answers it with `F`. A stage and a landing commit,
+    /// the new draft holding M with its marker while `F` keeps the head's
+    /// text the undo restored; the record's ids carry the new draft's stem
+    /// and its `replaces` names the undo's record. A call after it answers
+    /// that landing, nothing written.
     #[test]
     fn a_fresh_landing_after_its_take_back_in_one_session_stages_a_draft_of_its_own() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -5207,14 +5387,14 @@ mod scripted {
         let Landed::Draft { into: f2, position: at, record: link, .. } = relanded.clone() else { panic!("{relanded:?}") };
         assert_eq!(
             dialer.frames("stage")[0]["id"].as_str(),
-            Some(format!("{}@{}~{undone}.stage", merged.key.text(), merged.as_of).as_str()),
+            Some(landing_id(&format!("{}@{}~{undone}", merged.key.text(), merged.as_of), "stage").as_str()),
             "the stage's id names the record the landing follows"
         );
         let stage_at = dialer.world().rows.iter().rev().find(|r| r.op == "stage").unwrap().at;
-        let stem = format!("{}:{f2}@{stage_at}", merged.key.text());
-        assert_eq!(dialer.frames("set_arrangement")[0]["id"].as_str(), Some(format!("{stem}.draft").as_str()));
-        assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(format!("{stem}.record").as_str()));
-        assert_eq!(dialer.frames("make_link")[0]["id"].as_str(), Some(format!("{stem}.link").as_str()));
+        let stem = Stem::of(&format!("{}:{f2}@{stage_at}", merged.key.text()));
+        assert_eq!(dialer.frames("set_arrangement")[0]["id"].as_str(), Some(stem.id("draft").as_str()));
+        assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(stem.id("record").as_str()));
+        assert_eq!(dialer.frames("make_link")[0]["id"].as_str(), Some(stem.id("link").as_str()));
         let w = dialer.world();
         assert!(w.rows.len() > rows, "committed, never the memo's answers to the first landing");
         assert_ne!(f2, f, "a draft of its own: {relanded:?}");
@@ -5665,7 +5845,8 @@ mod scripted {
     ///
     /// Its gaps keep their runs and the resolutions they re-state, a draft
     /// side and a draft landing included; an object of another type or
-    /// version is no record.
+    /// version is no record, nor is one whose gap names a side past the one
+    /// byte a side is numbered by.
     #[test]
     fn the_record_round_trips_and_names_its_type() {
         let (_, board, _) = open(World::race());
@@ -5759,6 +5940,16 @@ mod scripted {
         other["type"] = json!("merge");
         other["v"] = json!(2);
         assert_eq!(Record::from_value(&other), None);
+        // A gap naming a side past the one byte a side is numbered by, in its
+        // runs or its order, is no record; 255, the last, reads.
+        let mut wide = v.clone();
+        wide["gaps"][0]["runs"][0]["side"] = json!(255);
+        assert_eq!(Record::from_value(&wide).map(|r| r.gaps[0].runs[0].0), Some(SideIx(255)));
+        wide["gaps"][0]["runs"][0]["side"] = json!(256);
+        assert_eq!(Record::from_value(&wide), None, "never read as the head's 0");
+        let mut wide = v.clone();
+        wide["gaps"][0]["placed"] = json!([1, 256]);
+        assert_eq!(Record::from_value(&wide), None);
     }
 
     // ── the fences ───────────────────────────────────────────────────────

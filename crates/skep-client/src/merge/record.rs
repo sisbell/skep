@@ -89,12 +89,13 @@ impl RecordKey {
 
     /// Returns the key as one line of text.
     ///
-    /// The text is `merge:<doc>:<base>:<side>+<side>…`. It is the stem of
-    /// the per-session idempotency ids the shot's writes carry, and it
-    /// opens the draft landing's, which name the draft and the position
-    /// too, and the stage's, which names the position and, where one
-    /// stands, the record the landing will replace (the `land` module's
-    /// doc).
+    /// The text is `merge:<doc>:<base>:<side>+<side>…`, as long as its
+    /// sides make it. It is the text naming the shot's writes, and it opens
+    /// the draft landing's, which names the draft and the position too, and
+    /// the stage's, which names the position and, where one stands, the
+    /// record the landing will replace. A write's per-session ids are
+    /// spelled over the SHA-256 of its text, a fixed width whatever the
+    /// sides (the `land` module's doc).
     pub fn text(&self) -> String {
         let sides: Vec<String> = self.sides.iter().map(ToString::to_string).collect();
         format!("merge:{}:{}:{}", self.doc, self.base, sides.join("+"))
@@ -310,10 +311,12 @@ impl Record {
     /// Returns the record a JSON object spells.
     ///
     /// `None` for an object of another `type`, another schema version, or
-    /// one missing a member this build cannot do without; a missing
-    /// `landed`, `claims`, `retries`, `replaces`, `by` or `values.applied`
-    /// reads as its empty value, and `rules` is not read. A member this build
-    /// does not know is left unread.
+    /// one missing a member this build cannot do without or spelling one it
+    /// cannot read — a gap naming a side past the one byte a side is
+    /// numbered by among them; a missing `landed`, `claims`, `retries`,
+    /// `replaces`, `by` or `values.applied` reads as its empty value, and
+    /// `rules` is not read. A member this build does not know is left
+    /// unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
             return None;
@@ -478,10 +481,7 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
     };
     let placed = match &v["placed"] {
         Value::Array(sides) => Placement::Order(
-            sides
-                .iter()
-                .map(|s| s.as_u64().map(|n| SideIx(n as u8)))
-                .collect::<Option<Vec<_>>>()?,
+            sides.iter().map(side_ix).collect::<Option<Vec<_>>>()?,
         ),
         Value::String(s) if s == "after" => Placement::After,
         Value::String(s) if s == "before" => Placement::Before,
@@ -504,7 +504,7 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
             let origin = origin_of(i_start)?;
             let first = last_component(&parse_address(i_start)?)?;
             let width: u64 = r["width"].as_str()?.parse().ok()?;
-            Some((SideIx(r["side"].as_u64()? as u8), Run::new(origin, first, width)))
+            Some((side_ix(&r["side"])?, Run::new(origin, first, width)))
         })
         .collect::<Option<Vec<_>>>()?;
     let anchor = |m: &Value| match m {
@@ -522,6 +522,14 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
         settled: v["settled"].as_bool()?,
         resolved_by,
     })
+}
+
+/// Returns the side a gap's `side` or `placed` entry names.
+///
+/// A side is numbered by one byte, its [`SideIx`]: a number past `u8::MAX`
+/// names no side the composition could have numbered, so `None`.
+fn side_ix(v: &Value) -> Option<SideIx> {
+    v.as_u64().and_then(|n| u8::try_from(n).ok()).map(SideIx)
 }
 
 // ── how a reader finds it, and its currency ───────────────────────────────
@@ -748,12 +756,13 @@ pub enum Verdict {
 /// [`Refusal::BeyondHead`] or [`Refusal::NotAPosition`] naming the draft as
 /// the record's — the record was not written against this board's history
 /// as it stands; a record with no head side or with `landed` none is faced
-/// — there is nothing to verify against; a client join the oracle
-/// disagrees with is this library's own fault, faced; a landed member with
-/// no `placed` term is faced; the landed document's reads' refusals but
-/// `withheld`, `doc_not_registered` and a reclaimed landing position, which
-/// answer [`Verdict::Unreadable`]; an `image` run that is no content
-/// I-address.
+/// — there is nothing to verify against — and so is one naming more sides
+/// besides the head than a merge numbers, before any read; a client join
+/// the oracle disagrees with is this library's own fault, faced; a landed
+/// member with no `placed` term is faced; the landed document's reads'
+/// refusals but `withheld`, `doc_not_registered` and a reclaimed landing
+/// position, which answer [`Verdict::Unreadable`]; an `image` run that is
+/// no content I-address.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
     let reader = Reader::new(board, token);
     let head = record.head().ok_or_else(|| {

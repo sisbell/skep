@@ -85,6 +85,13 @@ use super::record::{self, Record, RecordKey, SideAt};
 /// with the count, never split (decision 13).
 pub const SHOT_RUN_CAP: usize = 1 << 12;
 
+/// The most sides one merge composes besides the head.
+///
+/// Every list the core walks is numbered by its one-byte [`SideIx`], the
+/// head's `0` and each side's its place after it. A merge of more sides is
+/// refused by name before any read.
+pub(super) const MAX_SIDES: usize = u8::MAX as usize;
+
 /// The most items one `retrieve_v` delivers.
 ///
 /// It is `MAX_DELIVERY_ITEMS`, 131,072 (wire.md §Rejection codes,
@@ -121,6 +128,9 @@ pub struct Inputs {
     /// alone it is taken as named.
     pub base: Option<Address>,
     /// The other sides, in commit order.
+    ///
+    /// At most 255: every list a merge composes is numbered by one byte,
+    /// the head's first, and [`compose`] refuses more before any read.
     pub sides: Vec<Side>,
     /// The composition's switches and the merger's resolutions.
     pub options: Options,
@@ -1261,6 +1271,7 @@ pub(super) struct Readings {
 ///
 /// - a head that is no trunk member of `doc`, faced;
 /// - two drafts, [`Refusal::TwoDrafts`];
+/// - more sides besides the head than [`MAX_SIDES`], faced;
 /// - a member of another document or the bare document itself,
 ///   [`Refusal::BaseUnknown`];
 /// - the metadata read's refusals — at the named position,
@@ -1304,6 +1315,19 @@ pub(super) fn read_shape(
     if sides.iter().filter(|s| matches!(s, Side::Draft { .. })).count() > 1 {
         return Err(Refusal::TwoDrafts);
     }
+    // Every list the walk is given is numbered by its one-byte `SideIx`, the
+    // head's 0 and each side's its place after it: `last` is the last side's.
+    let Ok(last) = u8::try_from(sides.len()) else {
+        return Err(Halt::face(
+            format!(
+                "this merge names {} sides besides the head, past the {MAX_SIDES} one merge composes",
+                sides.len()
+            ),
+            "a merge numbers every list it composes by one byte, the head's first",
+            "merge fewer sides at a time; nothing was read or written",
+        )
+        .into());
+    };
     for side in sides {
         match side {
             // A fork's base and a draft's are read off the board below,
@@ -1418,8 +1442,8 @@ pub(super) fn read_shape(
     // Steps 4 and 5: the join and the walk, the values through the sides.
     let base_runs = runs_of(&base_image.runs)?;
     let mut side_runs = Vec::with_capacity(maps.len());
-    for (i, m) in maps.iter().enumerate() {
-        side_runs.push((SideIx(i as u8), runs_of(&m.runs)?));
+    for (ix, m) in (0..=last).zip(&maps) {
+        side_runs.push((SideIx(ix), runs_of(&m.runs)?));
     }
     let fault: RefCell<Option<Refusal>> = RefCell::new(None);
     let values = |side: SideIx, run: &Run| -> Option<Vec<Item>> {
@@ -1728,8 +1752,9 @@ fn compare_parts(
 ///
 /// A base named beside a fork side, [`Refusal::ForkBaseNamed`], before any
 /// read — a fork's base is the board's to serve (the fork-source design
-/// record, decision 8); then `read_shape`'s, then a halt reading the prior
-/// records.
+/// record, decision 8); then `read_shape`'s — more than 255 sides besides
+/// the head among them, faced before any read — then a halt reading the
+/// prior records.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
     if let Some(base) = &inputs.base {
         if let Some(fork) = inputs.sides.iter().find_map(|s| match s {

@@ -43,7 +43,9 @@
 //! request's merge beside a null base, by which the undo finds the landing
 //! and takes it back in one write (skep #784) — and into a fork whose
 //! source is not the head, refused `fork_base_moved` with nothing
-//! committed.
+//! committed. And ONE MERGE OF MANY DAUGHTERS (skep #792): twenty daughters
+//! off the base version merged with the head, a record key whose text alone
+//! passes the daemon's 256-byte id cap, landed on the trunk with its record.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -1378,4 +1380,52 @@ fn a_landing_into_a_fork_whose_source_is_not_the_head_is_refused_with_nothing_co
     assert!(meta["base"].is_null() && meta["merge"].is_null(), "nothing recorded: {meta}");
     assert_eq!(read(&rig.board, Some(forker.token()), &frames::find_links_ftt(&kind.to_string(), &fork.to_string()))["addrs"], json!([]), "no record");
     forker.close().expect("close");
+}
+
+/// A MERGE OF MANY DAUGHTERS ON THE REAL DAEMON (skep #792): the head and
+/// twenty daughters off the base version, each removing " sat", spell a
+/// record key whose text alone passes the 256-byte id cap the daemon holds
+/// at parse, yet the merge lands as the trunk's next member under ids the
+/// daemon admits — its record current for the key with every side, its
+/// testimony verifying Equal — and a second landing in the session is
+/// answered by the board's ids, nothing written twice.
+#[test]
+fn a_merge_of_many_daughters_lands_on_the_trunk_with_its_record() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let daughters: Vec<Address> = (1..=20)
+        .map(|k| {
+            let daughter = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+            assert_eq!(daughter.to_string(), format!("{d}.1.{k}"), "a base the trunk has moved past yields its own daughter");
+            daughter
+        })
+        .collect();
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let inputs = Inputs {
+        doc: d.clone(),
+        head: head.clone(),
+        base: None,
+        sides: daughters.iter().cloned().map(Side::Member).collect(),
+        options: Default::default(),
+        kind: kind.clone(),
+    };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    assert!(merged.key.text().len() > 256, "the premise: the key's text alone passes the cap, {} bytes", merged.key.text().len());
+    assert_eq!(m_of(&merged), vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 3)], "the big cat");
+    let merger = merger(&rig, &session);
+    let shot_landing = || Landing::Shot { merger, draft: None, journal: None };
+    let landed = land(&rig.board, &merged, shot_landing()).expect("landed");
+    let Landed::Member { address: member, position, record: link, .. } = landed.clone() else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.3"), "the merge is the trunk's next member");
+    assert_eq!(image(&rig.board, &token, &member, 11), as_image(&m_of(&merged)), "the member holds M");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.landed.clone(), record.link.clone()), (Some(RecordLanding::Member { member: member.clone(), position }), Some(link)));
+    assert_eq!(record.sides.len(), 21, "the head and every daughter");
+    assert_eq!(verify(&rig.board, Some(&token), &record).expect("verified"), Verdict::Equal);
+    let standing = rig.position();
+    assert_eq!(land(&rig.board, &merged, shot_landing()), Ok(landed), "the board answers the landing's ids again");
+    assert_eq!(rig.position(), standing, "nothing written twice");
+    session.close().expect("close");
 }

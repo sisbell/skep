@@ -5,7 +5,7 @@
 //! the lifecycle gates on (§1).
 
 use skep_address::{document_of, Address, Level, Nat, Span, Tumbler};
-use skep_arrangement::{trunk_of, Deposit, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{trunk_of, Deposit, SetArrangement, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_kernel::{Attestation, Seq};
@@ -285,6 +285,31 @@ pub enum Op {
     ///
     /// `as_of` is the typed state, as on [`Op::Insert`].
     Rearrange { doc: Address, cuts: Vec<VPos>, as_of: Seq },
+    /// SET_ARRANGEMENT (the landing lane; skep #764): a draft's whole content
+    /// arrangement set by identity in one commit.
+    ///
+    /// `arrangement` is M5's own request value, carried verbatim
+    /// ([`SetArrangement`]): the runs the draft is set to, in
+    /// [`Op::Reinstate`]'s run form, placed in place of everything the draft
+    /// arranged; the head the merge was composed on at the extent read,
+    /// where the write is a merge's landing; the base to record, where the
+    /// draft's recorded base is to move; and the merge's sides, where the
+    /// draft is to carry a marker beside that base. M5 decides everything of
+    /// them — the head and the base against the draft's chain, the fork
+    /// gate, what moves and what stands — and M10 hands them through; a
+    /// `merge` carried without a `head` is the codec's `malformed`. A
+    /// draft's write, owner-gated on `doc`, and never publish-class: no
+    /// `attest` rides it, the codec refusing the member as on `stage`.
+    ///
+    /// **The reach is wide**, as `reinstate`'s: a run's origin may be any
+    /// document the session principal may read, consulted at the write
+    /// door per distinct origin in run order ([`Op::source_arguments`]),
+    /// the destination's own I-space excepted. `as_of` is the draft's typed
+    /// state, as on [`Op::Insert`], REQUIRED: a frame typed against an
+    /// older arrangement is refused `arrangement_moved` with nothing wiped
+    /// — the one refusal that keeps a landing from landing over an edit
+    /// made since it was composed.
+    SetArrangement { doc: Address, arrangement: SetArrangement, as_of: Seq },
     /// CREATENEWVERSION (ASN-0123) — the content-sharing, copy-on-write fork.
     ///
     /// `published` is the three-valued flag with `None` ⇒ inherit
@@ -836,6 +861,8 @@ pub enum OpKind {
     Reinstate,
     /// The kind of [`Op::Rearrange`].
     Rearrange,
+    /// The kind of [`Op::SetArrangement`].
+    SetArrangement,
     /// The kind of [`Op::Version`].
     Version,
     /// The kind of [`Op::Stage`].
@@ -983,6 +1010,7 @@ impl Op {
             | Op::Copy { .. }
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
+            | Op::SetArrangement { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -1018,6 +1046,7 @@ impl Op {
             Op::Copy { .. } => OpKind::Copy,
             Op::Reinstate { .. } => OpKind::Reinstate,
             Op::Rearrange { .. } => OpKind::Rearrange,
+            Op::SetArrangement { .. } => OpKind::SetArrangement,
             Op::Version { .. } => OpKind::Version,
             Op::Stage { .. } => OpKind::Stage,
             Op::Publish { .. } => OpKind::Publish,
@@ -1144,6 +1173,7 @@ impl Op {
             | Op::Copy { .. }
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
+            | Op::SetArrangement { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -1243,6 +1273,7 @@ impl Op {
             | Op::Copy { .. }
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
+            | Op::SetArrangement { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -1256,15 +1287,16 @@ impl Op {
 
     /// Returns a write's source-argument list, in declaration order.
     ///
-    /// They are the documents whose arrangement — or, for `reinstate`, whose
-    /// minted content — the write reads before it writes (PUB-6.23, PUB-6.24,
-    /// PUB-6.4), so the first unreadable one is the `site.addr` the write
-    /// door's `Withheld` rejection carries. `copy` names each
-    /// `specs[].source` by index; `reinstate` each distinct `runs[].origin`
-    /// in run order, the destination's own I-space excepted (the shot's rule:
-    /// the document's own needs no consult — address arithmetic on the stated
-    /// origin, PUB-2.15); `version` its `d_src`; `stage` its `from`, the
-    /// surface it copies; `make_link` and `edit_link`
+    /// They are the documents whose arrangement — or, for `reinstate` and
+    /// `set_arrangement`, whose minted content — the write reads before it
+    /// writes (PUB-6.23, PUB-6.24, PUB-6.4), so the first unreadable one is
+    /// the `site.addr` the write door's `Withheld` rejection carries. `copy`
+    /// names each `specs[].source` by index; `reinstate` and
+    /// `set_arrangement` each distinct `runs[].origin` in run order, the
+    /// destination's own I-space excepted (the shot's rule: the document's
+    /// own needs no consult — address arithmetic on the stated origin,
+    /// PUB-2.15); `version` its `d_src`; `stage` its `from`, the surface it
+    /// copies; `make_link` and `edit_link`
     /// the document of every `Resolve`-form slot's V-spec — slots in the
     /// wire's declared order `from`, `to`, `ty`, specs by index within a slot.
     /// An address-form or I-span slot names no source: an address is not
@@ -1292,23 +1324,29 @@ impl Op {
         fn push_resolve_sources<'a>(slot: &'a SlotArg, out: &mut Vec<&'a Address>) {
             out.extend(slot.specs().iter().map(|s| &s.source));
         }
+        /// Returns the distinct origins the runs state, in run order, as
+        /// the client states them — the address a `withheld` names — the
+        /// destination's own I-space excepted: a stated origin projecting
+        /// to `doc`'s trunk (PUB-2.15) is the writer's own, which the
+        /// deferral has just found it owns. The one arm the two writes by
+        /// identity share.
+        fn distinct_origins<'a>(doc: &Address, runs: &'a [ShotRun]) -> Vec<&'a Address> {
+            let own = trunk_of(doc);
+            let mut out: Vec<&Address> = Vec::new();
+            for ShotRun { origin, .. } in runs {
+                if trunk_of(origin) != own && !out.contains(&origin) {
+                    out.push(origin);
+                }
+            }
+            out
+        }
         match self {
             Op::Copy { specs, .. } => specs.iter().map(|s| &s.source).collect(),
-            // The distinct origins the runs state, in run order, as the
-            // client states them — the address a `withheld` names — the
-            // destination's own I-space excepted: a stated origin projecting
-            // to `doc`'s trunk (PUB-2.15) is the writer's own, which the
-            // deferral has just found it owns.
-            Op::Reinstate { doc, runs, .. } => {
-                let own = trunk_of(doc);
-                let mut out: Vec<&Address> = Vec::new();
-                for ShotRun { origin, .. } in runs {
-                    if trunk_of(origin) != own && !out.contains(&origin) {
-                        out.push(origin);
-                    }
-                }
-                out
-            }
+            Op::Reinstate { doc, runs, .. } => distinct_origins(doc, runs),
+            // The whole arrangement's runs are REINSTATE's, consulted as
+            // REINSTATE's are; the head, the base and the sides are names,
+            // not sources — an address is not secret (PUB-1.13).
+            Op::SetArrangement { doc, arrangement, .. } => distinct_origins(doc, &arrangement.runs),
             Op::Version { d_src, .. } => vec![d_src],
             Op::Stage { from } => vec![from],
             Op::MakeLink { from, to, ty, .. } => {

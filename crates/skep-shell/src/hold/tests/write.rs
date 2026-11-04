@@ -849,27 +849,28 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     assert_eq!(line["base"], ack["at"], "the ack is noted for the base of the next hold on its home: {line}");
 }
 
-/// Checks that the seven unholdable writes are refused under a standing hold.
+/// Checks that the eight unholdable writes are refused under a standing hold.
 ///
 /// §3c.4: `fork`, `version`, `stage`, `make_link`, `nullify`, `edit_link`
 /// and `publish` arriving while the own node is stopped, the write path
 /// poisoned or the writes halted are refused at once under the hold's own
 /// name — `stopped`, `poisoned`, `halted` — naming the op, held never and
-/// dialed never; a write outside the seven dials as it dials under the same
+/// dialed never; a write outside the eight dials as it dials under the same
 /// hold; the poisoned state is the dial's own `poisoned` answer, standing
 /// until a `/health` read says writes go; and a board that does not answer
 /// is no hold of the kind — the write meets the dial's own `unreachable`
-/// (the mutants that dial the seven under a stop, hold them as bursts,
+/// (the mutants that dial the eight under a stop, hold them as bursts,
 /// never clear the poison, or read an unreachable board as a standing
 /// hold).
 #[test]
-fn the_seven_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewhere() {
+fn the_eight_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_elsewhere() {
     let citation = "1.1.0.1.0.1.0.3.13";
-    let seven = || {
+    let eight = || {
         vec![
             json!({"op": "fork", "published": true}),
             json!({"op": "version", "d_src": DOC}),
             json!({"op": "stage", "from": DOC}),
+            json!({"op": "set_arrangement", "doc": DOC, "runs": [{"origin": DOC, "i_start": format!("{DOC}.0.1.1"), "width": "1"}], "as_of": 1}),
             json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}),
             json!({"op": "nullify", "home": OTHER, "target": format!("{OTHER}.0.2.1")}),
             json!({"op": "edit_link", "original": format!("{OTHER}.0.2.1"), "d_s": OTHER, "d_a": DOC, "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": [citation]}}}),
@@ -877,7 +878,7 @@ fn the_seven_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_else
         ]
     };
     let poisoned = || json!({"resp": "rejected", "code": "poisoned", "disposition": "retry", "op": "insert"});
-    assert_eq!(UNHOLDABLE_WRITES.len(), 7);
+    assert_eq!(UNHOLDABLE_WRITES.len(), 8);
     for cause in ["stopped", "poisoned", "halted"] {
         let g = ground();
         match cause {
@@ -894,17 +895,17 @@ fn the_seven_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_else
         }
         let sends = g.fake.sends();
         let lines = g.lines().len();
-        for frame in seven() {
+        for frame in eight() {
             let op = frame["op"].as_str().unwrap();
-            assert!(UNHOLDABLE_WRITES.contains(&op), "{op} is of the seven");
+            assert!(UNHOLDABLE_WRITES.contains(&op), "{op} is of the eight");
             let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, frame.clone(), None) else { panic!("{cause}: {op} is refused") };
             let v = refused.to_value();
             assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), (cause, Some("shell"), Some(op)), "{cause}: {v}");
             assert_eq!(g.holds.unholdable_refusal("b-1", op).map(|r| r.name().to_string()), Some(cause.to_string()), "{cause}: the door the confirm asks");
         }
-        assert_eq!((g.fake.sends(), g.lines().len()), (sends, lines), "{cause}: none of the seven is dialed or held");
-        let OpAnswer::Answered(Ok(acked)) = g.holds.send(&g.session, json!({"op": "create_new_document", "account": "1.0.1"}), None) else { panic!("{cause}: a write outside the seven dials") };
-        assert_eq!((acked["resp"].as_str(), g.fake.sends()), (Some("ack"), sends + 1), "{cause}: a write outside the seven dials as it dials");
+        assert_eq!((g.fake.sends(), g.lines().len()), (sends, lines), "{cause}: none of the eight is dialed or held");
+        let OpAnswer::Answered(Ok(acked)) = g.holds.send(&g.session, json!({"op": "create_new_document", "account": "1.0.1"}), None) else { panic!("{cause}: a write outside the eight dials") };
+        assert_eq!((acked["resp"].as_str(), g.fake.sends()), (Some("ack"), sends + 1), "{cause}: a write outside the eight dials as it dials");
     }
     // The poison ends at the read that says writes go.
     let g = ground();
@@ -917,7 +918,7 @@ fn the_seven_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_else
     let g = ground();
     g.fake.op_unreachable.store(true, Ordering::SeqCst);
     assert!(g.holds.unholdable_refusal("b-1", "make_link").is_none());
-    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, seven()[3].clone(), None) else { panic!("the dial fails as it fails") };
+    let OpAnswer::Answered(Err(refused)) = g.holds.send(&g.session, eight()[4].clone(), None) else { panic!("the dial fails as it fails") };
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")), "{refused}");
     assert!(g.lines().is_empty(), "a write the hold never holds is held never");
 }

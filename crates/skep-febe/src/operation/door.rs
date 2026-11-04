@@ -375,6 +375,10 @@ impl Op {
             // document's (the replacement act's record, Q2) — so it is
             // consulted exactly as `copy` is, behind the destination's gate.
             Op::Reinstate { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
+            // The whole arrangement's runs are REINSTATE's, read as
+            // REINSTATE reads them: consulted exactly as `reinstate` is,
+            // behind the destination's gate.
+            Op::SetArrangement { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
             Op::Version { .. } => WriteConsult::AfterOwnershipOf(Vec::new()),
             // The staging act reads `from` as `version` reads `d_src`, and
             // its draft lands in the caller's own account: consulted, with
@@ -430,23 +434,24 @@ impl Op {
 
     /// Returns the destination this write edits in place, if any (PUB-2.11).
     ///
-    /// The class is `insert`, `delete`, `copy`-into, `reinstate` and
-    /// `rearrange`, the five writes that advance an existing document's
-    /// arrangement. `None` for everything else, and each exclusion is the
-    /// rule's own: the link writes are outside it (PUB-2.12), `version` and
-    /// `create`/`fork` mint a document rather than advancing one, `publish`
-    /// appends a chain member whose destination M5's composite decides
-    /// (PUB-2.39), and no read edits anything. Exhaustive with no `_` arm: a
-    /// new `Op` decides its row here.
+    /// The class is `insert`, `delete`, `copy`-into, `reinstate`,
+    /// `rearrange` and `set_arrangement`, the six writes that advance an
+    /// existing document's arrangement. `None` for everything else, and each
+    /// exclusion is the rule's own: the link writes are outside it
+    /// (PUB-2.12), `version` and `create`/`fork` mint a document rather than
+    /// advancing one, `publish` appends a chain member whose destination
+    /// M5's composite decides (PUB-2.39), and no read edits anything.
+    /// Exhaustive with no `_` arm: a new `Op` decides its row here.
     ///
     /// This names the class; what restricts the door's pre-evaluation to
-    /// `copy` and `reinstate` is the order in which the door asks.
-    /// `consult_write` asks only after the deferral, so only consulted writes
-    /// reach it — `insert`, `delete` and `rearrange` read no source, answer
-    /// [`WriteConsult::NotTaken`] from [`Op::write_consult`], and meet the
-    /// store's own `published_target` as the store words it, one layer later.
-    /// The two lists are therefore read together, and the pairing is pinned
-    /// in this module's tests rather than left to agree by hand.
+    /// `copy`, `reinstate` and `set_arrangement` is the order in which the
+    /// door asks. `consult_write` asks only after the deferral, so only
+    /// consulted writes reach it — `insert`, `delete` and `rearrange` read
+    /// no source, answer [`WriteConsult::NotTaken`] from
+    /// [`Op::write_consult`], and meet the store's own `published_target` as
+    /// the store words it, one layer later. The two lists are therefore read
+    /// together, and the pairing is pinned in this module's tests rather
+    /// than left to agree by hand.
     ///
     /// Private to the door for [`Op::write_consult`]'s reason: nothing outside
     /// it re-runs the door's pre-evaluation, which exists to order one refusal
@@ -457,7 +462,8 @@ impl Op {
             | Op::Delete { doc, .. }
             | Op::Copy { doc, .. }
             | Op::Reinstate { doc, .. }
-            | Op::Rearrange { doc, .. } => Some(doc),
+            | Op::Rearrange { doc, .. }
+            | Op::SetArrangement { doc, .. } => Some(doc),
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
@@ -544,6 +550,7 @@ impl Op {
             | Op::Copy { .. }
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
+            | Op::SetArrangement { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }
@@ -591,8 +598,9 @@ impl<W: FebeWorld> OperationSurface<W> {
     ///
     /// It realizes PUB-6.23, PUB-6.24, PUB-6.36 slot 6 and PUB-6.38 on a write
     /// that reads a document before it writes — `copy`'s sources,
-    /// `reinstate`'s run origins, `version`'s `d_src`, the resolve-form slots
-    /// of `make_link` and `edit_link` — and runs the link-address rule on the
+    /// `reinstate`'s and `set_arrangement`'s run origins, `version`'s
+    /// `d_src`, the resolve-form slots of `make_link` and `edit_link` — and
+    /// runs the link-address rule on the
     /// links a write validates by address (PUB-6.6: `edit_link.original`,
     /// `assert_sup.old`/`new`, the table [`Op::link_address_arguments`]
     /// keeps). It binds its own predicate — [`OperationSurface::readable_by`]
@@ -614,12 +622,13 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// `judgment`).
     ///
     /// **Staleness.** The predicate and the registry are read off `world` — a
-    /// prior snapshot, not the base the write commits on. For six of the
-    /// seven source-reading writes — `copy`, `reinstate`, `version`, `stage`,
-    /// `make_link`, `edit_link` — this door is the sole enforcement of
-    /// PUB-6.23: their stores carry no `withheld` verdict (M5 states the gate
-    /// as COPY's, REINSTATE's, VERSION's and STAGE's precondition, which this
-    /// consult discharges), so what is decided here is what is enforced, and
+    /// prior snapshot, not the base the write commits on. For seven of the
+    /// eight source-reading writes — `copy`, `reinstate`, `set_arrangement`,
+    /// `version`, `stage`, `make_link`, `edit_link` — this door is the sole
+    /// enforcement of PUB-6.23: their stores carry no `withheld` verdict (M5
+    /// states the gate as COPY's, REINSTATE's, SET_ARRANGEMENT's, VERSION's
+    /// and STAGE's precondition, which this consult discharges), so what is
+    /// decided here is what is enforced, and
     /// it is decided at that snapshot rather than at the operation's
     /// linearization point. The gap opens only where a write commits between
     /// the two — another `execute` in flight, which §8 invites, or a writer
@@ -641,8 +650,9 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// `edit_link` the whole successor build, which the caller sizes — and the
     /// write's wait for M2's applier lock, where any other write may commit.
     /// What bounds the consequence is not this door: the arrangement a late
-    /// `copy`, `reinstate` or `version` produces reads back masked per run by
-    /// origin (PUB-6.41), and the I-extents a late `make_link` or `edit_link`
+    /// `copy`, `reinstate`, `set_arrangement` or `version` produces reads
+    /// back masked per run by origin (PUB-6.41), and the I-extents a late
+    /// `make_link` or `edit_link`
     /// deposits are not secret (PUB-6.24); a late link-address argument is
     /// bounded by nothing, the store's residence check then confirming a link
     /// homed where the caller cannot read (PUB-6.6). Closing the gap means the
@@ -681,7 +691,7 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// (PUB-2.11, PUB-6.38).** The model's refusals are evaluated inside the
     /// store transaction (PUB-kickoff D2b), which leaves one cell the door
     /// could not order on its own — a source the caller may not read, copied
-    /// into a published destination the caller owns — where `withheld` would
+    /// or placed into a published destination the caller owns — where `withheld` would
     /// answer though PUB-6.36 has slot 5 speak first. So the door
     /// pre-evaluates the in-place advance refusal itself, between the deferral
     /// and the consult, over the class [`Op::in_place_destination`] names, by
@@ -746,9 +756,9 @@ impl<W: FebeWorld> OperationSurface<W> {
         // registered (PUB-6.37), so the door runs the rule the store enforces
         // rather than a copy of it — before any source is consulted, so the
         // one cell where both apply answers `published_target`, never
-        // `withheld`. `copy` and `reinstate` are the members of the class that
-        // are also consulted; the others never reach here
-        // (`in_place_destination`).
+        // `withheld`. `copy`, `reinstate` and `set_arrangement` are the
+        // members of the class that are also consulted; the others never
+        // reach here (`in_place_destination`).
         if let Some(in_place) = op.in_place_destination() {
             if published_target(m3, in_place) {
                 return Err(rejection(kind, RejectCode::PublishedTarget));
@@ -878,16 +888,18 @@ mod tests {
 
     /// PUB-2.11 / PUB-6.36 slot 5: the other pairing `consult_write` needs.
     ///
-    /// `in_place_destination` names the class — the five writes that advance
-    /// an existing document's arrangement — and the door's order is what
-    /// narrows the pre-evaluation to `copy` and `reinstate`: the check runs
-    /// past the deferral, so only a consulted member reaches it, and the three
-    /// that are not consulted meet the store's own `published_target` as the
-    /// store words it. Both halves are stated here, because a member that
-    /// quietly stopped being consulted, or a consulted write that quietly left
-    /// the class, would reorder a refusal with nothing to say so.
+    /// `in_place_destination` names the class — the six writes that advance
+    /// an existing document's arrangement, the five in-place edits and
+    /// `set_arrangement` — and the door's order is what narrows the
+    /// pre-evaluation to `copy`, `reinstate` and `set_arrangement`: the
+    /// check runs past the deferral, so only a consulted member reaches it,
+    /// and the three that are not consulted meet the store's own
+    /// `published_target` as the store words it. Both halves are stated
+    /// here, because a member that quietly stopped being consulted, or a
+    /// consulted write that quietly left the class, would reorder a refusal
+    /// with nothing to say so.
     #[test]
-    fn the_in_place_class_is_the_five_arrangement_edits_and_copy_and_reinstate_are_consulted() {
+    fn the_in_place_class_is_the_six_arrangement_edits_and_the_three_that_read_a_source_are_consulted() {
         for (op, is_read) in all_ops() {
             let in_place = op.in_place_destination().is_some();
             let expects = !is_read
@@ -898,6 +910,7 @@ mod tests {
                         | Op::Copy { .. }
                         | Op::Reinstate { .. }
                         | Op::Rearrange { .. }
+                        | Op::SetArrangement { .. }
                 );
             assert_eq!(in_place, expects, "{:?}: the in-place arrangement-edit row", op.kind());
             assert!(
@@ -911,8 +924,8 @@ mod tests {
                 in_place && matches!(op.write_consult(), WriteConsult::AfterOwnershipOf(_));
             assert_eq!(
                 pre_evaluated,
-                matches!(op, Op::Copy { .. } | Op::Reinstate { .. }),
-                "{:?}: `copy` and `reinstate` are the members the door's pre-evaluation reaches",
+                matches!(op, Op::Copy { .. } | Op::Reinstate { .. } | Op::SetArrangement { .. }),
+                "{:?}: `copy`, `reinstate` and `set_arrangement` are the members the door's pre-evaluation reaches",
                 op.kind()
             );
         }
@@ -941,6 +954,25 @@ mod tests {
         assert_eq!(reinstate.in_place_destination(), Some(&d));
         assert_eq!(reinstate.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
         assert_eq!(reinstate.source_arguments(), vec![&src], "the origin it is consulted on");
+        // The whole arrangement: REINSTATE's runs, REINSTATE's consult, the
+        // head and the base names and no sources.
+        let whole = Op::SetArrangement {
+            doc: d.clone(),
+            arrangement: skep_arrangement::SetArrangement {
+                runs: vec![ShotRun {
+                    origin: src.clone(),
+                    run: Run::new(addr(&[1, 0, 1, 0, 2, 0, 1, 1]), Nat::from(1u32))
+                        .expect("a content run"),
+                }],
+                head: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 3, 1]), extent: Nat::from(1u32) }),
+                base: Some(skep_arrangement::Base { member: addr(&[1, 0, 1, 0, 3, 1]), extent: Nat::from(1u32) }),
+                merge: Some(vec![addr(&[1, 0, 1, 0, 4])]),
+            },
+            as_of: Seq(7),
+        };
+        assert_eq!(whole.in_place_destination(), Some(&d));
+        assert_eq!(whole.write_consult(), WriteConsult::AfterOwnershipOf(vec![&d]));
+        assert_eq!(whole.source_arguments(), vec![&src], "the runs' origin alone: the head, the base and the sides are names");
     }
 
     /// PUB-6.6: the third pairing `consult_write` depends on.

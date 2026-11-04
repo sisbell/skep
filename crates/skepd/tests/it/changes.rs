@@ -641,19 +641,21 @@ fn one_entry_since(port: u16, token: &str, what: &str, before: u64) -> Value {
     entries[0].clone()
 }
 
-/// The five op terms a row may carry, by name.
-const TERMS: [&str; 5] = ["new_prefix", "new_id", "link", "placed", "base_extent"];
+/// The seven op terms a row may carry, by name.
+const TERMS: [&str; 7] = ["new_prefix", "new_id", "link", "placed", "base_extent", "base", "merge"];
 
 /// Returns the terms an op's row carries (wire.md §The change feed).
 ///
 /// Every other term is absent on its row — `emit`, `assert_sup` and
 /// `edit_link` mint links too and carry none (r6-2a and link-sets sweep 5
-/// S3 name `make_link` alone).
+/// S3 name `make_link` alone); a `set_arrangement` row carries its pair
+/// always, each `null` where the write recorded none (skep #764).
 fn terms_of(op: &str) -> &'static [&'static str] {
     match op {
         "delegate" => &["new_prefix", "new_id"],
         "make_link" => &["link"],
         "publish" => &["placed", "base_extent"],
+        "set_arrangement" => &["base", "merge"],
         _ => &[],
     }
 }
@@ -896,6 +898,15 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             serde_json::json!([doc_a]),
         ),
         (
+            // The landing (skep #764): the draft set, never a run's origin —
+            // doc_a's second address placed by identity as doc_b's whole
+            // arrangement; a plain draft, so no base and no merge recorded,
+            // the row's two terms null.
+            "set_arrangement",
+            set_arrangement_frame(&doc_b, &[(&doc_a, &format!("{doc_a}.0.1.2"), 1)], None, None, None, None),
+            serde_json::json!([doc_b]),
+        ),
+        (
             "register_node",
             r#"{"op":"register_node","addr":"1.9001"}"#.to_string(),
             serde_json::json!([]),
@@ -955,8 +966,12 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         assert_eq!(entry["op"].as_str(), Some(op_of(what)), "{what}: the entry's op kind");
         assert_eq!(entry["docs"], docs, "{what}: the affected-docs convention");
         // The terms: `emit` and `assert_sup` mint a link and carry no
-        // `link`, `nullify` deposits a record and carries none.
+        // `link`, `nullify` deposits a record and carries none; the
+        // landing into a plain draft carries its pair, both null.
         assert_terms_by_op(&entry, what);
+        if what == "set_arrangement" {
+            assert!(entry["base"].is_null() && entry["merge"].is_null(), "{what}: nothing recorded, both null: {entry}");
+        }
         assert_eq!(entry["key"].as_str(), Some("bare"), "{what}: a bare session's write");
         assert_absent(&entry, &["attest"], what);
     }

@@ -53,7 +53,7 @@ use crate::sessions::{Facts, Open, SessionKind, Supplements};
 mod resend;
 mod write;
 
-/// The five burst kinds are bursts; the eleven other write kinds are not.
+/// The five burst kinds are bursts; the thirteen other write kinds are not.
 #[test]
 fn the_five_kinds_are_bursts_and_no_other_write_kind_is() {
     for op in BURST_KINDS {

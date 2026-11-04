@@ -173,7 +173,8 @@ pub struct FaultSite {
     /// target link that failed the ω check; and every `Withheld` — M10's
     /// doc-argument consult and source consult, and M5's publish shot —
     /// naming the first unreadable document in declaration order (PUB-8.4's
-    /// pinned `site.addr`) — and from the publication's own four:
+    /// pinned `site.addr`); the landing's `fork_base_moved` naming the
+    /// fork's source — and from the publication's own four:
     /// `already_published` naming the member the words were published into,
     /// `claim_refused` naming the edition that already holds a member, and
     /// the re-window's `kept_place_moved` and `stray_place_unrecorded`
@@ -185,8 +186,9 @@ pub struct FaultSite {
     ///
     /// `arrangement_moved`'s alone, beside `current`: the frame's `as_of`,
     /// echoed, so a client holding several frames on one document knows
-    /// which state the refused one named. Filled by M5's five
-    /// `ArrangementMoved` verdicts and nothing else.
+    /// which state the refused one named. Filled by M5's six
+    /// `ArrangementMoved` verdicts — the five edits' and the landing's — and
+    /// nothing else.
     pub as_of: Option<Seq>,
     /// The position the refused edit's document last changed its arrangement
     /// at (skep #442).
@@ -194,7 +196,7 @@ pub struct FaultSite {
     /// `arrangement_moved`'s alone, beside `as_of`: the state the edit's
     /// positions would have to be true of — the newest the writer must read
     /// before placing its text again. Filled with `as_of`, and by the same
-    /// five verdicts.
+    /// six verdicts.
     pub current: Option<Seq>,
 }
 
@@ -379,13 +381,45 @@ pub enum RejectCode {
     /// Address arithmetic on the request; discloses nothing about what exists.
     BadRun,
     /// The base is neither the document nor a member of its chain (PUB-2.37).
+    ///
+    /// Also `set_arrangement`'s (the landing lane; skep #764): the head the
+    /// merge was composed on, or the base to record, is no member of the
+    /// chain the draft's recorded base lies in, or of its fork's source's
+    /// document.
     BaseNotInChain,
     /// The base is absent or the document itself while a member exists.
     ///
     /// The document's pre-chain arrangement is no base (PUB-2.34, PUB-2.66).
     BaseSuperseded,
     /// The base extent exceeds the base's current content count.
+    ///
+    /// Also `set_arrangement`'s: the head's extent as read at the compose,
+    /// past the head's current count.
     BaseExtentTooLarge,
+    /// A `set_arrangement` into a fork whose source is not the head named
+    /// (the landing lane; the owner's ruling N4 and its precision P5; skep
+    /// #764).
+    ///
+    /// The destination has no recorded base and its source — the surface a
+    /// `version` minted it sharing, immutable — is a published surface
+    /// other than the frame's `head`: a landing composed on that head would
+    /// hold the head's words under a source the board still names, so the
+    /// recorded source would be false. `site.addr` is the source. Permanent
+    /// by the catch-all: the source never moves; the act that exists is a
+    /// fresh fork from the head, landed into. A fork whose source IS the
+    /// head is admitted, gaining no base and no marker. Nothing is
+    /// committed.
+    ForkBaseMoved,
+    /// A `set_arrangement` naming a base to record for a document the board
+    /// records no base for (the landing lane; skep #764).
+    ///
+    /// A free-standing draft — one `create_new_document` or `fork` minted
+    /// and never staged, an alternative of such a draft — and an admitted
+    /// fork hold no record to move, so a frame carrying `base` has nothing
+    /// to make true; sent without it, the frame lands and moves nothing.
+    /// Permanent by the catch-all: no reissue of the same frame records a
+    /// base. Nothing is committed.
+    NoBaseToRecord,
     /// A draft-native run of the shot is already published (the link-sets
     /// design §5.7's twin fence).
     ///

@@ -237,14 +237,14 @@ mod tests {
         let s = sessions.open(skep_namespace::PrincipalId(1));
 
         let at_cap = ReqId(vec![b'k'; MAX_REQ_ID_BYTES]);
-        memo.put(s, at_cap.clone(), OpKind::Delete, CommittedAck::At { at: Seq(1) });
+        memo.put(s, at_cap.clone(), OpKind::Delete, CommittedAck::At { at: Seq(1), head_moved: None });
         assert!(
             memo.get(s, &at_cap, OpKind::Delete).is_some(),
             "a key at the bound is an ordinary key"
         );
 
         let over = ReqId(vec![b'k'; MAX_REQ_ID_BYTES + 1]);
-        memo.put(s, over.clone(), OpKind::Delete, CommittedAck::At { at: Seq(2) });
+        memo.put(s, over.clone(), OpKind::Delete, CommittedAck::At { at: Seq(2), head_moved: None });
         assert!(
             memo.get(s, &over, OpKind::Delete).is_none(),
             "a key past the bound is never retained, so a retry re-executes"
@@ -265,7 +265,7 @@ mod tests {
         let over = ReqId(vec![b'k'; MAX_REQ_ID_BYTES + 1]);
         memo.entries.lock().put(
             MemoKey { session: s, id: over.clone() },
-            TaggedAck { kind: OpKind::Delete, ack: CommittedAck::At { at: Seq(1) } },
+            TaggedAck { kind: OpKind::Delete, ack: CommittedAck::At { at: Seq(1), head_moved: None } },
         );
         assert!(
             memo.get(s, &over, OpKind::Delete).is_none(),
@@ -287,7 +287,7 @@ mod tests {
         let memo = memo_of(cap);
         let s = sessions.open(skep_namespace::PrincipalId(1));
         let id = |i: usize| ReqId(i.to_string().into_bytes());
-        let ack = |i: usize| CommittedAck::At { at: Seq(i as u64) };
+        let ack = |i: usize| CommittedAck::At { at: Seq(i as u64), head_moved: None };
 
         for i in 0..cap {
             memo.put(s, id(i), OpKind::Delete, ack(i));

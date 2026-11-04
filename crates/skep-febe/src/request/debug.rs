@@ -76,6 +76,12 @@ impl fmt::Debug for Op {
                 .field("cuts", cuts)
                 .field("as_of", as_of)
                 .finish(),
+            Op::SetArrangement { doc, arrangement, as_of } => f
+                .debug_struct("SetArrangement")
+                .field("doc", doc)
+                .field("arrangement", arrangement)
+                .field("as_of", as_of)
+                .finish(),
             Op::Version { d_src, published } => f
                 .debug_struct("Version")
                 .field("d_src", d_src)

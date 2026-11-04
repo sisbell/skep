@@ -59,7 +59,7 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{trunk_of, Base, Run, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{trunk_of, Base, Run, SetArrangement, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
@@ -629,12 +629,13 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "effective_owner" => Op::EffectiveOwner { addr: fields.addr("addr")? },
         "doc_metadata" => Op::DocMetadata { doc: fields.addr("doc")? },
-        // The five in-place edits each carry `as_of`, the document state
-        // the edit was typed against (wire.md §Arrangement; skep #442): a
-        // REQUIRED position, read as the response envelope writes one, so a
-        // frame without it is "missing field" — `malformed` by the
-        // envelope's rule — and, taken here on the five alone, the member on
-        // any other op is left for `finish` to refuse as unknown.
+        // The five in-place edits, and `set_arrangement` below them, each
+        // carry `as_of`, the document state the edit was typed against
+        // (wire.md §Arrangement; skep #442): a REQUIRED position, read as
+        // the response envelope writes one, so a frame without it is
+        // "missing field" — `malformed` by the envelope's rule — and, taken
+        // here on the six alone, the member on any other op is left for
+        // `finish` to refuse as unknown.
         "insert" => Op::Insert {
             doc: fields.addr("doc")?,
             at: fields.vpos("at")?,
@@ -667,6 +668,17 @@ fn parse_op(name: &str, fields: &mut Fields) -> Result<Op, Refusal> {
         "rearrange" => Op::Rearrange {
             doc: fields.addr("doc")?,
             cuts: fields.vposes("cuts")?,
+            as_of: fields.seq("as_of")?,
+        },
+        // A draft's whole arrangement set in one write (wire.md
+        // §Arrangement, `set_arrangement`; the landing lane): the runs in
+        // `reinstate`'s form, the typed state REQUIRED as on the five, and
+        // the three optional members — the head pair, the base pair and
+        // the merge's sides, read against the head. Outside the checked
+        // set: `attest` on it is an unknown field `finish` refuses.
+        "set_arrangement" => Op::SetArrangement {
+            doc: fields.addr("doc")?,
+            arrangement: fields.set_arrangement()?,
             as_of: fields.seq("as_of")?,
         },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
@@ -1006,6 +1018,49 @@ impl Fields {
     /// refused ([`p_list`], [`p_shot_run`]).
     fn shot_runs(&mut self, k: &'static str) -> PResult<Vec<ShotRun>> {
         self.field(k, |v| p_list(v, p_shot_run))
+    }
+
+    /// Takes a `set_arrangement`'s members beside `doc` and `as_of` (wire.md
+    /// §Arrangement, `set_arrangement`): the runs under the list cap in the
+    /// shot's run form, the optional `head` and `base` pairs
+    /// ([`p_extent_pair`]) and the optional `merge` object, whose one member
+    /// `sides` is a list of addresses under the cap; absent and explicit
+    /// `null` read alike as absent on the three. A `merge` carried without a
+    /// `head` is refused: the marker's head is the frame's.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where `runs` is missing or refused, where a present
+    /// `head`, `base` or `merge` is refused, or where `merge` stands without
+    /// `head`.
+    fn set_arrangement(&mut self) -> PResult<SetArrangement> {
+        let runs = self.shot_runs("runs")?;
+        let head = self.extent_pair_opt("head")?;
+        let base = self.extent_pair_opt("base")?;
+        let merge = match self.take_opt("merge") {
+            None => None,
+            Some(v) => {
+                let m = p_obj(&v, &["sides"]).map_err(|e| PErr(format!("field 'merge': {e}")))?;
+                Some(field(m, "sides", |v| p_list(v, p_addr)).map_err(|e| PErr(format!("field 'merge': {e}")))?)
+            }
+        };
+        if merge.is_some() && head.is_none() {
+            return Err(PErr("field 'merge': carried without 'head', which is the marker's own".into()));
+        }
+        Ok(SetArrangement { runs, head, base, merge })
+    }
+
+    /// Takes an optional `{at, extent}` pair — a member and the extent read
+    /// of it — absent and explicit `null` alike absent.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where a present value is refused ([`p_extent_pair`]).
+    fn extent_pair_opt(&mut self, k: &'static str) -> PResult<Option<Base>> {
+        match self.take_opt(k) {
+            None => Ok(None),
+            Some(v) => p_extent_pair(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}"))),
+        }
     }
 
     fn slotarg(&mut self, k: &'static str) -> PResult<SlotArg> {
@@ -1913,6 +1968,22 @@ fn p_vpos(v: &Value) -> PResult<VPos> {
 fn p_vspec(v: &Value) -> PResult<VSpec> {
     let m = p_obj(v, &["source", "span"])?;
     Ok(VSpec { source: field(m, "source", p_addr)?, span: field(m, "span", p_span)? })
+}
+
+/// Parses a `{at, extent}` pair: a member and the content count read of it
+/// (wire.md §Arrangement, `set_arrangement`'s `head` and `base`).
+///
+/// It is the shot's `base`/`base_extent` pair as one object: `at` an
+/// address, `extent` a natural — M5's own [`Base`], the member and the
+/// extent.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of `at` and `extent` alone, or either
+/// is missing or refused.
+fn p_extent_pair(v: &Value) -> PResult<Base> {
+    let m = p_obj(v, &["at", "extent"])?;
+    Ok(Base { member: field(m, "at", p_addr)?, extent: field(m, "extent", p_nat)? })
 }
 
 /// Parses one run of a publish shot (wire.md §Arrangement, `publish`).

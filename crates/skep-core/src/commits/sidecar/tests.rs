@@ -359,7 +359,7 @@ fn wire_entries_null_what_the_file_line_omits() {
     );
     assert_eq!(
         render(&CommitMeta::bare(), 3, &["1.0.1.0.1"]),
-        r#"{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#,
+        r#"{"at":3,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#,
         "a bare entry's docs and terms are the reserved null whatever the feed hands in"
     );
     // The journal's answers on a bare row: the op's own members, as the
@@ -425,11 +425,15 @@ fn a_bare_row_nulls_exactly_the_members_the_terms_render() {
         OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 },
         OpTerms::MakeLink { link: "1.0.1.0.1.0.2.1".into() },
         OpTerms::Publish { placed: "1".into(), base_extent: None },
+        OpTerms::SetArrangement { base: None, merge: None },
     ];
     let mut rendered: Vec<&str> = Vec::new();
     for terms in &one_of_each {
         match terms {
-            OpTerms::Delegate { .. } | OpTerms::MakeLink { .. } | OpTerms::Publish { .. } => {}
+            OpTerms::Delegate { .. }
+            | OpTerms::MakeLink { .. }
+            | OpTerms::Publish { .. }
+            | OpTerms::SetArrangement { .. } => {}
         }
         rendered.extend(terms.members().into_iter().map(|(name, _)| name));
     }
@@ -513,7 +517,7 @@ fn key_attest_and_the_terms_are_present_absent_or_null_by_the_rule() {
     // served; the testimony stays lost.
     assert_eq!(
         text(CommitMeta::bare().entry(12, vec![], Some(&slot))),
-        r#"{"at":12,"attest":{"alg":"mldsa65-ed25519","sig":"abababab"},"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#
+        r#"{"at":12,"attest":{"alg":"mldsa65-ed25519","sig":"abababab"},"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}"#
     );
 }
 

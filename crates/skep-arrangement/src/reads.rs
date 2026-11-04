@@ -506,25 +506,31 @@ impl M5State {
         self.fork_sources.get(doc)
     }
 
-    /// Returns the recorded base of `draft`: where its next publication lands.
+    /// Returns the recorded base of `draft`: where its next publication
+    /// lands, and the merge it carries.
     ///
     /// It is the [`DraftBase`] the staging operation
     /// ([`Vstream::stage`](crate::Vstream::stage)) recorded when it minted
     /// `draft` — the member or memberless document copied from with the
     /// extent the copy took, or an alternative's inherited base with its
-    /// source draft — as the shots the draft has rendered since moved it:
-    /// `base` the member the draft last rendered and `extent` that member's
-    /// whole count at the shot (B3-S10), which the doc-metadata read serves as
-    /// `base` and `base_copied` to every reader of the draft.
+    /// source draft and its inherited marker — as the shots the draft has
+    /// rendered and the landings that named a base since moved it: `base`
+    /// the member the draft last rendered, or the head a landing told, and
+    /// `extent` that member's whole count at the shot, or the head's extent
+    /// as the landing read it (B3-S10; the landing lane), and `merge` the
+    /// marker the last landing set, `None` where it set none or a shot
+    /// cleared it — which the doc-metadata read serves as `base`,
+    /// `base_copied` and `merge` to every reader of the draft.
     ///
     /// **The invariant** it answers under is BASE★, stated on [`M5State`]:
-    /// the entry is written by the staging record and moved by the placing
-    /// record of every shot naming the draft, and by nothing else. So `Some`
-    /// for every draft the operation made with a base to record, and for a
-    /// draft whose own publication the board recorded; `None` for every
-    /// other address: a `create_new_document` or `fork` draft never staged
-    /// and never published, an alternative of a draft the board held no base
-    /// for, a version member, a trunk, an address never minted.
+    /// the entry is written by the staging record and the landing's, moved
+    /// by the placing record of every shot naming the draft, and by nothing
+    /// else. So `Some` for every draft the operation made with a base to
+    /// record, and for a draft whose own publication the board recorded;
+    /// `None` for every other address: a `create_new_document` or `fork`
+    /// draft never staged and never published, an alternative of a draft
+    /// the board held no base for, a version member, a trunk, an address
+    /// never minted.
     ///
     /// Answers the address named, as every read here does; one map lookup,
     /// reading no run. The record is lent, as

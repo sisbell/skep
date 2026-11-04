@@ -407,7 +407,7 @@ pub fn as_of(r: &Response) -> Seq {
 
 pub fn ack(r: Response) -> Seq {
     match r {
-        Response::Ack { at } => at,
+        Response::Ack { at, .. } => at,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         other => panic!("expected Ack, got {other:?}"),
     }
@@ -758,7 +758,7 @@ pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
 /// three acknowledging shapes it is.
 pub fn at_of(kind: OpKind, r: &Response) -> Seq {
     match r {
-        Response::Ack { at } | Response::AckAddr { at, .. } | Response::AckEdit { at, .. } => *at,
+        Response::Ack { at, .. } | Response::AckAddr { at, .. } | Response::AckEdit { at, .. } => *at,
         Response::Rejected(rej) => panic!("{kind:?} was rejected: {rej}"),
         _ => panic!("{kind:?} did not acknowledge a committed write"),
     }

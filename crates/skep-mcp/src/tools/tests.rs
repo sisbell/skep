@@ -161,21 +161,21 @@ fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
 
 /// The dispatch has two kinds of tool, and is counted.
 ///
-/// Forty-eight wire ops — every op of wire.md §Operations but `publish`, the
-/// six the first catalog lacked among them, the count by home and the
-/// retracted-links read — and fourteen adapter tools, the `publication`
-/// family's four among them; no name twice across the two, each wire op a
-/// `Tool::Op` of its own name with no members list, each adapter tool its
-/// row's members; and a ceremony, `upload`, `restore`, `op`, `publish` or a
-/// row's dotted name no tool at all.
+/// Forty-nine wire ops — every op of wire.md §Operations but `publish`, the
+/// six the first catalog lacked among them, the count by home, the
+/// retracted-links read and the landing — and fourteen adapter tools, the
+/// `publication` family's four among them; no name twice across the two,
+/// each wire op a `Tool::Op` of its own name with no members list, each
+/// adapter tool its row's members; and a ceremony, `upload`, `restore`,
+/// `op`, `publish` or a row's dotted name no tool at all.
 #[test]
 fn the_dispatch_has_two_kinds_and_is_counted() {
     let names: Vec<&str> = Tool::names().collect();
     let set: std::collections::BTreeSet<_> = names.iter().collect();
     assert_eq!(set.len(), names.len(), "no name twice");
-    assert_eq!(DISPATCH_OPS.len(), 49);
-    assert_eq!(names.len(), 63);
-    for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history"] {
+    assert_eq!(DISPATCH_OPS.len(), 50);
+    assert_eq!(names.len(), 64);
+    for added in ["effective_owner", "key_set", "retrieve_i", "content_frontier", "edition_claims", "universal_grants", "count_v_by_home", "find_links_v_history", "set_arrangement"] {
         assert_eq!(Tool::named(added), Some(Tool::Op(added)), "{added} is a wire op of the dispatch");
     }
     assert_eq!(Tool::named("insert").and_then(Tool::members), None, "a wire op's arguments pass through unread");

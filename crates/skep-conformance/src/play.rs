@@ -1693,7 +1693,7 @@ mod tests {
         let failed = || Some("request failed (?)".to_string());
         let actual = |out: OpOutcome| out.disagreement().map(|d| d.actual.clone());
         let mut out = OpOutcome::new(0, "insert");
-        settle_unaccepted(&mut out, failed(), &Response::Ack { at: Seq(1) });
+        settle_unaccepted(&mut out, failed(), &Response::Ack { at: Seq(1), head_moved: None });
         assert_eq!(out.status(), Status::Disagreed);
         assert_eq!(actual(out).as_deref(), Some("unexpected response shape"));
 

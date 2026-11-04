@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use skep_address::{Address, Nat, SpanSet};
-use skep_arrangement::{Run, ShotTerms};
+use skep_arrangement::{Marker, Run, ShotTerms};
 use skep_content::Val;
 use skep_discovery::{Cursor, LinkRow, OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
@@ -199,8 +199,18 @@ pub enum TimeSource {
 #[must_use]
 #[derive(Debug, PartialEq, Eq)]
 pub enum Response {
-    /// delete/copy/reinstate/rearrange — committed at `at` (A7).
-    Ack { at: Seq },
+    /// delete/copy/reinstate/rearrange/set_arrangement — committed at `at`
+    /// (A7).
+    ///
+    /// `head_moved` is `set_arrangement`'s tell (the landing lane; the
+    /// owner's ruling R5 and its precision P1): where the request named a
+    /// head the merge was composed on and the trunk's current head is no
+    /// longer it, the trunk's current head — the write landed all the same,
+    /// recorded on the head named, and the caller learns a newer version
+    /// stands; `None` where the head named is the trunk's head, and on every
+    /// other op's acknowledgment, which the wire then renders without the
+    /// member.
+    Ack { at: Seq, head_moved: Option<Address> },
     /// A write acknowledged with one address (A7).
     ///
     /// What `addr` names is the op's: the document minted
@@ -351,7 +361,12 @@ pub enum Response {
     /// of a draft the board held no base for, a member, a trunk. `source` is
     /// answered for a `stage`d draft as for a `version`'s: the surface it
     /// was copied from. Both served to every reader of the draft, as `source`
-    /// is.
+    /// is. `merge` is the marker of the merge the draft carries (the landing
+    /// lane; M5's [`Marker`]), beside the base it travels with — set by a
+    /// `set_arrangement` that recorded a base and a merge, inherited by a
+    /// `stage` of a marked draft at the stage's own position, cleared by the
+    /// shot that moves the base — and `None` where the draft carries none or
+    /// the board records no base at all; served as `base` is.
     DocMetadata {
         /// The trunk document the argument projects to.
         doc: Address,
@@ -371,6 +386,8 @@ pub enum Response {
         base: Option<Address>,
         /// Beside `base`, the extent the draft's copy took of it.
         base_copied: Option<Nat>,
+        /// Beside `base`, the merge the draft carries, where it carries one.
+        merge: Option<Marker>,
         /// The position of the commit that minted the address named.
         at: Option<Seq>,
         /// The transport's testimony of when `at` committed.
@@ -414,11 +431,13 @@ pub enum Response {
 /// The three shapes are the three acknowledging `Response` variants, and the
 /// correspondence is stated in one place — [`Response::to_ack`] and the
 /// `From` impl below — so a new acknowledging shape is a compile error at
-/// `to_ack` rather than a memo silently dropped.
+/// `to_ack` rather than a memo silently dropped. A `set_arrangement`'s tell
+/// rides its memo as it rode its ack: a retry answered from the memo is told
+/// what the original was told, never a head read since.
 #[derive(Clone)]
 pub(crate) enum CommittedAck {
     /// [`Response::Ack`].
-    At { at: Seq },
+    At { at: Seq, head_moved: Option<Address> },
     /// [`Response::AckAddr`].
     Addr { addr: Address, at: Seq },
     /// [`Response::AckEdit`].
@@ -428,7 +447,7 @@ pub(crate) enum CommittedAck {
 impl From<CommittedAck> for Response {
     fn from(ack: CommittedAck) -> Response {
         match ack {
-            CommittedAck::At { at } => Response::Ack { at },
+            CommittedAck::At { at, head_moved } => Response::Ack { at, head_moved },
             CommittedAck::Addr { addr, at } => Response::AckAddr { addr, at },
             CommittedAck::Edit { successor, claim, at } => {
                 Response::AckEdit { successor, claim, at }
@@ -558,7 +577,9 @@ impl Response {
     /// classified as acknowledging or not before it can ship.
     pub(crate) fn to_ack(&self) -> Option<CommittedAck> {
         match self {
-            Response::Ack { at } => Some(CommittedAck::At { at: *at }),
+            Response::Ack { at, head_moved } => {
+                Some(CommittedAck::At { at: *at, head_moved: head_moved.clone() })
+            }
             Response::AckAddr { addr, at } => {
                 Some(CommittedAck::Addr { addr: addr.clone(), at: *at })
             }

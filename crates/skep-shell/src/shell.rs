@@ -239,7 +239,7 @@ pub enum NodeState {
 ///
 /// A frame of one of these in the guest form, or under a bare session, is
 /// refused by the shell without a dial.
-pub const WRITE_KINDS: [&str; 17] = [
+pub const WRITE_KINDS: [&str; 18] = [
     "delegate",
     "register_node",
     "create_new_document",
@@ -251,6 +251,7 @@ pub const WRITE_KINDS: [&str; 17] = [
     "copy",
     "reinstate",
     "rearrange",
+    "set_arrangement",
     "publish",
     "make_link",
     "emit",

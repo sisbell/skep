@@ -250,7 +250,7 @@ pub enum FirstHead {
     /// next turn and on the checkpoint thread's retry clock.
     Refused,
 }
-use self::sidecar::{OpTerms, WalkControl};
+use self::sidecar::{MergeTerms, OpTerms, WalkControl};
 use crate::codec::op_name;
 use crate::serial::{Serial, SerialFigures, SerialGuard};
 use feed::Feed;
@@ -1435,7 +1435,7 @@ impl Commits {
     ) -> Option<Seq> {
         let WriteMeta { kind, docs, testimony, signed, terms, minting } = meta;
         let (at, minted) = match resp {
-            Response::Ack { at } => (*at, None),
+            Response::Ack { at, .. } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
             Response::AckEdit { at, .. } => (*at, None),
             Response::Delivery { .. }
@@ -2194,7 +2194,7 @@ enum AffectedDocs {
 /// Per wire.md §The change feed (AUTH-6.36, signed-ops D25), they are
 /// decided per op by [`write_meta`], beside the documents, and completed at
 /// record time ([`RowTerms::complete`]) from the ack and the post-commit
-/// world, as [`AffectedDocs::Minted`] is. Three ops carry terms; every other
+/// world, as [`AffectedDocs::Minted`] is. Four ops carry terms; every other
 /// op's row carries none — wire.md's "absent on every other op's row",
 /// stated arm by arm in the table rather than by a default.
 #[derive(Debug)]
@@ -2217,6 +2217,16 @@ enum RowTerms {
     /// `ShotPlace`, folded per member), so the row and the member read
     /// cannot disagree.
     Publish,
+    /// `set_arrangement`'s base recorded and merge marked (the landing lane;
+    /// skep #764), from the request: `base` the base the frame named, which
+    /// the store recorded or refused the whole write; `merge` the marker's
+    /// sides and head where the frame named a base beside them — the store
+    /// records a marker only with a base, so a frame carrying `merge` with
+    /// no `base` carries none to the row. Each `None` where the frame named
+    /// none, which the row renders `null`, so a reader tells a landing
+    /// (`merge` present) from an undo (`merge` null, `base` present) from a
+    /// plain re-arrangement (both null).
+    SetArrangement { base: Option<Address>, merge: Option<(Vec<Address>, Address)> },
 }
 
 impl RowTerms {
@@ -2247,6 +2257,15 @@ impl RowTerms {
                     base_extent: t.base_extent.as_ref().map(ToString::to_string),
                 })
             }
+            // The landing's terms are the request's own, resolved at the
+            // table: nothing of the ack or the world completes them.
+            RowTerms::SetArrangement { base, merge } => Some(OpTerms::SetArrangement {
+                base: base.as_ref().map(ToString::to_string),
+                merge: merge.as_ref().map(|(sides, head)| MergeTerms {
+                    sides: sides.iter().map(ToString::to_string).collect(),
+                    head: head.to_string(),
+                }),
+            }),
         };
         debug_assert!(
             terms.is_some(),
@@ -2278,8 +2297,8 @@ impl RowTerms {
 /// time as the head's, the one thing that method's contract says it does
 /// not do. A read classified here as a write runs on `/op` through a write
 /// sequence, under the serialization lock, rather than as a read; `/op-at`
-/// asks the partition directly and is untouched. The two tables agree at 16
-/// writes of 46.
+/// asks the partition directly and is untouched. The two tables agree at 18
+/// writes of 50.
 ///
 /// **Second obligation**, and the one no assertion here can reach:
 /// `classify::derived_docs` answers this same question — which documents a
@@ -2365,6 +2384,27 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         // never a run's origin.
         Op::Reinstate { doc, .. } => meta(OpKind::Reinstate, one(doc), absent, no_cell),
         Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent, no_cell),
+        // A draft's whole arrangement set in one write (the landing lane;
+        // skep #764): REINSTATE's runs placed by identity, so no cell is
+        // minted; its row names the draft and never a run's origin, as
+        // `reinstate`'s does, and carries the base recorded and the merge
+        // marked as its terms, off the request — the marker rides the base
+        // (the owner's ruling N3), so a merge named beside no base is no
+        // term of the row.
+        Op::SetArrangement { doc, arrangement, .. } => meta(
+            OpKind::SetArrangement,
+            one(doc),
+            RowTerms::SetArrangement {
+                base: arrangement.base.as_ref().map(|b| b.member.clone()),
+                merge: arrangement
+                    .base
+                    .as_ref()
+                    .and(arrangement.head.as_ref())
+                    .zip(arrangement.merge.as_ref())
+                    .map(|(head, sides)| (sides.clone(), head.member.clone())),
+            },
+            no_cell,
+        ),
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
         // The staging act (B3-S10) shares identity as a `version` does and
         // mints no cell; its row names the draft it minted, known only from

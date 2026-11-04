@@ -17,7 +17,7 @@ use skep_arrangement::{Run, VPos};
 use skep_content::Val;
 use skep_discovery::{LinkRow, OrphanReport, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, MintTime, OpKind,
+    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, Marker, MintTime, OpKind,
     ParseError, RejectCode, Rejection, Response, ShotTerms, TimeSource, UniversalGrant,
 };
 use skep_kernel::Seq;
@@ -65,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 49] = [
+const OP_NAMES: [&str; 50] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -79,6 +79,7 @@ const OP_NAMES: [&str; 49] = [
     "copy",
     "reinstate",
     "rearrange",
+    "set_arrangement",
     "version",
     "stage",
     "publish",
@@ -118,7 +119,7 @@ const OP_NAMES: [&str; 49] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 49 ops appear.
+/// value), is tagged with the marker's own op name — and all 50 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -172,7 +173,11 @@ fn ispan() -> Span {
 
 fn fixture(name: &str) -> Response {
     match name {
-        "ack" => Response::Ack { at: Seq(7) },
+        "ack" => Response::Ack { at: Seq(7), head_moved: None },
+        // The landing's tell (skep #764): a `set_arrangement` composed on
+        // `1.0.1.0.1.2` after `1.0.1.0.1.3` was published lands and names
+        // the trunk's current head.
+        "ack_head_moved" => Response::Ack { at: Seq(14), head_moved: Some(a(&[1, 0, 1, 0, 1, 3])) },
         "ack_addr" => Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7) },
         "ack_edit" => Response::AckEdit {
             successor: a(&[1, 0, 1, 0, 1, 0, 2, 2]),
@@ -334,6 +339,7 @@ fn fixture(name: &str) -> Response {
             source: None,
             base: None,
             base_copied: None,
+            merge: None,
             at: Some(Seq(7)),
             time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
             as_of: Seq(9),
@@ -351,6 +357,7 @@ fn fixture(name: &str) -> Response {
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
             base: Some(a(&[1, 0, 1, 0, 1, 1])),
             base_copied: Some(n(5)),
+            merge: None,
             at: Some(Seq(8)),
             time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(9),
@@ -370,9 +377,34 @@ fn fixture(name: &str) -> Response {
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
             base: None,
             base_copied: None,
+            merge: None,
             at: None,
             time: None,
             as_of: Seq(9),
+        },
+        // The staged draft above after a merge's landing (the landing lane;
+        // skep #764): a `set_arrangement` composed on version 2 at six
+        // positions moved its base there and put the marker beside it — the
+        // one side merged, the head at the extent read, the landing's
+        // position.
+        "doc_metadata_marked" => Response::DocMetadata {
+            doc: a(&[1, 0, 1, 0, 2]),
+            published: false,
+            owner: Some(a(&[1, 0, 1])),
+            birth: None,
+            terms: None,
+            source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            base: Some(a(&[1, 0, 1, 0, 1, 2])),
+            base_copied: Some(n(6)),
+            merge: Some(Marker {
+                sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])],
+                head: a(&[1, 0, 1, 0, 1, 2]),
+                head_copied: n(6),
+                at: Seq(14),
+            }),
+            at: Some(Seq(8)),
+            time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
+            as_of: Seq(15),
         },
         "edition_claims" => Response::EditionClaims {
             claims: vec![EditionClaim {

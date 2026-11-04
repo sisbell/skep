@@ -59,6 +59,7 @@ const DISPATCH_OPS: &[&str] = &[
     "copy",
     "reinstate",
     "rearrange",
+    "set_arrangement",
     "version",
     "stage",
     // Links (writes).

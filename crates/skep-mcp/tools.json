@@ -130,7 +130,7 @@
     },
     {
       "name": "doc_metadata",
-      "description": "A document's publication metadata: doc (the trunk a version member projects to), published, owner, birth and birth_extent (its first version and the content it was born with; null before any version), placed and base_extent (the publish shot's terms of the address named; null where no shot minted it), source (the version member or bare document the address named was born sharing, where a version or a stage minted it — a fork's parent, or a staged draft's source, read by whoever may read it; null otherwise), and base with base_copied (a staged draft's recorded base — the member or memberless document its next publication lands after, moved by the board to the member each publication of the draft makes — and the content positions the copy took of it; null where the board records no base: a draft never staged, an alternative of such a draft, a member, a trunk). Response: doc_metadata; an unreadable document answers withheld, an unregistered one doc_not_registered.",
+      "description": "A document's publication metadata: doc (the trunk a version member projects to), published, owner, birth and birth_extent (its first version and the content it was born with; null before any version), placed and base_extent (the publish shot's terms of the address named; null where no shot minted it), source (the version member or bare document the address named was born sharing, where a version or a stage minted it — a fork's parent, or a staged draft's source, read by whoever may read it; null otherwise), base with base_copied (a staged draft's recorded base — the member or memberless document its next publication lands after, moved by the board to the member each publication of the draft makes and to the head each set_arrangement names a base for — and the content positions the copy took of it; null where the board records no base: a draft never staged, an alternative of such a draft, a member, a trunk), and merge (the marker of the merge a draft carries beside that base: sides, head, head_copied and at, the position the marker was put on the draft — set by a set_arrangement that recorded a base and a merge, inherited by a stage of a marked draft at the stage's own position, cleared by the publication that moves the base; null where the draft carries none). Response: doc_metadata; an unreadable document answers withheld, an unregistered one doc_not_registered.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -466,6 +466,103 @@
           }
         },
         "required": ["doc", "cuts", "as_of"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_arrangement",
+      "description": "Set a draft's WHOLE content arrangement by identity in ONE commit: everything doc arranges is removed and runs are placed from its start — shared identity, not copied bytes, each run as image answers one — so the draft holds the arrangement sent or what it held, never a state between. It is the landing of a merge into a draft, and the write for changing a draft's whole text at once; nothing here composes a merge. With head — the version the merge was composed on, at the content count read of it — the board checks the head against the draft's chain and NOT against the current head: a version published since lands all the same and the ack carries head_moved, the trunk's current head, so you learn a newer version stands. With base — the base to record: the head pair on a landing, the old base on an undo — the draft's recorded base moves there in the same commit, carrying merge (the sides merged, possibly none; the head is the frame's) as the marker the draft now carries, or clearing one when merge is absent; a draft the board records no base for refuses base no_base_to_record and otherwise gains no base and no marker. A FORK whose source is not head is refused fork_base_moved (fork afresh from the head and land there); a published doc published_target. Each origin must be a document you may read. Never held (an unholdable write): under a stopped node or halted writes it is refused at once. Read the record back with doc_metadata(draft): base, base_copied and merge. Response: ack with at, and head_moved where the head moved.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The draft whose whole arrangement is set (a draft you own)."
+          },
+          "runs": {
+            "type": "array",
+            "description": "The whole arrangement, in order: each the document whose I-space it names, its first content I-address, and its width. May be empty, which empties the draft. Obtain runs from image.",
+            "items": {
+              "type": "object",
+              "description": "One run of permanent content I-addresses.",
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The document the run's addresses were minted under (or a member of its chain)."
+                },
+                "i_start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The run's first content I-address, a full element position (doc.0.1.ordinal)."
+                },
+                "width": {
+                  "type": ["string", "integer"],
+                  "description": "Number of positions, an unbounded natural: decimal string canonically (\"5\"); a non-negative integer is accepted."
+                }
+              },
+              "required": ["origin", "i_start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "as_of": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The draft's state this arrangement was composed against (wire.md §Arrangement; the typed state): the as_of of your last read of doc, or the at of your own last ack on it, whichever is later. REQUIRED; composed against an older arrangement of doc it is refused arrangement_moved with site.as_of and site.current, and NOTHING is changed — the one refusal that keeps a landing from wiping an edit made since."
+          },
+          "head": {
+            "type": "object",
+            "description": "The version the merge was composed on, at the content count read of it (as doc_metadata's base_extent counts). Present on a merge's landing; absent on an undo and a plain re-arrangement. Checked against the draft's chain (base_not_in_chain) and the member's current count (base_extent_too_large), never against the current head: a newer head is told in the ack's head_moved.",
+            "properties": {
+              "at": {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                "description": "The head's address: a version member, or the document itself while it has no version."
+              },
+              "extent": {
+                "type": ["string", "integer"],
+                "description": "The head's content count as read when the merge was composed, an unbounded natural: decimal string canonically."
+              }
+            },
+            "required": ["at", "extent"],
+            "additionalProperties": false
+          },
+          "base": {
+            "type": "object",
+            "description": "The base to record for the draft, with the extent read of it: the head pair on a landing, the base read at the position before the landing on an undo. The draft's recorded base moves there in the same commit; absent, nothing of the record moves. A draft the board records no base for refuses it no_base_to_record; one off the draft's chain base_not_in_chain.",
+            "properties": {
+              "at": {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                "description": "The member or memberless document to record as the base."
+              },
+              "extent": {
+                "type": ["string", "integer"],
+                "description": "The content count of it to record, an unbounded natural: decimal string canonically."
+              }
+            },
+            "required": ["at", "extent"],
+            "additionalProperties": false
+          },
+          "merge": {
+            "type": "object",
+            "description": "The merge the draft is to carry: its sides, by address, possibly empty. Present only beside head, which is the marker's own; recorded only where base is recorded, as the marker travels with the base. Absent beside a base, the marker is cleared — the undo's shape.",
+            "properties": {
+              "sides": {
+                "type": "array",
+                "description": "The sides merged, by address; empty where the draft itself was the side.",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$"
+                }
+              }
+            },
+            "required": ["sides"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["doc", "runs", "as_of"],
         "additionalProperties": false
       }
     },

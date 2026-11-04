@@ -33,6 +33,28 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   doc-metadata read serves as `base` and `base_copied`). Always
   private, never publish-class, admitted whatever the source's state:
   the sibling draft the version-chain refusals point to.
+- **The landing** — `set_arrangement` sets a draft's WHOLE content
+  arrangement by identity in ONE commit: the draft's content span
+  removed and the request's runs placed at the start — `delete`'s and
+  `reinstate`'s own staging bodies composed under one transaction, so
+  the draft holds the arrangement sent or what it held, never a state
+  between — typed against the draft's state as the in-place edits are
+  (`arrangement_moved`, nothing wiped). It is the board's half of a
+  merge's landing into a draft: the request carries the HEAD the merge
+  was composed on at the extent read, which the store checks against
+  the draft's chain and never against the trunk's current head — a
+  version published since lands all the same and the answer names the
+  newer head (`head_moved`) — and, where the request names a BASE to
+  record, the draft's recorded base moves to it in the same commit,
+  carrying the request's MERGE as the marker the draft now carries
+  (`DraftBase::merge`: the sides, the head at the extent read, and the
+  position the marker was put on the document, stamped by the fold),
+  or clearing one. The marker travels with the base: copied by a stage
+  of a marked draft at the stage's own position, cleared by the shot
+  that moves the base, untouched by a write that leaves the base
+  untouched. A document with no recorded base gains none; a FORK whose
+  source is not the request's head is refused by name
+  (`fork_base_moved`), its recorded source never made false.
 - **The publish shot** — `publish` appends the next member of a
   published document's version chain, born published, in ONE commit,
   from CLIENT-SUPPLIED I-address runs and never from any draft's

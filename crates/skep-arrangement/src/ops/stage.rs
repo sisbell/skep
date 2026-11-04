@@ -15,7 +15,7 @@ use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use super::{head_lock_key, Vstream};
 use crate::chain::{published_target, reading_surface};
 use crate::error::StageError;
-use crate::state::M5Rec;
+use crate::state::{M5Rec, Merge};
 use crate::HasM5;
 
 impl<W> Vstream<'_, W>
@@ -57,15 +57,24 @@ where
     /// * a private draft of the caller's, or any draft the caller may read
     ///   — an ALTERNATIVE of it: `base` and `extent` that draft's own
     ///   recorded base and extent, inherited by identity, since the
-    ///   alternative holds the draft's words; `source` the draft. A draft the
-    ///   board holds no base for yields no record: the alternative is a
-    ///   free-standing draft of its own, whatever its source becomes.
+    ///   alternative holds the draft's words; `source` the draft; and the
+    ///   draft's merge marker, where it carries one, INHERITED with them
+    ///   (the owner's ruling N3 and its precision P2) — the record carries
+    ///   its content, and the fold stamps THIS commit's position as the
+    ///   marker's `at`, the position the marker was put on the alternative,
+    ///   so an undo of the alternative reads before its own mint and finds
+    ///   nothing to take back. A draft the board holds no base for yields no
+    ///   record: the alternative is a free-standing draft of its own,
+    ///   whatever its source becomes.
     ///
     /// The base moves at every shot the draft renders: the shot's placing
     /// record names its rendering draft ([`M5Rec::ShotPlace`]), and the fold
-    /// moves the draft's base to the member minted (BASE★ on
-    /// [`M5State`](crate::M5State)). Nothing checks a shot's own `base`
-    /// against the record: the request's base is the client's statement, as
+    /// moves the draft's base to the member minted, clearing the marker
+    /// (BASE★ on [`M5State`](crate::M5State)); and at every landing that
+    /// names a base to record
+    /// ([`set_arrangement`](Vstream::set_arrangement)), which sets or clears
+    /// the marker with it. Nothing checks a shot's own `base` against the
+    /// record: the request's base is the client's statement, as
     /// [`Base`](crate::Base) states it, whether or not the board holds one.
     ///
     /// **Always private.** The draft is minted private whatever `from`'s
@@ -141,22 +150,28 @@ where
             // `version` reads it.
             let surface = reading_surface(m3, from);
             // The base and the extent: the surface itself at its count where
-            // it is published (a member, or the bare document), else the
-            // source draft's own record, inherited — or none.
+            // it is published (a member, or the bare document), no marker;
+            // else the source draft's own record, inherited — base, extent
+            // and the marker's content, its position the fold's to stamp
+            // (N3, P2) — or none.
             let recorded = if published_target(m3, &surface) {
-                Some((surface.clone(), world.m5().content_count(&surface)))
+                Some((surface.clone(), world.m5().content_count(&surface), None))
             } else {
-                world
-                    .m5()
-                    .draft_base(&surface)
-                    .map(|standing| (standing.base.clone(), standing.extent.clone()))
+                world.m5().draft_base(&surface).map(|standing| {
+                    (
+                        standing.base.clone(),
+                        standing.extent.clone(),
+                        standing.merge.as_ref().map(Merge::from),
+                    )
+                })
             };
             let (draft, m3rec) = m3.mint_document(&prefix, false)?;
             stg.push(m3rec.into());
             stg.push(M5Rec::VersionSnapshot { source: surface.clone(), new: draft.clone() }.into());
-            if let Some((base, extent)) = recorded {
+            if let Some((base, extent, merge)) = recorded {
                 stg.push(
-                    M5Rec::DraftBase { draft: draft.clone(), base, extent, source: surface }.into(),
+                    M5Rec::DraftBase { draft: draft.clone(), base, extent, source: surface, merge }
+                        .into(),
                 );
             }
             Ok(draft)

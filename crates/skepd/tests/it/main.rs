@@ -65,6 +65,7 @@ mod restart;
 mod retracted_links;
 mod runbook_doc;
 mod scan_bound;
+mod set_arrangement;
 mod signed_ops;
 mod source_gate;
 mod stage;

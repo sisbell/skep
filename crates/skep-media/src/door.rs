@@ -294,11 +294,12 @@ fn value_arm(
 /// Exhaustive with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
 /// whether it can carry or re-insert a value naming the kind. `copy`,
-/// `reinstate`, `version` and `stage` share identity and mint no cell
-/// (`media.md` §The publication seam, consequence (b): "a `copy` of a cell
-/// shares identity and mints no baptism" — and a re-placement by I-address
-/// is the same sharing, a staged draft's whole surface too), so they take no
-/// arm; every other op carries no content value.
+/// `reinstate`, `set_arrangement`, `version` and `stage` share identity and
+/// mint no cell (`media.md` §The publication seam, consequence (b): "a
+/// `copy` of a cell shares identity and mints no baptism" — and a
+/// re-placement by I-address is the same sharing, a draft's whole
+/// arrangement set by identity and a staged draft's whole surface too), so
+/// they take no arm; every other op carries no content value.
 pub fn media_door<W: FebeWorld>(
     world: &W,
     op: &Op,
@@ -320,6 +321,7 @@ pub fn media_door<W: FebeWorld>(
         | Op::Copy { .. }
         | Op::Reinstate { .. }
         | Op::Rearrange { .. }
+        | Op::SetArrangement { .. }
         | Op::Version { .. }
         | Op::Stage { .. }
         | Op::MakeLink { .. }

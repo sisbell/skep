@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 use skep_address::{Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Run, ShotRun, VPos, VSpec};
+use skep_arrangement::{Base, Marker, Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, LinkRow, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -289,6 +289,26 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::Rearrange),
             vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts)), ("as_of", j_seq(*as_of))],
         ),
+        // Canonical: the head pair, the base pair and the merge ride only
+        // where present, so a frame without them marshals to no member and
+        // `parse ∘ marshal` is a fixpoint; the typed state always rides.
+        Op::SetArrangement { doc, arrangement, as_of } => {
+            let mut pairs = vec![
+                ("doc", j_addr(doc)),
+                ("runs", j_shot_runs(&arrangement.runs)),
+                ("as_of", j_seq(*as_of)),
+            ];
+            if let Some(head) = &arrangement.head {
+                pairs.push(("head", j_extent_pair(head)));
+            }
+            if let Some(base) = &arrangement.base {
+                pairs.push(("base", j_extent_pair(base)));
+            }
+            if let Some(sides) = &arrangement.merge {
+                pairs.push(("merge", obj(vec![("sides", j_addrs(sides))])));
+            }
+            (op_name(OpKind::SetArrangement), pairs)
+        }
         Op::Version { d_src, published } => {
             let mut pairs = vec![("d_src", j_addr(d_src))];
             pairs.extend(published_pair(published));
@@ -503,7 +523,16 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
 
 pub(super) fn j_response(r: &Response) -> Value {
     let (name, mut pairs): (&'static str, Vec<(&'static str, Value)>) = match r {
-        Response::Ack { at } => ("ack", vec![("at", j_seq(*at))]),
+        // The tell rides only where a `set_arrangement` named a head the
+        // trunk moved past; absent on every other ack, whose bytes are as
+        // they were.
+        Response::Ack { at, head_moved } => {
+            let mut pairs = vec![("at", j_seq(*at))];
+            if let Some(head) = head_moved {
+                pairs.push(("head_moved", j_addr(head)));
+            }
+            ("ack", pairs)
+        }
         Response::AckAddr { addr, at } => {
             ("ack_addr", vec![("addr", j_addr(addr)), ("at", j_seq(*at))])
         }
@@ -644,9 +673,13 @@ pub(super) fn j_response(r: &Response) -> Value {
         // neither minted it. `base` and `base_copied` (the staging act,
         // B3-S10) are two payload options over the draft base of the address
         // named: the member or bare document the draft's next publication
-        // lands after, moved by each publication it renders, and the extent
-        // the copy took of it — both null where the board records no base,
-        // every address that is no staged draft among them. `at`, `time` and
+        // lands after, moved by each publication it renders and each landing
+        // that names a base, and the extent the copy took of it — both null
+        // where the board records no base, every address that is no staged
+        // draft among them. `merge` (the landing lane) is a payload option
+        // over the marker beside them: the sides, the head, the head's
+        // extent as read and the position the marker was put on the
+        // document, null where the draft carries no merge. `at`, `time` and
         // `time_from` are the age of the address named, as `link_value`
         // carries a link's: the mint position off the world's map, null for
         // an address a build before it minted; the time and its source null
@@ -660,6 +693,7 @@ pub(super) fn j_response(r: &Response) -> Value {
             source,
             base,
             base_copied,
+            merge,
             at,
             time,
             as_of,
@@ -683,6 +717,7 @@ pub(super) fn j_response(r: &Response) -> Value {
                 ("source", source.as_ref().map(j_addr).unwrap_or(Value::Null)),
                 ("base", base.as_ref().map(j_addr).unwrap_or(Value::Null)),
                 ("base_copied", base_copied.as_ref().map(j_nat).unwrap_or(Value::Null)),
+                ("merge", merge.as_ref().map(j_marker).unwrap_or(Value::Null)),
                 ("at", at.map(j_seq).unwrap_or(Value::Null)),
                 ("time", time.map(j_mint_time).unwrap_or(Value::Null)),
                 ("time_from", time.map(j_time_from).unwrap_or(Value::Null)),
@@ -855,6 +890,24 @@ fn j_shot_run(r: &ShotRun) -> Value {
         ("origin", j_addr(&r.origin)),
         ("i_start", j_addr(r.run.i_start())),
         ("width", j_nat(r.run.width())),
+    ])
+}
+
+/// Renders a member with the extent read of it: `set_arrangement`'s `head`
+/// and `base` pairs, `{"at": <address>, "extent": <nat>}`.
+fn j_extent_pair(b: &Base) -> Value {
+    obj(vec![("at", j_addr(&b.member)), ("extent", j_nat(&b.extent))])
+}
+
+/// Renders a draft's merge marker as `doc_metadata` serves it: the sides,
+/// the head, the head's extent as read and the position the marker was put
+/// on the document.
+fn j_marker(m: &Marker) -> Value {
+    obj(vec![
+        ("sides", j_addrs(&m.sides)),
+        ("head", j_addr(&m.head)),
+        ("head_copied", j_nat(&m.head_copied)),
+        ("at", j_seq(m.at)),
     ])
 }
 
@@ -1373,6 +1426,7 @@ pub fn op_name(k: OpKind) -> &'static str {
         OpKind::Copy => "copy",
         OpKind::Reinstate => "reinstate",
         OpKind::Rearrange => "rearrange",
+        OpKind::SetArrangement => "set_arrangement",
         OpKind::Version => "version",
         OpKind::Stage => "stage",
         OpKind::Publish => "publish",
@@ -1515,6 +1569,10 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::BaseNotInChain => "base_not_in_chain",
         RejectCode::BaseSuperseded => "base_superseded",
         RejectCode::BaseExtentTooLarge => "base_extent_too_large",
+        // The landing's two (the landing lane; skep #764), tabled with the
+        // version-chain family in §Rejection codes.
+        RejectCode::ForkBaseMoved => "fork_base_moved",
+        RejectCode::NoBaseToRecord => "no_base_to_record",
         // The publication's twin fence and its re-window's check (the
         // link-sets design §5.7), tabled with the shot's codes in §The publish
         // shot and head-float.

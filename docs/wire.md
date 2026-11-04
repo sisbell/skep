@@ -1112,11 +1112,25 @@ response: the `unparseable` rejection (see §Rejections).
 Every response is a single JSON object tagged by `resp`. The shapes, each
 with its tested example:
 
-**`ack`** — delete / copy / rearrange succeeded; committed at `at`.
+**`ack`** — delete / copy / reinstate / rearrange / set_arrangement
+succeeded; committed at `at`.
 
 <!-- wire: response ack -->
 ```json
 {"at":7,"resp":"ack"}
+```
+
+A `set_arrangement` that named a `head` the trunk has since moved past
+carries `head_moved`, the trunk's current head (§Arrangement,
+`set_arrangement`: the write landed all the same, recorded on the head
+named, and this is the tell that a newer version stands); the member is
+ABSENT where the head named is the trunk's head, and on every other
+op's `ack`. A consumer reads it where present and dispatches on `resp`
+and `at` as before:
+
+<!-- wire: response ack_head_moved -->
+```json
+{"at":14,"head_moved":"1.0.1.0.1.3","resp":"ack"}
 ```
 
 **`ack_addr`** — a write that minted (or found) an address:
@@ -1443,7 +1457,10 @@ an alternative's inherited base — and MOVED by every `publish` naming the
 draft as its rendering `draft`: `base` to the member the shot minted and
 `base_copied` to that member's whole count, so the next publication
 lands after it and `base_copied` is the `base_extent` a shot off that
-base carries. Both `null` where the board records no base: a document
+base carries; and by every `set_arrangement` naming a `base` to record
+(§Arrangement): `base` and `base_copied` to the pair the frame named —
+the head a merge was composed on at the extent read, or the old base an
+undo restores. Both `null` where the board records no base: a document
 `create_new_document` or `fork` minted and never published as a draft,
 an alternative of a draft the board held no base for, a version member,
 the trunk itself; a draft whose own first publication minted its edition
@@ -1452,6 +1469,28 @@ board's state, carried by every checkpoint, the same at every position
 from the stage on, and served to every reader who may read the draft, as
 `source` is — never read off a record the client wrote and never the
 trunk's head where the board records none.
+
+`merge` is THE MERGE THE DRAFT CARRIES, the marker beside the base: an
+object `{"sides": [addresses], "head": <address>, "head_copied": <nat>,
+"at": <position>}` — `sides` the sides merged, by address, possibly empty
+(the draft itself was the side); `head` the version the merge was
+composed on and `head_copied` that version's content count AS READ at
+the compose, which is what the base beside it records; `at` the position
+of the commit that put the marker on THIS document — or `null` where the
+draft carries no merge. It TRAVELS WITH THE BASE: set or cleared by a
+`set_arrangement` that names a `base` (set where the frame carries
+`merge`, cleared where it does not — the undo's shape), INHERITED by a
+`stage` of a marked draft beside the base it inherits, with `at` the
+stage's own position — the position the marker was put on the
+alternative, so an undo of the alternative that reads `at − 1` reads
+before the alternative's own mint — CLEARED by the `publish` that moves
+the base (the merge is the member's now), and untouched by every write
+that leaves the base untouched, a plain `set_arrangement` naming no
+`base` and the publication's re-window of an `also` draft among them.
+Its content is the client's statement, as the shot's `base` is: the
+board checks the head against the draft's chain and nothing against the
+runs. Served as `base` is; a client that decodes neither `base` nor
+`merge` ignores both.
 
 `at`, `time` and `time_from` are THE AGE OF THE ADDRESS NAMED, exactly as
 `link_value` carries a link's: `at` the position of the commit that
@@ -1476,7 +1515,7 @@ base for it — the shot at 7, its row still in the feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047,"time_from":"feed"}
+{"as_of":9,"at":7,"base":null,"base_copied":null,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","merge":null,"owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047,"time_from":"feed"}
 ```
 
 A private draft the staging act minted at 8 off that birth version —
@@ -1486,7 +1525,7 @@ five positions the copy took, so a `publish` off it carries
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
+{"as_of":9,"at":8,"base":"1.0.1.0.1.1","base_copied":"5","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","merge":null,"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
@@ -1497,7 +1536,19 @@ by a build before the position map, so its age is unknown:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":null,"time_from":null}
+{"as_of":9,"at":null,"base":null,"base_copied":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","merge":null,"owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":null,"time_from":null}
+```
+
+The staged draft above after a merge's landing: a `set_arrangement` at
+14, composed on version 2 read at six positions with the daughter
+`1.0.1.0.1.1.1` as its one side, moved the draft's base to that version
+and put the marker beside it — the draft stands behind nothing until
+version 3 is published, when the landing's ack tells it (`ack`'s
+`head_moved`), and the marker ends at the draft's next `publish`:
+
+<!-- wire: response doc_metadata_marked -->
+```json
+{"as_of":15,"at":8,"base":"1.0.1.0.1.2","base_copied":"6","base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","merge":{"at":14,"head":"1.0.1.0.1.2","head_copied":"6","sides":["1.0.1.0.1.1.1"]},"owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":1786838400052,"time_from":"anchor"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -1688,19 +1739,22 @@ just minted, or refused the stretch a run of single-byte values is
 written as — empty, or reaching over a stored address — an upstream
 invariant no sound store breaks, so, like `gate`, a defence rather than
 a well-formed request's refusal),
-`empty_source`, `not_ordinal_vspan`, `dangling_source` (copy and
-reinstate: an address a placed run names holds no value — a copy probes
-each resolved run's start, a reinstate every address of every run),
+`empty_source`, `not_ordinal_vspan`, `dangling_source` (copy, reinstate
+and set_arrangement: an address a placed run names holds no value — a
+copy probes each resolved run's start, a reinstate and a set_arrangement
+every address of every run),
 `empty_result` (copy: the net placement is empty once the specs are
-clipped; reinstate: its run list is empty),
+clipped; reinstate: its run list is empty — never set_arrangement's,
+whose empty run list sets an empty arrangement),
 `not_arranged` (delete: the position's ordinal names no arranged content
 position), `out_of_bounds`, `arrangement_moved` (the five in-place
-edits: the typed state the frame names — its as_of member, §Arrangement
-— is below the position the document's content arrangement last changed
-at — permanent, the same frame can never land and the act that does is
-another frame typed against a fresh read; refused behind
-`published_target` and ahead of every shape check, so a stale frame never
-meets `out_of_bounds`; carries `site.as_of`, the typed state echoed, and
+edits and set_arrangement: the typed state the frame names — its as_of
+member, §Arrangement — is below the position the document's content
+arrangement last changed at — permanent, the same frame can never land
+and the act that does is another frame typed against a fresh read;
+refused behind `published_target` and ahead of every shape check, so a
+stale frame never meets `out_of_bounds`, and a stale set_arrangement
+wipes nothing; carries `site.as_of`, the typed state echoed, and
 `site.current`, that last change's position; a link write homed in the
 document moves no arrangement and never raises it), `empty_width`,
 `bad_cut_count`,
@@ -1720,10 +1774,25 @@ own (§The publish shot and head-float below): `withheld` — the
 source gate, and every READ's document-argument consult
 (§The read predicate); the one code of this family whose disposition is
 reorder, carrying `site.addr` (the document) and never a `detail` —
-`bad_run` (a shot's or a reinstate's run: its start is no content
-element, or its stated origin is not the document that minted it),
-`base_not_in_chain`, `base_superseded`,
-`base_extent_too_large`, `already_published` (the publication's
+`bad_run` (a shot's, a reinstate's or a set_arrangement's run: its start
+is no content element, or its stated origin is not the document that
+minted it), `base_not_in_chain` (a shot's base; a set_arrangement's head,
+or the base it names to record, off the chain the draft's recorded base
+lies in — or, for a fork, off its source's document),
+`base_superseded`, `base_extent_too_large` (a shot's base extent; a
+set_arrangement's head extent as read, past the head's current count),
+`fork_base_moved` (set_arrangement into a FORK — a document with no
+recorded base whose source is a published surface — whose source is not
+the frame's head: the source the board records is immutable, and a
+landing composed on another head would make it false; `site.addr` the
+source; permanent, the act that exists is a fresh fork from the head,
+landed into — a fork whose source IS the head is admitted, gaining no
+base and no marker; §The version-chain refusals' faces),
+`no_base_to_record` (set_arrangement naming a base to record for a
+document the board records no base for — a free-standing draft, an
+alternative of one, an admitted fork — so there is no record to move;
+permanent, the frame lands without the member and moves nothing),
+`already_published` (the publication's
 twin fence: a draft-native run of the shot whose I-span overlaps a span
 a correspondence record homed in the run's own draft — the rendering
 draft, or one of the family's other drafts — already names as its
@@ -1790,13 +1859,14 @@ shot and head-float, the in-lock reads' budget); and three more of M5's — `not
 element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
 minted, never a well-formed request's refusal), `too_many_runs` (a
-placement — a copy's, a reinstate's or a shot's — past M5's
-`MAX_PLACED_RUNS` = 65536 runs, or a copy whose specs command more than
+placement — a copy's, a reinstate's, a set_arrangement's or a shot's —
+past M5's `MAX_PLACED_RUNS` = 65536 runs, or a copy whose specs command more than
 `MAX_COPY_RESOLVE_STEPS` = 1048576 run-list steps, each spec charged its
 source's whole run count ahead of its walk, so a spec aimed past its
 source's arranged end is refused for the work it would do while keeping
 nothing — one code for both causes, told apart by the store's message;
-permanent, a copy or a reinstate past it is split by its caller; the
+permanent, a copy or a reinstate past it is split by its caller, a
+set_arrangement composed into fewer runs; the
 publish table below carries the first) and `too_many_values` (a shot whose draft-native runs
 name more than M5's `MAX_REINSERTED_VALUES` = 131072 distinct positions —
 a position two runs name counted once, each draft identity being minted
@@ -1895,11 +1965,11 @@ slot after registration and ownership (PUB-6.36 slot 5, PUB-6.37) and
 before the operation's own shape checks — so they answer from every
 session the daemon's gates admit, signed sessions included, and the
 daemon adds no gate of its own for them. (One qualification: the write
-door pre-evaluates `published_target` on a `copy`'s or a `reinstate`'s
-destination ahead of its source consult, in the store's own bytes, so
-the model's refusal speaks ahead of `withheld` — PUB-6.36 slot 5 before
-slot 6, §The read predicate; the store's own refusal stands behind
-it.) A version member is judged as
+door pre-evaluates `published_target` on a `copy`'s, a `reinstate`'s or
+a `set_arrangement`'s destination ahead of its source consult, in the
+store's own bytes, so the model's refusal speaks ahead of `withheld` —
+PUB-6.36 slot 5 before slot 6, §The read predicate; the store's own
+refusal stands behind it.) A version member is judged as
 the document it projects to (PUB-2.15): `1.0.1.0.1.2` refuses exactly as
 `1.0.1.0.1`. All three are `permanent`, carry no `detail` and no `site`,
 and a refused request commits nothing. The daemon's own publish-class
@@ -1908,7 +1978,7 @@ never reaches these codes on a published document.
 
 | code | op | when |
 | --- | --- | --- |
-| `published_target` | `insert`, `copy`, `reinstate`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` whose `deposit` names a type the deposit class holds, at fresh content positions past the arranged extent; a `deposit` naming any other type answers this code as an undeclared append does (§Arrangement) |
+| `published_target` | `insert`, `copy`, `reinstate`, `delete`, `rearrange`, `set_arrangement` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` whose `deposit` names a type the deposit class holds, at fresh content positions past the arranged extent; a `deposit` naming any other type answers this code as an undeclared append does (§Arrangement) |
 | `private_version_of_published` | `version` | you own `d_src`, `d_src` is PUBLISHED, and an explicit `published:false` asks for a private member |
 | `private_source_versionless` | `version`, `publish` | you own `d_src` (or the shot's `doc`) and it is PRIVATE — whatever the flag; a private document has no chain to append to (on `publish` this is the flag-`true` face below) |
 
@@ -1929,6 +1999,12 @@ wire carries the token. ⟨D⟩ is the document named.
   "⟨D⟩ is private — publishing means minting a separate edition: select
   what to publish and it is minted published-born, your draft
   re-windowing it; private documents are versionless."
+* `fork_base_moved` (§Rejection codes; the fork gate of
+  `set_arrangement`, §Arrangement) — ⟨F⟩ the fork named, ⟨D.k⟩ the
+  source the board records for it (`site.addr`) and ⟨D.h⟩ the head the
+  frame named: "⟨F⟩ was forked from ⟨D.k⟩, and this merge was composed
+  on ⟨D.h⟩ — fork ⟨D.h⟩ afresh and land the merge there." The source a
+  fork records never moves, so the frame is never reissued as it stands.
 
 The sibling draft both faces name — the one that holds a private copy
 of ⟨D⟩, the one the change is staged in — is `stage`'s (§Namespace): one
@@ -3024,13 +3100,19 @@ document, `base` that surface itself and `base_copied` its whole content
 count at the commit — what the copy took, measured, a memberless home's
 genesis atom counted where it stands; for a draft of yours, `base` and
 `base_copied` that draft's own recorded base and extent, inherited by
-identity, with that draft as the `source` — a draft the board records no
-base for leaves the alternative unrecorded, a free-standing draft of its
-own. THE BASE MOVES: at each `publish` naming the draft as its rendering
-`draft`, the board moves the draft's base to the member the shot minted
-and `base_copied` to that member's whole count, keeping the source, so a
-draft staged from version 3 that publishes version 4 publishes version 5
-next, never a daughter of version 3. The record is the board's own fact,
+identity, with that draft as the `source`, and the merge marker the
+draft carries inherited beside them with `at` THIS stage's position
+(`doc_metadata`'s `merge`: the alternative holds the merged words, and
+the position the marker was put on the alternative is its own mint's) —
+a draft the board records no base for leaves the alternative unrecorded,
+a free-standing draft of its own. THE BASE MOVES: at each `publish`
+naming the draft as its rendering `draft`, the board moves the draft's
+base to the member the shot minted and `base_copied` to that member's
+whole count, keeping the source and clearing the marker, so a draft
+staged from version 3 that publishes version 4 publishes version 5 next,
+never a daughter of version 3; and at each `set_arrangement` naming a
+`base` to record (§Arrangement), which moves it to the pair named and
+sets or clears the marker with it. The record is the board's own fact,
 read on every device and by every reader of the draft; the shot's own
 `base` is still the request's statement (§Arrangement, `publish`), and
 nothing compares the two.
@@ -3140,9 +3222,10 @@ lists; an `id` is accepted and ignored, as on every read. → `key_set`.
 ### Arrangement (document editing)
 
 Ownership: `insert`, `delete`, and `rearrange` require the session
-principal to own `doc`; `copy` and `reinstate` require owning the
-**destination** `doc` only — `copy`'s source spans and `reinstate`'s run
-origins may read any content the principal may READ (transclusion is
+principal to own `doc`; `copy`, `reinstate` and `set_arrangement`
+require owning the **destination** `doc` only — `copy`'s source spans
+and the run origins of `reinstate` and `set_arrangement` may read any
+content the principal may READ (transclusion is
 unrestricted across the published docuverse and qualified for drafts: a
 source you may not read is `withheld`, §The read predicate); `publish`
 requires owning `doc`, and its runs'
@@ -3160,9 +3243,10 @@ predicate).
 
 Publication: a PUBLISHED `doc` — or a version member of one, which
 is judged as its document (PUB-2.15) — refuses the five in-place edits
-`published_target` (§The version-chain refusals), behind the ownership
-check and ahead of every shape check, from signed sessions too. A draft
-is edited in place. The one thing a published document admits
+and `set_arrangement` `published_target` (§The version-chain refusals),
+behind the ownership check and ahead of every shape check, from signed
+sessions too. A draft is edited in place. The one thing a published
+document admits
 is the **declared deposit** below — and it advances by the **shot**,
 `publish`. Once a shot has landed, a bare document address reads
 as its trunk HEAD in every arrangement reader (head-float), and a
@@ -3170,7 +3254,8 @@ declared deposit into the chain lands in the head member's arrangement
 (§The publish shot and head-float).
 
 The typed state: each of the five in-place edits — `insert`, `delete`,
-`copy`, `reinstate` and `rearrange` — carries `as_of`, REQUIRED: the
+`copy`, `reinstate` and `rearrange` — and `set_arrangement` beside them
+carries `as_of`, REQUIRED: the
 position of the document state the edit was typed against, the same
 coordinate a read answers in its own `as_of` (§The response envelope:
 every response names where it sits), so a writer passes back the `as_of`
@@ -3351,6 +3436,105 @@ the cut count's own check.
 <!-- wire: request rearrange -->
 ```json
 {"as_of":7,"cuts":[{"ordinal":"1","subspace":"1"},{"ordinal":"3","subspace":"1"},{"ordinal":"6","subspace":"1"}],"doc":"1.0.1.0.1","op":"rearrange"}
+```
+
+**`set_arrangement`** — set a draft's WHOLE content arrangement by
+identity in ONE commit: everything `doc` arranges is removed and `runs`
+are placed from content ordinal 1 — each run `origin`, `i_start`,
+`width`, the form `reinstate`'s take, placed by identity as `reinstate`
+places them, in the order given, I-adjacent runs of one origin
+coalescing, a run placed twice placed twice — so the draft holds the
+arrangement sent or what it held, never a state between (a stop or
+another writer between a `delete` and a `reinstate` leaves no
+half-changed draft). It is the board's half of a merge's landing into a
+draft, and the one write that changes a draft's whole text at once; the
+board composes no merge — what it places is what it is sent. → `ack`,
+with `head_moved` where the head named is no longer the trunk's (§The
+response envelope). A DRAFT's act, owner-gated on `doc`: a PUBLISHED
+`doc`, or a member of one, refuses `published_target` as the five
+in-place edits do, and on a claimed board a bare session's into an owned
+published document meets `signed_session_required` ahead of it
+(§Credential refusals). It has no entry frame — nothing of its kind
+lands in the published world — so `attest` on it is an unknown field,
+as on `stage`. `as_of` is the draft's typed state (the typed state,
+above), REQUIRED: a frame composed against an older arrangement of `doc`
+is refused `arrangement_moved` with NOTHING changed — the refusal that
+keeps a landing from wiping an edit made since the merge was composed;
+the origins are not judged for it. An EMPTY `runs` is admitted and sets
+an empty arrangement.
+
+Three optional members, each absent or `null` alike absent:
+
+* `head` — `{"at": <address>, "extent": <nat>}`: the version the merge
+  was composed on, and its content count AS READ at the compose — present
+  on a merge's landing, absent on an undo and on a plain re-arrangement.
+  The board checks it against the draft's chain — `base_not_in_chain`
+  where `at` is no member of the chain the draft's recorded base lies in
+  (or, for a fork, of its source's document; a draft with neither is
+  unchecked) — and `extent` against `at`'s current count
+  (`base_extent_too_large`), and NEVER against the trunk's current head:
+  a version published since the compose refuses nothing. The write lands,
+  records what it was told, and the ack carries `head_moved`, the trunk's
+  current head, where it is no longer `at` — LAND AND TELL — so the
+  draft's next `publish` lands as the head's daughter (§The publish shot
+  and head-float) unless the merge is composed again on the newer head.
+  The extent as read is what the record beside it keeps, so a deposit the
+  head took between the compose and the landing lies past it and is
+  carried as the next shot's tail, never dropped.
+* `base` — `{"at": <address>, "extent": <nat>}`: THE BASE TO RECORD. A
+  landing sends the head pair; an undo sends the base read at the
+  position before the landing (§Reading history); a plain re-arrangement
+  sends none. Present, the draft's recorded base moves to it in the same
+  commit (`doc_metadata`'s `base` and `base_copied`), its `source` kept:
+  the draft must have one — `no_base_to_record` otherwise — and `at` must
+  lie in the same chain (`base_not_in_chain`). Absent, NOTHING of the
+  record moves, the marker included.
+* `merge` — `{"sides": [addresses]}`: the merge the draft is to carry,
+  its sides by address, possibly empty (the command's draft-side shape
+  names no daughter); its head is the frame's `head`, so a `merge`
+  carried without a `head` is `malformed`. Recorded ONLY where `base` is
+  recorded, as the marker beside it (`doc_metadata`'s `merge`, with the
+  head at its extent and the landing's position): present, the marker is
+  set; absent beside a `base`, the marker is CLEARED — the undo's shape;
+  beside no `base`, nothing is recorded and a marker that stood stands.
+
+THE FORK GATE. A document the board records no base for is one of two
+things. A FORK — minted by `version` off a published surface, which
+`doc_metadata` names as its immutable `source` — takes the landing only
+where `head.at` IS that source: admitted, it gains no base and no marker;
+where `head.at` is another member the frame is refused
+`fork_base_moved`, `site.addr` the source, since a landing composed on
+another head would make the recorded source false — the way out is a
+fresh fork from the head, landed into. A FREE-STANDING draft — a
+`create_new_document` or `fork` mint, an alternative of one — is
+admitted with its `head` unchecked, gaining no base and no marker, and
+refuses a `base` `no_base_to_record`. A draft WITH a recorded base is
+the staged draft the ruling is for: its base moves where `base` says.
+
+The runs' origins are consulted as `reinstate`'s are — per DISTINCT
+origin in run order, `withheld` naming the first unreadable one, `doc`'s
+own I-space excepted — and judged in the store as `reinstate` judges
+them: the destination's own refusals first (`doc_not_registered`,
+`not_owner`, `published_target`, `arrangement_moved`), then the head's
+(`base_not_in_chain`, `base_extent_too_large`), the fork gate
+(`fork_base_moved`), the base's (`no_base_to_record`,
+`base_not_in_chain`), then per run in the order given the FIRST
+defective run deciding — `bad_run`, `source_not_registered`,
+`dangling_source` (every address probed), `too_many_runs` past
+`MAX_PLACED_RUNS`; the run list itself is one wire list under the list
+cap. Every refusal writes nothing. A write: refused `write_at_history`
+on `/op-at`. On the change feed its row carries `op:
+"set_arrangement"`, `docs` the draft, and the two terms `base` and
+`merge` (§The change feed). Never held by the shell's burst machine
+(an unholdable write, with `stage` and `publish`). This example lands a
+merge composed on version 2 of `1.0.1.0.1`, read at six positions, into
+the staged draft `1.0.1.0.2` with the daughter `1.0.1.0.1.1.1` as its
+one side — four of the edition's positions and two of the draft's own
+— recording version 2 as the draft's base and the marker beside it:
+
+<!-- wire: request set_arrangement -->
+```json
+{"as_of":12,"base":{"at":"1.0.1.0.1.2","extent":"6"},"doc":"1.0.1.0.2","head":{"at":"1.0.1.0.1.2","extent":"6"},"merge":{"sides":["1.0.1.0.1.1.1"]},"op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"4"},{"i_start":"1.0.1.0.2.0.1.1","origin":"1.0.1.0.2","width":"2"}]}
 ```
 
 **`version`** — the content-sharing, copy-on-write fork of `d_src`.
@@ -5371,6 +5555,16 @@ Rules:
   that frozen state — a `reorder` cannot resolve by waiting; reissue at a
   later position instead.
 
+* **A draft's earlier arrangement and base read here.** `image` and
+  `doc_metadata` of a draft at a position answer the arrangement, the
+  `base`, `base_copied` and `merge` the draft held THEN — at the position
+  before a `set_arrangement` landed (its ack's `at` − 1), the arrangement
+  and base it replaced, `merge` null where none stood — which is what an
+  undo of a landing sends back in one `set_arrangement` (§Arrangement).
+  A marker inherited at a `stage` names the stage's own position, so
+  reading before it meets the draft's own `doc_not_registered`: there is
+  nothing of the alternative's to take back.
+
 * **The reader's class is the presented session's; the predicate is the
   HEAD's**. The content is the position's, but the sets that
   decide what you may read — publication and grants (§The read
@@ -5575,7 +5769,8 @@ Each entry:
 * `at` — the committed position (the same coordinate `/op-at` accepts).
 * `op` — the snake_case op kind of the write, or `null` (below).
 * `docs` — the document(s) whose state that commit touched, or `null`:
-  the write's target doc for `insert`/`delete`/`copy`/`reinstate`/`rearrange`;
+  the write's target doc for
+  `insert`/`delete`/`copy`/`reinstate`/`rearrange`/`set_arrangement`;
   a link write names its **home** (`edit_link` both its homes, successor's first;
   `nullify` — PUB-6.46 — its home AND the target link's home, a
   SET with each document named once, so a same-home retraction carries
@@ -5692,11 +5887,22 @@ Each entry:
   this extent, so these two are what a verifier composing the entry frame
   from the feed alone still needs. On a bare row, the journal's answer
   (below); absent on every other op's row.
+* `base`, `merge` — on a `set_arrangement` row (§Arrangement): the base
+  the write recorded, an address, or `null` where it recorded none; and
+  the merge it marked, `{"sides": [addresses], "head": <address>}`, or
+  `null` where it recorded none or cleared one — so a reader tells a
+  merge's LANDING (`merge` present) from an UNDO (`merge` null, `base`
+  present) from a plain re-arrangement (both null) without reading the
+  draft, and finds the latest landing on a document the board records no
+  base for by its row. Both present on every `set_arrangement` row, each
+  the request's own term; on a bare row both `null`, the journal naming
+  neither (below); absent on every other op's row.
 
 A client MUST ignore an entry member it does not know, and a member of
-the page object likewise: an entry gains members by later deltas (the six
-above joined the original five under this rule), and a consumer written to
-today's eleven must not treat a twelfth as a protocol violation.
+the page object likewise: an entry gains members by later deltas (the
+eight above joined the original five under this rule), and a consumer
+written to today's thirteen must not treat a fourteenth as a protocol
+violation.
 
 Only writes appear: reads are not in the journal and never enter the feed.
 Rejected operations committed nothing and never appear. An idempotent
@@ -5735,7 +5941,8 @@ page is answered from:
   and an `emit` deposit one link alike, so a bare `emit` or `assert_sup`
   row carries a `link` its recorded row does not). A member the journal
   rules out is ABSENT as on the recorded row; one it cannot decide — the
-  op of an arrangement write or a document mint, a `delegate` under a
+  op of an arrangement write or a document mint, and with it a
+  `set_arrangement` row's `base` and `merge`, a `delegate` under a
   node `register_node` admitted that no walk from the board's own nodes
   reaches, a `publish` under such a node — stays `null`. So a feed-only mirror's Π is whole across a bare
   span; where it is not — a bare span whose rows name no `delegate` where
@@ -5908,7 +6115,7 @@ byte-exact, `more` true for the seed's rows past it:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":true}
+{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base":null,"base_extent":null,"docs":null,"key":null,"link":null,"merge":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":true}
 ```
 
 **Retention.** The feed is kept whole from genesis: the daemon's

@@ -201,6 +201,74 @@ fn the_base_moves_to_the_member_the_draft_renders_at_each_publish() {
     sd.shutdown();
 }
 
+/// THE MARKER TRAVELS WITH THE BASE (the owner's ruling N3, its precision
+/// P2; skep #764): a `stage` of a draft that carries a merge inherits the
+/// marker beside the base it inherits — its content the source's, its `at`
+/// THE STAGE's own position, so `doc_metadata` of the alternative at
+/// `at − 1` answers `doc_not_registered` and an undo finds nothing of its
+/// own to take back — and the shot that moves the rendering draft's base
+/// clears the marker, the alternative's standing; a stage of the cleared
+/// draft inherits none.
+#[test]
+fn an_alternative_inherits_the_marker_at_the_stages_position_and_the_shot_clears_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let edition = edition_with(port, &signed, "abc");
+    let v1 = acked_addr(&version_of(port, &signed, &edition, None));
+    let draft = stage_of(port, &owner, &v1);
+    // The landing: the edition's last two words as the whole arrangement,
+    // the head and the base version 1 at three, one side named.
+    let side = format!("{v1}.1");
+    let runs = image_runs(port, Some(&owner), &edition, 2, 2);
+    let runs: Vec<(String, String, u64)> = runs.iter().map(|(i_start, w)| (origin_of(i_start), i_start.clone(), *w)).collect();
+    let runs_ref: Vec<(&str, &str, u64)> = runs.iter().map(|(o, s, w)| (o.as_str(), s.as_str(), *w)).collect();
+    let ack = op(port, Some(&owner), &set_arrangement_frame(&draft, &runs_ref, Some((&v1, 3)), Some((&v1, 3)), Some(&[&side]), None));
+    let landed_at = acked_at(&ack);
+    assert!(expect_resp(&ack, "ack").get("head_moved").is_none(), "the head is the trunk's: {ack}");
+    let marker = |at: u64| serde_json::json!({"at": at, "head": v1, "head_copied": "3", "sides": [side]});
+    let meta = doc_metadata(port, Some(&owner), &draft);
+    assert_eq!(meta["merge"], marker(landed_at), "the marker at the landing: {meta}");
+    assert_eq!(text_of(port, Some(&owner), &draft, 1, 2), "bc");
+    // The alternative: the marker's content inherited, its position the
+    // stage's own; before it, the alternative is unregistered.
+    let ack = op(port, Some(&owner), &stage_frame(&draft));
+    let alternative = acked_addr(&ack);
+    let staged_at = acked_at(&ack);
+    assert!(staged_at > landed_at);
+    let meta = doc_metadata(port, Some(&owner), &alternative);
+    assert_eq!(base_of(port, &owner, &alternative), (some(&v1), some("3"), some(&draft)), "the base inherited: {meta}");
+    assert_eq!(meta["merge"], marker(staged_at), "the marker inherited, stamped at the stage: {meta}");
+    // The position before the stage is the one below its ack — a stage is
+    // one commit of three records, so `at − 1` is no position and `/op-at`
+    // names the one before as `nearest`; there the alternative is
+    // unregistered.
+    let (st, inside) = op_at(port, Some(&owner), staged_at - 1, &doc_metadata_frame(&alternative));
+    assert_eq!((st, inside["error"].as_str()), (400, Some("not_a_position")), "{inside}");
+    let nearest = inside["nearest"].as_u64().expect("the position before");
+    assert!(nearest >= landed_at && nearest < staged_at);
+    let before = op_at_ok(port, Some(&owner), nearest, &doc_metadata_frame(&alternative));
+    assert_eq!(expect_resp(&before, "rejected")["code"].as_str(), Some("doc_not_registered"), "nothing of the alternative's before its mint: {before}");
+    // The shot from the marked draft: the base moves, the marker is cleared;
+    // the alternative's own marker stands.
+    let mut runs = shot_runs(port, Some(&owner), &edition, 2, 2);
+    runs.insert(0, run(&edition, &format!("{edition}.0.1.1"), 1));
+    let v2 = shot(port, &signed, &edition, Some((&v1, 3)), Some(&draft), &runs);
+    assert_eq!(v2, format!("{edition}.2"));
+    let meta = doc_metadata(port, Some(&owner), &draft);
+    assert_eq!(base_of(port, &owner, &draft), (some(&v2), some("3"), some(&v1)), "the base moved: {meta}");
+    assert!(meta["merge"].is_null(), "the shot clears the marker: {meta}");
+    assert_eq!(doc_metadata(port, Some(&owner), &alternative)["merge"], marker(staged_at), "the alternative's stands");
+    // A stage of the cleared draft inherits no marker.
+    let later = stage_of(port, &owner, &draft);
+    let meta = doc_metadata(port, Some(&owner), &later);
+    assert_eq!(base_of(port, &owner, &later), (some(&v2), some("3"), some(&draft)));
+    assert!(meta["merge"].is_null(), "{meta}");
+    sd.shutdown();
+}
+
 /// THE REFUSALS, as the lowering maps them: a source the stager may not
 /// read is `withheld` naming it (the door's consult, nothing minted); an
 /// unregistered source `source_not_registered`; a stage into an account

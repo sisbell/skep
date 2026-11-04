@@ -362,6 +362,68 @@ fn each_write_states_the_terms_its_row_carries() {
     }
 }
 
+/// The landing's row (the landing lane; skep #764): `op` `set_arrangement`,
+/// `docs` the draft alone — never a run's origin, as `reinstate`'s row — no
+/// cell, and its two terms off the request: `base` the base named, `merge`
+/// the sides and head named beside a base, each `None` where the frame
+/// named none — a merge named beside no base is no term, the marker riding
+/// the base; and the terms complete with nothing of the ack or the world.
+#[test]
+fn a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named() {
+    use skep_address::Nat;
+    use skep_febe::{Base, Run, SetArrangement, ShotRun};
+
+    let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
+    let (draft, origin, head) = (addr("1.0.1.0.5"), addr("1.0.1.0.2"), addr("1.0.1.0.1.2"));
+    let request = |head_: Option<&Address>, base: Option<&Address>, sides: Option<Vec<Address>>| Op::SetArrangement {
+        doc: draft.clone(),
+        arrangement: SetArrangement {
+            runs: vec![ShotRun {
+                origin: origin.clone(),
+                run: Run::new(addr("1.0.1.0.2.0.1.1"), Nat::from(1u32)).expect("a content run"),
+            }],
+            head: head_.map(|h| Base { member: h.clone(), extent: Nat::from(3u32) }),
+            base: base.map(|b| Base { member: b.clone(), extent: Nat::from(3u32) }),
+            merge: sides,
+        },
+        as_of: Seq(7),
+    };
+    let landing = write_meta(&request(Some(&head), Some(&head), Some(vec![addr("1.0.1.0.1.1.1")]))).expect("a write");
+    assert_eq!(landing.kind, OpKind::SetArrangement);
+    assert!(matches!(&landing.docs, AffectedDocs::Named(docs) if docs == &vec![draft.clone()]), "the draft alone: {:?}", landing.docs);
+    assert!(matches!(landing.minting, Minting::None), "{:?}", landing.minting);
+    assert!(
+        matches!(&landing.terms, RowTerms::SetArrangement { base: Some(b), merge: Some((sides, h)) } if b == &head && h == &head && sides == &vec![addr("1.0.1.0.1.1.1")]),
+        "the base and the merge named: {:?}",
+        landing.terms
+    );
+    let undo = write_meta(&request(None, Some(&head), None)).expect("a write");
+    assert!(matches!(&undo.terms, RowTerms::SetArrangement { base: Some(b), merge: None } if b == &head), "{:?}", undo.terms);
+    let plain = write_meta(&request(None, None, None)).expect("a write");
+    assert!(matches!(&plain.terms, RowTerms::SetArrangement { base: None, merge: None }), "{:?}", plain.terms);
+    let unrecorded = write_meta(&request(Some(&head), None, Some(vec![]))).expect("a write");
+    assert!(
+        matches!(&unrecorded.terms, RowTerms::SetArrangement { base: None, merge: None }),
+        "a merge named beside no base is no term of the row: {:?}",
+        unrecorded.terms
+    );
+    // Completed off nothing: the request's own, rendered as the row spells
+    // them.
+    let world = World::genesis();
+    let completed = landing.terms.complete(None, &world).expect("the terms resolve off the request");
+    assert_eq!(
+        completed,
+        OpTerms::SetArrangement {
+            base: Some("1.0.1.0.1.2".into()),
+            merge: Some(MergeTerms { sides: vec!["1.0.1.0.1.1.1".into()], head: "1.0.1.0.1.2".into() }),
+        }
+    );
+    assert_eq!(
+        undo.terms.complete(None, &world),
+        Some(OpTerms::SetArrangement { base: Some("1.0.1.0.1.2".into()), merge: None })
+    );
+}
+
 /// The commit stream only ever moves forward, and a burst between wakes
 /// coalesces onto one step — the property `next` answers "anything past
 /// what I last sent" for, rather than queueing.

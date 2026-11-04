@@ -55,8 +55,9 @@ where
     ///
     /// The coordinate a driver hands back is `committed_at` — the design's own
     /// word for it — in the three arms whose operation carries an `at` of its
-    /// own (a `VPos`), and `at` in every other arm. Those are the only two
-    /// spellings; a third would make one concept read as two.
+    /// own (a `VPos`), and `at` in every other arm, `set_arrangement`'s
+    /// included, whose ack carries the trunk's head beside it. Those are the
+    /// only two spellings; a third would make one concept read as two.
     ///
     /// **The attestation (signed ops).** It rides every M5 and M7 driver a
     /// write acquires, and the M3 driver of the two document mints —
@@ -178,7 +179,7 @@ where
                     .vstream_attested(attest)
                     .delete(wc.caller(), &doc, p, width, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::Ack { at })
+                Ok(Response::Ack { at, head_moved: None })
             }
             Op::Copy { doc, at, specs, as_of } => {
                 let committed_at = self
@@ -186,7 +187,7 @@ where
                     .vstream_attested(attest)
                     .copy(wc.caller(), &doc, at, &specs, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::Ack { at: committed_at })
+                Ok(Response::Ack { at: committed_at, head_moved: None })
             }
             // The write by identity (the replacement act's record): the
             // client's I-runs placed as given. Its origins were consulted at
@@ -200,7 +201,7 @@ where
                     .vstream_attested(attest)
                     .reinstate(wc.caller(), &doc, at, &runs, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::Ack { at: committed_at })
+                Ok(Response::Ack { at: committed_at, head_moved: None })
             }
             Op::Rearrange { doc, cuts, as_of } => {
                 let at = self
@@ -208,7 +209,24 @@ where
                     .vstream_attested(attest)
                     .rearrange(wc.caller(), &doc, &cuts, AsOf::Typed(as_of))
                     .map_err(|e| lower_txn(kind, e))?;
-                Ok(Response::Ack { at })
+                Ok(Response::Ack { at, head_moved: None })
+            }
+            // A draft's whole arrangement set in one commit (the landing
+            // lane; skep #764): DELETE's and REINSTATE's bodies composed in
+            // the store, where the request's head, base and merge are
+            // decided — the chain checks, the fork gate, what moves. Its
+            // origins were consulted at the door above as `reinstate`'s
+            // were (`Op::source_arguments`), so the store takes no predicate;
+            // the handle drops the attestation for a kind outside its three.
+            // The ack carries the trunk's current head where the head named
+            // is no longer it — the tell (R5), which M10 passes through.
+            Op::SetArrangement { doc, arrangement, as_of } => {
+                let (at, head_moved) = self
+                    .stores
+                    .vstream_attested(attest)
+                    .set_arrangement(wc.caller(), &doc, &arrangement, AsOf::Typed(as_of))
+                    .map_err(|e| lower_txn(kind, e))?;
+                Ok(Response::Ack { at, head_moved })
             }
             Op::Version { d_src, published } => {
                 let (addr, at) = self
@@ -725,6 +743,10 @@ where
                 let standing = world.m5().draft_base(&doc);
                 let base = standing.map(|b| b.base.clone());
                 let base_copied = standing.map(|b| b.extent.clone());
+                // The merge the draft carries, beside the base it travels
+                // with (the landing lane): served to whoever reads the
+                // draft, as the base is.
+                let merge = standing.and_then(|b| b.merge.clone());
                 let at = m3.minted_at(&doc);
                 let trunk = trunk_of(&doc);
                 let published = published_target(m3, &trunk);
@@ -739,6 +761,7 @@ where
                     source,
                     base,
                     base_copied,
+                    merge,
                     at,
                     time: None,
                     as_of,
@@ -782,6 +805,7 @@ where
             | Op::Copy { .. }
             | Op::Reinstate { .. }
             | Op::Rearrange { .. }
+            | Op::SetArrangement { .. }
             | Op::Version { .. }
             | Op::Stage { .. }
             | Op::Publish { .. }

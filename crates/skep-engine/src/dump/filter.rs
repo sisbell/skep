@@ -158,10 +158,14 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   the draft the staging operation made (the staging act, B3-S10), a
 ///   private document whose existence is its owner's to keep (PUB-1.33), so
 ///   an entry stays exactly where the reader class reads the draft — the
-///   test `doc_metadata` serves `base` and `base_copied` under. The value —
-///   the base's address, the count the copy took and the source's address —
-///   takes no test of its own: an address is not secret (PUB-1.13), and the
-///   draft's readers already hold the base's I-addresses through `image`.
+///   test `doc_metadata` serves `base`, `base_copied` and `merge` under.
+///   The value — the base's address, the count the copy took, the source's
+///   address and, where the draft carries a merge, the marker's sides and
+///   head with the head's extent and the marker's position — takes no test
+///   of its own: an address is not secret (PUB-1.13), the marker's members
+///   are addresses of the same class as the base's with two counts beside
+///   them, and the draft's readers already hold the base's I-addresses
+///   through `image`.
 /// * `authoritative.links.links` — a link homed in an unreadable document
 ///   leaves.
 /// * `publication` — the section reduced per entry to the readable drafts:

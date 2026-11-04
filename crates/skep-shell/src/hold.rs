@@ -24,7 +24,7 @@
 //! burst's own units still (`resend`'s shift, skep #442, #751), else held
 //! as a moved document, the board's verdict kept on its line. A write the
 //! hold never holds is faced where a burst's would be held (§3c.4: "a
-//! non-burst write that fails … is faced at its act") — and the seven of
+//! non-burst write that fails … is faced at its act") — and the eight of
 //! them §3c.4 names ([`UNHOLDABLE_WRITES`], `publication.confirm`'s send
 //! beside them) meeting a hold that stands at the board before any dial —
 //! the own node stopped, the write path poisoned, the writes halted — are
@@ -158,15 +158,20 @@ const WRITE_BUSY_WAIT: Duration = Duration::from_millis(50);
 /// The burst machine's five kinds (§3c.4) — the ops the held store holds.
 const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
 
-/// The seven non-burst writes §3c.4 names, which a standing hold refuses.
+/// The eight non-burst writes §3c.4 names, which a standing hold refuses.
 ///
 /// Each arriving while the board is stopped, poisoned or its writes halted
 /// is refused at once with the hold's cause as its token, never held and
 /// never dialed ([`Holds::unholdable_refusal`]); `publication.confirm`'s
 /// send, the shot's one carrier, takes the same door with `publish` as its
-/// op; `stage`, the staging act's mint (B3-S10), takes it as `fork` does.
-/// Every other write outside the five bursts dials as it dials.
-pub const UNHOLDABLE_WRITES: [&str; 7] = ["fork", "version", "stage", "make_link", "nullify", "edit_link", "publish"];
+/// op; `stage`, the staging act's mint (B3-S10), takes it as `fork` does;
+/// `set_arrangement`, a draft's whole arrangement set in one write (the
+/// landing lane, skep #764), takes it too — no burst, since it is the
+/// landing of a merge and no act of the page's hand, and a landing held
+/// would land over whatever the hand wrote meanwhile. Every other write
+/// outside the five bursts dials as it dials.
+pub const UNHOLDABLE_WRITES: [&str; 8] =
+    ["fork", "version", "stage", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
 
 /// Returns whether `frame` is a burst: one of the five kinds.
 ///

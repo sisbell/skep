@@ -664,7 +664,7 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         assert_eq!(reached, expected, "{kind:?}");
         seen += 1;
     }
-    assert_eq!(seen, 17, "every write, EDITLINK once");
+    assert_eq!(seen, 18, "every write, EDITLINK once");
 }
 
 // ── the store-backed tests of `successor` and `publication` ──
@@ -720,7 +720,7 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
     typed = at;
     let p = VPos::content(Nat::from(2u32));
     let deleted = issue(owner, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32), as_of: typed });
-    let Response::Ack { at } = deleted else {
+    let Response::Ack { at, .. } = deleted else {
         panic!("the owner deletes the middle element");
     };
     typed = at;
@@ -734,7 +734,7 @@ fn fragmented_draft(febe: &OperationSurface<World>, doublings: u32) -> Address {
             specs: vec![VSpec { source: doc.clone(), span: whole }],
             as_of: typed,
         };
-        let Response::Ack { at } = issue(owner, copy) else {
+        let Response::Ack { at, .. } = issue(owner, copy) else {
             panic!("the owner doubles its draft");
         };
         typed = at;

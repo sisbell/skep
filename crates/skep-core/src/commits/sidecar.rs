@@ -297,6 +297,52 @@ pub(super) enum OpTerms {
     /// copy took, `None` in the birth shape (the absence is the birth bit).
     /// Both decimal strings, `Nat`'s wire form.
     Publish { placed: String, base_extent: Option<String> },
+    /// `set_arrangement`: the base recorded and the merge marked (the
+    /// landing lane; skep #764).
+    ///
+    /// `base` is the address the draft's recorded base moved to, `None`
+    /// where the write moved none; `merge` the marker's sides and head where
+    /// the write recorded one, `None` where it recorded none or cleared one
+    /// — so a reader tells a landing from an undo from a plain
+    /// re-arrangement. Addresses in the board's local form, as the row's
+    /// `docs` are.
+    SetArrangement { base: Option<String>, merge: Option<MergeTerms> },
+}
+
+/// A `set_arrangement` row's merge term: the marker's sides and head, as the
+/// row renders them (the landing lane; skep #764).
+///
+/// The head's extent and the marker's position are `doc_metadata`'s to
+/// serve; the row carries what tells the act apart and the sides it named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MergeTerms {
+    /// The sides merged, by address; empty for the draft-side shape.
+    pub sides: Vec<String>,
+    /// The head the merge was composed on.
+    pub head: String,
+}
+
+impl MergeTerms {
+    /// Returns the term's object, `{"head": …, "sides": […]}`.
+    fn to_value(&self) -> Value {
+        obj(vec![
+            ("sides", Value::Array(self.sides.iter().cloned().map(Value::String).collect())),
+            ("head", Value::String(self.head.clone())),
+        ])
+    }
+
+    /// Parses the term's object; `None` is the torn verdict.
+    fn parse(v: &Value) -> Option<MergeTerms> {
+        let m = v.as_object()?;
+        let head = m.get("head")?.as_str()?.to_string();
+        let sides = m
+            .get("sides")?
+            .as_array()?
+            .iter()
+            .map(|s| s.as_str().map(str::to_string))
+            .collect::<Option<Vec<String>>>()?;
+        Some(MergeTerms { sides, head })
+    }
 }
 
 impl OpTerms {
@@ -306,14 +352,16 @@ impl OpTerms {
     /// carried) unknown. Held to the union of [`OpTerms::members`] over the
     /// variants by the sidecar test
     /// `a_bare_row_nulls_exactly_the_members_the_terms_render`.
-    const MEMBER_NAMES: [&'static str; 5] =
-        ["new_prefix", "new_id", "link", "placed", "base_extent"];
+    const MEMBER_NAMES: [&'static str; 7] =
+        ["new_prefix", "new_id", "link", "placed", "base_extent", "base", "merge"];
 
     /// Returns the members these terms render as.
     ///
     /// They render so on the wire's row and in the file's line alike, one
     /// spelling for both, which [`parse_line`] reads back: a `publish`'s
-    /// birth extent is `null`, the absence being the birth bit.
+    /// birth extent is `null`, the absence being the birth bit; a
+    /// `set_arrangement`'s two are each `null` where the write recorded
+    /// none, the pair always present on its row.
     fn members(&self) -> Vec<(&'static str, Value)> {
         match self {
             OpTerms::Delegate { new_prefix, new_id } => vec![
@@ -324,6 +372,10 @@ impl OpTerms {
             OpTerms::Publish { placed, base_extent } => vec![
                 ("placed", Value::String(placed.clone())),
                 ("base_extent", base_extent.clone().map(Value::String).unwrap_or(Value::Null)),
+            ],
+            OpTerms::SetArrangement { base, merge } => vec![
+                ("base", base.clone().map(Value::String).unwrap_or(Value::Null)),
+                ("merge", merge.as_ref().map(MergeTerms::to_value).unwrap_or(Value::Null)),
             ],
         }
     }
@@ -3375,8 +3427,10 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
 /// line's op — a `delegate` line's `new_prefix` and `new_id` together (one
 /// without the other is torn), a `make_link` line's `link`, a `publish`
 /// line's `placed` with `base_extent` beside it, `null` there being the
-/// birth shape and not an absence — and absent altogether on a line written
-/// before they were recorded, which reads as an op carrying none. A term on
+/// birth shape and not an absence, a `set_arrangement` line's `base` and
+/// `merge`, each `null` where the write recorded none — and absent
+/// altogether on a line written before they were recorded, which reads as
+/// an op carrying none. A term on
 /// a line of another op is an unknown key, ignored. A bare line's `journal`
 /// member is the journal's answer ([`JournalTerms::parse`]): absent on a
 /// line written before it was derived, or where the journal answered
@@ -3429,6 +3483,19 @@ pub(super) fn parse_line(line: &[u8]) -> Option<Record> {
                         },
                     }),
                 },
+                // The landing's pair: each `null` where the write recorded
+                // none, so a line is read as carrying the pair whatever each
+                // holds; a present member of the wrong shape is torn.
+                "set_arrangement" => Some(OpTerms::SetArrangement {
+                    base: match field("base") {
+                        None => None,
+                        Some(b) => Some(b.as_str()?.to_string()),
+                    },
+                    merge: match field("merge") {
+                        None => None,
+                        Some(m) => Some(MergeTerms::parse(m)?),
+                    },
+                }),
                 _ => None,
             };
             CommitMeta::Recorded {

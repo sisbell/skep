@@ -74,21 +74,21 @@ fn a_publish_frame_through_op_is_refused_as_a_call_before_any_dial() {
     assert!(recorded.iter().all(|f| f["op"] != "publish") && recorded.contains(&read), "no publish reached the board: {recorded:?}");
 }
 
-/// Checks that the seven unholdable writes are refused under a stopped node.
+/// Checks that the eight unholdable writes are refused under a stopped node.
 ///
 /// With the own node stopped, each of `fork`, `version`, `stage`,
-/// `make_link`, `nullify` and `edit_link` through `op` is refused `stopped`
-/// naming its op and dialed never (`publish` is refused as a call ahead of
-/// it); a write outside the seven — a draft's mint — is dialed as it dials;
-/// and with the node running, the same writes at a board that does not
-/// answer meet the dial's own `unreachable`, never a hold's cause (§3c.4:
-/// "`unreachable` not of this set"). The listener keeps the shell's own
-/// frames too — the feed thread's `H.1` read at its consumer's open, at the
-/// thread's start and at the session's widen — so both counts are measured
-/// from the frames standing once a call the feed thread answers behind the
-/// widen has returned (skep #752). A count, never a filter by op: a mutant
-/// that dials one of the six under the stop puts the attest's `H.1` read on
-/// the listener, never the write's own op.
+/// `set_arrangement`, `make_link`, `nullify` and `edit_link` through `op`
+/// is refused `stopped` naming its op and dialed never (`publish` is
+/// refused as a call ahead of it); a write outside the eight — a draft's
+/// mint — is dialed as it dials; and with the node running, the same writes
+/// at a board that does not answer meet the dial's own `unreachable`, never
+/// a hold's cause (§3c.4: "`unreachable` not of this set"). The listener
+/// keeps the shell's own frames too — the feed thread's `H.1` read at its
+/// consumer's open, at the thread's start and at the session's widen — so
+/// both counts are measured from the frames standing once a call the feed
+/// thread answers behind the widen has returned (skep #752). A count, never
+/// a filter by op: a mutant that dials one of the seven under the stop puts
+/// the attest's `H.1` read on the listener, never the write's own op.
 #[test]
 fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not_of_the_set() {
     let dir = TempDir::new().unwrap();
@@ -110,6 +110,7 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
         json!({"op": "fork", "published": true}),
         json!({"op": "version", "d_src": "1.0.2.0.1"}),
         json!({"op": "stage", "from": "1.0.2.0.1"}),
+        json!({"op": "set_arrangement", "doc": "1.0.2.0.1", "runs": [{"origin": "1.0.2.0.1", "i_start": "1.0.2.0.1.0.1.1", "width": "1"}], "as_of": 1}),
         json!({"op": "make_link", "home": "1.0.2.0.1", "from": {"addrs": ["1.0.2.0.1"]}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}),
         json!({"op": "nullify", "home": "1.0.2.0.1", "target": "1.0.2.0.1.0.2.1"}),
         json!({"op": "edit_link", "original": "1.0.2.0.1.0.2.1", "d_s": "1.0.2.0.1", "d_a": "1.0.2.0.1", "successor": {"from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}}),
@@ -121,9 +122,9 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
         assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("stopped", Some("shell"), frame["op"].as_str()), "{v}");
     }
     let under_the_stop = frames.lock().unwrap()[own..].to_vec();
-    assert!(under_the_stop.is_empty(), "nothing of the seven is dialed under the stop: {under_the_stop:?}");
+    assert!(under_the_stop.is_empty(), "nothing of the eight is dialed under the stop: {under_the_stop:?}");
     let mint = json!({"op": "create_new_document", "account": "1.0.2"});
-    assert_eq!(shell.call("op", &json!({"session": session, "frame": mint})).unwrap_err().name(), "unreachable", "a write outside the seven dials as it dials");
+    assert_eq!(shell.call("op", &json!({"session": session, "frame": mint})).unwrap_err().name(), "unreachable", "a write outside the eight dials as it dials");
     shell.set_node_state(NodeState::Running);
     for frame in &writes {
         let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
@@ -133,7 +134,7 @@ fn the_unholdable_writes_are_refused_under_a_stopped_node_and_unreachable_is_not
     // reads the board's `H.1` for its attest, which is what the listener
     // records of a write it never answers.
     let dialed = frames.lock().unwrap()[own..].to_vec();
-    assert!(dialed.len() >= 7, "the mint and the six writes under the running node reached the listener: {dialed:?}");
+    assert!(dialed.len() >= 8, "the mint and the seven writes under the running node reached the listener: {dialed:?}");
 }
 
 /// Checks the family's answers where no panel stands, and the row's members.

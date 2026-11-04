@@ -259,6 +259,11 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::BaseNotInChain
         | RejectCode::BaseSuperseded
         | RejectCode::BaseExtentTooLarge
+        // The landing's two (skep #764): a fork's source never moves, and
+        // no reissue of a frame naming a base records one for a document
+        // the board records no base for.
+        | RejectCode::ForkBaseMoved
+        | RejectCode::NoBaseToRecord
         | RejectCode::AlreadyPublished
         | RejectCode::KeptPlaceMoved
         // The stray places' record read (lane F4): a record names fresh
@@ -309,7 +314,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 90] = [
+const ALL_CODES: [RejectCode; 92] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -366,6 +371,8 @@ const ALL_CODES: [RejectCode; 90] = [
     RejectCode::BaseNotInChain,
     RejectCode::BaseSuperseded,
     RejectCode::BaseExtentTooLarge,
+    RejectCode::ForkBaseMoved,
+    RejectCode::NoBaseToRecord,
     RejectCode::AlreadyPublished,
     RejectCode::KeptPlaceMoved,
     RejectCode::StrayPlaceUnrecorded,

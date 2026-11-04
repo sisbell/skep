@@ -1,8 +1,10 @@
 //! STAGE (the staging act, B3-S10): the one operation that mints a private
 //! draft of a source, shares the source's whole surface into it and records
-//! where it began — and the base's move at every shot the draft renders.
+//! where it began — and the base's move at every shot the draft renders,
+//! with the merge marker a landing put beside it: inherited by an
+//! alternative at the stage's own position, cleared by the shot.
 
-use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, HasM5, InsertError, Shot, StageError, Vstream};
+use skep_arrangement::{reading_surface, AsOf, Deposit, DraftBase, HasM5, InsertError, Marker, SetArrangement, Shot, StageError, Vstream};
 use skep_kernel::{Attestation, Kernel};
 use skep_namespace::{HasM3, PrincipalId};
 use tempfile::tempdir;
@@ -49,7 +51,7 @@ fn a_stage_mints_a_private_draft_sharing_the_sources_whole_surface_and_records_i
         assert_eq!(m5.link_count(&draft), n(0), "the link subspace is not shared");
         assert_eq!(
             m5.draft_base(&draft),
-            Some(&DraftBase { base: member.clone(), extent: n(3), source: member.clone() }),
+            Some(&DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None }),
             "the base, the count the copy took, the source"
         );
         assert_eq!(m5.fork_source(&draft), Some(&member), "the snapshot's source, as a version's");
@@ -74,7 +76,7 @@ fn a_stage_mints_a_private_draft_sharing_the_sources_whole_surface_and_records_i
     let s = k.snapshot();
     assert_eq!(
         s.world().m5().draft_base(&off_bare),
-        Some(&DraftBase { base: member.clone(), extent: n(3), source: member.clone() }),
+        Some(&DraftBase { base: member.clone(), extent: n(3), source: member.clone(), merge: None }),
         "the head, not the document's own pre-chain arrangement"
     );
     assert_eq!(s.world().m5().fork_source(&off_bare), Some(&member));
@@ -99,7 +101,7 @@ fn a_stage_of_the_memberless_document_records_it_as_the_base_with_the_count_the_
         assert_eq!(m5.content_count(&empty), n(0), "nothing to share");
         assert_eq!(
             m5.draft_base(&empty),
-            Some(&DraftBase { base: pdoc(), extent: n(0), source: pdoc() }),
+            Some(&DraftBase { base: pdoc(), extent: n(0), source: pdoc(), merge: None }),
             "the bare document, at zero"
         );
         assert_eq!(m5.fork_source(&empty), Some(&pdoc()), "noted, an empty surface included");
@@ -111,10 +113,10 @@ fn a_stage_of_the_memberless_document_records_it_as_the_base_with_the_count_the_
     assert_eq!(bytes_of(&s, &full), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
     assert_eq!(
         m5.draft_base(&full),
-        Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc() }),
+        Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc(), merge: None }),
         "the count the copy took"
     );
-    assert_eq!(m5.draft_base(&empty), Some(&DraftBase { base: pdoc(), extent: n(0), source: pdoc() }), "the earlier record stands");
+    assert_eq!(m5.draft_base(&empty), Some(&DraftBase { base: pdoc(), extent: n(0), source: pdoc(), merge: None }), "the earlier record stands");
 }
 
 /// THE POOL SIBLING (B3-S10): an alternative staged from a draft inherits
@@ -141,7 +143,7 @@ fn an_alternative_inherits_its_source_drafts_base_and_an_unrecorded_source_leave
         let m5 = s.world().m5();
         assert_eq!(
             m5.draft_base(&alternative),
-            Some(&DraftBase { base: member.clone(), extent: n(3), source: staged.clone() }),
+            Some(&DraftBase { base: member.clone(), extent: n(3), source: staged.clone(), merge: None }),
             "the staging draft's base and extent, inherited; the draft its source"
         );
         assert_eq!(
@@ -155,7 +157,7 @@ fn an_alternative_inherits_its_source_drafts_base_and_an_unrecorded_source_leave
     let (nested, _) = vs.stage(PrincipalId(1), &alternative).expect("an alternative of the alternative");
     assert_eq!(
         k.snapshot().world().m5().draft_base(&nested),
-        Some(&DraftBase { base: member.clone(), extent: n(3), source: alternative.clone() }),
+        Some(&DraftBase { base: member.clone(), extent: n(3), source: alternative.clone(), merge: None }),
         "the same base, its own source"
     );
     // A plain draft never staged: doc1 holds a b c and no record.
@@ -208,7 +210,7 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
         let m5 = s.world().m5();
         assert_eq!(
             m5.draft_base(&d),
-            Some(&DraftBase { base: e2.clone(), extent: n(4), source: e1.clone() }),
+            Some(&DraftBase { base: e2.clone(), extent: n(4), source: e1.clone(), merge: None }),
             "the base moved to the member, the extent its whole count, the source kept"
         );
         assert_eq!(m5.content_count(&e2), n(4));
@@ -225,14 +227,14 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
     assert_eq!(e3, a(&[1, 0, 1, 0, 3, 3]));
     assert_eq!(
         k.snapshot().world().m5().draft_base(&d),
-        Some(&DraftBase { base: e3.clone(), extent: n(4), source: e1.clone() })
+        Some(&DraftBase { base: e3.clone(), extent: n(4), source: e1.clone(), merge: None })
     );
     // A shot naming no draft moves nothing.
     let unnamed = Shot { base: Some(base(&e3, 4)), draft: None, also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 4)] };
     vs.publish(P1, &pdoc(), &unnamed, &readable).expect("version 4, no draft named");
     assert_eq!(
         k.snapshot().world().m5().draft_base(&d),
-        Some(&DraftBase { base: e3.clone(), extent: n(4), source: e1.clone() }),
+        Some(&DraftBase { base: e3.clone(), extent: n(4), source: e1.clone(), merge: None }),
         "no draft named: the draft's base stands where it stood"
     );
     // The request's base is the client's statement, checked against the
@@ -244,7 +246,7 @@ fn the_base_moves_to_the_member_the_draft_renders_and_the_next_shot_lands_after_
     assert_eq!(e1_1, a(&[1, 0, 1, 0, 3, 1, 1]));
     assert_eq!(
         k.snapshot().world().m5().draft_base(&d),
-        Some(&DraftBase { base: e1_1, extent: n(3), source: e1 })
+        Some(&DraftBase { base: e1_1, extent: n(3), source: e1, merge: None })
     );
 }
 
@@ -269,7 +271,7 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
     for draft in [&d, &d2] {
         assert_eq!(
             k.snapshot().world().m5().draft_base(draft),
-            Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc() }),
+            Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc(), merge: None }),
             "the bare document, at the count the copy took"
         );
     }
@@ -304,7 +306,7 @@ fn a_draft_begun_before_version_one_lands_as_its_daughter_carrying_the_bare_docu
         assert_eq!(reading_surface(s.world().m3(), &pdoc()), e1, "a daughter moves no head");
         assert_eq!(
             s.world().m5().draft_base(&d),
-            Some(&DraftBase { base: daughter.clone(), extent: n(5), source: pdoc() }),
+            Some(&DraftBase { base: daughter.clone(), extent: n(5), source: pdoc(), merge: None }),
             "the base moved to the daughter, at its whole count, the source kept"
         );
     }
@@ -335,7 +337,7 @@ fn a_draft_the_board_held_no_base_for_gains_one_at_its_own_shot() {
     assert_eq!(e1, vdoc());
     assert_eq!(
         k.snapshot().world().m5().draft_base(&doc1()),
-        Some(&DraftBase { base: e1.clone(), extent: n(3), source: e1.clone() }),
+        Some(&DraftBase { base: e1.clone(), extent: n(3), source: e1.clone(), merge: None }),
         "the member rendered, its base and its source"
     );
     let next = Shot { base: Some(base(&e1, 3)), draft: Some(doc1()), also: vec![], runs: vec![shot_run(&pdoc(), &pca(1), 3)] };
@@ -343,8 +345,73 @@ fn a_draft_the_board_held_no_base_for_gains_one_at_its_own_shot() {
     assert_eq!(e2, a(&[1, 0, 1, 0, 3, 2]));
     assert_eq!(
         k.snapshot().world().m5().draft_base(&doc1()),
-        Some(&DraftBase { base: e2, extent: n(3), source: e1 }),
+        Some(&DraftBase { base: e2, extent: n(3), source: e1, merge: None }),
         "moved again, the source kept"
+    );
+}
+
+/// THE MARKER TRAVELS WITH THE BASE (the owner's ruling N3, its precision
+/// P2; skep #764): an alternative staged from a draft that carries a merge
+/// inherits the marker beside the base — its content the source's, its
+/// position the STAGE's own commit, never the landing's — and the shot
+/// that moves the rendering draft's base clears the marker, folding the
+/// merge into the member; an alternative staged from a draft the shot has
+/// since cleared inherits none.
+#[test]
+fn an_alternative_inherits_the_marker_at_its_own_mint_and_the_shot_clears_it() {
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let (e1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("version 1");
+    let (d, _) = vs.stage(PrincipalId(1), &e1).expect("the staging draft");
+    let landing = SetArrangement {
+        runs: vec![shot_run(&pdoc(), &pca(2), 2)],
+        head: Some(base(&e1, 3)),
+        base: Some(base(&e1, 3)),
+        merge: Some(vec![vca(1)]),
+    };
+    let (landed_at, head_moved) = vs.set_arrangement(P1, &d, &landing, now(&k)).expect("the landing");
+    assert_eq!(head_moved, None);
+    let marker = Marker { sides: vec![vca(1)], head: e1.clone(), head_copied: n(3), at: landed_at };
+    assert_eq!(
+        k.snapshot().world().m5().draft_base(&d),
+        Some(&DraftBase { base: e1.clone(), extent: n(3), source: e1.clone(), merge: Some(marker.clone()) })
+    );
+    // The alternative: the marker's content inherited, its position the
+    // stage's own.
+    let (alternative, staged_at) = vs.stage(PrincipalId(1), &d).expect("an alternative of the marked draft");
+    assert!(staged_at > landed_at);
+    assert_eq!(
+        k.snapshot().world().m5().draft_base(&alternative),
+        Some(&DraftBase {
+            base: e1.clone(),
+            extent: n(3),
+            source: d.clone(),
+            merge: Some(Marker { at: staged_at, ..marker.clone() }),
+        }),
+        "the marker inherited, stamped at the stage"
+    );
+    assert_eq!(bytes_of(&k.snapshot(), &alternative), [b"b".to_vec(), b"c".to_vec()], "the landed words");
+    // The shot from the marked draft: the base to the member, the marker
+    // cleared — the merge is the member's now.
+    let readable = readable_by(PrincipalId(1));
+    let shot = Shot { base: Some(base(&e1, 3)), draft: Some(d.clone()), also: vec![], runs: vec![shot_run(&pdoc(), &pca(2), 2)] };
+    let (e2, _) = vs.publish(P1, &pdoc(), &shot, &readable).expect("version 2");
+    assert_eq!(e2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(
+        k.snapshot().world().m5().draft_base(&d),
+        Some(&DraftBase { base: e2.clone(), extent: n(2), source: e1.clone(), merge: None }),
+        "the base moved, the marker cleared"
+    );
+    assert_eq!(
+        k.snapshot().world().m5().draft_base(&alternative).and_then(|b| b.merge.as_ref()),
+        Some(&Marker { at: staged_at, ..marker }),
+        "the alternative's own marker stands: the shot named the rendering draft alone"
+    );
+    // A second alternative, of the cleared draft, inherits no marker.
+    let (later, _) = vs.stage(PrincipalId(1), &d).expect("an alternative of the cleared draft");
+    assert_eq!(
+        k.snapshot().world().m5().draft_base(&later),
+        Some(&DraftBase { base: e2, extent: n(2), source: d, merge: None })
     );
 }
 
@@ -406,7 +473,7 @@ fn a_stage_is_one_commit_and_takes_the_plain_arm_whatever_handle_it_is_called_on
         assert_eq!(bytes_of(&s, &draft), [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()], "the copy");
         assert_eq!(
             s.world().m5().draft_base(&draft),
-            Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc() }),
+            Some(&DraftBase { base: pdoc(), extent: n(3), source: pdoc(), merge: None }),
             "the record"
         );
     }

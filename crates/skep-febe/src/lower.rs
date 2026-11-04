@@ -22,7 +22,7 @@
 
 use skep_arrangement::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
-    StageError, VersionError,
+    SetArrangementError, StageError, VersionError,
 };
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
@@ -229,7 +229,8 @@ impl Lower for ContentError {
 
 // ──────────────────────────── M5 (arrangement) ─────────────────────────────
 
-/// The stale-edit refusal's lowering (skep #442), one for the five edits.
+/// The stale-edit refusal's lowering (skep #442), one for the five edits
+/// and the landing.
 ///
 /// The two positions ride as the rejection's own `site` members: `as_of`,
 /// the typed state echoed, and `current`, the document's last arrangement
@@ -326,6 +327,38 @@ impl Lower for DeleteError {
             DeleteError::NotArranged => (RejectCode::NotArranged, None),
             DeleteError::OutOfBounds => (RejectCode::OutOfBounds, None),
             DeleteError::EmptyWidth => (RejectCode::EmptyWidth, None),
+        }
+    }
+}
+
+impl Lower for SetArrangementError {
+    /// Lowers the landing's verdicts (skep #764) to the codes the in-place
+    /// edits and the shot use, and to its two of its own.
+    ///
+    /// The destination's four are COPY's; the head's two are the shot's
+    /// (`base_not_in_chain`, `base_extent_too_large`), the base to record
+    /// answering the first of them too; the per-run four are the shot's and
+    /// REINSTATE's. Its own two: `fork_base_moved`, the fork's source riding
+    /// `site.addr` as a withheld document does, and `no_base_to_record`.
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        match self {
+            SetArrangementError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            SetArrangementError::NotOwner(a) => not_owner(a),
+            SetArrangementError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            SetArrangementError::ArrangementMoved { as_of, current } => {
+                arrangement_moved(as_of, current)
+            }
+            SetArrangementError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
+            SetArrangementError::BaseExtentTooLarge => (RejectCode::BaseExtentTooLarge, None),
+            SetArrangementError::ForkBaseMoved(source) => (
+                RejectCode::ForkBaseMoved,
+                Some(FaultSite { addr: Some(source), ..FaultSite::default() }),
+            ),
+            SetArrangementError::NoBaseToRecord => (RejectCode::NoBaseToRecord, None),
+            SetArrangementError::BadRun => (RejectCode::BadRun, None),
+            SetArrangementError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
+            SetArrangementError::DanglingSource => (RejectCode::DanglingSource, None),
+            SetArrangementError::TooManyRuns => (RejectCode::TooManyRuns, None),
         }
     }
 }

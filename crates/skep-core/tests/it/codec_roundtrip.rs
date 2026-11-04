@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{Base, Marker, Run, RunError, SetArrangement, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, LinkRow, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -170,6 +170,53 @@ fn all_requests() -> Vec<Request> {
             },
         ),
         rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)], as_of: Seq(7) }),
+        // The landing (the landing lane; skep #764): every optional member
+        // present — the head pair, the base pair and the merge's sides — on
+        // one request; none on the plain re-arrangement; the head alone,
+        // with its merge, on a landing into a free-standing draft; and an
+        // empty `runs`, which sets an empty arrangement.
+        rq(
+            None,
+            Op::SetArrangement {
+                doc: d3(),
+                arrangement: SetArrangement {
+                    runs: vec![
+                        shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4),
+                        shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 1),
+                    ],
+                    head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    merge: Some(vec![a(&[1, 0, 1, 0, 1, 1, 1])]),
+                },
+                as_of: Seq(7),
+            },
+        ),
+        rq(
+            Some("land-2"),
+            Op::SetArrangement {
+                doc: d3(),
+                arrangement: SetArrangement {
+                    runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 4)],
+                    head: None,
+                    base: None,
+                    merge: None,
+                },
+                as_of: Seq(9),
+            },
+        ),
+        rq(
+            None,
+            Op::SetArrangement {
+                doc: d3(),
+                arrangement: SetArrangement {
+                    runs: vec![],
+                    head: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }),
+                    base: None,
+                    merge: Some(vec![]),
+                },
+                as_of: Seq(9),
+            },
+        ),
         rq(None, Op::Version { d_src: d1(), published: None }),
         rq(None, Op::Version { d_src: d1(), published: Some(false) }),
         // The staging act (B3-S10): one argument, the source staged from —
@@ -546,6 +593,7 @@ const OP_NAMES: &[&str] = &[
     "copy",
     "reinstate",
     "rearrange",
+    "set_arrangement",
     "version",
     "stage",
     "publish",
@@ -604,43 +652,44 @@ fn op_index(kind: OpKind) -> usize {
         OpKind::Copy => 9,
         OpKind::Reinstate => 10,
         OpKind::Rearrange => 11,
-        OpKind::Version => 12,
-        OpKind::Stage => 13,
-        OpKind::Publish => 14,
-        OpKind::MakeLink => 15,
-        OpKind::Emit => 16,
-        OpKind::Nullify => 17,
-        OpKind::AssertSup => 18,
-        OpKind::EditLink => 19,
-        OpKind::ReadLink => 20,
-        OpKind::FollowLink => 21,
-        OpKind::RetrieveV => 22,
-        OpKind::RetrieveI => 23,
-        OpKind::ContentFrontier => 24,
-        OpKind::RetrieveDocVSpan => 25,
-        OpKind::RetrieveDocVSpanSet => 26,
-        OpKind::ShowOrigin => 27,
-        OpKind::ShowDeletions => 28,
-        OpKind::Compare => 29,
-        OpKind::FindDocsContaining => 30,
-        OpKind::Image => 31,
-        OpKind::FindLinksV => 32,
-        OpKind::FindLinksFtt => 33,
-        OpKind::CountV => 34,
-        OpKind::CountFtt => 35,
-        OpKind::WindowV => 36,
-        OpKind::WindowFtt => 37,
-        OpKind::CountVByHome => 38,
-        OpKind::FindLinksVHistory => 39,
-        OpKind::RetrieveEndsets => 40,
-        OpKind::Project => 41,
-        OpKind::DiscoverableFrom => 42,
-        OpKind::DeleteOrphans => 43,
-        OpKind::InClaims => 44,
-        OpKind::OutClaims => 45,
-        OpKind::DocMetadata => 46,
-        OpKind::EditionClaims => 47,
-        OpKind::UniversalGrants => 48,
+        OpKind::SetArrangement => 12,
+        OpKind::Version => 13,
+        OpKind::Stage => 14,
+        OpKind::Publish => 15,
+        OpKind::MakeLink => 16,
+        OpKind::Emit => 17,
+        OpKind::Nullify => 18,
+        OpKind::AssertSup => 19,
+        OpKind::EditLink => 20,
+        OpKind::ReadLink => 21,
+        OpKind::FollowLink => 22,
+        OpKind::RetrieveV => 23,
+        OpKind::RetrieveI => 24,
+        OpKind::ContentFrontier => 25,
+        OpKind::RetrieveDocVSpan => 26,
+        OpKind::RetrieveDocVSpanSet => 27,
+        OpKind::ShowOrigin => 28,
+        OpKind::ShowDeletions => 29,
+        OpKind::Compare => 30,
+        OpKind::FindDocsContaining => 31,
+        OpKind::Image => 32,
+        OpKind::FindLinksV => 33,
+        OpKind::FindLinksFtt => 34,
+        OpKind::CountV => 35,
+        OpKind::CountFtt => 36,
+        OpKind::WindowV => 37,
+        OpKind::WindowFtt => 38,
+        OpKind::CountVByHome => 39,
+        OpKind::FindLinksVHistory => 40,
+        OpKind::RetrieveEndsets => 41,
+        OpKind::Project => 42,
+        OpKind::DiscoverableFrom => 43,
+        OpKind::DeleteOrphans => 44,
+        OpKind::InClaims => 45,
+        OpKind::OutClaims => 46,
+        OpKind::DocMetadata => 47,
+        OpKind::EditionClaims => 48,
+        OpKind::UniversalGrants => 49,
         OpKind::Unparseable => unreachable!("`Op::kind` never answers `Unparseable`"),
     }
 }
@@ -1475,7 +1524,10 @@ fn the_publication_flag_reads_absent_null_true_and_false() {
 /// (`Response` derives no `Clone`, deliberately).
 fn all_responses() -> Vec<(&'static str, Response)> {
     vec![
-        ("ack", Response::Ack { at: Seq(7) }),
+        ("ack", Response::Ack { at: Seq(7), head_moved: None }),
+        // The landing's tell (skep #764): the trunk's current head beside the
+        // position, on the one ack that carries it.
+        ("ack", Response::Ack { at: Seq(9), head_moved: Some(a(&[1, 0, 1, 0, 1, 3])) }),
         ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7) }),
         (
             "ack_edit",
@@ -1652,6 +1704,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 source: None,
                 base: None,
                 base_copied: None,
+                merge: None,
                 at: Some(Seq(7)),
                 time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
                 as_of: Seq(9),
@@ -1672,6 +1725,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
                 base: Some(a(&[1, 0, 1, 0, 1, 1])),
                 base_copied: Some(n(5)),
+                merge: None,
                 at: Some(Seq(8)),
                 time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(9),
@@ -1691,9 +1745,35 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
                 base: None,
                 base_copied: None,
+                merge: None,
                 at: None,
                 time: None,
                 as_of: Seq(9),
+            },
+        ),
+        // The staged draft above after a landing (skep #764): its base the
+        // head the merge was composed on, and the marker beside it — the
+        // sides, the head at the extent read, the landing's position.
+        (
+            "doc_metadata_marked",
+            Response::DocMetadata {
+                doc: d2(),
+                published: false,
+                owner: Some(a(&[1, 0, 1])),
+                birth: None,
+                terms: None,
+                source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                base: Some(a(&[1, 0, 1, 0, 1, 2])),
+                base_copied: Some(n(6)),
+                merge: Some(Marker {
+                    sides: vec![a(&[1, 0, 1, 0, 1, 1, 1])],
+                    head: a(&[1, 0, 1, 0, 1, 2]),
+                    head_copied: n(6),
+                    at: Seq(14),
+                }),
+                at: Some(Seq(8)),
+                time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
+                as_of: Seq(15),
             },
         ),
         (
@@ -1784,10 +1864,88 @@ fn doc_metadata_marshals_its_source_as_an_address_or_null() {
     assert_eq!(staged["base"], Value::String("1.0.1.0.1.1".into()), "the base the stage recorded: {staged}");
     assert_eq!(staged["base_copied"], Value::String("5".into()), "the extent the copy took, a decimal string: {staged}");
     let member = marshaled("doc_metadata");
-    for name in ["source", "base", "base_copied"] {
+    for name in ["source", "base", "base_copied", "merge"] {
         assert!(member.get(name).is_some(), "{name}: the member is present");
         assert!(member[name].is_null(), "{name}: null where neither a `version` nor a `stage` minted it: {member}");
     }
+    // The merge marker (skep #764): null on the three above, and beside the
+    // base on a marked draft — the sides, the head, the head's extent as
+    // read and the position, in the wire's spellings.
+    assert!(fork["merge"].is_null() && staged["merge"].is_null(), "no marker on a fork or a plain staged draft");
+    let marked = marshaled("doc_metadata_marked");
+    assert_eq!(
+        marked["merge"],
+        serde_json::json!({"at": 14, "head": "1.0.1.0.1.2", "head_copied": "6", "sides": ["1.0.1.0.1.1.1"]}),
+        "{marked}"
+    );
+    assert_eq!(marked["base"], Value::String("1.0.1.0.1.2".into()), "the base the landing recorded: {marked}");
+    // The landing's ack (skep #764): `head_moved` rides only where told.
+    let acks: Vec<Value> = all_responses()
+        .into_iter()
+        .filter(|(n, _)| *n == "ack")
+        .map(|(_, resp)| serde_json::from_slice(&codec.marshal(&resp)).expect("marshal emits JSON"))
+        .collect();
+    assert_eq!(acks.len(), 2);
+    assert!(acks[0].get("head_moved").is_none(), "absent where no head moved: {}", acks[0]);
+    assert_eq!(acks[1]["head_moved"], Value::String("1.0.1.0.1.3".into()), "{}", acks[1]);
+}
+
+/// The landing's frame (wire.md §Arrangement, `set_arrangement`; skep #764):
+/// `runs` and `as_of` required, the head pair, the base pair and the
+/// merge's sides each optional and each read as an object of its own
+/// members alone, `null` reading as absent; a `merge` without a `head` is
+/// refused, the marker's head being the frame's; and `attest` is an unknown
+/// field, the op lying outside the checked set as `stage` does.
+#[test]
+fn a_set_arrangement_takes_its_three_optional_members_and_refuses_a_merge_without_a_head() {
+    let codec = JsonCodec;
+    let frame = |fields: &str| {
+        format!(
+            r#"{{"op":"set_arrangement","doc":"1.0.1.0.3","runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}],"as_of":7{fields}}}"#
+        )
+        .into_bytes()
+    };
+    let plain = parse_ok(&codec, &frame(""));
+    let Op::SetArrangement { arrangement, .. } = &plain.op else { panic!("{plain:?}") };
+    assert!(arrangement.head.is_none() && arrangement.base.is_none() && arrangement.merge.is_none());
+    assert_eq!(
+        String::from_utf8(codec.marshal_request(&plain)).expect("utf-8"),
+        r#"{"as_of":7,"doc":"1.0.1.0.3","op":"set_arrangement","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"}]}"#,
+        "the canonical form carries no absent member"
+    );
+    let landing = parse_ok(
+        &codec,
+        &frame(r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"base":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":["1.0.1.0.1.1.1"]}"#),
+    );
+    let Op::SetArrangement { arrangement, .. } = &landing.op else { panic!("{landing:?}") };
+    assert_eq!(arrangement.head, Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }));
+    assert_eq!(arrangement.base, Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(4) }));
+    assert_eq!(arrangement.merge, Some(vec![a(&[1, 0, 1, 0, 1, 1, 1])]));
+    assert_eq!(parse_ok(&codec, &codec.marshal_request(&landing)), landing, "parse ∘ marshal is a fixpoint");
+    // `null` reads as absent on each of the three; an empty `sides` is a
+    // marker with no side, the draft-side shape.
+    let nulls = parse_ok(&codec, &frame(r#","head":null,"base":null,"merge":null"#));
+    assert_eq!(nulls, plain);
+    let sideless = parse_ok(&codec, &frame(r#","head":{"at":"1.0.1.0.1.2","extent":"4"},"merge":{"sides":[]}"#));
+    let Op::SetArrangement { arrangement, .. } = &sideless.op else { panic!("{sideless:?}") };
+    assert_eq!(arrangement.merge, Some(vec![]));
+    for (bad, detail) in [
+        (r#","merge":{"sides":[]}"#, "carried without 'head'"),
+        (r#","head":{"at":"1.0.1.0.1.2"}"#, "missing field 'extent'"),
+        (r#","head":{"at":"1.0.1.0.1.2","extent":"4","member":"x"}"#, "unknown field 'member'"),
+        (r#","base":{"at":"1.0.1.0.1.2","extent":"four"}"#, "'base'"),
+        (r#","merge":{"sides":"1.0.1.0.1.1.1"}"#, "expected a JSON array"),
+        (r#","merge":{"head":"1.0.1.0.1.2","sides":[]}"#, "unknown field 'head'"),
+        (r#","attest":{"alg":"x","sig":"00"}"#, "unknown field 'attest'"),
+    ] {
+        let e = codec.parse(&frame(bad)).err().unwrap_or_else(|| panic!("{bad} must not parse"));
+        let got = e.detail.expect("a parse failure names what failed");
+        assert!(got.contains(detail), "{bad}: {got}");
+    }
+    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.3","runs":[]}"#).expect_err("as_of is required");
+    assert!(e.detail.expect("named").contains("missing field 'as_of'"));
+    let e = codec.parse(br#"{"op":"set_arrangement","doc":"1.0.1.0.3","as_of":7}"#).expect_err("runs is required");
+    assert!(e.detail.expect("named").contains("missing field 'runs'"));
 }
 
 /// Marshal determinism: same value twice → byte-equal; two independent
@@ -1853,14 +2011,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 91 codes, pinned.
+/// The full `RejectCode` wire-name table — all 93 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 91] = [
+    let table: [(RejectCode, &str); 93] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -1918,6 +2076,8 @@ fn reject_code_names_are_pinned() {
         (RejectCode::BaseNotInChain, "base_not_in_chain"),
         (RejectCode::BaseSuperseded, "base_superseded"),
         (RejectCode::BaseExtentTooLarge, "base_extent_too_large"),
+        (RejectCode::ForkBaseMoved, "fork_base_moved"),
+        (RejectCode::NoBaseToRecord, "no_base_to_record"),
         (RejectCode::AlreadyPublished, "already_published"),
         (RejectCode::KeptPlaceMoved, "kept_place_moved"),
         (RejectCode::StrayPlaceUnrecorded, "stray_place_unrecorded"),
@@ -2579,12 +2739,13 @@ fn an_ispan_slot_round_trips_at_the_cap_and_is_refused_past_it() {
 }
 
 /// The typed state's grammar (wire.md §Arrangement, the typed state; skep
-/// #442): each of the five in-place edits REQUIRES `as_of` — a frame without
-/// it is "missing field", `malformed` by the envelope's rule, and one whose
-/// member is no position is refused on the field — and no other op admits
-/// it: present on a mint, a read or a link write it is "unknown field", as
-/// any member an op does not take. With it the frame parses, carries the
-/// position, and marshals it back in the canonical form.
+/// #442): each of the five in-place edits, and the landing beside them,
+/// REQUIRES `as_of` — a frame without it is "missing field", `malformed` by
+/// the envelope's rule, and one whose member is no position is refused on
+/// the field — and no other op admits it: present on a mint, a read or a
+/// link write it is "unknown field", as any member an op does not take.
+/// With it the frame parses, carries the position, and marshals it back in
+/// the canonical form.
 #[test]
 fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op() {
     let codec = JsonCodec;
@@ -2592,14 +2753,15 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
         Err(e) => e.detail.unwrap_or_else(|| panic!("{frame}: a parse failure carries a detail")),
         Ok(_) => panic!("frame must not parse: {frame}"),
     };
-    let five = [
+    let six = [
         r#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":["a"]}"#,
         r#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#,
         r#"{"op":"copy","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.1"}}]}"#,
         r#"{"op":"reinstate","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
         r#"{"op":"rearrange","doc":"1.0.1.0.1","cuts":[{"subspace":"1","ordinal":"1"},{"subspace":"1","ordinal":"2"},{"subspace":"1","ordinal":"3"}]}"#,
+        r#"{"op":"set_arrangement","doc":"1.0.1.0.1","runs":[{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1"}]}"#,
     ];
-    for frame in five {
+    for frame in six {
         let detail = refused(frame);
         assert!(detail.contains("missing field 'as_of'"), "{frame}: {detail}");
         let with = |member: &str| format!("{},\"as_of\":{member}}}", &frame[..frame.len() - 1]);
@@ -2610,7 +2772,8 @@ fn the_typed_state_is_required_on_the_five_edits_and_unknown_on_every_other_op()
             | Op::Delete { as_of, .. }
             | Op::Copy { as_of, .. }
             | Op::Reinstate { as_of, .. }
-            | Op::Rearrange { as_of, .. } => *as_of,
+            | Op::Rearrange { as_of, .. }
+            | Op::SetArrangement { as_of, .. } => *as_of,
             other => panic!("{frame}: {other:?}"),
         };
         assert_eq!(typed, Seq(7), "{frame}");

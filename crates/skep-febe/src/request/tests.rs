@@ -1,6 +1,6 @@
 use super::*;
 use skep_address::{validate, Nat, Span, Tumbler};
-use skep_arrangement::Run;
+use skep_arrangement::{Base, Run};
 use skep_discovery::SlotSpec;
 
 fn tum(comps: &[u32]) -> Tumbler {
@@ -73,6 +73,19 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
             false,
         ),
         (Op::Rearrange { doc: doc(), cuts: vec![vpos()], as_of: Seq(7) }, false),
+        (
+            Op::SetArrangement {
+                doc: doc(),
+                arrangement: SetArrangement {
+                    runs: vec![run_of(&addr(&[1, 0, 1, 0, 2]), &[1, 0, 1, 0, 2, 0, 1, 1])],
+                    head: Some(Base { member: addr(&[1, 0, 1, 0, 2, 1]), extent: Nat::from(1u32) }),
+                    base: Some(Base { member: addr(&[1, 0, 1, 0, 2, 1]), extent: Nat::from(1u32) }),
+                    merge: Some(vec![addr(&[1, 0, 1, 0, 2, 1, 1])]),
+                },
+                as_of: Seq(7),
+            },
+            false,
+        ),
         (Op::Version { d_src: doc(), published: None }, false),
         (Op::Stage { from: doc() }, false),
         (
@@ -154,10 +167,11 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 32 reads and 17 writes (the publish
+/// (`is_write == !is_read`), with 32 reads and 18 writes (the publish
 /// shot joining the fourteen of the design, lane 3.2; the write by
 /// identity, `reinstate`, the sixteenth — the replacement act's record;
-/// the staging act, `stage`, the seventeenth — B3-S10;
+/// the staging act, `stage`, the seventeenth — B3-S10; the landing,
+/// `set_arrangement`, the eighteenth — the landing lane, skep #764;
 /// the doc-metadata read and the edition-claim lookup joining the
 /// twenty-four reads, lane 3.4; the owner-of-address read the
 /// twenty-seventh, AUTH-6.37; the any-principal discovery read the
@@ -168,7 +182,7 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 49);
+    assert_eq!(ops.len(), 50);
     let reads = ops.iter().filter(|(_, r)| *r).count();
     assert_eq!(reads, 32);
     for (op, expect_read) in &ops {
@@ -192,7 +206,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 49);
+    assert_eq!(seen.len(), 50);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -376,15 +390,15 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
 }
 
 /// PUB-6.23 / PUB-6.24 / PUB-6.4, lane 3.3c: the source-argument list
-/// runs in DECLARATION order — `copy`'s specs by index, `reinstate`'s
-/// DISTINCT run origins in run order with the destination's own I-space
-/// left out (the shot's rule, the replacement act's record), `version`'s
-/// `d_src`, `stage`'s `from`, and the two link writes' RESOLVE-form slots
-/// in the wire's declared order `from`, `to`, `ty` with specs by index
-/// inside a slot — while an ADDRESS-FORM or an I-SPAN slot is ungated and
-/// names nothing (the read check's door channel, W6 (a)). Exactly the six
-/// source-reading writes answer a non-empty list; `fork`, every other write
-/// and every read answer the empty one.
+/// runs in DECLARATION order — `copy`'s specs by index, `reinstate`'s and
+/// `set_arrangement`'s DISTINCT run origins in run order with the
+/// destination's own I-space left out (the shot's rule, the replacement
+/// act's record), `version`'s `d_src`, `stage`'s `from`, and the two link
+/// writes' RESOLVE-form slots in the wire's declared order `from`, `to`,
+/// `ty` with specs by index inside a slot — while an ADDRESS-FORM or an
+/// I-SPAN slot is ungated and names nothing (the read check's door channel,
+/// W6 (a)). Exactly the seven source-reading writes answer a non-empty
+/// list; `fork`, every other write and every read answer the empty one.
 #[test]
 fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
     let d1 = addr(&[1, 0, 1, 0, 1]);
@@ -426,6 +440,28 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         as_of: Seq(7),
     };
     assert!(own_only.source_arguments().is_empty(), "a document's own I-space needs no consult");
+    // `set_arrangement`: REINSTATE's rule over its runs, and the head, the
+    // base and the sides — names, not sources — contribute nothing.
+    let whole = Op::SetArrangement {
+        doc: d1.clone(),
+        arrangement: SetArrangement {
+            runs: vec![
+                run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 1]),
+                run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 1]),
+                run_of(&d2, &[1, 0, 1, 0, 2, 0, 1, 4]),
+                run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 7]),
+            ],
+            head: Some(Base { member: addr(&[1, 0, 1, 0, 9, 1]), extent: Nat::from(1u32) }),
+            base: Some(Base { member: addr(&[1, 0, 1, 0, 9, 1]), extent: Nat::from(1u32) }),
+            merge: Some(vec![addr(&[1, 0, 1, 0, 8]), addr(&[1, 0, 1, 0, 7])]),
+        },
+        as_of: Seq(7),
+    };
+    assert_eq!(
+        whole.source_arguments(),
+        vec![&d3, &d2],
+        "set_arrangement: each distinct origin once, in run order, the destination's own excepted; the names consulted for nothing"
+    );
     let op = Op::Version { d_src: d2.clone(), published: None };
     assert_eq!(op.source_arguments(), vec![&d2]);
     let op = Op::MakeLink {
@@ -487,6 +523,7 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
                 op,
                 Op::Copy { .. }
                     | Op::Reinstate { .. }
+                    | Op::SetArrangement { .. }
                     | Op::Version { .. }
                     | Op::Stage { .. }
                     | Op::MakeLink { .. }

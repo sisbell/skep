@@ -770,6 +770,7 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
         base: doc1(),
         extent: n(3),
         source: doc1(),
+        merge: Some(Merge { sides: vec![vdoc()], head: doc1(), head_copied: n(3) }),
     });
     assert_eq!(s.arrangements.len(), 4);
     assert_eq!(s.link_run_count(&doc1()), 1);
@@ -993,7 +994,7 @@ fn m5rec_survives_a_bincode_round_trip() {
             terms: ShotTerms { placed: n(0), base_extent: None },
             draft: Some(doc2()),
         },
-        M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(5), source: doc1() },
+        M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(5), source: doc1(), merge: None },
     ] {
         let bytes = bincode::serialize(&rec).expect("record serializes");
         let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
@@ -1120,11 +1121,11 @@ fn a_staging_record_notes_the_drafts_base_extent_and_source_and_moves_nothing_el
     let shared = s.apply_m5(Seq(5), &M5Rec::VersionSnapshot { source: doc1(), new: doc2() });
     let staged = shared.apply_m5(
         Seq(5),
-        &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1() },
+        &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1(), merge: None },
     );
     assert_eq!(
         staged.draft_base(&doc2()),
-        Some(&DraftBase { base: doc1(), extent: n(3), source: doc1() }),
+        Some(&DraftBase { base: doc1(), extent: n(3), source: doc1(), merge: None }),
         "the record as it was carried"
     );
     assert_eq!(staged.draft_base(&doc1()), None, "the source answers none: the address named");
@@ -1135,11 +1136,11 @@ fn a_staging_record_notes_the_drafts_base_extent_and_source_and_moves_nothing_el
     // An alternative's record names the source draft and its inherited base.
     let alternative = staged.apply_m5(
         Seq(7),
-        &M5Rec::DraftBase { draft: pdoc(), base: doc1(), extent: n(3), source: doc2() },
+        &M5Rec::DraftBase { draft: pdoc(), base: doc1(), extent: n(3), source: doc2(), merge: None },
     );
     assert_eq!(
         alternative.draft_base(&pdoc()),
-        Some(&DraftBase { base: doc1(), extent: n(3), source: doc2() })
+        Some(&DraftBase { base: doc1(), extent: n(3), source: doc2(), merge: None })
     );
     // Purity: the receiver was untouched.
     assert_eq!(shared.draft_base(&doc2()), None);
@@ -1156,7 +1157,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
     let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
     let s = s.apply_m5(
         Seq(5),
-        &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc() },
+        &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc(), merge: None },
     );
     let terms = ShotTerms { placed: n(2), base_extent: Some(n(2)) };
     // The shot that renders doc2 into pdoc's first member, placing two runs
@@ -1172,7 +1173,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
     );
     assert_eq!(
         rendered.draft_base(&doc2()),
-        Some(&DraftBase { base: vdoc(), extent: n(3), source: pdoc() }),
+        Some(&DraftBase { base: vdoc(), extent: n(3), source: pdoc(), merge: None }),
         "the base moved to the member, the extent its whole count, the source kept"
     );
     // A shot naming no draft moves nothing.
@@ -1198,7 +1199,7 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
     );
     assert_eq!(
         empty.draft_base(&doc2()),
-        Some(&DraftBase { base: vdoc(), extent: n(0), source: pdoc() })
+        Some(&DraftBase { base: vdoc(), extent: n(0), source: pdoc(), merge: None })
     );
     // A draft the map holds no entry for gains one: the member it rendered
     // as its base and its source, its extent the member's count.
@@ -1213,11 +1214,11 @@ fn a_shot_naming_its_draft_moves_the_drafts_base_to_the_member_it_minted() {
     );
     assert_eq!(
         first.draft_base(&pdoc()),
-        Some(&DraftBase { base: vdoc(), extent: n(3), source: vdoc() })
+        Some(&DraftBase { base: vdoc(), extent: n(3), source: vdoc(), merge: None })
     );
-    assert_eq!(first.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc() }), "another draft's entry stands");
+    assert_eq!(first.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc(), merge: None }), "another draft's entry stands");
     // Purity: the receiver was untouched.
-    assert_eq!(s.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc() }));
+    assert_eq!(s.draft_base(&doc2()), Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc(), merge: None }));
 }
 
 /// The draft bases ride the checkpoint as their six siblings do, are
@@ -1231,7 +1232,7 @@ fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
         let s = s.apply_m5(Seq(6), &M5Rec::VersionSnapshot { source: doc1(), new: doc2() });
         let s = s.apply_m5(
             Seq(6),
-            &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1() },
+            &M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1(), merge: None },
         );
         s.apply_m5(
             Seq(9),
@@ -1244,7 +1245,7 @@ fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
         )
     };
     let live = build();
-    assert_eq!(live.draft_base(&doc2()), Some(&DraftBase { base: vdoc(), extent: n(3), source: doc1() }));
+    assert_eq!(live.draft_base(&doc2()), Some(&DraftBase { base: vdoc(), extent: n(3), source: doc1(), merge: None }));
     let bytes = bincode::serialize(&live).expect("state serializes");
     let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
     assert_eq!(back, live);
@@ -1277,12 +1278,120 @@ fn the_draft_bases_ride_the_checkpoint_last_and_replay_re_derives_them() {
         bincode::deserialize::<M5State>(&without).is_err(),
         "a checkpoint body without the map must fail to decode, never read as no base"
     );
-    // The staging record's index: appended after the shot's, its fields in
-    // order, as every variant encodes (`M5Rec`'s card).
-    let rec = M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1() };
+    // The base record's index: appended after the shot's, its fields in
+    // order, as every variant encodes (`M5Rec`'s card) — the marker its
+    // fifth and last, appended at the landing lane, so a record journaled
+    // before it stays decodable as it was written.
+    let rec = M5Rec::DraftBase { draft: doc2(), base: doc1(), extent: n(3), source: doc1(), merge: None };
     assert_eq!(
         bincode::serialize(&rec).expect("encodes"),
-        bincode::serialize(&(6u32, doc2(), doc1(), n(3), doc1())).expect("encodes"),
-        "`DraftBase` is index 6, then its four fields in order"
+        bincode::serialize(&(6u32, doc2(), doc1(), n(3), doc1(), None::<Merge>)).expect("encodes"),
+        "`DraftBase` is index 6, then its five fields in order"
     );
+    let marked = M5Rec::DraftBase {
+        draft: doc2(),
+        base: doc1(),
+        extent: n(3),
+        source: doc1(),
+        merge: Some(Merge { sides: vec![vdoc()], head: doc1(), head_copied: n(3) }),
+    };
+    assert_eq!(
+        bincode::serialize(&marked).expect("encodes"),
+        bincode::serialize(&(6u32, doc2(), doc1(), n(3), doc1(), Some((vec![vdoc()], doc1(), n(3)))))
+            .expect("encodes"),
+        "the marker's content: its sides, its head and the head's extent, in order, with no position"
+    );
+    // An entry written before the marker — four fields — no longer decodes:
+    // the entry carries no default for it (the owner's accepted cost, a
+    // development board regenerating).
+    let old_entry: Vec<u8> = bincode::serialize(&(doc1(), n(3), doc1())).expect("encodes");
+    assert!(
+        bincode::deserialize::<DraftBase>(&old_entry).is_err(),
+        "an entry without the marker must fail to decode, never read as unmarked"
+    );
+}
+
+/// BASE★'s three arms for the marker (the owner's ruling N3; skep #764): a
+/// base record carrying a merge installs the marker with THIS commit's
+/// position stamped — the landing's own, or a stage's for the content it
+/// inherited — never a position the record names; a shot naming the draft
+/// moves the base and CLEARS the marker; a placement and a removal naming
+/// the draft (the publication's re-window of an `also` draft) touch neither
+/// the base nor the marker; and a base record carrying no merge clears a
+/// marker that stood.
+#[test]
+fn the_marker_is_stamped_at_the_fold_cleared_by_the_shot_and_kept_by_the_rewindow() {
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+    let s = s.apply_m5(
+        Seq(5),
+        &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc(), merge: None },
+    );
+    let merge = Merge { sides: vec![vdoc(), vca(1)], head: pdoc(), head_copied: n(2) };
+    // The landing's record at 8: the marker stamped 8.
+    let landed = s.apply_m5(
+        Seq(8),
+        &M5Rec::DraftBase {
+            draft: doc2(),
+            base: pdoc(),
+            extent: n(2),
+            source: pdoc(),
+            merge: Some(merge.clone()),
+        },
+    );
+    let marker = Marker { sides: vec![vdoc(), vca(1)], head: pdoc(), head_copied: n(2), at: Seq(8) };
+    assert_eq!(
+        landed.draft_base(&doc2()),
+        Some(&DraftBase { base: pdoc(), extent: n(2), source: pdoc(), merge: Some(marker.clone()) }),
+        "the marker's content as carried, its position the commit's own"
+    );
+    assert_eq!(landed.arranged_at(&doc2()), None, "the record moves no arranged-at entry");
+    // A stage of the marked draft at 11 carries the content and is stamped
+    // 11: the position the marker was put on the alternative.
+    let staged = landed.apply_m5(
+        Seq(11),
+        &M5Rec::DraftBase {
+            draft: a(&[1, 0, 1, 0, 4]),
+            base: pdoc(),
+            extent: n(2),
+            source: doc2(),
+            merge: Some(Merge::from(&marker)),
+        },
+    );
+    assert_eq!(
+        staged.draft_base(&a(&[1, 0, 1, 0, 4])).and_then(|b| b.merge.as_ref()),
+        Some(&Marker { at: Seq(11), ..marker.clone() }),
+        "inherited content, the stage's own position"
+    );
+    assert_eq!(staged.draft_base(&doc2()).and_then(|b| b.merge.as_ref()), Some(&marker), "the source's stands");
+    // The re-window: a placement and a removal naming the draft move the
+    // arrangement and nothing of the record.
+    let rewindowed = landed
+        .apply_m5(Seq(12), &M5Rec::ContentPlace { doc: doc2(), at: n(1), runs: vec![run(&pca(1), 1)] })
+        .apply_m5(Seq(12), &M5Rec::ContentRemove { doc: doc2(), from: n(1), width: n(1) });
+    assert_eq!(rewindowed.draft_base(&doc2()), landed.draft_base(&doc2()), "the base and the marker stand");
+    assert_eq!(rewindowed.arranged_at(&doc2()), Some(Seq(12)), "the arrangement moved all the same");
+    // The shot naming the draft: the base to the member, the marker cleared.
+    let shot = landed.apply_m5(
+        Seq(14),
+        &M5Rec::ShotPlace {
+            doc: vdoc(),
+            runs: vec![run(&pca(1), 2)],
+            terms: ShotTerms { placed: n(2), base_extent: Some(n(2)) },
+            draft: Some(doc2()),
+        },
+    );
+    assert_eq!(
+        shot.draft_base(&doc2()),
+        Some(&DraftBase { base: vdoc(), extent: n(2), source: pdoc(), merge: None }),
+        "the shot folds the merge into the member and clears the marker"
+    );
+    // A base record carrying no merge — an undo's, or a plain landing's —
+    // clears a marker that stood.
+    let cleared = landed.apply_m5(
+        Seq(15),
+        &M5Rec::DraftBase { draft: doc2(), base: pdoc(), extent: n(2), source: pdoc(), merge: None },
+    );
+    assert_eq!(cleared.draft_base(&doc2()).and_then(|b| b.merge.as_ref()), None);
+    // Purity: the receiver was untouched throughout.
+    assert_eq!(landed.draft_base(&doc2()).and_then(|b| b.merge.as_ref()), Some(&marker));
 }

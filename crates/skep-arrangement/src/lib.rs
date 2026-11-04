@@ -9,13 +9,16 @@
 //! `version`- or `stage`-minted document's **fork source** — the member or
 //! bare document it was born sharing (the fork-source design record) — and
 //! each staged draft's **base** — where its next publication lands, the
-//! extent the copy took and its source, moved by each publication it renders
-//! (the staging act, B3-S10) — and it is the *only* place in the system
-//! where destructive change lives (ASN-0047 P3). It provides the
-//! editing/versioning operations (INSERT [ASN-0116], DELETE [ASN-0117], COPY
-//! [ASN-0118], REINSTATE [the write by identity, the replacement act's
-//! record], REARRANGE [ASN-0119/0084], CREATENEWVERSION [ASN-0123], STAGE
-//! [the staging act, B3-S10], and the publish shot [PUB-2.33]), a
+//! extent the copy took, its source and the merge it carries, moved by each
+//! publication it renders and by each landing that names a base (the
+//! staging act, B3-S10; the landing lane, skep #764) — and it is the *only*
+//! place in the system where destructive change lives (ASN-0047 P3). It
+//! provides the editing/versioning operations (INSERT [ASN-0116], DELETE
+//! [ASN-0117], COPY [ASN-0118], REINSTATE [the write by identity, the
+//! replacement act's record], REARRANGE [ASN-0119/0084], SET_ARRANGEMENT
+//! [a draft's whole arrangement set in one write, the landing lane],
+//! CREATENEWVERSION [ASN-0123], STAGE [the staging act, B3-S10], and the
+//! publish shot [PUB-2.33]), a
 //! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
 //! resolution and reverse I→V projection for readers, the R reads for
 //! provenance queries, the birth-extent, shot-terms, fork-source and
@@ -42,9 +45,9 @@
 //! every member it mints, an empty placement included, and an owned
 //! version's snapshot — the shot terms are journaled in the shot's own
 //! record, the fork sources are noted off the snapshot's `source`, and the
-//! draft bases are journaled in the staging record and moved by the shot's
-//! record naming its draft; all four are carried by the checkpoint, never
-//! rebuilt, and [`M5State`] states why.
+//! draft bases are journaled in the staging record and the landing's and
+//! moved by the shot's record naming its draft; all four are carried by the
+//! checkpoint, never rebuilt, and [`M5State`] states why.
 //!
 //! ## Failure channels
 //!
@@ -84,9 +87,10 @@
 //! * content/link *queries* (M6/M8) — M5 exposes the read primitives;
 //!   RETRIEVEV/SHOWDELETIONS/FINDDOCSCONTAINING are M6's compositions;
 //! * read permission — M5 knows no principal's read rights: `copy`,
-//!   `reinstate`, `version` and `stage` read any registered source and owe
-//!   their source gate (PUB-6.23) to the caller, M10's pre-dispatch consult
-//!   on the wire route; `publish` alone takes the gate's predicate as an argument —
+//!   `reinstate`, `set_arrangement`, `version` and `stage` read any
+//!   registered source and owe their source gate (PUB-6.23) to the caller,
+//!   M10's pre-dispatch consult on the wire route; `publish` alone takes
+//!   the gate's predicate as an argument —
 //!   the caller's `readable`, which the composite asks per origin document
 //!   inside its transaction (PUB-8.1) — and so does [`shot_admission`],
 //!   `publish`'s checks through that gate, which asks it of the world it is
@@ -99,7 +103,8 @@
 //! The three write-path refusals of the version-chain model run here
 //! (PUB-kickoff D2b), at the transact, as typed errors beside the ownership
 //! gate — the in-place advance refusal `PublishedTarget` on
-//! `insert`/`copy`/`reinstate`/`delete`/`rearrange` (PUB-2.11), the
+//! `insert`/`copy`/`reinstate`/`delete`/`rearrange`/`set_arrangement`
+//! (PUB-2.11), the
 //! private-member refusal `PrivateVersionOfPublished` and the versionless
 //! sibling `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9), the
 //! second on `publish` too — each evaluated inside its op's own transaction,
@@ -260,12 +265,12 @@ pub use chain::{
 pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
-    StageError, VersionError,
+    SetArrangementError, StageError, VersionError,
 };
 pub use ops::{
     head_lock_key, mint_admission, shot_admission, stage_delete_at, stage_publish,
-    stage_reinstate_at, AsOf, MintedRun, Pairing, PublishWorld, Vstream, MAX_COPY_RESOLVE_STEPS,
-    MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    stage_reinstate_at, AsOf, MintedRun, Pairing, PublishWorld, SetArrangement, Vstream,
+    MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};
@@ -274,7 +279,7 @@ pub use run_list::Runs;
 pub use seat::seat_link;
 pub use seat::stage_seat_link;
 pub use shot::{Base, SegmentRun, Shot, ShotRun};
-pub use state::{DraftBase, M5Rec, M5State, ShotTerms};
+pub use state::{DraftBase, M5Rec, M5State, Marker, Merge, ShotTerms};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 
 /// The engine's **read accessor** for M5's slice.

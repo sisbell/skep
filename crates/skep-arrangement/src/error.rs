@@ -317,6 +317,65 @@ pub enum StageError {
     Mint(MintError),
 }
 
+/// SET_ARRANGEMENT rejection (the landing lane; skep #764): the verdicts of
+/// the write that sets a draft's whole arrangement in one commit.
+///
+/// Which one wins when several apply is stated on
+/// [`Vstream::set_arrangement`](crate::Vstream::set_arrangement) and only
+/// there. The destination's four are the in-place edits' own
+/// (`DocNotRegistered`, `NotOwner` carrying the destination,
+/// `PublishedTarget` — PUB-2.11's refusal, the face of
+/// [`InsertError::PublishedTarget`] — and `ArrangementMoved`, the stale-edit
+/// refusal, [`InsertError::ArrangementMoved`]'s, skep #442: the frame was
+/// typed against a state of the draft older than its arrangement's last
+/// change, and nothing is wiped). Then the head's two, the shot's spellings
+/// over the head the merge was composed on: `BaseNotInChain` — the head is
+/// no member of the chain the draft's recorded base lies in, or of the
+/// fork's source's document; a base to record off that chain answers it
+/// too — and `BaseExtentTooLarge`, the head's extent as read past the head's
+/// current count. Then the fork gate's `ForkBaseMoved`: the destination is a
+/// fork (no recorded base, its source a published surface) whose source is
+/// not the frame's head — a landing would make the source the board
+/// records false (the owner's ruling N4); it carries the source, the
+/// refusal's `site.addr`. Then `NoBaseToRecord`: the frame names a base to
+/// record and the board records none for the draft, so there is no record
+/// to move. Then, per run and in the order given as REINSTATE judges them,
+/// `BadRun`, `SourceNotRegistered`, `DanglingSource` and `TooManyRuns` —
+/// [`ReinstateError`]'s, the placement being REINSTATE's own body. No
+/// `EmptyResult`: an empty `runs` sets an empty arrangement, which a draft
+/// may hold. No `Withheld`: the origins' readability is the caller's,
+/// discharged at M10's door.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SetArrangementError {
+    /// The destination `doc` is not a registered document.
+    DocNotRegistered,
+    /// The caller is not the destination's effective owner (ω); carries it.
+    NotOwner(Address),
+    /// The destination's document is published; the op edits in place.
+    PublishedTarget,
+    /// The frame was typed against a state older than the destination's
+    /// last arrangement change: `as_of` the typed state, `current` that
+    /// change's position.
+    ArrangementMoved { as_of: Seq, current: Seq },
+    /// The head, or the base to record, is no member of the draft's chain.
+    BaseNotInChain,
+    /// The head's extent as read exceeds the head's current content count.
+    BaseExtentTooLarge,
+    /// The destination is a fork whose source is not the frame's head;
+    /// carries the source.
+    ForkBaseMoved(Address),
+    /// The frame names a base to record and the board records none.
+    NoBaseToRecord,
+    /// A supplied run is not a content run of its stated origin.
+    BadRun,
+    /// A run's origin document is not a registered document.
+    SourceNotRegistered,
+    /// An address a supplied run names holds no stored value.
+    DanglingSource,
+    /// The placement exceeds [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS).
+    TooManyRuns,
+}
+
 /// PUBLISH rejection (PUB-2.33, PUB-8.1): the shot's verdicts.
 ///
 /// Which one wins when several apply is stated on
@@ -662,6 +721,50 @@ impl fmt::Display for ReinstateError {
 }
 impl Error for ReinstateError {}
 
+impl fmt::Display for SetArrangementError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SetArrangementError::DocNotRegistered => {
+                "set_arrangement: doc is not a registered document"
+            }
+            SetArrangementError::NotOwner(_) => {
+                "set_arrangement: the caller is not the document's effective owner (ω)"
+            }
+            SetArrangementError::PublishedTarget => {
+                "set_arrangement: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
+            SetArrangementError::ArrangementMoved { .. } => {
+                "set_arrangement: typed against a state older than the document's last arrangement change (as_of is below it); read the document again and compose the arrangement against what it holds now — nothing was changed"
+            }
+            SetArrangementError::BaseNotInChain => {
+                "set_arrangement: the head, or the base to record, is no member of the draft's chain"
+            }
+            SetArrangementError::BaseExtentTooLarge => {
+                "set_arrangement: the head's extent exceeds the head's current content count"
+            }
+            SetArrangementError::ForkBaseMoved(_) => {
+                "set_arrangement: the document is a fork whose source is not the head named — fork afresh from the head and land there"
+            }
+            SetArrangementError::NoBaseToRecord => {
+                "set_arrangement: the board records no base for the document, so there is none to move; send no base"
+            }
+            SetArrangementError::BadRun => {
+                "set_arrangement: a supplied run is not a content run of its stated origin"
+            }
+            SetArrangementError::SourceNotRegistered => {
+                "set_arrangement: a run's origin is not a registered document"
+            }
+            SetArrangementError::DanglingSource => {
+                "set_arrangement: a supplied run names an I-address with no stored value (S3★)"
+            }
+            SetArrangementError::TooManyRuns => {
+                "set_arrangement: the placement exceeds the per-transaction run budget"
+            }
+        })
+    }
+}
+impl Error for SetArrangementError {}
+
 impl fmt::Display for DeleteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -870,6 +973,7 @@ mod tests {
             ReinstateError::PublishedTarget.to_string(),
             DeleteError::PublishedTarget.to_string(),
             RearrangeError::PublishedTarget.to_string(),
+            SetArrangementError::PublishedTarget.to_string(),
         ] {
             assert!(line.contains("published"), "{line}");
             assert!(line.contains("next version"), "{line}");

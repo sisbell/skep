@@ -56,20 +56,25 @@ pub const BURST_OPS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rear
 
 /// `frame` typed against the board's head as read at the send (skep #442).
 ///
-/// A burst frame — one of [`BURST_OPS`] — that names no `as_of` gains one:
-/// [`head_position`], the position a read made now answers, which is the
-/// state a cell that composed its positions against the live board holds.
-/// A frame that names its own state keeps it, so a cell about the check
-/// spells the state it means; every other frame, and bytes that are no
-/// JSON object, pass through untouched, so the refusal cells send what they
-/// wrote. It is the one door [`op`](crate::common::op) gives every frame,
-/// beside the attest it attaches; a cell that must send a burst WITHOUT the
-/// member posts through `op_as_written`.
+/// A burst frame — one of [`BURST_OPS`] — or a `set_arrangement`, which
+/// carries the typed state too and is no burst (the landing lane, skep
+/// #764), that names no `as_of` gains one: [`head_position`], the position
+/// a read made now answers, which is the state a cell that composed its
+/// positions against the live board holds. A frame that names its own
+/// state keeps it, so a cell about the check spells the state it means;
+/// every other frame, and bytes that are no JSON object, pass through
+/// untouched, so the refusal cells send what they wrote. It is the one
+/// door [`op`](crate::common::op) gives every frame, beside the attest it
+/// attaches; a cell that must send a burst WITHOUT the member posts through
+/// `op_as_written`.
 pub fn typed_at_head(port: u16, frame: &str) -> String {
     let Ok(mut v) = serde_json::from_str::<Value>(frame) else { return frame.to_string() };
     let Some(obj) = v.as_object_mut() else { return frame.to_string() };
-    let burst = obj.get("op").and_then(Value::as_str).is_some_and(|op| BURST_OPS.contains(&op));
-    if !burst || obj.contains_key("as_of") {
+    let typed = obj
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| BURST_OPS.contains(&op) || op == "set_arrangement");
+    if !typed || obj.contains_key("as_of") {
         return frame.to_string();
     }
     obj.insert("as_of".to_string(), Value::from(head_position(port)));
@@ -313,6 +318,38 @@ pub fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)], as_of: im
     format!(
         r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}]{}}}"#,
         runs.join(","),
+        typed_member(as_of)
+    )
+}
+
+/// `set_arrangement` of `doc` (wire.md §Arrangement; the landing lane, skep
+/// #764): the whole arrangement `runs` — each `(origin, i_start, width)` —
+/// the optional `head` and `base` pairs `(member, extent)`, the optional
+/// `merge` sides, typed against the draft state `as_of`.
+pub fn set_arrangement_frame(
+    doc: &str,
+    runs: &[(&str, &str, u64)],
+    head: Option<(&str, u64)>,
+    base: Option<(&str, u64)>,
+    merge: Option<&[&str]>,
+    as_of: impl Into<Option<u64>>,
+) -> String {
+    let runs: Vec<String> =
+        runs.iter().map(|(origin, i_start, width)| run(origin, i_start, *width)).collect();
+    let pair = |name: &str, pair: Option<(&str, u64)>| {
+        pair.map(|(at, extent)| format!(r#","{name}":{{"at":"{at}","extent":"{extent}"}}"#)).unwrap_or_default()
+    };
+    let merge = merge
+        .map(|sides| {
+            let sides: Vec<String> = sides.iter().map(|s| format!("\"{s}\"")).collect();
+            format!(r#","merge":{{"sides":[{}]}}"#, sides.join(","))
+        })
+        .unwrap_or_default();
+    format!(
+        r#"{{"op":"set_arrangement","doc":"{doc}","runs":[{}]{}{}{merge}{}}}"#,
+        runs.join(","),
+        pair("head", head),
+        pair("base", base),
         typed_member(as_of)
     )
 }

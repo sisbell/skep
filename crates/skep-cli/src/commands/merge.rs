@@ -29,7 +29,13 @@
 //! left open; `--journal` names the merge journal (decision 7), `--kind`
 //! the record kind's type address (decision 9's row is interim and
 //! unpinned, so the caller names it). The board's refusal is exit 1, a halt
-//! exit 3.
+//! exit 3. A `withheld` refusal — a document the merger may not read, or an
+//! origin a write's run windows — names the document, and the command says
+//! beside it what the run did: nothing composed; the merge composed, and
+//! nothing published or merged; nothing taken back or out. A journal the
+//! merger may not read, or one the board does not register, is met at the
+//! record, after the landing or the take-back: the library's halt says the
+//! act stands with its record unwritten, exit 3.
 //!
 //! **The two take-backs** (skep #783), each with `--kind` and nothing of
 //! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before
@@ -101,6 +107,48 @@ enum Land {
     Into(Address),
     /// `--new`: a fresh draft staged from the head, then the same write.
     New,
+}
+
+impl Land {
+    /// Returns the step a refusal of this landing answers.
+    fn step(&self) -> Step {
+        match self {
+            Land::Publish => Step::Publish,
+            Land::Into(_) | Land::New => Step::Draft,
+        }
+    }
+}
+
+/// The step of the run a library refusal answers ([`refused`]).
+///
+/// The library's two `withheld` refusals name the document and the code
+/// alone, the same at every act (SP-10); the step is what the run says
+/// beside them — what it did, and what it did not, before the refusal.
+#[derive(Clone, Copy)]
+enum Step {
+    /// The composition.
+    Compose,
+    /// `--publish`'s landing, after the composition.
+    Publish,
+    /// `--into`'s or `--new`'s landing, after the composition.
+    Draft,
+    /// `--undo`.
+    Undo,
+    /// `--withdraw`.
+    Withdraw,
+}
+
+impl Step {
+    /// Returns what the run did, and did not, before a refusal at this step.
+    fn outcome(self) -> &'static str {
+        match self {
+            Step::Compose => "nothing was composed",
+            Step::Publish => "the merge was composed, and nothing was published",
+            Step::Draft => "the merge was composed, and nothing was merged",
+            Step::Undo => "nothing was taken back",
+            Step::Withdraw => "nothing was taken out",
+        }
+    }
 }
 
 /// What the command line asks, judged whole before any socket opens.
@@ -192,14 +240,14 @@ fn run(
             Act::Undo(draft) => {
                 talk(format!("taking the merge back out of {draft} at {}", board.dialed()));
                 let undone = undo(board, merger, draft, &asked.kind, asked.journal.as_ref())
-                    .map_err(|r| refused_taking_out(draft, r))?;
+                    .map_err(|r| refused_taking_out(draft, r, Step::Undo))?;
                 say_undone(&undone);
                 undone_value(&undone)
             }
             Act::Withdraw(draft) => {
                 talk(format!("taking the merge out of {draft} at {}", board.dialed()));
                 let withdrawn = withdraw(board, merger, draft, &asked.kind, asked.journal.as_ref())
-                    .map_err(|r| refused_taking_out(draft, r))?;
+                    .map_err(|r| refused_taking_out(draft, r, Step::Withdraw))?;
                 say_withdrawn(&withdrawn);
                 withdrawn_value(&withdrawn)
             }
@@ -231,17 +279,18 @@ fn run(
         options: options.clone(),
         kind: asked.kind.clone(),
     };
-    let merged = compose(board, Some(token), &inputs).map_err(refused)?;
+    let merged = compose(board, Some(token), &inputs).map_err(|r| refused(r, Step::Compose))?;
     say_composed(&merged);
     let mut report = report_of(&merged);
     if let Some(landing) = landing {
         let journal = asked.journal.clone();
+        let step = landing.step();
         let landing = match landing {
             Land::Publish => Landing::Shot { merger, draft: None, journal },
             Land::Into(into) => Landing::Draft { merger, into: Some(into.clone()), journal },
             Land::New => Landing::Draft { merger, into: None, journal },
         };
-        let landed = land(board, &merged, landing).map_err(refused)?;
+        let landed = land(board, &merged, landing).map_err(|r| refused(r, step))?;
         let fresh = matches!(asked.act, Act::Merge { landing: Some(Land::New), .. })
             && staged_here(&merged, &landed);
         say_landed(&merged, &landed, fresh);
@@ -435,8 +484,11 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// take-backs' — another account's draft under `not_owner`, a published
 /// document under `published_target`, nothing to undo under
 /// `nothing_to_undo` with the library's reason, a draft carrying no merge
-/// under `no_merge`.
-fn refused(r: Refusal) -> Stop {
+/// under `no_merge`. The two `withheld` refusals — a document the reader
+/// may not read, an origin a write's run windows — name the document alone,
+/// so their detail says beside it what `step` did and did not do
+/// ([`Step::outcome`]).
+fn refused(r: Refusal, step: Step) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
         Refusal::BaseUnknown(_) => "base_unknown",
@@ -462,13 +514,21 @@ fn refused(r: Refusal) -> Stop {
     };
     match r {
         Refusal::Halt(h) => Stop::Halt(h),
-        other => Stop::Halt(Halt::Refused(Refused {
-            status: 200,
-            code: code.to_string(),
-            detail: Some(other.to_string()),
-            op: None,
-            body: Value::Null,
-        })),
+        other => {
+            let detail = match &other {
+                Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
+                    format!("{other}; {}", step.outcome())
+                }
+                _ => other.to_string(),
+            };
+            Stop::Halt(Halt::Refused(Refused {
+                status: 200,
+                code: code.to_string(),
+                detail: Some(detail),
+                op: None,
+                body: Value::Null,
+            }))
+        }
     }
 }
 
@@ -478,8 +538,9 @@ fn refused(r: Refusal) -> Stop {
 /// — `history_reclaimed` at the undo's read of the state before the merge —
 /// whose detail says what it means here: the state before the merge is no
 /// longer on this board, and nothing was sent; the library's own words
-/// advise composing again, which is no act of the undo's.
-fn refused_taking_out(draft: &Address, r: Refusal) -> Stop {
+/// advise composing again, which is no act of the undo's. `step` is the
+/// take-back's, [`Step::Undo`] or [`Step::Withdraw`].
+fn refused_taking_out(draft: &Address, r: Refusal, step: Step) -> Stop {
     match r {
         Refusal::HistoryReclaimed { at, floor } => Stop::Halt(Halt::Refused(Refused {
             status: 200,
@@ -491,7 +552,7 @@ fn refused_taking_out(draft: &Address, r: Refusal) -> Stop {
             op: None,
             body: Value::Null,
         })),
-        other => refused(other),
+        other => refused(other, step),
     }
 }
 

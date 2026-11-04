@@ -1043,6 +1043,26 @@ fn a_run_names_its_positions_and_the_options_default_as_ruled() {
     assert!(options.dedup && !options.retype && options.resolutions.is_empty() && options.retries == 0);
 }
 
+/// The two `withheld` refusals name the document and the code alone, the
+/// same words at every act that returns them (SP-10): `Unreadable` answers
+/// the composition, the shot's value reads, the draft landing's read of its
+/// draft and the take-backs' reads; `WindowWithheld` the shot's, the draft
+/// landing's and the take-backs' writes. Neither says what the act did,
+/// which the embedder says.
+#[test]
+fn the_withheld_refusals_name_the_document_and_leave_the_outcome_to_the_embedder() {
+    let doc = addr("1.0.2.0.8");
+    let unreadable = Refusal::Unreadable(doc.clone()).to_string();
+    assert_eq!(unreadable, "1.0.2.0.8 is not readable to this reader (withheld)");
+    let windowed = Refusal::WindowWithheld(doc).to_string();
+    assert!(windowed.starts_with("1.0.2.0.8 is not shared with you (withheld)"), "{windowed}");
+    for said in [&unreadable, &windowed] {
+        for outcome in ["nothing", "composed", "published", "shot", "merged"] {
+            assert!(!said.contains(outcome), "`{outcome}`: {said}");
+        }
+    }
+}
+
 // ── THE READS, THE LANDING AND THE RECORD over a scripted board ──────────
 //
 // A `Dialer` whose answers come from a `World` the test writes — each
@@ -4381,6 +4401,47 @@ mod scripted {
         assert_eq!(verbatim.code, "txn_over_budget");
     }
 
+    /// A DRAFT THE MERGER MAY NOT READ is refused before any write, naming
+    /// it: `X`, another account's private draft, withheld. A landing into
+    /// `X` meets `withheld` at its one read of `X`'s metadata at the
+    /// composition's position, the undo and the withdrawal of `X` at theirs
+    /// at the head — each [`Refusal::Unreadable`] naming `X`, with no
+    /// `stage`, `set_arrangement`, journal mint, `insert` or `make_link`
+    /// sent and no commit made.
+    #[test]
+    fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
+        let x = "1.0.2.0.8";
+        let mut w = draft_landing_world();
+        w.doc(x, false, "1.0.2", vec![run(D, 1, 11)]);
+        w.withheld.insert(x.to_string());
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let rows = dialer.world().rows.len();
+        let nothing_sent = |cell: &str| {
+            for op in ["publish", "stage", "set_arrangement", "create_new_document", "insert", "make_link"] {
+                assert!(dialer.frames(op).is_empty(), "{cell}: no `{op}`: {:?}", dialer.ops());
+            }
+            assert_eq!(dialer.world().rows.len(), rows, "{cell}: no commit");
+        };
+        dialer.clear();
+        assert_eq!(
+            land(&board, &merged, draft_landing(&session, &signer, Some(a(x)))),
+            Err(Refusal::Unreadable(a(x)))
+        );
+        assert_eq!(dialer.ops(), ["at:doc_metadata"], "the one read of X, at the composition's position");
+        nothing_sent("a landing into X");
+        dialer.clear();
+        assert_eq!(undo(&board, m, &a(x), &a(K), None), Err(Refusal::Unreadable(a(x))));
+        assert_eq!(dialer.ops(), ["doc_metadata"]);
+        nothing_sent("the undo");
+        dialer.clear();
+        assert_eq!(withdraw(&board, m, &a(x), &a(K), None), Err(Refusal::Unreadable(a(x))));
+        assert_eq!(dialer.ops(), ["doc_metadata"]);
+        nothing_sent("the withdrawal");
+    }
+
     /// A CLAIMED BOARD WHOSE HEAD IS OWED LANDS NOTHING (SP-14): `/health`
     /// names a claimant and `H.1` serves no record, so the shot, a draft
     /// landing into `S` and a fresh draft each halt naming `H.1` before
@@ -4500,6 +4561,103 @@ mod scripted {
             "signed over the head written: {}",
             links[0]
         );
+    }
+
+    /// A JOURNAL THE ACT CANNOT WRITE ITS RECORD INTO LEAVES THE ACT
+    /// STANDING: the journal is first read at the record — its extent, the
+    /// end the atom is appended at — after the act's write, so a named
+    /// journal this merger may not read (`J`, another account's private
+    /// document, withheld) or one this board does not register (`U`) is
+    /// faced as the act standing with its record unwritten, exit 3 and never
+    /// a refusal of the act, nothing of the record sent. Over the shot, a
+    /// landing into `S` and the undo of `S`: the member minted, the draft
+    /// holding M, the draft back to C. A `resume` naming no journal writes
+    /// the landing's record into the account's own, once, landing nothing
+    /// twice; the undo re-run finds the merge taken back.
+    #[test]
+    fn a_journal_the_act_cannot_write_into_leaves_the_act_standing_with_its_record_unwritten() {
+        let (j, u) = ("1.0.2.0.8", "1.0.2.0.9");
+        let world = |mut w: World| {
+            w.doc(j, false, "1.0.2", Vec::new());
+            w.withheld.insert(j.to_string());
+            w
+        };
+        for (journal, why) in [
+            (j, "is not readable to this merger (withheld)"),
+            (u, "is not registered at this board (doc_not_registered)"),
+        ] {
+            let unwritten = |err: &Refusal, cell: &str| -> crate::halt::Face {
+                let Refusal::Halt(halt) = err else { panic!("{cell}: {err:?}") };
+                assert_eq!(halt.exit_code(), 3, "{cell}: a halt, never the board's refusal: {err:?}");
+                let Halt::Halt(face) = halt else { panic!("{cell}: {err:?}") };
+                assert!(face.state.ends_with(&format!("is not written: the journal {journal} {why}")), "{cell}: {face}");
+                assert!(face.cause.contains(&format!("{journal}'s extent")), "{cell}: {face}");
+                assert!(!face.act.contains("fault in this library"), "{cell}: {face}");
+                face.clone()
+            };
+            let no_record = |dialer: &Scripted, cell: &str| {
+                assert!(
+                    dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+                    "{cell}: nothing of the record sent: {:?}",
+                    dialer.ops()
+                );
+            };
+
+            // The shot: the member minted, its record unwritten.
+            let (dialer, board, signer) = open(world(World::race()));
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+            let shot_into = |journal: Option<&str>| Landing::Shot { merger: merger(&session, &signer), draft: None, journal: journal.map(a) };
+            dialer.clear();
+            let err = land(&board, &merged, shot_into(Some(journal))).expect_err("the record unwritten");
+            let member = format!("{D}.3");
+            let face = unwritten(&err, "the shot");
+            assert!(face.state.starts_with(&format!("the merge stands at {member}, and its record is")), "{face}");
+            assert!(face.act.starts_with("resume with a journal this account can write"), "{face}");
+            assert!(dialer.world().docs.contains_key(&member), "{journal}: the shot landed");
+            no_record(&dialer, "the shot");
+            dialer.clear();
+            let resumed = resume(&board, &merged, shot_into(None)).expect("resumed");
+            assert!(matches!(&resumed, Some(Landed::Member { address, .. }) if address.to_string() == member), "{resumed:?}");
+            assert_eq!((dialer.frames("insert").len(), dialer.frames("make_link").len()), (1, 1), "the record, once: {:?}", dialer.ops());
+            assert!(dialer.frames("publish").is_empty(), "nothing landed twice");
+
+            // A landing into `S`: the draft holding M, its record unwritten.
+            let (dialer, board, signer) = open(world(draft_landing_world()));
+            let session = sign_in(&board, &signer);
+            let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+            let into_s = |journal: Option<&str>| Landing::Draft { merger: merger(&session, &signer), into: Some(a(S)), journal: journal.map(a) };
+            dialer.clear();
+            let err = land(&board, &merged, into_s(Some(journal))).expect_err("the record unwritten");
+            let face = unwritten(&err, "a landing into S");
+            assert!(face.state.starts_with(&format!("the merge stands at {S}, and its record is")), "{face}");
+            assert!(face.act.starts_with(&format!("resume naming {S} with a journal this account can write")), "{face}");
+            assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_m(), "{journal}: the draft holds M");
+            no_record(&dialer, "a landing into S");
+            dialer.clear();
+            let resumed = resume(&board, &merged, into_s(None)).expect("resumed");
+            assert!(matches!(&resumed, Some(Landed::Draft { into, .. }) if *into == a(S)), "{resumed:?}");
+            assert_eq!((dialer.frames("insert").len(), dialer.frames("make_link").len()), (1, 1), "the record, once: {:?}", dialer.ops());
+            assert!(dialer.frames("set_arrangement").is_empty(), "nothing landed twice");
+
+            // The undo of `S`: the draft back to C, the record of the undo
+            // unwritten; a re-run finds the merge taken back.
+            let (dialer, board, signer) = open(world(draft_landing_world()));
+            let session = sign_in(&board, &signer);
+            landed_in_s(&board, &session, &signer);
+            dialer.clear();
+            let err = undo(&board, merger(&session, &signer), &a(S), &a(K), Some(&a(journal))).expect_err("the record unwritten");
+            let face = unwritten(&err, "the undo");
+            assert!(face.state.starts_with(&format!("the merge is out of {S}, and the record of the undo is")), "{face}");
+            assert_eq!(dialer.world().docs.get(S).unwrap().runs, draft_c(), "{journal}: the draft back to C");
+            assert_eq!(dialer.frames("set_arrangement").len(), 1, "the undo's one write");
+            no_record(&dialer, "the undo");
+            assert_eq!(
+                undo(&board, merger(&session, &signer), &a(S), &a(K), None),
+                Err(Refusal::NothingToUndo { draft: a(S), why: NoUndo::TakenBack }),
+                "a re-run finds the merge taken back"
+            );
+        }
     }
 
     /// A LANDING WRITE's ID IS ITS STEM AND ITS FRAME (skep #792): the stem

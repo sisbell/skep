@@ -72,9 +72,11 @@
 //! account's default) and linked from the merger's doc 1, so a reader of
 //! the journal sees the merge no longer stands on the draft. Where no
 //! record stands none is written, and the act stands all the same. A
-//! re-run after either act finds no marker and writes nothing — so a lost
-//! acknowledgment at the record's writes leaves the landing's record
-//! standing alone, which the halt says. A landing of the key made after
+//! re-run after either act finds no marker and writes nothing — so where
+//! the record is not written after the act's write, for a lost
+//! acknowledgment at its writes, a head owed there, or a journal this
+//! merger may not read or this board does not register, the landing's
+//! record stands alone, which the halt says. A landing of the key made after
 //! either act writes a record of its own, which replaces this one: the
 //! landing's read-first takes the merger's newest record of the key, and
 //! this one names no landing (the `land` module's doc).
@@ -94,7 +96,7 @@ use crate::board::{acked_at, frames, Board, Rejection, Token};
 use crate::halt::{Halt, Refused};
 
 use super::compose::Run;
-use super::land::{own_fault, own_fault_face, shape_face, Merger, Writer};
+use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
 use super::reads::{feed_rows, runs_of, NoUndo, Reader, Refusal};
 use super::record::{self, Record};
 
@@ -157,8 +159,11 @@ pub struct Withdrawn {
 ///   `base_extent_too_large` and the runs' refusals as the library's own
 ///   faults, since it sends only the base and the runs it read; a lost
 ///   acknowledgment as the dialer's halt, with no re-ask;
-/// - the record's reads' refusals, then its writes' as
-///   `Writer::write_record` answers them, the act standing.
+/// - the record's reads' refusals; a journal this merger may not read or
+///   this board does not register, as [`Refusal::Halt`] saying the merge is
+///   out of the draft and the record is not written, nothing of the record
+///   sent; then the record's writes' as `Writer::write_record` answers
+///   them, the act standing.
 pub fn undo(
     board: &Board,
     merger: Merger<'_>,
@@ -569,9 +574,9 @@ fn replace_record(
         link: None,
         ..current
     };
-    let owed = |cause: String| {
+    let owed = |why: Unwritten, cause: String| {
         Halt::face(
-            format!("the merge is out of {draft}, and the record of {} is not written: this board has no H.1 yet", act.name()),
+            format!("the merge is out of {draft}, and the record of {} is not written: {}", act.name(), why.reason()),
             cause,
             "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
         )

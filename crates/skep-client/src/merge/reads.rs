@@ -398,13 +398,16 @@ pub enum Refusal {
     TwoDrafts,
     /// `withheld` on the document named.
     ///
-    /// It is a document the reads need — the trunk, the head, the base or a
-    /// side, and at the landing the landed document or the journal — that
-    /// the reader may not read; at the reads nothing is composed, at the
-    /// landing nothing further is written. It is as well the origin of a
-    /// `withheld` item a value read met: a run a readable side windows from
-    /// a document the reader may not read, which the board masks at its own
-    /// position (wire.md §Value encodings).
+    /// It is a document an act reads before its first write that the reader
+    /// may not read, so nothing of the act is written: at the composition the
+    /// trunk, the head, the base or a side; at the shot a run's origin its
+    /// values are read through; at the draft landing the draft landed into;
+    /// at the undo and the withdrawal the draft taken back. It is as well
+    /// the origin of a `withheld` item a value read met: a run a readable
+    /// side windows from a document the reader may not read, which the board
+    /// masks at its own position (wire.md §Value encodings). Its words name
+    /// the document and the code alone, the same at every act; the embedder
+    /// says what the act did (SP-10).
     ///
     /// Where the reads are a merge record's recomputation, [`record::verify`]
     /// answers [`Verdict::Unreadable`](record::Verdict::Unreadable) naming
@@ -494,8 +497,11 @@ pub enum Refusal {
     },
     /// `withheld` on a write naming an origin the merger may not read.
     ///
-    /// The write is the shot or a draft edit, the origin a window the source
-    /// gate refuses (§7, the shot).
+    /// The write is the shot, the draft landing's one write, the undo's or
+    /// the withdrawal's, the origin a window one of its runs names that the
+    /// source gate refuses (§7, the shot), and nothing of the act is written.
+    /// Its words name the origin and the code alone, the same at every
+    /// write; the embedder says what the act did (SP-10).
     WindowWithheld(Address),
     /// The merged list holds more runs than one shot may name.
     ///
@@ -606,7 +612,7 @@ impl fmt::Display for Refusal {
             Refusal::ForkBaseNamed { fork, base } => write!(f, "the base {base} was named for the fork {fork}: a fork's base is the source the board serves for it (doc_metadata's source), never the caller's to name — leave base unset"),
             Refusal::DraftBaseDisagrees { side, named, served } => write!(f, "the base {named} was named for the draft {}, whose recorded base (doc_metadata's base) derives the base {served}: a draft's base is the board's to serve — leave base unset, or name the base the board derives", side.address()),
             Refusal::TwoDrafts => f.write_str("two drafts off one head are no merge shape: shoot one first"),
-            Refusal::Unreadable(doc) => write!(f, "{doc} is not readable to this reader (withheld); nothing was composed"),
+            Refusal::Unreadable(doc) => write!(f, "{doc} is not readable to this reader (withheld)"),
             Refusal::NoSuchDocument(doc) => write!(f, "{doc} is not registered at this board"),
             Refusal::TooFragmented { doc, runs_seen } => write!(f, "{doc} is in more pieces than `image` can answer, even one position at a time ({runs_seen} runs seen)"),
             Refusal::HistoryBusy => f.write_str("the board was busy reading history (history_busy) past the bounded retries"),
@@ -645,7 +651,7 @@ impl fmt::Display for Refusal {
             }
             Refusal::ForkBaseMoved { fork, source, head } => write!(f, "{fork} was forked from {source}, and this merge was composed on {head} — fork {head} afresh and land the merge there; nothing was merged"),
             Refusal::BaseNotInChain { into, head } => write!(f, "{into} is a draft of another document: its recorded base is no version of the document {head} heads — land the merge in a draft staged from that document; nothing was merged"),
-            Refusal::WindowWithheld(origin) => write!(f, "{origin} is not shared with you — the shot windows it; nothing was published"),
+            Refusal::WindowWithheld(origin) => write!(f, "{origin} is not shared with you (withheld), and a run this write sends windows it"),
             Refusal::OverCap { runs, cap } => write!(f, "the merged list is in more pieces than one publication can carry — {runs}, where {cap} is the most; publishing this merge is not offered"),
             Refusal::NeedsSignedSession => f.write_str("a signed session is needed to land a merge on a claimed board (signed_session_required)"),
             Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),

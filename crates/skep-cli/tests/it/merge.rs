@@ -28,7 +28,11 @@
 //! nothing on stdout; and `--draft` WITHOUT `--base` — a draft `stage`
 //! minted off the base version merged over the base the board records for
 //! it, a `--base` that agrees taken, and one the board's record does not
-//! derive refused by name, exit 1, nothing on stdout.
+//! derive refused by name, exit 1, nothing on stdout; and A STRANGER's
+//! documents — a second top-level account's private draft and fork — each
+//! `withheld` refusal saying beside the document what the run did, and the
+//! draft named as the journal met at the record after the shot, the merge
+//! standing with its record unwritten, exit 3.
 
 use std::path::{Path, PathBuf};
 
@@ -215,6 +219,30 @@ impl Rig {
         let v = Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": FORKER_ACCOUNT})));
         assert_eq!(acked_addr(&v), Some(format!("{FORKER_ACCOUNT}.0.1").as_str()), "the forker's home: {v}");
         token
+    }
+
+    /// A STRANGER's private draft and private fork of `source`: a second
+    /// top-level account delegated as the dev seed delegates one — the
+    /// node's bare session delegating the next prefix under `1` to a free
+    /// principal — whose bare session mints its home, then the two. The
+    /// claimant may read neither: an account's subtree runs above and
+    /// beneath it, never beside it (wire.md §The read predicate).
+    fn stranger(&self, source: &Address) -> (Address, Address) {
+        let bare = |principal: u64| match self.board.session_open(SessionBody::Bare { principal }).expect("a bare session") {
+            Opened::Token(t) => t,
+            other => panic!("principal {principal}'s bare bind answered {other:?}"),
+        };
+        let prefix = self.board.next_account_prefix("1").expect("the read").expect("a top-level prefix");
+        let mut principal = FORKER + 1;
+        while self.board.principal_prefix(principal).expect("the read").is_some() {
+            principal += 1;
+        }
+        let v = Rig::acked(self.board.op(Some(&bare(0)), &frames::delegate(&prefix, principal, None)));
+        assert_eq!(acked_addr(&v), Some(prefix.as_str()), "the stranger's account: {v}");
+        let token = bare(principal);
+        let mint = || addr(acked_addr(&Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": prefix})))).expect("a minted address"));
+        assert_eq!(mint().to_string(), format!("{prefix}.0.1"), "the stranger's home first");
+        (mint(), self.fork(&token, source))
     }
 
     /// A private cross-owner fork of `source` by `forker`: the fresh document
@@ -816,5 +844,63 @@ fn the_two_take_backs_walk_on_the_real_daemon() {
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
     assert!(r.err.contains(&format!("the board refused: no_merge:{t} carries no merge: nothing to undo, nothing to take out")), "{}", r.err);
     assert_eq!(position(), before, "nothing written");
+    session.close().expect("close");
+}
+
+/// A STRANGER's DOCUMENTS, which the claimant may not read: a second
+/// top-level account's private draft `X` and its private fork `F` of `D.1`.
+/// Each `withheld` refusal names the document, and the talk says beside it
+/// what the run did, exit 1, nothing on stdout, nothing written: `--fork F`
+/// composed nothing; `--into X` composed the merge and merged nothing;
+/// `--undo X` took nothing back; `--withdraw X` took nothing out. And `X`
+/// named as the JOURNAL, met at the record after the shot: `--publish`
+/// lands the next version and halts, exit 3, saying the merge stands there
+/// with its record unwritten; the same `--publish` against the head it
+/// composed on, naming no journal, writes the record and lands nothing
+/// twice.
+#[test]
+fn a_strangers_document_is_refused_with_what_the_run_did_and_as_the_journal_leaves_the_merge_standing() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = Rig::new(dir.path());
+    let session = rig.session();
+    let token = session.token().clone();
+    let kind = rig.draft().to_string();
+    let (d, base, head, daughter) = rig.race(&session);
+    let (d_s, daughter_s, head_s) = (d.to_string(), daughter.to_string(), head.to_string());
+    let position = || rig.board.health().unwrap().log_position();
+    let (x, f) = rig.stranger(&base);
+    let x_s = x.to_string();
+    let refused = |extra: &[&str], said: &str| {
+        let before = position();
+        let r = rig.merge(extra);
+        assert_eq!(r.code, 1, "{extra:?}: {r:?}");
+        assert!(r.out.is_empty(), "{extra:?}: nothing on stdout: {}", r.out);
+        assert!(r.err.contains(&format!("the board refused: withheld:{said}")), "{extra:?}: {}", r.err);
+        assert_eq!(position(), before, "{extra:?}: nothing written");
+        r
+    };
+    refused(&["--doc", &d_s, "--fork", &f.to_string(), "--kind", &kind], &format!("{f} is not readable to this reader (withheld); nothing was composed"));
+    let r = refused(&["--doc", &d_s, "--alternative", &daughter_s, "--into", &x_s, "--kind", &kind], &format!("{x} is not readable to this reader (withheld); the merge was composed, and nothing was merged"));
+    assert!(r.err.contains(&format!("composed over the base {base}")), "the composition said before the landing's refusal: {}", r.err);
+    refused(&["--undo", &x_s, "--kind", &kind], &format!("{x} is not readable to this reader (withheld); nothing was taken back"));
+    refused(&["--withdraw", &x_s, "--kind", &kind], &format!("{x} is not readable to this reader (withheld); nothing was taken out"));
+
+    // THE JOURNAL, read at the record after the shot: the next version
+    // stands, its record unwritten.
+    let member = format!("{d}.3");
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--publish", "--journal", &x_s, "--kind", &kind]);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.out.is_empty(), "no report: {}", r.out);
+    assert!(r.err.contains(&format!("the merge stands at {member}, and its record is not written: the journal {x} is not readable to this merger (withheld)")), "{}", r.err);
+    assert!(r.err.contains("act: resume with a journal this account can write"), "{}", r.err);
+    assert!(!r.err.contains("nothing was composed") && !r.err.contains("fault in this library"), "{}", r.err);
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &daughter_s))["addrs"], json!([]), "no record found from the daughter");
+    let publishes = rig.publishes_under(&token, &d);
+    let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--head", &head_s, "--publish", "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!(v["landed"]["member"].as_str(), Some(member.as_str()), "the member found standing: {}", v["landed"]);
+    let link = v["landed"]["record"].as_str().expect("the record's link").to_string();
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &daughter_s))["addrs"], json!([link]), "the record found from the daughter");
+    assert_eq!(rig.publishes_under(&token, &d), publishes, "nothing landed twice");
     session.close().expect("close");
 }

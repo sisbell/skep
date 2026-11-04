@@ -192,7 +192,10 @@ impl SideAt {
 /// list was landed into and the position of the one `set_arrangement` that
 /// landed it; where the landing found the member standing with no feed row
 /// of its mint, the position is the reads' highest `as_of`. `None` in the
-/// record is the question — a merger that chose not to land (§3).
+/// record is the question — a merger that chose not to land (§3) — or,
+/// where the record `replaces` one naming a draft landing, the undo's or
+/// the withdrawal's testimony that the merge no longer stands on the draft
+/// (the `undo` module's doc).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordLanding {
     /// `{"member": …, "position": N}`.
@@ -237,7 +240,9 @@ pub struct Record {
     ///
     /// Every shape the record draws has two or more.
     pub sides: Vec<SideAt>,
-    /// Where the merge landed, or `None` for the question.
+    /// Where the merge landed, or `None` for the question — or, in a record
+    /// replacing one that names a draft landing, for the merge taken back
+    /// out of the draft by an undo or a withdrawal.
     pub landed: Option<RecordLanding>,
     /// The supersession claims' addresses.
     ///
@@ -255,7 +260,9 @@ pub struct Record {
     pub values: ValueLog,
     /// The record this one supersedes under the key.
     ///
-    /// It is its public link's address — or `None` at the first (P1).
+    /// It is its public link's address — or `None` at the first (P1). A
+    /// record with `landed` none replacing one that names a draft landing is
+    /// an undo's or a withdrawal's: the merge was taken out of that draft.
     pub replaces: Option<Address>,
     /// The library's crate and version.
     pub by: String,

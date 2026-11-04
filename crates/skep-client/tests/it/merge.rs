@@ -28,18 +28,32 @@
 //! write's position, the record naming that position and verifying Equal;
 //! land and tell against a real newer member, `head_moved`; and a fresh
 //! draft staged from the head and landed in, a re-run staging nothing.
+//! THE TWO TAKE-BACKS (skep #783): a landing undone — the pre-landing
+//! state read at `/op-at`'s `nearest` for `at − 1`, which the daemon
+//! answers `not_a_position` inside the landing's commit — the draft's text
+//! and base restored and the marker cleared in one write, the replacing
+//! record current; a landing withdrawn — the words kept, the marker
+//! cleared; an undo after an edit refused with the edit kept. And THE TWO
+//! LANDINGS THE FAKE ALONE CHECKED (skep #775's note): into a free-standing
+//! draft, admitted with no base and no marker — whose feed row at HEAD
+//! carries neither term, so the undo's row lookup finds no landing — and
+//! into a fork whose source is not the head, refused `fork_base_moved` with
+//! nothing committed.
 
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_client::address::{document_of, parse_address};
-use skep_client::board::{acked_addr, frames, Answer, AtAnswer, Board, Scope, Token};
+use skep_client::board::{
+    acked_addr, acked_at, frames, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Scope,
+    Token,
+};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::halt::Halt;
 use skep_client::merge::{
-    compose, current, head_of, land, verify, Inputs, Landed, Landing, Merger, RecordLanding,
-    Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
+    compose, current, head_of, land, undo, verify, withdraw, Inputs, Landed, Landing, Merger,
+    NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
 };
-use skep_client::sign::{sig_hex, Signer};
+use skep_client::sign::{sig_hex, signer_from_seed, Signer};
 use skep_identity::{
     entry_body_empty, entry_body_publish, entry_frame, ContentFreeOp, DocTerm, EntryBody, ShotBase,
     ShotSegmentPiece,
@@ -47,7 +61,8 @@ use skep_identity::{
 use skep_signature::HybridSigner;
 
 use crate::common::{
-    bare, board, claim, insert_text, keygen, mint, spawn, wire_delegate, wire_session,
+    bare, board, claim, insert_text, keyed_sub_account, keygen, mint, spawn, wire_delegate,
+    wire_session,
 };
 
 /// The claimant's account and principal on a notebook.
@@ -918,4 +933,351 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     assert_eq!(land(&board, &again, fresh_landing()).expect("the standing landing"), landed_fresh);
     assert_eq!(position(), standing, "nothing staged, nothing written");
     session.close().expect("close");
+}
+
+/// The take-backs' rig: a claimed permissive board, the device key's signer
+/// and the claimant's bare token. The daemon is dropped before its directory.
+struct Rig {
+    _sd: skepd::Skepd,
+    _dir: tempfile::TempDir,
+    board: Board,
+    device: HybridSigner,
+    bare: Token,
+    /// The claim's two anchor files, under `a` and `b`.
+    anchors: std::path::PathBuf,
+}
+
+impl Rig {
+    fn new() -> Rig {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = spawn(&dir.path().join("board"), true);
+        let board = board(sd.port());
+        let store = skep_client::store::FileStore::open(dir.path().join("store"));
+        let fp = keygen(&store, "notebook");
+        let anchors = dir.path().join("anchors");
+        claim(&board, &store, &anchors);
+        let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+        let bare = bare(&board, PRINCIPAL);
+        Rig { _sd: sd, _dir: dir, board, device, bare, anchors }
+    }
+
+    /// A content session under the device key.
+    fn session(&self) -> Session<'_> {
+        handshake(&self.board, Scope::Content, &self.device, PRINCIPAL, Site::Session).expect("a content session")
+    }
+
+    /// The board's committed head.
+    fn position(&self) -> u64 {
+        self.board.health().unwrap().log_position()
+    }
+
+    fn metadata(&self, token: &Token, doc: &Address) -> Value {
+        read(&self.board, Some(token), &frames::doc_metadata(&doc.to_string()))
+    }
+
+    /// A fresh document with its base version `D.1` "the cat sat" and its
+    /// head `D.2` "the big cat sat".
+    fn race(&self, session: &Session<'_>) -> (Address, Address, Address) {
+        let d = published_document(&self.board, session, &self.device);
+        let base = shot(&self.board, session, &self.device, &self.bare, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+        let head = shot(
+            &self.board,
+            session,
+            &self.device,
+            &self.bare,
+            &d,
+            Some((&base, 11)),
+            &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }],
+        );
+        assert_eq!((base.to_string(), head.to_string()), (format!("{d}.1"), format!("{d}.2")));
+        (d, base, head)
+    }
+
+    /// A draft staged from `from` with `text` typed at ordinal `at`.
+    fn staged(&self, from: &Address, at: u64, text: &str) -> Address {
+        let staged = acked(self.board.op(Some(&self.bare), &frames::stage(&from.to_string(), None)));
+        let draft = addr(acked_addr(&staged).expect("the staged draft's address"));
+        insert_text(&self.board, &self.bare, &draft.to_string(), at, text);
+        draft
+    }
+
+    /// Every row of the feed under `doc` on the supplement, oldest first.
+    fn rows_under(&self, token: &Token, doc: &Address) -> Vec<Value> {
+        let under = doc.to_string();
+        let (mut since, mut rows) = (0u64, Vec::new());
+        loop {
+            let query = ChangesQuery { since, under: Some(&under), drafts: true, limit: None };
+            match self.board.changes(Some(token), &query).expect("the feed") {
+                ChangesAnswer::Page(page) => {
+                    rows.extend(page.changes);
+                    if !page.more {
+                        return rows;
+                    }
+                    since = page.last;
+                }
+                other => panic!("the feed answered {other:?}"),
+            }
+        }
+    }
+}
+
+/// The merger's facts off a session, with the rig's device key as its hand.
+fn merger<'s>(rig: &'s Rig, session: &'s Session<'_>) -> Merger<'s> {
+    Merger { token: session.token(), account: session.account(), signer: &rig.device }
+}
+
+/// M's runs off a composition.
+fn m_of(merged: &skep_client::merge::Merged) -> Vec<Run> {
+    merged.composed.runs.iter().map(|p| p.run.clone()).collect()
+}
+
+/// THE UNDO ON THE REAL DAEMON (skep #783): the staged draft `S` off `D.1`
+/// with "!!!" typed, merged with `D.2` and landed in one write. The premise
+/// of the pre-landing read: `/op-at` at the landing's `at − 1` answers
+/// `not_a_position` naming the position before the landing as `nearest`.
+/// `undo` reads there and sends one `set_arrangement`: `S` holds C again,
+/// its base is `D.1` at eleven, the marker is gone, the undo's feed row
+/// names the base restored and no merge, and the replacing record —
+/// `landed` none, `replaces` the landing's link — is current for the key.
+/// A second undo has nothing to undo, the merge already taken back, and
+/// writes nothing.
+#[test]
+fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_clearing_the_marker() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let draft = rig.staged(&base, 12, "!!!");
+    let c = image(&rig.board, &token, &draft, 14);
+    assert_eq!(c, vec![(format!("{d}.0.1.1"), 11), (format!("{draft}.0.1.1"), 3)], "C: the base's text and the draft's own");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let before = rig.position();
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
+    let Landed::Draft { position: at, record: link, .. } = landed else { panic!("{landed:?}") };
+    let m = m_of(&merged);
+    assert_eq!(image(&rig.board, &token, &draft, 18), as_image(&m), "the premise: the draft holds M");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((meta["base"].as_str(), meta["merge"]["at"].as_u64()), (Some(head.to_string().as_str()), Some(at)), "the premise: the base on the head, the marker at the landing: {meta}");
+    // THE PRE-LANDING READ's premise: `at − 1` lies inside the landing's
+    // commit, and `nearest` is the position before it.
+    let AtAnswer::NotAPosition { nearest } = rig.board.op_at(Some(&token), at - 1, &frames::doc_metadata(&draft.to_string())).expect("the read at a position") else {
+        panic!("at − 1 answered a document or another refusal")
+    };
+    assert_eq!(nearest, Some(before), "nearest is the position before the landing");
+    // THE UNDO: one write.
+    let undone = undo(&rig.board, merger, &draft, &kind, None).expect("undone");
+    assert_eq!(undone.draft, draft);
+    assert_eq!(undone.restored, Some((base.clone(), 11)), "the base read before the landing, address and extent");
+    assert!(undone.position > at, "{undone:?}");
+    let replacing = undone.record.clone().expect("a record of the landing stood, so one replaces it");
+    assert_ne!(replacing, link);
+    assert_eq!(image(&rig.board, &token, &draft, 14), c, "C again");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str()), (Some(base.to_string().as_str()), Some("11")), "the base restored: {meta}");
+    assert!(meta["merge"].is_null(), "the marker cleared: {meta}");
+    let rows = rig.rows_under(&token, &draft);
+    let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the undo's row");
+    assert_eq!((row["at"].as_u64(), row["base"].as_str(), row["merge"].is_null()), (Some(undone.position), Some(base.to_string().as_str()), true), "the undo's row: the base restored, no merge: {row}");
+    // The replacing record, current for the key.
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
+    // A re-run: nothing to undo, nothing written.
+    let standing = rig.position();
+    assert_eq!(undo(&rig.board, merger, &draft, &kind, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
+    assert_eq!(rig.position(), standing, "nothing written");
+    session.close().expect("close");
+}
+
+/// THE WITHDRAWAL ON THE REAL DAEMON: a merge landed in the staged draft
+/// `T` is taken out by one write — `T` still holds M, its base stays `D.2`
+/// at fifteen, the marker is gone, the withdrawal's feed row names the base
+/// re-sent and no merge — and the replacing record is current; a second
+/// withdrawal finds no merge, an undo nothing to undo, and neither writes.
+#[test]
+fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let draft = rig.staged(&base, 12, "???");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
+    let Landed::Draft { position: at, record: link, .. } = landed else { panic!("{landed:?}") };
+    let m = m_of(&merged);
+    let withdrawn = withdraw(&rig.board, merger, &draft, &kind, None).expect("withdrawn");
+    assert_eq!(withdrawn.draft, draft);
+    assert!(withdrawn.position > at, "{withdrawn:?}");
+    let replacing = withdrawn.record.clone().expect("a record of the landing stood, so one replaces it");
+    assert_ne!(replacing, link);
+    assert_eq!(image(&rig.board, &token, &draft, 18), as_image(&m), "the words stay: M");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str()), (Some(head.to_string().as_str()), Some("15")), "the base unchanged: {meta}");
+    assert!(meta["merge"].is_null(), "the marker cleared: {meta}");
+    let rows = rig.rows_under(&token, &draft);
+    let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the withdrawal's row");
+    assert_eq!((row["at"].as_u64(), row["base"].as_str(), row["merge"].is_null()), (Some(withdrawn.position), Some(head.to_string().as_str()), true), "{row}");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
+    let standing = rig.position();
+    assert_eq!(withdraw(&rig.board, merger, &draft, &kind, None), Err(Refusal::NoMerge { draft: draft.clone() }));
+    assert_eq!(undo(&rig.board, merger, &draft, &kind, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
+    assert_eq!(rig.position(), standing, "nothing written");
+    session.close().expect("close");
+}
+
+/// AN EDIT SINCE THE LANDING: "?" typed at the start of the landed draft,
+/// then `undo` — typed against the landing's position — is refused
+/// `arrangement_moved` by the board, the edit kept, the marker standing,
+/// nothing written.
+#[test]
+fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let draft = rig.staged(&base, 12, "!!!");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
+    let Landed::Draft { position: at, .. } = landed else { panic!("{landed:?}") };
+    insert_text(&rig.board, &rig.bare, &draft.to_string(), 1, "?");
+    let edited = image(&rig.board, &token, &draft, 19);
+    assert_eq!(edited.len(), 5, "?the big cat sat!!!: {edited:?}");
+    let standing = rig.position();
+    let err = undo(&rig.board, merger, &draft, &kind, None).expect_err("the draft changed since the merge landed");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    let detail = refused.detail.as_deref().expect("the person's words");
+    assert!(detail.contains(&draft.to_string()) && detail.contains("changed since the merge landed") && detail.contains("nothing was changed"), "{detail}");
+    assert!(detail.contains(&format!("position {at}")), "{detail}");
+    assert_eq!(image(&rig.board, &token, &draft, 19), edited, "the edit kept");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((meta["base"].as_str(), meta["merge"]["at"].as_u64()), (Some(head.to_string().as_str()), Some(at)), "the base and the marker as they stood: {meta}");
+    assert_eq!(rig.position(), standing, "nothing written");
+    session.close().expect("close");
+}
+
+/// A FREE-STANDING DRAFT (skep #775's note; N4): a plain mint holding
+/// "hello", merged into — the head `D.2` against the daughter `D.1.1` — is
+/// admitted: the draft holds M, `doc_metadata`'s `base` and `merge` are
+/// null, and the landing is one commit of two records, `at − 1` inside it.
+/// Its feed row AT HEAD carries both terms null — the daemon writes the
+/// `merge` term only beside a `base` (skep-core's `write_meta`) — so the
+/// undo's lookup of a baseless landing by its row finds no landing: nothing
+/// to undo, nothing sent, the draft untouched.
+#[test]
+fn a_landing_into_a_free_standing_draft_is_admitted_with_no_base_and_no_marker() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let daughter = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+    assert_eq!(daughter.to_string(), format!("{d}.1.1"), "a base the trunk has moved past yields the base's own DAUGHTER");
+    let plain = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    insert_text(&rig.board, &rig.bare, &plain.to_string(), 1, "hello");
+    let c = image(&rig.board, &token, &plain, 5);
+    let meta = rig.metadata(&token, &plain);
+    assert!(meta["base"].is_null() && meta["source"].is_null() && meta["merge"].is_null(), "the premise: free-standing, no base and no source: {meta}");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter)], options: Default::default(), kind: kind.clone() };
+    let before = rig.position();
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let m = m_of(&merged);
+    assert_eq!(m, vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 3)], "the big cat");
+    let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(plain.clone()), journal: None }).expect("admitted");
+    let Landed::Draft { into, position: at, head_moved, .. } = landed else { panic!("{landed:?}") };
+    assert_eq!((into, head_moved), (plain.clone(), None));
+    assert_eq!(image(&rig.board, &token, &plain, 11), as_image(&m), "the draft holds M");
+    let meta = rig.metadata(&token, &plain);
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "nothing recorded: {meta}");
+    let AtAnswer::NotAPosition { nearest } = rig.board.op_at(Some(&token), at - 1, &frames::doc_metadata(&plain.to_string())).expect("the read at a position") else {
+        panic!("at − 1 answered a document or another refusal")
+    };
+    assert_eq!(nearest, Some(before), "one commit of two records: at − 1 inside it, nearest the position before");
+    // The row at HEAD, and the undo's lookup against it.
+    let rows = rig.rows_under(&token, &plain);
+    let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the landing's row");
+    assert_eq!(row["at"].as_u64(), Some(at));
+    assert!(row["base"].is_null() && row["merge"].is_null(), "the row's terms at HEAD, both null: {row}");
+    let standing = rig.position();
+    assert_eq!(undo(&rig.board, merger, &plain, &kind, None), Err(Refusal::NoMerge { draft: plain.clone() }), "no row carries a merge term, so no landing is found");
+    assert_eq!(rig.position(), standing, "nothing written");
+    assert_eq!(image(&rig.board, &token, &plain, 11), as_image(&m), "nothing changed");
+    let _ = c;
+    session.close().expect("close");
+}
+
+/// A FORK WHOSE SOURCE IS NOT THE HEAD (skep #775's note; N4, P5). The
+/// board refuses its owner a private `version` of a published member
+/// (`private_version_of_published`), so the fork is another account's: the
+/// forker, keyed at a sub-account delegated under the claimant's, takes a
+/// private `version` of `D.1` and removes " sat"; then `D.2` is published.
+/// The forker, as the merger that owns the fork, composes on `D.2` with the
+/// fork as its side, and the landing into the fork is refused
+/// `fork_base_moved` — the fork, its source `D.1` and the head named — the
+/// fork's position and words as they were, nothing committed, no record.
+#[test]
+fn a_landing_into_a_fork_whose_source_is_not_the_head_is_refused_with_nothing_committed() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let d = published_document(&rig.board, &session, &rig.device);
+    let base = shot(&rig.board, &session, &rig.device, &rig.bare, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
+    // The owner's own private version of a published member is refused.
+    let Answer::Document(refused) = rig.board.op(Some(&rig.bare), &json!({"op": "version", "d_src": base.to_string(), "published": false})).expect("the exchange") else { panic!("closed") };
+    assert_eq!(refused["code"].as_str(), Some("private_version_of_published"), "the premise: {refused}");
+    // The forker, keyed at a sub-account, and its private fork of D.1.
+    let forker_key = signer_from_seed(&[7; 32]);
+    assert_eq!(keyed_sub_account(&rig.board, &rig.anchors, &rig.device, 2, FORKER, &forker_key, "forker"), FORKER_ACCOUNT);
+    let forker_bare = bare(&rig.board, FORKER);
+    assert_eq!(mint(&rig.board, &forker_bare, FORKER_ACCOUNT, false), format!("{FORKER_ACCOUNT}.0.1"), "the forker's home first");
+    let forked = acked(rig.board.op(Some(&forker_bare), &json!({"op": "version", "d_src": base.to_string(), "published": false})));
+    let fork = addr(acked_addr(&forked).expect("the fork"));
+    let forked_at = acked_at(&forked).expect("the fork's position");
+    acked(rig.board.op(Some(&forker_bare), &frames::delete(&fork.to_string(), 8, 4, forked_at, None)));
+    let meta = rig.metadata(&token, &fork);
+    assert_eq!((meta["source"].as_str(), meta["base"].is_null(), meta["published"].as_bool()), (Some(base.to_string().as_str()), true, Some(false)), "the premise: a fork of D.1, no base: {meta}");
+    // The head, published after the fork.
+    let head = shot(
+        &rig.board,
+        &session,
+        &rig.device,
+        &rig.bare,
+        &d,
+        Some((&base, 11)),
+        &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }],
+    );
+    assert_eq!(head.to_string(), format!("{d}.2"));
+    session.close().expect("close");
+    // The forker composes on D.2 with its fork as the side, and lands into
+    // the fork it owns.
+    let kind = addr(&mint(&rig.board, &forker_bare, FORKER_ACCOUNT, false));
+    let forker = handshake(&rig.board, Scope::Content, &forker_key, FORKER, Site::Session).expect("the forker's content session");
+    let merger = Merger { token: forker.token(), account: forker.account(), signer: &forker_key };
+    assert_eq!(forker.account(), FORKER_ACCOUNT, "the merger is the fork's owner");
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Fork(fork.clone())], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(forker.token()), &inputs).expect("composed");
+    assert_eq!(m_of(&merged), vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 3)], "the big cat");
+    assert_eq!(merged.key.base, base, "the fork's served source is the base");
+    let words = image(&rig.board, forker.token(), &fork, 7);
+    let standing = rig.position();
+    assert_eq!(
+        land(&rig.board, &merged, Landing::Draft { merger, into: Some(fork.clone()), journal: None }),
+        Err(Refusal::ForkBaseMoved { fork: fork.clone(), source: base.clone(), head: head.clone() })
+    );
+    assert_eq!(rig.position(), standing, "nothing committed");
+    assert_eq!(image(&rig.board, forker.token(), &fork, 7), words, "the fork's words as they were");
+    let meta = rig.metadata(forker.token(), &fork);
+    assert!(meta["base"].is_null() && meta["merge"].is_null(), "nothing recorded: {meta}");
+    assert_eq!(read(&rig.board, Some(forker.token()), &frames::find_links_ftt(&kind.to_string(), &fork.to_string()))["addrs"], json!([]), "no record");
+    forker.close().expect("close");
 }

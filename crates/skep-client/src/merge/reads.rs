@@ -494,6 +494,40 @@ pub enum Refusal {
         /// The draft named, `site.addr`.
         draft: Address,
     },
+    /// `not_owner` on an undo's or a withdrawal's one write: the draft a
+    /// merge is taken out of is another account's, and a draft's
+    /// arrangement is its owner's to set (wire.md §Arrangement,
+    /// `set_arrangement`); nothing was changed.
+    NotOwner {
+        /// The draft named.
+        draft: Address,
+    },
+    /// A published document named to an undo or a withdrawal: a merge is
+    /// taken out of a DRAFT alone — a published document, or a member of
+    /// one, carries no marker and takes no `set_arrangement`
+    /// (`published_target`); nothing was changed.
+    Published {
+        /// The document named.
+        doc: Address,
+    },
+    /// Nothing to undo on the draft named: the merge its base record is
+    /// about is not one an undo can take back, for the reason carried
+    /// (the landing lane's precisions P2 and P4), and nothing was sent.
+    NothingToUndo {
+        /// The draft named.
+        draft: Address,
+        /// Why there is nothing to undo.
+        why: NoUndo,
+    },
+    /// The draft named carries no merge: nothing to undo, and nothing to
+    /// take out, with nothing sent.
+    ///
+    /// It is a draft with no marker and no base record, or whose feed holds
+    /// no landing on it; for a withdrawal, any draft with no marker.
+    NoMerge {
+        /// The draft named.
+        draft: Address,
+    },
     /// The library's own fault named (A-288's own-bug class).
     ///
     /// The fault is a frame the board refused as malformed in substance, a
@@ -504,6 +538,32 @@ pub enum Refusal {
     /// into, `publication_over_budget` with the daemon's detail — each a
     /// `Halt::Refused` whose `body` carries the `site`.
     Halt(Halt),
+}
+
+/// Why an undo has nothing to take back ([`Refusal::NothingToUndo`]).
+///
+/// Each is read off the draft's `doc_metadata` and, for a draft whose base
+/// is recorded with no marker beside it, off the draft's own latest feed row
+/// of the kinds that end a marker — read, never acted on (the undo module's
+/// doc).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoUndo {
+    /// The marker was inherited when the draft was staged (P2): its `at` is
+    /// the stage's own position, so the state before it is the draft's own
+    /// `doc_not_registered` — there is nothing of the draft's to take back;
+    /// discard it or edit it.
+    Inherited,
+    /// The merge was published from the draft (P4): the base record stands
+    /// on the version the shot minted and the marker is gone, so the way
+    /// back is to publish the older text again, never a re-recorded base.
+    Published {
+        /// The version the merge is — the draft's recorded base.
+        version: Address,
+    },
+    /// The merge was already taken back: the draft's latest marker-ending
+    /// row is a `set_arrangement` naming a base and no merge — an undo's or
+    /// a withdrawal's.
+    TakenBack,
 }
 
 impl From<Halt> for Refusal {
@@ -566,6 +626,14 @@ impl fmt::Display for Refusal {
             Refusal::OverCap { runs, cap } => write!(f, "the merged list is in more pieces than one publication can carry — {runs}, where {cap} is the most; publishing this merge is not offered"),
             Refusal::NeedsSignedSession => f.write_str("a signed session is needed to land a merge on a claimed board (signed_session_required)"),
             Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),
+            Refusal::NotOwner { draft } => write!(f, "{draft} is another account's draft (not_owner): a merge is taken out of a draft by its owner alone; nothing was changed"),
+            Refusal::Published { doc } => write!(f, "{doc} is published (published_target): a merge is taken out of a draft alone, and a published document carries none — nothing to undo or take out"),
+            Refusal::NothingToUndo { draft, why } => match why {
+                NoUndo::Inherited => write!(f, "nothing to undo: {draft} inherited the merge when it was staged; discard it or edit it"),
+                NoUndo::Published { version } => write!(f, "nothing to undo; the merge is version {version} — to take it back, publish the older text again"),
+                NoUndo::TakenBack => write!(f, "nothing to undo: the merge in {draft} was already taken back"),
+            },
+            Refusal::NoMerge { draft } => write!(f, "{draft} carries no merge: nothing to undo, nothing to take out"),
             Refusal::Halt(h) => h.fmt(f),
         }
     }
@@ -1749,7 +1817,7 @@ pub fn head_of(
     doc: &Address,
 ) -> Result<Option<Address>, Halt> {
     let mut head: Option<Address> = None;
-    feed_rows(board, token, &doc.to_string(), |row| {
+    feed_rows(board, token, &doc.to_string(), false, |row| {
         if row["op"].as_str() != Some("publish") {
             return;
         }
@@ -1782,7 +1850,7 @@ pub(super) fn position_of(
 ) -> Result<Option<u64>, Halt> {
     let mut at = None;
     let text = member.to_string();
-    feed_rows(board, token, &text, |row| {
+    feed_rows(board, token, &text, false, |row| {
         if at.is_none()
             && row["op"].as_str() == Some("publish")
             && row["docs"].as_array().and_then(|d| d.first()).and_then(Value::as_str)
@@ -1798,21 +1866,26 @@ pub(super) fn position_of(
 ///
 /// The walk runs from the floor to the head: the retention floor restarts
 /// the walk at the floor, a page past the byte budget is re-asked at the
-/// limit that fits.
+/// limit that fits. With `drafts` the walk is the supplement's,
+/// `drafts=true` — the rows naming a draft the token's class may read, which
+/// is where a draft's own `set_arrangement` rows are (wire.md §The change
+/// feed, Narrowings); without it the published stream's, the member rows a
+/// head or a mint position is read off.
 ///
 /// # Errors
 ///
 /// The feed's halts: a transport fault, the death signal under the token.
-fn feed_rows(
+pub(super) fn feed_rows(
     board: &Board,
     token: Option<&Token>,
     under: &str,
+    drafts: bool,
     mut each: impl FnMut(&Value),
 ) -> Result<(), Halt> {
     let mut since = 0u64;
     let mut limit = None;
     loop {
-        let query = ChangesQuery { since, under: Some(under), drafts: false, limit };
+        let query = ChangesQuery { since, under: Some(under), drafts, limit };
         match board.changes(token, &query)? {
             ChangesAnswer::Page(page) => {
                 for row in &page.changes {

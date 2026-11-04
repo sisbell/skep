@@ -1482,9 +1482,11 @@ draft carries no merge. It TRAVELS WITH THE BASE: set or cleared by a
 `merge`, cleared where it does not — the undo's shape), INHERITED by a
 `stage` of a marked draft beside the base it inherits, with `at` the
 stage's own position — the position the marker was put on the
-alternative, so an undo of the alternative that reads `at − 1` reads
-before the alternative's own mint — CLEARED by the `publish` that moves
-the base (the merge is the member's now), and untouched by every write
+alternative, so an undo of the alternative that reads before `at` (the
+`nearest` `/op-at` answers for `at − 1`, which lies inside the stage's
+one commit) reads before the alternative's own mint — CLEARED by the
+`publish` that moves the base (the merge is the member's now), and
+untouched by every write
 that leaves the base untouched, a plain `set_arrangement` naming no
 `base` and the publication's re-window of an `also` draft among them.
 Its content is the client's statement, as the shot's `base` is: the
@@ -5578,12 +5580,15 @@ Rules:
 * **A draft's earlier arrangement and base read here.** `image` and
   `doc_metadata` of a draft at a position answer the arrangement, the
   `base`, `base_copied` and `merge` the draft held THEN — at the position
-  before a `set_arrangement` landed (its ack's `at` − 1), the arrangement
-  and base it replaced, `merge` null where none stood — which is what an
-  undo of a landing sends back in one `set_arrangement` (§Arrangement).
-  A marker inherited at a `stage` names the stage's own position, so
-  reading before it meets the draft's own `doc_not_registered`: there is
-  nothing of the alternative's to take back.
+  before a `set_arrangement` landed, which is the `nearest` the board
+  answers for its ack's `at` − 1 (a landing is one commit of two or three
+  records, so `at` − 1 lies inside it and is `not_a_position`), the
+  arrangement and base it replaced, `merge` null where none stood — which
+  is what an undo of a landing sends back in one `set_arrangement`
+  (§Arrangement). A marker inherited at a `stage` names the stage's own
+  position, so reading before it the same way meets the draft's own
+  `doc_not_registered`: there is nothing of the alternative's to take
+  back.
 
 * **The reader's class is the presented session's; the predicate is the
   HEAD's**. The content is the position's, but the sets that

@@ -30,12 +30,18 @@
 //! merge was composed at, into the draft named or into a fresh draft staged
 //! from the head, the draft's base re-recorded on that head and the merge
 //! marked, a newer head told — and the residue walk over a lost
-//! acknowledgment; [`verify`], the record's testimony recomputed; the
-//! record kind and the journal under [`record`] and [`journal`]; and
-//! [`Refusal`], every refusal the reads and the landing can meet. Absent,
-//! by name: every surface — the `skep merge` command, which skep-cli builds
-//! over this module, the attendant's call, skep-mcp's compose-and-report
-//! tool, the editor's scene and its copy — and the supersession claim over
+//! acknowledgment; [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
+//! in a draft is taken back out, each one `set_arrangement` — the undo
+//! putting the draft back as it stood before the landing, its base
+//! restored, typed against the landing's position; the withdrawal taking
+//! the merge out and keeping the words, the base re-sent unmoved — with a
+//! replacing record of the kind (the `undo` module's doc); [`verify`], the
+//! record's testimony recomputed; the record kind and the journal under
+//! [`record`] and [`journal`]; and [`Refusal`], every refusal the reads,
+//! the landing, the undo and the withdrawal can meet. Absent, by name:
+//! every surface — the `skep merge` command, which skep-cli builds over
+//! this module, the attendant's call, skep-mcp's compose-and-report tool,
+//! the editor's scene and its copy — and the supersession claim over
 //! version members, which this wire's `assert_sup` does not admit (`land`'s
 //! doc says what stands in its place).
 //!
@@ -75,6 +81,7 @@ pub mod journal;
 mod land;
 mod reads;
 pub mod record;
+mod undo;
 
 #[cfg(test)]
 mod tests;
@@ -85,6 +92,8 @@ pub use compose::{
 };
 pub use land::{land, resume, Landed, Landing, Merger, SHOT_BODY_BUDGET};
 pub use reads::{
-    compose, head_of, origin_of, Family, Inputs, Merged, Refusal, Role, Side, SHOT_RUN_CAP,
+    compose, head_of, origin_of, Family, Inputs, Merged, NoUndo, Refusal, Role, Side,
+    SHOT_RUN_CAP,
 };
 pub use record::{current, verify, Record, RecordKey, RecordLanding, SideAt, Verdict};
+pub use undo::{undo, withdraw, Undone, Withdrawn};

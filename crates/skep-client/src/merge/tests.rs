@@ -1064,7 +1064,7 @@ mod scripted {
     use skep_signature::HybridSigner;
 
     use crate::address::parse_address;
-    use crate::board::{frames, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1};
+    use crate::board::{acked_addr, acked_at, frames, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1};
     use crate::ceremony::handshake::{handshake, Session, Site};
     use crate::dial::{
         DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse,
@@ -1222,6 +1222,11 @@ mod scripted {
         at: u64,
         op: &'static str,
         docs: Vec<String>,
+        /// A `set_arrangement` row's two terms — the base it recorded and
+        /// the merge it marked, each `null` where it recorded none (wire.md
+        /// §The change feed); `None` on every other op's row, which carries
+        /// neither member.
+        terms: Option<(Option<String>, Option<Value>)>,
     }
 
     /// The board as the test writes it.
@@ -1369,6 +1374,7 @@ mod scripted {
                 at: self.position,
                 op: "publish",
                 docs: vec![text.to_string()],
+                terms: None,
             });
         }
 
@@ -1384,6 +1390,7 @@ mod scripted {
                 at: self.position,
                 op: "version",
                 docs: vec![text.to_string()],
+                terms: None,
             });
         }
 
@@ -1454,7 +1461,19 @@ mod scripted {
 
         fn commit(&mut self, op: &'static str, docs: Vec<String>) -> u64 {
             self.position += 1;
-            self.rows.push(FeedRow { at: self.position, op, docs });
+            self.rows.push(FeedRow { at: self.position, op, docs, terms: None });
+            self.position
+        }
+
+        /// One commit of `records` records: the position advances by each,
+        /// the numbers inside the commit answer `not_a_position` on `/op-at`
+        /// (wire.md §Reading history), and the row's `at` is the commit's
+        /// last — the ack's.
+        fn commit_records(&mut self, op: &'static str, docs: Vec<String>, records: u64) -> u64 {
+            let first = self.position + 1;
+            self.position += records;
+            self.inside_commits.extend(first..self.position);
+            self.rows.push(FeedRow { at: self.position, op, docs, terms: None });
             self.position
         }
 
@@ -1492,15 +1511,19 @@ mod scripted {
             json!({"ok": true, "log_position": self.position, "chain_head": chain_hex(self.position), "auth": {"claimant": claimant, "local_trust": true, "origins": [origin], "signed_origins": [origin]}})
         }
 
+        /// Answers a `/changes` page: the rows past `since`, narrowed to
+        /// `under` and, with `drafts=true`, to the rows naming a draft (the
+        /// supplement's page, wire.md §The change feed); a
+        /// `set_arrangement` row carries its two terms.
         fn changes(&self, path: &str) -> Response {
             let query = path.splitn(2, '?').nth(1).unwrap_or("");
-            let (mut since, mut under, mut limit) = (0u64, None::<String>, 256usize);
+            let (mut since, mut under, mut limit, mut drafts) = (0u64, None::<String>, 256usize, false);
             for pair in query.split('&') {
                 match pair.split_once('=') {
                     Some(("since", v)) => since = v.parse().unwrap(),
                     Some(("under", v)) => under = Some(v.to_string()),
                     Some(("limit", v)) => limit = v.parse().unwrap(),
-                    Some(("drafts", _)) => {}
+                    Some(("drafts", v)) => drafts = v == "true",
                     _ => panic!("an unknown `/changes` member: {pair}"),
                 }
             }
@@ -1513,8 +1536,20 @@ mod scripted {
                         r.docs.iter().any(|d| d == u || d.starts_with(&format!("{u}.")))
                     })
                 })
+                .filter(|r| !drafts || r.docs.iter().any(|d| self.docs.get(d).is_some_and(|x| !x.published)))
                 .collect();
-            let page: Vec<Value> = visible.iter().take(limit).map(|r| json!({"at": r.at, "op": r.op, "docs": r.docs, "key": "bare", "time": null})).collect();
+            let page: Vec<Value> = visible
+                .iter()
+                .take(limit)
+                .map(|r| {
+                    let mut row = json!({"at": r.at, "op": r.op, "docs": r.docs, "key": "bare", "time": null});
+                    if let Some((base, merge)) = &r.terms {
+                        row["base"] = base.clone().map_or(Value::Null, Value::from);
+                        row["merge"] = merge.clone().unwrap_or(Value::Null);
+                    }
+                    row
+                })
+                .collect();
             let last = page.last().and_then(|r| r["at"].as_u64()).unwrap_or(since);
             reply(200, json!({"changes": page, "last": last, "more": visible.len() > page.len()}))
         }
@@ -1832,7 +1867,10 @@ mod scripted {
                         self.trunk_head.insert(doc.clone(), member.clone());
                         self.docs.get_mut(&doc).unwrap().runs = runs;
                     }
-                    let at = self.commit("publish", vec![member.clone()]);
+                    // The row names the minted member first, then the
+                    // rendering draft (wire.md §The change feed, `docs`).
+                    let docs = std::iter::once(member.clone()).chain(draft.clone()).collect();
+                    let at = self.commit("publish", docs);
                     // THE BASE MOVES at the shot's position: the rendering
                     // draft's recorded base becomes the member the shot
                     // minted, `base_copied` its whole count, and the marker
@@ -1859,7 +1897,10 @@ mod scripted {
                     self.next_doc += 1;
                     let extent: u64 = src.runs.iter().map(|r| r.width).sum();
                     self.doc(&addr, false, ACCOUNT, src.runs.clone());
-                    let at = self.commit("stage", vec![addr.clone()]);
+                    // ONE COMMIT of three records (the skepd suite's
+                    // `an_alternative_inherits_the_marker_at_the_stages_position_and_the_shot_clears_it`),
+                    // so the number below the ack's `at` lies inside it.
+                    let at = self.commit_records("stage", vec![addr.clone()], 3);
                     let d = self.docs.get_mut(&addr).unwrap();
                     d.source = Some(from.clone());
                     d.history = BTreeMap::from([(at, src.runs.clone())]);
@@ -2020,18 +2061,28 @@ mod scripted {
             // one named.
             let head_moved = head.as_ref().and_then(|(h, _)| self.trunk_head.get(&trunk(h)).filter(|cur| **cur != *h).cloned());
             let runs = coalesce(positions);
-            let at = self.commit("set_arrangement", vec![doc.clone()]);
+            // ONE COMMIT of two records — the removal and the placement —
+            // and a third where a base is recorded (the skepd suite's
+            // `a_landing_sets_the_arrangement_records_the_base_and_the_marker_in_one_commit`),
+            // so the number below the ack's `at` lies inside it.
+            let recorded = base.as_ref().filter(|_| standing.is_some()).cloned();
+            let at = self.commit_records("set_arrangement", vec![doc.clone()], if recorded.is_some() { 3 } else { 2 });
             let d = self.docs.get_mut(&doc).unwrap();
             d.runs = runs.clone();
             d.history.insert(at, runs);
-            if let (Some(b), Some(_)) = (&base, &standing) {
+            let mut marked = None;
+            if let Some(b) = &recorded {
                 d.staged.insert(at, b.clone());
                 let marker = match (&head, frame["merge"].as_object()) {
                     (Some((h, e)), Some(m)) => Some(Marker { sides: m["sides"].as_array().expect("`merge.sides`").iter().map(|s| s.as_str().unwrap().to_string()).collect(), head: h.clone(), head_copied: *e, at }),
                     _ => None,
                 };
+                marked = marker.as_ref().map(|m| json!({"sides": m.sides, "head": m.head}));
                 d.markers.insert(at, marker);
             }
+            // The row's two terms: the base recorded and the merge marked.
+            let row = self.rows.last_mut().expect("the commit's row");
+            row.terms = Some((recorded.map(|(b, _)| b), marked));
             let mut ack = json!({"resp": "ack", "at": at});
             if let Some(h) = head_moved {
                 ack["head_moved"] = json!(h);
@@ -2115,6 +2166,19 @@ mod scripted {
 
         fn clear(&self) {
             self.served.lock().unwrap().clear();
+        }
+
+        /// The 1-based place of the first `op` among every request served
+        /// since the last clear — the N a `World::interleave` names to land
+        /// an edit before that frame is answered.
+        fn served_index(&self, op: &str) -> usize {
+            self.served
+                .lock()
+                .unwrap()
+                .iter()
+                .position(|(line, _)| line == op)
+                .map(|i| i + 1)
+                .unwrap_or_else(|| panic!("no `{op}` was served: {:?}", self.ops()))
         }
 
         fn world(&self) -> std::sync::MutexGuard<'_, World> {
@@ -4324,6 +4388,594 @@ mod scripted {
             "signed over the head written: {}",
             links[0]
         );
+    }
+
+    // ── the undo and the withdrawal ──────────────────────────────────────
+
+    /// Lands M into `S` as the draft landing does — the base re-recorded on
+    /// `D.2` at fifteen, the marker beside it, the record written — and
+    /// answers the composition with the landing.
+    fn landed_in_s(board: &Board, session: &Session<'_>, signer: &HybridSigner) -> (Merged, Landed) {
+        let merged = compose(board, Some(session.token()), &draft_inputs()).expect("composed");
+        let landed = land(board, &merged, draft_landing(session, signer, Some(a(S)))).expect("landed");
+        (merged, landed)
+    }
+
+    /// A draft landing's position and its record's link.
+    fn landing_of(landed: &Landed) -> (u64, Address) {
+        let Landed::Draft { position, record, .. } = landed else { panic!("{landed:?}") };
+        (*position, record.clone())
+    }
+
+    /// C, the draft landing's `S` before the landing: the base's text by
+    /// identity and "!!!" after it.
+    fn draft_c() -> Vec<Run> {
+        vec![run(D, 1, 11), run(S, 1, 3)]
+    }
+
+    /// Runs as a `set_arrangement` frame built by hand spells them.
+    fn shot_runs(m: &[Run]) -> Vec<Value> {
+        m.iter().map(|r| frames::shot_run(&r.origin.to_string(), &i_addr(&r.origin, r.i_start), r.width)).collect()
+    }
+
+    /// The record a take-back appended, read off the one `insert` served.
+    fn appended_record(dialer: &Scripted) -> Value {
+        let inserts = dialer.frames("insert");
+        assert_eq!(inserts.len(), 1, "one record appended: {:?}", dialer.ops());
+        serde_json::from_str(inserts[0]["values"][0]["atom"].as_str().expect("the atom")).expect("a record")
+    }
+
+    /// THE UNDO (the landing lane's R6; P1, P3, P4; skep #783): after a
+    /// landing into `S`, `undo` reads the draft's `doc_metadata` live — a
+    /// base and a marker — then the state before the landing at ONE
+    /// position, `/op-at`'s `nearest` for the marker's `at − 1`: a landing
+    /// is one commit of three records, so `at − 1` lies inside it and the
+    /// board answers `not_a_position`; `doc_metadata` there for the old
+    /// base, address and extent, and `image` for C. ONE `set_arrangement`
+    /// follows — C as the runs, `as_of` the landing's position (P3), `base`
+    /// the old pair (P1), no `head`, no `merge`, the id naming the draft and
+    /// the position — so the draft holds C again, its base is `D.1` at
+    /// eleven and the marker is cleared; the replacing record, `landed`
+    /// none and `replaces` the landing's link, is appended and linked to
+    /// the draft.
+    #[test]
+    fn undo_after_a_landing_restores_c_and_the_old_base_and_clears_the_marker_in_one_frame() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let before = dialer.world().position;
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, link) = landing_of(&landed);
+        assert_eq!(at, before + 3, "the premise: one commit of three records");
+        assert_eq!(dialer.world().standing(S).1.map(|m| m.at), Some(at), "the premise: the marker at the landing");
+        dialer.clear();
+        let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None).expect("undone");
+        assert_eq!(undone.draft, a(S));
+        assert_eq!(undone.restored, Some((a(&format!("{D}.1")), 11)), "the pair read before the landing");
+        let replacing = undone.record.clone().expect("a record stood, so one replaces it");
+        assert_ne!(replacing, link);
+        // The pre-landing read: `at − 1` refused `not_a_position`, then the
+        // one position `nearest` for the metadata and the image.
+        assert_eq!(dialer.positions("doc_metadata"), [at - 1, before], "at − 1 asked, then nearest: {:?}", dialer.ops());
+        assert_eq!(dialer.positions("retrieve_doc_v_span_set"), [before]);
+        assert_eq!(dialer.positions("image"), [before]);
+        // The one write.
+        let frames = dialer.frames("set_arrangement");
+        assert_eq!(frames.len(), 1, "one write: {:?}", dialer.ops());
+        let frame = &frames[0];
+        assert_eq!(frame["doc"], S);
+        assert_eq!(frame["as_of"].as_u64(), Some(at), "typed against the landing's position: {frame}");
+        assert_eq!(frame["runs"], frame_runs(&draft_c()), "C, read before the landing");
+        assert_eq!(frame["base"], json!({"at": format!("{D}.1"), "extent": "11"}), "the old base, address and extent");
+        assert!(frame.get("head").is_none() && frame.get("merge").is_none(), "no head, no merge: {frame}");
+        assert_eq!(frame["id"].as_str(), Some(format!("undo:{S}:{at}.arrangement").as_str()));
+        let w = dialer.world();
+        assert_eq!(w.docs.get(S).unwrap().runs, draft_c(), "C again");
+        assert_eq!(w.standing(S), (Some((format!("{D}.1"), 11)), None), "the base restored, the marker cleared");
+        let row = w.rows.iter().rev().find(|r| r.op == "set_arrangement").expect("the undo's row");
+        assert_eq!((row.at, &row.terms), (undone.position, &Some((Some(format!("{D}.1")), None))), "the write's `at`; its row names the base restored and no merge");
+        drop(w);
+        // The record: the landing's with `landed` none and `replaces` its
+        // link, under the act's stem, linked to the draft.
+        let atom = appended_record(&dialer);
+        assert!(atom["landed"].is_null(), "{atom}");
+        assert_eq!(atom["replaces"].as_str(), Some(link.to_string().as_str()));
+        assert_eq!((atom["doc"].as_str(), atom["base"].as_str()), (Some(D), Some(format!("{D}.1").as_str())));
+        assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(format!("undo:{S}:{at}.record").as_str()));
+        assert_eq!(dialer.frames("make_link")[0]["to"]["addrs"], json!([S]));
+    }
+
+    /// ANOTHER HAND's EDIT SINCE THE LANDING: the undo, typed against the
+    /// landing's position, is refused `arrangement_moved` by the board — its
+    /// words the person's, naming the draft and that nothing was changed —
+    /// with the edit standing, nothing committed, the base and the marker as
+    /// they stood and no record.
+    #[test]
+    fn undo_after_another_hands_edit_is_refused_arrangement_moved_with_nothing_committed() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        // Another hand's edit after the landing: the "!!!" deleted.
+        let edited = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
+        let edit_at = dialer.world().change(S, edited.clone());
+        let (rows, standing) = {
+            let w = dialer.world();
+            (w.rows.len(), w.standing(S))
+        };
+        dialer.clear();
+        let err = undo(&board, merger(&session, &signer), &a(S), &a(K), None).expect_err("the draft changed since");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(refused.code, "arrangement_moved");
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(detail.contains(S) && detail.contains("changed since the merge landed") && detail.contains("nothing was changed"), "{detail}");
+        assert!(detail.contains(&format!("position {at}")) && detail.contains(&format!("changed at {edit_at}")), "{detail}");
+        assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the landing's position, never a fresh read");
+        let w = dialer.world();
+        assert_eq!(w.docs.get(S).unwrap().runs, edited, "the other hand's edit stands: nothing wiped");
+        assert_eq!(w.rows.len(), rows, "nothing committed");
+        assert_eq!(w.standing(S), standing, "the base and the marker as they stood");
+        drop(w);
+        assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "no record");
+    }
+
+    /// A BASE RECORDED AND NO MARKER (P4's second case): the merge was
+    /// published from the draft — the shot moved its base to the member
+    /// minted and cleared the marker — so there is nothing to undo, and an
+    /// undo from the feed would re-record the base backward (N4). The words
+    /// come from the draft's own latest marker-ending feed row, read on the
+    /// supplement and never acted on: a `publish` row, P4's words with the
+    /// recorded base as the version. Nothing is sent and no history is read.
+    #[test]
+    fn undo_after_a_publication_answers_nothing_to_undo_with_p4s_words_and_sends_nothing() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        landed_in_s(&board, &session, &signer);
+        // The merge published from the draft.
+        let runs = shot_runs(&draft_m());
+        let head = format!("{D}.2");
+        let frame = frames::publication(&frames::PublishFrame { doc: Some(D), base: Some((&head, 15)), draft: Some(S), runs: &runs, ..frames::PublishFrame::default() });
+        let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the shot") else { panic!("closed") };
+        assert_eq!(acked_addr(&ack), Some(format!("{D}.3").as_str()), "{ack}");
+        assert_eq!(dialer.world().standing(S), (Some((format!("{D}.3"), 18)), None), "the premise: the base moved, the marker cleared");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = undo(&board, merger(&session, &signer), &a(S), &a(K), None).expect_err("nothing to undo");
+        assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::Published { version: a(&format!("{D}.3")) } });
+        assert_eq!(err.to_string(), format!("nothing to undo; the merge is version {D}.3 — to take it back, publish the older text again"));
+        let ops = dialer.ops();
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {ops:?}");
+        assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={S}")) && o.contains("drafts=true")), "the words off the draft's own rows, on the supplement: {ops:?}");
+        assert!(dialer.positions("doc_metadata").is_empty() && dialer.positions("image").is_empty(), "no read of history: {ops:?}");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+    }
+
+    /// AN INHERITED MARKER (P2): a `stage` of the marked draft puts the
+    /// marker on the alternative at the stage's own position, one commit of
+    /// three records; the undo reads before it — `at − 1` refused
+    /// `not_a_position`, then `nearest` — and meets the alternative's own
+    /// `doc_not_registered`: nothing of its own to take back, said in P2's
+    /// words, with nothing sent.
+    #[test]
+    fn undo_at_an_inherited_marker_answers_p2s_words_with_nothing_sent() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        landed_in_s(&board, &session, &signer);
+        let before_stage = dialer.world().position;
+        let Answer::Document(ack) = board.op(Some(session.token()), &frames::stage(S, None)).expect("the stage") else { panic!("closed") };
+        let t = acked_addr(&ack).expect("the alternative").to_string();
+        let staged_at = acked_at(&ack).expect("its position");
+        assert_eq!(staged_at, before_stage + 3, "the premise: a stage is one commit of three records");
+        assert_eq!(
+            dialer.world().standing(&t),
+            (Some((format!("{D}.2"), 15)), Some(Marker { sides: vec![], head: format!("{D}.2"), head_copied: 15, at: staged_at })),
+            "the premise: the marker inherited, stamped at the stage"
+        );
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = undo(&board, merger(&session, &signer), &a(&t), &a(K), None).expect_err("inherited");
+        assert_eq!(err, Refusal::NothingToUndo { draft: a(&t), why: NoUndo::Inherited });
+        assert_eq!(err.to_string(), format!("nothing to undo: {t} inherited the merge when it was staged; discard it or edit it"));
+        assert_eq!(dialer.positions("doc_metadata"), [staged_at - 1, before_stage], "at − 1 inside the stage's commit, then nearest, where the alternative is unregistered: {:?}", dialer.ops());
+        assert!(dialer.positions("image").is_empty(), "nothing imaged");
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows);
+    }
+
+    /// NO BASE RECORD (N4's baseless case): the landing's position is the
+    /// draft's own latest `set_arrangement` row on the supplement that
+    /// carries a `merge` term, and the undo sends C read before it with no
+    /// `base`, no `head` and no `merge`, `as_of` the row's `at`. THE BOARD
+    /// AT HEAD writes no such row: a merge named beside no base is no term
+    /// of the row (skep-core's `write_meta`, pinned by its
+    /// `a_set_arrangement_row_names_its_draft_and_carries_the_base_and_merge_it_named`
+    /// and skepd's free-standing landing cell), so against the row as the
+    /// board writes it — both terms null — the undo finds no landing and
+    /// answers nothing to undo, nothing sent. The row the wire's N4
+    /// sentence promises ("finds the latest landing on a document the board
+    /// records no base for by its row") is planted on the world to pin the
+    /// path; a re-run against it is refused `arrangement_moved` by the
+    /// board, nothing committed.
+    #[test]
+    fn undo_of_a_baseless_landing_goes_by_its_feed_row_with_no_base_sent() {
+        let plain = "1.0.1.0.5";
+        let mut w = draft_landing_world();
+        w.doc(plain, false, ACCOUNT, vec![run(D, 1, 11)]);
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let before = dialer.world().position;
+        let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(plain)))).expect("landed");
+        let (at, link) = landing_of(&landed);
+        assert_eq!(at, before + 2, "the premise: a baseless landing is one commit of two records, the removal and the placement");
+        let feed_row = |w: &World| w.rows.iter().rev().find(|r| r.op == "set_arrangement").map(|r| (r.at, r.terms.clone())).expect("the row");
+        assert_eq!(feed_row(&dialer.world()), (at, Some((None, None))), "the premise: the row as the board writes it at HEAD, both terms null");
+        // The row as the board writes it: no landing found, nothing sent.
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None), Err(Refusal::NoMerge { draft: a(plain) }));
+        let ops = dialer.ops();
+        assert!(ops.iter().any(|o| o.starts_with("GET /changes?") && o.contains(&format!("under={plain}")) && o.contains("drafts=true")), "the lookup walks the draft's own rows on the supplement: {ops:?}");
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.positions("doc_metadata").is_empty(), "nothing sent, nothing read at a position: {ops:?}");
+        assert_eq!(dialer.world().rows.len(), rows);
+        // The row the wire's N4 sentence promises: the landing found by it.
+        dialer.world().rows.iter_mut().rev().find(|r| r.op == "set_arrangement").unwrap().terms = Some((None, Some(json!({"sides": [S], "head": format!("{D}.2")}))));
+        dialer.clear();
+        let undone = undo(&board, merger(&session, &signer), &a(plain), &a(K), None).expect("undone");
+        assert_eq!(undone.restored, None, "no base to restore");
+        assert!(undone.record.is_some(), "the landing's record stood, so one replaces it");
+        assert_eq!(dialer.positions("doc_metadata"), [at - 1, before], "the pre-landing read at nearest");
+        let frame = &dialer.frames("set_arrangement")[0];
+        assert_eq!(frame["as_of"].as_u64(), Some(at), "the row's at");
+        assert_eq!(frame["runs"], frame_runs(&[run(D, 1, 11)]), "C");
+        assert!(frame.get("base").is_none() && frame.get("head").is_none() && frame.get("merge").is_none(), "a baseless document is never sent a base: {frame}");
+        assert_eq!(frame["id"].as_str(), Some(format!("undo:{plain}:{at}.arrangement").as_str()));
+        let w = dialer.world();
+        assert_eq!(w.docs.get(plain).unwrap().runs, vec![run(D, 1, 11)]);
+        assert_eq!(w.standing(plain), (None, None), "nothing recorded");
+        assert_eq!(feed_row(&w), (undone.position, Some((None, None))), "the undo's row, both terms null");
+        drop(w);
+        let atom = appended_record(&dialer);
+        assert!(atom["landed"].is_null());
+        assert_eq!(atom["replaces"].as_str(), Some(link.to_string().as_str()));
+        // A re-run finds the landing's row again. In the same session the
+        // board answers the ids again — the same undo, nothing written
+        // twice; in a fresh session the write is refused by the board, the
+        // arrangement having moved at the undo, nothing committed.
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(undo(&board, merger(&session, &signer), &a(plain), &a(K), None), Ok(undone.clone()), "the memo's answer");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
+        dialer.world().memo.clear();
+        dialer.clear();
+        let err = undo(&board, merger(&session, &signer), &a(plain), &a(K), None).expect_err("the undo moved the arrangement");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(refused.code, "arrangement_moved");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing committed");
+        assert!(dialer.frames("insert").is_empty());
+    }
+
+    /// THE PRE-LANDING POSITION RECLAIMED: the journal's floor stands at the
+    /// landing, so `nearest` lies below it; the read there is
+    /// `history_reclaimed`, typed as the refusal — the state before the merge
+    /// is no longer on this board — with nothing sent and nothing read at
+    /// another position.
+    #[test]
+    fn undo_where_the_pre_landing_position_is_reclaimed_is_refused_with_nothing_sent() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let before = dialer.world().position;
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        dialer.world().floor = Some(at);
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(
+            undo(&board, merger(&session, &signer), &a(S), &a(K), None),
+            Err(Refusal::HistoryReclaimed { at: before, floor: Some(at) }),
+            "the position before the landing, reclaimed"
+        );
+        assert_eq!(dialer.positions("doc_metadata"), [at - 1, before], "at − 1 inside the commit, then nearest, reclaimed: {:?}", dialer.ops());
+        assert!(dialer.positions("image").is_empty(), "nothing read elsewhere");
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows);
+        assert_eq!(dialer.world().standing(S).1.map(|m| m.at), Some(at), "the marker stands");
+    }
+
+    /// THE PRE-LANDING READ GOES TO `nearest`, NEVER TO `at − 1` ITSELF: the
+    /// world answers `not_a_position` at `at − 1`, naming the position
+    /// before the landing's commit, and every read of the state before the
+    /// merge is made there — the metadata, the extent and the image — so
+    /// the write carries C as it stood then, never M.
+    #[test]
+    fn the_pre_landing_read_goes_to_nearest_never_to_at_minus_one_itself() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let before = dialer.world().position;
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        {
+            let w = dialer.world();
+            assert!(w.inside_commits.contains(&(at - 1)) && w.inside_commits.contains(&(at - 2)), "the premise: the numbers inside the landing's commit");
+            assert!(!w.inside_commits.contains(&before));
+        }
+        dialer.clear();
+        undo(&board, merger(&session, &signer), &a(S), &a(K), None).expect("undone");
+        let asked: Vec<u64> = dialer.served.lock().unwrap().iter().filter(|(line, _)| line.starts_with("at:")).map(|(_, f)| f["at"].as_u64().unwrap()).collect();
+        assert_eq!(asked, [at - 1, before, before, before], "doc_metadata at at − 1, then doc_metadata, the span set and the image at nearest: {:?}", dialer.ops());
+        assert_eq!(dialer.frames("set_arrangement")[0]["runs"], frame_runs(&draft_c()), "C as it stood at nearest, never M");
+    }
+
+    /// THE WITHDRAWAL (ruled 1 (a); skep #783): the draft's `doc_metadata`
+    /// read live, its image at THAT read's position through `/op-at`, and
+    /// ONE `set_arrangement` — the current image as the runs, `as_of` the
+    /// read's position, the recorded base re-sent unmoved (address and
+    /// extent as read), no `head`, no `merge`, the id naming the draft and
+    /// the position — so the marker is cleared and the draft's words and
+    /// base stay as they are; the replacing record follows.
+    #[test]
+    fn the_withdrawal_clears_the_marker_and_keeps_the_runs_and_the_base_in_one_frame() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, link) = landing_of(&landed);
+        let read_at = dialer.world().position;
+        dialer.clear();
+        let withdrawn = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
+        assert_eq!(withdrawn.draft, a(S));
+        assert!(withdrawn.position > at);
+        let replacing = withdrawn.record.clone().expect("a record stood, so one replaces it");
+        assert_ne!(replacing, link);
+        assert_eq!(dialer.positions("retrieve_doc_v_span_set"), [read_at], "the image at the metadata read's position");
+        assert_eq!(dialer.positions("image"), [read_at]);
+        assert!(dialer.positions("doc_metadata").is_empty(), "the metadata read live, at the head: {:?}", dialer.ops());
+        let frames = dialer.frames("set_arrangement");
+        assert_eq!(frames.len(), 1, "one write: {:?}", dialer.ops());
+        let frame = &frames[0];
+        assert_eq!(frame["doc"], S);
+        assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
+        assert_eq!(frame["runs"], frame_runs(&draft_m()), "the current image, M, sent back whole");
+        assert_eq!(frame["base"], json!({"at": format!("{D}.2"), "extent": "15"}), "the recorded base re-sent unmoved");
+        assert!(frame.get("head").is_none() && frame.get("merge").is_none(), "no head, no merge: {frame}");
+        assert_eq!(frame["id"].as_str(), Some(format!("withdraw:{S}:{read_at}.arrangement").as_str()));
+        let w = dialer.world();
+        assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "the words stay");
+        assert_eq!(w.standing(S), (Some((format!("{D}.2"), 15)), None), "the base stays, the marker cleared");
+        let row = w.rows.iter().rev().find(|r| r.op == "set_arrangement").expect("the withdrawal's row");
+        assert_eq!((row.at, &row.terms), (withdrawn.position, &Some((Some(format!("{D}.2")), None))));
+        drop(w);
+        let atom = appended_record(&dialer);
+        assert!(atom["landed"].is_null());
+        assert_eq!(atom["replaces"].as_str(), Some(link.to_string().as_str()));
+        assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(format!("withdraw:{S}:{read_at}.record").as_str()));
+        assert_eq!(dialer.frames("make_link")[0]["to"]["addrs"], json!([S]));
+    }
+
+    /// AN EDIT BETWEEN THE WITHDRAWAL's READ AND ITS WRITE: another hand's
+    /// edit lands before the one write is answered, so the write, typed
+    /// against the read's position, is refused `arrangement_moved` — the
+    /// draft as the other hand left it, the marker standing, nothing
+    /// committed but the edit, no record.
+    #[test]
+    fn the_withdrawal_is_refused_arrangement_moved_after_an_edit_since_its_read() {
+        // The place of the one write among a withdrawal's requests, off one
+        // that lands.
+        let n = {
+            let (dialer, board, signer) = open(draft_landing_world());
+            let session = sign_in(&board, &signer);
+            landed_in_s(&board, &session, &signer);
+            dialer.clear();
+            withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect("withdrawn");
+            dialer.served_index("set_arrangement")
+        };
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        let edited = vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7)];
+        let (rows, read_at) = {
+            let w = dialer.world();
+            (w.rows.len(), w.position)
+        };
+        dialer.clear();
+        dialer.world().interleave = Some((n, S.to_string(), edited.clone()));
+        let err = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect_err("the draft changed since the read");
+        assert!(dialer.world().interleave.is_none(), "the premise: the edit landed before the write was answered");
+        let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+        assert_eq!(refused.code, "arrangement_moved");
+        let detail = refused.detail.as_deref().expect("the person's words");
+        assert!(detail.contains(S) && detail.contains("changed since it was read") && detail.contains("nothing was changed"), "{detail}");
+        let frame = &dialer.frames("set_arrangement")[0];
+        assert_eq!(frame["as_of"].as_u64(), Some(read_at), "typed against the read's position: {frame}");
+        assert_eq!(frame["runs"], frame_runs(&draft_m()), "the image as read");
+        let w = dialer.world();
+        assert_eq!(w.docs.get(S).unwrap().runs, edited, "the other hand's edit stands");
+        assert_eq!(w.rows.len(), rows + 1, "the edit's commit alone");
+        assert_eq!(w.standing(S), (Some((format!("{D}.2"), 15)), Some(Marker { sides: vec![], head: format!("{D}.2"), head_copied: 15, at })), "the marker stands");
+        drop(w);
+        assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(), "no record");
+    }
+
+    /// NO MARKER: a withdrawal of a draft carrying no merge has nothing to
+    /// take out, with nothing sent — the one read is the draft's metadata.
+    #[test]
+    fn the_withdrawal_at_no_marker_answers_nothing_to_take_out() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = withdraw(&board, merger(&session, &signer), &a(S), &a(K), None).expect_err("no merge");
+        assert_eq!(err, Refusal::NoMerge { draft: a(S) });
+        assert_eq!(err.to_string(), format!("{S} carries no merge: nothing to undo, nothing to take out"));
+        assert_eq!(dialer.ops(), ["doc_metadata"], "the one read, at the head; nothing sent");
+        assert_eq!(dialer.world().rows.len(), rows);
+    }
+
+    /// THE RECORD (the operator's choice): each call writes a record
+    /// composed from the current one naming the draft as landed in —
+    /// `landed` none, `replaces` its link, the sides and the base the
+    /// landing's — and writes none where none stands, the act standing all
+    /// the same: a landing made by hand with no record is undone and
+    /// withdrawn with no `insert` and no `make_link`, the links of the kind
+    /// to the draft read first.
+    #[test]
+    fn each_call_writes_the_replaces_record_where_a_record_stands_and_none_where_none_stands() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (merged, landed) = landed_in_s(&board, &session, &signer);
+        let (_, link) = landing_of(&landed);
+        dialer.clear();
+        let withdrawn = withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        let atom = appended_record(&dialer);
+        let landing_record = merged.record.to_value();
+        assert!(atom["landed"].is_null() && landing_record["landed"].is_null(), "{atom}");
+        assert_eq!(atom["replaces"].as_str(), Some(link.to_string().as_str()), "the landing's link replaced");
+        for member in ["type", "v", "doc", "base", "sides", "runs", "gaps", "values"] {
+            assert_eq!(atom[member], landing_record[member], "`{member}` the landing's: {atom}");
+        }
+        let links = dialer.frames("make_link");
+        assert_eq!(links[0]["to"]["addrs"], json!([S]), "linked to the draft");
+        assert!(withdrawn.record.is_some(), "the link written is answered");
+        assert!(links[0]["attest"]["sig"].is_string(), "signed over the head: {}", links[0]);
+        // A landing by hand on a board holding no record of the kind: the
+        // undo and the withdrawal write none, the links of the kind to the
+        // draft read first.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let head = format!("{D}.2");
+        for (act, name) in [("undo", "the undo"), ("withdraw", "the withdrawal")] {
+            let typed = dialer.world().position;
+            let frame = frames::set_arrangement(S, &shot_runs(&draft_m()), typed, Some((&head, 15)), Some((&head, 15)), Some(&[]), None);
+            let Answer::Document(ack) = board.op(Some(session.token()), &frame).expect("the landing by hand") else { panic!("closed") };
+            assert_eq!(ack["resp"], "ack", "{name}: {ack}");
+            assert!(dialer.world().standing(S).1.is_some(), "{name}: the premise, the marker stands");
+            let rows = dialer.world().rows.len();
+            dialer.clear();
+            let record = match act {
+                "undo" => undo(&board, m, &a(S), &a(K), None).expect("undone").record,
+                _ => withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn").record,
+            };
+            assert_eq!(record, None, "{name}: no record stood, none written");
+            assert!(dialer.frames("set_arrangement").len() == 1, "{name}: the act stands: {:?}", dialer.ops());
+            assert!(dialer.ops().contains(&"find_links_ftt".to_string()), "{name}: the links of the kind to the draft read: {:?}", dialer.ops());
+            assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty() && dialer.frames("create_new_document").is_empty(), "{name}: nothing of a record: {:?}", dialer.ops());
+            assert_eq!(dialer.world().rows.len(), rows + 1, "{name}: the one write alone");
+            assert!(dialer.world().standing(S).1.is_none(), "{name}: the marker cleared");
+        }
+    }
+
+    /// A RE-RUN OF EITHER WRITES NOTHING TWICE: after an undo the draft
+    /// records a base and no marker, and its latest marker-ending row is
+    /// the undo's — nothing to undo, the merge already taken back; after a
+    /// withdrawal the draft carries no marker — nothing to take out. Each
+    /// re-run sends nothing and commits nothing.
+    #[test]
+    fn a_re_run_of_either_take_back_writes_nothing_twice() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        landed_in_s(&board, &session, &signer);
+        undo(&board, m, &a(S), &a(K), None).expect("undone");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = undo(&board, m, &a(S), &a(K), None).expect_err("already taken back");
+        assert_eq!(err, Refusal::NothingToUndo { draft: a(S), why: NoUndo::TakenBack });
+        assert_eq!(err.to_string(), format!("nothing to undo: the merge in {S} was already taken back"));
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "nothing sent: {:?}", dialer.ops());
+        assert!(dialer.positions("doc_metadata").is_empty(), "no read of history");
+        assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
+        // Landed again in a fresh session — the memo answers the first
+        // landing's id in this one — and withdrawn: a second withdrawal
+        // finds no merge.
+        dialer.world().memo.clear();
+        landed_in_s(&board, &session, &signer);
+        withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        assert_eq!(withdraw(&board, m, &a(S), &a(K), None), Err(Refusal::NoMerge { draft: a(S) }));
+        assert_eq!(undo(&board, m, &a(S), &a(K), None), Err(Refusal::NothingToUndo { draft: a(S), why: NoUndo::TakenBack }), "an undo after a withdrawal: taken back");
+        assert!(dialer.frames("set_arrangement").is_empty() && dialer.frames("insert").is_empty(), "{:?}", dialer.ops());
+        assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
+    }
+
+    /// Every refusal the one write can answer, each mapped (item 4):
+    /// `not_owner` naming the draft, `published_target`, `withheld` naming
+    /// the origin, `signed_session_required`, `doc_not_registered` naming
+    /// the draft; `source_not_registered`, `no_base_to_record`,
+    /// `base_not_in_chain`, `base_extent_too_large` and the runs' codes as
+    /// the library's own faults, since it sends only the base and the runs
+    /// it read; the board's others verbatim — and nothing after the
+    /// refusal. A published document is refused at the metadata read, before
+    /// any position is read.
+    #[test]
+    fn the_take_backs_refusals_are_mapped() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let (_, landed) = landed_in_s(&board, &session, &signer);
+        let (at, _) = landing_of(&landed);
+        let rows = dialer.world().rows.len();
+        let id = format!("undo:{S}:{at}.arrangement");
+        let refused = |code: &str, site: Option<&str>| -> Refusal {
+            let site = site.map_or(Value::Null, |s| json!({"addr": s}));
+            dialer.world().memo.insert(id.clone(), permanent("set_arrangement", code, site));
+            dialer.clear();
+            let err = undo(&board, m, &a(S), &a(K), None).expect_err(code);
+            assert_eq!(dialer.ops().last().map(String::as_str), Some("set_arrangement"), "{code}: nothing after the refusal: {:?}", dialer.ops());
+            assert_eq!(dialer.world().rows.len(), rows, "{code}: nothing committed");
+            err
+        };
+        assert_eq!(refused("not_owner", Some(S)), Refusal::NotOwner { draft: a(S) });
+        assert_eq!(refused("published_target", None), Refusal::Published { doc: a(S) });
+        assert_eq!(refused("withheld", Some(Z)), Refusal::WindowWithheld(a(Z)));
+        assert_eq!(refused("signed_session_required", None), Refusal::NeedsSignedSession);
+        assert_eq!(refused("doc_not_registered", None), Refusal::NoSuchDocument(a(S)));
+        for code in ["source_not_registered", "no_base_to_record", "base_not_in_chain", "base_extent_too_large", "fork_base_moved", "bad_run", "dangling_source", "too_many_runs", "malformed"] {
+            let err = refused(code, None);
+            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{code}: {err:?}") };
+            assert!(face.cause.contains(code) && face.act.contains("fault in this library"), "{code}: {face}");
+        }
+        let err = refused("txn_over_budget", None);
+        let Refusal::Halt(Halt::Refused(verbatim)) = &err else { panic!("{err:?}") };
+        assert_eq!(verbatim.code, "txn_over_budget");
+        let said = Refusal::NotOwner { draft: a(S) }.to_string();
+        assert!(said.contains("not_owner") && said.contains("nothing was changed"), "{said}");
+        // A published document: refused at the metadata read.
+        dialer.world().docs.get_mut(S).unwrap().published = true;
+        dialer.clear();
+        assert_eq!(undo(&board, m, &a(S), &a(K), None), Err(Refusal::Published { doc: a(S) }));
+        assert_eq!(withdraw(&board, m, &a(S), &a(K), None), Err(Refusal::Published { doc: a(S) }));
+        assert_eq!(dialer.ops(), ["doc_metadata", "doc_metadata"], "the one read each, nothing sent");
+    }
+
+    /// A CLAIMED BOARD WHOSE HEAD IS OWED TAKES NOTHING BACK (SP-14; skep
+    /// #729): `/health` names a claimant and `H.1` serves no record — read
+    /// afresh, since a board keeps the head it read — so the undo and the
+    /// withdrawal each halt naming `H.1` before the one write: the reads
+    /// made, no `set_arrangement`, no record, no commit.
+    #[test]
+    fn a_claimed_board_serving_no_head_record_takes_nothing_back() {
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        landed_in_s(&board, &session, &signer);
+        dialer.world().head = false;
+        let afresh = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), dialer.clone());
+        let session = sign_in(&afresh, &signer);
+        let m = merger(&session, &signer);
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        for (name, err) in [("the undo", undo(&afresh, m, &a(S), &a(K), None).map(|_| ()).expect_err("the head is owed")), ("the withdrawal", withdraw(&afresh, m, &a(S), &a(K), None).map(|_| ()).expect_err("the head is owed"))] {
+            let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{name}: {err:?}") };
+            assert!(face.state.contains("H.1") && face.state.contains(S), "{name}: {face}");
+            assert!(face.cause.contains(&format!("names {ACCOUNT} its claimant")), "{name}: {face}");
+            assert!(face.act.contains("nothing was written"), "{name}: {face}");
+        }
+        for op in ["set_arrangement", "create_new_document", "insert", "make_link"] {
+            assert!(dialer.frames(op).is_empty(), "no `{op}`: {:?}", dialer.ops());
+        }
+        assert_eq!(dialer.world().rows.len(), rows, "no commit");
+        assert!(dialer.world().standing(S).1.is_some(), "the marker stands");
     }
 
     // ── the record and the journal ───────────────────────────────────────

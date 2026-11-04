@@ -246,8 +246,10 @@ impl Form {
 /// (§4a.6), `handoff --payload` (§4c.2), `accept`'s pair, its decline
 /// (`--no-anchors`) or `--reprint` (§4c.1), whose synopsis requires the
 /// `--account` it reads nowhere, `merge`'s three sides, two apart
-/// (`--alternative`, `--draft` with `--base` inside it, `--fork`) and its
-/// three landings apart (`--publish`, `--into`, `--new`), the merge
+/// (`--alternative`, `--draft` with `--base` inside it, `--fork`), its
+/// three landings apart (`--publish`, `--into`, `--new`) and its two
+/// take-backs (`--undo`, `--withdraw`), each apart from the other and from
+/// every side, `--doc`, `--base`, `--head` and the landings, the merge
 /// record's §6 synopsis, and `share`'s four forms apart — a share (`--doc` or
 /// `--whole-account`, two apart, with `--to` or `--privash`, two apart),
 /// `--revoke` and `--list`, each apart from every flag of the others.
@@ -318,7 +320,7 @@ const GRAMMAR: [Row<Command>; 15] = [
     },
     Row {
         command: Command::Merge,
-        once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries"],
+        once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries", "--undo", "--withdraw"],
         repeated: &["--resolve"],
         switches: &["--publish", "--new", "--no-dedup", "--retype"],
         forms: &[
@@ -329,6 +331,27 @@ const GRAMMAR: [Row<Command>; 15] = [
             Form::Apart("--publish", "--into"),
             Form::Apart("--publish", "--new"),
             Form::Apart("--into", "--new"),
+            // The two take-backs: each apart from the composition's flags,
+            // its landings and the other.
+            Form::Apart("--undo", "--withdraw"),
+            Form::Apart("--undo", "--doc"),
+            Form::Apart("--undo", "--alternative"),
+            Form::Apart("--undo", "--draft"),
+            Form::Apart("--undo", "--fork"),
+            Form::Apart("--undo", "--base"),
+            Form::Apart("--undo", "--head"),
+            Form::Apart("--undo", "--into"),
+            Form::Apart("--undo", "--publish"),
+            Form::Apart("--undo", "--new"),
+            Form::Apart("--withdraw", "--doc"),
+            Form::Apart("--withdraw", "--alternative"),
+            Form::Apart("--withdraw", "--draft"),
+            Form::Apart("--withdraw", "--fork"),
+            Form::Apart("--withdraw", "--base"),
+            Form::Apart("--withdraw", "--head"),
+            Form::Apart("--withdraw", "--into"),
+            Form::Apart("--withdraw", "--publish"),
+            Form::Apart("--withdraw", "--new"),
         ],
     },
     Row {
@@ -398,8 +421,10 @@ usage: skep <command> [flags]
                version with its record, --into lands it in a draft in one
                write (refused whole where the draft changed since), --new
                in a fresh draft staged from the head; a newer version
-               published since is told; a side of another account is
-               refused; no person door
+               published since is told; --undo puts a draft back as it
+               stood before a merge landed in it, --withdraw takes the
+               merge out of a draft and keeps the words; a side of another
+               account is refused; no person door
   share        share a draft (--doc <D>) or your whole account
                (--whole-account) with ONE account (--to <account>); or
                --privash one draft: open it to every account on this
@@ -463,7 +488,13 @@ flags (a flag beats its env variable; a variable set empty is unset):
             before:<address>  keep:<side>  both  omit; a side is its
             index as the report numbers it)  [--no-dedup]  [--retype]
             [--retries <n>]  [--publish, or --into <draft>, or --new];
-            with none it composes and prints
+            with none it composes and prints; or --undo <S>  --kind
+            <address>  [--journal <J>] without them (the draft back as it
+            stood before the merge landed, its base restored, the merge
+            taken out — refused where the draft changed since); or
+            --withdraw <S>  --kind <address>  [--journal <J>] without
+            them (the merge taken out, the words kept, the draft's next
+            version an ordinary one)
   share:    --doc <D> --to <account>; or --whole-account --to <account>;
             or --doc <D> --privash; or --revoke <grant>; or --list; and
             [--yes] at a share, a privash or a revoke, required where

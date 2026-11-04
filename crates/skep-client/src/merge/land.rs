@@ -102,10 +102,10 @@ use crate::sign::{sig_hex, Signer};
 use super::compose::Run;
 use super::journal;
 use super::reads::{
-    daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of, runs_of,
-    values_for, Family, Merged, Reader, Refusal, Side,
+    comps, daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of,
+    runs_of, values_for, Family, Merged, Reader, Refusal, Role, Side,
 };
-use super::record::{read_record, RecordLanding};
+use super::record::{read_record, Record, RecordLanding};
 
 /// The most bytes a shot's signed body may run to.
 ///
@@ -360,7 +360,7 @@ fn walk(
         return Err(Refusal::OverCap { runs: m, cap });
     }
     let merger = landing.merger();
-    let writer = Writer { board, merger, reader: Reader::new(board, Some(merger.token)) };
+    let writer = Writer::new(board, merger);
     match &landing {
         Landing::Shot { draft, .. } => {
             let (member, position) = match writer.standing_member(merged)? {
@@ -383,7 +383,7 @@ fn walk(
             let landed = RecordLanding::Member { member: member.clone(), position };
             let record = match writer.record_standing(merged, &landed)? {
                 Some(link) => link,
-                None => writer.write_record(merged, landed, &claims, landing.journal())?,
+                None => writer.write_landing_record(merged, landed, &claims, landing.journal())?,
             };
             Ok(Some(Landed::Member {
                 address: member,
@@ -428,7 +428,7 @@ fn walk(
             let landed = RecordLanding::Draft { draft: into.clone(), position };
             let record = match writer.record_standing(merged, &landed)? {
                 Some(link) => link,
-                None => writer.write_record(merged, landed, &[], landing.journal())?,
+                None => writer.write_landing_record(merged, landed, &[], landing.journal())?,
             };
             Ok(Some(Landed::Draft { into, position, record, head_moved }))
         }
@@ -462,10 +462,22 @@ enum Holds {
 }
 
 /// The landing's writer: the merger and a reader under its token.
-struct Writer<'a> {
-    board: &'a Board,
-    merger: Merger<'a>,
-    reader: Reader<'a>,
+///
+/// The undo and the withdrawal (the `undo` module) write through it too:
+/// the head's pre-check, the one write and the record are theirs as the
+/// landing's.
+pub(super) struct Writer<'a> {
+    pub(super) board: &'a Board,
+    pub(super) merger: Merger<'a>,
+    pub(super) reader: Reader<'a>,
+}
+
+impl<'a> Writer<'a> {
+    /// Returns a writer over `board` as `merger`, its reader under the
+    /// merger's token.
+    pub(super) fn new(board: &'a Board, merger: Merger<'a>) -> Writer<'a> {
+        Writer { board, merger, reader: Reader::new(board, Some(merger.token)) }
+    }
 }
 
 impl Writer<'_> {
@@ -572,7 +584,7 @@ impl Writer<'_> {
     /// this client does not know, faced; the death signal; a dial fault after
     /// the one re-ask; the board's other refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
-        let term = self.signing_term(None)?;
+        let term = self.signing_term(&head_owed)?;
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
         let draft_side = merged.inputs.sides.iter().find_map(|s| match s {
@@ -766,35 +778,24 @@ impl Writer<'_> {
         Ok(None)
     }
 
-    /// Writes the record, answering its link's address.
+    /// Writes a landing's record, answering its link's address.
     ///
-    /// The board's head is read first, then the journal found or minted, the
-    /// atom appended at its end as a plain insert, and the public link made
-    /// from the merger's doc 1 to the landed address and every side besides
-    /// the head under the kind, attested over `H.1`'s pair.
+    /// The record is the composition's with `landed` and `claims` filled,
+    /// written through [`Writer::write_record`] under the landing's stem,
+    /// the link's first end the landed address, and a head owed at its
+    /// writes faced as the landing standing with its record unwritten
+    /// ([`record_owed`]).
     ///
     /// # Errors
     ///
-    /// The head's refusal and halts ([`Writer::signing_term`]), the landing
-    /// standing and nothing of the record sent; the journal's halts
-    /// ([`journal::of`]); the extent read's refusal; a journal that is
-    /// published, full or another account's, a doc 1 this session does not
-    /// own, a doc 1 or an account this client cannot spell, and an attest the
-    /// board refuses, as the library's own faults, but
-    /// `attestation_invalid:board_unavailable` at the link, faced as the head
-    /// the board owes with the landing standing; an answer of a shape this
-    /// client does not know, faced; [`Refusal::NeedsSignedSession`] at the
-    /// link; the death signal; the board's other refusals verbatim.
-    fn write_record(
+    /// [`Writer::write_record`]'s.
+    fn write_landing_record(
         &self,
         merged: &Merged,
         landed: RecordLanding,
         claims: &[Address],
         journal: Option<&Address>,
     ) -> Result<Address, Refusal> {
-        let kind = &merged.inputs.kind;
-        let term = self.signing_term(Some(&landed))?;
-        let journal = journal::of(self.board, &self.merger, kind, journal.cloned())?;
         let target = match &landed {
             RecordLanding::Member { member, .. } => member.clone(),
             RecordLanding::Draft { draft, .. } => draft.clone(),
@@ -802,6 +803,44 @@ impl Writer<'_> {
         let mut record = merged.record.clone();
         record.landed = Some(landed.clone());
         record.claims = claims.to_vec();
+        let owed = |cause: String| record_owed(&landed, cause);
+        self.write_record(&merged.inputs.kind, &record, &target, &merged.key.text(), journal, &owed)
+    }
+
+    /// Writes `record` under `kind`, answering its link's address.
+    ///
+    /// The board's head is read first, then the journal found or minted, the
+    /// atom appended at its end as a plain insert, and the public link made
+    /// from the merger's doc 1 to `target` — the landed address, or the
+    /// draft an undo or a withdrawal names — and every side of the record
+    /// besides its head under the kind, attested over `H.1`'s pair. The two
+    /// writes carry the per-session ids `<stem>.record` and `<stem>.link`;
+    /// `owed` is the face a head owed meets at either, the act standing
+    /// with its record unwritten.
+    ///
+    /// # Errors
+    ///
+    /// The head's refusal and halts ([`Writer::signing_term`]), the act
+    /// standing and nothing of the record sent; the journal's halts
+    /// ([`journal::of`]); the extent read's refusal; a journal that is
+    /// published, full or another account's, a doc 1 this session does not
+    /// own, a doc 1 or an account this client cannot spell, and an attest the
+    /// board refuses, as the library's own faults, but
+    /// `attestation_invalid:board_unavailable` at the link, faced as the head
+    /// the board owes with the act standing; an answer of a shape this
+    /// client does not know, faced; [`Refusal::NeedsSignedSession`] at the
+    /// link; the death signal; the board's other refusals verbatim.
+    pub(super) fn write_record(
+        &self,
+        kind: &Address,
+        record: &Record,
+        target: &Address,
+        stem: &str,
+        journal: Option<&Address>,
+        owed: &dyn Fn(String) -> Halt,
+    ) -> Result<Address, Refusal> {
+        let term = self.signing_term(owed)?;
+        let journal = journal::of(self.board, &self.merger, kind, journal.cloned())?;
         let text = record.to_value().to_string();
         let ordinal = self.reader.extent(&journal, None)?.checked_add(1).ok_or_else(|| {
             own_fault_face(
@@ -809,7 +848,6 @@ impl Writer<'_> {
                 format!("{journal} answered an extent with no ordinal after it"),
             )
         })?;
-        let stem = merged.key.text();
         // Typed against the state the extent was read at (skep #442): the
         // reader's highest `as_of`, which that read just raised.
         let v = self.answered_write(
@@ -835,14 +873,15 @@ impl Writer<'_> {
                 });
             }
         };
-        // The link from doc 1: the atom's unit span to the landed address and
-        // every side besides the head, typed the kind (§4, "Its home").
+        // The link from doc 1: the atom's unit span to the target and every
+        // side of the record besides its head, typed the kind (§4, "Its
+        // home").
         let home_text = doc_1_of(self.merger.account);
         let home = parse_address(&home_text).ok_or_else(|| {
             own_fault_face("the account's doc 1 cannot be spelled", home_text.clone())
         })?;
-        let mut to: Vec<Address> = vec![target];
-        for side in &merged.inputs.sides {
+        let mut to: Vec<Address> = vec![target.clone()];
+        for side in record.sides.iter().filter(|s| s.role() != Role::Head) {
             if !to.contains(side.address()) {
                 to.push(side.address().clone());
             }
@@ -881,7 +920,7 @@ impl Writer<'_> {
             ),
             "signed_session_required" => Refusal::NeedsSignedSession,
             // The board's state, never this library's frame (a reorder).
-            "attestation_invalid:board_unavailable" => record_owed(&landed, format!(
+            "attestation_invalid:board_unavailable" => owed(format!(
                 "{}: the board refused the record's link from doc 1, serving no head record (`H.1`) to verify its signature over — a head the board owes, never this library's frame",
                 r.token()
             ))
@@ -889,6 +928,48 @@ impl Writer<'_> {
             k if k.starts_with("attestation_") => own_fault("the record link's attest", &r),
             _ => Refusal::Halt(r.refused(&v)),
         })
+    }
+
+    /// Returns the current record naming `draft` as landed in.
+    ///
+    /// It is read as [`Writer::record_standing`] reads a landing's — the
+    /// links of `kind` to the draft, each record's atom through its journal
+    /// — keeping the records whose `landed` is the draft, and answering the
+    /// newest of them by its link's address, with that link; a record whose
+    /// journal the merger may not read is no candidate. `None` where none
+    /// stands: the undo's and the withdrawal's record is then not written
+    /// (the `undo` module's doc).
+    ///
+    /// # Errors
+    ///
+    /// The link read's refusal at the draft; a halt reading a record.
+    pub(super) fn landed_record(
+        &self,
+        kind: &Address,
+        draft: &Address,
+    ) -> Result<Option<Record>, Refusal> {
+        let v = self.reader.answered(
+            draft,
+            &frames::find_links_ftt(&kind.to_string(), &draft.to_string()),
+            None,
+        )?;
+        let mut newest: Option<(Address, Record)> = None;
+        for link in answers::addrs(&v) {
+            let Some(link) = parse_address(link) else { continue };
+            let Some(record) = read_record(&self.reader, &link)? else { continue };
+            let lands_here =
+                matches!(&record.landed, Some(RecordLanding::Draft { draft: d, .. }) if d == draft);
+            if !lands_here {
+                continue;
+            }
+            if newest.as_ref().is_none_or(|(l, _)| comps(&link) > comps(l)) {
+                newest = Some((link, record));
+            }
+        }
+        Ok(newest.map(|(link, mut record)| {
+            record.link = Some(link);
+            record
+        }))
     }
 
     /// Stages a fresh draft from the head, answering it and its position.
@@ -909,7 +990,7 @@ impl Writer<'_> {
     /// faced; the death signal; a dial fault; the board's other refusals
     /// verbatim — `mint_home_first` among them.
     fn stage(&self, merged: &Merged) -> Result<(Address, u64), Refusal> {
-        self.signing_term(None)?;
+        self.signing_term(&head_owed)?;
         let head = &merged.inputs.head;
         let frame = frames::stage(&head.to_string(), Some(&format!("{}.stage", merged.key.text())));
         let v = self.answered_write(&frame, "staging a fresh draft")?;
@@ -1036,7 +1117,7 @@ impl Writer<'_> {
             Some(&id),
         );
         // The head before the one write: the record's link signs over it.
-        self.signing_term(None)?;
+        self.signing_term(&head_owed)?;
         let v = self.answered_write(&frame, "landing the merge in the draft")?;
         if let Some(at) = acked_at(&v) {
             let head_moved = match acked_head_moved(&v) {
@@ -1106,40 +1187,38 @@ impl Writer<'_> {
     ///
     /// The death signal under the token, faced; otherwise [`Board::op`]'s
     /// errors.
-    fn answered_write(&self, frame: &Value, during: &str) -> Result<Value, Refusal> {
+    pub(super) fn answered_write(&self, frame: &Value, during: &str) -> Result<Value, Refusal> {
         match self.board.op(Some(self.merger.token), frame)? {
             Answer::Closed => Err(closed(during).into()),
             Answer::Document(v) => Ok(v),
         }
     }
 
-    /// Returns the term the landing's signed writes sign over (SP-14).
+    /// Returns the term the act's signed writes sign over (SP-14).
     ///
     /// It is `H.1`'s pair, or `None` on a board no one has claimed, which
     /// takes the shot and the record's link without an `attest`
-    /// (`Board::board_head`). Every write of the landing reads it first (the
-    /// module's doc); `landed` is the landing that stands where the record
-    /// is all that is left to write, and `None` before the landing's first
-    /// write.
+    /// (`Board::board_head`). Every write of a landing, an undo or a
+    /// withdrawal reads it first (the module's doc); `owed` is the face a
+    /// claimed board serving no head record meets — [`head_owed`] before an
+    /// act's first write, [`record_owed`] where a landing stands with its
+    /// record all that is left to write.
     ///
     /// # Errors
     ///
-    /// A claimed board serving no head record, faced — the merge not landed,
-    /// or `landed` standing with its record not written — with nothing sent;
-    /// `Board::board_head`'s halts, a head record that stands and cannot be
-    /// read among them.
-    fn signing_term(&self, landed: Option<&RecordLanding>) -> Result<Option<BoardTerm>, Refusal> {
+    /// A claimed board serving no head record, faced by `owed`, with nothing
+    /// sent; `Board::board_head`'s halts, a head record that stands and
+    /// cannot be read among them.
+    pub(super) fn signing_term(
+        &self,
+        owed: &dyn Fn(String) -> Halt,
+    ) -> Result<Option<BoardTerm>, Refusal> {
         let claimant = match self.board.board_head()? {
             BoardHead::Term(term) => return Ok(Some(term)),
             BoardHead::Unclaimed => return Ok(None),
             BoardHead::Owed { claimant } => claimant,
         };
-        let cause = format!("the board names {claimant} its claimant and serves no head record (`H.1`), and the shot and the record's link sign over that record's pair (signed ops), so no write of the landing is sent before the board writes it");
-        Err(match landed {
-            None => head_owed(cause),
-            Some(landed) => record_owed(landed, cause),
-        }
-        .into())
+        Err(owed(format!("the board names {claimant} its claimant and serves no head record (`H.1`), and the shot and the record's link sign over that record's pair (signed ops), so no write of the act is sent before the board writes it")).into())
     }
 
     /// Returns the `attest` member over `body`.
@@ -1155,7 +1234,7 @@ impl Writer<'_> {
     ///
     /// A merger's account this client cannot spell, as the library's own
     /// fault.
-    fn attest(
+    pub(super) fn attest(
         &self,
         term: Option<BoardTerm>,
         doc: &Address,
@@ -1175,7 +1254,7 @@ impl Writer<'_> {
 }
 
 /// Returns the death signal under the session, faced.
-fn closed(during: &str) -> Halt {
+pub(super) fn closed(during: &str) -> Halt {
     Halt::face(
         format!("the session ended while {during}"),
         "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
@@ -1188,7 +1267,7 @@ fn closed(during: &str) -> Halt {
 ///
 /// Nothing of the landing is written: the record's link could not be
 /// signed, so no write before it is begun.
-fn head_owed(cause: String) -> Halt {
+pub(super) fn head_owed(cause: String) -> Halt {
     Halt::face(
         "this board has no H.1 yet, so the merge cannot land",
         cause,
@@ -1218,19 +1297,19 @@ fn record_owed(landed: &RecordLanding, cause: String) -> Halt {
 /// Faces a board refusal of this library's own frame (A-288's own-bug class).
 ///
 /// It is nothing a person can act on.
-fn own_fault(what: &str, r: &Rejection) -> Refusal {
+pub(super) fn own_fault(what: &str, r: &Rejection) -> Refusal {
     own_fault_face(format!("the board refused {what}"), format!("{}: the frame this library composed is wrong in substance — its base, its runs, its home or its attest", r.token()))
 }
 
 /// Returns this library's own fault, faced.
 ///
 /// There is no user-facing act to offer.
-fn own_fault_face(state: impl Into<String>, cause: impl Into<String>) -> Refusal {
+pub(super) fn own_fault_face(state: impl Into<String>, cause: impl Into<String>) -> Refusal {
     Refusal::Halt(Halt::face(state, cause, "this is a fault in this library, not in your keys or your act; nothing further was written"))
 }
 
 /// Faces an answer without the shape the write's ack promises.
-fn shape_face(op: &str, v: &Value) -> Halt {
+pub(super) fn shape_face(op: &str, v: &Value) -> Halt {
     Halt::face(
         format!("`{op}` answered a document this client cannot read"),
         crate::halt::clipped(&v.to_string(), 200).to_string(),

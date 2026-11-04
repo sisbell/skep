@@ -31,6 +31,17 @@
 //! unpinned, so the caller names it). The board's refusal is exit 1, a halt
 //! exit 3.
 //!
+//! **The two take-backs** (skep #783), each with `--kind` and nothing of
+//! the composition's: `--undo ⟨S⟩` puts the draft back as it stood before
+//! the merge landed in it — its words and its base restored, the merge
+//! taken out, in one write typed against the landing's position, so a
+//! draft changed since is refused with nothing changed — and `--withdraw
+//! ⟨S⟩` takes the merge out and keeps the words, the draft's next version
+//! then an ordinary one. Each prints one JSON document carrying the act,
+//! the draft, the write's position, the replacing record's link and the
+//! case; where there is nothing to undo or take out the library's reason
+//! is the refusal, exit 1, and nothing was sent.
+//!
 //! The session is the command's own: the selected signing key (the file
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
 //! session opened as `skep session` opens its, and closed on every exit —
@@ -68,9 +79,9 @@ use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
-    compose, head_of, land, Choice, Family, Gap, GapId, GapKind, Inputs, Landed, Landing, Merged,
-    Merger, Options, Placement, Record, RecordLanding, Refusal, Resolution, ResolvedBy, Side,
-    SideIx,
+    compose, head_of, land, undo, withdraw, Choice, Family, Gap, GapId, GapKind, Inputs, Landed,
+    Landing, Merged, Merger, Options, Placement, Record, RecordLanding, Refusal, Resolution,
+    ResolvedBy, Side, SideIx, Undone, Withdrawn,
 };
 use skep_client::sign::Signer;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
@@ -96,14 +107,27 @@ enum Land {
 ///
 /// §2.3's exit 2 is the flags' shape alone.
 struct Asked {
-    doc: Address,
-    side: Side,
-    base: Option<Address>,
-    head: Option<Address>,
+    /// The act: a composition with its landing, or a take-back.
+    act: Act,
     kind: Address,
     journal: Option<Address>,
-    options: Options,
-    landing: Option<Land>,
+}
+
+/// The act the line asks.
+enum Act {
+    /// Compose, and land where a landing flag is given.
+    Merge {
+        doc: Address,
+        side: Side,
+        base: Option<Address>,
+        head: Option<Address>,
+        options: Options,
+        landing: Option<Land>,
+    },
+    /// `--undo ⟨S⟩`: the draft back as it stood before the merge landed.
+    Undo(Address),
+    /// `--withdraw ⟨S⟩`: the merge taken out, the words kept.
+    Withdraw(Address),
 }
 
 pub fn merge(c: &CommandLine) -> Result<(), Stop> {
@@ -144,7 +168,8 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
     }
 }
 
-/// Runs the merge under the session: the head, the composition, the landing.
+/// Runs the act under the session: the head, the composition and the
+/// landing, or a take-back with no composition.
 ///
 /// The landing is made where one is asked, and the report goes on stdout.
 ///
@@ -152,8 +177,8 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
 ///
 /// Returns a halt where no head is named and none is on the feed, and the
 /// halt the feed's read comes to; a library refusal ([`refused`]) from the
-/// composition or the landing; and the halt a write stdout refuses comes
-/// to.
+/// composition, the landing, the undo or the withdrawal; and the halt a
+/// write stdout refuses comes to.
 fn run(
     board: &Board,
     session: &Session<'_>,
@@ -161,35 +186,55 @@ fn run(
     asked: &Asked,
 ) -> Result<(), Stop> {
     let token = session.token();
-    let head = match &asked.head {
+    let merger = Merger { token, account: session.account(), signer };
+    let Act::Merge { doc, side, base, head, options, landing } = &asked.act else {
+        let report = match &asked.act {
+            Act::Undo(draft) => {
+                talk(format!("taking the merge back out of {draft} at {}", board.dialed()));
+                let undone = undo(board, merger, draft, &asked.kind, asked.journal.as_ref())
+                    .map_err(|r| refused_taking_out(draft, r))?;
+                say_undone(&undone);
+                undone_value(&undone)
+            }
+            Act::Withdraw(draft) => {
+                talk(format!("taking the merge out of {draft} at {}", board.dialed()));
+                let withdrawn = withdraw(board, merger, draft, &asked.kind, asked.journal.as_ref())
+                    .map_err(|r| refused_taking_out(draft, r))?;
+                say_withdrawn(&withdrawn);
+                withdrawn_value(&withdrawn)
+            }
+            Act::Merge { .. } => unreachable!("the composition is matched above"),
+        };
+        data_verbatim(report.to_string().as_bytes())?;
+        return Ok(());
+    };
+    let head = match head {
         Some(h) => h.clone(),
-        None => head_of(board, Some(token), &asked.doc)?.ok_or_else(|| {
+        None => head_of(board, Some(token), doc)?.ok_or_else(|| {
             Halt::face(
-                format!("no head version of {} is on the feed", asked.doc),
+                format!("no head version of {doc} is on the feed"),
                 "no publish row under the document names a trunk version: it has no version yet, or its rows lie below the feed's retention floor",
                 "name the head with --head <D.h>, or publish the document's first version",
             )
         })?,
     };
     talk(format!(
-        "merging {} with {head}, the head of {}, at {}",
-        side_named(&asked.side, asked.base.as_ref()),
-        asked.doc,
+        "merging {} with {head}, the head of {doc}, at {}",
+        side_named(side, base.as_ref()),
         board.dialed()
     ));
     let inputs = Inputs {
-        doc: asked.doc.clone(),
+        doc: doc.clone(),
         head,
-        base: asked.base.clone(),
-        sides: vec![asked.side.clone()],
-        options: asked.options.clone(),
+        base: base.clone(),
+        sides: vec![side.clone()],
+        options: options.clone(),
         kind: asked.kind.clone(),
     };
     let merged = compose(board, Some(token), &inputs).map_err(refused)?;
     say_composed(&merged);
     let mut report = report_of(&merged);
-    if let Some(landing) = &asked.landing {
-        let merger = Merger { token, account: session.account(), signer };
+    if let Some(landing) = landing {
         let journal = asked.journal.clone();
         let landing = match landing {
             Land::Publish => Landing::Shot { merger, draft: None, journal },
@@ -197,7 +242,8 @@ fn run(
             Land::New => Landing::Draft { merger, into: None, journal },
         };
         let landed = land(board, &merged, landing).map_err(refused)?;
-        let fresh = matches!(asked.landing, Some(Land::New)) && staged_here(&merged, &landed);
+        let fresh = matches!(asked.act, Act::Merge { landing: Some(Land::New), .. })
+            && staged_here(&merged, &landed);
         say_landed(&merged, &landed, fresh);
         report["landed"] = landed_value(&merged, &landed, fresh);
     }
@@ -228,14 +274,30 @@ impl Asked {
     ///
     /// # Errors
     ///
-    /// In this order: `--doc` absent or no address; no side, two sides, a
-    /// side no address, or `--base` no address; `--head`, `--kind` (or
-    /// `SKEP_MERGE_KIND`, required, a variable that is not UTF-8 text
-    /// refused too), `--journal` no address; `--retries` no count; a
-    /// `--resolve` outside its grammar; `--into` no address. The three
-    /// landings apart — `--publish`, `--into`, `--new` — are the grammar's
-    /// forms, refused ahead of this.
+    /// In this order: `--undo` or `--withdraw` no address; `--kind` (or
+    /// `SKEP_MERGE_KIND`, required at every act, a variable that is not
+    /// UTF-8 text refused too) and `--journal` no address; then, at a
+    /// composition, `--doc` absent or no address; no side, two sides, a
+    /// side no address, or `--base` no address; `--head` no address;
+    /// `--retries` no count; a `--resolve` outside its grammar; `--into` no
+    /// address. The three landings apart — `--publish`, `--into`, `--new` —
+    /// and the two take-backs apart from them, the sides, `--doc`, `--base`,
+    /// `--head` and each other are the grammar's forms, refused ahead of
+    /// this.
     fn of(c: &CommandLine, by: &ResolvedBy) -> Result<Asked, Usage> {
+        let taken_out = match (c.value("--undo"), c.value("--withdraw")) {
+            (Some(s), _) => Some(Act::Undo(address("--undo", s)?)),
+            (None, Some(s)) => Some(Act::Withdraw(address("--withdraw", s)?)),
+            (None, None) => None,
+        };
+        let kind = match c.merge_kind()? {
+            Some(k) => address("--kind", &k)?,
+            None => return Err(Usage("--kind <address> (or SKEP_MERGE_KIND) is required: the merge record kind's type address, which the caller names while its row is unpinned".into())),
+        };
+        let journal = c.value("--journal").map(|j| address("--journal", j)).transpose()?;
+        if let Some(act) = taken_out {
+            return Ok(Asked { act, kind, journal });
+        }
         let doc = match c.value("--doc") {
             Some(d) => address("--doc", d)?,
             None => {
@@ -264,11 +326,6 @@ impl Asked {
             _ => return Err(Usage("one side alone: --alternative, --draft or --fork".into())),
         };
         let head = c.value("--head").map(|h| address("--head", h)).transpose()?;
-        let kind = match c.merge_kind()? {
-            Some(k) => address("--kind", &k)?,
-            None => return Err(Usage("--kind <address> (or SKEP_MERGE_KIND) is required: the merge record kind's type address, which the caller names while its row is unpinned".into())),
-        };
-        let journal = c.value("--journal").map(|j| address("--journal", j)).transpose()?;
         let retries = match c.value("--retries") {
             None => 0,
             Some(n) => {
@@ -292,7 +349,7 @@ impl Asked {
             None if c.switch("--new") => Some(Land::New),
             None => None,
         };
-        Ok(Asked { doc, side, base, head, kind, journal, options, landing })
+        Ok(Asked { act: Act::Merge { doc, side, base, head, options, landing }, kind, journal })
     }
 }
 
@@ -372,9 +429,13 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// side under `not_owner`, its detail naming the draft; the draft landing's
 /// two — a fork composed on another head than its source under
 /// `fork_base_moved`, a draft of another document under
-/// `base_not_in_chain`; and a composition position the board does not
+/// `base_not_in_chain`; a composition position the board does not
 /// answer under its own fault's code — no longer, `history_reclaimed`; past
-/// its head, `beyond_head`; inside one commit, `not_a_position`.
+/// its head, `beyond_head`; inside one commit, `not_a_position`; and the
+/// take-backs' — another account's draft under `not_owner`, a published
+/// document under `published_target`, nothing to undo under
+/// `nothing_to_undo` with the library's reason, a draft carrying no merge
+/// under `no_merge`.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -392,9 +453,12 @@ fn refused(r: Refusal) -> Stop {
         Refusal::NotAPosition { .. } => "not_a_position",
         Refusal::OverCap { .. } => "too_many_runs",
         Refusal::NeedsSignedSession => "signed_session_required",
-        Refusal::UnownedDraft { .. } => "not_owner",
+        Refusal::UnownedDraft { .. } | Refusal::NotOwner { .. } => "not_owner",
         Refusal::ForkBaseMoved { .. } => "fork_base_moved",
         Refusal::BaseNotInChain { .. } => "base_not_in_chain",
+        Refusal::Published { .. } => "published_target",
+        Refusal::NothingToUndo { .. } => "nothing_to_undo",
+        Refusal::NoMerge { .. } => "no_merge",
     };
     match r {
         Refusal::Halt(h) => Stop::Halt(h),
@@ -406,6 +470,95 @@ fn refused(r: Refusal) -> Stop {
             body: Value::Null,
         })),
     }
+}
+
+/// Returns the stop a take-back's refusal comes to (§2.3's exit 1).
+///
+/// It is [`refused`]'s, but a pre-landing position the board has reclaimed
+/// — `history_reclaimed` at the undo's read of the state before the merge —
+/// whose detail says what it means here: the state before the merge is no
+/// longer on this board, and nothing was sent; the library's own words
+/// advise composing again, which is no act of the undo's.
+fn refused_taking_out(draft: &Address, r: Refusal) -> Stop {
+    match r {
+        Refusal::HistoryReclaimed { at, floor } => Stop::Halt(Halt::Refused(Refused {
+            status: 200,
+            code: "history_reclaimed".to_string(),
+            detail: Some(format!(
+                "the state before the merge is no longer on this board: {draft} as of position {at} is reclaimed{} — nothing was sent; the merge stays as it is, or take it out and keep the words with --withdraw",
+                floor.map(|f| format!(" (the oldest position it answers is {f})")).unwrap_or_default()
+            )),
+            op: None,
+            body: Value::Null,
+        })),
+        other => refused(other),
+    }
+}
+
+/// Says the talk after an undo: the draft is back to how it stood before
+/// the merge, its base — where the board records one — and the merge are
+/// taken back, and the record's link where one was written.
+fn say_undone(undone: &Undone) {
+    let Undone { draft, position, record, restored } = undone;
+    talk(format!(
+        "took the merge back out of {draft} at position {position}: the draft is back to how it stood before the merge{}, and the merge is taken out{}",
+        match restored {
+            Some((base, extent)) => format!(", its base is {base} at {extent} positions again"),
+            None => format!("; {draft} records no base, so none moved"),
+        },
+        record_said(record.as_ref())
+    ));
+}
+
+/// Says the talk after a withdrawal: the merge is taken out, the words
+/// stay as they are, the draft's next version is an ordinary one, and the
+/// record's link where one was written.
+fn say_withdrawn(withdrawn: &Withdrawn) {
+    let Withdrawn { draft, position, record } = withdrawn;
+    talk(format!(
+        "took the merge out of {draft} at position {position}: the words stay as they are, and the draft's next version is an ordinary one{}",
+        record_said(record.as_ref())
+    ));
+}
+
+/// Returns the record's clause of a take-back's talk.
+fn record_said(record: Option<&Address>) -> String {
+    match record {
+        Some(link) => format!("; the record's link is {link}"),
+        None => "; no record of the landing stood, so none was written".to_string(),
+    }
+}
+
+/// Returns an undo as the report carries it.
+///
+/// It is the act, the draft, the write's position, the replacing record's
+/// link (else null), the case — `marker` where the undo went by the
+/// draft's base record and marker, `feed` where by the draft's own feed
+/// row — and the base restored as `{at, extent}` (else null).
+fn undone_value(undone: &Undone) -> Value {
+    json!({
+        "act": "undo",
+        "draft": undone.draft.to_string(),
+        "position": undone.position,
+        "record": undone.record.as_ref().map(ToString::to_string),
+        "case": if undone.restored.is_some() { "marker" } else { "feed" },
+        "restored": undone.restored.as_ref().map(|(base, extent)| json!({"at": base.to_string(), "extent": extent.to_string()})),
+    })
+}
+
+/// Returns a withdrawal as the report carries it.
+///
+/// It is the act, the draft, the write's position, the replacing record's
+/// link (else null) and the case, `marker`: a withdrawal goes by the marker
+/// alone.
+fn withdrawn_value(withdrawn: &Withdrawn) -> Value {
+    json!({
+        "act": "withdraw",
+        "draft": withdrawn.draft.to_string(),
+        "position": withdrawn.position,
+        "record": withdrawn.record.as_ref().map(ToString::to_string),
+        "case": "marker",
+    })
 }
 
 /// Says the talk after the composition.

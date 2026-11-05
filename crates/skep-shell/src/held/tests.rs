@@ -14,9 +14,16 @@
 //! alone.
 //!
 //! The queue's cells, the queue the memory and the file its copy: a line the
-//! device refused stands in the queue under its ordinal; a re-mark reads
-//! back as the one line it re-marks; a `done` the device refused still
-//! settles its line, a reopen reading the line as held again; a line kept
+//! device refused stands in the queue under its ordinal; the wait (§3c.3) —
+//! a refused line and every line after it copied in `k` order once the
+//! device takes them, at the next hold or by a retry with no new line, a
+//! retry stopping at the first copy refused again and resuming there, a line
+//! behind one the writer refuses for good waiting until that one leaves, a
+//! waiting line's re-mark and shift carried to its one first copy and its
+//! drop writing no `done`, and a join entering nothing ahead of a waiting
+//! line; a re-mark reads back as the one line it re-marks; a `done` the
+//! device refused still settles its line, a reopen reading the line as held
+//! again; a line kept
 //! at a position is the base of the lines behind it on its document, in the
 //! queue and at a reopen; and a line re-marked with its base raised — the
 //! person's `send` on a moved document — reads back with the raised base,
@@ -355,10 +362,13 @@ fn the_file_compacts_once_every_line_is_done() {
 /// `store_unwritable` (the device's I/O error, which the `held` answer
 /// carries as `unwritable`) BESIDE a line that stands in the queue under
 /// its ordinal, its bytes cut back off the file, the next line taking the
-/// ordinal after it and a reopen reading the lines the disk took (the
-/// mutant that keeps the refused line out of the queue loses the burst its
-/// `held` answer promised; the one that leaves its bytes on the file keeps
-/// pages a refused sync may never write, behind every later line).
+/// ordinal after it — copied behind the refused line, which the retry copies
+/// first — and a reopen reading all three (the mutant that keeps the refused
+/// line out of the queue loses the burst its `held` answer promised; the one
+/// that leaves its bytes on the file keeps pages a refused sync may never
+/// write, behind every later line; the one that copies the next line ahead
+/// of it leaves a file holding a burst without the one it was composed
+/// after).
 #[test]
 fn an_appends_line_is_on_disk_before_its_answer() {
     let tmp = TempDir::new().unwrap();
@@ -390,7 +400,7 @@ fn an_appends_line_is_on_disk_before_its_answer() {
     let next = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
     assert!(next.unwritten.is_none());
     assert_eq!((next.k, ks(&queue)), (3, vec![1, 2, 3]), "the next line takes the ordinal after it");
-    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 3], "a reopen reads the lines the disk took");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2, 3], "a reopen reads every line, the refused one copied before the next");
 }
 
 /// A QUEUE IN MEMORY ALONE (§3c.3) enters, re-marks and settles lines as a
@@ -511,10 +521,11 @@ fn a_torn_last_line_is_cut_before_the_next_line_is_written() {
 
 /// A COPY CUT SHORT leaves the file as it was: a line whose write the
 /// device cut part-way, as a full disk does, answers `unwritable` and
-/// stands in the queue, its bytes cut back off the file, so the next line
-/// is written where the last whole one ends and a reopen reads every line
-/// the disk took (the mutant that skips the cut-back leaves on the file the
-/// bytes its `unwritable` answer says it does not hold).
+/// stands in the queue, its bytes cut back off the file, so the retry at the
+/// next hold copies it where the last whole line ends, the next line after
+/// it, and a reopen reads every line (the mutant that skips the cut-back
+/// leaves on the file the bytes its `unwritable` answer says it does not
+/// hold, glued to the retry's copy).
 #[test]
 fn a_copy_cut_short_leaves_the_file_as_it_was() {
     let tmp = TempDir::new().unwrap();
@@ -528,16 +539,17 @@ fn a_copy_cut_short_leaves_the_file_as_it_was() {
     assert_eq!(fs::read(file_path(&tmp)).unwrap(), before, "its bytes cut back off the file");
     assert_eq!(ks(&queue), [1, 2], "and the line stands in the queue");
     assert!(queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().unwritten.is_none());
-    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 3], "a reopen reads every line the disk took");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2, 3], "a reopen reads every line, the cut one copied in its place");
 }
 
 /// A HEADER THE DEVICE DID NOT TAKE WHOLE leaves no file (`write_once`'s
 /// idiom): a header write cut short, and a header sync refused, each answer
 /// the line `unwritable`, the line standing in the queue and the file the
-/// header began removed, so the next line makes the file again under
-/// `create_new`, header first, and a reopen reads it (the mutant that leaves
-/// the half-made file refuses every later copy `AlreadyExists`, and closed
-/// with a line standing leaves a file the next open halts on).
+/// header began removed, so the retry at the next hold makes the file again
+/// under `create_new`, header first, the waiting line and then the next one
+/// in it, and a reopen reads both (the mutant that leaves the half-made file
+/// refuses every later copy `AlreadyExists`, and closed with a line standing
+/// leaves a file the next open halts on).
 #[test]
 fn a_header_the_device_did_not_take_whole_leaves_no_file() {
     for torn in [true, false] {
@@ -556,7 +568,7 @@ fn a_header_the_device_did_not_take_whole_leaves_no_file() {
         assert_eq!(ks(&queue), [1], "torn {torn}: the line stands in the queue");
         let next = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
         assert!(next.unwritten.is_none(), "torn {torn}: {:?}", next.unwritten);
-        assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [2], "torn {torn}: a reopen reads the line the file took");
+        assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2], "torn {torn}: a reopen reads both lines, in order");
     }
 }
 
@@ -1231,6 +1243,197 @@ fn a_line_past_the_line_bound_halts_the_reader_and_is_never_written() {
     assert_eq!(held.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::InvalidInput), "the line is answered unwritten");
     assert_eq!(ks(&queue), [held.k], "and stands in the queue");
     assert!(!queue.on_disk(), "and is copied nowhere");
+}
+
+// ── THE WAIT (§3c.3; skep #813) ─────────────────────────────────────────────
+
+/// Returns the ordinals the appends copy from here, in their order.
+///
+/// It installs the seam run after each line's sync, which reads the file's
+/// last line — the one just copied — and keeps its `held` ordinal.
+fn record_copies() -> Arc<Mutex<Vec<u64>>> {
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&copied);
+    AFTER_SYNC.with(|s| {
+        *s.borrow_mut() = Some(Box::new(move |p: &Path| {
+            let text = fs::read_to_string(p).unwrap_or_default();
+            let last = text.lines().last().and_then(|line| serde_json::from_str::<Value>(line).ok());
+            if let Some(k) = last.and_then(|line| line["held"].as_u64()) {
+                kept.lock().unwrap().push(k);
+            }
+        }))
+    });
+    copied
+}
+
+/// Returns a verdict whose line is past the line bound.
+///
+/// It is past any a daemon answers: a line carrying it is past
+/// [`MAX_HELD_LINE_BYTES`], which the writer never copies.
+fn verdict_past_the_line_bound() -> Value {
+    json!({"resp": "rejected", "code": "out_of_bounds", "detail": "x".repeat(MAX_HELD_LINE_BYTES)})
+}
+
+/// Checks that a refused line and the lines after it are copied in order.
+///
+/// With every copy refused, two lines are held: each answers the device's
+/// refusal, its kind and its words, and no file stands. The device takes
+/// copies again, and the next hold copies the waiting lines first, in `k`
+/// order, then its own, so the file never holds a line without the lines
+/// held before it; a reopen reads all three (the mutant that copies a line
+/// once, at its hold, writes the third alone; the one that copies the new
+/// line before the waiting ones writes them out of order).
+#[test]
+fn a_refused_line_and_every_line_after_it_are_copied_in_k_order_once_the_device_takes_them() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    FAIL_SYNC.with(|f| f.set(true));
+    for doc in ["1.0.1.0.1", "1.0.1.0.2"] {
+        let held = queue.hold(doc, None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+        let why = held.unwritten.map(|e| (e.kind(), e.to_string()));
+        assert_eq!(why, Some((std::io::ErrorKind::StorageFull, "the held store's sync was made to fail".to_string())), "{doc}: the device's refusal");
+    }
+    FAIL_SYNC.with(|f| f.set(false));
+    assert!(!queue.on_disk(), "no file stands");
+    assert_eq!(queue.waiting().map(Waiting::first), Some(1), "both wait, from the first");
+    let copied = record_copies();
+    let third = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
+    AFTER_SYNC.with(|s| *s.borrow_mut() = None);
+    assert!(third.unwritten.is_none(), "{:?}", third.unwritten);
+    assert_eq!(*copied.lock().unwrap(), [1, 2, 3], "the waiting lines copied first, in `k` order");
+    assert!(queue.waiting().is_none(), "none waits");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2, 3], "a reopen reads all three");
+}
+
+/// Checks that a retry stops at the first copy refused, and resumes there.
+///
+/// Three lines wait, every copy refused at their holds. The device then
+/// takes one copy and cuts the next short: the retry copies the first, the
+/// second's bytes are cut back and the third is not tried, so a reopen reads
+/// the first alone and the lines wait from the second. The next retry, with
+/// no new line held, copies the second and the third (the mutant that copies
+/// on past a refusal writes the third without the second).
+#[test]
+fn a_retry_stops_at_its_first_refusal_and_resumes_there() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    FAIL_SYNC.with(|f| f.set(true));
+    for doc in ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.0.3"] {
+        assert!(queue.hold(doc, None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().unwritten.is_some(), "{doc}: refused");
+    }
+    FAIL_SYNC.with(|f| f.set(false));
+    // The seam run after the first copy's sync cuts the next copy short, once.
+    let armed = Cell::new(false);
+    AFTER_SYNC.with(|s| {
+        *s.borrow_mut() = Some(Box::new(move |_: &Path| {
+            if !armed.replace(true) {
+                TORN_WRITE.with(|t| t.set(Some(10)));
+            }
+        }))
+    });
+    queue.retry();
+    AFTER_SYNC.with(|s| *s.borrow_mut() = None);
+    assert_eq!(queue.waiting().map(|w| (w.first(), w.refusal().kind())), Some((2, std::io::ErrorKind::StorageFull)), "the lines wait from the one cut short");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "the first copied, the second cut back, the third not tried");
+    queue.retry();
+    assert!(queue.waiting().is_none(), "none waits");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1, 2, 3], "the next retry copies the rest, in order");
+}
+
+/// Checks that a line waits behind a refused one until that one leaves.
+///
+/// A line the writer refuses for good — a board's verdict past the line
+/// bound — waits, and the small line held after it answers the same refusal
+/// and is not copied, though the device would take it. The person's drop of
+/// the first writes no `done`, nothing of it standing on disk, and the
+/// retry then copies the small line, which a reopen reads alone (the mutant
+/// that copies a line past a waiting one leaves a file holding the second
+/// burst without the first; the one that writes a `done` for a waiting line
+/// names an ordinal the file never held).
+#[test]
+fn a_line_behind_a_refused_one_waits_until_it_leaves() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::refused("out_of_bounds", verdict_past_the_line_bound())).unwrap();
+    let refused = first.unwritten.map(|e| (e.kind(), e.to_string())).expect("the writer refuses the line past its bound");
+    let behind = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap();
+    assert_eq!(behind.unwritten.map(|e| (e.kind(), e.to_string())), Some(refused), "the line behind answers the same refusal");
+    assert!(!queue.on_disk(), "and is not copied ahead of the first");
+    let settled = queue.done(first.k, Done::Dropped).unwrap();
+    assert!(settled.unwritten.is_none() && settled.unremoved.is_none(), "{settled:?}");
+    assert!(queue.waiting().is_none(), "none waits once the first has left");
+    let text = fs::read_to_string(file_path(&tmp)).unwrap();
+    assert!(!text.contains("\"done\""), "no `done` for a line never copied: {text}");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [behind.k], "a reopen reads the line behind alone");
+}
+
+/// Checks that a waiting line's change is copied once, by the retry.
+///
+/// A line on disk, then two lines held while every copy is refused: the
+/// second's mark of `sent` and its shift answer no refusal — the queue takes
+/// both, and the line carries them to its first copy — and the third's drop
+/// answers no `done` refused, nothing of it standing on disk. The device
+/// takes copies again, and the retry copies the second ONCE, carrying the
+/// mark and the shifted frame and spending none of the re-mark budget; the
+/// file names no third line and no `done` of it, and a reopen reads the
+/// queue as it stands (the mutant that copies a waiting line's re-mark on
+/// its own writes the line ahead of its first copy's turn; the one that
+/// spends the budget on a first copy refuses re-marks the file never held).
+#[test]
+fn a_waiting_lines_change_is_copied_once_by_the_retry() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+    FAIL_SYNC.with(|f| f.set(true));
+    let second = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    let third = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), None, Reason::of("behind", false)).unwrap().k;
+    let shifted = json!({"op": "insert", "as_of": 9});
+    let marked = queue.remark(second, Reason::of("unreachable", true));
+    let moved = queue.rewrite(second, shifted.clone());
+    let settled = queue.done(third, Done::Dropped).unwrap();
+    FAIL_SYNC.with(|f| f.set(false));
+    assert!(marked.is_ok() && moved.is_ok(), "the mark and the shift wait with their line: {marked:?} {moved:?}");
+    assert!(settled.unwritten.is_none(), "no `done` owed for a line never copied: {settled:?}");
+    assert_eq!(queue.waiting().map(Waiting::first), Some(second), "the second waits still");
+    queue.retry();
+    assert!(queue.waiting().is_none(), "none waits");
+    let text = fs::read_to_string(file_path(&tmp)).unwrap();
+    let copies: Vec<Value> = text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter(|line| line["held"] == second).collect();
+    assert_eq!(copies.len(), 1, "one copy of the second: {text}");
+    assert_eq!((&copies[0]["sent"], &copies[0]["frame"]), (&json!(true), &shifted), "carrying the mark and the shift: {text}");
+    assert!(!text.contains(&format!("\"held\":{third},")) && !text.contains(&format!("\"done\":{third},")), "nothing of the third: {text}");
+    assert_eq!(queue.disk.as_ref().map(|d| d.remark_bytes), Some(0), "no re-mark budget spent");
+    assert_eq!(live(d.open_file(1, "1.0.1").unwrap()).lines(), queue.lines(), "a reopen reads the queue as it stands");
+}
+
+/// Checks that a queue whose lines wait joins nothing ahead of them.
+///
+/// The board's queue holds a line the writer refuses for good, waiting; a
+/// join of a queue kept in memory is refused at that queue's first line,
+/// under the waiting line's refusal — nothing entered, nothing copied, the
+/// line it would have entered standing where it was. Once the waiting line
+/// leaves, the same join enters it (the mutant that joins past a waiting
+/// line copies the joined line to a file that lacks the one held before it).
+#[test]
+fn a_queue_whose_lines_wait_joins_nothing_ahead_of_them() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut chain = live(d.open_file(1, "1.0.1").unwrap());
+    let waiting = chain.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), None, Reason::refused("out_of_bounds", verdict_past_the_line_bound())).unwrap().k;
+    let mut memory = HeldQueue::in_memory();
+    memory.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap();
+    let refused = chain.join(&memory).unwrap_err();
+    assert_eq!((refused.k, refused.error.kind()), (1, std::io::ErrorKind::InvalidInput), "refused at the joined queue's first line, under the waiting line's refusal");
+    assert_eq!(ks(&chain), [waiting], "nothing entered");
+    assert!(!chain.on_disk(), "nothing copied");
+    chain.done(waiting, Done::Dropped).unwrap();
+    let joined = chain.join(&memory).unwrap();
+    assert_eq!(joined.entered, [(1, 1)], "the line enters once the waiting one has left");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "and is on disk");
 }
 
 // ── THE PENDING DIRECTORY (§3c.1; skep #725) ────────────────────────────────

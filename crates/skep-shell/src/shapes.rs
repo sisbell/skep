@@ -176,7 +176,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldAnswer",
         open: false,
-        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `cause` the hold's token, and `unwritable` — why — where the device refused the line or the held file is out of reach (another process's lock on the board's held store among the causes: one shell per data directory, §3c.3), the burst held in memory alone",
+        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `cause` the hold's token, and `unwritable` — why — where the device refused the line, or refused an earlier line of the principal's at the board that still waits for its copy (the line waits behind it, both copied in order once the device takes them), or the held file is out of reach (another process's lock on the board's held store among the causes: one shell per data directory, §3c.3), the burst held in memory alone",
         fields: &[req("resp", "'held'"), req("held", "number"), req("cause", "string"), opt("unwritable", "string")],
     },
     Shape {

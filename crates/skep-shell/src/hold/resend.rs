@@ -6,7 +6,9 @@
 //! there too at its daemon-running tick and at the hand-overs of
 //! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
-//! unreachable board commits nothing. The resend it lets run is automatic
+//! unreachable board commits nothing. Each probe first copies the lines
+//! whose held file's copy the device refused, whatever the board's state —
+//! the retry's clock (§3c.3; skep #813). The resend it lets run is automatic
 //! at the hold's end and at reopen, under a standing session of the
 //! principal's that may write — never a bare one, the keyless session that
 //! reads alone (foundations §3.3 state 3), whose principal's lines stay held
@@ -473,16 +475,25 @@ impl Holds {
     /// It runs on the board's feed thread alone — every
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
     /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
-    /// While a line stands at a board whose own node is not stopped,
-    /// `/health` is read; where the board answers and takes writes, each
-    /// principal with lines resends them under a standing session of its own
-    /// that may write (`SessionEntry::may_write`) — under no bare session.
+    /// First, whatever the board's state — its node stopped, the board away
+    /// — each principal's lines waiting for their held file's copy are
+    /// copied where the device takes them (`HeldQueue::retry`, §3c.3; skep
+    /// #813), and a wait that ends is said ([`Holds::note_waiting`]): the
+    /// retry needs no dial. Then, while a line stands at a board whose own
+    /// node is not stopped, `/health` is read; where the board answers and
+    /// takes writes, each principal with lines resends them under a standing
+    /// session of its own that may write (`SessionEntry::may_write`) — under
+    /// no bare session.
     pub fn probe(&self, board_reference: &str) {
         // Gathered under the lock and dialed outside it, so `op` never waits
         // on a dead board's connect timeout.
         let slot = self.slot(board_reference);
         let due = {
-            let board_hold = slot.lock();
+            let mut board_hold = slot.lock();
+            for (principal, ph) in &mut board_hold.principals {
+                ph.queue.retry();
+                self.note_waiting(*principal, ph);
+            }
             !board_hold.node_stopped && board_hold.principals.values().any(|ph| !ph.queue.lines().is_empty())
         };
         if !due {

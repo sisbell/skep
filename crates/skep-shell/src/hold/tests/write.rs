@@ -35,8 +35,11 @@
 //! back, before any dial; a board the holds were not opened over stopped as
 //! the caller's bug; the stored frame without its attest; P38's halted file
 //! refusing every act at the principal's door, `resolve` among them, a copy
-//! the store cannot make, and a queue kept in memory for want of its file
-//! joining the board's file as soon as the directory is this shell's; no
+//! the store cannot make, a queue kept in memory for want of its file
+//! joining the board's file as soon as the directory is this shell's, and a
+//! burst the device refused waiting with the bursts after it until the
+//! probe's clock copies them in order, its node stopped, the wait said at
+//! its two edges; no
 //! `held` event when a session's open reads its file, and a misplaced file
 //! set aside and said on `Talk` alone.
 //!
@@ -1131,6 +1134,40 @@ fn a_queue_kept_in_memory_joins_the_boards_file_as_soon_as_the_directory_is_this
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
     assert!(next.get("unwritable").is_none(), "{next}");
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"c\"]"), "the next line recreates the board's file");
+}
+
+/// Checks that the probe's clock copies the bursts the device refused.
+///
+/// It is §3c.3's wait (skep #813). The held file's name taken by a
+/// directory, a burst is held `unwritable` under the device's refusal and
+/// the next burst is held `behind` it under the same refusal, neither on
+/// disk; the wait is said once in the shell's own window. The node stopped
+/// and the name freed, the next probe — which
+/// dials nothing while the node is stopped — copies both in `k` order and
+/// says the wait's end once, and a second probe says nothing more (the
+/// mutant that retries at a hold alone keeps both in memory while no one
+/// types; the one that gates the retry on the node or the board keeps them
+/// while the person has stopped it).
+#[test]
+fn a_burst_the_device_refused_waits_with_the_bursts_after_it_and_the_probes_clock_copies_them() {
+    let g = ground();
+    let file = held_file(&g);
+    std::fs::create_dir(&file).unwrap();
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    let why = first["unwritable"].as_str().unwrap_or_else(|| panic!("the device's refusal rides the answer: {first}")).to_string();
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the first") };
+    assert_eq!((behind["cause"].as_str(), behind["unwritable"].as_str()), (Some("behind"), Some(why.as_str())), "the line behind waits under the same refusal: {behind}");
+    assert_eq!(said_containing(&g, "could not be copied to its held file").len(), 1, "the wait said once as it begins: {:?}", g.said.lock().unwrap());
+    g.holds.set_node_stopped("b-1", true);
+    std::fs::remove_dir(&file).unwrap();
+    g.holds.probe("b-1");
+    let copied: Vec<u64> = file_lines(&std::fs::read_to_string(&file).unwrap()).iter().map(|line| line["held"].as_u64().unwrap()).collect();
+    assert_eq!(copied, [1, 2], "both copied by the probe, in `k` order");
+    assert_eq!(g.fake.sends(), 0, "nothing dialed while the node is stopped");
+    assert_eq!(said_containing(&g, "wait in memory no more").len(), 1, "the wait's end said once: {:?}", g.said.lock().unwrap());
+    g.holds.probe("b-1");
+    let said = (said_containing(&g, "could not be copied").len(), said_containing(&g, "wait in memory no more").len());
+    assert_eq!(said, (1, 1), "a second probe says nothing more: {:?}", g.said.lock().unwrap());
 }
 
 /// Checks that no `held` event goes out when a session's open reads its file.

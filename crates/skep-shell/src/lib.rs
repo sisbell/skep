@@ -52,7 +52,10 @@
 //!   forms, the directory lock, the line-by-line read with P38's faces, the
 //!   synced append (persist-first) and the compaction at every line done —
 //!   and a principal's queue, the memory the queue and the file its copy,
-//!   a line's anchors bounded at their one door, a hold adding no line past
+//!   a line whose copy was refused waiting in memory with every line held
+//!   after it until the retry copies them in `k` order, so the file never
+//!   holds a line without the lines standing before it, a line's anchors
+//!   bounded at their one door, a hold adding no line past
 //!   four frames' and one line's anchors' bounds in its bytes or past a line
 //!   budget in its lines, and its file's re-marks within a re-mark budget
 //!   that a line's mark of `sent` spends none of.

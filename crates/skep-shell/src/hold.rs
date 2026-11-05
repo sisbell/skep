@@ -75,9 +75,16 @@
 //! holder keeps a burst in memory as its own, and the lock is tried again at
 //! the next session's open and probe; or the board away, or unclaimed, at
 //! the first touch — such lines joining the board's file by the same rule
-//! the moment the directory is this shell's. The queue is opened only under
-//! a session as its principal (P39) — at the session's open, or at the first
-//! touch after it — by the principal's door, [`Holds::principal_hold`],
+//! the moment the directory is this shell's. A line whose copy the device
+//! refuses waits in memory with every line held after it, none copied ahead
+//! of it, until the retry copies them in `k` order (`HeldQueue::retry`,
+//! §3c.3; skep #813) — before the queue's next copy, and at every probe
+//! whatever the board's state — each answer for a waiting line carrying the
+//! device's refusal as `unwritable`, and the wait said in the shell's own
+//! window once as it begins and once as it ends ([`Holds::note_waiting`]).
+//! The queue is opened only under a session as its principal (P39) — at the
+//! session's open, or at the first touch after it — by the principal's door,
+//! [`Holds::principal_hold`],
 //! which every act on a principal's queue takes, a burst's among them once
 //! the burst's door has let it in. The probe ([`Holds::probe`]) and the
 //! resend it lets run, which drain the queue once the board returns, are the
@@ -122,7 +129,9 @@ mod resend;
 /// The interim probe cadence (§3c.4): `GET /health` at this interval.
 ///
 /// The probe reads it while a burst is held at a board; the value is open
-/// to tuning.
+/// to tuning. It is the retry's clock too (§3c.3): a line whose copy the
+/// device refused is copied again at every probe while it waits, whatever
+/// the board's state, so space freed while no one types is enough.
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
 
 /// A held line's wall-clock deadline: two minutes from its first failed send.
@@ -895,6 +904,11 @@ enum Custody {
     /// The next touch under a session of the principal opens its file.
     Unopened,
     /// In `principal-<n>.held`, each line synced before its answer.
+    ///
+    /// Where the device refused a line's copy, that line and every line held
+    /// after it wait in memory instead, copied in `k` order by the retry
+    /// (`HeldQueue::retry`, §3c.3), each answer carrying the refusal as
+    /// `unwritable`.
     File,
     /// In memory alone, the file out of this shell's reach.
     ///
@@ -936,9 +950,11 @@ impl Custody {
 /// read during the dial never lifts it past the line's own landing — the
 /// reissues each line's resend has been given and its clock, its first
 /// failed send and its last failure's token, kept across its probes
-/// ([`Reissues`]), and the position each line's moved document was
+/// ([`Reissues`]), the position each line's moved document was
 /// acknowledged through by the person's `send`
-/// ([`PrincipalHold::seen_through`]). An ack touches no standing line's
+/// ([`PrincipalHold::seen_through`]), and whether its lines' wait for their
+/// copy was said ([`PrincipalHold::waiting_said`]). An ack touches no
+/// standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
 /// line kept on its document (`HeldQueue::done`) and by the person's `send`
 /// on a moved document (`HeldQueue::remark_raised`, [`Holds::resolve`]).
@@ -972,12 +988,17 @@ struct PrincipalHold {
     /// first face after one names the acknowledged hands again, while the
     /// raised `base` persists.
     seen_through: HashMap<u64, u64>,
+    /// Whether the shell's own window was told the queue's lines wait.
+    ///
+    /// It is set as the wait is said to begin, and cleared as its end is
+    /// ([`Holds::note_waiting`]).
+    waiting_said: bool,
 }
 
 impl PrincipalHold {
     /// Returns a hold not yet opened, its file's header to name `account`.
     fn new(account: &str) -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, account: account.to_string(), queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new(), seen_through: HashMap::new() }
+        PrincipalHold { custody: Custody::Unopened, account: account.to_string(), queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new(), seen_through: HashMap::new(), waiting_said: false }
     }
 
     /// Returns whether the hold's lines were held before the board's
@@ -1953,12 +1974,15 @@ impl Holds {
     /// `poisoned` or `durability` hold, a refused run or a move, shifted or
     /// not — its clock starts now ([`HAND_OVER_DEADLINE`]), and a hold before
     /// any dial, or one no dial left by, starts none.
-    /// Nothing is said: the caller emits the `held` event, or none for a
-    /// line it settles within its call ([`Holds::shift_at_first_dial`]). The
-    /// answer is `{resp: held, held: <k>, cause}`, and `unwritable` beside
-    /// it — why — where the device refused its copy or the file is out of
-    /// reach, another process's lock on the board's directory among the
-    /// causes (§3c.3).
+    /// Nothing is said on the bus: the caller emits the `held` event, or none
+    /// for a line it settles within its call ([`Holds::shift_at_first_dial`]);
+    /// a wait for the held file's copies that begins or ends at this hold is
+    /// said in the shell's own window ([`Holds::note_waiting`]). The answer
+    /// is `{resp: held, held: <k>, cause}`, and `unwritable` beside it — why
+    /// — where no copy of the line stands: the device refused its copy, or
+    /// the copy of a line held before it, which it waits behind (§3c.3;
+    /// `HeldQueue::retry`), or the file is out of reach, another process's
+    /// lock on the board's directory among the causes.
     ///
     /// # Errors
     ///
@@ -1978,6 +2002,7 @@ impl Holds {
         if let Some(token) = failed {
             ph.reissues.entry(entered.k).or_default().failed(token, self.now());
         }
+        self.note_waiting(session.facts.principal, ph);
         let unwritable = match &ph.custody {
             Custody::Unwritable(why) => Some(why.clone()),
             _ => entered.unwritten.map(|e| e.to_string()),
@@ -2282,6 +2307,34 @@ impl Holds {
         }
         ph.reissues.remove(&k);
         ph.seen_through.remove(&k);
+    }
+
+    /// Says the edges of a principal's wait for its held file's copies.
+    ///
+    /// The wait (§3c.3) is the queue's line whose copy was refused and every
+    /// line held after it, each in memory alone until the retry copies it
+    /// (`HeldQueue::retry`). It is said in the shell's own window, as SP-11
+    /// and SP-12 have it: once as it begins — the first line that waits, the
+    /// refusal, and that a close before the retry lands loses the waiting
+    /// lines — and once as no line waits, whether the retry copied them or
+    /// they left the queue; never at each refused retry. The page reads the
+    /// same refusal in every waiting line's `unwritable`.
+    fn note_waiting(&self, principal: u64, ph: &mut PrincipalHold) {
+        match (ph.queue.waiting(), ph.waiting_said) {
+            (Some(waiting), false) => {
+                self.say(format_args!(
+                    "principal {principal}'s held line {} could not be copied to its held file ({}); it and every line held after it wait in memory, copied in order as soon as the device takes them, and a close before then loses them",
+                    waiting.first(),
+                    waiting.refusal()
+                ));
+                ph.waiting_said = true;
+            }
+            (None, true) => {
+                self.say(format_args!("principal {principal}'s held lines wait in memory no more: every line standing is in its held file"));
+                ph.waiting_said = false;
+            }
+            (Some(_), true) | (None, false) => {}
+        }
     }
 
     /// Emits the `held` event (§4b.2) at the session's board, once per change

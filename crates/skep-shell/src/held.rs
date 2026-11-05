@@ -41,11 +41,10 @@
 //! each line is copied to it as it enters; where the store keeps the queue
 //! in memory alone ([`HeldQueue::in_memory`]: a directory out of reach —
 //! another process's lock on it among the causes, §3c.3) no copy is made,
-//! and a close loses the lines. An append the device refuses is answered
-//! beside the line, which
-//! stands in the queue all the same, its bytes cut back off the file. A
-//! re-mark that changes nothing is no line at all. A line kept at a position
-//! raises to it the `base` of every line held after it on its document
+//! and a close loses the lines. A line whose copy is refused stands in the
+//! queue all the same, and waits (below). A re-mark that changes nothing is
+//! no line at all. A line kept at a position raises to it the `base` of
+//! every line held after it on its document
 //! ([`HeldQueue::done`]), in the queue as the `done` is written and again at
 //! a reopen from that `done` line, so no line is rewritten to carry it
 //! (§3c.2). The person's `send` on a moved document raises a line's `base`
@@ -60,6 +59,25 @@
 //! of its ordinal carrying the shifted frame, synced before the shifted
 //! frame is dialed, so a relaunch reads the positions the shell last sent,
 //! never the page's.
+//!
+//! **A refused copy waits, and every line after it** (§3c.3; skep #813). A
+//! line whose first copy is refused — by the device, its write cut short or
+//! its sync refused, its bytes then cut back off the file; or by the writer,
+//! a line past [`MAX_HELD_LINE_BYTES`] — has the refusal answered beside it,
+//! and it WAITS in memory with every line held after it ([`Waiting`]): none
+//! of them is copied ahead of it, so the file never holds a line without
+//! every line standing before it, and a reopen never resends a burst ahead
+//! of the one it was composed after. The retry ([`HeldQueue::retry`]) copies
+//! the waiting lines in `k` order, each whole in its state now — a re-mark
+//! or a shift made while it waited carried in its first copy, spending none
+//! of the re-mark budget, as the reader counts a line's first copy — and
+//! stops at the first copy refused again, the lines waiting on from that
+//! one. It runs before every copy the queue makes — a hold's, a re-mark's, a
+//! shift's, a `done`'s and a join's — and the shell runs it at every probe
+//! of the board, whatever the board's state, so space freed while no one
+//! types is enough. A waiting line that leaves the queue writes no `done`,
+//! nothing of it standing on disk; a join meeting a waiting line enters
+//! nothing. A close before the retry lands loses the waiting lines.
 //!
 //! **The pending directory** (§3c.1; skep #725). A board whose head record
 //! stands and cannot be read, or a claimed board serving none — the shell's
@@ -982,7 +1000,7 @@ impl HeldDir {
     /// and the move's where a misplaced file cannot be moved aside.
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
-        let disk = Disk { path: path.clone(), named: self.named.clone(), principal, account: account.to_string(), created: false, headless: false, torn: None, whole_bytes: 0, remark_bytes: 0 };
+        let disk = Disk { path: path.clone(), named: self.named.clone(), principal, account: account.to_string(), created: false, headless: false, torn: None, whole_bytes: 0, remark_bytes: 0, waiting: None };
         let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
         let Some(mut reader) = LineReader::open(&path, MAX_HELD_LINE_BYTES)? else { return Ok(fresh(disk, None)) };
         let halted = |why: HaltWhy| Ok(Opened::Halted { path: path.clone(), why });
@@ -1123,7 +1141,8 @@ impl HeldDir {
 /// [`MAX_HELD_LINES`] — the next ordinal, the bytes its lines' frames and
 /// anchors hold ([`MAX_HELD_BYTES`]'s count, each line's its
 /// `HeldLine::held_bytes`), and the file the lines are copied to — `None`
-/// where the store keeps them in memory alone (§3c.3).
+/// where the store keeps them in memory alone (§3c.3) — beside the lines
+/// still waiting for their first copy there ([`HeldQueue::waiting`]).
 #[derive(Debug)]
 pub struct HeldQueue {
     disk: Option<Disk>,
@@ -1138,9 +1157,10 @@ pub struct HeldQueue {
 /// (created lazily on the first append, under `create_new`, and again after a
 /// compaction), whether a file with no whole header line stands for the
 /// first append to cut and head, what the open found past the whole lines,
-/// the bytes of its whole lines, and the bytes of the re-mark lines it
+/// the bytes of its whole lines, the bytes of the re-mark lines it
 /// holds that spend the re-mark budget ([`MAX_HELD_REMARK_BYTES`]'s count,
-/// from its creation; a line's mark of `sent` spends none).
+/// from its creation; a line's mark of `sent` spends none), and the queue's
+/// lines still owed their first copy, where one was refused.
 #[derive(Debug)]
 struct Disk {
     path: PathBuf,
@@ -1166,18 +1186,55 @@ struct Disk {
     /// — which the next copy cuts off first ([`Disk::append`]).
     whole_bytes: u64,
     remark_bytes: usize,
+    /// The queue's lines that wait for their first copy, where some do.
+    ///
+    /// Boxed: it stands only while a copy is refused, so a queue with none
+    /// is no larger for it.
+    waiting: Option<Box<Waiting>>,
 }
 
 /// One line entered in the queue: the ordinal it took, and why no copy stands.
 ///
-/// The why is given where its copy could not be written (§3c.3's
-/// `store_unwritable`, which the `held` answer carries as `unwritable`: a
-/// full disk, a read-only volume, a line past [`MAX_HELD_LINE_BYTES`]). The
+/// The why is given where no copy of the line stands (§3c.3's
+/// `store_unwritable`, which the `held` answer carries as `unwritable`): the
+/// refusal of its copy — the device's, a full disk or a read-only volume, or
+/// the writer's, a line past [`MAX_HELD_LINE_BYTES`] — or the refusal of the
+/// copy of a line held before it, behind which it waits ([`Waiting`]). The
 /// line stands in the queue either way.
 #[derive(Debug)]
 pub struct Entered {
     pub k: u64,
     pub unwritten: Option<io::Error>,
+}
+
+/// The lines of a queue that wait for their first copy (§3c.3; skep #813).
+///
+/// They are the line whose first copy was refused and every line held after
+/// it: the standing lines from [`Waiting::first`] on, none of them on disk
+/// and every line before them there, beside the refusal of the first. Made
+/// where a line's first copy is refused, moved to the line a retry stops at,
+/// and gone once no standing line waits ([`HeldQueue::retry`]).
+#[derive(Debug)]
+pub struct Waiting {
+    /// The ordinal of the first line that waits: the one refused.
+    first: u64,
+    /// The refusal of the first line's copy: the device's or the writer's.
+    error: io::Error,
+}
+
+impl Waiting {
+    /// Returns the ordinal of the first line that waits: the one refused.
+    pub fn first(&self) -> u64 {
+        self.first
+    }
+
+    /// Returns the refusal of the first waiting line's copy.
+    ///
+    /// It is the refusal's kind and its words, which every waiting line
+    /// answers as why no copy of it stands.
+    pub fn refusal(&self) -> io::Error {
+        io::Error::new(self.error.kind(), self.error.to_string())
+    }
 }
 
 /// Why a line was not held, and is kept nowhere.
@@ -1269,11 +1326,15 @@ impl HeldQueue {
     ///
     /// Where the queue has a file, the line is copied to it — one `write`
     /// then `sync_data` (persist-first), the header written once first where
-    /// the file is new. `anchors` are the page's, kept with the line for the
-    /// shift (skep #442), none where the burst carried none; their bytes
-    /// spend the queue's budget beside the frame's. It answers the ordinal
-    /// the line took, and why its copy failed where it did, for the caller's
-    /// answer to say (§3c.3).
+    /// the file is new — behind every line still waiting for its first copy,
+    /// which the retry copies first, in `k` order ([`HeldQueue::retry`]); a
+    /// copy refused leaves the line waiting with them. `anchors` are the
+    /// page's, kept with the line for the shift (skep #442), none where the
+    /// burst carried none; their bytes spend the queue's budget beside the
+    /// frame's. It answers the ordinal the line took and, where no copy of it
+    /// stands, the refusal that keeps it off the disk — of its own copy, or of
+    /// the copy of the line it waits behind — for the caller's answer to say
+    /// (§3c.3).
     ///
     /// # Errors
     ///
@@ -1295,12 +1356,72 @@ impl HeldQueue {
             return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, anchor_bytes, held_lines: self.lines.len() });
         }
         let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
+        let k = line.k;
         self.next_k += 1;
         self.held_bytes += line_bytes;
-        let unwritten = self.disk.as_mut().and_then(|d| d.write_line(&held_line_bytes(&line)).err());
-        let k = line.k;
         self.lines.push(line);
-        Ok(Entered { k, unwritten })
+        // The line's first copy is made behind every line still waiting for
+        // its own.
+        let from = self.waiting().map_or(k, Waiting::first);
+        self.copy_run(from);
+        Ok(Entered { k, unwritten: self.refusal_of(k) })
+    }
+
+    /// Returns the lines waiting for their first copy, where some do.
+    ///
+    /// They are the line whose copy was refused and every line held after it
+    /// (§3c.3), none on disk; a queue in memory alone copies no line, and
+    /// none waits there.
+    pub fn waiting(&self) -> Option<&Waiting> {
+        self.disk.as_ref()?.waiting.as_deref()
+    }
+
+    /// Copies the lines waiting for their first copy, in `k` order (§3c.3).
+    ///
+    /// It is the retry of a refused copy (skep #813): each waiting line is
+    /// copied whole in its state now, one `write` then `sync_data` as a
+    /// hold's copy is, and the first refused again stops it, the lines
+    /// waiting on from that one under its refusal ([`Waiting`]). It runs
+    /// before every copy the queue makes, and the shell runs it at every
+    /// probe of the board, whatever the board's state. Where no line waits
+    /// it writes nothing.
+    pub fn retry(&mut self) {
+        if let Some(from) = self.waiting().map(Waiting::first) {
+            self.copy_run(from);
+        }
+    }
+
+    /// Copies every standing line from ordinal `from` on, in `k` order.
+    ///
+    /// They are the first copies the lines are owed, each made whole in the
+    /// line's state now. The first copy refused stops the run, which waits
+    /// from that line on, its refusal kept; a run copied whole, or one whose
+    /// lines have all left the queue, waits no more. A queue in memory alone
+    /// copies nothing.
+    fn copy_run(&mut self, from: u64) {
+        let Some(disk) = self.disk.as_mut() else { return };
+        let start = self.lines.partition_point(|l| l.k < from);
+        for line in &self.lines[start..] {
+            if let Err(error) = disk.write_line(&held_line_bytes(line)) {
+                disk.waiting = Some(Box::new(Waiting { first: line.k, error }));
+                return;
+            }
+        }
+        disk.waiting = None;
+    }
+
+    /// Returns whether line `k`'s first copy stands on disk.
+    ///
+    /// It does where the queue has a file and the line waits for no copy.
+    fn copied(&self, k: u64) -> bool {
+        self.disk.as_ref().is_some_and(|d| d.waiting.as_ref().is_none_or(|w| k < w.first))
+    }
+
+    /// Returns why no copy of line `k` stands, where it waits for one.
+    ///
+    /// It is the refusal of the first waiting line's copy.
+    fn refusal_of(&self, k: u64) -> Option<io::Error> {
+        self.waiting().filter(|w| w.first <= k).map(Waiting::refusal)
     }
 
     /// Re-marks a standing line: its cause, refusal and `sent`.
@@ -1308,7 +1429,9 @@ impl HeldQueue {
     /// It appends a `held` line of its ordinal, which the reader takes in
     /// its place; no `done` is owed. A reason the line already has changes
     /// nothing and writes nothing. The queue takes the reason whatever the
-    /// disk did. A line not standing is left alone.
+    /// disk did. A line not standing is left alone. A line waiting for its
+    /// first copy takes the reason in the queue alone, and the retry copies
+    /// the line carrying it ([`HeldQueue::retry`]).
     ///
     /// # Errors
     ///
@@ -1335,7 +1458,9 @@ impl HeldQueue {
     /// later leaves it standing, in the queue and at a reopen alike, since
     /// either raise takes the greater. A reason and a base the line already
     /// carries change nothing and write nothing. The queue takes both
-    /// whatever the disk did. A line not standing is left alone.
+    /// whatever the disk did. A line not standing is left alone, and a line
+    /// waiting for its first copy takes both in the queue alone, as a
+    /// re-mark does ([`HeldQueue::remark`]).
     ///
     /// # Errors
     ///
@@ -1350,9 +1475,11 @@ impl HeldQueue {
     ///
     /// It is the body of [`HeldQueue::remark`], which raises nothing, and of
     /// [`HeldQueue::remark_raised`], whose raise takes the base where it is
-    /// past it. A re-mark that marks the line `sent` (`marks_sent`) is copied
-    /// as a hold's line is, spending none of the re-mark budget; every other
-    /// one is copied within it ([`Disk::write_remark`]).
+    /// past it. The waiting lines are copied first, this one among them where
+    /// it waits, its first copy carrying the re-mark; a line on disk then
+    /// takes its re-mark's copy — one that marks the line `sent`
+    /// (`marks_sent`) copied as a hold's line is, spending none of the
+    /// re-mark budget, every other one within it ([`Disk::write_remark`]).
     fn remark_raising(&mut self, k: u64, reason: Reason, raise: Option<u64>) -> io::Result<()> {
         let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
         let base = raise.map_or(line.base, |at| line.base.max(at));
@@ -1364,10 +1491,12 @@ impl HeldQueue {
         line.base = base;
         line.time = now_ms();
         let bytes = held_line_bytes(line);
+        let copied = self.copied(k);
+        self.retry();
         match self.disk.as_mut() {
-            Some(d) if marks => d.write_line(&bytes),
-            Some(d) => d.write_remark(&bytes),
-            None => Ok(()),
+            Some(d) if copied && marks => d.write_line(&bytes),
+            Some(d) if copied => d.write_remark(&bytes),
+            _ => Ok(()),
         }
     }
 
@@ -1386,7 +1515,10 @@ impl HeldQueue {
     /// queue's bytes are recounted by the new frame, the line's anchors
     /// counted as they were — a shift changes digits, never what the queue's
     /// budget bounds, which is what a hold ADDS — and the queue takes the
-    /// frame whatever the disk did. A line not standing is left alone.
+    /// frame whatever the disk did. A line not standing is left alone. The
+    /// waiting lines are copied first, this one among them where it waits —
+    /// its first copy carrying the shifted frame and spending none of the
+    /// re-mark budget — and a line on disk then takes the shift's copy.
     ///
     /// # Errors
     ///
@@ -1405,9 +1537,11 @@ impl HeldQueue {
         line.time = now_ms();
         self.held_bytes = self.held_bytes.saturating_sub(was).saturating_add(line.held_bytes());
         let bytes = held_line_bytes(line);
+        let copied = self.copied(k);
+        self.retry();
         match self.disk.as_mut() {
-            Some(d) => d.write_remark(&bytes),
-            None => Ok(()),
+            Some(d) if copied => d.write_remark(&bytes),
+            _ => Ok(()),
         }
     }
 
@@ -1415,7 +1549,9 @@ impl HeldQueue {
     ///
     /// The `done` is [`Done::Kept`] or [`Done::Dropped`]. The line leaves the
     /// queue whatever the disk did, and what the disk did is answered
-    /// ([`Settled`]) for the caller to say.
+    /// ([`Settled`]) for the caller to say. The waiting lines are copied
+    /// first ([`HeldQueue::retry`]); a line itself waiting for its first copy
+    /// has nothing on disk to resolve, and leaves with no `done` written.
     ///
     /// **The base behind a kept line.** A line kept at a position raises to
     /// it the `base` of every line held after it on its document, a base
@@ -1444,9 +1580,12 @@ impl HeldQueue {
         if let Done::Kept { at: Some(at) } = done {
             raise_bases(self.lines[index..].iter_mut(), &line.doc, at);
         }
-        // A file never created holds no line to resolve.
+        // A file never created, or a line waiting for its first copy, holds
+        // nothing on disk to resolve.
+        let copied = self.copied(k);
+        self.retry();
         let unwritten = match self.disk.as_mut() {
-            Some(d) if d.created => d.append(&done_line_bytes(k, done)).err(),
+            Some(d) if d.created && copied => d.append(&done_line_bytes(k, done)).err(),
             _ => None,
         };
         let mut unremoved = None;
@@ -1497,16 +1636,25 @@ impl HeldQueue {
     /// `from` held them; the queue's bytes count each line's frame and
     /// anchors, and no budget refuses one — the join enters what stood, as a
     /// reopen reads a file whole, and the queue holds nothing more until it
-    /// drains below its budgets.
+    /// drains below its budgets. The lines of this queue waiting for their
+    /// first copy are copied first ([`HeldQueue::retry`]), and no line of
+    /// `from` enters ahead of one that still waits.
     ///
     /// # Errors
     ///
-    /// Returns [`JoinRefused`] where a copy was refused — by the device, or
-    /// for a line whose ordinal here would pass [`MAX_ORDINAL`] — and the
-    /// join is UNDONE: every line it entered here is `done … dropped`, this
-    /// queue standing as it stood, and `from` untouched, its file standing
-    /// for the next launch's join. Nothing is lost, and nothing enters twice.
+    /// Returns [`JoinRefused`], nothing entered and `from` untouched, where a
+    /// line of this queue still waits for its first copy: at `from`'s first
+    /// line, under the refusal the waiting line carries. Returns it too where
+    /// a copy was refused — by the device, or for a line whose ordinal here
+    /// would pass [`MAX_ORDINAL`] — and the join is UNDONE: every line it
+    /// entered here is `done … dropped`, this queue standing as it stood, and
+    /// `from` untouched, its file standing for the next launch's join.
+    /// Nothing is lost, and nothing enters twice.
     pub fn join(&mut self, from: &HeldQueue) -> Result<Joined, JoinRefused> {
+        self.retry();
+        if let (Some(first), Some(waiting)) = (from.lines.first(), self.waiting()) {
+            return Err(JoinRefused { k: first.k, error: waiting.refusal() });
+        }
         let keep = self.lines.is_empty() && from.lines.first().is_some_and(|first| self.next_k <= first.k);
         let mut joined = Joined::default();
         for line in &from.lines {
@@ -1584,9 +1732,10 @@ pub struct Joined {
 #[derive(Debug)]
 pub struct JoinRefused {
     /// The ordinal, in the queue joined from, of the line whose copy was
-    /// refused.
+    /// refused — its first line, where a line of the queue joined into still
+    /// waits for its copy.
     pub k: u64,
-    /// The copy's refusal.
+    /// The copy's refusal, or the waiting line's.
     pub error: io::Error,
 }
 

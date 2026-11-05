@@ -251,7 +251,7 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     assert_eq!((&panel["rows"], &panel["windows"], &panel["price"]["over"]), (&json!([]), &json!([]), &json!([])), "no link, no window, under every cap: {panel}");
     assert_eq!((&panel["standing"], &panel["left_behind"]), (&json!("first"), &json!([])), "the bare edition's chain is empty, and no other draft stands on it: {panel}");
     let counted = mcp.call_json("publication_count", json!({}));
-    assert_eq!(counted["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "{counted}");
+    assert_eq!(counted["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "{counted}");
     let acked = mcp.call_json("publication_confirm", json!({}));
     let member = format!("{edition}.1");
     assert_eq!((acked["outcome"].as_str(), acked["member"].as_str(), acked["via"].as_str()), (Some("acknowledged"), Some(member.as_str()), Some("answer")), "{acked}");

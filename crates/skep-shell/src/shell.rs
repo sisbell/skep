@@ -35,6 +35,10 @@
 //! The four `publication` rows — the panel, the four numbers, the one
 //! request composed, signed and sent, the cancel — are the child module
 //! `publication`'s, `pub(super)` to the door, with the panels they stand on.
+//! The four `merge` rows — the composition landed in a draft, the shot
+//! carrying the supersession claim with the record after it, the undo, the
+//! withdrawal — are the child module `merge`'s, `pub(super)` to the door,
+//! with the compositions they stand on.
 //!
 //! **What the shell refuses without asking.** A write frame in the guest
 //! form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so no
@@ -101,7 +105,9 @@ use crate::Talk;
 
 mod ceremony;
 mod publication;
+mod merge;
 
+use merge::Merges;
 use publication::Publications;
 
 /// The session mode a run names, both arms selectable per run.
@@ -262,11 +268,12 @@ pub const WRITE_KINDS: [&str; 18] = [
 
 /// One call of the bridge, as [`Shell::call`] dispatches it.
 ///
-/// It is a call of §4b.1 — the `publication` family's four among them —
-/// the document index's listing `places` (A-255), or the change feed's
-/// page `changes`: one arm per call, which the compiler holds exhaustive,
-/// and the list a transport admits a call by, [`CALLS`], spelled from
-/// `Call::ALL` — so no call is listed that the dispatch does not answer.
+/// It is a call of §4b.1 — the `publication` family's four and the `merge`
+/// family's four among them — the document index's listing `places`
+/// (A-255), or the change feed's page `changes`: one arm per call, which
+/// the compiler holds exhaustive, and the list a transport admits a call
+/// by, [`CALLS`], spelled from `Call::ALL` — so no call is listed that the
+/// dispatch does not answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Call {
     Boards,
@@ -289,6 +296,10 @@ enum Call {
     PublicationCount,
     PublicationConfirm,
     PublicationCancel,
+    MergeCompose,
+    MergeLand,
+    MergeUndo,
+    MergeWithdraw,
     Upload,
     Fetch,
     Restore,
@@ -303,9 +314,10 @@ impl Call {
     /// Every call, in §4b.1's order.
     ///
     /// The `publication` family stands after `op`, whose publish arm it
-    /// carries; `places` stands beside `search`, and the change feed's
+    /// carries, and the `merge` family after it, whose shot its landing
+    /// rides; `places` stands beside `search`, and the change feed's
     /// `changes` last.
-    const ALL: [Call; 28] = [
+    const ALL: [Call; 32] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -326,6 +338,10 @@ impl Call {
         Call::PublicationCount,
         Call::PublicationConfirm,
         Call::PublicationCancel,
+        Call::MergeCompose,
+        Call::MergeLand,
+        Call::MergeUndo,
+        Call::MergeWithdraw,
         Call::Upload,
         Call::Fetch,
         Call::Restore,
@@ -359,6 +375,10 @@ impl Call {
             Call::PublicationCount => "publication.count",
             Call::PublicationConfirm => "publication.confirm",
             Call::PublicationCancel => "publication.cancel",
+            Call::MergeCompose => "merge.compose",
+            Call::MergeLand => "merge.land",
+            Call::MergeUndo => "merge.undo",
+            Call::MergeWithdraw => "merge.withdraw",
             Call::Upload => "upload",
             Call::Fetch => "fetch",
             Call::Restore => "restore",
@@ -376,12 +396,13 @@ impl Call {
     }
 }
 
-/// The bridge's twenty-eight calls, as it spells them, in its order.
+/// The bridge's thirty-two calls, as it spells them, in its order.
 ///
-/// They are §4b.1's twenty-six — the `publication` family's four among them
-/// — the document index's listing, `places` (A-255), and the change feed's
-/// page, `changes`: the list a transport admits a call by, every name of it
-/// one [`Shell::call`] answers.
+/// They are §4b.1's thirty — the `publication` family's four and the
+/// `merge` family's four among them — the document index's listing,
+/// `places` (A-255), and the change feed's page, `changes`: the list a
+/// transport admits a call by, every name of it one [`Shell::call`]
+/// answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -483,6 +504,11 @@ pub struct Shell {
     /// by the bus's watcher at `session-died`, whichever thread met the
     /// death.
     publications: Arc<Publications>,
+    /// The merge compositions (§4b.1's `merge` family).
+    ///
+    /// One per (board, principal), the latest composed standing, dying with
+    /// the session it stands under as the panels do.
+    merges: Arc<Merges>,
     session_mode: SessionMode,
     talk: Talk,
     /// The own node's board reference, where the shell runs one.
@@ -684,11 +710,16 @@ impl Shell {
         // `session-died`, whichever thread — a call's, or a board's feed
         // thread's — met the death, and says `ended` for each.
         let publications = Arc::new(Publications::default());
-        let watched = Arc::clone(&publications);
+        // The merge compositions die with their session the same way, by
+        // the same watcher, saying nothing: a composition's state crosses
+        // in its calls' answers alone.
+        let merges = Arc::new(Merges::default());
+        let (watched, watched_merges) = (Arc::clone(&publications), Arc::clone(&merges));
         bus.watch(move |bus, event| {
             if event.name == EventName::SessionDied {
                 if let Some(session) = event.data["session"].as_str() {
                     watched.ended(bus, session);
+                    watched_merges.ended(session);
                 }
             }
         });
@@ -708,6 +739,7 @@ impl Shell {
             store,
             holds,
             publications,
+            merges,
             session_mode: opts.session_mode,
             talk: opts.talk,
             own_node_reference,
@@ -904,6 +936,10 @@ impl Shell {
             Some(Call::PublicationCount) => self.publication_count(args),
             Some(Call::PublicationConfirm) => self.publication_confirm(args),
             Some(Call::PublicationCancel) => self.publication_cancel(args),
+            Some(Call::MergeCompose) => self.merge_compose(args),
+            Some(Call::MergeLand) => self.merge_land(args),
+            Some(Call::MergeUndo) => self.merge_undo(args),
+            Some(Call::MergeWithdraw) => self.merge_withdraw(args),
             Some(Call::Upload) => self.upload(args),
             Some(Call::Fetch) => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),
             Some(Call::Restore) => self.restore(args),

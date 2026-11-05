@@ -32,13 +32,13 @@ use super::*;
 use crate::sessions::{Facts, Open};
 
 /// Returns a signed session's facts: a key that signs nothing here.
-fn signed_facts(principal: u64) -> Facts {
+pub(super) fn signed_facts(principal: u64) -> Facts {
     let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
     Facts { principal, account: Some(format!("1.0.{principal}")), kind: SessionKind::Signed { fingerprint, set_account: format!("1.0.{principal}") } }
 }
 
 /// Registers a session of `facts` at the shell's first board: its reference.
-fn register(shell: &Shell, token: &str, facts: Facts) -> String {
+pub(super) fn register(shell: &Shell, token: &str, facts: Facts) -> String {
     let board = shell.board_references().remove(0);
     let open = Open { token: Token::parse(&token.repeat(16)).unwrap(), facts, opened_at: 0 };
     shell.sessions.register(&shell.boards[0], open, &mut shell.feed(&board)).reference.clone()
@@ -180,14 +180,16 @@ fn no_panel_cancel_is_idempotent_and_the_rows_read_their_members_first() {
 
 /// The signed shell over a claimed board, its own node the board: the
 /// shell, the events seen, the board's and a signed session's references.
-struct Ground {
-    shell: Shell,
-    seen: Arc<Mutex<Vec<Event>>>,
-    board: String,
-    session: String,
+///
+/// The merge family's suite (`tests/merge.rs`) stands on the same ground.
+pub(super) struct Ground {
+    pub(super) shell: Shell,
+    pub(super) seen: Arc<Mutex<Vec<Event>>>,
+    pub(super) board: String,
+    pub(super) session: String,
 }
 
-fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
+pub(super) fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
     claim_board(&format!("http://127.0.0.1:{}", sd.port()), &dir.path().join("store"));
     open_ground(dir, sd)
 }
@@ -195,7 +197,7 @@ fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
 /// A fresh signed shell over the board `ground` claimed, its key store the
 /// same: a second device's shell, holding no index and no panel of the
 /// first's.
-fn open_ground(dir: &TempDir, sd: &Skepd) -> Ground {
+pub(super) fn open_ground(dir: &TempDir, sd: &Skepd) -> Ground {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     let (talk, _) = talk();
@@ -210,17 +212,17 @@ fn open_ground(dir: &TempDir, sd: &Skepd) -> Ground {
 }
 
 impl Ground {
-    fn op(&self, frame: Value) -> Value {
+    pub(super) fn op(&self, frame: Value) -> Value {
         self.shell.call("op", &json!({"session": self.session, "frame": frame})).unwrap_or_else(|r| panic!("{frame}: {r}"))
     }
 
-    fn addr(&self, frame: Value) -> String {
+    pub(super) fn addr(&self, frame: Value) -> String {
         self.op(frame)["addr"].as_str().expect("an ack_addr").to_string()
     }
 
     /// A draft of the claimant's holding `text`, minted and never staged:
     /// the board records no base for it.
-    fn draft(&self, text: &str) -> String {
+    pub(super) fn draft(&self, text: &str) -> String {
         let minted = self.op(json!({"op": "create_new_document", "account": "1.0.1"}));
         let d = minted["addr"].as_str().expect("an ack_addr").to_string();
         self.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": minted["at"]}));
@@ -231,26 +233,26 @@ impl Ground {
     /// document while its chain is empty — by the one `stage` frame, which
     /// copies `from`'s words by identity and records the draft's base
     /// (B3-S10), `text` written at its head.
-    fn staged(&self, from: &str, text: &str) -> String {
+    pub(super) fn staged(&self, from: &str, text: &str) -> String {
         let staged = self.op(skep_client::board::frames::stage(from, None));
         let d = staged["addr"].as_str().expect("an ack_addr").to_string();
         self.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "1"}, "values": [text], "as_of": staged["at"]}));
         d
     }
 
-    fn call(&self, name: &str, args: Value) -> Result<Value, Refusal> {
+    pub(super) fn call(&self, name: &str, args: Value) -> Result<Value, Refusal> {
         self.shell.call(name, &args)
     }
 
     /// The `publication` events seen so far, their states in order.
-    fn states(&self) -> Vec<String> {
+    pub(super) fn states(&self) -> Vec<String> {
         self.seen.lock().unwrap().iter().filter(|e| e.name == EventName::Publication).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect()
     }
 
     /// The `publication` events' states once `n` of them are seen: the
     /// events are copied on the answerer's thread, so a check of the ones a
     /// call said waits for them to arrive.
-    fn states_once(&self, n: usize) -> Vec<String> {
+    pub(super) fn states_once(&self, n: usize) -> Vec<String> {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let states = self.states();
@@ -262,14 +264,21 @@ impl Ground {
         }
     }
 
-    fn position(&self) -> u64 {
+    pub(super) fn position(&self) -> u64 {
         self.shell.call("health", &json!({"board": self.board})).unwrap()["health"]["log_position"].as_u64().unwrap()
+    }
+
+    /// The text a document reads over its first `width` positions, read
+    /// under the session — a draft of the person's own among them.
+    pub(super) fn text(&self, doc: &str, width: u64) -> String {
+        let read = self.op(skep_client::board::frames::retrieve_v(doc, 1, width));
+        read["items"].as_array().into_iter().flatten().map(|i| i["content"].as_str().unwrap_or("")).collect()
     }
 
     /// Waits for the document index to list each of `docs` among the
     /// session's places: the shell's own list, which an open reads for the
     /// family it leaves behind.
-    fn listed(&self, docs: &[&str]) {
+    pub(super) fn listed(&self, docs: &[&str]) {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let places = self.call("places", json!({"session": self.session})).unwrap_or_else(|r| panic!("{r}"));
@@ -330,7 +339,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     assert_eq!((rows[0]["home"].as_str(), rows[0]["kind"].as_str(), rows[0]["label"].as_str()), (Some(notes.as_str()), Some("notes"), Some("notes here")));
     assert_eq!(rows[0]["links"], json!([link]));
     assert_eq!(rows[0]["types"][0]["ty"], citation);
-    assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "the counts at the default: every private row OFF");
+    assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "the counts at the default: every private row OFF, and no merge marker to claim from");
     assert_eq!(panel["windows"], json!([]), "no run windows an unpublished origin of the person's");
     assert_eq!(panel["read_with"], json!({set.clone(): true}), "the set the edition is read with");
     assert_eq!(panel["price"]["over"], json!([]), "under every cap: {}", panel["price"]);
@@ -338,7 +347,7 @@ fn the_family_publishes_a_drafts_links_and_answers_as_data() {
     // The count with the notes ON: ⟨l⟩ up by one, nothing dialed.
     let dials = g.shell.log().entries().len();
     let counted = g.call("publication.count", json!({"session": g.session, "switches": {"on": [notes]}})).unwrap();
-    assert_eq!(counted["count"], json!({"l": 1, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "{counted}");
+    assert_eq!(counted["count"], json!({"l": 1, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "{counted}");
     crate::shapes::assert_declared("Price", &counted["price"]);
     assert!(counted["price"]["bytes"].as_u64().unwrap() > panel["price"]["bytes"].as_u64().unwrap(), "the price moves with the switches: {counted}");
     assert_eq!(g.shell.log().entries().len(), dials + 1, "the count is pure local: its own call logged and no dial");
@@ -885,6 +894,107 @@ fn a_siblings_shot_between_the_open_and_the_confirm_is_restated_and_nothing_land
     assert_eq!(g.states_once(3), ["sent", "acknowledged", "restated"], "{:?}", g.states());
     let daughter = g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((daughter["outcome"].as_str(), daughter["member"].as_str()), (Some("acknowledged"), Some(format!("{e1}.1").as_str())), "behind is told, never refused: {daughter}");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks the open's read of the draft's merge marker and the claim it
+/// composes from it (the merge bridge lane; `client.md` §4b.1's merge row,
+/// `land`): the request carries `supersede` ONLY for the marker's published
+/// daughters and ONLY where the marker's head is the trunk's head as read
+/// at the open, by a direct probe, never off the standing.
+///
+/// D publishes E.1 and E.2; S, staged from E.1 and behind, publishes the
+/// daughter E.1.1 with its own words; L, a level draft staged from E.2,
+/// takes the merge of E.2 with E.1.1 (`merge.compose`), its marker naming
+/// E.1.1 under head E.2. L's `publication.open` answers `count.supersede
+/// [E.1.1]` and its panel, count and acknowledgment are declared; the
+/// `confirm` is acknowledged E.3 with `supersede [E.1.1]`, what rode, and
+/// `in_claims` at E.1.1 answers one active claim homed in E whose `new` is
+/// E.3 — the daughter marked superseded in the member's commit. Then a
+/// marked draft BEHIND the head: L2 takes the merge of E.3 with E.2.1 (a
+/// daughter S2 publishes under E.2), a SECOND DEVICE's shell publishes E.4
+/// meanwhile, and L2's open — the marker's head E.3 no longer the trunk's
+/// — carries no claim, `count.supersede []`, its standing `behind`; its
+/// confirm lands a daughter E.3.1 with no claim. An unmarked draft's open
+/// carries none, and its acknowledgment says none rode: the body today's
+/// (the mutants that claim off the standing alone send a claim at a marked
+/// draft the trunk moved past, which the board refuses whole; the one that
+/// composes the claim from `sides` unfiltered claims a private draft).
+#[test]
+fn the_open_on_a_marked_draft_carries_the_claim_only_where_the_markers_head_is_the_trunks() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
+    let open = |g: &Ground, draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
+    let confirm = |g: &Ground| g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    // D publishes E.1, then E.2; S, behind at E.1, publishes the daughter
+    // E.1.1 with its own words.
+    let d = g.staged(&edition, "the fox");
+    open(&g, &d);
+    let e1 = format!("{edition}.1");
+    assert_eq!(confirm(&g)["member"].as_str(), Some(e1.as_str()));
+    let s = g.addr(skep_client::board::frames::stage(&e1, None));
+    g.op(json!({"op": "insert", "doc": s, "at": {"subspace": "1", "ordinal": "8"}, "values": [" today"], "as_of": g.position()}));
+    g.op(json!({"op": "insert", "doc": d, "at": {"subspace": "1", "ordinal": "8"}, "values": [" jumps"], "as_of": g.position()}));
+    open(&g, &d);
+    let e2 = format!("{edition}.2");
+    assert_eq!(confirm(&g)["member"].as_str(), Some(e2.as_str()));
+    open(&g, &s);
+    let e11 = format!("{e1}.1");
+    assert_eq!(confirm(&g)["member"].as_str(), Some(e11.as_str()), "the daughter under E.1");
+    // L, level with the head, takes the merge of E.2 with E.1.1.
+    let l = g.addr(skep_client::board::frames::stage(&e2, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": edition, "alternative": e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!((landed["outcome"].as_str(), landed["into"].as_str()), (Some("landed"), Some(l.as_str())), "{landed}");
+    let marker = g.op(skep_client::board::frames::doc_metadata(&l))["merge"].clone();
+    assert_eq!((marker["sides"].clone(), marker["head"].as_str()), (json!([e11]), Some(e2.as_str())), "the marker the open reads: {marker}");
+    // The open on the marked draft at the head: the claim rides.
+    let panel = open(&g, &l);
+    crate::shapes::assert_declared("PublicationPanel", &panel);
+    crate::shapes::assert_declared("Count", &panel["count"]);
+    assert_eq!((panel["count"]["supersede"].clone(), panel["standing"].as_str()), (json!([e11]), Some("at_head")), "the marker's published daughter, the marker's head the trunk's: {panel}");
+    let counted = g.call("publication.count", json!({"session": g.session})).unwrap();
+    assert_eq!(counted["count"]["supersede"], json!([e11]), "the count carries the claim as data: {counted}");
+    let acked = confirm(&g);
+    crate::shapes::assert_declared("Acknowledged", &acked);
+    let e3 = format!("{edition}.3");
+    assert_eq!((acked["member"].as_str(), acked["supersede"].clone()), (Some(e3.as_str()), json!([e11])), "the claim rode: {acked}");
+    let text = g.text(&e3, 19);
+    assert!(text.starts_with("the fox") && text.contains(" jumps") && text.contains(" today") && text.len() == 19, "{text:?}");
+    let claims = g.call("op", json!({"guest": true, "board": g.board, "frame": skep_client::board::frames::in_claims(&e11)})).unwrap();
+    let rows = claims["claims"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1, "one claim at the daughter: {claims}");
+    assert_eq!((rows[0]["new"].as_str(), rows[0]["home"].as_str(), rows[0]["active"].as_bool().unwrap_or(true)), (Some(e3.as_str()), Some(edition.as_str()), true), "homed in the trunk, naming the member: {claims}");
+    // A marked draft BEHIND the head carries none: L2's merge of E.3 with
+    // E.2.1, then a second device moves the head to E.4.
+    let s2 = g.addr(skep_client::board::frames::stage(&e2, None));
+    g.op(json!({"op": "insert", "doc": s2, "at": {"subspace": "1", "ordinal": "14"}, "values": [" high"], "as_of": g.position()}));
+    open(&g, &s2);
+    let e21 = format!("{e2}.1");
+    assert_eq!(confirm(&g)["member"].as_str(), Some(e21.as_str()), "the daughter under E.2");
+    let l2 = g.addr(skep_client::board::frames::stage(&e3, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": edition, "alternative": e21, "into": l2})).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
+    let second = open_ground(&dir, &sd);
+    let t = second.addr(skep_client::board::frames::stage(&e3, None));
+    second.op(json!({"op": "insert", "doc": t, "at": {"subspace": "1", "ordinal": "20"}, "values": ["!"], "as_of": second.position()}));
+    open(&second, &t);
+    let e4 = format!("{edition}.4");
+    assert_eq!(confirm(&second)["member"].as_str(), Some(e4.as_str()), "the head moved to E.4");
+    second.shell.shutdown();
+    let behind = open(&g, &l2);
+    assert_eq!((behind["count"]["supersede"].clone(), behind["standing"].as_str()), (json!([]), Some("behind")), "a marked draft behind the head claims nothing: {behind}");
+    let daughter = confirm(&g);
+    assert_eq!((daughter["member"].as_str(), daughter["supersede"].clone()), (Some(format!("{e3}.1").as_str()), json!([])), "the daughter lands with no claim: {daughter}");
+    // An unmarked draft: no claim, and the acknowledgment says none rode.
+    let plain = g.addr(skep_client::board::frames::stage(&e4, None));
+    g.op(json!({"op": "insert", "doc": plain, "at": {"subspace": "1", "ordinal": "21"}, "values": ["?"], "as_of": g.position()}));
+    let unmarked = open(&g, &plain);
+    assert_eq!(unmarked["count"]["supersede"], json!([]), "{unmarked}");
+    let acked = confirm(&g);
+    assert_eq!((acked["member"].as_str(), acked["supersede"].clone()), (Some(format!("{edition}.5").as_str()), json!([])), "{acked}");
     g.shell.shutdown();
     sd.shutdown();
 }

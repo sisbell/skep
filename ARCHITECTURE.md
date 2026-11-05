@@ -284,9 +284,10 @@ foundation and on the stores above it.
   `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
-  record): the bridge's twenty-four calls — §4b.1's
-  twenty-two, the document index's listing and the change feed's page —
-  and seven events over
+  record): the bridge's thirty-two calls — §4b.1's thirty, the
+  publication family's four and the merge family's four among them, the
+  document index's listing and the change feed's page — and eight events
+  over
   `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC
   moments to the page and answers SECRET and CONSENT ones from a dev arm
@@ -836,7 +837,13 @@ re-exports counted as the module it is brought from (held by
   `confirm`, `cancel` over `skep_client::publication` — `pub(super)` to
   `call`, and `Publications`, the panels they stand on: one family per
   (board, principal), the standing panel and the held ones, each dying with
-  its session through the bus's watcher.
+  its session through the bus's watcher; the open's read of the draft's
+  merge marker, from which the request's supersession claim is composed.
+- `shell/merge.rs` the four `merge` rows — `compose`, `land`, `undo`,
+  `withdraw` over `skep_client::merge` — `pub(super)` to `call`, and
+  `Merges`, the compositions they stand on: one per (board, principal), the
+  latest standing, dying with its session through the bus's watcher; the
+  shot of `land` goes through `shell/publication.rs`'s panel and send.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.
@@ -845,7 +852,8 @@ Rules that hold across its files:
 
 - **One door per call.** Every call reaches its row through `Shell::call`,
   which logs it; the row methods are `shell`'s alone — private, or
-  `pub(super)` in `shell/ceremony.rs` and `shell/publication.rs` — so a
+  `pub(super)` in `shell/ceremony.rs`, `shell/publication.rs` and
+  `shell/merge.rs` — so a
   transport cannot serve a call the log never saw. `Shell::fetch` is the
   one public row, because it streams, and logs its own call.
   `tests/it/tidy.rs` pins `Shell`'s public methods across every
@@ -864,8 +872,8 @@ Rules that hold across its files:
 
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
-it; `modes`, `ceremonies`, `boards`, `held` and `publication` against a
-daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`
+it; `modes`, `ceremonies`, `boards`, `held`, `publication` and `merge`
+against a daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`
 and `resend` drive the hold over a fake board; the other modules test
 themselves over fakes and temp dirs; and `tests/it/tidy.rs` holds the
 arrangement — the declaration order, every file under `src/` declared by

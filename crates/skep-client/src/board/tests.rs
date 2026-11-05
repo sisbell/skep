@@ -112,6 +112,32 @@ fn the_builders_spell_the_wires_own_examples() {
     assert_eq!(mint, json!({"account":"1.0.1","also":["1.0.1.0.9"],"claim":true,"draft":"1.0.1.0.7","mint":true,"op":"publish","runs":runs[1..]}));
 }
 
+/// The merge marker read (the merge bridge lane): `merge_marker` decodes
+/// the board's `merge` member off a `doc_metadata` answer — the sides by
+/// address, the head, its count as read and the landing's position —
+/// answers no marker where the board serves `null`, an absent member, or an
+/// object naming no head, and no answer at all for a document that is no
+/// `doc_metadata` answer, a rejection among them (the mutant that reads a
+/// rejection as no marker lets a withheld draft's open claim nothing and
+/// say so as a fact).
+#[test]
+fn the_marker_read_decodes_the_boards_merge_member_and_absent_where_it_serves_none() {
+    let marked = json!({"as_of": 9, "at": 8, "base": "1.0.1.0.1.3", "base_copied": "7", "doc": "1.0.1.0.2", "merge": {"sides": ["1.0.1.0.1.2.1", "1.0.1.0.4"], "head": "1.0.1.0.1.3", "head_copied": "7", "at": 8}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    let marker = merge_marker(&marked).expect("a doc_metadata answer").expect("a marker");
+    assert_eq!(marker, MergeMarker { sides: vec!["1.0.1.0.1.2.1".into(), "1.0.1.0.4".into()], head: "1.0.1.0.1.3".into(), head_copied: Some(7), at: Some(8) });
+    let bare = json!({"as_of": 9, "at": 8, "base": "1.0.1.0.1.3", "base_copied": "7", "doc": "1.0.1.0.2", "merge": null, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    assert_eq!(merge_marker(&bare), Some(None), "a draft carrying no marker");
+    let absent = json!({"as_of": 9, "doc": "1.0.1.0.2", "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    assert_eq!(merge_marker(&absent), Some(None), "an older board serving no member");
+    let headless = json!({"as_of": 9, "doc": "1.0.1.0.2", "merge": {"sides": []}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    assert_eq!(merge_marker(&headless), Some(None), "an object naming no head is no marker");
+    let empty_sides = json!({"as_of": 9, "doc": "1.0.1.0.2", "merge": {"sides": [], "head": "1.0.1.0.1.3"}, "owner": "1.0.1", "published": false, "resp": "doc_metadata"});
+    assert_eq!(merge_marker(&empty_sides).flatten().map(|m| (m.sides.len(), m.head_copied, m.at)), Some((0, None, None)), "the draft-side form's marker names no daughter");
+    let refused = json!({"code": "withheld", "disposition": "permanent", "op": "doc_metadata", "resp": "rejected", "site": {"addr": "1.0.1.0.2"}});
+    assert_eq!(merge_marker(&refused), None, "a rejection is no answer, never no marker");
+    assert_eq!(merge_marker(&json!({"as_of": 9, "resp": "span_set", "set": []})), None);
+}
+
 /// The four type constants the publication reads by, each the wire's own
 /// spelling (a literal, with its line): the correspondence class the
 /// publish shot's records are typed (wire.md §The publish shot and

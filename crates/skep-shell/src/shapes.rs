@@ -4,10 +4,12 @@
 //! on the Rust side and declared for the page from that definition".
 //! [`declarations`] renders one TypeScript declaration file — every call's
 //! input and output, every event, the refusal, the `feed` update's shape (a
-//! `changes` entry's too), the index state's ten arms and the publication
-//! family's panel, inputs and outcomes — from the table below, which is
+//! `changes` entry's too), the index state's ten arms, the publication
+//! family's panel, inputs and outcomes, and the merge family's report and
+//! outcomes — from the table below, which is
 //! written by hand beside the code that builds each value (`shell`,
-//! `shell::publication`, `feed`, `sessions`, `refusal`, `person`, `hold`)
+//! `shell::publication`, `shell::merge`, `feed`, `sessions`, `refusal`,
+//! `person`, `hold`)
 //! and pinned by this module's suite: a sample of each type, built as the
 //! code builds it,
 //! is round-tripped through `serde_json` and its field names held equal to
@@ -239,8 +241,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Count",
         open: false,
-        doc: "`publication.count(session, {switches, answers})` — THE COUNT: PUB-3.8's four numbers as DATA (DECISION 5) — ⟨l⟩ the switched-on sets' `links` entries plus the `read_with` entries, ⟨n⟩ the formatting line's marks that re-make nothing, ⟨r⟩ the `retract` entries no re-make covers, ⟨e⟩ the re-makes — `claim` whether the one write carries the edition claim, `read_with` the entries the switches need: each switched-on row's destination other than the member, once, where the edition is not already read with it",
-        fields: &[req("l", "number"), req("n", "number"), req("r", "number"), req("e", "number"), req("claim", "boolean"), req("read_with", "string[]")],
+        doc: "`publication.count(session, {switches, answers})` — THE COUNT: PUB-3.8's four numbers as DATA (DECISION 5) — ⟨l⟩ the switched-on sets' `links` entries plus the `read_with` entries, ⟨n⟩ the formatting line's marks that re-make nothing, ⟨r⟩ the `retract` entries no re-make covers, ⟨e⟩ the re-makes — `claim` whether the one write carries the edition claim, `read_with` the entries the switches need: each switched-on row's destination other than the member, once, where the edition is not already read with it; `supersede` THE SUPERSESSION CLAIM the one write carries — the published daughters the draft's merge marker names, each one claim in the commit marking the daughter superseded by the member (the slot's merge form, B3-S11's THE MERGE SCENE) — composed by the shell at the open off the board's marker alone, never session memory, and ONLY where the marker's head is the trunk's head as read at the open: empty at an unmarked draft, at a marked draft behind the head, and at a draft-side merge, whose side is a private draft no public claim supersedes",
+        fields: &[req("l", "number"), req("n", "number"), req("r", "number"), req("e", "number"), req("claim", "boolean"), req("read_with", "string[]"), req("supersede", "string[]")],
     },
     Shape {
         name: "Price",
@@ -278,8 +280,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "Acknowledged",
         open: false,
-        doc: "`publication.confirm` — THE ACKNOWLEDGMENT: `member` the member minted (`E.1` of the edition at the mint form), `edition` the edition minted at the mint form, `claim` whether the edition claim rode in the write (the request's own, echoed), `at` the commit's position, `via` how it was reached — `answer` the frame's own ack or the memo of the one re-ask, `twin` `already_published` READ AS THE ACKNOWLEDGMENT (the landed test passed at the member the refusal named), `records`, `walk` and `edition_claim` a lost answer's landed test; the page lands at P5",
-        fields: &[req("outcome", "'acknowledged'"), req("member", "string"), req("edition", "string | null"), req("claim", "boolean"), req("at", "number"), req("via", "AckVia")],
+        doc: "`publication.confirm` — THE ACKNOWLEDGMENT: `member` the member minted (`E.1` of the edition at the mint form), `edition` the edition minted at the mint form, `claim` whether the edition claim rode in the write (the request's own, echoed), `supersede` the daughters the write claimed superseded — the panel's `count.supersede` as sent, less a daughter an active claim of the person's own already named, which the board skips and the request leaves out — `at` the commit's position, `via` how it was reached — `answer` the frame's own ack or the memo of the one re-ask, `twin` `already_published` READ AS THE ACKNOWLEDGMENT (the landed test passed at the member the refusal named), `records`, `walk` and `edition_claim` a lost answer's landed test; the page lands at P5",
+        fields: &[req("outcome", "'acknowledged'"), req("member", "string"), req("edition", "string | null"), req("claim", "boolean"), req("supersede", "string[]"), req("at", "number"), req("via", "AckVia")],
     },
     Shape {
         name: "Restated",
@@ -304,6 +306,68 @@ const SHAPES: &[Shape] = &[
         open: true,
         doc: "`publication(board, session, {draft, state, …})` (§4b.2) — THE STATE OF THE ONE REQUEST as it moves: `sent` (the frame left the shell), `acknowledged {member, edition, at}` (the commit stands), `restated` (the re-read found a difference; nothing sent), `refused {arm}` (the arm by name, its data in `confirm`'s answer), `cancelled` (the standing panel dropped by `cancel`), `ended` (the session died with the panel standing or held — gone with it); fired at `confirm`'s send and at its outcome, at `cancel`, and at the session's death",
         fields: &[req("board", "string"), req("session", "string"), req("draft", "string"), req("state", "'sent' | 'acknowledged' | 'restated' | 'refused' | 'cancelled' | 'ended'")],
+    },
+    Shape {
+        name: "MergeReport",
+        open: false,
+        doc: "`merge.compose(session, {doc, alternative, into?})` — or THE DRAFT SIDE, `merge.compose(session, {doc, draft, into?})` — THE REPORT, brief-shaped as the publication panel is, every member DATA and never a string: `outcome` — `landed`, M landed into `into` by ONE `set_arrangement` (the draft named, or a FRESH draft staged from the head first where none is named, `fresh` true), typed against the compose's read of the draft, the draft's recorded base re-recorded to the head and the marker set beside it, `position` the write's commit, `head_moved` the trunk's newer head where one stands (LAND AND TELL: the write landed on the head it composed on), `record_link` the merge record's public link, or null where the record could not be written and the landing stands (`unrecorded` the refusal, for a later `merge.compose` to record); `reopened`, the draft `into` already carrying this merge (its marker naming the side and the head): the report with NOTHING landed, the side read as compose read it — at the marker's position, `position` — and each unsettled gap's state read off the draft as it stands, settled `person` where the draft no longer arranges the gap's default as M placed it (its runs removed whole, or reordered); `merged`, a daughter a supersession claim of the person's own already names: `member` the member that claim names, `claims` the claims standing at the daughter, `record_link` the record of that merge — written now where none named it — and nothing landed; `doc` the trunk, `head` the trunk's head the merge was composed on (the marker's at a re-open), `base` the member both sides descend from, derived, `side` the daughter or the draft composed, `form` which, `sides` the record's sides with the position a draft side was read at, `runs` M with each run's side and family, `gaps` THE GAP REPORT — each gap its kind (`order`, `corner`, `cut`, `collision`, `moves` unsettled; `anchor` settled by the rules), its anchors, the runs placed with their sides, the placement as it stands (the default), `settled` and `resolved_by` (`rule`, `person`, `agent`, `answer:<address>`, or null) — `counts` the run counts, `m` against `cap`, `over_cap` where it passes it (the composition answered, nothing landed, the refusal `over_cap`), `record` the merge record's body as it stands — unlanded at a re-open — and `as_of` the one board position every read was made at",
+        fields: &[
+            req("outcome", "'landed' | 'reopened' | 'merged'"),
+            req("doc", "string"),
+            req("head", "string"),
+            req("base", "string"),
+            req("side", "string"),
+            req("form", "'daughter' | 'draft'"),
+            req("sides", "MergeSide[]"),
+            req("runs", "MergeRun[]"),
+            req("gaps", "MergeGap[]"),
+            req("counts", "RunCounts"),
+            req("cap", "number"),
+            req("over_cap", "boolean"),
+            req("record", "unknown"),
+            req("as_of", "number"),
+            opt("into", "string"),
+            opt("position", "number"),
+            opt("fresh", "boolean"),
+            opt("head_moved", "string | null"),
+            opt("record_link", "string | null"),
+            opt("unrecorded", "Refusal"),
+            opt("member", "string"),
+            opt("claims", "string[]"),
+        ],
+    },
+    Shape { name: "MergeSide", open: false, doc: "one side of the merge record: `at` the member or the draft, `role` the head, an alternative (a daughter), a draft or a fork, `position` the board position a draft side was read at — null at a member", fields: &[req("at", "string"), req("role", "'head' | 'alternative' | 'draft' | 'fork'"), req("position", "number | null")] },
+    Shape {
+        name: "MergeRun",
+        open: false,
+        doc: "one run of M, the merged list, in V-order: `width` positions of `origin`'s content I-space from the ordinal `i_start`, `side` the side that placed it (0 the head, then each side in order) or null for the base's own, `family` the shot's three — `own` the trunk's I-space by reference, `window` another document's, `draft_native` a draft side's fresh text",
+        fields: &[req("origin", "string"), req("i_start", "number"), req("width", "number"), req("side", "number | null"), req("family", "'own' | 'window' | 'draft_native'")],
+    },
+    Shape {
+        name: "MergeGap",
+        open: false,
+        doc: "one gap of the report: `id` the key `merge.land`'s `resolutions` take, `kind`, `after` and `before` the surviving base anchors on either side (null at an edge), `runs` the runs the gap places with the side each came from, `placed` the placement as it stands — the sides' order, `after` or `before` the anchor, or `omitted` — `settled` whether the rules settled it (an `anchor` gap) or the person did (`resolved_by` `person`), `resolved_by` who settled it, or null while it stands unsettled at its default",
+        fields: &[req("id", "number"), req("kind", "GapKind"), req("after", "string | null"), req("before", "string | null"), req("runs", "GapRun[]"), req("placed", "GapPlacement"), req("settled", "boolean"), req("resolved_by", "string | null")],
+    },
+    Shape { name: "GapRun", open: false, doc: "one run a gap places: `side` the side it came from, `i_start` its first I-address, `width` its positions", fields: &[req("side", "number"), req("i_start", "string"), req("width", "number")] },
+    Shape { name: "RunCounts", open: false, doc: "the run counts the record keeps (the merge record's decision 17): `a` the head's, `b` the sides', `m` the merged list's, checked against the cap", fields: &[req("a", "number"), req("b", "number"), req("m", "number")] },
+    Shape {
+        name: "MergeLanded",
+        open: false,
+        doc: "`merge.land(session, {resolutions?})` — THE LANDING ON THE TRUNK: the shot through the publication family's one composition and send from the draft the composition landed in — the panel standing for it, with the switches and answers the page last sent, or one the shell opens over the whole draft, every private row OFF and every window kept private — THE REQUEST CARRYING THE SUPERSESSION CLAIM as the panel composed it at its open (`Count.supersede`), then THE MERGE RECORD, its own write, idempotent by reading first: `member` the member minted, `at` its commit, `via` and `claim` the acknowledgment's, `supersede` the daughters the write claimed superseded (`Acknowledged.supersede`), `daughter` whether the head moved under a shot naming NO daughter — the draft side's — and the member landed as a daughter, reported as a race is and never a silent success, `record` the merge record's public link, null where the member stands and its record could not be written (`unrecorded` the refusal; the next `merge.compose` of the daughter records it), `claims` the supersession claims standing at the daughters whose `new` is the member, `retries` the record's; the composition is gone with the landing; the panel's RE-STATEMENT (`Restated`) and its typed REFUSAL (`PublicationRefused`) are the other two shapes — the race, `supersede_refused` with `detail` `head_moved` and `head` the trunk's, crossing as the board answered it, NOTHING RE-SENT, the composition gone, to be made again on that head; `no_merge` where nothing is composed",
+        fields: &[req("outcome", "'landed'"), req("member", "string"), req("at", "number"), req("via", "AckVia"), req("claim", "boolean"), req("supersede", "string[]"), req("daughter", "boolean"), req("record", "string | null"), opt("unrecorded", "Refusal"), req("claims", "string[]"), req("retries", "number")],
+    },
+    Shape {
+        name: "Undone",
+        open: false,
+        doc: "`merge.undo(session)` — the landing's one undo step while the session that landed it stands: ONE `set_arrangement` carrying the arrangement the draft held before the landing, its old base as the base to record, and no marker, typed against the landing's position (the library's R6 with P3's command rule: a write to the draft since the landing refuses it `arrangement_moved`, nothing wiped); `draft` the draft the merge was taken back out of, `position` the write's commit, `record` the replacing record's public link (null where no record of the landing stood), `restored` the base restored, address and extent (null where the draft records none); the composition is gone with the undo; `no_merge` where nothing is composed, `nothing_to_undo {draft, why}` where the merge is not one an undo takes back",
+        fields: &[req("draft", "string"), req("position", "number"), req("record", "string | null"), req("restored", "{ base: string; extent: number } | null")],
+    },
+    Shape {
+        name: "Withdrawn",
+        open: false,
+        doc: "`merge.withdraw(session, {draft})` — THE WITHDRAWAL, in any session: ONE `set_arrangement` of the draft's current runs with its recorded base re-sent unmoved and no `merge`, clearing the marker and keeping the words, typed against the shell's read of the draft; `draft` the draft, `position` the write's commit, `record` the replacing record's public link (null where no record of the landing stood); `no_merge {draft}` where the draft carries no marker, `not_owner {addr}` where it is another account's or published",
+        fields: &[req("draft", "string"), req("position", "number"), req("record", "string | null")],
     },
 ];
 
@@ -372,6 +436,10 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "publication.count", forms: &[&[req("session", "string"), opt("switches", "Switches"), opt("answers", "Record<string, OriginAnswer>")]], result: "{ count: Count; price: Price }" },
     CallRow { name: "publication.confirm", forms: &[&[req("session", "string"), opt("switches", "Switches"), opt("answers", "Record<string, OriginAnswer>")]], result: "Acknowledged | Restated | PublicationRefused" },
     CallRow { name: "publication.cancel", forms: &[&[req("session", "string")]], result: "Empty" },
+    CallRow { name: "merge.compose", forms: &[&[req("session", "string"), req("doc", "string"), opt("alternative", "string"), opt("draft", "string"), opt("into", "string")]], result: "MergeReport" },
+    CallRow { name: "merge.land", forms: &[&[req("session", "string"), opt("resolutions", "Record<string, MergeChoice>")]], result: "MergeLanded | Restated | PublicationRefused" },
+    CallRow { name: "merge.undo", forms: &[&[req("session", "string")]], result: "Undone" },
+    CallRow { name: "merge.withdraw", forms: &[&[req("session", "string"), req("draft", "string")]], result: "Withdrawn" },
     CallRow { name: "upload", forms: &[&[req("session", "string"), req("target", "string"), req("path", "string")]], result: "never" },
     CallRow {
         name: "fetch",
@@ -418,6 +486,9 @@ pub const ALIASES: &[&str] = &[
     "export type Missing = { copy: number } | { retraction: number };",
     "export type HandKey = 'own' | 'other' | 'bare' | 'lost';",
     "export type BaseStanding = 'at_head' | 'behind' | 'first' | 'superseded_first';",
+    "export type GapKind = 'order' | 'anchor' | 'corner' | 'cut' | 'collision' | 'moves';",
+    "export type GapPlacement = number[] | 'after' | 'before' | 'omitted';",
+    "export type MergeChoice = 'keep_both' | 'omit' | { order: number[] } | { keep_only: number } | { after: string } | { before: string };",
 ];
 
 /// Returns a call's name as a method of the `Bridge` interface: quoted where
@@ -476,7 +547,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four among them — the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four and the `merge` family's four among them — the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

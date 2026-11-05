@@ -236,6 +236,70 @@ impl Name {
     pub const ANSWERS_LOST: Name = Name("answers_lost");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");
+    /// A `merge.land` or a `merge.undo` with no composition standing, or a
+    /// `merge.withdraw` of a draft carrying no merge.
+    ///
+    /// None was composed under the session's board and principal, it was
+    /// landed or taken back, or it went with its session (the family's one
+    /// session rule; `client.md` §4b.1's merge row, "`no_merge` at `land`
+    /// with nothing composed"); at the withdrawal the draft carries no marker
+    /// (`skep_client::merge::Refusal::NoMerge`). The detail names the
+    /// `session`, or the `draft`.
+    pub const NO_MERGE: Name = Name("no_merge");
+    /// A side whose base the merge library cannot read (`client.md` §4b.1's
+    /// merge row, `BaseUnknown{side}`).
+    ///
+    /// The detail names the `side` and the `reason`: `base_unknown` — a
+    /// member of another document, a draft of another account's, a draft the
+    /// board records no base for or whose base lies in another chain
+    /// (`skep_client::merge::Refusal::BaseUnknown`); `bare_source` with the
+    /// `source` — a draft staged from the bare document, before its first
+    /// version, whose base is history the board does not serve
+    /// (`Refusal::BareSource`); `draft_base_disagrees` with `named` and
+    /// `served` (`Refusal::DraftBaseDisagrees`, never met by this shell,
+    /// which names no base).
+    pub const BASE_UNKNOWN: Name = Name("base_unknown");
+    /// Two drafts off one head: no merge shape
+    /// (`skep_client::merge::Refusal::TwoDrafts`); the way out is to shoot
+    /// one.
+    pub const TWO_DRAFTS: Name = Name("two_drafts");
+    /// The merged list holds more runs than one publication may carry.
+    ///
+    /// `skep_client::merge::Refusal::OverCap`, met at `merge.compose` with
+    /// nothing landed (the merge record's decision 13, "refuse with count";
+    /// B3-S11's cap face at the act); the detail names `n`, the runs, and
+    /// the `cap`.
+    pub const OVER_CAP: Name = Name("over_cap");
+    /// A draft the merge family would write into that is another account's,
+    /// or published.
+    ///
+    /// The draft `merge.compose` is to land into (`into`), read off its
+    /// `doc_metadata` before anything is composed — the page's member,
+    /// UNTRUSTED (skep #799) — or the one an undo or a withdrawal is to
+    /// take a merge out of, as the board refuses it (`not_owner`,
+    /// `published_target`; `skep_client::merge::Refusal::{NotOwner,
+    /// UnownedDraft, Published}`); the detail names the `addr`.
+    pub const NOT_OWNER: Name = Name("not_owner");
+    /// Nothing to undo on the draft the composition landed in.
+    ///
+    /// `skep_client::merge::Refusal::NothingToUndo`, nothing sent; the
+    /// detail names the `draft` and `why`: `inherited` (the marker came with
+    /// the draft's staging), `published` with the `version` (the merge was
+    /// published from the draft; the way back is the revert), `taken_back`
+    /// (an undo or a withdrawal already took it out).
+    pub const NOTHING_TO_UNDO: Name = Name("nothing_to_undo");
+    /// A refusal of the merge library with no name of its own here.
+    ///
+    /// Each crosses as typed data under this one name, its `arm` the
+    /// library's arm in snake case and the arm's members beside it
+    /// (`shell/merge.rs`'s `merge_refusal`): `too_fragmented {doc,
+    /// runs_seen}`, `history_busy`, `history_reclaimed {at, floor}`,
+    /// `beyond_head {at, head}`, `not_a_position {at, nearest}`,
+    /// `fork_base_moved {fork, source, head}`, `base_not_in_chain {into,
+    /// head}`, `window_withheld {origin}`, `needs_signed_session`,
+    /// `fork_base_named {fork, base}`, `supersede_refused {index, detail,
+    /// head}`.
+    pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────
 

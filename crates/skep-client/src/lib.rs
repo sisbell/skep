@@ -41,9 +41,11 @@
 //!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
 //!   spells every frame this crate sends, its child `answers` decodes the
 //!   read answers the crate reads but the registry reads', which `Board`
-//!   decodes itself, and an envelope member a caller reads in place, and
-//!   `Rejection::key` is the one token a refusal is dispatched on (wire.md
-//!   §Rejections).
+//!   decodes itself, and an envelope member a caller reads in place — and
+//!   lends an embedder one reader, `merge_marker`, a draft's merge marker
+//!   off a `doc_metadata` answer the embedder dialed (the merge bridge
+//!   lane) — and `Rejection::key` is the one token a refusal is dispatched
+//!   on (wire.md §Rejections).
 //! * [`derive`](mod@derive) — the pure derivations over board reads: the
 //!   mode off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
 //!   three-state key diagnosis at the set AUTH-5.21's walk reaches

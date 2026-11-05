@@ -52,7 +52,8 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 /// Checks that every call is named by its own spelling.
 ///
 /// Every call parses back from its own spelling, so no two calls share one;
-/// `CALLS` is those spellings in §4b.1's order, the document index's listing
+/// `CALLS` is those spellings in §4b.1's order — the publication family
+/// after `op`, the merge family after it — the document index's listing
 /// `places` beside `search`; a name of no call names none, and `call`
 /// answers it `unknown_call`; and `fetch`, which streams on its transport's
 /// own route, is answered `streamed_call` through the door, whatever its
@@ -63,9 +64,10 @@ fn every_call_is_named_by_its_own_spelling() {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[27]), (28, "boards", "changes"));
-    assert_eq!((CALLS[23], CALLS[24]), ("search", "places"));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[31]), (32, "boards", "changes"));
+    assert_eq!((CALLS[27], CALLS[28]), ("search", "places"));
     assert_eq!(&CALLS[16..20], ["publication.open", "publication.count", "publication.confirm", "publication.cancel"], "the publication family stands after `op`, whose publish arm it carries");
+    assert_eq!(&CALLS[20..24], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
     assert_eq!(Call::named("verify"), None);
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
     let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));
@@ -233,7 +235,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 33, "the optional members of the thirteen rows of one form that declare any: the publication family's twelve among them, `publication.open`'s `also` included");
+    assert_eq!(asked, 37, "the optional members of the fifteen rows of one form that declare any: the publication family's twelve and the merge family's four among them, `publication.open`'s `also` and `merge.compose`'s `into` included");
 }
 
 /// Checks that an ended or another run's reference is answered its reason,

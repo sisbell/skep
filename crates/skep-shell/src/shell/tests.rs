@@ -15,7 +15,8 @@
 //! `changes` the catch-up call, against the daemon and over a scripted
 //! board; `publication` the publication family — the rules the shell alone
 //! keeps, and the panel, the count, the confirm and the cancel against the
-//! daemon.
+//! daemon; `merge` the merge family — the compose, the land, the undo and
+//! the withdrawal against the daemon, and the rules the shell alone keeps.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -40,6 +41,7 @@ mod ceremonies;
 mod changes;
 mod door;
 mod held;
+mod merge;
 mod modes;
 mod publication;
 

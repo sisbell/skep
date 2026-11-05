@@ -86,7 +86,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Removal", json!({"record": "1.0.1.0.5.0.2.9", "mark": "1.0.1.0.2.1.0.2.1", "mark_value": {"from": [], "to": [], "ty": [], "at": 7}, "on_selection": true, "spent": false, "remake": null})),
         ("LinkValue", json!({"from": [{"start": "1.0.1.0.2.0.1.5", "width": "0.0.0.0.0.0.0.5"}], "to": [], "ty": [{"start": "1.1.0.1.0.1.0.3.13", "width": "0.0.0.0.0.0.0.0.1"}], "at": 7})),
         ("LinkSpan", json!({"start": "1.0.1.0.2.0.1.5", "width": "0.0.0.0.0.0.0.5"})),
-        ("Count", json!({"l": 3, "n": 2, "r": 1, "e": 0, "claim": false, "read_with": ["1.0.1.0.4"]})),
+        ("Count", json!({"l": 3, "n": 2, "r": 1, "e": 0, "claim": false, "read_with": ["1.0.1.0.4"], "supersede": ["1.0.1.0.2.1.1"]})),
         ("Price", json!({"lists": [3, 1, 4, 1, 1], "body": 120, "values": 10, "reads": 20, "bytes": 5000, "over": [{"term": "lists", "by": 1}]})),
         ("PriceOver", json!({"term": "links", "by": 4})),
         ("Window", json!({"run": 2, "origin": "1.0.1.0.7", "owner": "1.0.1", "i_start": 1, "width": 5, "counterpart": {"run": 2, "draft": "1.0.1.0.7", "record": "1.0.1.0.7.0.2.1", "from": {"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4}, "to": {"chain": "1.0.1.0.2.0.1", "first": 16, "width": 4}}})),
@@ -95,11 +95,23 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("ISpan", json!({"chain": "1.0.1.0.7.0.1", "first": 1, "width": 4})),
         ("Hold", json!({"since": 1_761_696_000_000u64})),
         ("Switches", json!({"on": ["1.0.1.0.6"], "destinations": {"1.0.1.0.6": {"set": "1.0.1.0.4"}}})),
-        ("Acknowledged", json!({"outcome": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "claim": false, "at": 412, "via": "answer"})),
+        ("Acknowledged", json!({"outcome": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "claim": false, "supersede": ["1.0.1.0.2.1.1"], "at": 412, "via": "answer"})),
         ("Restated", json!({"outcome": "restated", "left": [], "superseded": [], "came": ["1.0.1.0.6.0.2.3"], "removals_undone": [], "removals_came": [], "selection": [{"run": 1, "placement": {"split": [[1, 2, 1], [3, 3, 1]]}}], "race": {"at": 999, "key": "bare", "signed": false}, "standing": "behind"})),
         ("RaceKey", json!({"at": 999, "key": "bare", "signed": false})),
         ("PublicationRefused", json!({"outcome": "refused", "arm": "claim_refused", "edition": "1.0.1.0.2"})),
         ("PublicationEvent", json!({"board": "b-0", "session": "s-0", "draft": "1.0.1.0.5", "state": "acknowledged", "member": "1.0.1.0.2.2", "edition": null, "at": 412})),
+        (
+            "MergeReport",
+            json!({"outcome": "landed", "doc": "1.0.1.0.2", "head": "1.0.1.0.2.1", "base": "1.0.1.0.2.1", "side": "1.0.1.0.2.1.1", "form": "daughter", "sides": [{"at": "1.0.1.0.2.1", "role": "head", "position": null}], "runs": [{"origin": "1.0.1.0.2", "i_start": 1, "width": 19, "side": null, "family": "own"}], "gaps": [], "counts": {"a": 1, "b": 1, "m": 1}, "cap": 4096, "over_cap": false, "record": {"type": "merge"}, "as_of": 12, "into": "1.0.1.0.5", "position": 13, "fresh": false, "head_moved": null, "record_link": "1.0.1.0.1.0.2.3", "member": "1.0.1.0.2.2", "claims": []}),
+        ),
+        ("MergeSide", json!({"at": "1.0.1.0.5", "role": "draft", "position": 12})),
+        ("MergeRun", json!({"origin": "1.0.1.0.2", "i_start": 1, "width": 19, "side": 1, "family": "draft_native"})),
+        ("MergeGap", json!({"id": 1, "kind": "order", "after": "1.0.1.0.2.0.1.4", "before": null, "runs": [{"side": 1, "i_start": "1.0.1.0.2.0.1.20", "width": 6}], "placed": [0, 1], "settled": false, "resolved_by": null})),
+        ("GapRun", json!({"side": 1, "i_start": "1.0.1.0.2.0.1.20", "width": 6})),
+        ("RunCounts", json!({"a": 1, "b": 2, "m": 3})),
+        ("MergeLanded", json!({"outcome": "landed", "member": "1.0.1.0.2.2", "at": 412, "via": "answer", "claim": false, "supersede": ["1.0.1.0.2.1.1"], "daughter": false, "record": "1.0.1.0.1.0.2.3", "claims": ["1.0.1.0.2.0.2.1"], "retries": 0})),
+        ("Undone", json!({"draft": "1.0.1.0.5", "position": 14, "record": null, "restored": {"base": "1.0.1.0.2.1", "extent": 19}})),
+        ("Withdrawn", json!({"draft": "1.0.1.0.5", "position": 14, "record": "1.0.1.0.1.0.2.4"})),
     ]
 }
 
@@ -145,7 +157,7 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 28, "the twenty-eight calls: §4b.1's with the publication family's four, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 32, "the thirty-two calls: §4b.1's with the publication family's four and the merge family's four, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
@@ -155,6 +167,14 @@ fn the_file_names_every_shape_call_and_event() {
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price }>>;\n",
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",
         "  'publication.cancel'(args: { session: string }): Promise<Outcome<Empty>>;\n",
+        "  'merge.compose'(args: { session: string; doc: string; alternative?: string; draft?: string; into?: string }): Promise<Outcome<MergeReport>>;\n",
+        "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
+        "  'merge.undo'(args: { session: string }): Promise<Outcome<Undone>>;\n",
+        "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",
+        "  supersede: string[];\n",
+        "  over_cap: boolean;\n",
+        "  unrecorded?: Refusal;\n",
+        "export type MergeChoice = 'keep_both' | 'omit' | { order: number[] } | { keep_only: number } | { after: string } | { before: string };\n",
         "  places(args: { session: string; board?: string; opts?: PlacesOpts } | { guest: true; board?: string; origin?: string; opts?: PlacesOpts }): Promise<Outcome<PlacesAnswer>>;\n",
         "  changes(args: { session: string; since: number; limit?: number; class?: 'drafts' } | { guest: true; board?: string; origin?: string; since: number; limit?: number }): Promise<Outcome<ChangesAnswer>>;\n",
         "  opened_at?: number;\n",

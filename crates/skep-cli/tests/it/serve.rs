@@ -1032,7 +1032,7 @@ fn f5b_the_publication_family_over_the_bridge() {
     let rows = panel["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "{panel}");
     assert_eq!((rows[0]["home"].as_str(), rows[0]["kind"].as_str(), rows[0]["links"].clone()), (Some(notes.as_str()), Some("notes"), json!([link])), "{panel}");
-    assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": []}), "{panel}");
+    assert_eq!(panel["count"], json!({"l": 0, "n": 0, "r": 0, "e": 0, "claim": false, "read_with": [], "supersede": []}), "{panel}");
     assert_eq!((panel["windows"].clone(), panel["read_with"].clone(), panel["price"]["over"].clone()), (json!([]), json!({set.clone(): true}), json!([])), "{panel}");
     // THE COUNT with the row ON: ⟨l⟩ one up, no dial.
     let log_before = signed.get("/bridge/log").2.len();

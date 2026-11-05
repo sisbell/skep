@@ -6,11 +6,13 @@
 //! link's age, [`LinkValue`]), a `delivery`'s first value, a `span_set`'s
 //! content extent and a `runs` answer's I-map, the count by home's `homes`,
 //! the retracted-links read's `links` window and an `edition_claims`
-//! answer's rows, and behind `search` and `merge` a `delivery`'s typed items,
-//! its values and the origin of its first `withheld` item, a
-//! `doc_metadata`'s terms, a `universal_grants` answer's rows, a head
-//! member's pair, a `compare` answer's pairs, a `claims` answer's rows and
-//! an answer's `as_of`. Pure functions of a document the caller already
+//! answer's rows, a draft's merge marker off a `doc_metadata` answer for an
+//! embedder ([`merge_marker`], the merge bridge lane), and behind `search`
+//! and `merge` a `delivery`'s typed items, its values and the origin of its
+//! first `withheld` item, a `doc_metadata`'s terms, a `universal_grants`
+//! answer's rows, a head member's pair, a `compare` answer's pairs, a
+//! `claims` answer's rows and an answer's `as_of`. Pure functions of a
+//! document the caller already
 //! holds: the dial stays the caller's — under its token or as a guest — and
 //! with it what the death signal means. The ack and refusal readers
 //! (`acked_at`, `acked_addr`, [`Rejection`](super::Rejection)) and the
@@ -507,19 +509,60 @@ pub(crate) struct Metadata {
 }
 
 /// The merge marker a draft carries (wire.md §The response envelope,
-/// `doc_metadata`'s `merge`).
+/// `doc_metadata`'s `merge`; the landing lane's R2).
 ///
-/// It is the merge's sides by address, possibly empty, the version the merge
-/// was composed on and that version's content count as read at the compose
-/// — what the base beside it records — and the position of the commit that
-/// put the marker on the document.
-#[cfg_attr(not(feature = "acting"), allow(dead_code))]
+/// It is the merge's sides by address, possibly empty — a daughter of the
+/// trunk's chain, or a private draft at the draft-side form — the version
+/// the merge was composed on and that version's content count as read at
+/// the compose — what the base beside it records — and the position of the
+/// commit that put the marker on the document. The board records it at a
+/// `set_arrangement` naming a base and a merge, copies it to a draft staged
+/// from the marked one, and clears it at the draft's own `publish` and at a
+/// `set_arrangement` naming no merge (the withdrawal, the undo). An
+/// embedder reads it off a `doc_metadata` answer through [`merge_marker`]:
+/// the editor's shell, for the supersession claim its publication carries
+/// and the re-open of a merge the draft already carries (the merge bridge
+/// lane).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MergeMarker {
-    pub(crate) sides: Vec<String>,
-    pub(crate) head: String,
-    pub(crate) head_copied: Option<u64>,
-    pub(crate) at: Option<u64>,
+pub struct MergeMarker {
+    /// The merge's sides by address, possibly empty.
+    pub sides: Vec<String>,
+    /// The trunk member the merge was composed on.
+    pub head: String,
+    /// The head's content count as read at the compose; `None` where the
+    /// board serves none.
+    pub head_copied: Option<u64>,
+    /// The position of the commit that put the marker on the draft; `None`
+    /// where the board serves none.
+    pub at: Option<u64>,
+}
+
+/// Returns the merge marker a `doc_metadata` answer carries.
+///
+/// It is `None` for a document that is no such answer — a rejection among
+/// them; `Some(None)` where the draft carries no marker, `merge` null or
+/// absent, or an object naming no head; else `Some(Some(marker))`. The
+/// public read of the marker (the merge bridge lane): the dial is the
+/// caller's, under its token or as a guest, as every reader of this module
+/// leaves it.
+pub fn merge_marker(v: &Value) -> Option<Option<MergeMarker>> {
+    if v["resp"].as_str() != Some("doc_metadata") {
+        return None;
+    }
+    Some(marker_of(v))
+}
+
+/// Returns the marker a `doc_metadata` answer's `merge` member spells.
+///
+/// `None` where the member is no object naming its head.
+fn marker_of(v: &Value) -> Option<MergeMarker> {
+    let m = v["merge"].as_object()?;
+    Some(MergeMarker {
+        sides: m.get("sides")?.as_array()?.iter().filter_map(|s| s.as_str().map(str::to_string)).collect(),
+        head: m.get("head")?.as_str()?.to_string(),
+        head_copied: m.get("head_copied").and_then(Value::as_str).and_then(natural),
+        at: m.get("at").and_then(Value::as_u64),
+    })
 }
 
 /// Decodes a `doc_metadata` answer.
@@ -528,26 +571,13 @@ pub(crate) struct MergeMarker {
 /// or one without its owner or its `published` bit. A `source` or a `base`
 /// that is neither a string nor absent reads as absent: the merge checks the
 /// address it names itself. A `merge` that is no object naming its head
-/// reads as absent too.
+/// reads as absent too ([`merge_marker`]).
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
         return None;
     }
     let count = |member: &str| v[member].as_str().and_then(natural);
-    let merge = v["merge"].as_object().and_then(|m| {
-        Some(MergeMarker {
-            sides: m
-                .get("sides")?
-                .as_array()?
-                .iter()
-                .filter_map(|s| s.as_str().map(str::to_string))
-                .collect(),
-            head: m.get("head")?.as_str()?.to_string(),
-            head_copied: m.get("head_copied").and_then(Value::as_str).and_then(natural),
-            at: m.get("at").and_then(Value::as_u64),
-        })
-    });
     Some(Metadata {
         published: v["published"].as_bool()?,
         owner: v["owner"].as_str()?.to_string(),
@@ -556,7 +586,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         source: v["source"].as_str().map(str::to_string),
         base: v["base"].as_str().map(str::to_string),
         base_copied: count("base_copied"),
-        merge,
+        merge: marker_of(v),
         at: v["at"].as_u64(),
     })
 }

@@ -27,11 +27,17 @@
 //! under the board's own directory;
 //! a refusal the table holds nowhere faced at the first dial, a
 //! `write_busy` and a first and second `durability` reissued within the
-//! first dial's call and a third holding the burst; a burst answered
-//! `500 internal_panic` held `sent: true` and read before it is sent again;
-//! a write the hold never holds taking the same path, faced where a burst is
-//! held and its ack noted for the base; the death signal at a write's dial
-//! holding nothing; `resolve(send)` answering once the lines are handed
+//! first dial's call, a second `write_busy` holding the burst `sent: false`
+//! with its clock started at its birth and a third `durability` holding it;
+//! a burst answered `500 internal_panic` held `sent: true` and read before it
+//! is sent again; a write the hold never holds taking the same path, faced
+//! where a burst is held and its ack noted for the base; the death signal at
+//! a burst's dial, or at its shifted dial, holding it `session_died` and at
+//! any other write's holding nothing, the line taking the death's reason
+//! unless the resend re-marked it first, and kept by the probe with no clock
+//! run on it; over the real dialer, a refused connection held `unreachable`
+//! unsent and a request the dialer cannot make faced; `resolve(send)`
+//! answering once the lines are handed
 //! back, before any dial; a board the holds were not opened over stopped as
 //! the caller's bug; the stored frame without its attest; P38's halted file
 //! refusing every act at the principal's door, `resolve` among them, a copy
@@ -744,31 +750,74 @@ fn a_drop_drops_its_own_documents_run_and_no_other() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// Checks that a refusal held nowhere is faced, a `write_busy` reissued once.
+/// Checks that a refusal held nowhere is faced, and a second `write_busy`
+/// holds a burst.
 ///
 /// A refusal the table holds nowhere is faced at the burst's first dial
-/// (§3c.4's neither), and a `write_busy` — read by its code off the 503 the
-/// board answers it as — is reissued within the call, once, after the short
-/// wait (§4b.1's `op` row: "reissued by the shell and reach the page as the
-/// ack or the next refusal, never as `held`"): a `write_busy` the reissue
-/// meets again is the next refusal, faced; one the reissue clears is the
-/// ack; no burst is held (the mutants that hold either, that face the first
-/// `write_busy`, or that reissue it without bound).
+/// (§3c.4's neither). A `write_busy` — read by its code off the 503 the board
+/// answers it as — is reissued within the call, once, after the short wait
+/// (§4b.1's `op` row: "reissued by the shell and reach the page as the ack or
+/// the next refusal"), and one the reissue clears is the ack. A `write_busy`
+/// the reissue meets again holds a burst (§3c.4; skep #786): answered `held`,
+/// cause `unreachable`, its line `sent: false` — the board briefly full, the
+/// write committing nothing — said `holding`, and at the next probe sent from
+/// the head with no read for its landing and kept; while a write the hold
+/// never holds faces it, `write_busy` and its 503, nothing held (the mutants
+/// that face the burst's second `write_busy`, hold a non-burst's, hold the
+/// first, or reissue it without bound).
 #[test]
-fn a_refusal_the_table_holds_nowhere_is_faced_and_a_write_busy_reissued_once() {
+fn a_refusal_the_table_holds_nowhere_is_faced_and_a_second_write_busy_holds_a_burst() {
     let g = ground();
     g.fake.op_rejected.every(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
     let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("faced at the act") };
     assert_eq!((refused.name(), g.fake.sends()), ("index_rebuilding", 1), "{refused}");
     g.fake.op_rejected.clear();
-    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
-    let OpAnswer::Answered(Err(busy)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("the reissue's refusal faced") };
-    let v = busy.to_value();
-    assert_eq!((busy.name(), v["status"].as_u64(), g.fake.sends()), ("write_busy", Some(503), 3), "reissued once: {v}");
     g.fake.op_refused.next(1, (503, json!({"error": "write_busy"})));
-    let OpAnswer::Answered(Ok(ack)) = g.holds.send_burst(&g.session, insert(DOC, json!(["c"]), g.fake.head()), None) else { panic!("the reissue acked") };
-    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 5), "{ack}");
-    assert!(g.lines().is_empty(), "no burst is held");
+    let OpAnswer::Answered(Ok(ack)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("the reissue acked") };
+    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 3), "reissued once: {ack}");
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    let link = json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": [DOC]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
+    let OpAnswer::Answered(Err(busy)) = g.holds.send(&g.session, link, None) else { panic!("a write the hold never holds faces it") };
+    let v = busy.to_value();
+    assert_eq!((busy.name(), v["status"].as_u64(), g.fake.sends()), ("write_busy", Some(503), 5), "reissued once, then faced: {v}");
+    assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held");
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["c"]), g.fake.head()), None) else { panic!("held at the reissue's own write_busy") };
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str(), g.fake.sends()), (Some("held"), Some("unreachable"), 7), "reissued once, then held: {held}");
+    let lines = g.lines();
+    assert_eq!((lines.len(), lines[0]["sent"].as_bool()), (1, Some(false)), "the write committed nothing: {lines:?}");
+    assert_eq!(g.states(), ["holding"]);
+    g.fake.op_refused.clear();
+    let reads = g.fake.changes_reads.load(Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.fake.changes_reads.load(Ordering::SeqCst)), (8, reads), "sent from the head, no read for a landing");
+    assert!(g.lines().is_empty() && g.states() == ["sending", "kept"], "kept");
+}
+
+/// Checks that a burst held at its second `write_busy` starts its clock then.
+///
+/// The person's own first dial is the line's first failed send, whatever the
+/// failure (`HAND_OVER_DEADLINE`; §3c.4): a burst held at the reissue's own
+/// `write_busy` — `unreachable` with `sent: false`, as a connection never
+/// made is held, which starts nothing — is born with its clock running, so
+/// past the deadline the next probe hands it to the person, `answers_lost`
+/// naming `write_busy`, dialing nothing (the mutant that reads the line's
+/// clock off its reason alone sends a busy board's line at every probe, the
+/// deadline never reached).
+#[test]
+fn a_burst_held_at_its_second_write_busy_starts_its_clock_at_its_birth() {
+    let g = ground();
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held at the reissue's own write_busy") };
+    assert_eq!((held["cause"].as_str(), g.fake.sends()), (Some("unreachable"), 2), "{held}");
+    g.holds.advance(HAND_OVER_DEADLINE);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!(g.fake.sends(), 2, "handed over, undialed");
+    assert_eq!(
+        (lines[0]["cause"].as_str(), lines[0]["refusal"]["last"].as_str(), lines[0]["sent"].as_bool()),
+        (Some("answers_lost"), Some("write_busy"), Some(false)),
+        "the person's own first dial started the clock: {lines:?}"
+    );
 }
 
 /// Checks that a first and second `durability` are reissued, a third holds.
@@ -927,22 +976,164 @@ fn the_eight_unholdable_writes_are_refused_under_a_standing_hold_and_dialed_else
     assert!(g.lines().is_empty(), "a write the hold never holds is held never");
 }
 
-/// Checks that a death signal at a write's dial holds nothing.
+/// The `session_died` refusal the session's end answers, on the restart arm
+/// with no re-open: what `Shell::died` hands `Holds::note_death`.
+fn died(g: &Ground) -> Refusal {
+    Refusal::shell(Name::SESSION_DIED, json!({"session": g.session.reference, "reason": crate::sessions::restart_reason(None, None)}))
+}
+
+/// Checks that the death at a burst's dial holds the burst, and at any other
+/// write's holds nothing.
 ///
-/// The death is neither held nor faced (§3c.4): a burst and a write the
-/// hold never holds each answer `OpAnswer::Died`, the session's end the
-/// caller's to run, and no line is held and no `held` event said (the
-/// mutant that holds the burst at the death keeps a line behind a session
-/// nobody ends).
+/// The death is neither held nor faced (§3c.4), and a burst that met it is
+/// held before its session ends (skep #786): the burst answers
+/// `OpAnswer::Died` with its line held `session_died`, `sent: false` — a
+/// dead token's write commits nothing — one line and one `held` event,
+/// `holding` under the cause; a write the hold never holds answers
+/// `OpAnswer::Died` with nothing held. Once the end derives the death, the
+/// line takes its reason (`Holds::note_death`) — the `session_died` refusal,
+/// its arm — and the call's answer is the `held` answer; the line still
+/// holds: no act of the person's moves it (`not_resolvable`), no clock runs
+/// on it, and the probe sends it from the head with no read once the board
+/// takes the session's writes, two minutes on, and keeps it (the mutants
+/// that face the burst, hold it `unreachable`, start its clock and hand it
+/// over, read its refusal as a refused run's, or hold a non-burst write).
 #[test]
-fn a_death_signal_at_a_writes_dial_holds_nothing() {
+fn a_death_at_a_bursts_dial_holds_it_and_at_another_writes_dial_holds_nothing() {
     let g = ground();
     g.fake.op_closed.store(true, Ordering::SeqCst);
+    let OpAnswer::Died(AtDeath::Held(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("a burst's dial meets the death, and the burst is held") };
     let link = json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": [DOC]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
-    assert!(matches!(g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None), OpAnswer::Died), "a burst's dial meets the death");
-    assert!(matches!(g.holds.send(&g.session, link, None), OpAnswer::Died), "and a write the hold never holds");
+    assert!(matches!(g.holds.send(&g.session, link, None), OpAnswer::Died(AtDeath::NotABurst)), "a write the hold never holds meets the death, held never");
     assert_eq!(g.fake.sends(), 2, "each dialed once");
-    assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
+    let lines = g.lines();
+    assert_eq!(lines.len(), 1, "the burst alone is held: {lines:?}");
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0].get("refusal")), (Some("session_died"), Some(false), None), "{lines:?}");
+    let events: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_held_event_declared(&events[0]);
+    assert_eq!((events[0]["state"].as_str(), events[0]["cause"].as_str()), (Some("holding"), Some("session_died")), "never `unreachable` while the board answers: {events:?}");
+    let k = lines[0]["held"].as_u64().unwrap();
+    let answer = g.holds.note_death(&g.session, held, &died(&g));
+    crate::shapes::assert_declared("HeldAnswer", &answer);
+    assert_eq!((answer["resp"].as_str(), answer["held"].as_u64(), answer["cause"].as_str()), (Some("held"), Some(k), Some("session_died")), "{answer}");
+    let lines = g.lines();
+    assert_eq!(
+        (lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0]["refusal"]["name"].as_str(), lines[0]["refusal"]["reason"]["arm"].as_str()),
+        (Some("session_died"), Some(false), Some("session_died"), Some("restart")),
+        "the line carries the death's arm: {lines:?}"
+    );
+    for act in [ResolveAct::Send, ResolveAct::Drop] {
+        assert_eq!(g.holds.resolve(&g.session, k, act).map_err(|r| r.name().to_string()), Err("not_resolvable".to_string()), "{act:?}: no act of the person's moves it");
+    }
+    assert!(g.states().is_empty(), "nothing more is said");
+    g.fake.op_closed.store(false, Ordering::SeqCst);
+    g.holds.advance(HAND_OVER_DEADLINE);
+    let reads = g.fake.changes_reads.load(Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.fake.changes_reads.load(Ordering::SeqCst)), (3, reads), "sent from the head, no read for a landing, never handed over");
+    assert!(g.lines().is_empty() && g.states() == ["sending", "kept"], "kept");
+}
+
+/// Checks that the death's reason leaves a line the resend re-marked since.
+///
+/// A line held at the death is the resend's as soon as a session that may
+/// write stands, and a probe may reach it before the end's reason comes: a
+/// resend whose answer is lost re-marks it `unreachable`, `sent`. The
+/// reason arriving after leaves the line as the resend left it, and the call
+/// is answered `held` all the same (the mutant that re-marks unguarded writes
+/// the death over the resend's verdict, and a line that may have landed reads
+/// as one the death held).
+#[test]
+fn the_deaths_reason_leaves_a_line_the_resend_re_marked_since() {
+    let g = ground();
+    g.fake.op_closed.store(true, Ordering::SeqCst);
+    let OpAnswer::Died(AtDeath::Held(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("the burst is held at the death") };
+    g.fake.op_closed.store(false, Ordering::SeqCst);
+    g.fake.op_lost.next(1, Lost::Timeout);
+    g.holds.probe("b-1");
+    let resent = g.lines();
+    assert_eq!((g.fake.sends(), resent[0]["cause"].as_str(), resent[0]["sent"].as_bool()), (2, Some("unreachable"), Some(true)), "{resent:?}");
+    let answer = g.holds.note_death(&g.session, held, &died(&g));
+    assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("session_died")), "{answer}");
+    assert_eq!(g.lines(), resent, "the resend's re-mark stands");
+}
+
+/// Checks the transport class over the real dialer (§3c.4; skep #786).
+///
+/// A connection the host refuses — a port released — is the dialer's
+/// `Connect`, which the table holds `unreachable`, `sent: false`: a burst
+/// sent there through the hold's one path is answered `held`, its line
+/// saying no dial of it may have landed. A request the dialer cannot make —
+/// a target outside visible ASCII — is its `Request`, refused before any
+/// connection opens, which the table faces (the mutant that reads a refused
+/// connection as the dialer's own refusal hands the page an outage's burst;
+/// the one that holds the dialer's own refusal holds a burst no send can
+/// carry).
+#[test]
+fn a_refused_connection_is_held_unsent_and_a_request_the_dialer_cannot_make_is_faced() {
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
+    let dialer = skep_client::PlainHttp::new();
+    let refused = dialer.exchange(&origin, &Request::post("/op", b"{}".to_vec())).unwrap_err();
+    assert!(matches!(refused, DialError::Connect(_)), "a refused connection: {refused:?}");
+    assert_eq!(classify(DialOutcome::Dial(&refused), &Reissues::default()), Decision::Hold { cause: "unreachable", sent: false });
+    let unmade = dialer.exchange(&origin, &Request::post("/op x", Vec::new())).unwrap_err();
+    assert!(matches!(unmade, DialError::Request(_)), "a target the dialer will not write: {unmade:?}");
+    assert_eq!(classify(DialOutcome::Dial(&unmade), &Reissues::default()), Decision::Neither);
+    // A burst through the hold's one path at the released port: a bare
+    // session, so the dial is the burst's own and no attest's read.
+    let store = TempDir::new().unwrap();
+    let entry = Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(origin, dialer)) });
+    let sessions = Arc::new(Sessions::new(None, Arc::new(|_: &str| {})));
+    let keys = Arc::new(FileStore::open(store.path().join("store")));
+    let holds = Holds::new(Arc::clone(&sessions), Arc::new(EventBus::new()), keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [Arc::clone(&entry)]);
+    let session = sessions.register(&entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
+    holds.open_session(&session);
+    let OpAnswer::Answered(Ok(held)) = holds.send(&session, insert(DOC, json!(["a"]), 0), None) else { panic!("held at the refused connection") };
+    let lines = holds.lines(&session).unwrap();
+    assert_eq!((held["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("unreachable"), Some(false)), "{held} {lines}");
+}
+
+/// Checks that the death at a shifted dial holds the line, and says it.
+///
+/// A stale burst carrying its anchors is shifted within its first dial's call
+/// (skep #442), its line entered `moved` and said to no one while it is the
+/// shift's; the shifted dial meets the death signal, and the line is held as
+/// the death at a first dial holds a burst — `session_died`, the shifted
+/// frame on it and the shift's mark of `sent` kept — the call answered
+/// `OpAnswer::Died` with the line's `held` answer, the `held` event said
+/// `holding` under the cause; and once the board takes the session's writes
+/// the probe reads it, sends the shifted frame and keeps it (the mutant that
+/// leaves the line `moved` keeps it unsaid, the person's act awaited by no
+/// face, and no probe ever sends it).
+#[test]
+fn a_death_at_a_shifted_dial_holds_the_line_and_says_it() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    // The page's own dial is refused stale; the shifted one meets the death.
+    let fake = Arc::clone(&g.fake);
+    *g.fake.at_send.lock().unwrap() = Some(Box::new(move || fake.op_closed.store(fake.sends() == 2, Ordering::SeqCst)));
+    let answer = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2)))));
+    *g.fake.at_send.lock().unwrap() = None;
+    g.fake.op_closed.store(false, Ordering::SeqCst);
+    let OpAnswer::Died(AtDeath::Held(held)) = answer else { panic!("the shifted dial meets the death, the line held") };
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines.len()), (2, 1), "{lines:?}");
+    assert_eq!(
+        (lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0]["frame"]["at"]["ordinal"].as_str(), lines[0].get("refusal")),
+        (Some("session_died"), Some(true), Some("4"), None),
+        "held at the death, the shifted frame on it, the shift's mark kept: {lines:?}"
+    );
+    assert_eq!(g.states(), ["holding"], "said once the death holds it");
+    let answer = g.holds.note_death(&g.session, held, &died(&g));
+    assert_eq!((answer["held"].as_u64(), answer["cause"].as_str()), (Some(1), Some("session_died")), "{answer}");
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sent.len(), sent[2]["at"]["ordinal"].as_str()), (3, Some("4")), "the shifted frame sent: {sent:?}");
+    assert!(g.lines().is_empty() && g.states() == ["sending", "kept"], "kept");
 }
 
 /// Checks that `resolve(send)` answers once the lines are handed back.
@@ -1721,7 +1912,7 @@ fn a_burst_at_one_board_waits_on_no_other_boards_hold() {
 #[test]
 fn a_sessions_held_line_is_kept_at_the_board_it_stands_at() {
     let TwoBoards { holds, sessions, store, fakes } = two_boards();
-    let held = holds.hold(&sessions[1], Burst::admit(insert(DOC, json!(["z"]), fakes[1].head()), &sessions[1]).unwrap(), Reason::of("unreachable", false), sessions[1].opened_at).unwrap();
+    let held = holds.hold(&sessions[1], Burst::admit(insert(DOC, json!(["z"]), fakes[1].head()), &sessions[1]).unwrap(), Reason::of("unreachable", false), None, sessions[1].opened_at).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     let file = |chain: &str| store.path().join("held").join(chain).join("principal-1.held");
     assert!(file(&"cd".repeat(32)).is_file() && !file(&"ab".repeat(32)).exists(), "the line is kept in b-2's directory alone");

@@ -5,10 +5,12 @@
 //! three times, `arrangement_moved`, and an ack, each to exactly its row, the
 //! table the one owner of every reissue's bound; the failed send, which starts
 //! and runs a line's clock (`HAND_OVER_DEADLINE`), is every answer but an ack,
-//! the death signal and a dial that never left, each with its token; the five
-//! kinds are bursts and the eleven other
-//! `WRITE_KINDS` are not; the five held states are the declared ones, and the
-//! two acts of `resolve` the declared words and no other spelling.
+//! the death signal and a dial that never left, each with its token — a
+//! second `write_busy` among them, held as a connection never made is; the
+//! five kinds are bursts and the eleven other
+//! `WRITE_KINDS` are not; the five held states are the declared ones, a
+//! line's its cause's whatever refusal stands beside it, and the two acts of
+//! `resolve` the declared words and no other spelling.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, and whether it names a claimant; its `/changes` rows and
@@ -88,7 +90,9 @@ fn retry(code: &str) -> Value {
 /// (`DialOutcome`'s doc); a write the hold never holds is read through it as
 /// a burst is, and faced where a burst is held (`write`'s suite). The mutant
 /// that leaves `arrangement_moved` to the disposition's row holds a stale
-/// burst as a refused run, whose resend meets the same refusal.
+/// burst as a refused run, whose resend meets the same refusal; the one that
+/// faces the reissue's own `write_busy` hands the page a burst the board was
+/// briefly too full to take (skep #786).
 #[test]
 fn every_outcome_classifies_to_exactly_its_row() {
     // No connection made — the burst did not leave (`sent: false`).
@@ -112,10 +116,10 @@ fn every_outcome_classifies_to_exactly_its_row() {
     // disposition — held as a lost answer is, `sent: true`.
     assert_eq!(rej("internal_panic", ""), Decision::Hold { cause: "unreachable", sent: true });
     // `write_busy` once → reissue, after the short wait; the reissue's own →
-    // the next refusal, faced.
+    // a burst held `unreachable`, `sent: false`: nothing was committed.
     let busy = DialOutcome::Rejected { code: "write_busy", disposition: "retry" };
     assert_eq!(classify(busy, &given(0, 0)), Decision::Reissue(Reissue::WriteBusy));
-    assert_eq!(classify(busy, &given(1, 0)), Decision::Neither);
+    assert_eq!(classify(busy, &given(1, 0)), Decision::Hold { cause: "unreachable", sent: false });
     // `durability` once, twice → reissue as-is; a THIRD on the same burst →
     // hold; a `write_busy` given beside counts nothing toward the rider.
     let durability = DialOutcome::Rejected { code: "durability", disposition: "retry" };
@@ -142,15 +146,18 @@ fn every_outcome_classifies_to_exactly_its_row() {
 ///
 /// A dial's answer starts or runs its line's clock (`HAND_OVER_DEADLINE`) where
 /// the send left, or was answered, and did not land — a lost answer,
-/// `poisoned`, `durability`, a refused run, a move, a reissue-class answer, any
-/// refusal of the board's faced — and never where it landed, where the session
-/// died, or where no dial left: a connection never made, a request refused
-/// before any connection, an attest that could not be composed, a signature not
-/// made, a hold before any dial. Its token is the held cause, or the board's in
-/// the `code:detail` convention (the mutant that reads a connection never made
-/// as a failure hands an outage's line to the person; the one that reads the
-/// shell's own refusal as the board's hands a line over that the board never
-/// judged).
+/// `poisoned`, `durability`, a refused run, a move, a reissue-class answer, a
+/// second `write_busy` held as a connection never made is, any refusal of the
+/// board's faced — and never where it landed, where the session died, or
+/// where no dial left: a connection never made, a request refused before any
+/// connection, an attest that could not be composed, a signature not made, a
+/// hold before any dial; nor does a line held at the death. Its token is the
+/// held cause, or the board's in the `code:detail` convention (the mutant
+/// that reads a connection never made as a failure hands an outage's line to
+/// the person; the one that reads the shell's own refusal as the board's
+/// hands a line over that the board never judged; the one that reads a held
+/// `write_busy` by its reason alone starts no clock on a busy board's line,
+/// which is resent for ever).
 #[test]
 fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left() {
     let held = |cause: &str, sent: bool| Dialed::Held { reason: Reason::of(cause, sent), refusal: Refusal::malformed("x") };
@@ -159,7 +166,7 @@ fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left
     let cells: Vec<(&str, Dialed, Option<&str>)> = vec![
         ("an ack", Dialed::Acked(json!({"resp": "ack", "at": 1})), None),
         ("the death signal", Dialed::Died, None),
-        ("a connection never made", held("unreachable", false), None),
+        ("a connection never made", Dialed::Held { reason: Reason::of("unreachable", false), refusal: Refusal::Unreachable(DialError::Connect("x".into())) }, None),
         ("an answer lost", held("unreachable", true), Some("unreachable")),
         ("poisoned", held("poisoned", true), Some("poisoned")),
         ("a third durability", held("durability", false), Some("durability")),
@@ -167,7 +174,7 @@ fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left
         ("a refused run", Dialed::Held { reason: Reason::refused("out_of_bounds", json!({})), refusal: Refusal::malformed("x") }, Some("out_of_bounds")),
         ("a signature not made", held("head_unreadable", false), None),
         ("a reissue", Dialed::Reissue { kind: Reissue::WriteBusy, refusal: Refusal::board(503, json!({"error": "write_busy"})) }, Some("write_busy")),
-        ("a write_busy past its reissue", Dialed::Faced(Refusal::board(503, json!({"error": "write_busy"}))), Some("write_busy")),
+        ("a write_busy past its reissue, held as a connection never made is", Dialed::Held { reason: Reason::of("unreachable", false), refusal: Refusal::board(503, json!({"error": "write_busy"})) }, Some("write_busy")),
         ("a code the table holds nowhere", Dialed::Faced(board(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry"}))), Some("credential_refused:index_rebuilding")),
         ("a request refused before any connection", Dialed::Faced(Refusal::Unreachable(DialError::Request("x".into()))), None),
         ("the attest's composer halted", Dialed::Faced(Refusal::named(Name::ATTEST_NOT_COMPOSED, face)), None),
@@ -178,6 +185,33 @@ fn a_failed_send_is_every_answer_but_an_ack_the_death_and_a_dial_that_never_left
     }
     for cause in ["halted", "stopped", "behind"] {
         assert_eq!(failed_send(&Reason::of(cause, false)), None, "{cause}: a hold before any dial");
+    }
+    assert_eq!(failed_send(&Reason::of("session_died", false)), None, "a line held at the death: the death is neither");
+}
+
+/// Checks that a line's state is its cause's, whatever refusal stands beside.
+///
+/// A refused run's line reads `refused` and a moved one's `moved`, each
+/// awaiting the person's act; a line held `head_unreadable` or `session_died`
+/// carries a refusal that says why it waits — the head's, or the death's
+/// with its arm — and reads `holding`, awaiting no act (P10), so the probe
+/// sends it once the head reads or a session that may write stands (the
+/// mutant that reads every line carrying a refusal as a refused run's leaves
+/// a burst held at the death waiting for an act no face asks for).
+#[test]
+fn a_lines_state_is_its_causes_whatever_refusal_stands_beside_it() {
+    let with = |cause: &str, refusal: Value| Reason { cause: cause.to_string(), refusal: Some(refusal), sent: false };
+    let died = Refusal::shell(Name::SESSION_DIED, json!({"session": "s-1", "reason": crate::sessions::restart_reason(None, None)})).to_value();
+    let cells = [
+        ("a refused run", with("out_of_bounds", json!({"code": "out_of_bounds"})), HeldState::Refused),
+        ("a moved document", with("moved", arrangement_moved(40, 45)), HeldState::Moved),
+        ("a head that will not read", with("head_unreadable", json!({"name": "head_unreadable"})), HeldState::Holding),
+        ("a burst held at the death, its reason beside it", with("session_died", died), HeldState::Holding),
+        ("a burst held at the death, its reason not yet derived", Reason::of("session_died", false), HeldState::Holding),
+        ("a lost answer", Reason::of("unreachable", true), HeldState::Holding),
+    ];
+    for (cell, reason, state) in cells {
+        assert_eq!(line_state(&reason), state, "{cell}");
     }
 }
 
@@ -693,11 +727,13 @@ impl Ground {
 
     /// A burst held for `reason` through the hold's own door, at the base a
     /// hold on its document takes now — as a dial's answer holds it, no dial
-    /// between: the `held` answer, or the hold's refusal.
+    /// between, the failed send the reason says (`failed_send`) its clock's
+    /// start: the `held` answer, or the hold's refusal.
     fn hold_for(&self, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
         let burst = self.burst(frame);
         let base = self.base_of(&burst.doc);
-        self.holds.hold(&self.session, burst, reason, base)
+        let failed = failed_send(&reason).map(str::to_owned);
+        self.holds.hold(&self.session, burst, reason, failed, base)
     }
 
     /// A burst carrying `anchors` held for `cause`, `sent` as a lost answer's
@@ -706,7 +742,9 @@ impl Ground {
     fn hold_anchored(&self, frame: &Value, anchors: Anchors, cause: &str, sent: bool) -> Value {
         let burst = self.burst(frame).with_anchors(Some(anchors));
         let base = self.base_of(&burst.doc);
-        let answer = self.holds.hold(&self.session, burst, Reason::of(cause, sent), base).unwrap();
+        let reason = Reason::of(cause, sent);
+        let failed = failed_send(&reason).map(str::to_owned);
+        let answer = self.holds.hold(&self.session, burst, reason, failed, base).unwrap();
         crate::shapes::assert_declared("HeldAnswer", &answer);
         answer
     }

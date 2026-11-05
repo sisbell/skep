@@ -29,9 +29,12 @@
 //! the one sequence the board's feed thread runs too (`Sessions::end`) — the
 //! reason derived on the call's thread, the swap and the `session-died` run
 //! on the board's feed thread — and the call answers `session_died` with the
-//! reason that sequence derived; a later call on the ended reference, or on
-//! one of an earlier run of the shell, is answered `session_died` too, with
-//! the reason kept or the restart arm ([`Shell::session`]).
+//! reason that sequence derived, save a burst's `op`: the hold holds the
+//! burst `session_died` before the end, and the call answers `held` once the
+//! line carries that reason (`Holds::note_death`, §3c.4); a later call on
+//! the ended reference, or on one of an earlier run of the shell, is
+//! answered `session_died` too, with the reason kept or the restart arm
+//! ([`Shell::session`]).
 //! The four `publication` rows — the panel, the four numbers, the one
 //! request composed, signed and sent, the cancel — are the child module
 //! `publication`'s, `pub(super)` to the door, with the panels they stand on.
@@ -93,7 +96,7 @@ use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, changes_since, places_without_index, query_too_long, BridgeSearchOpts, ChangesRead, Feed, FeedThreads, Searcher, Shared};
 use crate::held::Anchors;
-use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
+use crate::hold::{AtDeath, Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::{Answerer, Pending};
 use crate::refs::{session_run, BoardEntry};
@@ -1178,7 +1181,10 @@ impl Shell {
     /// under a standing hold refused `stopped`, `poisoned` or `halted` (§3c.4)
     /// — or for an `/op-at` frame the board's verdict or `unreachable`; and
     /// `session_died` where a death signal met at the dial or at a read the
-    /// attest needed ends the session.
+    /// attest needed ends the session — save for a burst, which the hold
+    /// holds `session_died` before the end (§3c.4), the call answering `held`
+    /// once its line carries the death's reason, or the hold's own refusal
+    /// (`held_full`, `store_halted`) where it could not hold it.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");
@@ -1206,7 +1212,17 @@ impl Shell {
         let Some(at) = at else {
             return match self.holds.send(&session, frame, anchors) {
                 OpAnswer::Answered(answer) => answer,
-                OpAnswer::Died => Err(self.died(&session)),
+                // The session ends first, so the death's reason is derived;
+                // a burst the hold held at it is then answered `held`, its
+                // line carrying that reason.
+                OpAnswer::Died(at_death) => {
+                    let died = self.died(&session);
+                    match at_death {
+                        AtDeath::NotABurst => Err(died),
+                        AtDeath::Held(held) => Ok(self.holds.note_death(&session, held, &died)),
+                        AtDeath::Refused(refusal) => Err(refusal),
+                    }
+                }
             };
         };
         match session.board.op_at(Some(&session.token), at, &frame)? {

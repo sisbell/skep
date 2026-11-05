@@ -43,7 +43,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   board's verdict — among the causes, a board not answering and a frame the
   shell refused itself, nothing sent — or `fetch` declined a file.
 - **The session's life.** A board restart is met by the shell's silent
-  re-open, and the agent sees nothing. A death the shell does not re-open —
+  re-open, and a call that met it is reissued under the re-opened session,
+  so the agent sees nothing of it — save a burst whose own dial met it,
+  which the shell holds (`held`, cause `session_died`, as data) and sends
+  under that session itself. A death the shell does not re-open —
   the key retired, the prefix blocked, the account seeded, a re-open the
   board refused — stops the process with one plain line on stderr, as does
   the board's refusal of the session the adapter opens once a board that

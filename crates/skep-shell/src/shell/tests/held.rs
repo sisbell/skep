@@ -2,7 +2,11 @@
 //!
 //! Its bursts are a signed session's — a bare session reads alone. The suite
 //! checks a burst held while the daemon is stopped and resent `kept` after a
-//! restart, the kernel poison holding a burst `poisoned` then `halted`, the
+//! restart, a burst whose dial meets the death signal held `session_died`
+//! and kept under the session the restart arm re-opened, a burst whose
+//! reissue meets `write_busy` again held `unreachable` unsent and kept once
+//! the board takes writes, the kernel poison
+//! holding a burst `poisoned` then `halted`, the
 //! poisoned burst that lands at the restart and is kept, a burst that
 //! committed and then panicked — answered `500 internal_panic` — held and
 //! kept off the read, sent once, the signed session's own attested row kept
@@ -84,7 +88,11 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     assert_eq!(held["cause"], "unreachable", "{held}");
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists the burst: {rows}");
-    assert_eq!((rows[0]["doc"].as_str(), rows[0]["cause"].as_str()), (Some(draft.as_str()), Some("unreachable")));
+    assert_eq!(
+        (rows[0]["doc"].as_str(), rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()),
+        (Some(draft.as_str()), Some("unreachable"), Some(false)),
+        "the connection refused, nothing of the burst landed: {rows}"
+    );
     // Restart at the same port; the session dies — the restart arm re-opening
     // it — and a fresh one is opened beside it.
     let sd = spawn_at(&dir.path().join("board"), true, port);
@@ -104,6 +112,117 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     assert!(shell.call("held", &json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "the file compacted away");
     let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 2, 1)})).unwrap();
     assert_eq!(read["items"][0]["content"], "b", "the resent burst is on the board: {read}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a burst whose dial meets the death signal is held, and kept
+/// under the re-opened session.
+///
+/// A signed session's token closed at the board while its feed stands
+/// quiet, the next burst on its draft meets the death at its own dial (§3c.4;
+/// skep #786): the call answers `held`, cause `session_died` — never the
+/// `session_died` refusal, and never `unreachable` while the board answers —
+/// and its `held` event goes out under the dying session before the
+/// session's end, whose `session-died` names the restart arm that re-opened
+/// it; `held` under the re-opened session lists the line, its refusal the
+/// death's with that arm — read before the probe's cadence, counted from a
+/// probe handed to the feed thread just before the call, comes round; the
+/// probe resends it under the re-opened session, the `held` event reaching
+/// `kept`; and the board holds the burst's text once, the dead token's dial
+/// having committed nothing (the mutant that answers the burst
+/// `session_died` leaves the person's text to the page; the one that holds
+/// it `unreachable` says the board is away while it answers).
+#[test]
+fn a_burst_whose_dial_meets_the_death_is_held_and_kept_under_the_reopened_session() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
+    // The feed widens the session's supplement, then falls quiet: nothing
+    // commits, so the burst's dial is the first to meet the death.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (mut events, mut quiet_since) = (0, Instant::now());
+    loop {
+        let (now, widened) = {
+            let seen = seen.lock().unwrap();
+            (seen.len(), seen.iter().any(|e| e.name == EventName::Index && e.data["session"] == session))
+        };
+        if now != events {
+            (events, quiet_since) = (now, Instant::now());
+        }
+        if widened && quiet_since.elapsed() > Duration::from_millis(500) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the board never fell quiet");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let token = shell.sessions.get(&session).unwrap().token.clone();
+    Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).session_close(&token).unwrap();
+    shell.feed(&board).probe();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
+    crate::shapes::assert_declared("HeldAnswer", &held);
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("session_died")), "{held}");
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
+    assert_eq!(died.data["reason"]["arm"], "restart", "{:?}", died.data);
+    let reopened = died.data["reason"]["session"].as_str().expect("the restart arm re-opened the session").to_string();
+    let rows = shell.call("held", &json!({"session": reopened})).unwrap();
+    assert_eq!(rows.as_array().map(Vec::len), Some(1), "{rows}");
+    assert_eq!(
+        (rows[0]["cause"].as_str(), rows[0]["refusal"]["name"].as_str(), rows[0]["refusal"]["reason"]["arm"].as_str(), rows[0]["refusal"]["reason"]["session"].as_str()),
+        (Some("session_died"), Some("session_died"), Some("restart"), Some(reopened.as_str())),
+        "the line carries the death's arm: {rows}"
+    );
+    {
+        let seen = seen.lock().unwrap();
+        let holding = seen.iter().position(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["session"] == session && e.data["state"] == "holding" && e.data["cause"] == "session_died");
+        let death = seen.iter().position(|e| e.name == EventName::SessionDied && e.data["session"] == session);
+        assert!(matches!((holding, death), (Some(h), Some(d)) if h < d), "the hold is said under the dying session before its end: {holding:?} {death:?}");
+    }
+    let kept = wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    assert_eq!(kept.data["session"].as_str(), Some(reopened.as_str()), "resent under the re-opened session: {:?}", kept.data);
+    let entry = shell.sessions.get(&reopened).unwrap();
+    let read = shell.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "the burst is on the board: {read}");
+    let rows = changes_under(&entry.board, &entry.token, &draft, at);
+    assert_eq!(rows.len(), 1, "the burst landed once: {rows:?}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that a burst whose reissue meets `write_busy` again is held, and
+/// kept once the board takes writes.
+///
+/// The daemon's write permits all held, a signed session's burst on its
+/// draft is dialed and reissued once after the short wait, and the reissue's
+/// own `write_busy` holds it (§3c.4; skep #786): the call answers `held`,
+/// cause `unreachable`, its line `sent: false`, the board having committed
+/// nothing — read before the probe's cadence, counted from a probe handed to
+/// the feed thread just before the call, comes round; the permits let go,
+/// the probe resends it, the `held` event reaching `kept`, and the board
+/// holds its text once (the mutant that faces the burst's second
+/// `write_busy` hands the page a burst a board briefly full takes a moment
+/// later).
+#[test]
+fn a_burst_whose_reissue_meets_write_busy_again_is_held_and_kept_once_the_board_takes_writes() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let HeldGround { shell, seen, board, session, draft, at } = held_ground(&dir, &sd);
+    let mut permits = Vec::new();
+    while let Some(permit) = sd.daemon().try_hold_write_permit() {
+        permits.push(permit);
+    }
+    shell.feed(&board).probe();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at}})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!((rows.as_array().map(Vec::len), rows[0]["sent"].as_bool()), (Some(1), Some(false)), "the board committed nothing: {rows}");
+    drop(permits);
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "the burst is on the board: {read}");
+    let entry = shell.sessions.get(&session).unwrap();
+    assert_eq!(changes_under(&entry.board, &entry.token, &draft, at).len(), 1, "the burst landed once");
     shell.shutdown();
     sd.shutdown();
 }
@@ -308,7 +427,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     assert!(rows[0].get("attest").is_none(), "{rows:?}");
     // Held as a lost answer is: the line `sent: true`, at the base the shell
     // knew before the dial — the first insert's ack.
-    let held = signed.holds.hold(&entry, Burst::admit(frame.clone(), &entry).unwrap(), Reason::of("unreachable", true), base).unwrap();
+    let held = signed.holds.hold(&entry, Burst::admit(frame.clone(), &entry).unwrap(), Reason::of("unreachable", true), Some("unreachable".into()), base).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     assert_eq!(signed.call("held", &json!({"session": session})).unwrap()[0]["sent"], true);
     // The restart: the session re-opened under a fresh reference, the resend
@@ -652,7 +771,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
             }
         });
         let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at});
-        shell.holds.hold(&entry, Burst::admit(frame, &entry).unwrap(), Reason::of("unreachable", true), at).unwrap();
+        shell.holds.hold(&entry, Burst::admit(frame, &entry).unwrap(), Reason::of("unreachable", true), Some("unreachable".into()), at).unwrap();
         let deadline = Instant::now() + PROBE_CADENCE * 3;
         let kept = loop {
             if seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept") {

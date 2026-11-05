@@ -536,17 +536,27 @@ fn the_index_states_that_ask_an_act_are_said_once() {
 ///
 /// No line where none stands; else the bursts counted, those sent and so
 /// perhaps landed, and those waiting on the agent's `resolve` — a refused
-/// run's, which carries its refusal, and a moved document's. The members read
-/// are ones skep-shell declares for a held line (`HeldRow`).
+/// run's, which carries its refusal, and a moved document's — never a line
+/// held `head_unreadable` or `session_died`, whose refusal says why it waits
+/// and which the shell sends once the wait ends (the mutant that counts every
+/// line carrying a refusal tells the agent to resolve a burst a restart held,
+/// which the shell sends without it). The members read are ones skep-shell
+/// declares for a held line (`HeldRow`).
 #[test]
 fn an_earlier_runs_held_bursts_are_counted_as_they_stand() {
     assert_eq!(carried_line(&json!([])), None, "no line where no burst stands");
     let line = |k: u64, cause: &str, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": cause, "sent": sent, "time": k});
-    let mut refused = line(2, "out_of_bounds", false);
-    refused["refusal"] = json!({"code": "out_of_bounds"});
-    let four = json!([line(1, "unreachable", true), refused, line(3, "moved", false), line(4, "behind", false)]);
-    let said = carried_line(&four).expect("four stand");
-    assert!(said.starts_with("held: an earlier run left 4 bursts held at this board (1 sent and so perhaps landed, 2 waiting on the agent's `resolve`, refused or moved): "), "{said}");
+    let with_refusal = |k: u64, cause: &str, refusal: Value| {
+        let mut held = line(k, cause, false);
+        held["refusal"] = refusal;
+        held
+    };
+    let refused = with_refusal(2, "out_of_bounds", json!({"code": "out_of_bounds"}));
+    let head = with_refusal(5, "head_unreadable", json!({"kind": "halt", "name": "head_unreadable"}));
+    let died = with_refusal(6, "session_died", json!({"kind": "shell", "name": "session_died", "detail": {"session": "s-1", "reason": {"arm": "restart"}}}));
+    let six = json!([line(1, "unreachable", true), refused, line(3, "moved", false), line(4, "behind", false), head, died]);
+    let said = carried_line(&six).expect("six stand");
+    assert!(said.starts_with("held: an earlier run left 6 bursts held at this board (1 sent and so perhaps landed, 2 waiting on the agent's `resolve`, refused or moved): "), "{said}");
     let said = carried_line(&json!([line(1, "unreachable", false)])).expect("one stands");
     assert!(said.starts_with("held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 0 waiting"), "{said}");
     let declared: BTreeSet<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();

@@ -760,16 +760,16 @@ fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     let mut fixture = Fixture::new("a8");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
-    // The draft's mint is the one ack the agent holds on it: the insert's
-    // typed state, with no tool call spent on a read (the stop line below
-    // counts the loop's answers).
-    let minted = mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
-    let draft = minted["addr"].as_str().expect("doc addr").to_string();
-    let typed = minted["at"].as_u64().expect("the mint's position");
+    // A mint before the restart and one after it, no tool call spent on a
+    // read (the stop line below counts the loop's answers).
+    mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
     fixture.restart();
     // The write after the restart answers on stdout, which the driver
-    // parses line by line, while the drain says the re-open on talk.
-    let v = mcp.call_json("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
+    // parses line by line, while the drain says the re-open on talk. It is
+    // no burst, so the death it meets is answered `session_died` and the
+    // call reissued under the re-open, to an ack; a burst the shell holds at
+    // a death instead (client.md §3c.4).
+    let v = mcp.call_json("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
     assert_eq!(v["resp"], "ack_addr", "{v}");
     for _ in 0..3 {
         assert_eq!(mcp.request("ping", json!({}))["result"], json!({}));
@@ -784,7 +784,7 @@ fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     let ended = log.find("stdin's end: no request follows").unwrap_or_else(|| panic!("the end said:\n{log}"));
     let stopping = log.find("stopping: closing the session at the board, saving the index").unwrap_or_else(|| panic!("the stop said:\n{log}"));
     assert!(ended < stopping, "the end's cause before the stop's line:\n{log}");
-    // The initialize, the draft's mint, the insert and the three pings.
+    // The initialize, the two mints and the three pings.
     let stop = log[stopping..].lines().next().unwrap_or_default();
     assert!(
         stop.contains(" — 6 answers written in ") && stop.contains(" s of it: 2 tool results, 0 of them isError, and 0 JSON-RPC errors; no request waited longer than "),

@@ -194,7 +194,7 @@ fn a_probe_resends_every_principals_lines() {
     let second = g.holds.sessions.register(&board, open, &mut NoSupplements);
     g.holds.open_session(&second);
     g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
-    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"]), g.fake.head()), &second).unwrap(), Reason::of("unreachable", false), second.opened_at).unwrap();
+    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"]), g.fake.head()), &second).unwrap(), Reason::of("unreachable", false), None, second.opened_at).unwrap();
     g.holds.probe("b-1");
     let mut sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| f["doc"].as_str().unwrap_or("?").to_string()).collect();
     sent.sort();
@@ -1483,15 +1483,19 @@ fn a_resent_line_held_durability_is_handed_over_at_its_deadline() {
 ///
 /// It is skep #720's `write_busy` loop. A line's resends meet `write_busy` at
 /// every probe: the first reissued at the next probe, every one after it past
-/// its one reissue — a reissue-class answer at its count — the line standing
-/// for the next probe, never handed over at once, the clock running from the
-/// first; "sent again" said once. With the clock past `HAND_OVER_DEADLINE` the
-/// next probe's read finds no landing and hands it to the person under
-/// `answers_lost`, its `last` `write_busy` (the mutant that starts no clock
-/// there resends it for ever; the one that hands every code the table holds
-/// nowhere over at once, `write_busy` among them, hands the person a line a
-/// busy board would take in a moment; the one that says "sent again" at every
-/// probe fills the log).
+/// its one reissue held `unreachable`, as at a first dial (skep #786) — the
+/// line standing for the next probe, never handed over at once, the clock
+/// running from the first; "sent again" said once. With the clock past
+/// `HAND_OVER_DEADLINE` the next probe's read finds no landing and hands it to
+/// the person under `answers_lost`, its `last` `write_busy`. The person's
+/// `send` starts the clock afresh at the line's next failed send, and a board
+/// still busy past the next deadline hands it over again, dialed once in
+/// between (the mutant that starts no clock there resends it for ever, and
+/// the one that reads a held `write_busy` by its reason alone does so once
+/// the person's `send` has cleared the clock; the one that hands every code
+/// the table holds nowhere over at once, `write_busy` among them, hands the
+/// person a line a busy board would take in a moment; the one that says
+/// "sent again" at every probe fills the log).
 #[test]
 fn a_write_busy_past_its_reissue_at_a_resend_runs_the_clock_to_its_deadline() {
     let g = ground();
@@ -1509,6 +1513,17 @@ fn a_write_busy_past_its_reissue_at_a_resend_runs_the_clock_to_its_deadline() {
     g.holds.probe("b-1");
     let lines = g.lines();
     assert_eq!(g.fake.sends(), 3, "handed over at the next probe's read, undialed");
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["refusal"]["last"].as_str()), (Some("answers_lost"), Some("write_busy")), "{lines:?}");
+    // The person's `send`: the board still busy, the line is dialed once,
+    // held again, and handed over again at its next deadline.
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str()), (4, Some("unreachable")), "sent again, held: {lines:?}");
+    g.holds.advance(HAND_OVER_DEADLINE);
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!(g.fake.sends(), 4, "handed over again at its next deadline, undialed");
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["refusal"]["last"].as_str()), (Some("answers_lost"), Some("write_busy")), "{lines:?}");
 }
 
@@ -1581,8 +1596,8 @@ fn the_first_dials_lost_answer_starts_the_clock() {
 /// It is said as the failure changes (§3c.4; skep #720). A line held before any
 /// dial is resent at seven probes: three answers lost — a timeout, a garbled
 /// answer, the board's handler panicking, one failure — then three
-/// `write_busy`, the first reissued and the two past its reissue faced, then a
-/// `durability` reissued. The shell's window says "it is sent again at the next
+/// `write_busy`, the first reissued and the two past its reissue held
+/// `unreachable`, then a `durability` reissued. The shell's window says "it is sent again at the next
 /// probe" three times: at the first lost answer, at the first `write_busy` and
 /// at the `durability`, each a change of the failure; the probes failing alike
 /// say nothing more (the mutant that says it at every probe fills the log with

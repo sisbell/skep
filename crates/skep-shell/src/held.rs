@@ -323,15 +323,17 @@ fn now_ms() -> u64 {
 /// the three members a hold writes and a re-mark rewrites together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reason {
-    /// A token of §3c.4's table, the shell's `head_unreadable`, or a refused
-    /// run's own token.
+    /// A token of §3c.4's table, the shell's `head_unreadable` or
+    /// `session_died`, or a refused run's own token.
     ///
     /// A refused run's token is the board's — a refusal at a resend under a
     /// code the shell's table holds nowhere among them, handed to the person
     /// at once — or the shell's `answers_lost` where it handed the person a
     /// line no landing of which was found two minutes after its first failed
     /// send. `head_unreadable` holds a signed write whose signature could not
-    /// be made, until the board's head record reads again (SP-14).
+    /// be made, until the board's head record reads again (SP-14);
+    /// `session_died` a burst whose dial met the death signal, until a
+    /// session of its principal's that may write stands (§3c.4).
     pub cause: String,
     /// The verdict beside a refused run's line, or a held line's reason.
     ///
@@ -343,7 +345,10 @@ pub struct Reason {
     /// held `moved`, the board's `arrangement_moved` verbatim, naming the
     /// state the burst was typed against and the document's current one; at
     /// a line held `head_unreadable`, the shell's refusal naming why the
-    /// signature could not be made, the line holding all the same.
+    /// signature could not be made, the line holding all the same; at a line
+    /// held `session_died`, the shell's `session_died` refusal once the
+    /// session's end derives the death, its `reason` the death's arm, the
+    /// line holding all the same.
     pub refusal: Option<Value>,
     /// Whether the burst may have landed.
     ///
@@ -355,13 +360,14 @@ pub struct Reason {
     /// resend, which marks its line before it dials, synced, so a crash or a
     /// refused write between the dial and its answer leaves the line read as
     /// one that may have landed. It is `false` for a line held before any
-    /// dial, or whose first dial reached no board or met its refusal, until
-    /// a resend of it is attempted. A re-mark keeps it, whatever that resend
-    /// answers: one that never left, or one the board refused, says nothing
-    /// of an earlier dial's write. A moved document's lines keep theirs, a
-    /// line handed to the person keeps it too, and `resolve(send)` keeps
-    /// every line's own, so a line that may have landed reads before it is
-    /// sent again (§3c.5).
+    /// dial, or whose first dial reached no board or met its refusal — the
+    /// death signal among them, a dead token's write committing nothing —
+    /// until a resend of it is attempted. A re-mark keeps it, whatever that
+    /// resend answers: one that never left, or one the board refused, says
+    /// nothing of an earlier dial's write. A moved document's lines keep
+    /// theirs, a line handed to the person keeps it too, and `resolve(send)`
+    /// keeps every line's own, so a line that may have landed reads before
+    /// it is sent again (§3c.5).
     pub sent: bool,
 }
 

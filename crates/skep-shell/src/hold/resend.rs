@@ -794,8 +794,8 @@ impl Holds {
     /// line keeping its `sent` — a resend that never left, or one the board
     /// refused, says nothing of an earlier dial's write (§3c.2); a
     /// reissue-class answer counted against the line and reissued at the
-    /// next probe, so its third `durability` holds it, and a `write_busy`
-    /// past its one reissue left standing for the next probe too; any other
+    /// next probe, so its second `write_busy` and its third `durability`
+    /// hold it, as hold-class answers of the table's; any other
     /// code of the board's the table holds nowhere handed to the person at
     /// once, a refused run under the board's token with its verdict verbatim
     /// and its `sent` kept, through the door a `permanent` refusal takes,
@@ -907,14 +907,14 @@ impl Holds {
                     return ControlFlow::Break(());
                 }
                 // The board's own verdict under a code the table holds
-                // nowhere, save a `write_busy` past its one reissue: it cannot
-                // resolve, so the line is the person's at once (§3c.4; skep
-                // #720) — a refused run under the board's token with its
-                // verdict verbatim, its `sent` kept, through the door a
-                // `permanent` refusal takes, the lines behind it waiting with
-                // it. A refusal of the board's that reached no dial — a read
-                // the attest's composer made — is the shell's own.
-                Dialed::Faced(Refusal::Board(r)) if left && r.code != "write_busy" => {
+                // nowhere: it cannot resolve, so the line is the person's at
+                // once (§3c.4; skep #720) — a refused run under the board's
+                // token with its verdict verbatim, its `sent` kept, through
+                // the door a `permanent` refusal takes, the lines behind it
+                // waiting with it. A refusal of the board's that reached no
+                // dial — a read the attest's composer made — is the shell's
+                // own.
+                Dialed::Faced(Refusal::Board(r)) if left => {
                     let token = r.token();
                     let reason = Reason { sent, ..Reason::refused(&token, r.body.clone()) };
                     self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
@@ -922,11 +922,9 @@ impl Holds {
                     self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), &[]);
                     return ControlFlow::Break(());
                 }
-                // A `write_busy` past its one reissue, the line's clock
-                // running on, or a refusal of the shell's own, which dialed
-                // nothing the board judged and starts no clock: the line
-                // stands for the next probe, and the shell's own is said at
-                // each.
+                // A refusal of the shell's own, which dialed nothing the
+                // board judged and starts no clock: the line stands for the
+                // next probe, and the refusal is said at each.
                 Dialed::Faced(refusal) => {
                     if failed != Some(false) {
                         self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));

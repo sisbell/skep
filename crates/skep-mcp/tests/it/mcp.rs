@@ -214,15 +214,20 @@ fn make_link_takes_from_as_the_wires_from_and_follow_link_reads_the_to_slot() {
     assert!(mcp.finish().success());
 }
 
-/// The restart arm through the adapter: a write after a restart is acked.
+/// The restart arm through the adapter: a write after a restart lands once.
 ///
 /// The daemon is killed mid-session — every token dies with it — and started
-/// again on the same data dir at the same port; the adapter's next write
-/// answers through the session the shell re-opened silently under a fresh
-/// reference, which the adapter took from the death's `session-died`, the write
-/// that met it waiting for that and reissued once, so the agent sees an ack
-/// (the mutant that keeps the first reference serves `session_ended` forever
-/// after the restart); the log says the session was re-opened, and
+/// again on the same data dir at the same port. A mint after it answers
+/// through the session the shell re-opened silently under a fresh reference,
+/// which the adapter took from the death's `session-died`: the call that met
+/// the death, at its own dial or after the board's feed thread met it first,
+/// waits for that and is reissued once, so the agent sees an ack (the mutant
+/// that keeps the first reference serves `session_ended` forever after the
+/// restart). An insert after a second restart is a burst: held where its own
+/// dial meets the death — answered `held`, cause `session_died` — and sent by
+/// the shell under the re-opened session (client.md §3c.4), or acked where
+/// the feed thread met the death first; either way `held()` empties and the
+/// text lands once. The log says the session was re-opened, and
 /// `session_info` still answers.
 #[test]
 fn daemon_restart_reopens_the_session_and_reissues() {
@@ -235,13 +240,26 @@ fn daemon_restart_reopens_the_session_and_reissues() {
     assert_eq!(v["resp"], "ack_addr", "the pre-restart write: {v}");
 
     fixture.restart();
+    let v = mcp.call_json("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}\n{}", mcp.log());
 
+    fixture.restart();
     let typed = mcp.position();
     let v = mcp.call_json("insert", json!({"as_of": typed, "doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}));
-    assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}\n{}", mcp.log());
+    match v["resp"].as_str() {
+        Some("held") => assert_eq!(v["cause"], "session_died", "held at the death its own dial met: {v}"),
+        _ => assert_eq!(v["resp"], "ack_addr", "acked where the feed thread met the death first: {v}\n{}", mcp.log()),
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while mcp.call_json("held", json!({})) != json!([]) {
+        assert!(Instant::now() < deadline, "the held burst is sent under the re-opened session:\n{}", mcp.log());
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.11"}}]}));
     assert_eq!(v["items"], json!([{"content": "hello, wire"}]));
+    let frontier = mcp.call_json("content_frontier", json!({"doc": doc}));
+    assert_eq!(frontier["next"], "12", "the eleven values minted once, never twice: {frontier}");
     let info = mcp.call_json("session_info", json!({}));
     assert_eq!(info["writes"], true, "{info}");
     let (status, log) = mcp.finish_logged();

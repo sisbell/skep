@@ -21,7 +21,10 @@
 //! one sequence (`Sessions::end`), and on the restart arm the shell re-opens a
 //! signed session silently under a fresh reference (AUTH-5.31), named in the
 //! death's reason. That reason is emitted once, as `session-died`, and
-//! [`Backend::drain`] alone settles the session's state by it. A call the shell
+//! [`Backend::drain`] alone settles the session's state by it. A burst whose
+//! own dial met the death is no call to reissue: the shell holds it,
+//! `session_died`, answers `held`, and sends its line itself under the session
+//! that stands next (client.md §3c.4). A call the shell
 //! answers `session_died` or `session_ended` waits for the drain to settle it
 //! (within `SETTLE_WAIT`), reading no reason itself and opening no second
 //! session early, which would leave the shell's re-open adopted by nothing. It
@@ -157,19 +160,32 @@ fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
     format!("stopped before serving: {what}: {refusal}{act}")
 }
 
+/// Returns whether a held line waits on the agent's `resolve`.
+///
+/// `line` is one of the `held` row's lines (skep-shell's `HeldRow`). It waits
+/// where it is a moved document's, or a refused run's, which carries its
+/// `refusal` (client.md §3c.4, §3c.5): the shell never resends either, nor
+/// any burst behind them on their documents. A line held `head_unreadable`
+/// or `session_died` carries a refusal too, saying why it waits, and awaits
+/// no act: the shell sends it once the board's head record reads, or once a
+/// session of the principal's that may write stands — at a board restart,
+/// the one the shell re-opens.
+fn awaits_resolve(line: &Value) -> bool {
+    let cause = line["cause"].as_str().unwrap_or_default();
+    cause == "moved" || (!line["refusal"].is_null() && !matches!(cause, "head_unreadable" | "session_died"))
+}
+
 /// Returns the line that says the held bursts an earlier run left, if any.
 ///
 /// `lines` is the `held` row's answer at the session's open (skep-shell's
 /// `HeldRow[]`): the principal's held file, read whole there (client.md
 /// §3c.7). The line counts the bursts, those `sent` — perhaps landed, their
-/// answer lost (§3c.2) — and those waiting on the agent's `resolve`: a refused
-/// run's, which carries its `refusal`, and a moved document's (§3c.4, §3c.5),
-/// which the shell never resends, nor any burst behind them on their
-/// documents. `None` where no burst stands.
+/// answer lost (§3c.2) — and those waiting on the agent's `resolve`
+/// ([`awaits_resolve`]). `None` where no burst stands.
 fn carried_line(lines: &Value) -> Option<String> {
     let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
     let sent = lines.iter().filter(|line| line["sent"] == true).count();
-    let waiting = lines.iter().filter(|line| !line["refusal"].is_null() || line["cause"] == "moved").count();
+    let waiting = lines.iter().filter(|line| awaits_resolve(line)).count();
     let bursts = if lines.len() == 1 { "1 burst".to_string() } else { format!("{} bursts", lines.len()) };
     Some(format!(
         "held: an earlier run left {bursts} held at this board ({sent} sent and so perhaps landed, {waiting} waiting on the agent's `resolve`, refused or moved): the shell resends held bursts in order as the board takes writes, save a waiting one and every burst behind it on its document"

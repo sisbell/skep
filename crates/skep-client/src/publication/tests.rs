@@ -2793,17 +2793,17 @@ fn a_drafts_base_moves_to_the_member_each_publication_makes() {
 
 // ── THE BASE's STANDING AND THE FAMILY LEFT BEHIND ───────────────────────
 
-/// THE STANDING (D4 (a)+(b′)), off ONE PROBE — `doc_metadata` of the trunk
-/// member after the base's, and no `/changes` read: a draft staged from the
-/// head `E.1` stands `AtHead`, `E.2` absent; once a later publication lands
-/// `E.2` it stands `Behind`, and so does a daughter base `E.1.1`, probed at
-/// `E.2` and never at `E.1.2`; a draft staged from the memberless `X` stands
-/// `First`, its probe `X.1`, and once `X.1` stands `SupersededFirst` naming
-/// it. A probe refused otherwise is that fault, never the member's absence
-/// (SP-14).
+/// Checks that a trunk base's standing is typed off one probe (D4 (a)+(b′)).
+///
+/// The probe is `doc_metadata` of the trunk member after the base, and no
+/// `/changes` read: a draft staged from the head `E.1` stands `AtHead`,
+/// `E.2` absent; once a later publication lands `E.2` it stands `Behind`; a
+/// draft staged from the memberless `X` stands `First`, its probe `X.1`, and
+/// once `X.1` stands `SupersededFirst` naming it. A probe refused otherwise
+/// is that fault, never the member's absence (SP-14).
 #[test]
 fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
-    let (e1, e2, e11) = (format!("{E}.1"), format!("{E}.2"), format!("{E}.1.1"));
+    let (e1, e2) = (format!("{E}.1"), format!("{E}.2"));
     let (mut world, _) = World::base();
     world.stage(D, &e1);
     let (dialer, board, signer) = open(world);
@@ -2818,10 +2818,6 @@ fn each_standing_is_typed_off_one_probe_of_the_next_trunk_member() {
     dialer.clear();
     assert_eq!(standing(&p, &a(E), &a(&e1)), Ok(Standing::Behind), "a trunk member follows E.1");
     assert_eq!((dialer.ops(), probed(&dialer)), (vec!["doc_metadata".to_string()], vec![json!(e2)]));
-    dialer.world().doc(&e11, true, ACCOUNT, vec![run(E, 1, 19)]);
-    dialer.clear();
-    assert_eq!(standing(&p, &a(E), &a(&e11)), Ok(Standing::Behind), "a daughter of E.1, and E.2 stands");
-    assert_eq!(probed(&dialer), [json!(e2)], "the member after the daughter's trunk member, never E.1.2");
     // The bare document: the first while its chain is empty, superseded
     // once its first member stands.
     let (mut world, _) = World::base();
@@ -2898,6 +2894,76 @@ fn the_landed_walk_from_a_bare_base_finds_the_first_member_then_its_daughters_an
     let mut other = request.clone();
     other.runs[1] = run(second_draft, 2, 3);
     assert_eq!(landed(&p, &second, &other, Base::Walk).unwrap(), Verdict::NotFound);
+}
+
+/// Checks that a base under a trunk member stands behind off its address.
+///
+/// Two drafts are staged from the memberless `X` (skep #807; PUB-2.37,
+/// PUB-2.53). The first's shot births `X.1`; the second's lands `X.1.1`,
+/// version 1's daughter, and the board moves the second draft's recorded
+/// base there, `X.2` absent. That base stands `Behind` with no frame sent,
+/// never `AtHead` off a probe of `X.2`, and so does a deeper base,
+/// `X.1.1.1`. The draft's next shot, a word of its own added, lands
+/// `X.1.1.1`, the base's own daughter, as its standing told, and mints no
+/// `X.2`; the landed walk from that base finds it among the base's
+/// daughters, the trunk's next member never read. Once a trunk member `X.2`
+/// stands, the base still stands `Behind` off its address alone.
+#[test]
+fn a_base_under_a_trunk_member_stands_behind_off_its_address_and_its_shot_lands_its_daughter() {
+    let (first_draft, second_draft) = ("1.0.1.0.37", "1.0.1.0.38");
+    let (x1, x11, x111, x2) = (format!("{X}.1"), format!("{X}.1.1"), format!("{X}.1.1.1"), format!("{X}.2"));
+    let (mut world, _) = World::base();
+    world.text(X, 1, "xyz");
+    world.doc(X, true, ACCOUNT, vec![run(X, 1, 3)]);
+    world.text(first_draft, 1, "ab");
+    world.doc(first_draft, false, ACCOUNT, vec![run(X, 1, 3), run(first_draft, 1, 2)]);
+    world.text(second_draft, 1, "wxyz");
+    world.doc(second_draft, false, ACCOUNT, vec![run(X, 1, 3), run(second_draft, 1, 4)]);
+    for d in [first_draft, second_draft] {
+        world.stage(d, X);
+    }
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    // One shot of the whole draft off `base`: its inputs, its request and
+    // the acknowledgment.
+    let shot = |draft: &str, base: (Address, u64)| -> (Inputs, Request, Ack) {
+        let selection = dialer.world().docs[draft].runs.clone();
+        let inputs = Inputs { doc: Some(a(X)), base: Some(base), draft: a(draft), also: Vec::new(), selection, notes: Vec::new(), readable_drafts: vec![a(draft)], published: vec![a(X)], ..inputs() };
+        let e = enumerate(&p, &inputs).expect("enumerated");
+        let panel = panel(&p, &inputs, &e).expect("the panel");
+        let Built::Request(mut request) = build(&p, &inputs, &e, &panel, &Confirmed::default()).expect("built") else { panic!("inert") };
+        let Sent::Acknowledged(ack) = send(&p, &inputs, &mut request).expect("sent") else { panic!("acknowledged") };
+        (inputs, *request, ack)
+    };
+    assert_eq!(shot(first_draft, (a(X), 3)).2.member.to_string(), x1, "the birth version");
+    assert_eq!(shot(second_draft, (a(X), 3)).2.member.to_string(), x11, "beside version 1, as its daughter");
+    assert_eq!(draft_base(&p, &a(X), &a(second_draft)), recorded(&x11, 7), "the board moved the second draft's base to the daughter it made");
+    dialer.clear();
+    assert_eq!(standing(&p, &a(X), &a(&x11)), Ok(Standing::Behind), "a daughter is never the head, X.2 absent or not");
+    assert_eq!(standing(&p, &a(X), &a(&x111)), Ok(Standing::Behind), "nor is a member under a daughter");
+    assert!(dialer.ops().is_empty(), "typed off the address, no frame sent: {:?}", dialer.ops());
+    // The next shot off the daughter: a word of the draft's own added.
+    {
+        let mut w = dialer.world();
+        w.text(second_draft, 5, "!");
+        w.docs.get_mut(second_draft).unwrap().runs.push(run(second_draft, 5, 1));
+    }
+    let (third, request, ack) = shot(second_draft, (a(&x11), 7));
+    assert_eq!(ack.member.to_string(), x111, "the base's own daughter, as its standing told");
+    assert!(!dialer.world().docs.contains_key(&x2), "no trunk member X.2 minted");
+    assert_eq!(dialer.world().trunk_head.get(X), Some(&x1), "the head did not move");
+    dialer.clear();
+    let verdict = landed(&p, &third, &request, Base::Walk).unwrap();
+    assert!(matches!(verdict, Verdict::Passed(Ack { ref member, via: AckVia::Walk, .. }) if member.to_string() == x111), "the walk finds the base's daughter: {verdict:?}");
+    let probed: Vec<String> = dialer.frames("doc_metadata").iter().filter_map(|f| f["doc"].as_str().map(str::to_string)).collect();
+    assert_eq!(probed.first(), Some(&x111), "the base's first daughter first: {probed:?}");
+    assert!(!probed.contains(&x2) && dialer.frames("image").iter().all(|f| f["d"].as_str() != Some(x2.as_str())), "never the trunk's next member: {probed:?}");
+    // A later trunk member standing moves nothing: still behind, unread.
+    dialer.world().doc(&x2, true, ACCOUNT, Vec::new());
+    dialer.clear();
+    assert_eq!(standing(&p, &a(X), &a(&x11)), Ok(Standing::Behind), "a daughter, and X.2 stands");
+    assert!(dialer.ops().is_empty(), "no frame sent: {:?}", dialer.ops());
 }
 
 /// THE FAMILY LEFT BEHIND (skep #744): every draft `also` names, in its

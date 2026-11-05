@@ -31,15 +31,22 @@
 //! board records no base for. A base the board names without its count is
 //! an answer this client cannot read, never read as no base (SP-14).
 //!
-//! **The standing** ([`standing`]) is typed by ONE PROBE: the trunk member
-//! after the base's — `doc`'s first member for the bare document, the
-//! member after `⟨doc⟩.k` for a base `⟨doc⟩.k` or any daughter under it —
-//! read by `doc_metadata`. Its answer says the trunk moved past the base;
-//! `doc_not_registered` says it did not. No read answers a document's head
-//! member, and a walk of the feed for it fails where the history is
-//! reclaimed; the probe needs neither, and names no head member. The
-//! successor rule is the merge's (`merge::reads`), copied here, since this
-//! module stands outside the merge's feature. Every standing is told, none
+//! **The standing** ([`standing`]) is typed off the base's place in `doc`'s
+//! chain and at most one probe. The head a shot's base is judged against is
+//! a trunk member `⟨doc⟩.k`, never a daughter (PUB-2.53), so a base under a
+//! trunk member — `⟨doc⟩.k.…`, where a daughter's publication moves its
+//! draft's base, or a member a draft was staged from — is never the head:
+//! its shot lands as the base's own daughter, the head unmoved (PUB-2.37,
+//! PUB-2.55), and it stands [`Standing::Behind`] off its address alone, no
+//! read sent. The bare document and a trunk member are typed by one probe,
+//! read by `doc_metadata`: `doc`'s first member for the bare document, the
+//! member after `⟨doc⟩.k` for a base `⟨doc⟩.k`. Its answer says the trunk
+//! moved past the base; `doc_not_registered` says it did not. No read
+//! answers a document's head member, and a walk of the feed for it fails
+//! where the history is reclaimed; the probe needs neither, and names no
+//! head member. The successor rule is the merge's (`merge::reads`), a trunk
+//! member's one version component plus one, copied here, since this module
+//! stands outside the merge's feature. Every standing is told, none
 //! refused: a draft begun from the bare document whose first member now
 //! stands ([`Standing::SupersededFirst`]) publishes beside that member as
 //! its daughter, as a draft behind the head publishes beside its base.
@@ -87,11 +94,12 @@ pub enum Unrecorded {
 /// Where a draft's recorded base stands against `doc`'s newest version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Standing {
-    /// No trunk member follows the base's: the next publication is the
-    /// trunk's next member, the head.
+    /// The base is the trunk's newest member: the next publication is the
+    /// trunk's next member, the new head.
     AtHead,
-    /// A trunk member follows the base's: the next publication lands as the
-    /// base's daughter, and the head does not move.
+    /// The base is a trunk member a later one follows, or a member under a
+    /// trunk member: the next publication lands as the base's daughter, and
+    /// the head does not move.
     Behind,
     /// The base is the bare document and its chain is empty: the next
     /// publication is its first member.
@@ -144,13 +152,14 @@ fn recorded(door: &Door<'_>, doc: &str, draft: &Address) -> Result<Base, Fault> 
     Ok(if in_chain(&base, doc) { Base::Recorded { base: member, copied } } else { Base::Unrecorded(Unrecorded::OtherChain) })
 }
 
-/// Returns where `base` stands against `doc`'s newest version, off one probe.
+/// Returns where `base` stands against `doc`'s newest version.
 ///
-/// The probe is `doc_metadata` of the trunk member after `base`'s (the
-/// module doc): an answer is [`Standing::SupersededFirst`] for the bare
-/// document and [`Standing::Behind`] otherwise; `doc_not_registered` is
-/// [`Standing::First`] for the bare document and [`Standing::AtHead`]
-/// otherwise.
+/// A base under a trunk member is [`Standing::Behind`] off its address, no
+/// read sent (the module doc). The bare document and a trunk member are
+/// typed off one probe, `doc_metadata` of the trunk member after the base:
+/// for the bare document an answer is [`Standing::SupersededFirst`] and
+/// `doc_not_registered` is [`Standing::First`]; for a trunk member an answer
+/// is [`Standing::Behind`] and `doc_not_registered` is [`Standing::AtHead`].
 ///
 /// # Errors
 ///
@@ -163,17 +172,20 @@ fn recorded(door: &Door<'_>, doc: &str, draft: &Address) -> Result<Base, Fault> 
 /// Panics where `base` is neither `doc` nor a member of its chain: the
 /// caller owes the base [`draft_base`] answers, which is.
 pub fn standing(p: &Publisher<'_>, doc: &Address, base: &Address) -> Result<Standing, Fault> {
-    let next = successor(doc, base).expect("a base in doc's chain");
-    let bare = base == doc;
-    let door = Door::new(p.board, p.token);
-    door.step("standing");
-    match door.metadata(&next.to_string()) {
-        Ok(_) if bare => Ok(Standing::SupersededFirst { first: next }),
-        Ok(_) => Ok(Standing::Behind),
-        Err(Fault::NoSuchDocument(_)) if bare => Ok(Standing::First),
-        Err(Fault::NoSuchDocument(_)) => Ok(Standing::AtHead),
-        Err(e) => Err(e),
-    }
+    let stands = |member: &Address| -> Result<bool, Fault> {
+        let door = Door::new(p.board, p.token);
+        door.step("standing");
+        match door.metadata(&member.to_string()) {
+            Ok(_) => Ok(true),
+            Err(Fault::NoSuchDocument(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    };
+    Ok(match place(doc, base).expect("a base in doc's chain") {
+        Place::Bare { first } => if stands(&first)? { Standing::SupersededFirst { first } } else { Standing::First },
+        Place::Trunk { next } => if stands(&next)? { Standing::Behind } else { Standing::AtHead },
+        Place::Under => Standing::Behind,
+    })
 }
 
 /// Returns the drafts a publication of `inputs.draft` leaves behind.
@@ -218,19 +230,40 @@ fn in_chain(addr: &str, doc: &str) -> bool {
     addr == doc || addr.strip_prefix(doc).and_then(|rest| rest.strip_prefix('.')).is_some_and(|rest| rest.split('.').all(|c| c != "0"))
 }
 
-/// Returns the trunk member after the one `base` is or lies under: `doc`'s
-/// first member where `base` is `doc` itself, `⟨doc⟩.(k+1)` for `⟨doc⟩.k`
-/// and every member under it — the merge's successor rule, its one version
-/// component plus one. `None` where `base` is neither `doc` nor a member of
-/// its chain.
-fn successor(doc: &Address, base: &Address) -> Option<Address> {
+/// Where a base lies in `doc`'s version chain.
+///
+/// A place whose standing a read decides names the trunk member it is
+/// probed at; a member under a trunk member, whose standing its address
+/// decides, names none.
+enum Place {
+    /// `doc` itself, probed at its first member, `⟨doc⟩.1`.
+    Bare { first: Address },
+    /// A trunk member `⟨doc⟩.k`, probed at the one after it, `⟨doc⟩.(k+1)`.
+    Trunk { next: Address },
+    /// A member under a trunk member, `⟨doc⟩.k.…`: never the head
+    /// (PUB-2.53), so never probed.
+    Under,
+}
+
+/// Returns where `base` lies in `doc`'s version chain.
+///
+/// That is `doc` itself, a trunk member — `doc` and one version component —
+/// or a member under one, the first two naming the member their standing is
+/// probed at by the merge's successor rule: `⟨doc⟩.1` for the bare
+/// document, a trunk member's one version component plus one. `None` where
+/// `base` is neither `doc` nor a member of its chain.
+fn place(doc: &Address, base: &Address) -> Option<Place> {
     let doc: Vec<Nat> = doc.tumbler().iter().cloned().collect();
     let comps: Vec<Nat> = base.tumbler().iter().cloned().collect();
     let version = comps.strip_prefix(doc.as_slice())?;
     if version.contains(&Nat::from(0u32)) {
         return None;
     }
+    let member = |k: Nat| -> Option<Address> { validate(Tumbler::new(doc.iter().cloned().chain(std::iter::once(k))).ok()?).ok() };
     let one = Nat::from(1u32);
-    let next = version.first().map_or_else(|| one.clone(), |k| k + &one);
-    validate(Tumbler::new(doc.into_iter().chain(std::iter::once(next))).ok()?).ok()
+    match version {
+        [] => Some(Place::Bare { first: member(one)? }),
+        [k] => Some(Place::Trunk { next: member(k + &one)? }),
+        _ => Some(Place::Under),
+    }
 }

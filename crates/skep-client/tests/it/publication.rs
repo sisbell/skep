@@ -756,3 +756,70 @@ fn a_moved_also_draft_is_refused_naming_it_and_left_as_it_stands_once_its_place_
     assert_eq!(page.changes[0]["docs"], json!([e2, a_draft, d]), "the member, the rendering draft, then D for the record homed in it: {:?}", page.changes);
     sd.shutdown();
 }
+
+/// Checks that a base under a trunk member stands behind against the daemon.
+///
+/// `B` and `C` are staged from the memberless `X` (skep #807; PUB-2.37,
+/// PUB-2.53), each with words of its own. `B`'s shot births `X.1`; `C`'s,
+/// its base still the bare document, lands `X.1.1`, version 1's daughter,
+/// and the board moves `C`'s recorded base there at the daughter's whole
+/// count. That base stands `Behind`, `X.2` absent, and `C`'s next shot,
+/// words of its own added, lands `X.1.1.1`, the base's own daughter, as its
+/// standing told: no trunk member `X.2` is minted and the edition still
+/// reads version 1. The landed walk from that base finds the member the
+/// shot made.
+#[test]
+fn a_base_under_a_trunk_member_stands_behind_and_its_next_shot_lands_its_daughter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let x = published_document(&board, &session, &device);
+    let staged = |text: &str| -> String {
+        let d = acked_addr(&acked(board.op(Some(&bare_token), &frames::stage(&x, None)))).expect("the staged draft").to_string();
+        insert_text(&board, &bare_token, &d, 1, text);
+        d
+    };
+    let (b, c) = (staged("ab"), staged("wxyz"));
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    // One shot of the draft's first `width` positions off `base`: its
+    // inputs, its request and the acknowledgment.
+    let shot = |draft: &str, base: (Address, u64), width: u64| -> (Inputs, publication::Request, publication::Ack) {
+        let selection = image(&board, &bare_token, draft, 1, width)
+            .into_iter()
+            .map(|(start, w)| {
+                let (origin, ordinal) = start.rsplit_once(".0.1.").expect("a content I-address");
+                run(origin, ordinal.parse().expect("an ordinal"), w)
+            })
+            .collect();
+        let inputs = Inputs { doc: Some(addr(&x)), mint: None, claim: false, base: Some(base), draft: addr(draft), also: vec![], selection, notes: vec![], readable_drafts: vec![addr(draft)], published: vec![addr(&x)], supersede: vec![] };
+        let en = enumerate(&p, &inputs).expect("enumerated");
+        let pn = panel(&p, &inputs, &en).expect("the panel");
+        let Built::Request(mut request) = build(&p, &inputs, &en, &pn, &Confirmed::default()).expect("built") else { panic!("inert") };
+        let sent = send(&p, &inputs, &mut request).expect("sent");
+        let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+        (inputs, *request, ack)
+    };
+    let (x1, x11, x111, x2) = (format!("{x}.1"), format!("{x}.1.1"), format!("{x}.1.1.1"), format!("{x}.2"));
+    assert_eq!(shot(&b, (addr(&x), 0), 2).2.member.to_string(), x1, "the birth version");
+    assert_eq!(shot(&c, (addr(&x), 0), 4).2.member.to_string(), x11, "beside version 1, as its daughter");
+    let moved = publication::draft_base(&p, &addr(&x), &addr(&c));
+    assert_eq!(moved, Ok(publication::base::Base::Recorded { base: addr(&x11), copied: 4 }), "the board moved C's base to the daughter it made");
+    assert_eq!(publication::standing(&p, &addr(&x), &addr(&x11)), Ok(publication::Standing::Behind), "a daughter is never the head, X.2 absent");
+    insert_text(&board, &bare_token, &c, 5, " now");
+    let (inputs, request, ack) = shot(&c, (addr(&x11), 4), 8);
+    assert_eq!(ack.member.to_string(), x111, "the base's own daughter, as its standing told");
+    let Answer::Document(probe) = board.op(Some(&token), &frames::doc_metadata(&x2)).expect("the read") else { panic!("closed") };
+    assert_eq!(probe["code"].as_str(), Some("doc_not_registered"), "no trunk member X.2 minted: {probe}");
+    assert_eq!(read(&board, &token, &frames::retrieve_v(&x, 1, 2))["items"][0]["content"], "ab", "the edition still reads version 1: a daughter moves no head");
+    assert_eq!(read(&board, &token, &frames::retrieve_v(&x111, 1, 8))["items"][0]["content"], "wxyz now", "C's whole text in its daughter's daughter");
+    let verdict = landed(&p, &inputs, &request, Base::Walk).expect("the landed test");
+    assert!(matches!(&verdict, Verdict::Passed(found) if found.member.to_string() == x111 && found.via == AckVia::Walk), "the walk from the daughter finds the member the shot made: {verdict:?}");
+    session.close().expect("close");
+}

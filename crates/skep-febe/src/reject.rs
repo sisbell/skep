@@ -531,6 +531,16 @@ pub enum RejectCode {
     /// `detail` names which: `not_registered`, `not_document` (a member),
     /// `not_owner`, or `not_published`.
     ReadWithRefused,
+    /// A `supersede` entry is refused (the merge bridge lane, brief A).
+    ///
+    /// `detail` names which: `not_member` (the daughter is no registered
+    /// version member of `doc`'s own chain — the trunk itself, a document or
+    /// member outside the chain, an element address, a member not yet
+    /// minted, or any entry at the mint form), `base` (the daughter is the
+    /// member the shot appends to), or `duplicate` (a second entry naming
+    /// one daughter, the second's index). A daughter a claim of the caller's
+    /// own already names is SKIPPED, never refused.
+    SupersedeRefused,
     /// The document form carries `claim: true` and `doc` already holds a
     /// member (the link-sets design §5.7; skep #692).
     ///
@@ -548,7 +558,8 @@ pub enum RejectCode {
     ///
     /// The daemon's own cell, raised ahead of its serialization lock off a
     /// lock-free snapshot: the caller's link-holding home count × (`links`
-    /// entries + `read_with` entries) + the draft's content run count × the
+    /// entries + `read_with` entries + `supersede` entries) + the draft's
+    /// content run count × the
     /// request's runs, past M7's `MAX_PUBLICATION_READS` — the four reads
     /// the composite makes under the lock, bounded before it is taken.
     /// `detail` names the price's four terms and the budget, `site` nothing.

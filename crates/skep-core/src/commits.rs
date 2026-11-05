@@ -180,7 +180,7 @@ use skep_arrangement::{trunk_of, HasM5};
 use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{MintTime, Op, OpKind, RejectCode, Rejection, Response, Stores, TimeSource};
 use skep_kernel::{Attestation, Seq, Snapshot};
-use skep_links::{read_with_in, HasLinks, NamedAddress};
+use skep_links::{read_with_in, supersession_claim_in, HasLinks, NamedAddress};
 use skep_media::cell::names_kind_by_prefix;
 use skep_media::index::CellIndex;
 use skep_util::notice::{self, Class};
@@ -1503,13 +1503,15 @@ impl Commits {
             // cannot read it, and the row keeps its `attest` all the same
             // (`feed::Inner::visible`) — then every other home the deposits
             // touched, in address order (the link-sets design §5.7): the
-            // homes the request named by address, and, of the two lists the
-            // plan may skip an entry of, each home whose deposit LANDED,
+            // homes the request named by address, and, of the three lists
+            // the plan may skip an entry of, each home whose deposit LANDED,
             // read off the commit's two worlds — a `retract` target active
             // before and retracted after, a `read_with` set holding the
-            // read-with after and not before — so a skipped entry's home is
-            // not named.
-            AffectedDocs::Published { drafts, mints, homes, retract, read_with } => {
+            // read-with after and not before, the trunk holding a daughter's
+            // claim onto the minted member after (it cannot before: the
+            // member is this commit's) — so a skipped entry's home is not
+            // named.
+            AffectedDocs::Published { drafts, mints, homes, retract, read_with, supersede } => {
                 debug_assert!(
                     minted.is_some(),
                     "a publish answers AckAddr, the ack carrying the member it minted"
@@ -1533,6 +1535,9 @@ impl Commits {
                         if !read_with_in(before, set, &edition, set) && read_with_in(after, set, &edition, set) {
                             others.insert(set.clone());
                         }
+                    }
+                    if supersede.iter().any(|daughter| supersession_claim_in(after, &edition, daughter, member)) {
+                        others.insert(edition.clone());
                     }
                     others.retain(|home| !docs.contains(home));
                     docs.extend(others);
@@ -2174,18 +2179,22 @@ enum AffectedDocs {
     /// mint form, the edition then the member's own trunk. `homes` are the
     /// homes the request's `links` entries name by address, and the private
     /// homes of the originals they name, each of which the commit writes
-    /// where it lands at all; `retract` the targets and `read_with` the sets
-    /// of the two lists whose deposit the plan may SKIP — a target already
-    /// retracted, a read-with standing in a published home of the maker's —
-    /// so whether each landed is read at record time off the commit's two
-    /// worlds ([`Commits::record`]), and a home nothing touched is not
-    /// named. The same `AckAddr` obligation as `Minted`'s.
+    /// where it lands at all; `retract` the targets, `read_with` the sets
+    /// and `supersede` the daughters of the three lists whose deposit the
+    /// plan may SKIP — a target already retracted, a read-with standing in
+    /// a published home of the maker's, a daughter a claim of the maker's
+    /// own already names — so whether each landed is read at record time
+    /// off the commit's two worlds ([`Commits::record`]), and a home nothing
+    /// touched is not named: a landed supersession claim names the trunk of
+    /// `doc`, its home (the merge bridge lane, brief A). The same `AckAddr`
+    /// obligation as `Minted`'s.
     Published {
         drafts: Vec<Address>,
         mints: bool,
         homes: Vec<Address>,
         retract: Vec<Address>,
         read_with: Vec<Address>,
+        supersede: Vec<Address>,
     },
 }
 
@@ -2474,6 +2483,7 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
                     homes: homes.into_iter().collect(),
                     retract: deposits.retract.clone(),
                     read_with: deposits.read_with.clone(),
+                    supersede: deposits.supersede.clone(),
                 },
                 RowTerms::Publish,
                 Minting::Publish { reinserted: u64::try_from(&reinserted).unwrap_or(u64::MAX) },

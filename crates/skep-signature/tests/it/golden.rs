@@ -19,7 +19,7 @@ use skep_identity::{
 };
 use skep_signature::{pq_widths, verify, HybridFault, HybridSigner, PqWidths, SeededRng06};
 
-use crate::frames::{addr, extent, fixed_frames};
+use crate::frames::{addr, extent, fixed_frames, publish_supersede};
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -270,6 +270,25 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ],
         None,
     );
+    // The `publish` with ONE SUPERSESSION CLAIM behind it (the merge bridge
+    // lane, brief A): the fixed `publish` shot — three values, a window of
+    // two, the base `1.0.1.0.1.1` at three — with the daughter
+    // `1.0.1.0.1.1.1` superseded by the member the commit mints, homed in
+    // the trunk `1.0.1.0.1`; a NEW row, the fourteen's pins unmoved.
+    let base_member = addr("1.0.1.0.1.1");
+    let shot = entry_body_publish(
+        [
+            ShotSegmentPiece::Value(b"x"),
+            ShotSegmentPiece::Value(b"y"),
+            ShotSegmentPiece::Value(b"z"),
+            ShotSegmentPiece::Window {
+                start: &window,
+                width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
+            },
+        ],
+        Some(skep_identity::ShotBase { member: &base_member, extent: 3 }),
+    );
+    let supersede = publish_supersede(shot, &doc, &addr("1.0.1.0.1.1.1"));
     let [insert, link, publish, deposits, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
         fixed_frames(alg);
     // The fourteen come under `fixed_frames`' own names, the names the
@@ -278,7 +297,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
     let named = |(name, bytes): (&'static str, Vec<u8>), len: usize, hash: &'static str| {
         (name, bytes, len, hash)
     };
-    let shapes: [(&str, Vec<u8>, usize, &str); 18] = [
+    let shapes: [(&str, Vec<u8>, usize, &str); 19] = [
         named(insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
         named(link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
@@ -287,6 +306,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         named(publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
         ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
         named(deposits, 641, "437f26fdc5da3747eee6cc240d91d9c36f21ba56131c509064fdfb0ed6e99e1a"),
+        ("publish, with a supersession claim", frame(&supersede), 344, "4c96f9017488cea59fcd829e7cae7a8242055916327bed946fb175ffc66ecffb"),
         named(enroll, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
         named(retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
         named(claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),

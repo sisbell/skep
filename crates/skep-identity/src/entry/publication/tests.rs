@@ -104,6 +104,7 @@ fn the_home_row_and_the_kind_byte_part_the_groups() {
         row(DepositHome::Address(&home), DepositKind::ReadWith, slots),
         row(DepositHome::Address(&home), DepositKind::Retraction, slots),
         row(DepositHome::Edition, DepositKind::EditionClaim, slots),
+        row(DepositHome::Address(&home), DepositKind::Supersede, slots),
     ];
     let spelled: Vec<Vec<u8>> =
         bodies.iter().map(|r| entry_body_publication(shot(), std::slice::from_ref(r)).as_bytes().to_vec()).collect();
@@ -126,6 +127,7 @@ fn the_home_row_and_the_kind_byte_part_the_groups() {
     assert_eq!(kind_byte(&bodies[3]), 0x04, "a read-with");
     assert_eq!(kind_byte(&bodies[4]), 0x03, "a retraction");
     assert_eq!(kind_byte(&bodies[5]), 0x01, "the edition claim");
+    assert_eq!(kind_byte(&bodies[6]), 0x05, "a supersession claim");
     // The order of the groups is signed.
     let ab = entry_body_publication(shot(), &[bodies[0].clone(), bodies[3].clone()]);
     let ba = entry_body_publication(shot(), &[bodies[3].clone(), bodies[0].clone()]);
@@ -137,6 +139,43 @@ fn the_home_row_and_the_kind_byte_part_the_groups() {
             + (entry_body_publication(shot(), std::slice::from_ref(&bodies[3])).as_bytes().len() - shot().as_bytes().len()),
         "two groups are the two groups' bytes"
     );
+}
+
+/// THE SUPERSESSION CLAIM's GROUP, byte for byte (the merge bridge lane,
+/// brief A): a `supersede` entry's claim homed in the trunk by address —
+/// the home row the trunk's address delimited, the kind byte `0x05`, the
+/// type slot the supersedes class's one unit span as stored, the `from`
+/// slot the daughter's unit span as stored, the `to` slot ONE TAG ELEMENT,
+/// `member` — the member the commit mints, which no signer holds before the
+/// commit — then the EMPTY `replaces` row; and a request naming no daughter
+/// spells today's body byte for byte, the group absent.
+#[test]
+fn a_supersession_claims_group_is_its_home_its_kind_and_the_assert_sup_bodys_four_rows() {
+    let trunk = addr(&[1, 0, 1, 0, 3]);
+    let daughter = addr(&[1, 0, 1, 0, 3, 1, 1]);
+    let sup = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 4]));
+    let old = unit_span(&daughter);
+    let row = DepositRow {
+        home: DepositHome::Address(&trunk),
+        kind: DepositKind::Supersede,
+        ty: spans(&[&sup]),
+        from: spans(&[&old]),
+        to: DepositSlot::Stored(vec![SlotElement::Member]),
+    };
+    let body = entry_body_publication(shot(), &[row]);
+    let to_row = [vec![0x03u8], 1u64.to_be_bytes().to_vec(), delimited(b"member"), delimited(b"")].concat();
+    let want = [
+        shot().as_bytes().to_vec(),
+        delimited(b"1.0.1.0.3"),
+        vec![0x05],
+        stored(&[&sup]),
+        stored(&[&old]),
+        to_row,
+        vec![0, 0, 0, 0],
+    ]
+    .concat();
+    assert_eq!(body.as_bytes(), &want[..]);
+    assert_eq!(entry_body_publication(shot(), &[]), shot(), "no daughter: today's body, no group");
 }
 
 /// A TAG ELEMENT in a slot row as stored: the tag's token where a start

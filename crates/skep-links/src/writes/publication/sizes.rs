@@ -31,7 +31,10 @@
 //! [`COPY_BYTES`] is the copy with every slot at `MAX_SLOT_SPANS` spans of
 //! the shallow depth — and [`CLAIM_BYTES`]), a retraction per `retract`
 //! entry ([`RETRACTION_BYTES`]), a read-with per `read_with` entry
-//! ([`READ_WITH_BYTES`]), the re-window per piece at a kept place
+//! ([`READ_WITH_BYTES`]), a claim per `supersede` entry ([`CLAIM_BYTES`]
+//! again — a claim over two version members spells shorter spans than one
+//! over two links, so the link-ended figure bounds it), the re-window per
+//! piece at a kept place
 //! ([`KEPT_PLACE_BYTES`], a placement and a removal), the shot's own
 //! placement per run ([`PLACED_RUN_BYTES`]) and its re-insert per value
 //! ([`REINSERTED_VALUE_BYTES`], the value's own bytes on top), the shot's
@@ -153,24 +156,30 @@ const SHALLOW_TYPE_SPAN_BYTES: u64 = 208;
 /// not a request any body can carry: every wire list at its cap
 /// (`MAX_WIRE_LIST`, the codec's, equal to `MAX_SLOT_SPANS`) — 4096 `links`
 /// entries each with a copy at full slots and a claim, 4096 `retract`
-/// entries, 4096 `read_with` entries, 4096 runs each minting a record and
+/// entries, 4096 `read_with` entries, 4096 `supersede` entries each a
+/// claim, 4096 runs each minting a record and
 /// re-windowed at a place as one piece — the placement at `MAX_PLACED_RUNS`
 /// runs, the re-insert at `MAX_REINSERTED_VALUES` values every one an atom,
-/// the shot's fixed records and the mint form's two: 9,190,118,681 bytes,
+/// the shot's fixed records and the mint form's two: 9,193,628,953 bytes,
 /// which DOES NOT FIT `MAX_TXN_BYTES` (64 MiB) — by two orders, the copies
 /// at full slots being 9,132,613,632 of it. With the copies at one span a
 /// slot (1,029 bytes apiece: the fixed part, a content span, a document's
 /// unit span and a nine-component type's) every other cap at once sums to
-/// 65,230,105 bytes, INSIDE the budget by 1,878,759 — the re-inserted
-/// atoms' 37,617,664 the largest term. What a body within the frame routes'
-/// cap can command is [`REACHABLE_PUBLICATION_BYTES`]. The caps are the
-/// design's to move; `tests` pins the figures.
+/// 68,740,377 bytes, PAST the budget by 1,631,513 since the fourth list,
+/// `supersede`, joined the caps (its 4096 claims are 3,510,272 of it;
+/// without them the sum stood inside the budget by 1,878,759) — the
+/// re-inserted atoms' 37,617,664 the largest term; the live price
+/// ([`price_staged_bytes`]) refuses such a request ahead of the lock. What
+/// a body within the frame routes' cap can command is
+/// [`REACHABLE_PUBLICATION_BYTES`]. The caps are the design's to move;
+/// `tests` pins the figures.
 pub const MAXIMAL_PUBLICATION_BYTES: u64 = SHOT_BYTES
     + EDITION_MINT_BYTES
     + EDITION_CLAIM_BYTES
     + MAX_WIRE_LIST * (COPY_BYTES + CLAIM_BYTES)
     + MAX_WIRE_LIST * RETRACTION_BYTES
     + MAX_WIRE_LIST * READ_WITH_BYTES
+    + MAX_WIRE_LIST * CLAIM_BYTES
     + MAX_WIRE_LIST * (CORRESPONDENCE_RECORD_BYTES + KEPT_PLACE_BYTES)
     + MAX_PLACED_RUNS as u64 * PLACED_RUN_BYTES
     + MAX_REINSERTED_VALUES as u64 * REINSERTED_VALUE_BYTES;
@@ -218,8 +227,9 @@ const REACHABLE_PIECES: u64 = MAX_WIRE_LIST / 2 + (MAX_WIRE_LIST / 2) * (MAX_WIR
 ///   `addrs` and `spans` forms command 10 bytes per body byte besides.
 ///
 /// Summed with the shot's fixed records, the mint form's two, a record per
-/// minting run of the first half, a claim per entry and the retractions and
-/// read-withs at their caps, the figure is 7,225,126,169 bytes: PAST
+/// minting run of the first half, a claim per entry and the retractions,
+/// read-withs and supersession claims at their caps, the figure is
+/// 7,228,636,441 bytes: PAST
 /// `MAX_TXN_BYTES` by two orders, each of the two large terms past it
 /// alone. So a request within the body cap can command more staged bytes
 /// than one transaction holds, and the kernel's `txn_over_budget` is met
@@ -239,7 +249,7 @@ pub const REACHABLE_PUBLICATION_BYTES: u64 = SHOT_BYTES
             + 2 * MAX_SLOT_SPANS as u64 * SHALLOW_CONTENT_SPAN_BYTES
             + SHALLOW_TYPE_SPAN_BYTES
             + CLAIM_BYTES)
-    + MAX_WIRE_LIST * (RETRACTION_BYTES + READ_WITH_BYTES);
+    + MAX_WIRE_LIST * (RETRACTION_BYTES + READ_WITH_BYTES + CLAIM_BYTES);
 
 /// The bytes one component of a tumbler stores: bincode fixint's 8-byte
 /// length before the magnitude's 32-bit digits, 4 bytes each, zero having
@@ -307,10 +317,13 @@ pub fn stored_span_bytes(span: &Span) -> u64 {
 ///   request's runs and `MAX_SLOT_SPANS` content spans of the edition's
 ///   chain — and [`CLAIM_BYTES`] where it names an original;
 /// * per `retract` entry [`RETRACTION_BYTES`], per `read_with` entry
-///   [`READ_WITH_BYTES`].
+///   [`READ_WITH_BYTES`], per `supersede` entry [`CLAIM_BYTES`] — the
+///   daughter's claim, its two member-ended spans shorter than the
+///   link-ended figure's.
 ///
 /// An upper bound: the twin fence refuses before anything is staged, the
-/// plan's skips (a retracted target, a standing read-with) stage less, a
+/// plan's skips (a retracted target, a standing read-with, a daughter
+/// already claimed) stage less, a
 /// run named twice stages its identity once, a member-position end's
 /// pieces merge where the member's runs are I-adjacent, and a byte of prose
 /// costs a fraction of an atom. Request arithmetic — `O(n log n)` in the
@@ -402,7 +415,8 @@ pub fn price_staged_bytes<W: LinkWorld>(
         }
     }
     bytes = bytes.saturating_add((deposits.retract.len() as u64).saturating_mul(RETRACTION_BYTES));
-    bytes.saturating_add((deposits.read_with.len() as u64).saturating_mul(READ_WITH_BYTES))
+    bytes = bytes.saturating_add((deposits.read_with.len() as u64).saturating_mul(READ_WITH_BYTES));
+    bytes.saturating_add((deposits.supersede.len() as u64).saturating_mul(CLAIM_BYTES))
 }
 
 /// Returns a content I-span of the edition's chain, one position wide at a
@@ -442,22 +456,26 @@ mod tests {
 
     /// THE ARITHMETIC (M6): the maximal request's bytes against the
     /// transaction budget — a product of caps. At full slots it does not
-    /// fit; at one span a slot every other cap at once does, narrowly. Both
+    /// fit; at one span a slot every other cap at once stood inside the
+    /// budget narrowly until the fourth list, `supersede`, joined the caps
+    /// (the merge bridge lane, brief A), and is past it narrowly since —
+    /// the live price refuses such a request ahead of the lock. Both
     /// figures are pinned so a cap or an encoding that moves either is a
     /// visible decision here.
     #[test]
     fn the_maximal_request_is_priced_against_the_transaction_budget() {
-        assert_eq!(MAXIMAL_PUBLICATION_BYTES, 9_190_118_681, "the table's sum");
+        assert_eq!(MAXIMAL_PUBLICATION_BYTES, 9_193_628_953, "the table's sum");
         assert!(
             MAXIMAL_PUBLICATION_BYTES > MAX_TXN_BYTES,
             "the maximal request at the table's figures does not fit the budget: {MAXIMAL_PUBLICATION_BYTES} bytes against {MAX_TXN_BYTES}"
         );
         let one_span_a_slot = MAXIMAL_PUBLICATION_BYTES - MAX_WIRE_LIST * (COPY_BYTES - 1_029);
-        assert_eq!(one_span_a_slot, 65_230_105, "every other cap at once, the copies at one span a slot");
+        assert_eq!(one_span_a_slot, 68_740_377, "every other cap at once, the copies at one span a slot");
+        assert_eq!(MAX_WIRE_LIST * CLAIM_BYTES, 3_510_272, "the supersession claims' share at their cap");
         assert!(
-            one_span_a_slot <= MAX_TXN_BYTES,
-            "…fits the budget, by {} bytes",
-            MAX_TXN_BYTES.saturating_sub(one_span_a_slot)
+            one_span_a_slot > MAX_TXN_BYTES && one_span_a_slot - MAX_WIRE_LIST * CLAIM_BYTES <= MAX_TXN_BYTES,
+            "…past the budget by {} bytes, and inside it without the fourth list",
+            one_span_a_slot.saturating_sub(MAX_TXN_BYTES)
         );
         // The copy at full slots is the fixed part plus its spans at the
         // shallow depth: two content spans and one type span per span index.
@@ -478,7 +496,7 @@ mod tests {
     #[test]
     fn the_reachable_request_is_priced_against_the_transaction_budget() {
         assert_eq!(REACHABLE_PIECES, 2_048 + 2_048 * 2_048);
-        assert_eq!(REACHABLE_PUBLICATION_BYTES, 7_225_126_169, "the lane's arithmetic");
+        assert_eq!(REACHABLE_PUBLICATION_BYTES, 7_228_636_441, "the lane's arithmetic");
         assert!(
             REACHABLE_PUBLICATION_BYTES > MAX_TXN_BYTES,
             "the reachable request is past the budget: {REACHABLE_PUBLICATION_BYTES} against {MAX_TXN_BYTES}"
@@ -488,8 +506,8 @@ mod tests {
         assert!(MAX_WIRE_LIST * 2 * MAX_SLOT_SPANS as u64 * SHALLOW_CONTENT_SPAN_BYTES > MAX_TXN_BYTES, "the copies' slots alone");
         assert!(REACHABLE_PUBLICATION_BYTES < MAXIMAL_PUBLICATION_BYTES, "and under the product of caps");
         // The body the division costs: every list at its cap in its cheapest
-        // spelling, about an eighth of the cap.
-        let body = MAX_WIRE_LIST * (61 + 27 + 140 + 18 + 12);
+        // spelling, about an eighth of the cap — a `supersede` address 14.
+        let body = MAX_WIRE_LIST * (61 + 27 + 140 + 18 + 12 + 14);
         assert!(body < REQUEST_BODY_BYTES / 7, "{body} bytes of body for every list at its cap");
     }
 

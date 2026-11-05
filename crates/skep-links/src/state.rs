@@ -347,18 +347,29 @@ impl LinkState {
         self.hints.nullified.contains(t)
     }
 
-    /// Checks a value against the `[K_sup]` claim schema (Df-DISC(ii)).
+    /// Checks a value against the `[K_sup]` claim schema (Df-DISC(ii)) in
+    /// its LINK form.
     ///
     /// The schema: F and G each a unit-depth single denoted address, both
-    /// resident, the two distinct.
+    /// resident links, the two distinct. The schema's second form, admitted
+    /// since the merge bridge lane (brief A; skep #805), names VERSION
+    /// MEMBERS: F a registered member of a published document's chain and
+    /// G the member the same commit mints under that chain — the claim a
+    /// publication's `supersede` entry deposits, and that form's one writer
+    /// — which this check does not ask; the publication's plan holds it
+    /// (`plan_deposits`, THE VALIDATION's (6)), as `editlink`'s own claim
+    /// is held by construction below.
     ///
     /// The one statement of the invariant every stored claim holds, and the
-    /// whole reason `assert_sup`/`editlink` are the sole `[K_sup]` writers:
-    /// the supersession adjacency, the walk family and M8's lineage reads all
-    /// take it as fact. Both writers ask it and translate the verdict into
-    /// their own vocabulary — `assert_sup` into its two typed rejections,
-    /// `editlink`'s DC guard into one — and `editlink`'s own claim meets it by
-    /// construction rather than by asking: built by
+    /// whole reason `assert_sup`/`editlink` are the sole `[K_sup]` writers
+    /// of the link form: the supersession adjacency, the walk family and
+    /// M8's lineage reads all take it as fact — the adjacency and the walks
+    /// read the endpoints as tumblers and never as keys of the map, so a
+    /// member endpoint walks as a link endpoint does. Both writers ask it
+    /// and translate the verdict into their own vocabulary — `assert_sup`
+    /// into its two typed rejections, `editlink`'s DC guard into one — and
+    /// `editlink`'s own claim meets it by construction rather than by
+    /// asking: built by
     /// [`supersession_claim`](crate::supersession_claim), one address a side;
     /// F the original, checked resident against the base;
     /// G the successor minted a line earlier in the same transaction —
@@ -407,8 +418,10 @@ impl LinkState {
     ///
     /// Every key in `type_slices`/`dedup`, and every key `stab` or `stab_in`
     /// returns, is a key of `links` — [`fold_hints`] indexes there only the
-    /// address it is inserting; `sup_fwd`'s endpoints are keys of `links` by
-    /// the claim schema. `readlink` is the fallible form, for an address a
+    /// address it is inserting. `sup_fwd`'s endpoints are NOT keys of this
+    /// map by any rule: a claim of the schema's member form names two
+    /// version members, so the walks read an endpoint as a tumbler and never
+    /// through here. `readlink` is the fallible form, for an address a
     /// caller supplies.
     ///
     /// # Panics

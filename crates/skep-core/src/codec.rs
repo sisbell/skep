@@ -507,7 +507,7 @@ type PResult<T> = Result<T, PErr>;
 /// Every leaf parser answers a bare [`PErr`], which lifts into this naming
 /// no entry; the parsers that localize their refusal — the publish shot's
 /// `places` and `also_places`, refused entry by entry ([`Fields::places`],
-/// [`Fields::also_places`]), and its deposits' three lists — answer this
+/// [`Fields::also_places`]), and its deposits' four lists — answer this
 /// directly. The request's own faults ride it to [`ParseError`]. A tuple as
 /// [`PErr`] is, its detail first, so a reader of either names the text the
 /// same way.
@@ -1510,14 +1510,18 @@ impl Fields {
         }
     }
 
-    /// Takes a `publish`'s three deposit lists (the link-sets design §5.7):
-    /// `links`, `retract` and `read_with`, each optional and read as the
-    /// empty list where absent — and carries `claim`, the edition claim's
-    /// flag the `publish` arm read ahead of the shot, beside them.
+    /// Takes a `publish`'s four deposit lists (the link-sets design §5.7;
+    /// the merge bridge lane, brief A): `links`, `retract`, `read_with` and
+    /// `supersede`, each optional and read as the empty list where absent
+    /// — and carries `claim`, the edition claim's flag the `publish` arm
+    /// read ahead of the shot, beside them.
     ///
     /// Each list is one wire list under [`MAX_WIRE_LIST`]. A `links` entry
     /// is `{home, ty, from, to, old?}` ([`p_link_entry`]); a `retract` entry
-    /// a link address; a `read_with` entry a document address. The tags
+    /// a link address; a `read_with` entry a document address; a `supersede`
+    /// entry a version member's address — the daughter the member takes
+    /// in, whose membership of `doc`'s chain is the plan's question, not
+    /// the codec's. The tags
     /// `member` and `edition` are admitted where an address is expected
     /// inside an entry — a home, an element of an address-form end —
     /// `edition` at the mint form alone; the member-position end form is
@@ -1543,7 +1547,11 @@ impl Fields {
             None => Vec::new(),
             Some(v) => indexed_list(&v, "read_with", p_addr)?,
         };
-        Ok(PublishDeposits { claim, links, retract, read_with })
+        let supersede = match self.take_opt("supersede") {
+            None => Vec::new(),
+            Some(v) => indexed_list(&v, "supersede", p_addr)?,
+        };
+        Ok(PublishDeposits { claim, links, retract, read_with, supersede })
     }
 }
 

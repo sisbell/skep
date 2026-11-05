@@ -3,8 +3,9 @@
 //! shot's correspondence records beside it in each named draft, every public
 //! deposit the request carries (the accepted links as copies with their
 //! claims, the held removals' retractions, the read-withs, the edition
-//! claim) and every named draft re-windowed at its own kept places, in one
-//! transaction.
+//! claim, the supersession claims over the daughters a merged member takes
+//! in — the merge bridge lane, brief A) and every named draft re-windowed at
+//! its own kept places, in one transaction.
 //!
 //! [`stage_publication`] is the composite as a function over a caller-opened
 //! staging — at the mint form the edition's mint first; the shot's admission;
@@ -88,9 +89,9 @@ mod stray;
 
 pub use plan::{
     canonical_member_spans, edition_type, member_end, member_image, names_read_with,
-    plan_deposits, read_with_in, read_with_type, request_image, resolve_end, DepositPlan, EndArg,
-    LinkEntry, MemberEnd, MemberSpan, NamedAddress, PlannedClaim, PlannedDeposit, PlannedEnd,
-    PlannedHome, PublishDeposits, PublishTarget,
+    plan_deposits, read_with_in, read_with_type, request_image, resolve_end,
+    supersession_claim_in, DepositPlan, EndArg, LinkEntry, MemberEnd, MemberSpan, NamedAddress,
+    PlannedClaim, PlannedDeposit, PlannedEnd, PlannedHome, PublishDeposits, PublishTarget,
 };
 pub use sizes::{
     price_staged_bytes, stored_span_bytes, stored_tumbler_bytes, CLAIM_BYTES, COPY_BYTES,
@@ -159,9 +160,9 @@ pub struct ReadPrice {
     /// plan's `own_homes` before its ownership filter, so at or above the
     /// homes the plan reads.
     pub homes: usize,
-    /// The `links` entries and the `read_with` entries, summed: the entries
-    /// whose read ranges over the caller's homes — (3)'s claim read and
-    /// (5)'s presence read.
+    /// The `links` entries, the `read_with` entries and the `supersede`
+    /// entries, summed: the entries whose read ranges over the caller's
+    /// homes — (3)'s claim read, (5)'s presence read and (6)'s claim read.
     pub entries: usize,
     /// The content runs of every draft the re-window reads, summed:
     /// `content_run_count` of the rendering draft where `places` carries a
@@ -264,7 +265,11 @@ pub fn price_publication_reads<W: LinkWorld + HasM5>(
         .fold(0usize, usize::saturating_add);
     ReadPrice {
         homes,
-        entries: deposits.links.len().saturating_add(deposits.read_with.len()),
+        entries: deposits
+            .links
+            .len()
+            .saturating_add(deposits.read_with.len())
+            .saturating_add(deposits.supersede.len()),
         draft_runs,
         runs: shot.runs.len(),
         staged_bytes: price_staged_bytes(world, target, shot, places, also_places, deposits),
@@ -297,7 +302,8 @@ impl From<HomeFault> for PublicationError {
 
 impl From<EmitCoreError> for PublicationError {
     // The record, the edition claim, a copy and a read-with take the Open
-    // gate over a type slot the plan found non-empty; the claim takes the
+    // gate over a type slot the plan found non-empty; the two claims — a
+    // copy's over its original, a daughter's over the member — take the
     // Managed gate over the registry-fixed `[K_sup]` class and the
     // retraction the Retraction gate over the shipped `[R]` class, each
     // Binary over a tuple built one address a side — so of the gate's
@@ -412,7 +418,12 @@ impl From<EmitCoreError> for PublicationError {
 ///    retraction (`retraction_tuple(home, target)` under `Gate::Retraction`
 ///    at the target's home, as `nullify` deposits it, unseated as `nullify`
 ///    leaves it); each read-with (`Gate::Open`, `{home: S, ty: rw, from:
-///    unit(E), to: unit(S)}`, seated). Every deposit's home passes the
+///    unit(E), to: unit(S)}`, seated); each supersession claim
+///    (`supersession_claim(daughter, member)` under `Gate::Managed` in the
+///    trunk, as `assert_sup` deposits its claim — `new` the member THIS
+///    commit minted at step 5, whichever the race made it, the claim's
+///    dedup a guaranteed miss, unseated as `assert_sup` leaves it; the merge
+///    bridge lane, brief A). Every deposit's home passes the
 ///    gate's registration and ω check, so a home the plan did not read is
 ///    refused `NotOwner` with its address. A request carrying no deposit
 ///    stages none here and commits as S2 left it.
@@ -677,6 +688,16 @@ where
                     let value = Link::triple(from, enc([set]), enc([read_with_type()]));
                     let link = emit_core(stg, readable, caller, &home, value, Gate::Open)?.minted();
                     seat(stg, &home, &link)?;
+                }
+                PlannedDeposit::Supersede { old, .. } => {
+                    // The daughter superseded by THE MEMBER THIS COMMIT
+                    // MINTED — the trunk's next, or the base's daughter where
+                    // the head moved under the shot — as `assert_sup`
+                    // deposits its claim: the Managed gate, unseated.
+                    // `minted`: the claim's I0 carries the member, minted
+                    // above in this transaction, so no incumbent can answer.
+                    let value = supersession_claim(old, member);
+                    emit_core(stg, readable, caller, &home, value, Gate::Managed)?.minted();
                 }
             }
         }
@@ -1025,7 +1046,8 @@ where
     /// `link_lock_key` of every home a deposit names by address (a `links`
     /// entry's bare home, its `old`'s home, a `retract` target's home, a
     /// `read_with` set, and the trunk of `doc` where the deposits claim at
-    /// the document form — the edition claim is minted in its link
+    /// the document form or name a daughter superseded — the edition claim
+    /// and the supersession claims are minted in its link
     /// subspace) and, at the mint form, the account's `document_lock_key`
     /// as `create_new_document` takes it — a home the commit mints has no
     /// key to name before it —
@@ -1041,7 +1063,7 @@ where
     /// parallel to `shot.runs` by index — empty for a request that sends
     /// none; `also_places` the kept places of each draft `also` names, one
     /// [`AlsoPlaces`] per draft that is re-windowed — empty for one that
-    /// re-windows no `also` draft; `deposits` the request's three lists —
+    /// re-windows no `also` draft; `deposits` the request's four lists —
     /// empty for one that sends none. All empty, at the document form, is
     /// today's shot.
     ///
@@ -1089,7 +1111,8 @@ where
 /// know, and while it holds none the shot mints `D.1` itself under the head
 /// key every shot takes —
 /// the trunk's `link_lock_key` where the deposits claim at the document form
-/// — or the account's `document_lock_key` at the mint form; each named
+/// or name a daughter superseded (both claims are minted in the trunk's link
+/// subspace) — or the account's `document_lock_key` at the mint form; each named
 /// draft's `link_lock_key` where a run of its identity is re-inserted (its
 /// records are minted there — the rendering `draft`'s and each `also`
 /// draft's alike); each re-windowed draft's `content_lock_key` — the
@@ -1118,10 +1141,10 @@ fn publication_lock_keys(
                     keys.push(M3State::version_lock_key(&frontier));
                 }
             }
-            // The edition claim at the document form lands in the
-            // trunk's link subspace, a home that stands before the
-            // commit and so has a key to name.
-            if deposits.claim {
+            // The edition claim at the document form, and every
+            // supersession claim, land in the trunk's link subspace, a
+            // home that stands before the commit and so has a key to name.
+            if deposits.claim || !deposits.supersede.is_empty() {
                 keys.push(M3State::link_lock_key(&trunk));
             }
             keys

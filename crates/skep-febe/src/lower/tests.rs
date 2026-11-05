@@ -1,7 +1,7 @@
 use super::*;
 use crate::reject::Disposition;
 use skep_address::{validate, Nat, Tumbler};
-use skep_links::{OldCause, ReadWithCause, RetractCause, FROM, TO};
+use skep_links::{OldCause, ReadWithCause, RetractCause, SupersedeCause, FROM, TO};
 use skep_retrieval::{Operand, SpanFault};
 
 /// The standard test document address.
@@ -44,11 +44,12 @@ fn wrappers_recurse() {
 }
 
 /// The deposit plan's lowering (the link-sets design §5.7; lane S3): every
-/// refusal of a `links`, `retract` or `read_with` entry carries the entry's
+/// refusal of a `links`, `retract`, `read_with` or `supersede` entry carries
+/// the entry's
 /// index in `site.index` — the content clause its slot beside it, and
 /// nothing else — save ω's, which rides `not_owner` with the home as
 /// `site.addr`, and the claim-without-draft shape, which names no entry.
-/// The three detailed codes carry their cause's token as `detail` through
+/// The four detailed codes carry their cause's token as `detail` through
 /// `lower_txn` (`Lower::lower_with_detail`); every other carries none.
 #[test]
 fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
@@ -67,6 +68,10 @@ fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
         (PlanFault::MemberSpan { index: 4 }, RejectCode::Malformed, None),
         (PlanFault::Retract { index: 4, cause: RetractCause::NotPublished }, RejectCode::RetractRefused, Some("not_published")),
         (PlanFault::ReadWith { index: 4, cause: ReadWithCause::NotDocument }, RejectCode::ReadWithRefused, Some("not_document")),
+        // The merge bridge lane's (brief A): the fourth detailed code.
+        (PlanFault::Supersede { index: 4, cause: SupersedeCause::NotMember }, RejectCode::SupersedeRefused, Some("not_member")),
+        (PlanFault::Supersede { index: 4, cause: SupersedeCause::Base }, RejectCode::SupersedeRefused, Some("base")),
+        (PlanFault::Supersede { index: 4, cause: SupersedeCause::Duplicate }, RejectCode::SupersedeRefused, Some("duplicate")),
     ];
     for (fault, expected, detail) in faults {
         let name = format!("{fault:?}");
@@ -351,7 +356,7 @@ fn deviates<E: Lower>(name: &str, e: E, expected: RejectCode) {
 /// §5's mechanical claim over the whole table rather than a sample of it:
 /// EVERY flat variant of EVERY upstream error enum lowers to the leaf
 /// with its own name, and the documented deviations — nine, and the deposit
-/// plan's twelve — are the only ones. Wrapper variants belong to
+/// plan's thirteen — are the only ones. Wrapper variants belong to
 /// `wrappers_recurse`.
 #[test]
 fn flat_variants_lower_to_the_same_named_code() {
@@ -569,6 +574,11 @@ fn flat_variants_lower_to_the_same_named_code() {
         "ReadWith",
         PlanFault::ReadWith { index: 0, cause: ReadWithCause::NotRegistered },
         RejectCode::ReadWithRefused,
+    );
+    deviates(
+        "Supersede",
+        PlanFault::Supersede { index: 0, cause: SupersedeCause::NotMember },
+        RejectCode::SupersedeRefused,
     );
 
     // ── M6 (retrieval) ──

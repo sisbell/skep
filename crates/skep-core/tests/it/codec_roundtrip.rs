@@ -327,6 +327,28 @@ fn all_requests() -> Vec<Request> {
                     ],
                     retract: vec![link1(), link2()],
                     read_with: vec![d2()],
+                    supersede: vec![],
+                },
+            },
+        ),
+        // The merge bridge lane (brief A): the fourth list, `supersede` —
+        // two daughters of `d1`'s chain beside the shot off its head, so the
+        // member rides the round trip; the empty list is no member.
+        rq(
+            None,
+            Op::Publish {
+                target: PublishTarget::Document(d1()),
+                shot: Shot {
+                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
+                    draft: None,
+                    also: vec![],
+                    runs: vec![shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3)],
+                },
+                places: vec![],
+                also_places: vec![],
+                deposits: PublishDeposits {
+                    supersede: vec![a(&[1, 0, 1, 0, 1, 1, 1]), a(&[1, 0, 1, 0, 1, 1, 2])],
+                    ..PublishDeposits::default()
                 },
             },
         ),
@@ -355,6 +377,7 @@ fn all_requests() -> Vec<Request> {
                     }],
                     retract: vec![],
                     read_with: vec![d2()],
+                    supersede: vec![],
                 },
             },
         ),
@@ -1205,6 +1228,26 @@ fn a_publications_members_parse_in_their_forms_and_are_refused_by_entry() {
     assert_eq!(index_of(&doc(r#","retract":["1.0.1.0.1.0.2.1","x"]"#)), Some(1), "a retract entry that is no address");
     assert_eq!(index_of(&doc(r#","read_with":[7]"#)), Some(0), "a read_with entry that is no address");
     assert_eq!(index_of(&doc(r#","links":{}"#)), None, "no array: refused with no site");
+    // The fourth list (the merge bridge lane, brief A): `supersede`, the
+    // daughters by address, parsed in order and written back only where it
+    // holds an entry — absent, `null` and the empty list alike are the
+    // empty list and no member; a non-address entry names its index, a
+    // list that is no array none. Membership of the chain is the plan's.
+    let merged = parse_ok(&codec, &doc(r#","supersede":["1.0.1.0.1.1.1","1.0.1.0.1.2.1"]"#));
+    let Op::Publish { deposits, .. } = &merged.op else { panic!("a publish") };
+    assert_eq!(deposits.supersede, vec![a(&[1, 0, 1, 0, 1, 1, 1]), a(&[1, 0, 1, 0, 1, 2, 1])]);
+    assert!(!deposits.is_empty(), "a daughter is a deposit");
+    let canonical = codec.marshal_request(&merged);
+    assert!(String::from_utf8_lossy(&canonical).contains(r#""supersede":["1.0.1.0.1.1.1","1.0.1.0.1.2.1"]"#), "{}", String::from_utf8_lossy(&canonical));
+    assert_eq!(parse_ok(&codec, &canonical), merged, "the canonical form parses to the same request");
+    for (tail, why) in [(r#","supersede":[]"#, "the empty list"), (r#","supersede":null"#, "null"), ("", "absent")] {
+        let req = parse_ok(&codec, &doc(tail));
+        let Op::Publish { deposits, .. } = &req.op else { panic!("a publish") };
+        assert!(deposits.supersede.is_empty(), "{why}: the empty list");
+        assert!(!String::from_utf8_lossy(&codec.marshal_request(&req)).contains("supersede"), "{why}: no member");
+    }
+    assert_eq!(index_of(&doc(r#","supersede":["1.0.1.0.1.1.1",7]"#)), Some(1), "a supersede entry that is no address");
+    assert_eq!(index_of(&doc(r#","supersede":"1.0.1.0.1.1.1""#)), None, "no array: refused with no site");
     assert!(detail_of(&doc(&format!(r#","links":[{}]"#, entry(r#""member""#, r#"{"member":[{"ordinal":"1","width":"1"},{"ordinal":"2","width":"2"}]}"#, r#"{"addrs":[]}"#, ty, "")))).contains(r#"[{"ordinal":"1","width":"3"}]"#), "the canonical spelling owed is named");
 }
 
@@ -2011,14 +2054,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 93 codes, pinned.
+/// The full `RejectCode` wire-name table — all 94 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 93] = [
+    let table: [(RejectCode, &str); 94] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -2097,6 +2140,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::ReadWithInLinks, "read_with_in_links"),
         (RejectCode::RetractRefused, "retract_refused"),
         (RejectCode::ReadWithRefused, "read_with_refused"),
+        (RejectCode::SupersedeRefused, "supersede_refused"),
         (RejectCode::ClaimRefused, "claim_refused"),
         (RejectCode::PublicationOverBudget, "publication_over_budget"),
         (RejectCode::NoSuchSubspace, "no_such_subspace"),

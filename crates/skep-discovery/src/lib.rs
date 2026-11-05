@@ -344,9 +344,10 @@
 //!   key at that slot, no walk of the class and none of the store, so a home
 //!   the reader may not read costs its test and a key no admitted claim names
 //!   costs the same, resident or not; where an admitted home's stab first
-//!   finds a claim, one `readlink` of the key, then, per claim whose `old`
-//!   and `new` are defined, one `is_active` and one comparison of the probed
-//!   endpoint with the key.
+//!   finds a claim, one `readlink` of the key and, where no link resides
+//!   there, one M3 registration lookup of it as a version member, then, per
+//!   claim whose `old` and `new` are defined, one `is_active` and one
+//!   comparison of the probed endpoint with the key.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's `#runs` for the

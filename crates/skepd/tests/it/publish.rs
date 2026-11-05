@@ -2382,3 +2382,320 @@ fn a_retry_of_a_committed_publication_replays_its_ack_ahead_of_the_admission() {
     assert_eq!(text(port, &member, 1, 3), "abc");
     sd.shutdown();
 }
+
+// ───────── the merge bridge lane, brief A: the daughters a publication supersedes ─────────
+
+/// The board the merge cells stand on (skep #805): the claimant's signed
+/// session S and bare session B; the edition `E` holding `E.1` ("abc", from
+/// `D1`), the head `E.2` ("def", from `D2`), and the daughter `E.1.1`
+/// ("ghi", from `D3`, shot off `E.1` after the head had moved); `D4`
+/// ("jkl"), the draft the merged version is published from; `SET`, a second
+/// published edition.
+struct MergeBoard {
+    signed: String,
+    bare: String,
+    e: String,
+    e1: String,
+    e2: String,
+    e11: String,
+    d4: String,
+    set: String,
+}
+
+fn merge_board(port: u16) -> MergeBoard {
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let e = edition(port, &signed);
+    let text_run = |d: &str| run(d, &format!("{d}.0.1.1"), 3);
+    let d1 = draft_with(port, &bare, "abc");
+    let e1 = acked_addr(&op(port, Some(&signed), &publish(&e, None, Some(&d1), &[text_run(&d1)])));
+    assert_eq!(e1, format!("{e}.1"));
+    let d2 = draft_with(port, &bare, "def");
+    let e2 = acked_addr(&op(port, Some(&signed), &publish(&e, Some((&e1, 3)), Some(&d2), &[text_run(&d2)])));
+    assert_eq!(e2, format!("{e}.2"), "the head");
+    let d3 = draft_with(port, &bare, "ghi");
+    let e11 = acked_addr(&op(port, Some(&signed), &publish(&e, Some((&e1, 3)), Some(&d3), &[text_run(&d3)])));
+    assert_eq!(e11, format!("{e}.1.1"), "the daughter: the base the trunk moved past");
+    let d4 = draft_with(port, &bare, "jkl");
+    let set = edition(port, &signed);
+    MergeBoard { signed, bare, e, e1, e2, e11, d4, set }
+}
+
+impl MergeBoard {
+    /// The merged version's shot: off the head `E.2`, the words of `D4`.
+    fn shot(&self) -> String {
+        publish(&self.e, Some((&self.e2, 3)), Some(&self.d4), &[run(&self.d4, &format!("{}.0.1.1", self.d4), 3)])
+    }
+
+    /// The shot naming `daughters` superseded.
+    fn merge(&self, daughters: &[&str]) -> String {
+        with_members(&self.shot(), serde_json::json!({"supersede": daughters}))
+    }
+
+    /// A second daughter of `E.1`, `E.1.2`, holding `text` from a fresh draft.
+    fn second_daughter(&self, port: u16, text: &str) -> String {
+        let d = draft_with(port, &self.bare, text);
+        let e12 = acked_addr(&op(port, Some(&self.signed), &publish(&self.e, Some((&self.e1, 3)), Some(&d), &[run(&d, &format!("{d}.0.1.1"), 3)])));
+        assert_eq!(e12, format!("{}.1.2", self.e));
+        e12
+    }
+}
+
+/// The rows `in_claims{y, view: active}` answers as `token`, each
+/// `(claim, new, home)`.
+fn claim_rows(port: u16, token: Option<&str>, y: &str) -> Vec<(String, String, String)> {
+    let v = op(port, token, &format!(r#"{{"op":"in_claims","view":"active","y":"{y}"}}"#));
+    expect_resp(&v, "claims")["claims"]
+        .as_array()
+        .expect("claims")
+        .iter()
+        .map(|c| {
+            (
+                c["claim"].as_str().expect("claim").to_string(),
+                c["new"].as_str().expect("new").to_string(),
+                c["home"].as_str().expect("home").to_string(),
+            )
+        })
+        .collect()
+}
+
+/// THE CLAIM RIDES THE SHOT (the merge bridge lane, brief A; skep #805): a
+/// publication off the head naming the daughter `E.1.1` lands the member
+/// `E.3` and, in ONE commit (one feed entry), the supersession claim in
+/// `E`'s own link subspace — typed the supersedes class, `from` the daughter,
+/// `to` the member the commit minted — which `in_claims{y: E.1.1, view:
+/// active}` answers to every class with `new` the member and `home` the
+/// edition (before the shot the daughter had no claim; a version member is a
+/// key of the claim index), `out_claims{x: E.3}` answers from the member's
+/// side, the base is named by no claim, and the feed row names the member,
+/// the draft, then the edition — the claim's home.
+#[test]
+fn a_publication_naming_a_daughter_lands_the_member_and_its_claim_in_one_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    assert!(claim_rows(port, None, &b.e11).is_empty(), "no claim names the daughter yet");
+    let before = head(port);
+    let member = acked_addr(&op(port, Some(&b.signed), &b.merge(&[&b.e11])));
+    assert_eq!(member, format!("{}.3", b.e), "the trunk's next member");
+    assert_eq!(text(port, &member, 1, 3), "jkl");
+    let entries = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(entries.len(), 1, "one commit: {entries:?}");
+    let claim = format!("{}.0.2.1", b.e);
+    let link = read_link(port, None, &claim);
+    assert_eq!(slot_span(&link, 0).0, b.e11, "`from` the daughter: {link}");
+    assert_eq!(slot_span(&link, 1).0, member, "`to` the member this commit minted: {link}");
+    assert_eq!(slot_span(&link, 2).0, T_SUPERSEDES, "the supersedes class: {link}");
+    let row = (claim.clone(), member.clone(), b.e.clone());
+    assert_eq!(claim_rows(port, None, &b.e11), vec![row.clone()], "the guest reads the claim at the daughter");
+    assert_eq!(claim_rows(port, Some(&b.bare), &b.e11), vec![row], "and so does the owner");
+    assert_eq!(claims_out(port, None, &member, "active"), vec![claim.clone()], "and from the member's side");
+    assert!(claim_rows(port, None, &b.e2).is_empty(), "the base is named by no claim");
+    assert_eq!(entries[0]["docs"], serde_json::json!([member, b.d4, b.e]), "the member, the draft, then the claim's home: {}", entries[0]);
+    assert!(entries[0]["attest"].is_object(), "{}", entries[0]);
+    sd.shutdown();
+}
+
+/// TWO DAUGHTERS: two claims, at consecutive ordinals of `E`'s link subspace
+/// in the request's declared order — `E.1.2` named first, then `E.1.1` —
+/// each daughter answering its own, the member answering both.
+#[test]
+fn two_daughters_land_two_claims_in_the_declared_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    let e12 = b.second_daughter(port, "mno");
+    let member = acked_addr(&op(port, Some(&b.signed), &b.merge(&[&e12, &b.e11])));
+    assert_eq!(member, format!("{}.3", b.e));
+    let (first, second) = (format!("{}.0.2.1", b.e), format!("{}.0.2.2", b.e));
+    assert_eq!(slot_span(&read_link(port, None, &first), 0).0, e12, "the first entry's claim first");
+    assert_eq!(slot_span(&read_link(port, None, &second), 0).0, b.e11, "the second's second");
+    assert_eq!(claim_rows(port, None, &e12), vec![(first, member.clone(), b.e.clone())]);
+    assert_eq!(claim_rows(port, None, &b.e11), vec![(second, member.clone(), b.e.clone())]);
+    assert_eq!(claims_out(port, None, &member, "active").len(), 2, "the member took both in");
+    sd.shutdown();
+}
+
+/// A DAUGHTER ALREADY CLAIMED by the caller is SKIPPED, never refused: once
+/// `E.3` took `E.1.1` in, a publication off `E.3` naming `E.1.1` again lands
+/// `E.4` with no second claim — the signer that reads the skip as the board
+/// does (through `in_claims` at the daughter) signs no group for it, and the
+/// feed row names no home for the entry — while the same request signed
+/// over the skipped entry's group is refused `attestation_invalid:signature`,
+/// nothing committed.
+#[test]
+fn a_daughter_already_claimed_by_the_caller_is_skipped_and_the_publication_lands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    let e3 = acked_addr(&op(port, Some(&b.signed), &b.merge(&[&b.e11])));
+    let claim = format!("{}.0.2.1", b.e);
+    let d5 = draft_with(port, &b.bare, "pqr");
+    let again = with_members(
+        &publish(&b.e, Some((&e3, 3)), Some(&d5), &[run(&d5, &format!("{d5}.0.1.1"), 3)]),
+        serde_json::json!({"supersede": [b.e11]}),
+    );
+    let before = head(port);
+    // Signed over the skipped entry's group: refused for its signature.
+    let v = op_unskipped(port, &b.signed, &again);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["detail"].as_str()), (Some("credential_refused"), Some("attestation_invalid:signature")), "{v}");
+    assert_eq!(head(port), before, "nothing committed");
+    // Signed as the board reads the skip: landed, one claim still, no home
+    // named for the entry.
+    let e4 = acked_addr(&op(port, Some(&b.signed), &again));
+    assert_eq!(e4, format!("{}.4", b.e));
+    assert_eq!(claim_rows(port, None, &b.e11), vec![(claim, e3, b.e.clone())], "the one claim, the first publication's");
+    assert!(read_link(port, None, &format!("{}.0.2.2", b.e)).is_null(), "no second claim in E");
+    let owners = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0]["docs"], serde_json::json!([e4, d5]), "the skipped entry names no home: {}", owners[0]);
+    sd.shutdown();
+}
+
+/// THE REFUSALS over the wire, each `supersede_refused`, permanent,
+/// `site.index` the entry and `detail` the cause, nothing committed: the
+/// trunk itself, another edition and a member never minted `not_member`;
+/// the shot's base `base`; a repeat `duplicate` at the second; every entry
+/// at the mint form `not_member`; and `claim: true` beside a daughter where
+/// a member stands is the claim's own refusal, `claim_refused`, ahead of the
+/// plan — the two never land together.
+#[test]
+fn each_refused_daughter_names_its_entry_and_commits_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    let before = head(port);
+    let cells: Vec<(Vec<String>, u64, &str)> = vec![
+        (vec![b.e.clone()], 0, "not_member"),
+        (vec![b.set.clone()], 0, "not_member"),
+        (vec![format!("{}.9", b.e)], 0, "not_member"),
+        (vec![b.e11.clone(), b.e2.clone()], 1, "base"),
+        (vec![b.e11.clone(), b.e11.clone()], 1, "duplicate"),
+    ];
+    for (daughters, index, detail) in cells {
+        let refs: Vec<&str> = daughters.iter().map(String::as_str).collect();
+        let v = op(port, Some(&b.signed), &b.merge(&refs));
+        assert_deposit_refused(&v, "supersede_refused", index, Some(detail));
+        assert_eq!(head(port), before, "{detail}: nothing committed");
+    }
+    // The mint form has no chain before the commit (the draft it is shot
+    // from is minted first, so the baseline is read after it).
+    let d = draft_with(port, &b.bare, "stu");
+    let before = head(port);
+    let mint = format!(
+        r#"{{"op":"publish","account":"{CLAIMANT_ACCOUNT}","mint":true,"draft":"{d}","runs":[{}],"supersede":["{}"]}}"#,
+        run(&d, &format!("{d}.0.1.1"), 3),
+        b.e11
+    );
+    assert_deposit_refused(&op(port, Some(&b.signed), &mint), "supersede_refused", 0, Some("not_member"));
+    assert_eq!(head(port), before);
+    // The edition claim beside a daughter: a member stands, so the claim's
+    // own refusal speaks first.
+    let both = with_members(&b.shot(), serde_json::json!({"claim": true, "supersede": [b.e11]}));
+    let v = op(port, Some(&b.signed), &both);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["detail"].as_str()), (Some("claim_refused"), Some("member_stands")), "{v}");
+    assert_eq!(head(port), before);
+    assert!(claim_rows(port, None, &b.e11).is_empty(), "no claim landed");
+    sd.shutdown();
+}
+
+/// THE SIGNED BODY: the claim's group is IN the preimage — the shot alone's
+/// signature, moved onto the frame naming a daughter, is refused
+/// `attestation_invalid:signature`, nothing committed (a body carrying a
+/// skipped entry's group is the skip cell's).
+#[test]
+fn a_body_missing_the_claims_group_is_refused_for_its_signature() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    let before = head(port);
+    let signed_shot: Value = serde_json::from_str(&attach_attest(port, &b.signed, &b.shot())).expect("a frame");
+    let mut frame: Value = serde_json::from_str(&b.merge(&[&b.e11])).expect("a frame");
+    frame["attest"] = signed_shot["attest"].clone();
+    let v = op_as_written(port, Some(&b.signed), &frame.to_string());
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!((rej["code"].as_str(), rej["detail"].as_str()), (Some("credential_refused"), Some("attestation_invalid:signature")), "{v}");
+    assert_eq!(head(port), before, "nothing committed");
+    assert!(claim_rows(port, None, &b.e11).is_empty());
+    sd.shutdown();
+}
+
+/// THE RACE: a merged version signed off the head `E.2`, sent after another
+/// shot moved the head to `E.3`, lands as the BASE's DAUGHTER `E.2.1` (the
+/// shot's own rule) — and its claim lands with it, `new` the daughter the
+/// commit minted and never the trunk's next member: the body names the
+/// member by tag, so the signature made before the head moved verifies
+/// unchanged, and `in_claims{y: E.1.1}` answers the claim with `new` `E.2.1`.
+#[test]
+fn a_head_moved_under_the_shot_lands_the_claim_on_the_minted_daughter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    let signed_merge = attach_attest(port, &b.signed, &b.merge(&[&b.e11]));
+    assert!(signed_merge.contains("\"attest\""), "signed before the head moves");
+    // The head moves: another shot off E.2, from another draft.
+    let d5 = draft_with(port, &b.bare, "vwx");
+    let e3 = acked_addr(&op(port, Some(&b.signed), &publish(&b.e, Some((&b.e2, 3)), Some(&d5), &[run(&d5, &format!("{d5}.0.1.1"), 3)])));
+    assert_eq!(e3, format!("{}.3", b.e));
+    let before = head(port);
+    let landed = acked_addr(&op_as_written(port, Some(&b.signed), &signed_merge));
+    assert_eq!(landed, format!("{}.2.1", b.e), "the base's daughter");
+    let claim = format!("{}.0.2.1", b.e);
+    assert_eq!(claim_rows(port, None, &b.e11), vec![(claim, landed.clone(), b.e.clone())], "the claim names the member this commit minted");
+    assert!(claims_out(port, None, &e3, "active").is_empty(), "never the trunk's next member");
+    let owners = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(owners.len(), 1);
+    assert_eq!(owners[0]["docs"], serde_json::json!([landed, b.d4, b.e]), "{}", owners[0]);
+    sd.shutdown();
+}
+
+/// BESIDE A COPY, A RETRACTION AND A READ-WITH in one publication every
+/// deposit lands, in the documented order inside `E`'s home — the copy, the
+/// retraction, then the supersession claim — the read-with in `SET`; and
+/// the row names every home: the member, the draft, then `E` and `SET` in
+/// address order. (The edition claim never lands beside a daughter: it is a
+/// first version's, and a daughter exists only once a member stands — the
+/// refusal cell above.)
+#[test]
+fn beside_a_copy_a_retraction_and_a_read_with_every_deposit_lands_in_the_documented_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let b = merge_board(port);
+    // A link R in E, to retract through the publication.
+    let r = acked_addr(&op(port, Some(&b.signed), &link_frame(&b.e, &addrs_slot(&[&b.e]), &addrs_slot(&[]), &ghost_ty(&b.e, 1))));
+    assert_eq!(r, format!("{}.0.2.1", b.e));
+    let copy = serde_json::json!({"home": b.e, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": [format!("{}.0.3.6.2", b.e)]}});
+    let frame = with_members(&b.shot(), serde_json::json!({"links": [copy], "retract": [r], "read_with": [b.set], "supersede": [b.e11]}));
+    let before = head(port);
+    let member = acked_addr(&op(port, Some(&b.signed), &frame));
+    assert_eq!(member, format!("{}.3", b.e));
+    let (copy, retraction, claim) = (format!("{}.0.2.2", b.e), format!("{}.0.2.3", b.e), format!("{}.0.2.4", b.e));
+    assert_eq!(slot_span(&read_link(port, None, &copy), 2).0, format!("{}.0.3.6.2", b.e), "the copy first");
+    let retraction_link = read_link(port, None, &retraction);
+    assert_eq!(slot_span(&retraction_link, 2).0, T_RETRACTION, "{retraction_link}");
+    assert_eq!(slot_span(&retraction_link, 1).0, r, "the retraction of R second: {retraction_link}");
+    let claim_link = read_link(port, None, &claim);
+    assert_eq!(slot_span(&claim_link, 2).0, T_SUPERSEDES, "{claim_link}");
+    assert_eq!((slot_span(&claim_link, 0).0, slot_span(&claim_link, 1).0), (b.e11.clone(), member.clone()), "the claim last: {claim_link}");
+    assert_eq!(slot_span(&read_link(port, None, &format!("{}.0.2.1", b.set)), 2).0, T_READ_WITH, "the read-with in SET");
+    assert_eq!(claim_rows(port, None, &b.e11), vec![(claim, member.clone(), b.e.clone())]);
+    let active = find_links_ftt_home(port, None, &b.e);
+    assert!(!active.contains(&r), "R is retracted: {active:?}");
+    let entries = changes_since_as(port, Some(&b.signed), before);
+    assert_eq!(entries.len(), 1, "one commit: {entries:?}");
+    let mut others = vec![b.e.clone(), b.set.clone()];
+    others.sort_by_key(|a| a.split('.').map(|c| c.parse::<u64>().unwrap()).collect::<Vec<_>>());
+    let mut want = vec![member, b.d4.clone()];
+    want.extend(others);
+    assert_eq!(entries[0]["docs"], serde_json::json!(want), "{}", entries[0]);
+    sd.shutdown();
+}

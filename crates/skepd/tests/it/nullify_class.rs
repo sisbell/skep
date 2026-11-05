@@ -892,3 +892,67 @@ fn the_ordering_pins_hold_across_every_target_class() {
     expect_resp(&nullify(port, Some(&signed), CLAIMANT_DOC1, &plain), "ack_addr");
     sd.shutdown();
 }
+
+/// THE SUPERSESSION CLAIM OVER TWO VERSION MEMBERS (the merge bridge lane,
+/// brief A; skep #805): a publication's `supersede` entry deposits, in the
+/// edition `E`, the claim that the daughter `E.1.1` is superseded by the
+/// member it mints — `new` a published member, `old` a member of the
+/// claimant's own chain — so the claim joins PUB-6.64's class as a fact of a
+/// past act no act retracts: the OWNER's signed `nullify` is
+/// `nullify_audit_view`, permanent (the bare owner meets the publish-class
+/// gate first, `E` being published); a STRANGER, signed or bare, answers
+/// `not_owner` naming the home, byte-identical to its answer for an empty
+/// address of the same subspace; the GUEST `unauthenticated`; nothing
+/// commits, the claim stays active and `in_claims` at the daughter still
+/// answers it.
+#[test]
+fn a_merged_versions_claim_over_its_daughter_is_refused_retraction() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (_, stranger_signed) = signed_stranger(port, &signed, 983, 83);
+    let (_, stranger_bare) = stranger(port, 984);
+    // E's chain: E.1 from D1, the head E.2 from D2, the daughter E.1.1 from
+    // D3 shot off E.1 once the head had moved; then the merged version E.3
+    // from D4, naming the daughter.
+    let e = published_edition(port, &signed);
+    let text_run = |d: &str| run(d, &format!("{d}.0.1.1"), 3);
+    let d1 = draft_with(port, &bare, "abc");
+    let e1 = shot(port, &signed, &e, None, Some(&d1), &[text_run(&d1)]);
+    let d2 = draft_with(port, &bare, "def");
+    let e2 = shot(port, &signed, &e, Some((&e1, 3)), Some(&d2), &[text_run(&d2)]);
+    let d3 = draft_with(port, &bare, "ghi");
+    let e11 = shot(port, &signed, &e, Some((&e1, 3)), Some(&d3), &[text_run(&d3)]);
+    assert_eq!((e1.as_str(), e2.as_str(), e11.as_str()), (format!("{e}.1").as_str(), format!("{e}.2").as_str(), format!("{e}.1.1").as_str()));
+    let d4 = draft_with(port, &bare, "jkl");
+    let mut frame: Value = serde_json::from_str(&publish_frame(&e, Some((&e2, 3)), Some(&d4), &[text_run(&d4)])).expect("a frame");
+    frame["supersede"] = serde_json::json!([e11]);
+    let member = acked_addr(&op(port, Some(&signed), &frame.to_string()));
+    assert_eq!(member, format!("{e}.3"));
+    let claim = format!("{e}.0.2.1");
+    assert_eq!(claims_in(port, None, &e11, "active"), vec![claim.clone()], "the claim stands at the daughter");
+    let before = head(port);
+
+    // THE OWNER: the class, signed; the publish-class gate first, bare.
+    let v = nullify(port, Some(&signed), &e, &claim);
+    assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "{v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(v["op"].as_str(), Some("nullify"), "{v}");
+    assert_eq!(verdict(&nullify(port, Some(&bare), &e, &claim)), "credential_refused:signed_session_required");
+    // STRANGERS: ω's own answer naming the home, byte-identical to their
+    // answer for an EMPTY address of the same link subspace; the GUEST: slot 0.
+    let empty = format!("{e}.0.2.99");
+    for token in [&stranger_signed, &stranger_bare] {
+        let (_, on_claim) = http(port, "POST", "/op", Some(token), nullify_frame(&e, &claim).as_bytes());
+        let (_, on_empty) = http(port, "POST", "/op", Some(token), nullify_frame(&e, &empty).as_bytes());
+        assert_not_owner(&json(&on_empty), &e);
+        assert_eq!(on_claim, on_empty, "the claim's class is invisible to a stranger");
+    }
+    assert_eq!(verdict(&nullify(port, None, &e, &claim)), "unauthenticated");
+    assert_eq!(head(port), before, "the refusals commit nothing");
+    assert_eq!(claims_in(port, None, &e11, "active"), vec![claim.clone()], "the claim stays active");
+    assert!(link_resident(port, Some(&signed), &claim), "and resident");
+    sd.shutdown();
+}

@@ -461,10 +461,11 @@ impl Lower for PublishError {
 // ─────────────────────────────── M7 (links) ────────────────────────────────
 
 /// Lowers the deposit plan's refusal (the link-sets design §5.7's validation
-/// (3)–(5); lane S3): each the lane's own token or the slot-form and
+/// (3)–(6); lane S3 and the merge bridge lane's brief A): each the lane's
+/// own token or the slot-form and
 /// class-fence code `make_link` answers, with the entry's index as
-/// `site.index` — and, for `old_refused`, `retract_refused` and
-/// `read_with_refused`, the cause as `detail`.
+/// `site.index` — and, for `old_refused`, `retract_refused`,
+/// `read_with_refused` and `supersede_refused`, the cause as `detail`.
 ///
 /// `NotOwner`, a `links` entry's home that is not the caller's, rides
 /// `not_owner` with the home as `site.addr`, ω's own site; the slot-form
@@ -496,15 +497,17 @@ impl Lower for PlanFault {
             PlanFault::ClaimWithoutDraft => (RejectCode::Malformed, None),
             PlanFault::Retract { index, .. } => (RejectCode::RetractRefused, at(index)),
             PlanFault::ReadWith { index, .. } => (RejectCode::ReadWithRefused, at(index)),
+            PlanFault::Supersede { index, .. } => (RejectCode::SupersedeRefused, at(index)),
         }
     }
 
-    /// The three detailed codes carry their cause's token as `detail`.
+    /// The four detailed codes carry their cause's token as `detail`.
     fn lower_with_detail(self) -> (RejectCode, Option<FaultSite>, Option<String>) {
         let detail = match &self {
             PlanFault::Old { cause, .. } => Some(cause.token().to_string()),
             PlanFault::Retract { cause, .. } => Some(cause.token().to_string()),
             PlanFault::ReadWith { cause, .. } => Some(cause.token().to_string()),
+            PlanFault::Supersede { cause, .. } => Some(cause.token().to_string()),
             _ => None,
         };
         let (code, site) = self.lower();

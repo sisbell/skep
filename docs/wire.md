@@ -1839,9 +1839,17 @@ read-with list alone deposits), `retract_refused` (a retract entry, with
 `detail` naming which: absent, not_owner, not_published — the target not
 homed in a published document of yours — or the target's class, which
 the nullify class refuses to retract: audit_view, not_retraction for a
-credential, not_revocation for a grant), and `read_with_refused` (a
+credential, not_revocation for a grant), `read_with_refused` (a
 read-with entry, with `detail` naming which: not_registered,
-not_document, not_owner, not_published); the edition claim's own,
+not_document, not_owner, not_published), and `supersede_refused` (a
+supersede entry — the merge bridge lane — with `detail` naming which:
+not_member, the daughter no registered version member of the
+document's own chain — the trunk itself, a document or member outside
+the chain, an element address, a member not yet minted, or any entry
+at the mint form; base, the daughter the member the shot appends to;
+duplicate, a second entry naming one daughter, the second's index — a
+daughter a claim of yours already names being skipped, never
+refused); the edition claim's own,
 `claim_refused` (the document form carries claim: true and doc already
 holds a member — the edition claim is a first version's alone, written
 with the edition's first member: `site.addr` the edition, `detail`
@@ -1850,11 +1858,13 @@ sends the shot without its claim); and the publication's budget on
 its in-lock reads and its staged bytes, `publication_over_budget` (the reads the one commit
 makes under the daemon's serialization lock, priced AHEAD of the lock
 off a lock-free snapshot — the caller's link-holding home count × the
-links and read-with entries, plus the draft's content run count × the
+links, read-with and supersede entries, plus the draft's content run
+count × the
 request's runs — past M7's `MAX_PUBLICATION_READS` = 65536; or the
 bytes the commit would stage, priced from M7's worst-case table off the
 request — a record per piece a run mints, a copy at its slots' spans and
-its claim per links entry, a retraction, a read-with, the re-window's two
+its claim per links entry, a retraction, a read-with, a claim per
+supersede entry, the re-window's two
 records per piece at a kept place, the shot's placement and its values
 — past the kernel's `MAX_TXN_BYTES` = 67108864, so the kernel's own
 `txn_over_budget` is met only by a bug or a race; permanent,
@@ -2230,8 +2240,9 @@ re-windowed at, through its own list — are `malformed` with
 producers send none.
 
 **The deposits** (the link-sets design §5.7). A publication may carry,
-beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes and
-THE READ-WITHS it declares — `links`, `retract`, `read_with`
+beside its shot, THE LINKS it accepts, THE RETRACTIONS it makes, THE
+READ-WITHS it declares and THE DAUGHTERS it supersedes — `links`,
+`retract`, `read_with`, `supersede`
 (§Arrangement) — and THE EDITION CLAIM (`claim: true`, typed `3.14`,
 `from` the edition, `to` the `draft`), homed in the edition the commit
 mints OR names: its target may be THE MINT FORM, an edition minted
@@ -2249,8 +2260,8 @@ below, the first refused entry refusing the whole, nothing committed —
 the shot, the records, then the deposits per home (the member first,
 then a minted edition, then every other home in address order, an
 edition `doc` names among them; inside a home the edition claim, the
-copies, the retractions, the read-withs, each list in its declared
-order), then the re-window. Within one commit a home's link
+copies, the retractions, the read-withs, the supersession claims, each
+list in its declared order), then the re-window. Within one commit a home's link
 addresses RISE in that order, so a reader sorting a home's links by
 address reads them as the signed entry lists them. THE PLAN, read on
 the committed state the transaction opens on: (3) each `links` entry's
@@ -2284,24 +2295,46 @@ RETRACTED is SKIPPED, the entry committing nothing. (5) each
 published (`read_with_refused`: not_registered, not_document,
 not_owner, not_published); a read-with from the edition to it already
 standing in a published home of yours is SKIPPED; at the mint form
-none can stand, and every entry is written. A copy is homed where the
+none can stand, and every entry is written. (6) each `supersede`
+entry names a REGISTERED VERSION MEMBER of `doc`'s own chain
+(`supersede_refused`, `detail` `not_member`: the trunk itself, a
+document or member outside the chain, an element address, a member not
+yet minted, and every entry at the mint form, whose edition has no
+chain before the commit), other than the member the shot appends to —
+its base (`detail` `base`) — and once (a second entry naming one
+daughter is `detail` `duplicate` at the second); a daughter an ACTIVE
+claim of yours already names as its `old`, homed in any document of
+yours and whatever its `new`, is SKIPPED, never refused — the entry
+commits nothing, the publication lands. A copy is homed where the
 entry says, typed as given, its ends as stored — the tags resolved to
 the addresses the commit mints, a member-position end to the I-spans
 the member holds at those positions — and its original's supersession
 claim beside it in the original's home; a retraction is `nullify`'s
 tuple at the target's home; a read-with is typed `3.71`, `from` the
-edition, `to` the set, homed in the set. The deposits are IN THE
+edition, `to` the set, homed in the set; a supersession claim is
+`assert_sup`'s tuple — typed the supersedes class `1.1.0.1.0.1.0.1.4`,
+`from` the daughter's unit span, `to` the unit span of THE MEMBER THIS
+COMMIT MINTED — homed in `doc`'s TRUNK (the edition's own link
+subspace, where the edition claim lands at the document form: one home
+for every daughter's claim, a key that stands before the commit, the
+signer naming it from the request's `doc` alone, the feed row naming it
+as it names the edition), unseated as `assert_sup` leaves its claim,
+the one writer of a claim over two version members. The deposits are IN THE
 SIGNED FRAME (§Arrangement, `publish`'s body): behind the shot's rows,
 one group per PUBLIC deposit in the order above — the home, one
 length-delimited element, the tag `member` or `edition` where the
 commit mints the home, else its address; the kind, one byte, `0x01`
 the edition claim, `0x02` a copy, `0x03` a retraction, `0x04` a
-read-with; then the four rows the deposit's own act signs — the type,
+read-with, `0x05` a supersession claim; then the four rows the deposit's own act signs — the type,
 `from` and `to` slots as the store will hold them in the `0x03` slot
 row, a tag spelled as its token where a span's start goes and the EMPTY
 element where its width goes, or, for a member-position end, the
 `0x04` row `be64(n) ‖ (be64(ordinal) ‖ be64(width))*` as the request
-spells it; then the `replaces` row EMPTY. A skipped entry has no
+spells it; then the `replaces` row EMPTY. A supersession claim's group
+is the trunk's address delimited, `0x05`, the supersedes class's one
+unit span, the daughter's unit span, and `to` ONE TAG ELEMENT, `member`
+— the member the commit mints, whose address no signer holds before the
+commit — then the EMPTY row. A skipped entry has no
 group — the signer reads the skip as the board does — and the private
 claims are in no group. A request carrying no deposit signs today's
 body byte for byte. A signature over a body missing a deposit's rows,
@@ -2313,20 +2346,48 @@ otherwise (§Correlation and idempotency). The feed row of the commit
 names the member first, then the edition at the mint form, then the
 draft where a record landed in it, then every other home the deposits
 touched in address order — the edition `doc` names, where the claim
-landed in it, among them (§The change feed). THE EDITION CLAIM's
+landed in it or where a supersession claim landed in it, among them;
+a skipped daughter names no home (§The change feed). THE EDITION CLAIM's
 reader is `edition_claims` (§Namespace), and a minting publication's
 member is `E.1` of the edition `E` the ack's address lies under, as a
 first version claimed into an empty edition is `E.1` of the `doc` it
-named.
+named. THE SUPERSESSION CLAIM's readers are `in_claims` at the
+daughter and `out_claims` at the member (§Link discovery reads):
+`in_claims{y: the daughter, view: active}` answers the claim, its
+`new` the member and its `home` the trunk, so a client that lands a
+merged version and loses the acknowledgment reads whether the shot
+landed off the daughter — a landed shot carried its claim.
+
+**The race at a supersession claim.** The claim's `new` is the member
+BY TAG, so one signed body stands whichever member the commit mints:
+where the head moved under the shot and the commit mints the BASE's
+DAUGHTER (the destination, above), the claim lands all the same, `old`
+the daughter named and `new` the daughter the commit minted — never a
+member this commit did not mint, and never skipped on a state the
+signer could not read before signing. The client that meant the trunk's
+next member reads the ack's address as it does for any shot, reports
+the landing as a daughter's, and composes its next publication afresh;
+at that publication the daughter it named is already claimed by it and
+is SKIPPED, the skip read off the board before signing through
+`in_claims` at the daughter, as the signer reads every skip.
+
+**The permanence of a supersession claim over members** (§Credential
+refusals, item 5, the supersession claim): its `new` is a published
+member and its `old` a member of the claim's owner's own chain, so the
+claim joins the class `nullify` refuses to retract — a merged version
+stands for good, and so does the fact that it took the daughter in; the
+owner's `nullify` of it is `nullify_audit_view`, and no act retracts it.
 
 **The in-lock reads' budget** (the link-sets design §5.7). The four
 reads the one commit makes under the daemon's serialization lock — the
-claim read per `links` entry and the presence read per `read_with`
-entry, each over the caller's link-holding homes; the twin fence's stab
+claim read per `links` entry, the presence read per `read_with`
+entry and the claim read per `supersede` entry, each over the caller's
+link-holding homes; the twin fence's stab
 per re-inserted run; and the kept-place check's resolution over the
 draft's run-list per placed run — are PRICED BEFORE THE LOCK IS TAKEN,
 off a lock-free snapshot of the head: the caller's link-holding home
-count × (`links` entries + `read_with` entries), plus the draft's
+count × (`links` entries + `read_with` entries + `supersede` entries),
+plus the draft's
 content run count × the request's runs, against `MAX_PUBLICATION_READS`
 = 65536 (16 × `MAX_SLOT_SPANS`) — AND THE STAGED BYTES, the price's
 fifth term (the link-sets design §5.6, M6): the bytes the one commit
@@ -2337,7 +2398,8 @@ re-window's two records per piece, a stray place's per record covering
 it; per `links` entry its copy at the spans its slots spell (an address
 as its unit span, an I-span as itself, a member-position span as up to
 the fewer of its width and the request's runs) and its claim; a
-retraction per `retract` entry, a read-with per `read_with` entry; the
+retraction per `retract` entry, a read-with per `read_with` entry, a
+claim per `supersede` entry; the
 shot's own records and, at the mint form, the edition's mint and claim
 — against the kernel's transaction budget, `MAX_TXN_BYTES` = 67108864
 (64 MiB), an upper bound on what the kernel charges, so the kernel's
@@ -2460,7 +2522,7 @@ commits nothing:
 | `stray_place_unrecorded` | permanent | `index` = the `runs` entry, `addr` = the draft | a kept place in the draft `addr` names stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at that draft's re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
 | `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
-| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
+| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused`, `supersede_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused`, `read_with_refused` and `supersede_refused` carry the cause as `detail` |
 
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
@@ -2815,19 +2877,29 @@ resolves AFTER every token below.
      is the claim's owner's own: a CREDENTIAL-typed link whose SUBJECT —
      the one address its `to` denotes — is the account that owns the
      claim, wherever that credential is homed, or any other link owned by
-     the account that owns the claim itself. Its ground is not the view
+     the account that owns the claim itself — or, where the claim is the
+     one a publication deposits over two VERSION MEMBERS (`publish`'s
+     `supersede`, §The publish shot and head-float, the deposits), a
+     member of the claim's owner's own chain, the daughter the member
+     took in. Its ground is not the view
      it is read on but what it records: a claim that its owner's public
      copy supersedes its owner's own original is a fact of a past act
      that no act legitimately retracts — among them a rotation's trail
      (AUTH-5.59 step 2) over the genesis enrollment that seeded its
-     owner, which its registrar homed in the registrar's own doc 1 —
+     owner, which its registrar homed in the registrar's own doc 1, and
+     a merged version's claim over the daughter it took in, the member
+     standing for good as every version does —
      refused, the claim keeps the ACTIVE view's claim reads (`in_claims`,
      `out_claims`) exact, a published copy leaving that view by its own
      retraction alone. The second key is RES-207's shape on the claim's
-     other end — the TYPE and `published(document_of(new))` — and the
+     other end — the TYPE and `published(document_of(new))`, a version
+     member being published as its chain is — and the
      third reads `old`'s own link: credential-typed, its subject is
      compared with the account that owns the claim; otherwise its owner
-     is compared with the claim's owner. Outside them the claim is an
+     is compared with the claim's owner — a version member having no
+     link to read, its owner is its chain's, read by ω as any address's,
+     so a published merge's claim is never retractable by its owner.
+     Outside them the claim is an
      ordinary link, its owner's retraction landing — the one correction
      path for a wrong claim — both where its `new` is PRIVATE (a
      correction inside the owner's own notes) and where it was asserted
@@ -3706,16 +3778,26 @@ edition holding no member yet, the claim landing in the same commit as
 its first version — where a member already stands the publication is
 refused `claim_refused` (`detail` `member_stands`, `site.addr` the
 edition, nothing committed): the claim is a first version's alone, and
-the shot without it is the act that exists. THE DEPOSITS, three
+the shot without it is the act that exists. THE DEPOSITS, four
 optional lists beside the shot, land in the shot's one commit (§The
-publish shot and head-float, the deposits; the six codes in §Rejection
+publish shot and head-float, the deposits; the seven codes in §Rejection
 codes): `links`, one entry per accepted link — `{home, ty, from, to,
 old?}`, `home` the tag `member` (the member the commit mints) or a
 published document of yours, `old` the private original the copy stands
 for, whose supersession claim the commit writes in the original's home;
-`retract`, link addresses of yours to retract from their homes; and
+`retract`, link addresses of yours to retract from their homes;
 `read_with`, published documents of yours the edition is newly read
-with. Each end of a `links` entry is the address form `{"addrs": […]}` —
+with; and `supersede`, THE DAUGHTERS the member takes in (the merge
+bridge lane; skep #805) — version members of `doc`'s own chain, a
+merged version's sides, by address — each deposited as ONE SUPERSESSION
+CLAIM in `assert_sup`'s shape, `old` the daughter and `new` THE MEMBER
+THIS COMMIT MINTS, homed in `doc`'s trunk and signed in the body as the
+edition claim is, so the daughter is marked superseded in the commit
+that lands the member and `in_claims` at the daughter answers it; a
+daughter a claim of yours already names is SKIPPED, never refused;
+`supersede` is the document form's alone (a minted edition has no chain,
+so every entry is `supersede_refused` there) and never lands beside the
+edition claim, a first version having no daughter to take in. Each end of a `links` entry is the address form `{"addrs": […]}` —
 the tags `member` and, at the mint form, `edition` admitted among the
 addresses — the I-span form `{"spans": […]}`, or THE MEMBER-POSITION
 FORM `{"member": [{"ordinal": "4", "width": "2"}, …]}`, spans of the
@@ -3723,9 +3805,13 @@ member's own positions inside `[1, placed]`, 1-based, for an end on the
 shot's own new words, which must be CANONICAL: the lowest member
 positions holding each value, consecutive positions merged, else
 `malformed` naming the spelling owed; `ty` takes the first two forms
-over addresses alone. A V-spec is admitted in no entry. A refused entry
-of any of the three lists is `malformed` with `site.index` the entry.
-Absent, each list is empty, and the shot is the shot as before.
+over addresses alone. A V-spec is admitted in no entry. A `supersede`
+entry is an address, the daughter's; whether it is a member of `doc`'s
+chain is the plan's question, not the codec's. A refused entry
+of any of the four lists is `malformed` with `site.index` the entry.
+Absent, `null` and the empty list alike, each list is empty, and the
+shot is the shot as before; the canonical form writes a list only where
+it holds an entry.
 On a CLAIMED board the shot carries the optional top-level `attest`
 member (signed ops; the object `insert` describes): the entry signature
 over the frame whose `doc` is the trunk document, `op` `publish` and
@@ -4726,7 +4812,9 @@ steward's classification link with a published home, the `replaces` link
 a grant is deposited with, and the supersession claim whose `new` is
 homed in a published document and whose `old` is its owner's own — a
 credential naming the claim's owner as its subject, wherever it is
-homed, or any other link the claim's owner owns — a fact of a past act
+homed, any other link the claim's owner owns, or a version member of
+the owner's own chain, the daughter a publication's `supersede` entry
+named — a fact of a past act
 that no act legitimately retracts; a claim whose `new` is private, or
 whose `old` is another account's ordinary link or a credential naming
 another account, stays retractable by its owner) is refused
@@ -4970,7 +5058,12 @@ home and withholds it from the rest (§The change feed).
 ```
 
 **`assert_sup`** — record "`old` is superseded by `new`". → `ack_addr`
-(the claim's address). On a CLAIMED board, into a published home, it
+(the claim's address). `old` and `new` are resident LINKS (the resident
+rule, above): a claim over two VERSION MEMBERS — a daughter superseded
+by the member a publication mints — has one writer, `publish`'s
+`supersede` entry, deposited in the shot's own commit (§The publish
+shot and head-float, the deposits), and a member named here answers
+`endpoint_not_resident` as any address no link occupies does. On a CLAIMED board, into a published home, it
 carries the optional top-level `attest` member (signed ops): the entry
 signature over the frame whose `doc` is `home`, `op` `assert_sup` and
 `body` the `make_link` body's four rows over the claim the store deposits
@@ -5451,7 +5544,14 @@ on the per-document pool above as `find_links_v` does, keyed by `d`.
 ```
 
 **`in_claims`** / **`out_claims`** — supersession lineage: claims whose
-`old` is `y` / whose `new` is `x`, under the given view. → `claims`.
+`old` is `y` / whose `new` is `x`, under the given view. → `claims`. The
+key is a link, or a VERSION MEMBER: `in_claims{y: a daughter}` answers
+the claims publications deposited over it (`publish`'s `supersede`,
+§The publish shot and head-float, the deposits), each `new` the member
+that took it in and each `home` the document's trunk, and
+`out_claims{x: a member}` the daughters it took in; a key that is
+neither a resident link nor a registered member answers `[]`, the
+answer for an address no claim can conform to.
 
 <!-- wire: request in_claims -->
 ```json

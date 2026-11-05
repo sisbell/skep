@@ -45,10 +45,14 @@ pub struct Edit {
 ///
 /// The claim is `(enc({old}), enc({new}), [K_sup])`: F the superseded link
 /// and G its successor (Conflicts §2), one denoted address a side by
-/// construction. What [`LinkWriter::assert_sup`] deposits, and the claim
+/// construction. What [`LinkWriter::assert_sup`] deposits, the claim
 /// [`LinkWriter::editlink`] deposits beside its successor (`old` the
-/// original, `new` the successor it minted). Public as
-/// [`slot_endset`](crate::slot_endset) is: both writers build through it and
+/// original, `new` the successor it minted), and the two claims a
+/// publication deposits — a copy's over its original, and the schema's
+/// MEMBER form, a daughter superseded by the member the commit mints
+/// (`stage_publication`'s `supersede` entries; the merge bridge lane,
+/// brief A). Public as
+/// [`slot_endset`](crate::slot_endset) is: every writer builds through it and
 /// so does the daemon's entry-frame composer for an `assert_sup` (signed
 /// ops), so the row an attestation covers and the link the store deposits
 /// agree by construction.
@@ -105,6 +109,12 @@ where
     /// — so the endpoints' owner cannot retract a foreign claim about their
     /// own links. The wider question this belongs to (moderation, viewer-side
     /// filtering) is the deferred scope decision `nullify` names.
+    ///
+    /// The op takes LINKS alone as its ends: a claim over two version
+    /// members — a daughter superseded by the member a publication mints —
+    /// is the publication's `supersede` entry's to deposit, in the shot's
+    /// own commit, and this op refuses a member end `EndpointNotResident` as
+    /// it always has (the merge bridge lane, brief A).
     ///
     /// # Errors
     ///

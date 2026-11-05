@@ -706,7 +706,7 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
         "THE TARGET takes one of two forms",
         "`claim: true` rides either form and writes the edition claim",
         "refused `claim_refused` (`detail` `member_stands`, `site.addr` the edition, nothing committed)",
-        "THE DEPOSITS, three",
+        "THE DEPOSITS, four",
         "THE MEMBER-POSITION",
         "A V-spec is admitted in no entry",
         "DEPOSIT ROWS (§The publish shot and head-float, the deposits)",
@@ -722,13 +722,13 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
         "standing in a published home of yours is SKIPPED",
         "A skipped entry has no",
         "answered from the retry memo BEFORE the admission judges it",
-        "| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list |",
+        "| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused`, `supersede_refused` | permanent | `index` = the entry in its own list |",
         "| `claim_refused` | permanent | `addr` = the edition |",
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
-    for token in ["`link_home_refused`", "`old_refused`", "`duplicate_original`", "`read_with_in_links`", "`retract_refused`", "`read_with_refused`", "`claim_refused`"] {
+    for token in ["`link_home_refused`", "`old_refused`", "`duplicate_original`", "`read_with_in_links`", "`retract_refused`", "`read_with_refused`", "`supersede_refused`", "`claim_refused`"] {
         assert!(codes.contains(token), "§Rejection codes carries {token}");
     }
     assert!(codes.contains("`site.addr` the edition, `detail` member_stands"), "§Rejection codes states the claim refusal's site and detail");
@@ -738,6 +738,72 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
     assert!(memo.contains("the memo is read BEFORE the write is judged"), "§Correlation states the memo's place");
     let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
     assert!(feed.contains("then every other home the commit's"), "§The change feed states the row's homes");
+}
+
+/// THE SUPERSESSION CLAIM A PUBLICATION CARRIES (the merge bridge lane,
+/// brief A; skep #805): §Arrangement's `publish` names the `supersede`
+/// member — the daughters by address, each one claim homed in `doc`'s
+/// trunk, skipped where a claim of yours already names it; §The publish
+/// shot and head-float states the plan's (6) with its three causes, the
+/// claim's home and stored form, the fifth kind byte and its group with the
+/// member BY TAG, the race's rule, the reads and the permanence; §Rejection
+/// codes carries the token with its details; §Links (writes) keeps
+/// `assert_sup` to links and names the publication the member form's one
+/// writer, and the `nullify` class names the member `old`; §Link discovery
+/// reads states `in_claims` over a member; §Credential refusals names the
+/// merged version's claim among the class. The daemon's answers are pinned
+/// in `publish.rs` and `nullify_class.rs`; this pins that the contract says
+/// so.
+#[test]
+fn doc_states_the_supersession_claim_a_publication_carries() {
+    let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
+    for fact in [
+        "and `supersede`, THE DAUGHTERS the member takes in",
+        "`old` the daughter and `new` THE MEMBER THIS COMMIT MINTS, homed in `doc`'s trunk and signed in the body as the edition claim is",
+        "daughter a claim of yours already names is SKIPPED, never refused",
+        "`supersede` is the document form's alone",
+        "A `supersede` entry is an address, the daughter's",
+    ] {
+        assert!(arrangement.contains(fact), "§Arrangement says {fact:?}");
+    }
+    let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
+    for fact in [
+        "THE DAUGHTERS it supersedes",
+        "the read-withs, the supersession claims, each list in its declared order",
+        "(6) each `supersede` entry names a REGISTERED VERSION MEMBER of `doc`'s own chain",
+        "`detail` `not_member`",
+        "its base (`detail` `base`)",
+        "`detail` `duplicate` at the second",
+        "is SKIPPED, never refused — the entry commits nothing, the publication lands",
+        "homed in `doc`'s TRUNK",
+        "`0x05` a supersession claim",
+        "`to` ONE TAG ELEMENT, `member`",
+        "**The race at a supersession claim.**",
+        "never a member this commit did not mint",
+        "**The permanence of a supersession claim over members**",
+        "THE SUPERSESSION CLAIM's readers are `in_claims` at the daughter and `out_claims` at the member",
+        "a claim per `supersede` entry",
+    ] {
+        assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
+    }
+    let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
+    for fact in ["`supersede_refused` (a supersede entry", "not_member", "base, the daughter the member the shot appends to", "duplicate, a second entry naming one daughter", "links, read-with and supersede entries"] {
+        assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
+    }
+    let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
+    for fact in [
+        "`old` and `new` are resident LINKS",
+        "has one writer, `publish`'s `supersede` entry",
+        "or a version member of the owner's own chain, the daughter a publication's `supersede` entry named",
+    ] {
+        assert!(links.contains(fact), "§Links (writes) says {fact:?}");
+    }
+    let discovery = prose("\n### Link discovery reads", &["\n### Grants"]);
+    assert!(discovery.contains("`in_claims{y: a daughter}` answers the claims publications deposited over it"), "§Link discovery reads states the member key");
+    assert!(discovery.contains("neither a resident link nor a registered member answers `[]`"), "§Link discovery reads states the empty answer");
+    let credentials = prose("\n### Credential refusals", &["\n## Operations"]);
+    assert!(credentials.contains("a merged version's claim over the daughter it took in"), "§Credential refusals names the merged version's claim");
+    assert!(credentials.contains("so a published merge's claim is never retractable by its owner"), "§Credential refusals states the permanence");
 }
 
 /// THE KEPT PLACES (the link-sets design §5.7; lane S2; every named draft
@@ -2047,7 +2113,7 @@ fn doc_states_the_received_frame_the_pending_frame_the_reads_budget_and_the_fenc
     for fact in [
         "**The in-lock reads' budget**".to_string(),
         "PRICED BEFORE THE LOCK IS TAKEN".to_string(),
-        "the caller's link-holding home count × (`links` entries + `read_with` entries), plus the draft's content run count × the request's runs".to_string(),
+        "the caller's link-holding home count × (`links` entries + `read_with` entries + `supersede` entries), plus the draft's content run count × the request's runs".to_string(),
         format!("`MAX_PUBLICATION_READS` = {} (16 × `MAX_SLOT_SPANS`)", skep_links::MAX_PUBLICATION_READS),
         "ahead of the write permit, both locks and every other refusal of a publication's".to_string(),
         "the budget is conservative by design".to_string(),

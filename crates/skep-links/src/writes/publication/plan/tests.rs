@@ -242,3 +242,260 @@ fn the_read_with_and_edition_types_are_the_commons_rows_and_the_test_is_by_prefi
     assert!(!names_read_with(&enc([&a(&[1, 1, 0, 1, 0, 1, 0, 3, 70])])), "a sibling");
     assert!(!names_read_with(&Endset::empty()));
 }
+
+// ──────────── THE VALIDATION's (6): the daughters superseded ────────────
+//
+// The merge bridge lane, brief A (skep #805): a publication's `supersede`
+// entries, planned over a world of M3, M7 and an empty M5 and no kernel —
+// the plan being a pure function of the world and the request.
+
+use serde::{Deserialize, Serialize};
+use skep_arrangement::M5State;
+use skep_kernel::{RebuildError, Seq, WorldState};
+use skep_namespace::{HasM3, M3Rec, PrincipalId};
+
+use super::super::super::nullify::retraction_tuple;
+use super::super::super::supersession::supersession_claim;
+// The root's accessor trait, named by its path from this module (the crate's
+// tidy rule lets a module reach the root for `LinkWorld` alone): the test
+// world below must implement it to be a `LinkWorld`.
+use super::super::super::super::HasLinks;
+use crate::error::SupersedeCause;
+use crate::state::LinkRec;
+
+/// The owner of the chain, principal 1 of the account `1.0.1`.
+const P1: Caller = Caller::Principal(PrincipalId(1));
+
+/// The plan's world: M3's registrations, M7's links, M5 at genesis.
+#[derive(Clone, Serialize, Deserialize)]
+struct World {
+    m3: M3State,
+    links: LinkState,
+    m5: M5State,
+}
+
+impl WorldState for World {
+    type Record = LinkRec;
+    fn apply(&self, _at: Seq, r: &LinkRec) -> World {
+        World { links: self.links.apply_link(r), ..self.clone() }
+    }
+    fn rebuild_derived(self) -> Result<World, RebuildError> {
+        Ok(self)
+    }
+}
+impl HasM3 for World {
+    fn m3(&self) -> &M3State {
+        &self.m3
+    }
+}
+impl HasLinks for World {
+    fn links(&self) -> &LinkState {
+        &self.links
+    }
+}
+impl HasM5 for World {
+    fn m5(&self) -> &M5State {
+        &self.m5
+    }
+}
+
+/// The edition `E`, the owner's third document, published.
+fn trunk() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
+/// `E.k`, a trunk member.
+fn member(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, k])
+}
+
+/// `E.k.m`, a daughter of `E.k`.
+fn daughter(k: u32, m: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, k, m])
+}
+
+/// The owner's other published document, the set `S`.
+fn set() -> Address {
+    a(&[1, 0, 1, 0, 4])
+}
+
+/// The sibling account's published document.
+fn theirs() -> Address {
+    a(&[1, 0, 2, 0, 1])
+}
+
+/// Link element `k` of `home`.
+fn link_in(home: &Address, k: u32) -> Address {
+    let comps: Vec<u32> = home.tumbler().iter().map(|c| u32::try_from(c).expect("small")).chain([0, 2, k]).collect();
+    a(&comps)
+}
+
+/// The chain's world: the owner's account and a sibling's, the owner's two
+/// private drafts, `E` and `S` published, the sibling's document, and `E`'s
+/// members `E.1`, `E.2` (the head) and the daughter `E.1.1` — each
+/// allocated at its chain's next ordinal, as M3's fold requires.
+fn chain_world() -> World {
+    let at = Seq(0);
+    let m3 = M3State::genesis()
+        .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(at, &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 2]), false))
+        .apply_m3(at, &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
+        .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(at, &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(at, &M3Rec::allocate(trunk(), true))
+        .apply_m3(at, &M3Rec::allocate(set(), true))
+        .apply_m3(at, &M3Rec::allocate(theirs(), true))
+        .apply_m3(at, &M3Rec::allocate(member(1), true))
+        .apply_m3(at, &M3Rec::allocate(member(2), true))
+        .apply_m3(at, &M3Rec::allocate(daughter(1, 1), true));
+    World { m3, links: LinkState::genesis(), m5: M5State::genesis() }
+}
+
+/// `world` with the claim `old → new` deposited at link `k` of `home`.
+fn with_claim(world: World, home: &Address, k: u32, old: &Address, new: &Address) -> World {
+    let rec = LinkRec::Deposit { addr: link_in(home, k).tumbler().clone(), value: supersession_claim(old, new) };
+    world.apply(Seq(1), &rec)
+}
+
+/// A records-less shot off `base`, the whole arrangement empty.
+fn off(base: &Address) -> Shot {
+    Shot { base: Some(Base { member: base.clone(), extent: Nat::from(0u32) }), draft: None, also: vec![], runs: vec![] }
+}
+
+/// The deposits of `supersede` alone.
+fn supersede(daughters: Vec<Address>) -> PublishDeposits {
+    PublishDeposits { supersede: daughters, ..PublishDeposits::default() }
+}
+
+/// THE PLAN's (6): each `supersede` entry plans one claim — `old` the
+/// daughter, homed in the TRUNK by address — in declared order, BEHIND the
+/// other kinds inside the trunk's home (a copy homed in `E` ahead of it); a
+/// trunk member other than the base is a member of the chain and is
+/// admitted; the price's entry term counts the entries; and a request
+/// naming no daughter plans as before.
+#[test]
+fn a_supersede_entry_plans_the_daughters_claim_in_the_trunk_behind_the_other_kinds() {
+    let world = chain_world();
+    let target = PublishTarget::Document(trunk());
+    let shot = off(&member(2));
+    let copy = LinkEntry {
+        home: NamedAddress::Address(trunk()),
+        from: EndArg::Addrs(vec![]),
+        to: EndArg::Addrs(vec![]),
+        ty: EndArg::Addrs(vec![NamedAddress::Address(a(&[1, 0, 1, 0, 3, 0, 3, 6, 1]))]),
+        old: None,
+    };
+    let deposits = PublishDeposits { links: vec![copy], supersede: vec![daughter(1, 1), member(1)], ..PublishDeposits::default() };
+    let plan = plan_deposits(&world, P1, &target, &shot, &deposits).expect("planned");
+    assert_eq!(plan.homes.len(), 1, "one home, the trunk: {plan:?}");
+    assert_eq!(plan.homes[0].home, NamedAddress::Address(trunk()));
+    assert_eq!(plan.homes[0].deposits.len(), 3);
+    assert!(matches!(plan.homes[0].deposits[0], PlannedDeposit::Copy { index: 0, .. }), "the copy first: {plan:?}");
+    assert_eq!(plan.homes[0].deposits[1], PlannedDeposit::Supersede { index: 0, old: daughter(1, 1) });
+    assert_eq!(plan.homes[0].deposits[2], PlannedDeposit::Supersede { index: 1, old: member(1) }, "a trunk member that is not the base");
+    let price = super::super::price_publication_reads(&world, P1, &target, &shot, &[], &[], &deposits);
+    assert_eq!(price.entries, 3, "one links entry and two supersede entries read over the caller's homes");
+    assert!(plan_deposits(&world, P1, &target, &shot, &PublishDeposits::default()).expect("planned").is_empty(), "no entry: the plan as before");
+}
+
+/// THE REFUSALS, each naming its entry and its cause: the trunk itself, a
+/// document outside the chain, a member not yet minted, an element address
+/// and another account's document are `not_member`; the shot's base is
+/// `base`; a repeat is `duplicate` at the second; every entry at the mint
+/// form is `not_member`; and the plan's order — a read-with fault speaks
+/// ahead of a supersede fault.
+#[test]
+fn each_supersede_refusal_names_its_entry_and_its_cause() {
+    let world = chain_world();
+    let target = PublishTarget::Document(trunk());
+    let shot = off(&member(2));
+    let refused = |deposits: PublishDeposits| plan_deposits(&world, P1, &target, &shot, &deposits).expect_err("refused");
+    let not_member = |index| PlanFault::Supersede { index, cause: SupersedeCause::NotMember };
+    assert_eq!(refused(supersede(vec![trunk()])), not_member(0), "the trunk itself");
+    assert_eq!(refused(supersede(vec![set()])), not_member(0), "a document outside the chain");
+    assert_eq!(refused(supersede(vec![member(3)])), not_member(0), "a member not yet minted");
+    assert_eq!(refused(supersede(vec![a(&[1, 0, 1, 0, 3, 0, 1, 1])])), not_member(0), "an element address");
+    assert_eq!(refused(supersede(vec![theirs()])), not_member(0), "another account's document");
+    assert_eq!(refused(supersede(vec![daughter(1, 1), member(2)])), PlanFault::Supersede { index: 1, cause: SupersedeCause::Base }, "the base");
+    assert_eq!(
+        refused(supersede(vec![daughter(1, 1), member(1), daughter(1, 1)])),
+        PlanFault::Supersede { index: 2, cause: SupersedeCause::Duplicate },
+        "a repeat, at the second"
+    );
+    let mint = PublishTarget::Mint { account: a(&[1, 0, 1]) };
+    let birth = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    assert_eq!(
+        plan_deposits(&world, P1, &mint, &birth, &supersede(vec![daughter(1, 1)])).expect_err("refused"),
+        not_member(0),
+        "the mint form has no chain before the commit"
+    );
+    let both = PublishDeposits { read_with: vec![a(&[1, 0, 1, 0, 2])], supersede: vec![trunk()], ..PublishDeposits::default() };
+    assert!(matches!(refused(both), PlanFault::ReadWith { index: 0, .. }), "(5) speaks ahead of (6)");
+}
+
+/// THE SKIP: a daughter an ACTIVE claim of the caller's own already names
+/// is skipped — nothing planned, never refused — whatever the claim's `new`
+/// and wherever among the caller's homes it lies; another account's claim
+/// naming it skips nothing, nor does the caller's own claim once
+/// retracted; and a skipped entry leaves the next planned at its own index.
+#[test]
+fn a_daughter_a_claim_of_the_callers_own_names_is_skipped_and_anothers_or_a_retracted_one_is_not() {
+    let target = PublishTarget::Document(trunk());
+    let shot = off(&member(2));
+    let plan_of = |world: &World, daughters: Vec<Address>| plan_deposits(world, P1, &target, &shot, &supersede(daughters)).expect("planned");
+    let own = with_claim(chain_world(), &trunk(), 1, &daughter(1, 1), &member(2));
+    assert!(plan_of(&own, vec![daughter(1, 1)]).is_empty(), "the caller's own claim in the trunk: skipped");
+    let elsewhere = with_claim(chain_world(), &a(&[1, 0, 1, 0, 2]), 1, &daughter(1, 1), &a(&[1, 0, 1, 0, 2, 0, 2, 9]));
+    assert!(plan_of(&elsewhere, vec![daughter(1, 1)]).is_empty(), "a claim in the caller's draft onto a link: skipped all the same");
+    let not_mine = with_claim(chain_world(), &theirs(), 1, &daughter(1, 1), &member(2));
+    assert_eq!(
+        plan_of(&not_mine, vec![daughter(1, 1)]).homes[0].deposits,
+        vec![PlannedDeposit::Supersede { index: 0, old: daughter(1, 1) }],
+        "another account's claim is not the caller's: planned"
+    );
+    let retracted = own.apply(
+        Seq(2),
+        &LinkRec::Deposit { addr: link_in(&trunk(), 2).tumbler().clone(), value: retraction_tuple(&trunk(), &link_in(&trunk(), 1)) },
+    );
+    assert_eq!(
+        plan_of(&retracted, vec![daughter(1, 1)]).homes[0].deposits,
+        vec![PlannedDeposit::Supersede { index: 0, old: daughter(1, 1) }],
+        "the caller's own claim, retracted, is no longer active: planned"
+    );
+    assert_eq!(
+        plan_of(&own, vec![daughter(1, 1), member(1)]).homes[0].deposits,
+        vec![PlannedDeposit::Supersede { index: 1, old: member(1) }],
+        "the skipped entry leaves the next at its own index"
+    );
+}
+
+/// THE FEED ROW's TEST: `supersession_claim_in` finds the claim `old → new`
+/// homed in `home` — exactly that pair, in that home — and no other.
+#[test]
+fn supersession_claim_in_finds_the_claim_onto_the_member_and_no_other() {
+    let world = with_claim(chain_world(), &trunk(), 1, &daughter(1, 1), &member(2));
+    assert!(supersession_claim_in(&world.links, &trunk(), &daughter(1, 1), &member(2)));
+    assert!(!supersession_claim_in(&world.links, &trunk(), &daughter(1, 1), &member(1)), "another `new`");
+    assert!(!supersession_claim_in(&world.links, &trunk(), &member(1), &member(2)), "another `old`");
+    assert!(!supersession_claim_in(&world.links, &set(), &daughter(1, 1), &member(2)), "another home");
+    assert!(!supersession_claim_in(&chain_world().links, &trunk(), &daughter(1, 1), &member(2)), "no claim");
+}
+
+/// THE LOCK SET gains the trunk's link key where a daughter is named, as it
+/// does where the deposits claim at the document form: the claims are
+/// minted in the trunk's link subspace, a home that stands before the
+/// commit.
+#[test]
+fn a_publication_naming_a_daughter_takes_the_trunks_link_key() {
+    let target = PublishTarget::Document(trunk());
+    let shot = off(&member(2));
+    let keys = publication_lock_keys(&target, &shot, &[], &[], &PublishDeposits::default());
+    assert!(!keys.contains(&M3State::link_lock_key(&trunk())), "no deposit in the trunk: no key: {keys:?}");
+    let keys = publication_lock_keys(&target, &shot, &[], &[], &supersede(vec![daughter(1, 1)]));
+    assert!(keys.contains(&M3State::link_lock_key(&trunk())), "a daughter named: the trunk's link key: {keys:?}");
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(keys, sorted, "M2's order, duplicates collapsed");
+}

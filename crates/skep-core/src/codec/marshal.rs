@@ -325,8 +325,8 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         // deposits (the link-sets design §5.7): the target in its one form
         // (`doc`, or `account` with `mint: true`), `claim: true` where the
         // deposits claim, at either form (an unset flag is no field), and
-        // each of `links`, `retract` and `read_with` only where it holds an
-        // entry.
+        // each of `links`, `retract`, `read_with` and `supersede` only
+        // where it holds an entry.
         Op::Publish { target, shot, places, also_places, deposits } => {
             let mut pairs = match target {
                 PublishTarget::Document(doc) => vec![("doc", j_addr(doc))],
@@ -375,6 +375,9 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             }
             if !deposits.read_with.is_empty() {
                 pairs.push(("read_with", j_addrs(&deposits.read_with)));
+            }
+            if !deposits.supersede.is_empty() {
+                pairs.push(("supersede", j_addrs(&deposits.supersede)));
             }
             (op_name(OpKind::Publish), pairs)
         }
@@ -1592,14 +1595,16 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::IllFormedSuccessor => "ill_formed_successor",
         RejectCode::DcViolation => "dc_violation",
         // The publication's deposits (the link-sets design §5.7; lane S3):
-        // six tokens, tabled in §Rejection codes — and the edition claim's
-        // own beside them (skep #692).
+        // seven tokens, tabled in §Rejection codes — the supersession
+        // claim's the merge bridge lane's (brief A) — and the edition
+        // claim's own beside them (skep #692).
         RejectCode::LinkHomeRefused => "link_home_refused",
         RejectCode::OldRefused => "old_refused",
         RejectCode::DuplicateOriginal => "duplicate_original",
         RejectCode::ReadWithInLinks => "read_with_in_links",
         RejectCode::RetractRefused => "retract_refused",
         RejectCode::ReadWithRefused => "read_with_refused",
+        RejectCode::SupersedeRefused => "supersede_refused",
         RejectCode::ClaimRefused => "claim_refused",
         // The publication's in-lock reads priced past their budget ahead of
         // the daemon's lock (the link-sets design §5.7; lane S4), tabled in

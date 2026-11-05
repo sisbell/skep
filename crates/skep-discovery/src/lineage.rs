@@ -1,4 +1,5 @@
-//! §7 — archival supersession lineage: the claims naming a link.
+//! §7 — archival supersession lineage: the claims naming a link, or a
+//! version member.
 //!
 //! It is ASN-0125 EL11b, the archival, arrangement-independent half of the
 //! decomposed scope: raw claim enumeration home by home — M7's candidate
@@ -6,11 +7,16 @@
 //! each once ahead of its claims, and M7's typed stab of the supersession
 //! class within each home it admits — distinct from M7's own
 //! `succs`/`chain`/`tip`/`current` walks, which stay M7's. Contextual
-//! discovery (EL11a) is out of scope and composed above M8.
+//! discovery (EL11a) is out of scope and composed above M8. The key is a
+//! resident link, or — since the merge bridge lane (brief A; skep #805) —
+//! a registered version member, the `old` or `new` of the claim a
+//! publication deposits over the daughter it takes in.
 
-use skep_address::{validate, Address};
+use skep_address::{validate, Address, Level};
+use skep_arrangement::trunk_of;
 use skep_kernel::Snapshot;
 use skep_links::{enc, registry, LinkState, ShippedType, Tuple, View, FROM, TO};
+use skep_namespace::M3State;
 
 use crate::home::{home_admitted, home_of};
 use crate::types::SupClaim;
@@ -92,11 +98,13 @@ impl Endpoint {
 /// built from holds: its F and its G each in the schema's canonical form,
 /// unit-depth spans alone denoting one address, T4-valid — the part of it
 /// EL4's `old` and `new` are read out of. The schema's remaining clauses —
-/// the two endpoints distinct, both resident — M7 holds at its two `[K_sup]`
-/// writers (`assert_sup` checks them, and `editlink`'s DC guard asks them of
-/// a caller's successor through a predicate M7 keeps crate-private). This
-/// read-out asks neither; [`claims_naming`] states which of them the read
-/// restates.
+/// the two endpoints distinct, both resident links or, in the schema's
+/// MEMBER form (the merge bridge lane, brief A), both version members of one
+/// published chain — M7 holds at its `[K_sup]` writers (`assert_sup` checks
+/// them, `editlink`'s DC guard asks them of a caller's successor through a
+/// predicate M7 keeps crate-private, and the publication's plan holds the
+/// member form). This read-out asks neither; [`claims_naming`] states which
+/// of them the read restates.
 ///
 /// **The home is M7's, not a condition.** `t.addr` is a key of M7's store,
 /// and every key there has a home (EL8b): `LinkState`'s invariant, gated by
@@ -183,23 +191,28 @@ fn sup_claim(l: &LinkState, t: Tuple) -> Option<SupClaim> {
 ///
 /// **The probed endpoint's residence** is the one clause of the schema
 /// beyond the definedness [`sup_claim`] reads out that the read restates: a
-/// schema-conforming claim's endpoint is a resident link (Df-DISC(ii)), so no
-/// conforming claim names a non-link `key`, and `[]` is the true answer for
-/// one. It is asked by one `readlink` of `key` — resident, not active: a
-/// nullified link is still resident and remains a legal probe key — once,
-/// where an admitted home's stab first finds a claim, never ahead of one and
-/// never for a claim of a home the reader refuses. So a key no admitted
-/// claim names costs the same whether or not a link resides there: a gate
-/// asked ahead of the walk does visibly different work on its two branches,
-/// a non-resident key answering at once and a resident one walking the
-/// homes, and a guest could read a private link's residence off the
-/// difference (skep #647). The clause is kept because the equality does not
-/// imply it: a decoded frame can fold a claim naming an unminted address at
-/// its probed endpoint, and such a non-conformer is not read out, as
-/// `tests/it/lineage.rs` pins. The other endpoint's residence, and the two
-/// endpoints' distinctness, the read never asks — M7 holds both at its two
-/// `[K_sup]` writers — so a claim it returns can name, at its other endpoint,
-/// an address that is no resident link, or `key` itself.
+/// schema-conforming claim's endpoint is a resident link (Df-DISC(ii)) or,
+/// in the schema's member form, a registered version member (the merge
+/// bridge lane, brief A: the claim a publication's `supersede` entry
+/// deposits, `old` the daughter and `new` the member the commit minted), so
+/// no conforming claim names a `key` that is neither, and `[]` is the true
+/// answer for one. It is asked by one `readlink` of `key` — resident, not
+/// active: a nullified link is still resident and remains a legal probe key
+/// — and, where no link resides there, by `member`, the caller's one M3
+/// registration lookup over a document-tier address with version
+/// components; once, where an admitted home's stab first finds a claim,
+/// never ahead of one and never for a claim of a home the reader refuses.
+/// So a key no admitted claim names costs the same whether or not a link
+/// resides there: a gate asked ahead of the walk does visibly different work
+/// on its two branches, a non-resident key answering at once and a resident
+/// one walking the homes, and a guest could read a private link's residence
+/// off the difference (skep #647). The clause is kept because the equality
+/// does not imply it: a decoded frame can fold a claim naming an unminted
+/// address at its probed endpoint, and such a non-conformer is not read
+/// out, as `tests/it/lineage.rs` pins. The other endpoint's residence, and
+/// the two endpoints' distinctness, the read never asks — M7 holds both at
+/// its `[K_sup]` writers — so a claim it returns can name, at its other
+/// endpoint, an address that is no resident link, or `key` itself.
 ///
 /// Within an admitted home, [`sup_claim`] reads each stabbed claim out, or
 /// skips it where its `old` or `new` is undefined, and the equality keeps the
@@ -215,12 +228,13 @@ fn claims_naming(
     endpoint: Endpoint,
     view: View,
     readable: &dyn Fn(&Address) -> bool,
+    member: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
     let sup = registry().shipped_class(ShippedType::Supersedes);
     let probe = enc([key]);
     let slot = endpoint.slot();
     let mut found = Vec::new();
-    let mut resident = false; // whether `key` has been found a resident link
+    let mut resident = false; // whether `key` has been found a resident link or a member
     for touch in l.homes_touching([(slot, &probe)]) {
         if !home_admitted(readable, touch.home()) {
             continue; // a refused home is never stabbed (PUB-6.13, PUB-7.18)
@@ -230,8 +244,8 @@ fn claims_naming(
             continue;
         }
         if !resident {
-            if l.readlink(key).is_none() {
-                return Vec::new(); // no claim names a non-link (Df-DISC(ii))
+            if l.readlink(key).is_none() && !member(key) {
+                return Vec::new(); // no claim names a key that is neither link nor member (Df-DISC(ii))
             }
             resident = true;
         }
@@ -252,10 +266,16 @@ fn claims_naming(
 /// They come in ascending claim-address order, the same permanent key both
 /// query families page by.
 ///
-/// **Total.** Every `Address` is admitted, and a `y` that is no resident
-/// link is no schema-conforming claim's `old` (Df-DISC(ii)), so `[]` is the
-/// answer rather than a refusal — a caller owes no check that `y` is
-/// resident before asking. `view = Active` yields the operative graph
+/// **Total.** Every `Address` is admitted, and a `y` that is neither a
+/// resident link nor a registered version member is no schema-conforming
+/// claim's `old` (Df-DISC(ii), in its link form and its member form), so
+/// `[]` is the answer rather than a refusal — a caller owes no check that
+/// `y` is resident before asking. A VERSION MEMBER as `y` (the merge bridge
+/// lane, brief A) answers the claims a publication deposited naming it as a
+/// daughter superseded by the member it minted, homed in the document's
+/// trunk — the read the merge library's resume rests on: a landed shot
+/// carried its claim, so a claim answered here means the shot landed.
+/// `view = Active` yields the operative graph
 /// (`succ_o`), `Audit` the full history (`succ_h`); `Default` behaves as
 /// `Active` (M7's reads coerce it).
 ///
@@ -265,11 +285,12 @@ fn claims_naming(
 /// whose `old` is `y` itself, never merely lying above it, as a document's
 /// address lies above every link the document homes. A claim outside that
 /// form is a non-conformer (ASN-0125 EL4) and is not returned. The rest of
-/// the schema is asked of the probed endpoint alone, whose residence the
-/// read-out holds: the other endpoint's residence, and the two endpoints'
-/// distinctness, are never asked, so a returned claim's `new` can be an
-/// address that is no resident link, or `y` itself. On a store M7's two
-/// `[K_sup]` writers alone have written, every claim is schema-conforming
+/// the schema is asked of the probed endpoint alone, whose residence — a
+/// link's, or a version member's registration — the read-out holds: the
+/// other endpoint's residence, and the two endpoints' distinctness, are
+/// never asked, so a returned claim's `new` can be an address that is no
+/// resident link, or `y` itself. On a store M7's `[K_sup]` writers alone
+/// have written, every claim is schema-conforming
 /// (Ŝ^Σ = S^Σ), none of this removes or admits anything, and the two views
 /// answer exactly `succ_o`'s and `succ_h`'s claims at `y`; the domain above
 /// holds in every state M7's fold accepts, a restored checkpoint or a
@@ -303,19 +324,33 @@ pub fn in_claims_on<W: DiscoveryWorld>(
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_naming(s.world().links(), y, Endpoint::Old, view, readable)
+    let m3 = s.world().m3();
+    claims_naming(s.world().links(), y, Endpoint::Old, view, readable, &|a| is_version_member(m3, a))
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`). Same key, view,
 /// order, cost, endpoint-disclosure, domain and reader contract (PUB round 2,
 /// lane 3.3, §3) as [`in_claims_on`], the two endpoints' roles exchanged:
 /// every claim returned has `new` EQUAL to `x`, and its `old` is the
-/// endpoint whose residence is never asked.
+/// endpoint whose residence is never asked. A version member as `x` answers
+/// the claims a publication deposited naming it as the member that took a
+/// daughter in.
 pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,
     view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_naming(s.world().links(), x, Endpoint::New, view, readable)
+    let m3 = s.world().m3();
+    claims_naming(s.world().links(), x, Endpoint::New, view, readable, &|a| is_version_member(m3, a))
+}
+
+/// Returns whether `a` is a registered VERSION MEMBER: a document-tier
+/// address with version components — one `trunk_of` strips, so the trunk
+/// itself is none — that M3 registers. The residence clause's second
+/// branch ([`claims_naming`]): the schema's member form names members and
+/// nothing else, so a bare document, an account or an element address is
+/// no key of it, and a member not yet minted is none either.
+fn is_version_member(m3: &M3State, a: &Address) -> bool {
+    a.level() == Level::Document && trunk_of(a) != *a && m3.is_registered_document(a)
 }

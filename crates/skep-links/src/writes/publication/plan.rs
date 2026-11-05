@@ -10,9 +10,11 @@
 //! lands — a published document of the caller's, or an edition minted under
 //! an account in the commit (`mint: true` with `account`, `doc` absent);
 //! [`PublishDeposits`], the edition claim's flag (`claim: true`, at either
-//! form) and the three lists — `links`, one [`LinkEntry`] per accepted link,
-//! `retract`, the held removals' marks by address, and `read_with`, the sets
-//! the document is newly read with. An entry names an address the commit
+//! form) and the four lists — `links`, one [`LinkEntry`] per accepted link,
+//! `retract`, the held removals' marks by address, `read_with`, the sets
+//! the document is newly read with, and `supersede`, the daughters the
+//! member takes in, by address (the merge bridge lane, brief A: skep #805).
+//! An entry names an address the commit
 //! mints by TAG ([`NamedAddress`]): the member by `member`, the edition by
 //! `edition`. An end is one of three forms
 //! ([`EndArg`]): the address form, the I-span form, or THE MEMBER-POSITION
@@ -21,16 +23,17 @@
 //! spelled in the signed row as the request spells it and stored as the
 //! I-spans the commit mints.
 //!
-//! **The plan** ([`plan_deposits`]) runs THE VALIDATION's (3), (4) and (5)
-//! over a world — never a staging — and answers a [`DepositPlan`]: the
-//! deposits per home in THE SIGNED ENTRY's order (the member first, then a
-//! minted edition, then every other home in address order; inside a home
-//! the edition claim, then the copies, then the retractions, then the
-//! read-withs, each list in declared order), each skip decided — a
-//! retraction whose target is already retracted, a read-with that stands in
-//! a published home of the caller's — and each copy's private claim beside
-//! it, outside the signed set. The first fault in list order refuses the
-//! whole ([`PlanFault`]), naming the entry. The edition claim is homed in
+//! **The plan** ([`plan_deposits`]) runs THE VALIDATION's (3), (4), (5)
+//! and (6) over a world — never a staging — and answers a [`DepositPlan`]:
+//! the deposits per home in THE SIGNED ENTRY's order (the member first,
+//! then a minted edition, then every other home in address order; inside a
+//! home the edition claim, then the copies, then the retractions, then the
+//! read-withs, then the supersession claims, each list in declared order),
+//! each skip decided — a retraction whose target is already retracted, a
+//! read-with that stands in a published home of the caller's, a daughter a
+//! claim of the caller's own already names — and each copy's private claim
+//! beside it, outside the signed set. The first fault in list order refuses
+//! the whole ([`PlanFault`]), naming the entry. The edition claim is homed in
 //! the edition whichever form names it — the tag `edition` at the mint
 //! form, the trunk's own address at the document form, where it sorts among
 //! the other homes — and the plan plans the row either way: whether the
@@ -47,7 +50,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::{
-    content_subspace, document_of, is_prefix, subtree_of, validate, Address, Nat, Span, Tumbler,
+    content_subspace, document_of, is_prefix, subtree_of, validate, Address, Level, Nat, Span,
+    Tumbler,
 };
 use skep_arrangement::{trunk_of, Caller, HasM5, Pairing, Run, Shot};
 use skep_namespace::M3State;
@@ -59,7 +63,7 @@ use crate::budget::MAX_SLOT_SPANS;
 use crate::class::coverage_class;
 use crate::endset::{enc, Endset, Link};
 use crate::registry::{registry, ShippedType};
-use crate::error::{OldCause, PlanFault, ReadWithCause, RetractCause};
+use crate::error::{OldCause, PlanFault, ReadWithCause, RetractCause, SupersedeCause};
 use crate::state::{LinkState, View, FROM, TO, TYPE};
 use crate::LinkWorld;
 
@@ -194,7 +198,7 @@ pub struct LinkEntry {
 }
 
 /// The deposits a publication carries beside its shot: the edition claim's
-/// flag and the three optional lists.
+/// flag and the four optional lists.
 ///
 /// The claim is the first deposit of the edition's group whichever form
 /// minted or named the edition, so its flag lives here, once, beside the
@@ -202,6 +206,15 @@ pub struct LinkEntry {
 /// in the edition it mints; at the document form homed in `doc`'s trunk,
 /// which must hold no member yet (the composite's refusal, `ClaimRefused`).
 /// Either way it names the staging draft, which the request must then carry.
+///
+/// `supersede` (the merge bridge lane, brief A; skep #805) names the
+/// DAUGHTERS the member takes in — members of `doc`'s own chain, a merged
+/// version's sides — each deposited as one supersession claim, `old` the
+/// daughter and `new` THE MEMBER THIS COMMIT MINTS, typed as `assert_sup`
+/// types it, homed in `doc`'s trunk as the edition claim is at the document
+/// form, in the shot's one commit. The two claims never land together: the
+/// edition claim is a first version's, and a daughter exists only once a
+/// member stands.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct PublishDeposits {
     /// Whether the commit writes the edition claim (`claim: true`): typed the
@@ -213,13 +226,20 @@ pub struct PublishDeposits {
     pub retract: Vec<Address>,
     /// The sets the document is newly read with, by address.
     pub read_with: Vec<Address>,
+    /// The daughters the member supersedes, by address — version members of
+    /// `doc`'s own chain; absent and empty alike on the wire.
+    pub supersede: Vec<Address>,
 }
 
 impl PublishDeposits {
     /// Returns whether the request carries no deposit: no claim and none of
-    /// the three lists.
+    /// the four lists.
     pub fn is_empty(&self) -> bool {
-        !self.claim && self.links.is_empty() && self.retract.is_empty() && self.read_with.is_empty()
+        !self.claim
+            && self.links.is_empty()
+            && self.retract.is_empty()
+            && self.read_with.is_empty()
+            && self.supersede.is_empty()
     }
 }
 
@@ -331,6 +351,15 @@ pub enum PlannedDeposit {
         /// The set `S`.
         set: Address,
     },
+    /// A `supersede` entry's claim: typed the supersedes class, `from` the
+    /// daughter, `to` the member the commit mints — homed in `doc`'s trunk,
+    /// by address.
+    Supersede {
+        /// The entry's position in `supersede`.
+        index: usize,
+        /// The daughter superseded: a version member of `doc`'s own chain.
+        old: Address,
+    },
 }
 
 /// One home's deposits, in the order the daemon mints them.
@@ -339,7 +368,7 @@ pub struct PlannedHome {
     /// The home, by tag or address.
     pub home: NamedAddress,
     /// Its deposits: the edition claim, the copies, the retractions, the
-    /// read-withs, each list in declared order.
+    /// read-withs, the supersession claims, each list in declared order.
     pub deposits: Vec<PlannedDeposit>,
 }
 
@@ -358,20 +387,22 @@ impl DepositPlan {
     }
 }
 
-/// Plans a publication's deposits over `world`: THE VALIDATION's (3), (4)
-/// and (5) in the design's order, and the deposits per home in the signed
-/// entry's order.
+/// Plans a publication's deposits over `world`: THE VALIDATION's (3), (4),
+/// (5) and (6) in the design's order, and the deposits per home in the
+/// signed entry's order.
 ///
 /// `caller` is the writer, whose homes the reads range over; `target` the
-/// request's form; `shot` the request's shot, read for its draft and for
-/// the member's positions a member-position end names; `deposits` the three
-/// lists. The reads are the design's in-lock reads, composed from M7's own
-/// primitives (the survey's C16): (3)'s claims naming `old` over the
-/// caller's homes alone — `homes_under` of the caller's account, then one
-/// typed stab per home — never another hand's; `old`'s residence, activity
-/// and ownership off the store and the registry; (5)'s presence over the
-/// caller's PUBLISHED homes, each row kept where its stored `from` is the
-/// edition's own unit span and its stored `to` the set's, exactly.
+/// request's form; `shot` the request's shot, read for its draft, for its
+/// base and for the member's positions a member-position end names;
+/// `deposits` the four lists. The reads are the design's in-lock reads,
+/// composed from M7's own primitives (the survey's C16): (3)'s claims
+/// naming `old` over the caller's homes alone — `homes_under` of the
+/// caller's account, then one typed stab per home — never another hand's;
+/// `old`'s residence, activity and ownership off the store and the
+/// registry; (5)'s presence over the caller's PUBLISHED homes, each row kept
+/// where its stored `from` is the edition's own unit span and its stored
+/// `to` the set's, exactly; (6)'s claims naming the daughter over the
+/// caller's homes, as (3)'s.
 ///
 /// In order, per entry, the first fault refusing the whole:
 ///
@@ -396,7 +427,25 @@ impl DepositPlan {
 ///    caller's, published; a read-with from the edition to `S` standing in
 ///    a published home of the caller's → SKIPPED, the maker's published
 ///    homes only; at the mint form the edition is the tag, no presence can
-///    stand, and the read-with is written.
+///    stand, and the read-with is written;
+/// 6. each `supersede` entry (the merge bridge lane, brief A): the daughter
+///    a registered VERSION MEMBER of `doc`'s own chain — the trunk itself, a
+///    document or member outside the chain, an element address, a member
+///    not yet minted, and every entry at the mint form, whose edition has no
+///    chain before the commit, are `not_member`; the member the shot
+///    appends to, its base, is `base`; a second entry naming one daughter is
+///    `duplicate` at the second — then a daughter an ACTIVE claim of the
+///    caller's own already names as its `old`, in any home the caller owns
+///    and whatever its `new` → SKIPPED, never refused (the design's "dropped
+///    where a claim of the person's own already names it, never refused").
+///    The claim is homed in `doc`'s trunk by address, where the edition
+///    claim lands at the document form, so one home holds every daughter's
+///    claim, its key stands before the commit, the signer spells it from the
+///    request's `doc` alone and the feed row names it as it names the
+///    edition; its `new` is the member BY TAG, whichever member the commit
+///    mints — the trunk's next, or the base's daughter where the head moved
+///    under the shot — so the signed body is one body whatever the race
+///    decides and the claim never names a member this commit did not mint.
 ///
 /// The edition claim, where the deposits claim, leads the edition's home,
 /// `to` the shot's draft: the tag `edition` at the mint form, the trunk of
@@ -496,9 +545,88 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
             .or_default()
             .push(PlannedDeposit::ReadWith { index, set: set.clone() });
     }
+    // (6) each daughter superseded: a member of the chain, not the base,
+    // named once; one a claim of the caller's own already names is skipped.
+    let base = shot.base.as_ref().map(|base| &base.member);
+    let mut daughters: BTreeSet<&Address> = BTreeSet::new();
+    let own = (!deposits.supersede.is_empty()).then(|| own_homes(m3, links, caller));
+    for (index, daughter) in deposits.supersede.iter().enumerate() {
+        let fault = |cause| PlanFault::Supersede { index, cause };
+        let Some(trunk) = &edition else {
+            return Err(fault(SupersedeCause::NotMember)); // the mint form: no chain yet
+        };
+        if !is_chain_member(m3, trunk, daughter) {
+            return Err(fault(SupersedeCause::NotMember));
+        }
+        if base == Some(daughter) {
+            return Err(fault(SupersedeCause::Base));
+        }
+        if !daughters.insert(daughter) {
+            return Err(fault(SupersedeCause::Duplicate));
+        }
+        if claimed_by_own(links, own.as_deref().unwrap_or(&[]), daughter) {
+            continue; // the caller's own claim names it: the entry commits nothing
+        }
+        homes
+            .entry(NamedAddress::Address(trunk.clone()))
+            .or_default()
+            .push(PlannedDeposit::Supersede { index, old: daughter.clone() });
+    }
     Ok(DepositPlan {
         homes: homes.into_iter().map(|(home, deposits)| PlannedHome { home, deposits }).collect(),
     })
+}
+
+/// Returns whether `a` is a registered version member of the chain `trunk`
+/// anchors (THE VALIDATION's (6)): a document-tier address other than the
+/// trunk itself whose trunk is `trunk` — address arithmetic, `trunk_of` —
+/// and registered with M3, so a member not yet minted is no member. An
+/// element address, an account and a document outside the chain project to
+/// themselves or to another trunk and fail the arithmetic before M3 is
+/// asked.
+fn is_chain_member(m3: &M3State, trunk: &Address, a: &Address) -> bool {
+    a.level() == Level::Document && a != trunk && trunk_of(a) == *trunk && m3.is_registered_document(a)
+}
+
+/// Returns whether an ACTIVE claim homed in one of `homes` — the caller's
+/// own — names `daughter` as its `old`, whatever its `new`: the skip (6)
+/// decides on. One typed stab of the supersession class at `FROM` over the
+/// daughter's unit span per home, each claim kept where its `from` denotes
+/// the daughter itself — the read the design's resume makes through
+/// `in_claims{y: the daughter, view: active}`, cut to the caller's homes.
+fn claimed_by_own(links: &LinkState, homes: &[Address], daughter: &Address) -> bool {
+    let sup = registry().shipped_class(ShippedType::Supersedes);
+    let probe = subtree_of(daughter.tumbler());
+    homes.iter().any(|home| {
+        links
+            .stab_typed_in(sup, home, FROM, [&probe], View::Active)
+            .iter()
+            .any(|claim| claim.from.single_denoted() == Some(daughter.tumbler()))
+    })
+}
+
+/// Returns whether an active supersession claim `old → new` is homed in
+/// `home`: a row of the supersedes class whose stored `from` is `old`'s
+/// unit span and whose stored `to` is `new`'s, exactly — the test the
+/// daemon's feed row applies over the commit's post-world to say whether a
+/// `supersede` entry's claim landed in `doc`'s trunk or was skipped, as
+/// [`read_with_in`] is for a `read_with` entry. One index probe: the home's
+/// rows driven by `from` over `old`'s unit span, the two other slots as
+/// constraints.
+///
+/// # Panics
+///
+/// Panics where `home` is not a document address, as
+/// [`LinkState::match_links_in`] does; the claim's home is `doc`'s trunk.
+pub fn supersession_claim_in(links: &LinkState, home: &Address, old: &Address, new: &Address) -> bool {
+    let (from, to) = (enc([old]), enc([new]));
+    let sup = registry().reserved_type(ShippedType::Supersedes);
+    let from_span = subtree_of(old.tumbler());
+    links
+        .match_links_in(home, (FROM, [&from_span]), &[(TO, &to), (TYPE, sup)], View::Active)
+        .into_iter()
+        .filter_map(|hit| links.readlink(&hit))
+        .any(|link| *link.from_slot() == from && *link.to_slot() == to && *link.type_slot() == *sup)
 }
 
 /// Returns a `links` entry's type slot as the store will hold it, under the

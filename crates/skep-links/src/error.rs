@@ -400,8 +400,34 @@ impl ReadWithCause {
     }
 }
 
+/// Why a `supersede` entry is refused: the `supersede_refused` token's
+/// `detail` (THE VALIDATION's (6); the merge bridge lane, brief A).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupersedeCause {
+    /// The daughter is no registered version member of the publication's
+    /// own document chain: the trunk itself, a document or member outside
+    /// the chain, an element address, a member not yet minted — and every
+    /// entry at the mint form, whose edition has no chain before the commit.
+    NotMember,
+    /// The daughter is the member the shot appends to, its base.
+    Base,
+    /// A second entry names one daughter.
+    Duplicate,
+}
+
+impl SupersedeCause {
+    /// Returns the cause's `detail` token.
+    pub fn token(self) -> &'static str {
+        match self {
+            SupersedeCause::NotMember => "not_member",
+            SupersedeCause::Base => "base",
+            SupersedeCause::Duplicate => "duplicate",
+        }
+    }
+}
+
 /// The deposit plan's refusal (the link-sets design §5.7, THE VALIDATION's
-/// (3)–(5)): the first fault in list order, naming its entry.
+/// (3)–(6)): the first fault in list order, naming its entry.
 ///
 /// The lane's tokens (the survey's ruling 8), each a `RejectCode` with a
 /// site — the entry's index, or, for a `links` entry's home that is not the
@@ -498,6 +524,13 @@ pub enum PlanFault {
         /// Which clause refused it.
         cause: ReadWithCause,
     },
+    /// A `supersede` entry is refused, the cause named.
+    Supersede {
+        /// The entry's position in `supersede`.
+        index: usize,
+        /// Which clause refused it.
+        cause: SupersedeCause,
+    },
 }
 
 /// The publication's rejection (the link-sets design §5.7): the shot's own
@@ -533,8 +566,8 @@ pub enum PublicationError {
     /// The shot's own refusal, as `publish` states it — and, at the mint
     /// form, the account's registration and ownership under its codes.
     Publish(PublishError),
-    /// The deposit plan's refusal: a `links`, `retract` or `read_with`
-    /// entry, the first fault in list order.
+    /// The deposit plan's refusal: a `links`, `retract`, `read_with` or
+    /// `supersede` entry, the first fault in list order.
     Plan(PlanFault),
     /// A draft-native run of the request overlaps a span a correspondence
     /// record homed in the named draft whose identity the run is — the
@@ -894,6 +927,9 @@ impl fmt::Display for PlanFault {
             }
             PlanFault::ReadWith { index, cause } => {
                 write!(f, "read_with[{index}]: refused: {}", cause.token())
+            }
+            PlanFault::Supersede { index, cause } => {
+                write!(f, "supersede[{index}]: refused: {}", cause.token())
             }
         }
     }

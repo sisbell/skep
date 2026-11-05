@@ -170,6 +170,30 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 14] {
     ]
 }
 
+/// The `publish` body `shot` with ONE SUPERSESSION CLAIM behind it (the
+/// merge bridge lane, brief A): the daughter `daughter` superseded by the
+/// member the commit mints, homed in the trunk `doc` by address — the home
+/// row the trunk's address, the kind byte `0x05`, the supersedes class's
+/// unit span, the daughter's unit span, `to` the member BY TAG, the
+/// `replaces` row EMPTY. Not among `fixed_frames`: its preimage is pinned
+/// by name in `golden.rs`'s table of the shapes the fourteen leave out.
+pub fn publish_supersede(
+    shot: skep_identity::EntryBody,
+    doc: &skep_address::Address,
+    daughter: &skep_address::Address,
+) -> skep_identity::EntryBody {
+    let supersedes = unit_span(&addr("1.1.0.1.0.1.0.1.4"));
+    let old = unit_span(daughter);
+    let rows = [DepositRow {
+        home: DepositHome::Address(doc),
+        kind: DepositKind::Supersede,
+        ty: DepositSlot::Stored(vec![SlotElement::Span(&supersedes)]),
+        from: DepositSlot::Stored(vec![SlotElement::Span(&old)]),
+        to: DepositSlot::Stored(vec![SlotElement::Member]),
+    }];
+    entry_body_publication(shot, &rows)
+}
+
 /// The `publish` body `shot` with the three deposit rows behind it (lane
 /// S3): the copy in the member, the retraction and the read-with in
 /// `other`, `doc` the edition the read-with is `from`.

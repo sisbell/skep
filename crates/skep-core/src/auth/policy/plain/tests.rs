@@ -93,7 +93,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
         shot,
         places,
         also_places: Vec::new(),
-        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with] },
+        deposits: PublishDeposits { claim: false, links: Vec::new(), retract: Vec::new(), read_with: vec![home.clone(); read_with], supersede: Vec::new() },
     };
     // A drafted shot carries one kept place — beside its first run, a stray
     // place — so the re-window reads the draft; a draftless one none.
@@ -156,6 +156,7 @@ fn a_publications_reads_priced_past_the_budget_are_refused_ahead_of_the_lock() {
                 .collect(),
             retract: Vec::new(),
             read_with: Vec::new(),
+            supersede: Vec::new(),
         },
     };
     assert_eq!(publication_read_refusal(snap.world(), &wide(1), maker_id), None, "one wide entry is inside both budgets");

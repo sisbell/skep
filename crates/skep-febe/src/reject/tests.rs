@@ -53,6 +53,7 @@ fn invariant_forced_and_state_dependent_codes_are_permanent() {
         RejectCode::AlreadyPublished,
         RejectCode::StrayPlaceUnrecorded,
         RejectCode::ClaimRefused,
+        RejectCode::SupersedeRefused,
     ] {
         assert_eq!(code.disposition(), Disposition::Permanent);
     }
@@ -287,6 +288,9 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::ReadWithInLinks
         | RejectCode::RetractRefused
         | RejectCode::ReadWithRefused
+        // The merge bridge lane's: a daughter outside the chain, the base
+        // or a repeat is a fact of the request against the committed world.
+        | RejectCode::SupersedeRefused
         // The edition claim into an edition that already holds a member
         // (skep #692): the member stands for good, so the same request
         // never lands and the client sends the shot without its claim.
@@ -314,7 +318,7 @@ fn documented_disposition(c: RejectCode) -> Disposition {
 /// Every code, in declaration order — the domain the policy is total
 /// over. A newly added code lands here and in
 /// [`documented_disposition`].
-const ALL_CODES: [RejectCode; 92] = [
+const ALL_CODES: [RejectCode; 93] = [
     RejectCode::Unauthenticated,
     RejectCode::Malformed,
     RejectCode::Durability,
@@ -392,6 +396,7 @@ const ALL_CODES: [RejectCode; 92] = [
     RejectCode::ReadWithInLinks,
     RejectCode::RetractRefused,
     RejectCode::ReadWithRefused,
+    RejectCode::SupersedeRefused,
     RejectCode::ClaimRefused,
     RejectCode::PublicationOverBudget,
     RejectCode::NoSuchSubspace,

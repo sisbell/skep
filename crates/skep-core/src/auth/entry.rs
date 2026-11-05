@@ -59,7 +59,8 @@
 //!   it, outside the preimage as `draft` and `also` are, so a shot with
 //!   places in either list verifies as the same shot without them; and,
 //!   behind the shot's rows, THE DEPOSIT ROWS of a
-//!   publication that carries `links`, `retract` or `read_with` entries
+//!   publication that carries `links`, `retract`, `read_with` or
+//!   `supersede` entries
 //!   (the link-sets design §5.7's signed entry; the signed-ops record's D25
 //!   delta): M7's own [`plan_deposits`] over this snapshot — the one
 //!   function the composite stages from, under the serialization lock the
@@ -121,8 +122,9 @@
 //!   ([`ComposeFault::SuccessorRefused`]): the dispatch refuses the same
 //!   request by the same function.
 //! * a `publish` whose deposits M7's plan refuses
-//!   ([`ComposeFault::DepositRefused`]): a `links`, `retract` or `read_with`
-//!   entry the design's validation (3)–(5) refuses over this snapshot — the
+//!   ([`ComposeFault::DepositRefused`]): a `links`, `retract`, `read_with`
+//!   or `supersede` entry the design's validation (3)–(6) refuses over this
+//!   snapshot — the
 //!   store refuses the same request by the same function, with the same
 //!   fault, and answers it as the typed rejection naming the entry.
 
@@ -241,7 +243,7 @@ pub(super) enum ComposeFault {
     /// request by the same function, before any driver.
     SuccessorRefused,
     /// A `publish` whose deposits M7's plan refuses (the link-sets design
-    /// §5.7's validation (3)–(5)).
+    /// §5.7's validation (3)–(6)).
     ///
     /// The plan is a pure function of the world and the request, run here
     /// over the snapshot that is, under the serialization lock, the base the
@@ -766,7 +768,10 @@ impl OwnedRow {
 ///   target, as a `nullify` signs it;
 /// * a read-with: the read-with type's unit span, `from` the edition —
 ///   `edition`'s unit span at the document form, the tag at the mint form —
-///   `to` the set's unit span.
+///   `to` the set's unit span;
+/// * a supersession claim (the merge bridge lane, brief A): the supersedes
+///   class's unit span, `from` the daughter's unit span, `to` the member by
+///   tag — homed in `doc`'s trunk by address, as the plan homes it.
 fn deposit_rows(plan: &DepositPlan, edition: Option<&Address>) -> Vec<OwnedRow> {
     let mut rows = Vec::new();
     for PlannedHome { home, deposits } in &plan.homes {
@@ -812,6 +817,21 @@ fn deposit_rows(plan: &DepositPlan, edition: Option<&Address>) -> Vec<OwnedRow> 
                     },
                     OwnedSlot::unit(set),
                 ),
+                // The supersession claim's rows, as `assert_sup` signs its
+                // claim and the store deposits it (`supersession_claim(old,
+                // member)`): the supersedes class's unit span, `from` the
+                // daughter's unit span, `to` THE MEMBER BY TAG — the one
+                // address of the claim no signer holds before the commit,
+                // whichever member the commit mints.
+                PlannedDeposit::Supersede { old, .. } => {
+                    let claim = supersession_claim(old, old);
+                    row(
+                        DepositKind::Supersede,
+                        OwnedSlot::spans(claim.type_slot().spans()),
+                        OwnedSlot::unit(old),
+                        OwnedSlot::Stored(vec![OwnedElement::Member]),
+                    )
+                }
             });
         }
     }

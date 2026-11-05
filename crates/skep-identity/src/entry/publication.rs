@@ -9,20 +9,25 @@
 //! and every verifier compute (the design's: the homes member first, then
 //! a minted edition, then every other home in address order; inside a home
 //! the edition claim, then the copies, then the retractions, then the
-//! read-withs, each list in declared order), each group:
+//! read-withs, then the supersession claims, each list in declared order),
+//! each group:
 //!
 //! * **the home row** — the deposit's home, one length-delimited element:
 //!   the tag `member` or `edition` where the commit mints the home, else
 //!   the home's address in the address row's spelling ([`DepositHome`]);
-//! * **the kind byte** — `0x01` the edition claim, `0x02` a copy, `0x03` a
-//!   retraction, `0x04` a read-with ([`DepositKind`]): the token the
-//!   deposit's own op would carry, as one byte, so two deposits of one
-//!   shape under different acts spell different bodies;
+//! * **the kind byte** — FIVE KINDS: `0x01` the edition claim, `0x02` a
+//!   copy, `0x03` a retraction, `0x04` a read-with, `0x05` a supersession
+//!   claim ([`DepositKind`]): the token the deposit's own op would carry,
+//!   as one byte, so two deposits of one shape under different acts spell
+//!   different bodies;
 //! * **the four rows its own op signs** — the type slot, the `from` slot,
 //!   the `to` slot, then the `replaces` row EMPTY (`be32(0)`; no deposit of
 //!   a publication carries the member) — a copy's and a read-with's the
 //!   `make_link` body's, a retraction's `nullify`'s, the edition claim's a
-//!   `make_link` body's — each slot one of two rows:
+//!   `make_link` body's, a supersession claim's `assert_sup`'s (the
+//!   supersedes class's unit span, `from` the daughter's unit span, `to`
+//!   the member the commit mints BY TAG, the one address of the claim no
+//!   signer holds before the commit) — each slot one of two rows:
 //!   - **the slot row as stored** (the parent's `0x03` row) over elements
 //!     ([`SlotElement`]): a span as the parent spells it, its start and its
 //!     width each length-delimited; or a TAG standing for an address the
@@ -74,6 +79,10 @@ pub enum DepositKind {
     Retraction,
     /// A read-with, a `read_with` entry.
     ReadWith,
+    /// A supersession claim over two version members, a `supersede` entry:
+    /// the daughter the publication takes in, superseded by the member the
+    /// commit mints — homed in the document whose chain the shot appends.
+    Supersede,
 }
 
 impl DepositKind {
@@ -84,6 +93,7 @@ impl DepositKind {
             DepositKind::Copy => 0x02,
             DepositKind::Retraction => 0x03,
             DepositKind::ReadWith => 0x04,
+            DepositKind::Supersede => 0x05,
         }
     }
 }

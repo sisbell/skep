@@ -619,9 +619,12 @@ fn unit_span_slot(addr: &str) -> String {
 /// retraction class, `from` the home, `to` the target) and the read-withs
 /// (`read_with`, in order, each homed in its set: the read-with class,
 /// `from` the edition — the trunk, or the tag at the mint form — `to` the
-/// set). With `skipping`, the two skips the plan decides are read off the
+/// set) and the supersession claims (`supersede`, in order, each homed in
+/// the trunk: the supersedes class, `from` the daughter, `to` the member by
+/// tag — the merge bridge lane, brief A). With `skipping`, the three skips
+/// the plan decides are read off the
 /// board and the skipped entries' rows left out ([`retraction_stands`],
-/// [`read_with_stands`]); without it every entry's rows are spelled — the
+/// [`read_with_stands`], [`claimed_by_own`]); without it every entry's rows are spelled — the
 /// body the daemon refuses `signature` where the plan skipped one, which
 /// the refusal cells send on purpose. `None` where a member does not parse.
 pub fn deposit_rows(port: u16, token: &str, frame: &Value, account: &str, skipping: bool) -> Option<Vec<SignerRow>> {
@@ -689,7 +692,45 @@ pub fn deposit_rows(port: u16, token: &str, frame: &Value, account: &str, skippi
             SignerSlot::unit(&parse_addr(set)?),
         );
     }
+    // The supersession claims (the merge bridge lane, brief A): one per
+    // daughter, homed in the trunk by address — the supersedes class's unit
+    // span, `from` the daughter's, `to` the member BY TAG; a daughter a
+    // claim of the account's own already names is skipped where `skipping`.
+    for daughter in list("supersede") {
+        let daughter = daughter.as_str()?;
+        if skipping && claimed_by_own(port, token, account, daughter) {
+            continue;
+        }
+        // At the mint form no trunk stands: the row is homed under the
+        // edition's tag so the frame signs at all — the board refuses every
+        // such entry at the plan, ahead of any signature.
+        let home = match &trunk {
+            Some(trunk) => SignerHome::Addr(parse_addr(trunk)?),
+            None => SignerHome::Edition,
+        };
+        push(
+            home,
+            DepositKind::Supersede,
+            SignerSlot::unit(&parse_addr(T_SUPERSEDES)?),
+            SignerSlot::unit(&parse_addr(daughter)?),
+            SignerSlot::Stored(vec![SignerElement::Member]),
+        );
+    }
     Some(homes.into_values().flatten().collect())
+}
+
+/// Whether an ACTIVE claim of the account's own names `daughter` as its
+/// `old` — the skip the plan decides for a `supersede` entry — read as
+/// `token`: `in_claims` at the daughter on the active view, each claim kept
+/// where its home's ω is the account, whatever its `new`.
+fn claimed_by_own(port: u16, token: &str, account: &str, daughter: &str) -> bool {
+    let v = op_as_written(port, Some(token), &format!(r#"{{"op":"in_claims","view":"active","y":"{daughter}"}}"#));
+    let Some(claims) = v["claims"].as_array() else { return false };
+    claims.iter().any(|claim| {
+        claim["home"]
+            .as_str()
+            .is_some_and(|home| effective_owner(port, Some(token), home).is_some_and(|(prefix, _)| prefix == account))
+    })
 }
 
 /// [`op`] for a `publish` signed over EVERY entry's rows, the plan's skips

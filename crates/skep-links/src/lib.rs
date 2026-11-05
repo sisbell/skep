@@ -139,6 +139,7 @@ pub use skep_arrangement::Caller;
 pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
     OldCause, PlanFault, PublicationError, ReadWithCause, RetractCause, RetractStaleError,
+    SupersedeCause,
 };
 pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
@@ -151,7 +152,8 @@ pub use writes::{
     is_replaces_class, member_end, member_image, names_read_with, plan_deposits,
     price_publication_reads, price_staged_bytes, read_with_in, read_with_type, replaces_type,
     request_image, resolve_end, retraction_tuple, slot_endset, stage_correspondence,
-    stage_publication, stored_span_bytes, stored_tumbler_bytes, supersession_claim, AlsoPlaces,
+    stage_publication, stored_span_bytes, stored_tumbler_bytes, supersession_claim,
+    supersession_claim_in, AlsoPlaces,
     DepositPlan, Edit, EndArg, LinkEntry, LinkWriter, MemberEnd, MemberSpan, NamedAddress, PlannedClaim,
     PlannedDeposit, PlannedEnd, PlannedHome, PublishDeposits, PublishTarget, ReadPrice, SlotArg,
     Visibility, CLAIM_BYTES, COPY_BYTES, COPY_FIXED_BYTES, CORRESPONDENCE_RECORD_BYTES,

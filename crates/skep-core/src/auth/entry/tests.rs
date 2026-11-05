@@ -246,3 +246,51 @@ fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
         Err(ComposeFault::MissingValue)
     ));
 }
+
+/// Checks the supersession claim's rows (the merge bridge lane, brief A).
+///
+/// A `supersede` entry's planned deposit spells, in the trunk's home by
+/// address, the `assert_sup` body's rows over the claim the store deposits:
+/// the supersedes class's one unit span — the type slot of
+/// `supersession_claim` itself, so the row and the stored link agree by
+/// construction — `from` the daughter's unit span, and `to` ONE TAG
+/// ELEMENT, the member the commit mints, whose address no signer holds
+/// before the commit.
+#[test]
+fn the_supersession_claims_rows_are_the_class_the_daughter_and_the_member_by_tag() {
+    use skep_links::{DepositPlan, PlannedHome};
+
+    let addr = |comps: &[u32]| {
+        skep_address::validate(
+            skep_address::Tumbler::new(comps.iter().map(|&c| skep_address::Nat::from(c)))
+                .expect("a tumbler"),
+        )
+        .expect("an address")
+    };
+    let (trunk, daughter) = (addr(&[1, 0, 1, 0, 3]), addr(&[1, 0, 1, 0, 3, 1, 1]));
+    let plan = DepositPlan {
+        homes: vec![PlannedHome {
+            home: NamedAddress::Address(trunk.clone()),
+            deposits: vec![PlannedDeposit::Supersede { index: 0, old: daughter.clone() }],
+        }],
+    };
+    let rows = deposit_rows(&plan, Some(&trunk));
+    assert_eq!(rows.len(), 1);
+    let sup = unit_span(&addr(&[1, 1, 0, 1, 0, 1, 0, 1, 4]));
+    let old = unit_span(&daughter);
+    assert_eq!(
+        rows[0].borrow(),
+        DepositRow {
+            home: DepositHome::Address(&trunk),
+            kind: DepositKind::Supersede,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&sup)]),
+            from: DepositSlot::Stored(vec![SlotElement::Span(&old)]),
+            to: DepositSlot::Stored(vec![SlotElement::Member]),
+        }
+    );
+    assert_eq!(
+        spans_of(supersession_claim(&daughter, &trunk).type_slot()),
+        vec![sup],
+        "the type row is the stored claim's own type slot"
+    );
+}

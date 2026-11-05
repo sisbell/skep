@@ -53,8 +53,9 @@
 //!   synced append (persist-first) and the compaction at every line done —
 //!   and a principal's queue, the memory the queue and the file its copy,
 //!   a line's anchors bounded at their one door, a hold adding no line past
-//!   one frame's and one line's anchors' bounds in its bytes or past a line
-//!   budget in its lines, and its file's re-marks within a re-mark budget.
+//!   four frames' and one line's anchors' bounds in its bytes or past a line
+//!   budget in its lines, and its file's re-marks within a re-mark budget
+//!   that a line's mark of `sent` spends none of.
 //! * [`script`] — the dev arm's script: the grammar a script file's answers
 //!   are parsed by.
 //! * `dev_arm` — the dev arm for the secret and consent moments (§4b.3): a

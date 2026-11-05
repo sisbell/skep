@@ -68,7 +68,9 @@
 //! head's `Talk` line said once per change of state, not per probe; at the
 //! head's first read the pending lines joining the board's file and sent in
 //! `k` order, and renumbered — `held` said again — where the file already
-//! holds lines.
+//! holds lines. And, timed (`#[ignore]`, the full gate's), the walk over a
+//! full queue drained within its ceiling, each line's send measured beside
+//! it.
 
 use super::*;
 
@@ -2160,4 +2162,70 @@ fn pending_lines_joining_a_file_that_holds_lines_are_renumbered_and_held_is_said
     let on_disk = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
     let disk_ks: Vec<u64> = on_disk.iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert!(disk_ks.contains(&2) && disk_ks.contains(&3), "the renumbered lines on the board's file: {disk_ks:?}");
+}
+
+// ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────
+
+/// Checks that the walk over a full queue drains within the ceiling.
+///
+/// It is the resend's own work at `held::MAX_HELD_LINES` lines whose frames
+/// and anchors are `held::MAX_HELD_BYTES`: the queue in memory alone, at a
+/// board no one has claimed that serves no head record — no line owing an
+/// attest, no copy synced, the board answering at once — so the figure is
+/// the walk's bookkeeping, in its two worst shapes, every line on one
+/// document and each on its own; one probe sends every line and keeps it,
+/// within `held::TIMED_CEILING`. Beside it, what each line's send costs held
+/// or not: a queue of 256 lines on a claimed board under a writer's session,
+/// its file this shell's, drained by one probe — each line attested, its
+/// mark and its `done` synced — and its cost a line printed. The figures are
+/// printed with the build's profile, and `held::MAX_HELD_LINES` states them.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn the_walk_over_a_full_queue_drains_within_the_ceiling() {
+    let profile = if cfg!(debug_assertions) { "unoptimized" } else { "optimized" };
+    let edges = anchors(Some(&i(4)), Some(&i(5)));
+    for (shape, apart) in [("on one document", false), ("each on its own document", true)] {
+        let doc = |n: usize| if apart { format!("1.0.1.0.{}", 100_000 + n) } else { DOC.to_string() };
+        let fake = Fake::new();
+        fake.no_head.store(true, Ordering::SeqCst);
+        fake.unclaimed.store(true, Ordering::SeqCst);
+        let store = TempDir::new().unwrap();
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        // Each line's frame and anchors a share of the byte budget, the
+        // frame's values sized by the rest of its spelling.
+        let rest = json_len(&insert(&doc(0), json!([""]), g.fake.head()));
+        let values = "x".repeat(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes() - rest);
+        g.holds
+            .with_principal("b-1", 1, |ph| {
+                for n in 0..MAX_HELD_LINES {
+                    ph.queue.hold(&doc(n), None, 0, insert(&doc(n), json!([values]), g.fake.head()), Some(edges.clone()), Reason::of("unreachable", false)).unwrap();
+                }
+            })
+            .unwrap();
+        let started = Instant::now();
+        g.holds.probe("b-1");
+        let took = started.elapsed();
+        eprintln!("the walk over a full held queue, {MAX_HELD_LINES} lines {shape}, drains in {took:?} ({profile})");
+        assert_eq!((g.fake.sends(), g.lines().len()), (MAX_HELD_LINES, 0), "{shape}: every line sent and kept");
+        assert!(took < crate::held::TIMED_CEILING, "{shape}: the walk took {took:?}, past {:?}", crate::held::TIMED_CEILING);
+    }
+    // Each line's send, held or not: attested, its mark and its `done`
+    // synced to the board's held file.
+    let g = ground();
+    let lines = 256;
+    let frame = insert(DOC, json!(["x".repeat(2000)]), g.fake.head());
+    g.holds
+        .with_principal("b-1", 1, |ph| {
+            for _ in 0..lines {
+                ph.queue.hold(DOC, None, 0, frame.clone(), Some(edges.clone()), Reason::of("unreachable", false)).unwrap();
+            }
+        })
+        .unwrap();
+    let started = Instant::now();
+    g.holds.probe("b-1");
+    let took = started.elapsed();
+    assert_eq!((g.fake.sends(), g.lines().len()), (lines, 0), "every line sent and kept");
+    assert!(g.fake.sends.lock().unwrap().iter().all(|sent| sent.get("attest").is_some()), "each line attested");
+    eprintln!("each held line's send — attested, its mark and its `done` synced to the held file — takes {:?} ({profile})", took / u32::try_from(lines).unwrap());
 }

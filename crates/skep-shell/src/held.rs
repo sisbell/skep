@@ -122,17 +122,21 @@
 //! at their one door ([`Anchors::of`]) by [`MAX_ANCHOR_BYTES`], the bridge's
 //! argument and the held file's member alike, as the burst's door bounds its
 //! frame by the board's frame cap. No line is held that would carry the
-//! queue's standing frames and anchors past [`MAX_HELD_BYTES`], one frame and
-//! one line's anchors at their bounds, or its lines past [`MAX_HELD_LINES`] —
-//! a line past either refused and kept nowhere. A reopened queue is read
+//! queue's standing frames and anchors past [`MAX_HELD_BYTES`], four frames
+//! and one line's anchors at their bounds, or its lines past
+//! [`MAX_HELD_LINES`] — a line past either refused and kept nowhere. Both are
+//! defence bounds far past any outage a person meets (§3c.3), set where a
+//! launch's reopen and the resend's walk at them measure a few seconds
+//! ([`MAX_HELD_LINES`] states the figures). A reopened queue is read
 //! whole, past either budget where its file is past it (a `done` the device
 //! refused leaves its line on disk, and a file another writer made may hold
 //! any number), and holds nothing more until it drains below them. Each line
 //! is bounded by [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike;
 //! the re-marks one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark
-//! past them taken in the queue alone; and the file is read line by line,
-//! keeping the standing lines alone — so an open holds the queue it reads,
-//! never the file's history of lines done.
+//! past them taken in the queue alone and the mark of a line `sent` spending
+//! none of them; and the file is read line by line, keeping the standing
+//! lines alone — so an open holds the queue it reads, never the file's
+//! history of lines done.
 //!
 //! **The lock** `held/<chain>/lock` (the key store's `flock` idiom, copied
 //! from `search::directory::BoardDir::try_lock` — the index directory's type
@@ -172,19 +176,22 @@ const LOCK_NAME: &str = "lock";
 /// the reader halts on a line carrying them.
 pub const MAX_ANCHOR_BYTES: usize = MAX_FRAME_BYTES;
 
-/// The queue's budget: one frame and one line's anchors, each at its bound.
+/// The queue's budget: four frames and one line's anchors, each at its bound.
 ///
 /// It is the most bytes a hold lets a principal's standing lines' frames
-/// and anchors come to at one board — the board's own frame cap,
+/// and anchors come to at one board — four of the board's own frame cap,
 /// [`MAX_FRAME_BYTES`], beside [`MAX_ANCHOR_BYTES`] — so a burst the burst's
-/// door admits, its anchors of their form, always fits a queue holding none.
-/// The design's estimate is that hours of typing are kilobytes (§3c.3),
-/// orders of magnitude under it; a queue past it is a page holding without
-/// bound — every frame and its anchors copied to disk and read back at the
-/// next open — so the line that would pass it is refused, and kept nowhere.
-/// A reopened queue is read whole, past it where its file is, and holds no
-/// line more until it drains below it.
-pub const MAX_HELD_BYTES: usize = MAX_FRAME_BYTES + MAX_ANCHOR_BYTES;
+/// door admits, its anchors of their form, always fits a queue holding none,
+/// and three more frames at the cap fit beside it. It is a defence bound far
+/// past any outage a person meets (§3c.3): the design's estimate is that
+/// hours of typing are kilobytes, orders of magnitude under it; a queue past
+/// it is a page holding without bound — every frame and its anchors copied
+/// to disk and read back at the next open — so the line that would pass it
+/// is refused, and kept nowhere. The bytes cost a launch's read little
+/// beside the lines: a file at both budgets is read in the figures
+/// [`MAX_HELD_LINES`] states. A reopened queue is read whole, past it where
+/// its file is, and holds no line more until it drains below it.
+pub const MAX_HELD_BYTES: usize = 4 * MAX_FRAME_BYTES + MAX_ANCHOR_BYTES;
 
 /// The most bytes one line of a held file may carry, its `\n` aside.
 ///
@@ -202,18 +209,49 @@ const MAX_HELD_LINE_BYTES: usize = 2 * MAX_FRAME_BYTES + MAX_ANCHOR_BYTES + 64 *
 
 /// The most lines a hold lets a principal's queue come to at one board.
 ///
-/// It is the queue's line budget. The resend walks the queue line by line,
-/// finding each line's document among the others, and a line costs its walk
-/// the same whatever its frame holds — so the lines a hold admits bound the
-/// walk's work as the lines' bytes bound its memory, and the byte budget
-/// alone admits hundreds of thousands of empty bursts held behind one
-/// refused. The design's outage is hours of typing in kilobytes (§3c.3), the
-/// burst machine coalescing each pause's keystrokes into one burst: at a
-/// burst per ten bytes typed, 4096 lines is hours of continuous typing.
-/// Past it a line is refused `held_full`, as one past the bytes is. A
-/// reopened queue is read whole, past it where its file is, and holds no
-/// line more until it drains below it.
-pub const MAX_HELD_LINES: usize = 4096;
+/// It is the queue's line budget, a defence bound far past any outage a
+/// person meets (§3c.3): the burst machine coalesces each pause's keystrokes
+/// into one burst, and at a burst per ten bytes typed, 16384 lines is some
+/// eleven hours of continuous typing at forty words a minute. Past it a line
+/// is refused `held_full`, as one past the bytes is. A reopened queue is read
+/// whole, past it where its file is, and holds no line more until it drains
+/// below it.
+///
+/// **What it bounds.** A line costs the same whatever its frame holds, and
+/// the byte budget alone admits millions of empty bursts held behind one
+/// refused, so the lines a hold admits bound two costs the bytes do not, each
+/// growing at its worst as the square of the lines:
+///
+/// * the reopen's read at a launch ([`HeldDir::open_file`]), each `done` kept
+///   at a position raising the lines standing after it on its document;
+/// * the resend's walk on the board's feed thread, each line it settles taken
+///   out of the queue ([`HeldQueue::done`]) and the lines after it on its
+///   document raised, and each document's lines found and counted for its
+///   `held` event.
+///
+/// **Measured** on an Apple M1 Max, the figures the budget is set by, at it
+/// and [`MAX_HELD_BYTES`] (`held`'s and `hold`'s timing cells): a drained
+/// file — every line on one document held, marked `sent` and kept at a
+/// position by a `done`, the last refused — reopens in 1.1 s optimized and
+/// 11 s unoptimized; the walk's own work over a full queue in memory, the
+/// board answering at once and no attest owed, takes 1.8 s with every line on
+/// one document and 2.9 s with each on its own, 10 s and 16 s unoptimized.
+/// At twice the lines, optimized, the reopen takes 6.2 s and the walk 10 s
+/// and 21 s, past a few seconds. A drain also pays each line's send, as a
+/// burst never held pays it but for the copies: the attest a signed session
+/// composes, the board's write, and the two copies its mark and its `done`
+/// sync to the device — about 13 ms a line here, most of it the two copies.
+pub const MAX_HELD_LINES: usize = 16384;
+
+/// The ceiling the timing cells hold a reopen and a walk at the budgets to.
+///
+/// It is five times the slowest figure [`MAX_HELD_LINES`] states for the
+/// build's profile — 2.9 s optimized, 16 s unoptimized — and loose on
+/// purpose, as a flaky bound is wrong and a loose one honest: the load of a
+/// full gate's parallel run stays under it, and a cost grown by another power
+/// of the lines does not.
+#[cfg(test)]
+pub(crate) const TIMED_CEILING: std::time::Duration = std::time::Duration::from_secs(if cfg!(debug_assertions) { 80 } else { 15 });
 
 /// The most bytes of re-mark lines one file copies, creation to compaction.
 ///
@@ -223,9 +261,8 @@ pub const MAX_HELD_LINES: usize = 4096;
 /// answering each probe with another hold-class cause would grow the file
 /// by a synced line at every probe for as long as it answers so, for a few
 /// hundred bytes of answer each. An honest outage re-marks a document's head
-/// a handful of times as the board's state and the person's acts move it —
-/// its first resend marking it `sent` once before the dial among them — and
-/// its text is kilobytes (§3c.3), so one line bound holds its re-marks
+/// a handful of times as the board's state and the person's acts move it,
+/// and its text is kilobytes (§3c.3), so one line bound holds its re-marks
 /// many times over — a head of kilobytes re-marked thousands of times, the
 /// largest line the writer copies re-marked once. A shift of the line's
 /// frame ([`HeldQueue::rewrite`]) spends the budget a whole frame too, as a
@@ -235,6 +272,16 @@ pub const MAX_HELD_LINES: usize = 4096;
 /// copy refused as a copy the device refused is ([`HeldQueue::remark`]): a
 /// reopen reads the reason — and the frame and the base — copied last, and
 /// the resend's read decides the line from there.
+///
+/// **The mark of `sent` spends none of it** (`marks_sent`). A resend marks
+/// its line `sent` before it dials (§3c.2), and a drain of a full queue
+/// marks every line in it, copying up to [`MAX_HELD_BYTES`] of re-mark lines,
+/// past this budget; a mark refused would relaunch a line whose dial may have
+/// landed as one never sent, which the resend sends again without the read
+/// for its landing, and the person's text would land twice. A line is marked
+/// once after its hold, and again only after a re-mark lowered its `sent` and
+/// spent the budget, so the marks one file copies are bounded by the lines it
+/// holds and by the budget.
 const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 
 /// The largest ordinal a line may carry: `2^53 − 1`.
@@ -761,6 +808,16 @@ fn raise_bases<'a>(behind: impl Iterator<Item = &'a mut HeldLine>, doc: &str, at
     }
 }
 
+/// Returns whether a re-mark from `was` to `now` marks its line `sent`.
+///
+/// It is the one rule the writer ([`HeldQueue::remark`]) and the reader
+/// ([`HeldDir::open_file`]) count the re-mark budget by: a re-mark that turns
+/// the line's `sent` true spends none of [`MAX_HELD_REMARK_BYTES`], and every
+/// other re-mark spends its line.
+fn marks_sent(was: &Reason, now: &Reason) -> bool {
+    !was.sent && now.sent
+}
+
 impl HeldDir {
     /// Returns the directory `<data_dir>/held/<chain>/`.
     ///
@@ -901,8 +958,9 @@ impl HeldDir {
     /// each `done` taking its line out — a `kept` one at a position raising
     /// the lines behind it on its document, as [`HeldQueue::done`] raised
     /// them — and the re-mark lines' bytes counted against
-    /// [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's budget
-    /// where its writer left it. The whole lines' bytes are counted
+    /// [`MAX_HELD_REMARK_BYTES`] as the writer counts them, a line's mark of
+    /// `sent` spending none, so a relaunch keeps the file's budget where its
+    /// writer left it. The whole lines' bytes are counted
     /// too, so the next line is written where the last of them ends, a torn
     /// tail cut off first; the open itself writes nothing, a tail it meets
     /// left for that cut and answered ([`HeldQueue::torn`]) for the shell
@@ -996,8 +1054,11 @@ impl HeldDir {
                 max_k = max_k.max(k);
                 // A `held` line of a standing ordinal is its re-mark
                 // ([`HeldQueue::remark`]): it takes the earlier line's place,
-                // and its bytes count against the file's re-mark budget.
-                if standing.insert(k, line).is_some() {
+                // and its bytes count against the file's re-mark budget, save
+                // the mark of its line `sent`, as the writer counts them.
+                let spends = standing.get(&k).is_some_and(|was| !marks_sent(&was.reason, &line.reason));
+                standing.insert(k, line);
+                if spends {
                     remark_bytes = remark_bytes.saturating_add(line_bytes);
                 }
             } else if let Some(done) = m.get("done") {
@@ -1078,7 +1139,8 @@ pub struct HeldQueue {
 /// compaction), whether a file with no whole header line stands for the
 /// first append to cut and head, what the open found past the whole lines,
 /// the bytes of its whole lines, and the bytes of the re-mark lines it
-/// holds ([`MAX_HELD_REMARK_BYTES`]'s count, from its creation).
+/// holds that spend the re-mark budget ([`MAX_HELD_REMARK_BYTES`]'s count,
+/// from its creation; a line's mark of `sent` spends none).
 #[derive(Debug)]
 struct Disk {
     path: PathBuf,
@@ -1251,20 +1313,11 @@ impl HeldQueue {
     /// # Errors
     ///
     /// Returns a copy refused — by the device, or past the file's
-    /// [`MAX_HELD_REMARK_BYTES`] — for the caller to say (a reopen then reads
-    /// the earlier reason).
+    /// [`MAX_HELD_REMARK_BYTES`], which a re-mark marking the line `sent`
+    /// spends none of — for the caller to say (a reopen then reads the
+    /// earlier reason).
     pub fn remark(&mut self, k: u64, reason: Reason) -> io::Result<()> {
-        let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
-        if line.reason == reason {
-            return Ok(());
-        }
-        line.reason = reason;
-        line.time = now_ms();
-        let bytes = held_line_bytes(line);
-        match self.disk.as_mut() {
-            Some(d) => d.write_remark(&bytes),
-            None => Ok(()),
-        }
+        self.remark_raising(k, reason, None)
     }
 
     /// Re-marks a standing line and raises its `base` to `at`.
@@ -1290,16 +1343,29 @@ impl HeldQueue {
     /// [`MAX_HELD_REMARK_BYTES`], which a raise spends as a re-mark does — for
     /// the caller to say (a reopen then reads the earlier reason and base).
     pub fn remark_raised(&mut self, k: u64, reason: Reason, at: u64) -> io::Result<()> {
+        self.remark_raising(k, reason, Some(at))
+    }
+
+    /// Re-marks line `k` with `reason`, raising its `base` to `raise`.
+    ///
+    /// It is the body of [`HeldQueue::remark`], which raises nothing, and of
+    /// [`HeldQueue::remark_raised`], whose raise takes the base where it is
+    /// past it. A re-mark that marks the line `sent` (`marks_sent`) is copied
+    /// as a hold's line is, spending none of the re-mark budget; every other
+    /// one is copied within it ([`Disk::write_remark`]).
+    fn remark_raising(&mut self, k: u64, reason: Reason, raise: Option<u64>) -> io::Result<()> {
         let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
-        let base = line.base.max(at);
+        let base = raise.map_or(line.base, |at| line.base.max(at));
         if line.reason == reason && line.base == base {
             return Ok(());
         }
+        let marks = marks_sent(&line.reason, &reason);
         line.reason = reason;
         line.base = base;
         line.time = now_ms();
         let bytes = held_line_bytes(line);
         match self.disk.as_mut() {
+            Some(d) if marks => d.write_line(&bytes),
             Some(d) => d.write_remark(&bytes),
             None => Ok(()),
         }
@@ -1546,8 +1612,10 @@ impl Disk {
 
     /// Copies one re-mark line, within [`MAX_HELD_REMARK_BYTES`].
     ///
-    /// Its bytes count as the copy is tried, so a device that takes a line
-    /// and refuses its sync spends the budget all the same.
+    /// It copies every re-mark but a line's mark of `sent`, which is copied
+    /// as a hold's line is (`HeldQueue::remark_raising`). Its bytes count as
+    /// the copy is tried, so a device that takes a line and refuses its sync
+    /// spends the budget all the same.
     ///
     /// # Errors
     ///

@@ -1517,76 +1517,90 @@ fn an_unanswered_read_the_attest_needs_holds_the_burst_unsent() {
 /// Checks that a burst the queue has no room for is refused `held_full`.
 ///
 /// It is the queue's budget at the hold: with the principal's standing
-/// frames and anchors at the budget — one burst at the board's frame cap
-/// less ten bytes, its anchors at theirs — the next burst is refused
-/// `held_full` — no line, no `held` event — and its answer names the bytes
-/// held against the queue's cap (the mutant that drops the queue's count
-/// holds a page's bursts without bound). The queue's own budget, under a
-/// session whose key attests no insert — a bare one, its door keeping no
-/// attest's room, so one burst fills the queue.
+/// frames and anchors at the budget — three bursts at the board's frame cap
+/// and a fourth ten bytes under it, its anchors at theirs — the next burst is
+/// refused `held_full` — no line, no `held` event — and its answer names the
+/// bytes held against the queue's cap (the mutant that drops the queue's
+/// count holds a page's bursts without bound). The queue's own budget, under
+/// a session whose key attests no insert — a bare one, its door keeping no
+/// attest's room, so four bursts at the cap fill the queue.
 #[test]
 fn a_burst_the_queue_has_no_room_for_is_refused_held_full() {
     let g = bare_ground();
+    for _ in 0..3 {
+        g.hold(&sized_frame(MAX_FRAME_BYTES), "unreachable", false);
+    }
     g.hold_anchored(&sized_frame(MAX_FRAME_BYTES - 10), anchors_of_len(MAX_ANCHOR_BYTES), "unreachable", false);
     let _ = g.states();
     let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("refused, not held") };
     let v = refused.to_value();
     assert_eq!((refused.name(), v["held_bytes"].as_u64(), v["cap"].as_u64()), ("held_full", Some(MAX_HELD_BYTES as u64 - 10), Some(MAX_HELD_BYTES as u64)), "{v}");
-    assert_eq!(g.lines().len(), 1, "nothing more held");
+    assert_eq!(g.lines().len(), 4, "nothing more held");
     assert!(g.states().is_empty(), "no `held` event for a burst not held");
     assert_eq!(g.fake.sends(), 0);
 }
 
 /// Checks that a burst's anchors spend the queue's budget beside its frame.
 ///
-/// Behind one refused run, three small bursts on three documents, each
-/// carrying anchors of three quarters of `held::MAX_ANCHOR_BYTES`, sent by
-/// the burst's write path: two are held `behind`, and the third — its frame
-/// a few bytes, its anchors carrying the queue past `held::MAX_HELD_BYTES` —
-/// is refused `held_full`, naming its anchors' bytes against the queue's
-/// cap: no line, no `held` event, nothing dialed (the mutant that counts
-/// frames alone holds a page's anchors without bound, every one copied to
-/// disk and read back at each launch).
+/// Behind one refused run, small bursts on as many documents, each carrying
+/// anchors of three quarters of `held::MAX_ANCHOR_BYTES`, sent by the
+/// burst's write path, are held `behind` as many as `held::MAX_HELD_BYTES`
+/// holds beside the run; and the next — its frame a few bytes, its anchors
+/// carrying the queue past the budget — is refused `held_full`, naming its
+/// anchors' bytes against the queue's cap: no line, no `held` event, nothing
+/// dialed (the mutant that counts frames alone holds a page's anchors without
+/// bound, every one copied to disk and read back at each launch).
 #[test]
 fn a_bursts_anchors_spend_the_queues_budget_beside_its_frame() {
     let g = bare_ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap();
+    let run = insert(DOC, json!(["a"]), g.fake.head());
+    g.hold_for(&run, Reason::refused("out_of_bounds", verdict)).unwrap();
     let anchors = anchors_of_len(MAX_ANCHOR_BYTES * 3 / 4);
-    let send = |doc: &str| g.holds.send_burst(&g.session, delete(doc, g.fake.head()), Some(anchors.clone()));
-    for doc in ["1.0.1.0.2", "1.0.1.0.3"] {
-        let OpAnswer::Answered(Ok(held)) = send(doc) else { panic!("held behind the refused run") };
+    // Documents of one spelling's length, so every burst spends the same.
+    let doc = |n: usize| format!("1.0.1.0.{}", 100 + n);
+    let fits = (MAX_HELD_BYTES - json_len(&run)) / (json_len(&delete(&doc(0), g.fake.head())) + anchors.bytes());
+    let send = |n: usize| g.holds.send_burst(&g.session, delete(&doc(n), g.fake.head()), Some(anchors.clone()));
+    for n in 0..fits {
+        let OpAnswer::Answered(Ok(held)) = send(n) else { panic!("held behind the refused run") };
         assert_eq!(held["cause"], "behind", "{held}");
     }
     let _ = g.states();
-    let OpAnswer::Answered(Err(refused)) = send("1.0.1.0.4") else { panic!("refused, not held") };
+    let OpAnswer::Answered(Err(refused)) = send(fits) else { panic!("refused, not held") };
     let v = refused.to_value();
     let anchor_bytes = (MAX_ANCHOR_BYTES * 3 / 4) as u64;
     assert_eq!((refused.name(), v["anchor_bytes"].as_u64(), v["cap"].as_u64()), ("held_full", Some(anchor_bytes), Some(MAX_HELD_BYTES as u64)), "{v}");
-    assert_eq!(g.lines().len(), 3, "nothing more held");
+    assert_eq!(g.lines().len(), fits + 1, "nothing more held");
     assert!(g.states().is_empty(), "no `held` event for a burst not held");
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
 /// Checks that a burst past the queue's line budget is refused `held_full`.
 ///
-/// It is the queue's line budget at the hold: behind one refused run, small
-/// bursts on as many documents held `behind` until the principal's queue
-/// stands at `held::MAX_HELD_LINES` — their bytes a few hundred kilobytes,
-/// far under the frames' budget — and the next burst refused `held_full`,
+/// It is the queue's line budget at the hold: the principal's file holds a
+/// refused run and small bursts on as many documents `behind` it,
+/// `held::MAX_HELD_LINES` lines in all — written whole before the session
+/// opens, as a relaunch finds them, their bytes a few megabytes, far under
+/// the frames' budget — and the next burst sent is refused `held_full`,
 /// naming the lines held and the line budget: no line, no `held` event,
-/// nothing dialed (the mutant that counts bytes alone holds a quarter of a
-/// million such bursts, and the resend walks each past the others).
+/// nothing dialed (the mutant that counts bytes alone holds millions of such
+/// bursts, and the resend walks each past the others).
 #[test]
 fn a_burst_past_the_queues_line_budget_is_refused_held_full() {
+    let store = TempDir::new().unwrap();
     let fake = Fake::new();
-    fake.no_head.store(true, Ordering::SeqCst);
-    let g = ground_over(fake, TempDir::new().unwrap(), bare_facts(), 0);
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    g.hold_for(&insert(DOC, json!(["a"]), g.fake.head()), Reason::refused("out_of_bounds", verdict)).unwrap();
-    for n in 1..MAX_HELD_LINES {
-        g.hold(&delete(&format!("1.0.1.0.{}", 100 + n), g.fake.head()), "behind", false);
+    let line = |k: usize, doc: &str, cause: &str| json!({"held": k, "doc": doc, "base": 0, "frame": delete(doc, fake.head()), "cause": cause, "sent": false, "time": 1});
+    let mut run = line(1, DOC, "out_of_bounds");
+    run["refusal"] = verdict;
+    let mut body = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n{run}\n", fake.chain);
+    for k in 2..=MAX_HELD_LINES {
+        body.push_str(&format!("{}\n", line(k, &format!("1.0.1.0.{}", 100 + k), "behind")));
     }
+    let dir = store.path().join("held").join(&fake.chain);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("principal-1.held"), body).unwrap();
+    let g = ground_over(fake, store, bare_facts(), 0);
     let _ = g.rx.try_iter().count();
     let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, delete("1.0.1.0.99", g.fake.head()), None) else { panic!("refused, not held") };
     let v = refused.to_value();

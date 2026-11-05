@@ -23,22 +23,26 @@
 //! never lowered by a raise below it or a later `done` kept below it.
 //!
 //! The budgets' cells: the queue's frames and anchors held to its byte
-//! budget, each line's anchors counted beside its frame at the hold, the
-//! open, the join and the settle, and its lines to the line budget — a
-//! reopened queue past it read whole, holding nothing more until it drains;
-//! a line at every member's bound written and read back; an unchanged
-//! re-mark writing nothing, and a board flapping between two causes growing
-//! the file no further than its re-mark budget; the ordinals held to the
-//! page's; the writer refusing a line its reader would halt on and copying
-//! none past the line bound; and the reader halting on any line it cannot
-//! read whole — no UTF-8, a member missing or of another type, anchors past
-//! their bound, an ordinal past the page's, a line past the bound — while
-//! ignoring a torn last line cut mid-character.
+//! budget, four frames at the frame cap fitting it, each line's anchors
+//! counted beside its frame at the hold, the open, the join and the settle,
+//! and its lines to the line budget — a reopened queue past it read whole,
+//! holding nothing more until it drains; a line at every member's bound
+//! written and read back; an unchanged re-mark writing nothing, a board
+//! flapping between two causes growing the file no further than its re-mark
+//! budget, and a line's mark of `sent` copied past a spent budget, spending
+//! none of it; the ordinals held to the page's; the writer refusing a line
+//! its reader would halt on and copying none past the line bound; and the
+//! reader halting on any line it cannot read whole — no UTF-8, a member
+//! missing or of another type, anchors past their bound, an ordinal past the
+//! page's, a line past the bound — while ignoring a torn last line cut
+//! mid-character. And, timed (`#[ignore]`, the full gate's), a drained file
+//! at both budgets reopened within its ceiling.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -827,22 +831,30 @@ fn anchors_of_len(bytes: usize) -> Anchors {
 }
 
 /// THE QUEUE's BUDGET: the standing frames and anchors held to
-/// [`MAX_HELD_BYTES`] — a line one frame and one line's anchors at their
-/// bounds less a hundred bytes, and a frame that would pass the budget
-/// refused `Full`, naming the bytes held, the frame's and the anchors', and
-/// NOTHING of it written; one at the budget exactly held; and room made by a
-/// `done` (the mutant that never counts, or never uncounts, holds a page's
-/// frames without bound, or refuses for good).
+/// [`MAX_HELD_BYTES`] — three frames at the board's frame cap and a fourth a
+/// hundred bytes under it carrying anchors at their bound, four frames and
+/// one line's anchors at their bounds less a hundred bytes — and a frame that
+/// would pass the budget refused `Full`, naming the bytes held, the frame's
+/// and the anchors', and NOTHING of it written; one at the budget exactly
+/// held; and room made by a `done` (the mutant that never counts, or never
+/// uncounts, holds a page's frames without bound, or refuses for good; the
+/// one whose budget is one frame refuses the person's second burst at the
+/// cap, and keeps it nowhere).
 #[test]
 fn the_queue_holds_its_frames_and_anchors_within_its_budget_and_writes_nothing_past_it() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_FRAME_BYTES - 100), Some(anchors_of_len(MAX_ANCHOR_BYTES)), Reason::of("stopped", false)).unwrap().k;
+    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_FRAME_BYTES), None, Reason::of("stopped", false)).unwrap().k;
+    for _ in 0..2 {
+        let beside = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_FRAME_BYTES), None, Reason::of("behind", false));
+        assert!(beside.is_ok_and(|held| held.unwritten.is_none()), "a frame at the cap held and copied beside the first");
+    }
+    queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_FRAME_BYTES - 100), Some(anchors_of_len(MAX_ANCHOR_BYTES)), Reason::of("behind", false)).unwrap();
     let written = file_len(&tmp);
     let refused = queue.hold("1.0.1.0.1", None, 0, sized_frame(200), None, Reason::of("behind", false));
-    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_BYTES - 100, frame_bytes: 200, anchor_bytes: 0, held_lines: 1 });
-    assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first]), "nothing of the refused line is kept");
+    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_BYTES - 100, frame_bytes: 200, anchor_bytes: 0, held_lines: 4 });
+    assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first, first + 1, first + 2, first + 3]), "nothing of the refused line is kept");
     assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(100), None, Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
     queue.done(first, Done::Kept { at: Some(3) }).unwrap();
     assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(200), None, Reason::of("behind", false)).is_ok(), "a done makes room");
@@ -850,36 +862,40 @@ fn the_queue_holds_its_frames_and_anchors_within_its_budget_and_writes_nothing_p
 
 /// Checks that the queue counts each line's anchors beside its frame.
 ///
-/// Three small frames on three documents, each carrying anchors of three
-/// quarters of [`MAX_ANCHOR_BYTES`]: two are held, and the third — its frame
-/// a few bytes, its anchors carrying the queue past [`MAX_HELD_BYTES`] — is
-/// refused `Full`, naming its anchors' bytes, and nothing of it written. The
-/// file reopened refuses it alike, and so does a queue in memory alone that
-/// has joined the reopened one; a `done` of the first gives its anchors'
-/// bytes back, and the third is held (the mutants that count frames alone at
-/// the hold, the open, the join or the settle hold a page's anchors without
-/// bound — every one copied to disk and read back at each launch — or refuse
-/// for good).
+/// Small frames on as many documents, each carrying anchors of three
+/// quarters of [`MAX_ANCHOR_BYTES`], are held as many as [`MAX_HELD_BYTES`]
+/// holds, and the next — its frame a few bytes, its anchors carrying the
+/// queue past the budget — is refused `Full`, naming its anchors' bytes, and
+/// nothing of it written. The file reopened refuses it alike, and so does a
+/// queue in memory alone that has joined the reopened one; a `done` of the
+/// first gives its anchors' bytes back, and the next is held (the mutants
+/// that count frames alone at the hold, the open, the join or the settle
+/// hold a page's anchors without bound — every one copied to disk and read
+/// back at each launch — or refuse for good).
 #[test]
 fn the_queue_counts_each_lines_anchors_beside_its_frame() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let each = anchors_of_len(MAX_ANCHOR_BYTES * 3 / 4);
-    let hold = |queue: &mut HeldQueue, doc: &str| queue.hold(doc, None, 0, json!({"op": "insert"}), Some(each.clone()), Reason::of("behind", false));
-    let full = |held: Result<Entered, Unheld>| matches!(held, Err(Unheld::Full { anchor_bytes, held_lines: 2, .. }) if anchor_bytes == MAX_ANCHOR_BYTES * 3 / 4);
-    let first = hold(&mut queue, "1.0.1.0.1").unwrap().k;
-    hold(&mut queue, "1.0.1.0.2").unwrap();
+    let (frame, each) = (json!({"op": "insert"}), anchors_of_len(MAX_ANCHOR_BYTES * 3 / 4));
+    let fits = MAX_HELD_BYTES / (json_len(&frame) + each.bytes());
+    assert!(fits >= 2, "the budget holds {fits} such lines, the frames a few bytes of them");
+    let hold = |queue: &mut HeldQueue, n: usize| queue.hold(&format!("1.0.1.0.{}", n + 1), None, 0, frame.clone(), Some(each.clone()), Reason::of("behind", false));
+    let full = |held: Result<Entered, Unheld>| matches!(held, Err(Unheld::Full { anchor_bytes, held_lines, .. }) if anchor_bytes == MAX_ANCHOR_BYTES * 3 / 4 && held_lines == fits);
+    let first = hold(&mut queue, 0).unwrap().k;
+    for n in 1..fits {
+        hold(&mut queue, n).unwrap();
+    }
     let written = file_len(&tmp);
-    assert!(full(hold(&mut queue, "1.0.1.0.3")), "the third line's anchors pass the budget at the hold");
+    assert!(full(hold(&mut queue, fits)), "the next line's anchors pass the budget at the hold");
     assert_eq!(file_len(&tmp), written, "nothing of the refused line is written");
     let mut reopened = live(d.open_file(1, "1.0.1").unwrap());
-    assert!(full(hold(&mut reopened, "1.0.1.0.3")), "the open counts its lines' anchors");
+    assert!(full(hold(&mut reopened, fits)), "the open counts its lines' anchors");
     let mut joined = HeldQueue::in_memory();
     joined.join(&reopened).unwrap();
-    assert!(full(hold(&mut joined, "1.0.1.0.3")), "the join counts them too");
+    assert!(full(hold(&mut joined, fits)), "the join counts them too");
     queue.done(first, Done::Dropped).unwrap();
-    assert!(hold(&mut queue, "1.0.1.0.3").is_ok(), "a done gives its anchors' bytes back");
+    assert!(hold(&mut queue, fits).is_ok(), "a done gives its anchors' bytes back");
 }
 
 /// Checks that a line at every member's bound is written and read back.
@@ -989,23 +1005,23 @@ fn an_unchanged_remark_writes_nothing() {
 }
 
 /// THE RE-MARK BUDGET: a board flapping between two hold-class causes — the
-/// line re-marked at every probe, each re-mark a whole line of a large frame
-/// — grows the file by at most [`MAX_HELD_REMARK_BYTES`]: the re-marks past
-/// it refused their copy, the queue taking each reason all the same; a
-/// reopen reads one line under a reason the file copied and keeps the
-/// budget spent, refusing the next copy; and a compaction gives the file
-/// that replaces it a budget of its own (the mutant that copies every
-/// re-mark fills the disk at a frame per probe for as long as the board
-/// flaps; the one that counts afresh at each open fills it a budget per
-/// relaunch).
+/// line, one that may have landed, re-marked at every probe, its `sent` kept
+/// as the hold keeps it, each re-mark a whole line of a large frame — grows
+/// the file by at most [`MAX_HELD_REMARK_BYTES`]: the re-marks past it
+/// refused their copy, the queue taking each reason all the same; a reopen
+/// reads one line under a reason the file copied and keeps the budget spent,
+/// refusing the next copy; and a compaction gives the file that replaces it a
+/// budget of its own (the mutant that copies every re-mark fills the disk at
+/// a frame per probe for as long as the board flaps; the one that counts
+/// afresh at each open fills it a budget per relaunch).
 #[test]
 fn a_board_flapping_between_two_causes_grows_no_file_past_its_remark_budget() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4), None, Reason::of("unreachable", false)).unwrap().k;
+    let k = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4), None, Reason::of("unreachable", true)).unwrap().k;
     let written = file_len(&tmp);
-    let flaps = [Reason::of("poisoned", true), Reason::of("durability", false)];
+    let flaps = [Reason::of("poisoned", true), Reason::of("durability", true)];
     let copied = (0..8).filter(|i| queue.remark(k, flaps[i % 2].clone()).is_ok()).count();
     assert!((1..8).contains(&copied), "some re-marks are copied and the rest refused: {copied} of 8");
     let grown = (file_len(&tmp) - written) as usize;
@@ -1024,6 +1040,48 @@ fn a_board_flapping_between_two_causes_grows_no_file_past_its_remark_budget() {
     let written = file_len(&tmp);
     queue.remark(k, Reason::of("durability", false)).unwrap();
     assert!(file_len(&tmp) > written, "the file that replaces it copies its re-marks afresh");
+}
+
+/// Checks that a line's mark of `sent` spends none of the re-mark budget.
+///
+/// It is the mark a resend makes before its dial (§3c.2). With the budget
+/// spent to forty bytes short — a large line re-marked between two refusals
+/// spelled at one length, its `sent` kept, four times, and a fifth copy
+/// refused — a small line's mark of `sent` is copied all the same and spends
+/// nothing; a reopen reads it marked, the budget spent as the writer spent
+/// it; and a re-mark of that line keeping its `sent`, or lowering it, is
+/// refused past the budget as every other re-mark is (the mutant that counts
+/// the mark refuses it once the budget is spent, and a relaunch reads a line
+/// whose dial may have landed as one never sent, which the resend sends again
+/// without the read for its landing; the ones that spare a re-mark keeping
+/// `sent` true, or lowering it, grow the file past its budget under a board
+/// flapping between two causes).
+#[test]
+fn a_lines_mark_of_sent_spends_none_of_the_remark_budget() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let spent = |queue: &HeldQueue| queue.disk.as_ref().map_or(0, |d| d.remark_bytes);
+    let refused = |n: u64| Reason { sent: true, ..Reason::refused("out_of_bounds", json!({"n": n})) };
+    // The large line spells a quarter of the budget less ten bytes: its frame
+    // sized by the rest of its spelling, its two reasons spelled at one length.
+    let spelled = HeldLine { k: 1, doc: "1.0.1.0.1".into(), id: None, base: 0, frame: json!({}), anchors: None, reason: refused(1), time: now_ms() };
+    let rest = held_line_bytes(&spelled).len() - 1 - json_len(&spelled.frame);
+    let large = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4 - 10 - rest), None, refused(1)).unwrap().k;
+    let small = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), None, Reason::of("unreachable", false)).unwrap().k;
+    for n in [2, 1, 2, 1] {
+        queue.remark(large, refused(n)).unwrap();
+    }
+    assert_eq!(spent(&queue), MAX_HELD_REMARK_BYTES - 40, "the budget spent to forty bytes short");
+    assert!(queue.remark(large, refused(2)).is_err(), "a fifth copy is refused");
+    let written = file_len(&tmp);
+    queue.remark(small, Reason::of("unreachable", true)).expect("the mark is copied past the spent budget");
+    assert!(file_len(&tmp) > written && spent(&queue) == MAX_HELD_REMARK_BYTES - 40, "the mark is on disk, and spends nothing");
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    let marked = reopened.lines().iter().find(|l| l.k == small).map(|l| l.reason.clone());
+    assert_eq!((marked, spent(&reopened)), (Some(Reason::of("unreachable", true)), spent(&queue)), "a reopen reads the mark, the budget spent as the writer spent it");
+    assert!(queue.remark(small, Reason::of("durability", true)).is_err(), "a re-mark keeping `sent` spends the budget");
+    assert!(queue.remark(small, Reason::of("unreachable", false)).is_err(), "and so does one lowering it");
 }
 
 /// The header T1 writes for principal 1, then `body`, as the principal's
@@ -1400,4 +1458,52 @@ fn a_join_the_device_refuses_is_undone_and_leaves_the_pending_file() {
     assert_eq!(ks(&from), [1, 2], "the pending queue untouched");
     assert_eq!(ks(&live(pending.open_file(1, "1.0.1").unwrap())), [1, 2], "the pending file stands with both lines");
     assert!(live(chain_dir.open_file(1, "1.0.1").unwrap()).lines().is_empty(), "the board's file reads fresh");
+}
+
+// ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────
+
+/// Checks that a drained file at both budgets reopens within the ceiling.
+///
+/// It is a launch's read of the worst file the budgets admit:
+/// [`MAX_HELD_LINES`] lines on one document, their frames and anchors
+/// [`MAX_HELD_BYTES`], written as a drain of the full queue writes them —
+/// every line held, then line by line marked `sent`, its base the one the
+/// line kept before it raised it to, and kept at a position by a `done`, the
+/// last refused instead, so the file stands — each `done` raising every line
+/// standing after it. The reopen reads the one line standing, raised by the
+/// last line kept before it, within [`TIMED_CEILING`]; the figure is printed
+/// with the build's profile, and [`MAX_HELD_LINES`] states it.
+#[test]
+#[ignore = "timing test - gate-full only"]
+fn a_drained_file_at_both_budgets_reopens_within_the_ceiling() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let n = MAX_HELD_LINES as u64;
+    let edges = anchors(Some("1.0.1.0.1.0.1.4"), Some("1.0.1.0.1.0.1.5"));
+    let frame = sized_frame(MAX_HELD_BYTES / MAX_HELD_LINES - edges.bytes());
+    let line = |k: u64, base: u64, reason: Reason| held_line_bytes(&HeldLine { k, doc: "1.0.1.0.1".into(), id: None, base, frame: frame.clone(), anchors: Some(edges.clone()), reason, time: now_ms() });
+    // The position line `k` is kept at, and the base it raises the lines after
+    // it to.
+    let kept_at = |k: u64| 100 + k;
+    let mut body = header_bytes(&Named::Chain(chain()), 1, "1.0.1");
+    for k in 1..=n {
+        body.extend(line(k, 0, Reason::of("unreachable", false)));
+    }
+    for k in 1..n {
+        let base = if k == 1 { 0 } else { kept_at(k - 1) };
+        body.extend(line(k, base, Reason::of("unreachable", true)));
+        body.extend(done_line_bytes(k, Done::Kept { at: Some(kept_at(k)) }));
+    }
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
+    body.extend(line(n, kept_at(n - 1), Reason::of("unreachable", true)));
+    body.extend(line(n, kept_at(n - 1), Reason { sent: true, ..Reason::refused("out_of_bounds", verdict) }));
+    fs::write(file_path(&tmp), &body).unwrap();
+    let started = Instant::now();
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    let took = started.elapsed();
+    let profile = if cfg!(debug_assertions) { "unoptimized" } else { "optimized" };
+    eprintln!("a drained held file at both budgets, {n} lines in {} bytes, reopens in {took:?} ({profile})", body.len());
+    let standing: Vec<(u64, u64, &str)> = reopened.lines().iter().map(|l| (l.k, l.base, l.reason.cause.as_str())).collect();
+    assert_eq!(standing, [(n, kept_at(n - 1), "out_of_bounds")], "the one line standing, raised by the last line kept before it");
+    assert!(took < TIMED_CEILING, "the reopen took {took:?}, past {TIMED_CEILING:?}");
 }

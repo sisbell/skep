@@ -722,7 +722,8 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
         "standing in a published home of yours is SKIPPED",
         "A skipped entry has no",
         "answered from the retry memo BEFORE the admission judges it",
-        "| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused`, `supersede_refused` | permanent | `index` = the entry in its own list |",
+        "| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list |",
+        "| `supersede_refused` | permanent | `index` = the entry in `supersede`; at `head_moved`, `index` = 0 and `addr` = the trunk's head |",
         "| `claim_refused` | permanent | `addr` = the edition |",
     ] {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
@@ -741,25 +742,29 @@ fn doc_states_the_deposits_their_body_and_their_tokens() {
 }
 
 /// THE SUPERSESSION CLAIM A PUBLICATION CARRIES (the merge bridge lane,
-/// brief A; skep #805): §Arrangement's `publish` names the `supersede`
-/// member — the daughters by address, each one claim homed in `doc`'s
-/// trunk, skipped where a claim of yours already names it; §The publish
-/// shot and head-float states the plan's (6) with its three causes, the
-/// claim's home and stored form, the fifth kind byte and its group with the
-/// member BY TAG, the race's rule, the reads and the permanence; §Rejection
-/// codes carries the token with its details; §Links (writes) keeps
-/// `assert_sup` to links and names the publication the member form's one
-/// writer, and the `nullify` class names the member `old`; §Link discovery
-/// reads states `in_claims` over a member; §Credential refusals names the
-/// merged version's claim among the class. The daemon's answers are pinned
-/// in `publish.rs` and `nullify_class.rs`; this pins that the contract says
-/// so.
+/// brief A; skep #805, #806): §Arrangement's `publish` names the
+/// `supersede` member — the daughters by address, each one claim homed in
+/// `doc`'s trunk onto the trunk's next member, skipped where a claim of
+/// yours already names it; §The publish shot and head-float sets the
+/// supersede list aside from the destination's no-refusal rule and states
+/// the plan's (6) with its four causes — `head_moved` first, the list
+/// refused whole with the trunk's head — the claim's home and stored form,
+/// the fifth kind byte and its group with the member BY TAG, the race's
+/// refusal ahead of the signature check, the reads and the permanence;
+/// §Rejection codes carries the token with its details; §Links (writes)
+/// keeps `assert_sup` to links and names the publication the member form's
+/// one writer, and the `nullify` class names the member `old`; §Link
+/// discovery reads states `in_claims` over a member; §Credential refusals
+/// names the merged version's claim among the class. The daemon's answers
+/// are pinned in `publish.rs` and `nullify_class.rs`; this pins that the
+/// contract says so.
 #[test]
 fn doc_states_the_supersession_claim_a_publication_carries() {
     let arrangement = prose("\n### Arrangement (document editing)", &["\n### Media"]);
     for fact in [
         "and `supersede`, THE DAUGHTERS the member takes in",
         "`old` the daughter and `new` THE MEMBER THIS COMMIT MINTS, homed in `doc`'s trunk and signed in the body as the edition claim is",
+        "that member is the trunk's next, a shot off a base the trunk moved past being refused whole `supersede_refused` with `detail` `head_moved`",
         "daughter a claim of yours already names is SKIPPED, never refused",
         "`supersede` is the document form's alone",
         "A `supersede` entry is an address, the daughter's",
@@ -769,8 +774,11 @@ fn doc_states_the_supersession_claim_a_publication_carries() {
     let shot = prose("\n### The publish shot and head-float", &["\n### Credential refusals"]);
     for fact in [
         "THE DAUGHTERS it supersedes",
+        "nothing is refused for want of a base, a shot carrying `supersede` aside",
         "the read-withs, the supersession claims, each list in its declared order",
-        "(6) each `supersede` entry names a REGISTERED VERSION MEMBER of `doc`'s own chain",
+        "(6) a `supersede` list stands only beside a shot that lands on the TRUNK",
+        "the list is refused whole, ahead of every entry's own check (`supersede_refused`, `detail` `head_moved`, `site.index` 0 and `site.addr` the trunk's head)",
+        "then each `supersede` entry names a REGISTERED VERSION MEMBER of `doc`'s own chain",
         "`detail` `not_member`",
         "its base (`detail` `base`)",
         "`detail` `duplicate` at the second",
@@ -779,7 +787,10 @@ fn doc_states_the_supersession_claim_a_publication_carries() {
         "`0x05` a supersession claim",
         "`to` ONE TAG ELEMENT, `member`",
         "**The race at a supersession claim.**",
-        "never a member this commit did not mint",
+        "that member is always the TRUNK's next",
+        "a request carrying `supersede` is refused whole: `supersede_refused`, permanent, `detail` `head_moved`, `site.index` 0 and `site.addr` the trunk's head, nothing committed",
+        "a signed request over the old head is answered this code with its signature unchecked, never `attestation_invalid`",
+        "A shot carrying no `supersede` keeps the destination's rule and lands as the base's daughter",
         "**The permanence of a supersession claim over members**",
         "THE SUPERSESSION CLAIM's readers are `in_claims` at the daughter and `out_claims` at the member",
         "a claim per `supersede` entry",
@@ -787,7 +798,15 @@ fn doc_states_the_supersession_claim_a_publication_carries() {
         assert!(shot.contains(fact), "§The publish shot and head-float says {fact:?}");
     }
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
-    for fact in ["`supersede_refused` (a supersede entry", "not_member", "base, the daughter the member the shot appends to", "duplicate, a second entry naming one daughter", "links, read-with and supersede entries"] {
+    for fact in [
+        "`supersede_refused` (a supersede entry",
+        "head_moved, a member stands and the base is not the trunk's head",
+        "`site.index` 0 and `site.addr` the trunk's head",
+        "not_member",
+        "base, the daughter the member the shot appends to",
+        "duplicate, a second entry naming one daughter",
+        "links, read-with and supersede entries",
+    ] {
         assert!(codes.contains(fact), "§Rejection codes says {fact:?}");
     }
     let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);

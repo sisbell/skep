@@ -434,6 +434,47 @@ fn each_supersede_refusal_names_its_entry_and_its_cause() {
     assert!(matches!(refused(both), PlanFault::ReadWith { index: 0, .. }), "(5) speaks ahead of (6)");
 }
 
+/// THE MOVED HEAD (skep #806): beside a shot whose base is not the trunk's
+/// head `E.2` — the older member `E.1`, the bare document, the daughter
+/// `E.1.1`, or no base at all — the `supersede` list is refused whole at its
+/// first entry, `head_moved` naming the head, ahead of every entry's own
+/// check: a later entry's `not_member`, the base named, and the skip of a
+/// daughter the caller's own claim names. (5) still speaks ahead of it; a
+/// request naming no daughter plans at a moved head as before; and a chain
+/// with no member has no head to move, every entry there `not_member`.
+#[test]
+fn a_supersede_list_beside_a_base_the_trunk_moved_past_is_refused_whole_as_head_moved() {
+    let world = chain_world();
+    let target = PublishTarget::Document(trunk());
+    let head_moved = PlanFault::Supersede { index: 0, cause: SupersedeCause::HeadMoved(member(2)) };
+    let unbased = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    for (shot, name) in [(off(&member(1)), "an older member"), (off(&trunk()), "the bare document"), (off(&daughter(1, 1)), "a daughter"), (unbased, "no base")] {
+        let refused = |deposits: PublishDeposits| plan_deposits(&world, P1, &target, &shot, &deposits).expect_err("refused");
+        assert_eq!(refused(supersede(vec![daughter(1, 1)])), head_moved, "{name}");
+        assert_eq!(refused(supersede(vec![daughter(1, 1), trunk()])), head_moved, "{name}: ahead of the second entry's `not_member`");
+        assert_eq!(refused(supersede(vec![trunk()])), head_moved, "{name}: ahead of the first entry's own `not_member`");
+        let rw = PublishDeposits { read_with: vec![a(&[1, 0, 1, 0, 2])], supersede: vec![daughter(1, 1)], ..PublishDeposits::default() };
+        assert!(matches!(refused(rw), PlanFault::ReadWith { index: 0, .. }), "{name}: (5) speaks ahead of (6)");
+        assert!(plan_deposits(&world, P1, &target, &shot, &PublishDeposits::default()).expect("planned").is_empty(), "{name}: no daughter, no refusal");
+    }
+    let off_daughter = off(&daughter(1, 1));
+    let named_base = plan_deposits(&world, P1, &target, &off_daughter, &supersede(vec![daughter(1, 1)])).expect_err("refused");
+    assert_eq!(named_base, head_moved, "the base named: the moved head speaks, not `base`");
+    let own = with_claim(chain_world(), &trunk(), 1, &daughter(1, 1), &member(2));
+    let claimed = plan_deposits(&own, P1, &target, &off(&member(1)), &supersede(vec![daughter(1, 1)])).expect_err("refused");
+    assert_eq!(claimed, head_moved, "a daughter the caller's own claim names is refused here, never skipped");
+    // A chain with no member: the set `S`, published and memberless, off its
+    // bare document and in the birth shape — no head, so each entry's own
+    // check speaks.
+    let memberless = PublishTarget::Document(set());
+    let s1 = a(&[1, 0, 1, 0, 4, 1]);
+    let birth = Shot { base: None, draft: None, also: vec![], runs: vec![] };
+    for shot in [off(&set()), birth] {
+        let refused = plan_deposits(&world, P1, &memberless, &shot, &supersede(vec![s1.clone()])).expect_err("refused");
+        assert_eq!(refused, PlanFault::Supersede { index: 0, cause: SupersedeCause::NotMember }, "no member stands: no head moved");
+    }
+}
+
 /// THE SKIP: a daughter an ACTIVE claim of the caller's own already names
 /// is skipped — nothing planned, never refused — whatever the claim's `new`
 /// and wherever among the caller's homes it lies; another account's claim

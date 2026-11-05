@@ -29,7 +29,7 @@ use skep_discovery::{OrphanError, QueryError};
 use skep_kernel::{Seq, TxnError};
 use skep_links::{
     AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, PlanFault,
-    PublicationError,
+    PublicationError, SupersedeCause,
 };
 use skep_namespace::{CreateDocumentError, DelegateError, MintError, RegisterNodeError};
 use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
@@ -468,7 +468,9 @@ impl Lower for PublishError {
 /// `read_with_refused` and `supersede_refused`, the cause as `detail`.
 ///
 /// `NotOwner`, a `links` entry's home that is not the caller's, rides
-/// `not_owner` with the home as `site.addr`, ω's own site; the slot-form
+/// `not_owner` with the home as `site.addr`, ω's own site; `supersede_refused`
+/// at `head_moved` rides the trunk's head as `site.addr` beside the first
+/// entry's index, the base the client composes again on; the slot-form
 /// codes name the entry and, for the content clause, the slot — never a
 /// span's index within the slot, the entry being the site the lane names.
 /// The three fenced classes lower as `make_link`'s do, to `dc_violation`,
@@ -497,7 +499,22 @@ impl Lower for PlanFault {
             PlanFault::ClaimWithoutDraft => (RejectCode::Malformed, None),
             PlanFault::Retract { index, .. } => (RejectCode::RetractRefused, at(index)),
             PlanFault::ReadWith { index, .. } => (RejectCode::ReadWithRefused, at(index)),
-            PlanFault::Supersede { index, .. } => (RejectCode::SupersedeRefused, at(index)),
+            // A moved head names the trunk's head in `site.addr` beside the
+            // first entry, the base the client composes again on, as
+            // `kept_place_moved` carries both; every other cause names its
+            // entry alone.
+            PlanFault::Supersede { index, cause } => {
+                let addr = match cause {
+                    SupersedeCause::HeadMoved(head) => Some(head),
+                    SupersedeCause::NotMember
+                    | SupersedeCause::Base
+                    | SupersedeCause::Duplicate => None,
+                };
+                (
+                    RejectCode::SupersedeRefused,
+                    Some(FaultSite { index: Some(index), addr, ..FaultSite::default() }),
+                )
+            }
         }
     }
 

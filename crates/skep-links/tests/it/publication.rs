@@ -1951,6 +1951,53 @@ fn the_plan_is_a_pure_function_of_the_world_and_the_request() {
     assert_eq!(again, once);
 }
 
+/// A records-less shot off `base`, re-supplying its positions by reference.
+fn shot_off(k: &Kernel<World>, base: &Address) -> Shot {
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    let runs = m5.content_runs(base).map(|r| ShotRun { origin: pdoc(), run: r.clone() }).collect();
+    Shot { base: Some(skep_arrangement::Base { member: base.clone(), extent: m5.content_count(base) }), draft: None, also: vec![], runs }
+}
+
+/// THE PLAN AND THE SHOT AGREE WHERE THE MEMBER LANDS (skep #806): over a
+/// kernel holding `E.1`, the head `E.2` and the daughter `E.1.1`, a shot off
+/// each base the trunk moved past — the older member `E.1`, the bare
+/// document, the daughter — naming `E.1.1` superseded is refused
+/// `head_moved` naming the head, nothing committed, while the same shot
+/// with no deposit lands where M5's destination puts it, a daughter and
+/// never the trunk's next member (`E.1.2`, then `E.1.3`, then `E.1.1.1`);
+/// off the head it lands the trunk's next member `E.3` and the claim naming
+/// it. The plan's head check and M5's destination rule are two spellings of
+/// one rule, and this holds them to each other.
+#[test]
+fn a_shot_naming_a_daughter_lands_on_the_trunk_or_is_refused_as_head_moved() {
+    use skep_links::{supersession_claim_in, SupersedeCause};
+
+    let k = kernel_over(deposits_world());
+    draft_holding(&k, "abc");
+    let none = PublishDeposits::default();
+    assert_eq!(publish(&k, &shot(None, vec![shot_run(&doc1(), &ca(1), 3)]), &none).expect("E.1").0, pmember(1));
+    assert_eq!(publish(&k, &shot_off(&k, &pmember(1)), &none).expect("E.2").0, pmember(2));
+    let e11 = publish(&k, &shot_off(&k, &pmember(1)), &none).expect("E.1.1").0;
+    assert_eq!(e11, a(&[1, 0, 1, 0, 3, 1, 1]), "off the member the trunk moved past: its daughter");
+    let merge = PublishDeposits { supersede: vec![e11.clone()], ..PublishDeposits::default() };
+    let head_moved = PlanFault::Supersede { index: 0, cause: SupersedeCause::HeadMoved(pmember(2)) };
+    for (base, lands) in [
+        (pmember(1), a(&[1, 0, 1, 0, 3, 1, 2])),
+        (pdoc(), a(&[1, 0, 1, 0, 3, 1, 3])),
+        (e11.clone(), a(&[1, 0, 1, 0, 3, 1, 1, 1])),
+    ] {
+        let off = shot_off(&k, &base);
+        assert_eq!(refused_plan(&k, &off, merge.clone()), head_moved, "off {base}: refused, nothing committed");
+        assert_eq!(publish(&k, &off, &none).expect("the shot alone lands").0, lands, "off {base}: M5 mints a daughter");
+        assert_eq!(trunk_head(k.snapshot().world().m3(), &pdoc()), Some(pmember(2)), "off {base}: the head stands");
+    }
+    let (member, _) = publish(&k, &shot_off(&k, &pmember(2)), &merge).expect("off the head, the merge lands");
+    assert_eq!(member, pmember(3), "the trunk's next member");
+    let s = k.snapshot();
+    assert!(supersession_claim_in(s.world().links(), &pdoc(), &e11, &member), "the claim names the trunk's next member");
+}
+
 // ───────────────────────── the family (the Nelson way) ─────────────────────────
 
 /// doc2 — P1's second private draft, the family's other draft — holding

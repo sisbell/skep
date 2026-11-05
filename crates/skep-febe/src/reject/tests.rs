@@ -288,8 +288,9 @@ fn documented_disposition(c: RejectCode) -> Disposition {
         | RejectCode::ReadWithInLinks
         | RejectCode::RetractRefused
         | RejectCode::ReadWithRefused
-        // The merge bridge lane's: a daughter outside the chain, the base
-        // or a repeat is a fact of the request against the committed world.
+        // The merge bridge lane's: a daughter outside the chain, the base, a
+        // repeat or a base the trunk moved past (`head_moved`) is a fact of
+        // the request against the committed world.
         | RejectCode::SupersedeRefused
         // The edition claim into an edition that already holds a member
         // (skep #692): the member stands for good, so the same request

@@ -2627,33 +2627,46 @@ fn a_body_missing_the_claims_group_is_refused_for_its_signature() {
     sd.shutdown();
 }
 
-/// THE RACE: a merged version signed off the head `E.2`, sent after another
-/// shot moved the head to `E.3`, lands as the BASE's DAUGHTER `E.2.1` (the
-/// shot's own rule) — and its claim lands with it, `new` the daughter the
-/// commit minted and never the trunk's next member: the body names the
-/// member by tag, so the signature made before the head moved verifies
-/// unchanged, and `in_claims{y: E.1.1}` answers the claim with `new` `E.2.1`.
+/// THE RACE (skep #806): a merged version signed off the head `E.2`, sent
+/// after another shot moved the head to `E.3`, would land as the BASE's
+/// DAUGHTER `E.2.1` (the shot's own rule) with a claim naming that side
+/// version for good — so it is refused whole, `supersede_refused`,
+/// permanent, `detail` `head_moved`, `site.index` 0 and `site.addr` the
+/// head `E.3`, nothing committed and no claim at the daughter. The refusal
+/// is the plan's, which the daemon composes the signed body with, so it
+/// speaks AHEAD OF THE SIGNATURE CHECK: the merge frame carrying the shot
+/// alone's signature, which no merge body verifies against, is answered
+/// the same and never `attestation_invalid:signature`. The same shot with
+/// no `supersede` then lands as the base's daughter `E.2.1` — the address
+/// the refused requests never minted.
 #[test]
-fn a_head_moved_under_the_shot_lands_the_claim_on_the_minted_daughter() {
+fn a_head_moved_under_a_shot_naming_a_daughter_is_refused_ahead_of_the_signature() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
     let b = merge_board(port);
     let signed_merge = attach_attest(port, &b.signed, &b.merge(&[&b.e11]));
     assert!(signed_merge.contains("\"attest\""), "signed before the head moves");
+    let signed_shot: Value = serde_json::from_str(&attach_attest(port, &b.signed, &b.shot())).expect("a frame");
+    let mut missigned: Value = serde_json::from_str(&b.merge(&[&b.e11])).expect("a frame");
+    missigned["attest"] = signed_shot["attest"].clone();
     // The head moves: another shot off E.2, from another draft.
     let d5 = draft_with(port, &b.bare, "vwx");
     let e3 = acked_addr(&op(port, Some(&b.signed), &publish(&b.e, Some((&b.e2, 3)), Some(&d5), &[run(&d5, &format!("{d5}.0.1.1"), 3)])));
     assert_eq!(e3, format!("{}.3", b.e));
     let before = head(port);
-    let landed = acked_addr(&op_as_written(port, Some(&b.signed), &signed_merge));
-    assert_eq!(landed, format!("{}.2.1", b.e), "the base's daughter");
-    let claim = format!("{}.0.2.1", b.e);
-    assert_eq!(claim_rows(port, None, &b.e11), vec![(claim, landed.clone(), b.e.clone())], "the claim names the member this commit minted");
-    assert!(claims_out(port, None, &e3, "active").is_empty(), "never the trunk's next member");
-    let owners = changes_since_as(port, Some(&b.signed), before);
-    assert_eq!(owners.len(), 1);
-    assert_eq!(owners[0]["docs"], serde_json::json!([landed, b.d4, b.e]), "{}", owners[0]);
+    for (frame, name) in [(signed_merge, "signed over the merge"), (missigned.to_string(), "carrying the shot alone's signature")] {
+        let v = op_as_written(port, Some(&b.signed), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!((rej["code"].as_str(), rej["detail"].as_str()), (Some("supersede_refused"), Some("head_moved")), "{name}: {v}");
+        assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{name}: {v}");
+        assert_eq!(rej["site"], serde_json::json!({"addr": e3, "index": 0}), "{name}: the first entry and the head: {v}");
+        assert_eq!(head(port), before, "{name}: nothing committed");
+    }
+    assert!(claim_rows(port, None, &b.e11).is_empty(), "no claim names the daughter");
+    let landed = acked_addr(&op(port, Some(&b.signed), &b.shot()));
+    assert_eq!(landed, format!("{}.2.1", b.e), "the shot alone: the base's daughter, never minted before");
+    assert!(claim_rows(port, None, &b.e11).is_empty(), "and it carries no claim");
     sd.shutdown();
 }
 

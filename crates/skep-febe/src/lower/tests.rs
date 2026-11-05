@@ -48,9 +48,11 @@ fn wrappers_recurse() {
 /// the entry's
 /// index in `site.index` — the content clause its slot beside it, and
 /// nothing else — save ω's, which rides `not_owner` with the home as
-/// `site.addr`, and the claim-without-draft shape, which names no entry.
-/// The four detailed codes carry their cause's token as `detail` through
-/// `lower_txn` (`Lower::lower_with_detail`); every other carries none.
+/// `site.addr`, the moved head's, which rides the trunk's head as
+/// `site.addr` beside the first entry, and the claim-without-draft shape,
+/// which names no entry. The four detailed codes carry their cause's token
+/// as `detail` through `lower_txn` (`Lower::lower_with_detail`); every other
+/// carries none.
 #[test]
 fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
     let faults: Vec<(PlanFault, RejectCode, Option<&str>)> = vec![
@@ -84,6 +86,15 @@ fn a_plan_refusal_names_its_entry_and_the_content_clause_its_slot() {
         assert!(site.operand.is_none() && site.region.is_none(), "{name}");
         assert_eq!(rej.detail.as_deref(), detail, "{name}: the cause's token, or none");
     }
+    // A moved head: the first entry, the trunk's head beside it, and the
+    // cause's token — permanent, the head never moving back.
+    let head_moved = PlanFault::Supersede { index: 0, cause: SupersedeCause::HeadMoved(doc()) };
+    let rej = lower_txn(OpKind::Publish, TxnError::Rejected(PublicationError::Plan(head_moved)));
+    assert_eq!((rej.code, rej.disposition), (RejectCode::SupersedeRefused, Disposition::Permanent));
+    let site = rej.site.expect("the entry and the head ride the site");
+    assert_eq!((site.index, site.addr), (Some(0), Some(doc())), "the first entry and the trunk's head");
+    assert!(site.slot.is_none() && site.fault.is_none() && site.operand.is_none() && site.region.is_none());
+    assert_eq!(rej.detail.as_deref(), Some("head_moved"));
     // The content clause names the slot beside the entry.
     let (code, site) = PlanFault::NotContentSpan { index: 1, slot: TO }.lower();
     assert_eq!(code, RejectCode::NotContentSubspace);

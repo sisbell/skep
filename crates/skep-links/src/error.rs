@@ -402,8 +402,19 @@ impl ReadWithCause {
 
 /// Why a `supersede` entry is refused: the `supersede_refused` token's
 /// `detail` (THE VALIDATION's (6); the merge bridge lane, brief A).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`, as `PlanFault` is not: `HeadMoved` carries an `Address`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupersedeCause {
+    /// The shot would mint the base's daughter, not the trunk's next member.
+    ///
+    /// A member stands and the base is not the trunk's head — an older
+    /// member, a daughter, or the bare document, which lands as the first
+    /// member's daughter (PUB-2.39) — so each claim would name a side
+    /// version, for good. Carries the trunk's head, the base the client
+    /// composes again on. Refused at the first entry, ahead of every check
+    /// of an entry's own.
+    HeadMoved(Address),
     /// The daughter is no registered version member of the publication's
     /// own document chain: the trunk itself, a document or member outside
     /// the chain, an element address, a member not yet minted — and every
@@ -417,8 +428,9 @@ pub enum SupersedeCause {
 
 impl SupersedeCause {
     /// Returns the cause's `detail` token.
-    pub fn token(self) -> &'static str {
+    pub fn token(&self) -> &'static str {
         match self {
+            SupersedeCause::HeadMoved(_) => "head_moved",
             SupersedeCause::NotMember => "not_member",
             SupersedeCause::Base => "base",
             SupersedeCause::Duplicate => "duplicate",
@@ -430,10 +442,11 @@ impl SupersedeCause {
 /// (3)–(6)): the first fault in list order, naming its entry.
 ///
 /// The lane's tokens (the survey's ruling 8), each a `RejectCode` with a
-/// site — the entry's index, or, for a `links` entry's home that is not the
-/// caller's, the home's address, `not_owner`'s own site. The slot forms and
-/// the class fences answer as `make_link`'s do, with the entry. Built by
-/// `plan_deposits` (`writes/publication/plan.rs`), and carried by
+/// site — the entry's index, beside it the trunk's head for a moved head
+/// ([`SupersedeCause::HeadMoved`]), or, for a `links` entry's home that is
+/// not the caller's, the home's address, `not_owner`'s own site. The slot
+/// forms and the class fences answer as `make_link`'s do, with the entry.
+/// Built by `plan_deposits` (`writes/publication/plan.rs`), and carried by
 /// [`PublicationError::Plan`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanFault {
@@ -526,7 +539,8 @@ pub enum PlanFault {
     },
     /// A `supersede` entry is refused, the cause named.
     Supersede {
-        /// The entry's position in `supersede`.
+        /// The entry's position in `supersede`: the first, `0`, for
+        /// [`SupersedeCause::HeadMoved`], which refuses the list whole.
         index: usize,
         /// Which clause refused it.
         cause: SupersedeCause,
@@ -543,12 +557,14 @@ pub enum PlanFault {
 /// admission through its source gate (`Publish`, M5's verdicts as `publish`
 /// states their order, the draft's registration and ownership among them);
 /// then THE TWIN FENCE (`AlreadyPublished`), before anything is staged;
-/// then THE DEPOSIT PLAN (`Plan`: THE VALIDATION's (3), (4) and (5), the
-/// first fault in list order); then the shot's staging (`Publish` again:
-/// the re-insert's count, the existence walk, the placement, the member's
-/// mint); then, per correspondence record, the deposit gate's home check
-/// (`HomeNotRegistered`, `NotOwner`) — a backstop the admission's draft
-/// slots make unreachable on the composite's path, reachable through
+/// then, at the document form, the edition claim's precondition (`Publish`
+/// carrying `ClaimRefused`); then THE DEPOSIT PLAN (`Plan`: THE
+/// VALIDATION's (3), (4), (5) and (6), the first fault in list order); then
+/// the shot's staging (`Publish` again: the re-insert's count, the existence
+/// walk, the placement, the member's mint); then, per correspondence
+/// record, the deposit gate's home check (`HomeNotRegistered`, `NotOwner`)
+/// — a backstop the admission's draft slots make unreachable on the
+/// composite's path, reachable through
 /// [`stage_correspondence`](crate::stage_correspondence) alone — and the
 /// record's mint and seat; then the deposits as planned — each deposit's
 /// gate (`NotOwner` on a home the plan did not read, a backstop), its mint

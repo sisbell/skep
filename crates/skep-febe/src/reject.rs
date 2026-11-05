@@ -492,10 +492,11 @@ pub enum RejectCode {
     /// A type slot breaks a sole-writer fence or the DC guard's claim schema.
     DcViolation,
     // ── M7 link: the publication's deposits (the link-sets design §5.7's
-    //    validation (3)–(5); lane S3). Each is permanent, carries its
-    //    entry's index in `site.index`, and the three that name a cause
-    //    carry it as `detail`; the edition claim's own, last of them, names
-    //    the edition in `site.addr` instead. ──
+    //    validation (3)–(6); lane S3 and the merge bridge lane). Each is
+    //    permanent, carries its entry's index in `site.index`, and the four
+    //    that name a cause carry it as `detail`, `head_moved` naming the
+    //    trunk's head in `site.addr` beside the index; the edition claim's
+    //    own, last of them, names the edition in `site.addr` instead. ──
     /// A `links` entry's home is neither the tag `member` nor a published
     /// document of the caller's.
     ///
@@ -533,13 +534,19 @@ pub enum RejectCode {
     ReadWithRefused,
     /// A `supersede` entry is refused (the merge bridge lane, brief A).
     ///
-    /// `detail` names which: `not_member` (the daughter is no registered
+    /// `detail` names which: `head_moved` (a member stands and the base is
+    /// not the trunk's head, so the shot would mint the base's daughter and
+    /// not the trunk's next member — the list refused whole, `site.index`
+    /// the first entry and `site.addr` the trunk's head, ahead of every
+    /// entry's own check), `not_member` (the daughter is no registered
     /// version member of `doc`'s own chain — the trunk itself, a document or
     /// member outside the chain, an element address, a member not yet
     /// minted, or any entry at the mint form), `base` (the daughter is the
     /// member the shot appends to), or `duplicate` (a second entry naming
     /// one daughter, the second's index). A daughter a claim of the caller's
-    /// own already names is SKIPPED, never refused.
+    /// own already names is SKIPPED, never refused. Permanent by the
+    /// catch-all: the head never moves back, so the client composes again
+    /// on the head `site.addr` names.
     SupersedeRefused,
     /// The document form carries `claim: true` and `doc` already holds a
     /// member (the link-sets design §5.7; skep #692).

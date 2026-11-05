@@ -376,16 +376,18 @@ impl From<EmitCoreError> for PublicationError {
 ///    admission makes of the base (skep #692); a shot off the bare document
 ///    onto such a chain lands as the first member's daughter and is refused
 ///    here all the same where it claims, the claim being no daughter's; the
-///    mint form's edition is memberless by
-///    construction. Then the plan ([`plan_deposits`]) — THE VALIDATION's
-///    (3), (4) and (5), the first fault in list order refusing the whole as
-///    `Plan` — the same world the daemon's composer read for the body it
-///    checked the signature against (the survey's C8: under the
-///    serialization lock the admission's snapshot is the base), so the
-///    deposits staged below are the deposits the signature covers, by one
-///    function over one world; the claim's row among them, homed in the
-///    edition by tag where the commit mints it and by address where `doc`
-///    names it.
+///    mint form's edition is memberless by construction. Then the plan
+///    ([`plan_deposits`]) — THE VALIDATION's (3), (4), (5) and (6), the
+///    first fault in list order refusing the whole as `Plan`, (6) refusing
+///    a `supersede` list whole, `head_moved`, where a member stands and the
+///    base is not the trunk's head, so every supersession claim staged
+///    below names the trunk's next member — the same world the daemon's
+///    composer read for the body it checked the signature against (the
+///    survey's C8: under the serialization lock the admission's snapshot is
+///    the base), so the deposits staged below are the deposits the
+///    signature covers, by one function over one world; the claim's row
+///    among them, homed in the edition by tag where the commit mints it and
+///    by address where `doc` names it.
 /// 5. THE SHOT: [`stage_publish`] — the admission again, one answer (its
 ///    card states why), the re-insert's count, the existence walk, the
 ///    placement with each draft identity minted once, the member's mint and
@@ -421,12 +423,13 @@ impl From<EmitCoreError> for PublicationError {
 ///    unit(E), to: unit(S)}`, seated); each supersession claim
 ///    (`supersession_claim(daughter, member)` under `Gate::Managed` in the
 ///    trunk, as `assert_sup` deposits its claim — `new` the member THIS
-///    commit minted at step 5, whichever the race made it, the claim's
-///    dedup a guaranteed miss, unseated as `assert_sup` leaves it; the merge
-///    bridge lane, brief A). Every deposit's home passes the
-///    gate's registration and ω check, so a home the plan did not read is
-///    refused `NotOwner` with its address. A request carrying no deposit
-///    stages none here and commits as S2 left it.
+///    commit minted at step 5, the trunk's next, the plan having refused a
+///    base the trunk moved past; the claim's dedup a guaranteed miss,
+///    unseated as `assert_sup` leaves it; the merge bridge lane, brief A).
+///    Every deposit's home passes the gate's registration and ω check, so
+///    a home the plan did not read is refused `NotOwner` with its address.
+///    A request carrying no deposit stages none here and commits as S2
+///    left it.
 /// 8. THE RE-WINDOW, last (`stage_rewindow`), of EVERY NAMED DRAFT at its
 ///    own kept places (the design's §5.7 (viii), the Nelson way): first THE
 ///    RENDERING DRAFT at `places`, then EACH `also` DRAFT at its
@@ -691,11 +694,12 @@ where
                 }
                 PlannedDeposit::Supersede { old, .. } => {
                     // The daughter superseded by THE MEMBER THIS COMMIT
-                    // MINTED — the trunk's next, or the base's daughter where
-                    // the head moved under the shot — as `assert_sup`
-                    // deposits its claim: the Managed gate, unseated.
-                    // `minted`: the claim's I0 carries the member, minted
-                    // above in this transaction, so no incumbent can answer.
+                    // MINTED — the trunk's next, the plan having refused a
+                    // shot off any base but the head (`head_moved`) — as
+                    // `assert_sup` deposits its claim: the Managed gate,
+                    // unseated. `minted`: the claim's I0 carries the member,
+                    // minted above in this transaction, so no incumbent can
+                    // answer.
                     let value = supersession_claim(old, member);
                     emit_core(stg, readable, caller, &home, value, Gate::Managed)?.minted();
                 }

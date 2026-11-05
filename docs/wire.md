@@ -1843,13 +1843,17 @@ credential, not_revocation for a grant), `read_with_refused` (a
 read-with entry, with `detail` naming which: not_registered,
 not_document, not_owner, not_published), and `supersede_refused` (a
 supersede entry — the merge bridge lane — with `detail` naming which:
-not_member, the daughter no registered version member of the
-document's own chain — the trunk itself, a document or member outside
-the chain, an element address, a member not yet minted, or any entry
-at the mint form; base, the daughter the member the shot appends to;
-duplicate, a second entry naming one daughter, the second's index — a
-daughter a claim of yours already names being skipped, never
-refused); the edition claim's own,
+head_moved, a member stands and the base is not the trunk's head, so
+the shot would mint the base's daughter and not the trunk's next
+member — the list refused whole ahead of every entry's own check,
+`site.index` 0 and `site.addr` the trunk's head, the head to compose
+the merge again on; not_member, the daughter no registered version
+member of the document's own chain — the trunk itself, a document or
+member outside the chain, an element address, a member not yet
+minted, or any entry at the mint form; base, the daughter the member
+the shot appends to; duplicate, a second entry naming one daughter,
+the second's index — a daughter a claim of yours already names being
+skipped, never refused); the edition claim's own,
 `claim_refused` (the document form carries claim: true and doc already
 holds a member — the edition claim is a first version's alone, written
 with the edition's first member: `site.addr` the edition, `detail`
@@ -2050,7 +2054,10 @@ is still the trunk head yields the trunk's next member (`1.0.1.0.1.2`
 after `1.0.1.0.1.1`); a base the trunk has moved past yields the base's
 own DAUGHTER, in the nested form (`1.0.1.0.1.1.1`) — so two shots
 staged off one head both land, the first on the trunk and the second
-under it, and nothing is refused for want of a base. A memberless
+under it, and nothing is refused for want of a base, a shot carrying
+`supersede` aside: its claims name the trunk's next member, so once a
+member stands, off any base but the head it is refused `head_moved`
+(the deposits, below). A memberless
 document is its own base (`base` = `doc`), and `base` absent is that
 same **birth version** (PUB-2.34): the chain's first member, `.1`,
 either way while the chain is empty. Once a member exists the two part:
@@ -2295,7 +2302,13 @@ RETRACTED is SKIPPED, the entry committing nothing. (5) each
 published (`read_with_refused`: not_registered, not_document,
 not_owner, not_published); a read-with from the edition to it already
 standing in a published home of yours is SKIPPED; at the mint form
-none can stand, and every entry is written. (6) each `supersede`
+none can stand, and every entry is written. (6) a `supersede` list
+stands only beside a shot that lands on the TRUNK: where a member
+stands and the base is not the trunk's head — an older member, a
+daughter, or the bare document, each landing as a daughter (the
+destination, above) — the list is refused whole, ahead of every
+entry's own check (`supersede_refused`, `detail` `head_moved`,
+`site.index` 0 and `site.addr` the trunk's head); then each `supersede`
 entry names a REGISTERED VERSION MEMBER of `doc`'s own chain
 (`supersede_refused`, `detail` `not_member`: the trunk itself, a
 document or member outside the chain, an element address, a member not
@@ -2359,17 +2372,21 @@ merged version and loses the acknowledgment reads whether the shot
 landed off the daughter — a landed shot carried its claim.
 
 **The race at a supersession claim.** The claim's `new` is the member
-BY TAG, so one signed body stands whichever member the commit mints:
-where the head moved under the shot and the commit mints the BASE's
-DAUGHTER (the destination, above), the claim lands all the same, `old`
-the daughter named and `new` the daughter the commit minted — never a
-member this commit did not mint, and never skipped on a state the
-signer could not read before signing. The client that meant the trunk's
-next member reads the ack's address as it does for any shot, reports
-the landing as a daughter's, and composes its next publication afresh;
-at that publication the daughter it named is already claimed by it and
-is SKIPPED, the skip read off the board before signing through
-`in_claims` at the daughter, as the signer reads every skip.
+BY TAG — the one address of the claim no signer holds before the
+commit — and that member is always the TRUNK's next. Where the head
+moved under the shot, so that the commit would mint the BASE's
+DAUGHTER (the destination, above), a request carrying `supersede` is
+refused whole: `supersede_refused`, permanent, `detail` `head_moved`,
+`site.index` 0 and `site.addr` the trunk's head, nothing committed. No
+claim names a side version: one would stand for good (the permanence,
+below), and a later publication naming the daughter would be SKIPPED on
+it. The refusal is the plan's (6), which the daemon runs as it composes
+the body a signature is checked against, ahead of that check: a signed
+request over the old head is answered this code with its signature
+unchecked, never `attestation_invalid`. The client composes the merge
+again on the head `site.addr` names and signs the new body. A shot
+carrying no `supersede` keeps the destination's rule and lands as the
+base's daughter.
 
 **The permanence of a supersession claim over members** (§Credential
 refusals, item 5, the supersession claim): its `new` is a published
@@ -2522,7 +2539,8 @@ commits nothing:
 | `stray_place_unrecorded` | permanent | `index` = the `runs` entry, `addr` = the draft | a kept place in the draft `addr` names stands beside a run of published identity the shot does not mint — `doc`'s own, or another document's words — and no correspondence record the caller may read names that identity whole as its `to`, wherever homed (the stray places, above) — read inside the transaction at that draft's re-window, ahead of the entry's check |
 | `not_owner` | permanent | `addr` = the account | the mint form's parent account is not the session principal's (the deposits, above) — the shot's slot 1 on the account the edition is minted under |
 | `claim_refused` | permanent | `addr` = the edition | the document form carries `claim: true` and `doc` already holds a member (the claim is a first version's alone; the deposits, above) — read inside the transaction with the plan, after the twin fence and ahead of the shot; `detail` is `member_stands` |
-| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused`, `supersede_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused`, `read_with_refused` and `supersede_refused` carry the cause as `detail` |
+| `link_home_refused`, `old_refused`, `duplicate_original`, `read_with_in_links`, `retract_refused`, `read_with_refused` | permanent | `index` = the entry in its own list | the plan's refusal of a deposit (the deposits, above) — read inside the transaction after the twin fence and ahead of the shot, the first refused entry answering; `old_refused`, `retract_refused` and `read_with_refused` carry the cause as `detail` |
+| `supersede_refused` | permanent | `index` = the entry in `supersede`; at `head_moved`, `index` = 0 and `addr` = the trunk's head | the plan's refusal of a `supersede` entry (the deposits, above) — read as the other lists' are, after them, the cause as `detail`: `head_moved` (a member stands and the base is not the trunk's head, so the shot would mint the base's daughter: the list refused whole, ahead of every entry's own check), then `not_member`, `base`, `duplicate` |
 
 The daemon's own publish-class gate (`signed_session_required`, slot 4)
 stands ahead of the store: a shot is publication's own act whatever
@@ -3793,7 +3811,9 @@ merged version's sides, by address — each deposited as ONE SUPERSESSION
 CLAIM in `assert_sup`'s shape, `old` the daughter and `new` THE MEMBER
 THIS COMMIT MINTS, homed in `doc`'s trunk and signed in the body as the
 edition claim is, so the daughter is marked superseded in the commit
-that lands the member and `in_claims` at the daughter answers it; a
+that lands the member and `in_claims` at the daughter answers it; that
+member is the trunk's next, a shot off a base the trunk moved past
+being refused whole `supersede_refused` with `detail` `head_moved`; a
 daughter a claim of yours already names is SKIPPED, never refused;
 `supersede` is the document form's alone (a minted edition has no chain,
 so every entry is `supersede_refused` there) and never lands beside the

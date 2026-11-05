@@ -40,6 +40,15 @@
 //! document form may carry it at all (the edition holding no member yet) is
 //! the composite's step, judged on the same base ahead of the plan.
 //!
+//! **The member a claim names.** A supersession claim names the member by
+//! tag, and the plan asks where the shot lands before it plans one: where a
+//! member stands and the base is not the trunk's head, M5 mints the base's
+//! daughter (PUB-2.39), so the `supersede` list is refused whole as
+//! `head_moved`, and every claim the plan holds names the trunk's next
+//! member. The plan restates M5's destination rule through M5's own head
+//! read, and `tests/it/publication.rs` holds the two to each other over a
+//! kernel.
+//!
 //! **One world, one plan.** Under the daemon's serialization lock the
 //! snapshot the admission reads IS the base the transaction opens on (the
 //! survey's C8), and the plan is a pure function of that world and the
@@ -53,7 +62,7 @@ use skep_address::{
     content_subspace, document_of, is_prefix, subtree_of, validate, Address, Level, Nat, Span,
     Tumbler,
 };
-use skep_arrangement::{trunk_of, Caller, HasM5, Pairing, Run, Shot};
+use skep_arrangement::{trunk_head, trunk_of, Caller, HasM5, Pairing, Run, Shot};
 use skep_namespace::M3State;
 use std::sync::LazyLock;
 
@@ -428,24 +437,29 @@ impl DepositPlan {
 ///    a published home of the caller's → SKIPPED, the maker's published
 ///    homes only; at the mint form the edition is the tag, no presence can
 ///    stand, and the read-with is written;
-/// 6. each `supersede` entry (the merge bridge lane, brief A): the daughter
-///    a registered VERSION MEMBER of `doc`'s own chain — the trunk itself, a
-///    document or member outside the chain, an element address, a member
-///    not yet minted, and every entry at the mint form, whose edition has no
-///    chain before the commit, are `not_member`; the member the shot
-///    appends to, its base, is `base`; a second entry naming one daughter is
-///    `duplicate` at the second — then a daughter an ACTIVE claim of the
-///    caller's own already names as its `old`, in any home the caller owns
-///    and whatever its `new` → SKIPPED, never refused (the design's "dropped
-///    where a claim of the person's own already names it, never refused").
-///    The claim is homed in `doc`'s trunk by address, where the edition
-///    claim lands at the document form, so one home holds every daughter's
-///    claim, its key stands before the commit, the signer spells it from the
-///    request's `doc` alone and the feed row names it as it names the
-///    edition; its `new` is the member BY TAG, whichever member the commit
-///    mints — the trunk's next, or the base's daughter where the head moved
-///    under the shot — so the signed body is one body whatever the race
-///    decides and the claim never names a member this commit did not mint.
+/// 6. the `supersede` list (the merge bridge lane, brief A): first, at the
+///    document form, the shot landing on the trunk — where a member stands
+///    and the base is not the trunk's head, the shot would mint the base's
+///    daughter (PUB-2.39), and the list is refused whole at its first
+///    entry, `head_moved` with the head, ahead of every entry's own check;
+///    then each entry: the daughter a registered VERSION MEMBER of `doc`'s
+///    own chain — the trunk itself, a document or member outside the chain,
+///    an element address, a member not yet minted, and every entry at the
+///    mint form, whose edition has no chain before the commit, are
+///    `not_member`; the member the shot appends to, its base, is `base`; a
+///    second entry naming one daughter is `duplicate` at the second — then
+///    a daughter an ACTIVE claim of the caller's own already names as its
+///    `old`, in any home the caller owns and whatever its `new` → SKIPPED,
+///    never refused (the design's "dropped where a claim of the person's own
+///    already names it, never refused"). The claim is homed in `doc`'s trunk
+///    by address, where the edition claim lands at the document form, so one
+///    home holds every daughter's claim, its key stands before the commit,
+///    the signer spells it from the request's `doc` alone and the feed row
+///    names it as it names the edition; its `new` is the member BY TAG, the
+///    one address of the claim no signer holds before the commit, and that
+///    member is the trunk's next — the head check refuses every shot that
+///    would mint another — so the claim names the version that takes the
+///    daughter in, never a side version.
 ///
 /// The edition claim, where the deposits claim, leads the edition's home,
 /// `to` the shot's draft: the tag `edition` at the mint form, the trunk of
@@ -545,9 +559,15 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
             .or_default()
             .push(PlannedDeposit::ReadWith { index, set: set.clone() });
     }
-    // (6) each daughter superseded: a member of the chain, not the base,
-    // named once; one a claim of the caller's own already names is skipped.
+    // (6) each daughter superseded: the shot landing on the trunk, then each
+    // a member of the chain, not the base, named once; one a claim of the
+    // caller's own already names is skipped.
     let base = shot.base.as_ref().map(|base| &base.member);
+    if !deposits.supersede.is_empty() {
+        if let Some(head) = edition.as_ref().and_then(|trunk| moved_head(m3, trunk, base)) {
+            return Err(PlanFault::Supersede { index: 0, cause: SupersedeCause::HeadMoved(head) });
+        }
+    }
     let mut daughters: BTreeSet<&Address> = BTreeSet::new();
     let own = (!deposits.supersede.is_empty()).then(|| own_homes(m3, links, caller));
     for (index, daughter) in deposits.supersede.iter().enumerate() {
@@ -575,6 +595,20 @@ pub fn plan_deposits<W: LinkWorld + HasM5>(
     Ok(DepositPlan {
         homes: homes.into_iter().map(|(home, deposits)| PlannedHome { home, deposits }).collect(),
     })
+}
+
+/// Returns the trunk's head where a shot off `base` would not mint the
+/// trunk's next member (THE VALIDATION's (6); PUB-2.39's head/older).
+///
+/// A member stands and the base is not it: an older member or a daughter,
+/// whose own daughter the shot mints; the bare document, which lands as the
+/// first member's daughter; or no base, which the shot's own table refuses
+/// `BaseSuperseded` ahead of the plan. `None` where the shot mints the
+/// trunk's next member — off the head, or into a chain with no member yet.
+/// It is M5's destination rule read through M5's own head ([`trunk_head`]),
+/// the head the shot's admission judges its base against.
+fn moved_head(m3: &M3State, trunk: &Address, base: Option<&Address>) -> Option<Address> {
+    trunk_head(m3, trunk).filter(|head| base != Some(head))
 }
 
 /// Returns whether `a` is a registered version member of the chain `trunk`

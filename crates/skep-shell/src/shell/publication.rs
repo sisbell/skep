@@ -122,7 +122,7 @@ use skep_address::Address;
 use skep_client::address::is_address_text;
 use skep_client::board::{frames, Answer, LinkSpan, LinkValue, Rejection};
 use skep_client::halt::Halt;
-use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, Missing, OriginAnswer, OwnFault, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, Switches, Term, Unrecorded, Verdict};
+use skep_client::publication::{self as lib, Ack, AckVia, Base, Built, Confirmed, Destination, Fault, Inert, Missing, OriginAnswer, OwnFault, Placement, Publisher, RaceKey, Refusal as PubRefusal, Restatement, RowKind, Sent, Standing, SupersedeCause, Switches, Term, Unrecorded, Verdict};
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 
@@ -605,7 +605,7 @@ impl Shell {
         if !readable.contains(&draft) {
             readable.push(draft.clone());
         }
-        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts: readable, published: published.unwrap_or(own_published) };
+        let inputs = lib::Inputs { doc, mint, claim, base, draft: draft.clone(), also, selection, notes: notes.unwrap_or_default(), readable_drafts: readable, published: published.unwrap_or(own_published), supersede: Vec::new() };
         let left_behind = match &standing {
             Some(standing) => lib::left_behind(&p, &inputs, standing, &own_drafts).map_err(fault)?,
             None => Vec::new(),
@@ -1229,6 +1229,13 @@ pub(super) fn refusal_arm(refusal: &PubRefusal) -> (&'static str, Value) {
         PubRefusal::UnownedDraft { draft } => ("unowned_draft", json!({"draft": draft.to_string()})),
         PubRefusal::NotOwner { addr } => ("not_owner", json!({"addr": addr.as_ref().map(ToString::to_string)})),
         PubRefusal::ClaimRefused { edition } => ("claim_refused", json!({"edition": edition.as_ref().map(ToString::to_string)})),
+        PubRefusal::SupersedeRefused { index, cause } => {
+            let head = match cause {
+                SupersedeCause::HeadMoved { head } => head.as_ref().map(ToString::to_string),
+                _ => None,
+            };
+            ("supersede_refused", json!({"index": index, "detail": cause.token(), "head": head}))
+        }
         PubRefusal::WindowWithheld { origin } => ("window_withheld", json!({"origin": origin.as_ref().map(ToString::to_string)})),
         PubRefusal::NeedsSignedSession => ("needs_signed_session", json!({})),
         PubRefusal::NoSuchDocument => ("no_such_document", json!({})),

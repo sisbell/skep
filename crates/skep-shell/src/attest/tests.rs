@@ -145,6 +145,10 @@ struct Fake {
     /// The links a retraction tuple stands for: `find_links_ftt` over the
     /// retraction class and one of these as `to` answers one hit.
     retracted: Vec<&'static str>,
+    /// The active supersession claims standing, `(old, home)`: `in_claims`
+    /// at `old` answers each as a claim homed in `home`, whose owner
+    /// `effective_owner` answers as the home's account prefix.
+    claims: Vec<(&'static str, &'static str)>,
     closed: AtomicBool,
     dialed: Mutex<Vec<String>>,
 }
@@ -215,6 +219,16 @@ impl Dialer for Fake {
                 let ty = frame["q"]["ty"][0]["start"].as_str().unwrap_or("");
                 let hits: Vec<String> = if ty == T_RETRACTION && self.retracted.contains(&to) { vec![format!("{}.0.2.9", to.rsplit_once(".0.2.").map_or(to, |(home, _)| home))] } else { Vec::new() };
                 ok(json!({"resp": "addrs", "addrs": hits, "as_of": 1}))
+            }
+            "in_claims" => {
+                let y = frame["y"].as_str().unwrap_or("");
+                let claims: Vec<Value> = self.claims.iter().filter(|(old, _)| *old == y).map(|(old, home)| json!({"active": true, "claim": format!("{home}.0.2.3"), "home": home, "new": format!("{old}.1"), "old": old})).collect();
+                ok(json!({"resp": "claims", "as_of": 1, "claims": claims}))
+            }
+            "effective_owner" => {
+                let a = frame["addr"].as_str().unwrap_or("");
+                let prefix = a.split(".0.").next().map(|node| format!("{node}.0.{}", a.split(".0.").nth(1).unwrap_or("0"))).unwrap_or_default();
+                ok(json!({"resp": "owner", "prefix": prefix, "principal": 1}))
             }
             _ => ok(json!({"resp": "ack"})),
         })
@@ -510,6 +524,64 @@ fn a_publications_deposit_rows_follow_the_signed_order_and_a_standing_retraction
     ];
     let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
     assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the claim first in doc's group, by address; the read-with from the edition's unit span");
+}
+
+/// THE SUPERSESSION CLAIMS' GROUPS (the merge bridge lane): a `publish`
+/// naming two daughters in `supersede` composes one group per daughter,
+/// last in the trunk's group in declared order — the trunk by address, the
+/// supersedes class's unit span, `from` the daughter's unit span, `to` the
+/// tag `member` — exactly the group the client's own builder spells for the
+/// same request (`skep_client::publication::Request::rows`), byte for byte
+/// through the one builder; a daughter an ACTIVE claim of the session's
+/// account's own already names, read off `in_claims` and its home's owner,
+/// is skipped as the board's plan skips it, while another account's claim
+/// skips nothing; at the mint form the group is homed under the edition's
+/// tag, the entry the board's to refuse. One `in_claims` per daughter, one
+/// `effective_owner` per claim's home.
+#[test]
+fn a_publications_supersede_entries_spell_the_claims_group_and_an_own_claim_is_skipped() {
+    let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
+    fake.claims.push(("1.0.1.0.1.1.2", "1.0.1.0.6"));
+    fake.claims.push(("1.0.1.0.1.1.3", "1.0.2.0.1"));
+    let g = Ground::over(fake);
+    let c = g.composer();
+    let frame = json!({
+        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2",
+        "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)],
+        "read_with": ["1.0.1.0.3"],
+        "supersede": ["1.0.1.0.1.1.1", "1.0.1.0.1.1.2", "1.0.1.0.1.1.3"],
+    });
+    let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &frame).unwrap();
+    let a = |text: &str| parse_address(text).unwrap();
+    assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1.0.1")));
+    fn stored<'a>(elements: Vec<SlotElement<'a>>) -> DepositSlot<'a> {
+        DepositSlot::Stored(elements)
+    }
+    let (sup_ty, read_with_ty, trunk, three) = (unit_span(&a(T_SUPERSEDES)), unit_span(&a(T_READ_WITH)), unit_span(&a("1.0.1.0.1")), unit_span(&a("1.0.1.0.3")));
+    let (first, third) = (unit_span(&a("1.0.1.0.1.1.1")), unit_span(&a("1.0.1.0.1.1.3")));
+    /// The group as the client's builder spells it: the trunk by address,
+    /// the supersedes class, `from` the daughter, `to` the tag `member`.
+    fn claim_group<'a>(trunk: &'a Address, sup_ty: &'a Span, daughter: &'a Span) -> DepositRow<'a> {
+        DepositRow { home: DepositHome::Address(trunk), kind: DepositKind::Supersede, ty: DepositSlot::Stored(vec![SlotElement::Span(sup_ty)]), from: DepositSlot::Stored(vec![SlotElement::Span(daughter)]), to: DepositSlot::Stored(vec![SlotElement::Member]) }
+    }
+    let trunk_addr = a("1.0.1.0.1");
+    let rows = [
+        claim_group(&trunk_addr, &sup_ty, &first),
+        claim_group(&trunk_addr, &sup_ty, &third),
+        DepositRow { home: DepositHome::Address(&a("1.0.1.0.3")), kind: DepositKind::ReadWith, ty: stored(vec![SlotElement::Span(&read_with_ty)]), from: stored(vec![SlotElement::Span(&trunk)]), to: stored(vec![SlotElement::Span(&three)]) },
+    ];
+    let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
+    assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "the trunk's group: one claim per daughter in declared order, the own-claimed second daughter skipped, another account's claim skipping nothing; then the read-with's home");
+    let reads = g.fake.dialed();
+    assert_eq!(reads.iter().filter(|op| *op == "in_claims").count(), 3, "one in_claims per daughter: {reads:?}");
+    assert_eq!(reads.iter().filter(|op| *op == "effective_owner").count(), 2, "the two claims' homes: {reads:?}");
+    // The mint form: no trunk stands, the group under the edition's tag.
+    let mint = json!({"op": "publish", "account": "1.0.1", "mint": true, "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3)], "supersede": ["1.0.1.0.1.1.1"]});
+    let (term, body) = c.doc_term_and_body(CheckedKind::Publish, &mint).unwrap();
+    assert_eq!(term.as_doc_term(), DocTerm::One(&a("1.0.1")));
+    let rows = [DepositRow { home: DepositHome::Edition, kind: DepositKind::Supersede, ty: stored(vec![SlotElement::Span(&sup_ty)]), from: stored(vec![SlotElement::Span(&first)]), to: stored(vec![SlotElement::Member]) }];
+    let shot = entry_body_publish([ShotSegmentPiece::Value(b"a"), ShotSegmentPiece::Value(b"b"), ShotSegmentPiece::Value(b"c")], None);
+    assert_eq!(body.as_bytes(), entry_body_publication(shot, &rows).as_bytes(), "homed under the edition's tag so the frame signs");
 }
 
 /// THE CANONICAL MEMBER-POSITION END (the client lane's C2): a `links`

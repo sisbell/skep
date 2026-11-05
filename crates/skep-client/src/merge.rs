@@ -24,13 +24,18 @@
 //! the reads of §1.3 in order over a board but step 6's, the shot's bytes,
 //! which the landing reads — every read at ONE board position, which the
 //! result carries as `as_of` — writing nothing; [`land()`] and [`resume`],
-//! the one `publish` of the merged list from the head with its signed body,
-//! the claim's read, the record in a merge journal with its public link,
+//! the one `publish` of the merged list from the head with its signed body
+//! carrying the supersession claims — one per daughter, each marking the
+//! daughter superseded by the member in the commit that mints it — the
+//! claims' read, the record in a merge journal with its public link,
 //! the draft landing — one `set_arrangement` typed against the position the
 //! merge was composed at, into the draft named or into a fresh draft staged
 //! from the head, the draft's base re-recorded on that head and the merge
 //! marked, a newer head told — and the residue walk over a lost
-//! acknowledgment; [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
+//! acknowledgment; [`record_published`], the record of a merge a
+//! publication of the merger's own landed — the editor's shot from the
+//! draft the merge was landed in — written once and never a second shot;
+//! [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
 //! in a draft is taken back out, each one `set_arrangement` — the undo
 //! putting the draft back as it stood before the landing, its base
 //! restored, typed against the landing's position; the withdrawal taking
@@ -41,9 +46,7 @@
 //! the landing, the undo and the withdrawal can meet. Absent, by name:
 //! every surface — the `skep merge` command, which skep-cli builds over
 //! this module, the attendant's call, skep-mcp's compose-and-report tool,
-//! the editor's scene and its copy — and the supersession claim over
-//! version members, which this wire's `assert_sup` does not admit (`land`'s
-//! doc says what stands in its place).
+//! the editor's scene and its copy.
 //!
 //! **The one rule** (merge record §2): a case is safe when the two sides
 //! touched different material; a conflict when they touched the same
@@ -94,10 +97,11 @@ pub use compose::{
     base_of, compose_runs, script, Choice, Composed, Gap, GapId, GapKind, InPlaceOp, Item, Options,
     PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, ValueLog,
 };
-pub use land::{land, resume, Landed, Landing, Merger, SHOT_BODY_BUDGET};
+pub use land::{land, record_published, resume, Landed, Landing, Merger, SHOT_BODY_BUDGET};
 pub use reads::{
     compose, head_of, origin_of, Family, Inputs, Merged, NoUndo, Refusal, Role, Side,
     SHOT_RUN_CAP,
 };
+pub use crate::publication::SupersedeCause;
 pub use record::{current, verify, Record, RecordKey, RecordLanding, SideAt, Verdict};
 pub use undo::{undo, withdraw, Undone, Withdrawn};

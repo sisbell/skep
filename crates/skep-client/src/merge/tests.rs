@@ -1078,14 +1078,17 @@ mod scripted {
     use serde_json::{json, Value};
     use skep_address::Address;
     use skep_identity::{
-        entry_body_publish, entry_frame, DocTerm, Fingerprint, PublicKey, ShotBase,
-        ShotSegmentPiece,
+        entry_body_publication, entry_body_publish, entry_frame, unit_span, DepositHome,
+        DepositKind, DepositRow, DepositSlot, DocTerm, Fingerprint, PublicKey, ShotBase,
+        ShotSegmentPiece, SlotElement,
     };
     use skep_febe::MAX_REQ_ID_BYTES;
     use skep_signature::HybridSigner;
 
     use crate::address::parse_address;
-    use crate::board::{acked_addr, acked_at, frames, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1};
+    use crate::board::{
+        acked_addr, acked_at, frames, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1, T_SUPERSEDES,
+    };
     use crate::ceremony::handshake::{handshake, Session, Site};
     use crate::dial::{
         DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse,
@@ -1928,6 +1931,17 @@ mod scripted {
                     let runs = coalesce(positions);
                     let placed: u64 = runs.iter().map(|r| r.width).sum();
                     let head = self.trunk_head.get(&doc).cloned().expect("a chain");
+                    // THE VALIDATION's (6), the merge bridge lane: a shot
+                    // naming daughters lands on the trunk or not at all —
+                    // refused whole `head_moved` naming the head where it
+                    // would mint the base's daughter, nothing committed.
+                    let supersede: Vec<String> = frame["supersede"]
+                        .as_array()
+                        .map(|l| l.iter().map(|x| x.as_str().unwrap().to_string()).collect())
+                        .unwrap_or_default();
+                    if !supersede.is_empty() && (self.head_moved || base != head) {
+                        return json!({"resp": "rejected", "code": "supersede_refused", "detail": "head_moved", "disposition": "permanent", "op": "publish", "site": {"index": 0, "addr": head}});
+                    }
                     let member = if self.head_moved || base != head {
                         let k = 1 + self
                             .docs
@@ -1951,8 +1965,35 @@ mod scripted {
                         self.docs.get_mut(&doc).unwrap().runs = runs;
                     }
                     // The row names the minted member first, then the
-                    // rendering draft (wire.md §The change feed, `docs`).
-                    let docs = std::iter::once(member.clone()).chain(draft.clone()).collect();
+                    // rendering draft, then every other home the deposits
+                    // touched (wire.md §The change feed, `docs`).
+                    let mut docs: Vec<String> =
+                        std::iter::once(member.clone()).chain(draft.clone()).collect();
+                    // Each daughter's claim deposited in the trunk — `old`
+                    // the daughter, `new` the member this commit minted — one
+                    // an active claim of the merger's own already names
+                    // skipped, whatever its `new`.
+                    for daughter in &supersede {
+                        let own = self
+                            .claims
+                            .iter()
+                            .any(|c| c.old == *daughter && c.home.starts_with(&format!("{ACCOUNT}.0.")));
+                        if own {
+                            continue;
+                        }
+                        let n = self.links.iter().filter(|l| l.home == doc).count()
+                            + self.claims.iter().filter(|c| c.home == doc).count()
+                            + 1;
+                        self.claims.push(ClaimRow {
+                            claim: format!("{doc}.0.2.{n}"),
+                            home: doc.clone(),
+                            old: daughter.clone(),
+                            new: member.clone(),
+                        });
+                        if !docs.contains(&doc) {
+                            docs.push(doc.clone());
+                        }
+                    }
                     let at = self.commit("publish", docs);
                     // THE BASE MOVES at the shot's position: the rendering
                     // draft's recorded base becomes the member the shot
@@ -3315,7 +3356,8 @@ mod scripted {
             panic!("{landed:?}")
         };
         assert_eq!(address.to_string(), format!("{D}.3"));
-        assert!(claims.is_empty());
+        let own_claim = a(&format!("{D}.0.2.1"));
+        assert_eq!(claims, &vec![own_claim.clone()], "the claim the shot deposited, read back");
         let ops = dialer.ops();
         let after_values: Vec<&str> =
             ops.iter().map(String::as_str).skip_while(|o| *o != "publish").collect();
@@ -3362,6 +3404,7 @@ mod scripted {
             serde_json::from_str(insert["values"][0]["atom"].as_str().unwrap()).unwrap();
         assert_eq!(atom["type"], "merge");
         assert_eq!(atom["landed"], json!({"member": format!("{D}.3"), "position": position}));
+        assert_eq!(atom["claims"], json!([own_claim.to_string()]), "the record carries the shot's claim");
         let written = Record::from_value(&atom).expect("a record");
         assert_eq!((written.key(), written.landed.is_some()), (merged.key.clone(), true));
         let link = &dialer.frames("make_link")[0];
@@ -3385,7 +3428,7 @@ mod scripted {
         let Landed::Member { claims, record: again_record, .. } = &again else {
             panic!("{again:?}")
         };
-        assert_eq!((claims.clone(), again_record), (vec![a(&format!("{DOC1}.0.2.9"))], record));
+        assert_eq!((claims.clone(), again_record), (vec![own_claim, a(&format!("{DOC1}.0.2.9"))], record));
         assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
         let ops = dialer.ops();
         assert!(
@@ -3401,8 +3444,9 @@ mod scripted {
     /// re-ask's under the same id — the write applied once, the memo
     /// answering the re-ask — so `land` halts at the transport; `resume`
     /// finds the member whose first `placed` positions equal M, with its
-    /// position off the feed, and completes the claim's read and the record;
-    /// a second `resume` writes nothing.
+    /// position off the feed, AND THE CLAIM WITH IT — a landed shot carried
+    /// its claim — and completes the record; a second `resume` writes
+    /// nothing.
     #[test]
     fn a_lost_ack_is_completed_by_resume_and_nothing_is_written_twice() {
         let (dialer, board, signer) = open(World::race());
@@ -3420,10 +3464,11 @@ mod scripted {
         assert!(dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty());
         dialer.clear();
         let resumed = resume(&board, &merged, shot(&session, &signer)).expect("resumed");
-        let Some(Landed::Member { address, position, record, .. }) = &resumed else {
+        let Some(Landed::Member { address, position, claims, record, .. }) = &resumed else {
             panic!("{resumed:?}")
         };
         assert_eq!(address.to_string(), format!("{D}.3"));
+        assert_eq!(claims, &vec![a(&format!("{D}.0.2.1"))], "the claim found with the member");
         assert_eq!(
             *position,
             dialer.world().rows.iter().find(|r| r.docs[0] == format!("{D}.3")).unwrap().at,
@@ -3464,15 +3509,16 @@ mod scripted {
         assert_eq!(dialer.ops(), ["doc_metadata"]);
     }
 
-    /// A DAUGHTER in the acknowledgment — the head moved under the merge —
-    /// is reported at once with its position: ONE `publish`, no second, no
-    /// claim read, no record. The embedder's `retries` rides into the next
-    /// composition's record.
+    /// A DAUGHTER in the acknowledgment — the head moved under a merge whose
+    /// shot names NO daughter, a draft side's — is reported at once with its
+    /// position: ONE `publish`, no second, no claim read, no record; a
+    /// standing daughter holding M is found by the read-first too, once the
+    /// trunk has moved on by another's shot.
     #[test]
     fn a_daughter_is_reported_at_once_and_never_retried() {
-        let (dialer, board, signer) = open(World::race());
+        let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
-        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
         dialer.world().head_moved = true;
         dialer.clear();
         let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
@@ -3483,23 +3529,17 @@ mod scripted {
         let ops = dialer.ops();
         assert_eq!(ops.iter().filter(|o| *o == "publish").count(), 1);
         assert_eq!(ops.last().map(String::as_str), Some("publish"), "the library stops: {ops:?}");
-        // The re-run the embedder makes carries `retries` one higher.
-        let again =
-            Inputs { options: Options { retries: 1, ..Options::default() }, ..race_inputs() };
-        let merged = compose(&board, Some(session.token()), &again).expect("composed");
-        assert_eq!(
-            (merged.record.retries, merged.record.to_value()["retries"].as_u64()),
-            (1, Some(1))
-        );
+        assert!(dialer.frames("publish")[0].get("supersede").is_none(), "a draft side names no daughter");
+        assert!(!ops.iter().any(|o| o == "in_claims"), "no claim read: {ops:?}");
         // A standing daughter holding M is found by the read-first too: the
         // trunk moved on by another's shot (which is why ours landed under
         // the head), so the trunk's next is another's and the daughter ours.
         {
             let mut w = dialer.world();
-            w.text(D, 16, "!");
+            w.text(D, 19, "!");
             w.member(
                 &format!("{D}.3"),
-                vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 16, 1)],
+                vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 19, 1)],
                 Some(15),
             );
             w.trunk_head.insert(D.to_string(), format!("{D}.3"));
@@ -3512,6 +3552,301 @@ mod scripted {
             "{found:?}"
         );
         assert!(!dialer.ops().iter().any(|o| o == "publish"), "{:?}", dialer.ops());
+    }
+
+    /// A SHOT NAMING A DAUGHTER AT A MOVED HEAD IS REFUSED WHOLE (skep #806;
+    /// the merge bridge lane): the head moved under the merge, so the shot
+    /// would have landed as a daughter with a claim naming a side version
+    /// for good — the board refuses it `supersede_refused` / `head_moved`,
+    /// answered typed with the trunk's head, ONE `publish` and nothing after
+    /// it, nothing committed, no claim at the daughter, no record; `resume`
+    /// finds nothing landed. The embedder composes again on the head the
+    /// refusal names with `retries` one higher, and that shot lands on the
+    /// trunk with its claim, the count in its record.
+    #[test]
+    fn a_shot_naming_a_daughter_at_a_moved_head_is_refused_whole_and_typed() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.world().head_moved = true;
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("refused");
+        assert_eq!(
+            err,
+            Refusal::SupersedeRefused {
+                index: 0,
+                cause: SupersedeCause::HeadMoved { head: Some(a(&format!("{D}.2"))) },
+            }
+        );
+        let ops = dialer.ops();
+        assert_eq!(ops.iter().filter(|o| *o == "publish").count(), 1);
+        assert_eq!(ops.last().map(String::as_str), Some("publish"), "nothing after it: {ops:?}");
+        {
+            let w = dialer.world();
+            assert!(!w.docs.contains_key(&format!("{D}.2.1")), "nothing committed");
+            assert_eq!(w.rows.len(), rows, "nothing committed");
+            assert!(w.claims.is_empty(), "no claim at the daughter");
+        }
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, shot(&session, &signer)), Ok(None), "nothing to find");
+        assert!(!dialer.ops().iter().any(|o| o == "publish"), "{:?}", dialer.ops());
+        // THE RE-RUN on the head the refusal names: another's shot stands as
+        // `D.3`; composed on it with `retries` one higher, the merge lands
+        // as `D.4` with its claim, the count in its record.
+        {
+            let mut w = dialer.world();
+            w.text(D, 16, "!");
+            w.member(
+                &format!("{D}.3"),
+                vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 7), run(D, 16, 1)],
+                Some(15),
+            );
+            w.trunk_head.insert(D.to_string(), format!("{D}.3"));
+            w.head_moved = false;
+        }
+        let again = Inputs {
+            head: a(&format!("{D}.3")),
+            options: Options { retries: 1, ..Options::default() },
+            ..race_inputs()
+        };
+        let merged = compose(&board, Some(session.token()), &again).expect("composed again");
+        assert_eq!(
+            (merged.record.retries, merged.record.to_value()["retries"].as_u64()),
+            (1, Some(1))
+        );
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let Landed::Member { address, claims, retries, .. } = &landed else {
+            panic!("{landed:?}")
+        };
+        assert_eq!(
+            (address.to_string(), claims.clone(), *retries),
+            (format!("{D}.4"), vec![a(&format!("{D}.0.2.1"))], 1)
+        );
+    }
+
+    /// THE SHOT NAMES THE MEMBER SIDES AS `supersede` AND NEVER A DRAFT SIDE
+    /// (the merge bridge lane): the race shape's shot carries `supersede`
+    /// `[D.1.1]`, the skip read at the daughter before it, its `attest`
+    /// verifying over the entry frame whose body is the shot's rows then the
+    /// one group the daemon's verifier spells for the daughter — the trunk
+    /// by address, the supersedes class, `from` the daughter's unit span,
+    /// `to` the tag `member`; a daughter an active claim of the merger's own
+    /// already names, whatever its `new`, is dropped from the list and the
+    /// body alike, the frame then naming no `supersede` and the body
+    /// today's; a draft side beside a member side is named as `draft`, never
+    /// in `supersede`; and a draft side alone names none.
+    #[test]
+    fn the_shot_names_the_member_sides_as_supersede_and_never_a_draft_side() {
+        let values: Vec<[u8; 1]> = b"the big cat".iter().map(|b| [*b]).collect();
+        let head = a(&format!("{D}.2"));
+        let shot_body = || {
+            entry_body_publish(
+                values.iter().map(|v| ShotSegmentPiece::Value(v)),
+                Some(ShotBase { member: &head, extent: 15 }),
+            )
+        };
+        let verifies = |frame: &Value, body: &skep_identity::EntryBody, board: &Board, signer: &HybridSigner| {
+            let term = board.board_term().unwrap().unwrap();
+            let alg = Signer::public_key(signer).alg();
+            assert_eq!(frame["attest"]["alg"].as_str(), Some(alg));
+            let sig = crate::hex::decode(frame["attest"]["sig"].as_str().unwrap()).unwrap();
+            let expected = entry_frame(alg, term, &a(ACCOUNT), DocTerm::One(&a(D)), body);
+            skep_signature::verify(Signer::tag(signer), Signer::public_key(signer), &expected, &sig)
+        };
+        // The member side: the group, byte-checked through the attest.
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(
+            matches!(&landed, Landed::Member { address, claims, .. } if address.to_string() == format!("{D}.3") && *claims == vec![a(&format!("{D}.0.2.1"))]),
+            "{landed:?}"
+        );
+        let ops = dialer.ops();
+        assert!(
+            ops.iter().position(|o| o == "in_claims") < ops.iter().position(|o| o == "publish"),
+            "the skip read before the shot: {ops:?}"
+        );
+        let frame = &dialer.frames("publish")[0];
+        assert_eq!(frame["supersede"], json!([format!("{D}.1.1")]));
+        assert!(frame.get("draft").is_none());
+        let (trunk, sup_ty, daughter) =
+            (a(D), unit_span(&a(T_SUPERSEDES)), unit_span(&a(&format!("{D}.1.1"))));
+        let group = DepositRow {
+            home: DepositHome::Address(&trunk),
+            kind: DepositKind::Supersede,
+            ty: DepositSlot::Stored(vec![SlotElement::Span(&sup_ty)]),
+            from: DepositSlot::Stored(vec![SlotElement::Span(&daughter)]),
+            to: DepositSlot::Stored(vec![SlotElement::Member]),
+        };
+        assert_eq!(
+            verifies(frame, &entry_body_publication(shot_body(), &[group]), &board, &signer),
+            Ok(()),
+            "the attest signs the body the board composes: the shot's rows then the daughter's group"
+        );
+        // THE SKIP: an own claim already names the daughter, its `new` a side
+        // version — dropped from the list and the body, no second claim.
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        dialer.world().claims.push(ClaimRow {
+            claim: format!("{DOC1}.0.2.7"),
+            home: DOC1.into(),
+            old: format!("{D}.1.1"),
+            new: format!("{D}.1.1.1"),
+        });
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        dialer.clear();
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(
+            matches!(&landed, Landed::Member { address, claims, .. } if address.to_string() == format!("{D}.3") && claims.is_empty()),
+            "{landed:?}"
+        );
+        let frame = &dialer.frames("publish")[0];
+        assert!(frame.get("supersede").is_none(), "the daughter dropped: {frame}");
+        assert_eq!(
+            verifies(frame, &entry_body_publication(shot_body(), &[]), &board, &signer),
+            Ok(()),
+            "today's body, no group"
+        );
+        assert_eq!(dialer.world().claims.len(), 1, "no second claim deposited");
+        // A draft side beside a member side: `draft`, never `supersede`.
+        let mut w = draft_landing_world();
+        w.member(&format!("{D}.1.1"), vec![run(D, 1, 7)], Some(11));
+        let (dialer, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let both = Inputs {
+            sides: vec![
+                Side::Member(a(&format!("{D}.1.1"))),
+                Side::Draft { at: a(S), position: None },
+            ],
+            ..draft_inputs()
+        };
+        let merged = compose(&board, Some(session.token()), &both).expect("composed");
+        dialer.clear();
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let frame = &dialer.frames("publish")[0];
+        assert_eq!(
+            (frame["supersede"].clone(), frame["draft"].as_str()),
+            (json!([format!("{D}.1.1")]), Some(S))
+        );
+        // A draft side alone names none.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        dialer.clear();
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        assert!(dialer.frames("publish")[0].get("supersede").is_none());
+    }
+
+    /// THE RECORD AFTER THE MERGER's OWN PUBLICATION (the merge bridge
+    /// lane): the person publishes the merged draft themselves — here the
+    /// world's `D.3` holding M with an edit, "!" typed before the shot, and
+    /// the claim at the daughter as that shot deposited it — and
+    /// `record_published`, handed the member and the position acknowledged,
+    /// sends NO `publish`: it reads the claims at the daughter and the
+    /// merger's newest record for the key, writes the record — `landed` the
+    /// member at that position, `claims` the shot's — in the journal with
+    /// its link from doc 1 under the shot's own ids, and answers the
+    /// landing; a second call answers the same record and writes nothing.
+    /// The shot landing's read-first would not find the edited member
+    /// (`resume` answers none), which is why the entry exists; a member
+    /// outside the document's chain is the library's own fault, nothing
+    /// read.
+    #[test]
+    fn the_record_is_written_after_the_mergers_own_publication_and_never_a_second_shot() {
+        let (dialer, board, signer) = open(World::race());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (member, at) = {
+            let mut w = dialer.world();
+            w.text(D, 16, "!");
+            w.member(
+                &format!("{D}.3"),
+                vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3), run(D, 16, 1)],
+                Some(15),
+            );
+            w.trunk_head.insert(D.to_string(), format!("{D}.3"));
+            w.claims.push(ClaimRow {
+                claim: format!("{D}.0.2.1"),
+                home: D.into(),
+                old: format!("{D}.1.1"),
+                new: format!("{D}.3"),
+            });
+            (a(&format!("{D}.3")), w.position)
+        };
+        dialer.clear();
+        let landed =
+            record_published(&board, &merged, merger(&session, &signer), &member, at, None)
+                .expect("recorded");
+        let Landed::Member { address, position, claims, record, retries } = &landed else {
+            panic!("{landed:?}")
+        };
+        assert_eq!(
+            (address, *position, claims.clone(), record.to_string(), *retries),
+            (&member, at, vec![a(&format!("{D}.0.2.1"))], format!("{DOC1}.0.2.1"), 0)
+        );
+        assert_eq!(
+            dialer.ops(),
+            [
+                "in_claims",
+                "find_links_ftt",
+                "find_links_ftt",
+                "retrieve_v",
+                "find_links_ftt",
+                "create_new_document",
+                "retrieve_doc_v_span_set",
+                "insert",
+                "make_link"
+            ],
+            "the claims' read, the record's read-first, the head before the first write, the journal's find and mint, the two writes — no publish, no shot read-first"
+        );
+        assert_eq!(
+            dialer.frames("retrieve_v")[0]["specs"][0]["doc"],
+            HEAD_MEMBER_1,
+            "the one value read is the head record's, before the first write"
+        );
+        let insert = &dialer.frames("insert")[0];
+        let atom: Value =
+            serde_json::from_str(insert["values"][0]["atom"].as_str().unwrap()).unwrap();
+        assert_eq!(atom["landed"], json!({"member": format!("{D}.3"), "position": at}));
+        assert_eq!(atom["claims"], json!([format!("{D}.0.2.1")]));
+        assert_eq!(atom["replaces"], Value::Null);
+        assert_eq!(
+            insert["id"].as_str(),
+            Some(landing_id(&merged.key.text(), "record").as_str()),
+            "the shot's own ids"
+        );
+        let link = &dialer.frames("make_link")[0];
+        assert_eq!(link["to"]["addrs"], json!([format!("{D}.3"), format!("{D}.1.1")]));
+        // A second call: the standing record, nothing written.
+        dialer.clear();
+        let rows = dialer.world().rows.len();
+        assert_eq!(
+            record_published(&board, &merged, merger(&session, &signer), &member, at, None),
+            Ok(landed.clone())
+        );
+        assert_eq!(dialer.world().rows.len(), rows, "nothing written twice");
+        assert!(
+            !dialer
+                .ops()
+                .iter()
+                .any(|o| ["publish", "insert", "make_link", "create_new_document"]
+                    .contains(&o.as_str())),
+            "{:?}",
+            dialer.ops()
+        );
+        // The shot landing's read-first finds no member holding M: the edit.
+        dialer.clear();
+        assert_eq!(resume(&board, &merged, shot(&session, &signer)), Ok(None));
+        assert!(!dialer.ops().iter().any(|o| o == "publish"), "{:?}", dialer.ops());
+        // A member outside the chain: the library's own fault, nothing read.
+        dialer.clear();
+        let err = record_published(&board, &merged, merger(&session, &signer), &a(Z), at, None)
+            .expect_err("own fault");
+        assert!(matches!(&err, Refusal::Halt(h) if h.exit_code() == 3), "{err}");
+        assert!(dialer.ops().is_empty(), "{:?}", dialer.ops());
     }
 
     /// OVER THE CAP: a merged list past the shot's run cap is refused with
@@ -4298,6 +4633,41 @@ mod scripted {
         let err = land(&board, &merged, shot(&session, &signer)).expect_err("own fault");
         assert!(
             matches!(&err, Refusal::Halt(h) if h.exit_code() == 3 && h.to_string().contains("base_superseded")),
+            "{err}"
+        );
+        // The daughters' refusal, typed with its entry and cause —
+        // `head_moved` carrying the trunk's head — never the library's
+        // fault; a detail this client does not know the board's verbatim.
+        let refuse_entry = |detail: &str, site: Value| {
+            dialer.world().memo.insert(
+                landing_id(&merged.key.text(), "publish"),
+                json!({"resp": "rejected", "code": "supersede_refused", "detail": detail, "disposition": "permanent", "op": "publish", "site": site}),
+            );
+        };
+        refuse_entry("head_moved", json!({"index": 0, "addr": format!("{D}.2")}));
+        assert_eq!(
+            land(&board, &merged, shot(&session, &signer)),
+            Err(Refusal::SupersedeRefused {
+                index: 0,
+                cause: SupersedeCause::HeadMoved { head: Some(a(&format!("{D}.2"))) }
+            })
+        );
+        for (detail, cause) in [
+            ("not_member", SupersedeCause::NotMember),
+            ("base", SupersedeCause::Base),
+            ("duplicate", SupersedeCause::Duplicate),
+        ] {
+            refuse_entry(detail, json!({"index": 1}));
+            assert_eq!(
+                land(&board, &merged, shot(&session, &signer)),
+                Err(Refusal::SupersedeRefused { index: 1, cause }),
+                "{detail}"
+            );
+        }
+        refuse_entry("later_cause", json!({"index": 0}));
+        let err = land(&board, &merged, shot(&session, &signer)).expect_err("verbatim");
+        assert!(
+            matches!(&err, Refusal::Halt(Halt::Refused(r)) if r.code == "supersede_refused"),
             "{err}"
         );
         // The publication family's arms: `not_owner` naming the DRAFT side is

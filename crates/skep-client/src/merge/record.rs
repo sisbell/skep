@@ -261,7 +261,10 @@ pub struct Record {
     pub landed: Option<RecordLanding>,
     /// The supersession claims' addresses.
     ///
-    /// They are those standing at the daughters when the record was written.
+    /// They are those standing at the daughters when the record was written
+    /// whose `new` is the landed member — the claims the shot deposited, one
+    /// per daughter it named (the `land` module's doc); none at a draft
+    /// landing, and none where the shot named no daughter.
     pub claims: Vec<Address>,
     /// The run counts, `{a, b, m}` (decision 17).
     pub runs: RunCounts,

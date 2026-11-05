@@ -323,6 +323,13 @@ pub struct Count {
     /// row's destination other than the member, once, where `E` is not
     /// already read with it.
     pub read_with: Vec<Address>,
+    /// The daughters the one write claims superseded — the caller's
+    /// [`Inputs::supersede`] as asked, the count's clause for "with its
+    /// claim" (the merge bridge lane). The count reads nothing: a daughter an
+    /// active claim of the person's own already names is dropped when the
+    /// request is built, and the acknowledgment carries what rode
+    /// ([`super::send::Ack::supersede`]).
+    pub supersede: Vec<Address>,
 }
 
 /// Returns whether `value` is a mark the formatting line takes.
@@ -645,6 +652,7 @@ pub fn count(panel: &Panel, switches: &Switches, inputs: &Inputs) -> Count {
     let n = panel.formatting.marks.iter().filter(|m| !remakes.contains(m)).count();
     let r = panel.formatting.removals.iter().filter(|r| r.listed() && r.remake.is_none()).count();
     // The claim clause where the caller asks the claim, at either form:
-    // whether the edition may take it is the board's to refuse.
-    Count { l, n, r, e, claim: inputs.claim, read_with }
+    // whether the edition may take it is the board's to refuse; the daughters
+    // as asked, the skip among them the request's read.
+    Count { l, n, r, e, claim: inputs.claim, read_with, supersede: inputs.supersede.clone() }
 }

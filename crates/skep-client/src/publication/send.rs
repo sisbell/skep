@@ -47,10 +47,14 @@
 //! `not_owner` naming the draft → the unowned draft, named; `not_owner` on
 //! `doc` or the account → named too; `claim_refused` → the edition named
 //! already holds a member, so the claim is a first version's no longer
-//! (skep #692) — the caller sends the shot without it; the six deposit tokens
+//! (skep #692) — the caller sends the shot without it; `supersede_refused`
+//! → the entry and its cause typed, `head_moved` carrying the trunk's head
+//! the board refused the whole publication against — the caller composes
+//! again on it, nothing re-sent — never this library's fault (the merge
+//! bridge lane); the six deposit tokens
 //! → own-bug arms with their entry and detail; `attestation_invalid:signature`
 //! → one re-sign with the skipped deposits dropped — presence re-read for
-//! every `retract` and `read_with` entry — under a fresh `id`;
+//! every `retract`, `read_with` and `supersede` entry — under a fresh `id`;
 //! `attestation_required` at a frame sent unsigned → the one signed send
 //! above, under a fresh `id`;
 //! `attestation_invalid:board_unavailable` → the board's own state, the head
@@ -79,7 +83,7 @@ use crate::sign::sig_hex;
 
 use super::landed::{landed_with, Base, Missing, Verdict};
 use super::panel::read_with_stands;
-use super::request::{AlsoPlaces, Request};
+use super::request::{claimed_by_own, AlsoPlaces, Request};
 use super::{trunk_of, Door, Fault, Inputs, Publisher};
 
 /// How the acknowledgment was reached.
@@ -113,6 +117,60 @@ pub struct Ack {
     /// Whether the edition claim rode in the write — the request's own
     /// `claim`, echoed (skep #692).
     pub claim: bool,
+    /// The daughters the write claimed superseded — the request's
+    /// `supersede` as sent, each one claim in the commit, `in_claims` at the
+    /// daughter answering the member (the merge bridge lane). A daughter an
+    /// active claim of the person's own already named was dropped before
+    /// the send and is not among them.
+    pub supersede: Vec<Address>,
+}
+
+/// Why the board refused a `supersede` entry — its `detail` (wire.md
+/// §Rejection codes, `supersede_refused`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupersedeCause {
+    /// `head_moved`: a member stands and the request's base is not the
+    /// trunk's head, so the shot would mint the base's daughter — the whole
+    /// list refused ahead of every entry's own check, nothing committed
+    /// (the plan's (6)). The caller composes again on the head.
+    HeadMoved {
+        /// The trunk's head, `site.addr`, the head to compose again on.
+        head: Option<Address>,
+    },
+    /// `not_member`: the daughter is no registered version member of `doc`'s
+    /// own chain — the trunk itself, a document or member outside the chain,
+    /// an element address, a member not yet minted, or any entry at the mint
+    /// form.
+    NotMember,
+    /// `base`: the daughter is the member the shot appends to.
+    Base,
+    /// `duplicate`: a second entry naming one daughter, at the second.
+    Duplicate,
+}
+
+impl SupersedeCause {
+    /// Returns the cause a `supersede_refused` rejection's `detail` names,
+    /// `head_moved` carrying the head `site.addr` names; `None` for a detail
+    /// this client does not know.
+    pub(crate) fn of(detail: Option<&str>, site: &Site) -> Option<SupersedeCause> {
+        Some(match detail? {
+            "head_moved" => SupersedeCause::HeadMoved { head: site.addr.as_deref().and_then(parse_address) },
+            "not_member" => SupersedeCause::NotMember,
+            "base" => SupersedeCause::Base,
+            "duplicate" => SupersedeCause::Duplicate,
+            _ => return None,
+        })
+    }
+
+    /// Returns the cause's `detail` token as the wire spells it.
+    pub fn token(&self) -> &'static str {
+        match self {
+            SupersedeCause::HeadMoved { .. } => "head_moved",
+            SupersedeCause::NotMember => "not_member",
+            SupersedeCause::Base => "base",
+            SupersedeCause::Duplicate => "duplicate",
+        }
+    }
 }
 
 /// The race's key at `kept_place_moved`: the feed's newest row under the
@@ -217,6 +275,20 @@ pub enum Refusal {
     ClaimRefused {
         /// The edition, `site.addr`.
         edition: Option<Address>,
+    },
+    /// `supersede_refused`: the board refused a `supersede` entry, the whole
+    /// publication with it and nothing committed — the plan's judgement of
+    /// the daughters, never this library's frame (the merge bridge lane). At
+    /// `head_moved` the trunk's head moved under the request, so the shot
+    /// would have landed as a daughter: the arm crosses as the board answered
+    /// it, nothing re-sent, and the caller composes the publication again on
+    /// the head the cause names.
+    SupersedeRefused {
+        /// The entry in `supersede`, `site.index` — 0 at `head_moved`, the
+        /// list refused whole.
+        index: u64,
+        /// The cause, `detail`.
+        cause: SupersedeCause,
     },
     /// `withheld`: a window's origin is not readable to the session.
     WindowWithheld {
@@ -346,7 +418,7 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
         if let (Some(addr), Some(at)) = (acked_addr(&v), acked_at(&v)) {
             let member = parse_address(addr).ok_or_else(|| super::shape(&frame, &v))?;
             let edition = request.mint.as_ref().and_then(|_| trunk_of(addr)).and_then(|t| parse_address(&t));
-            return Ok(Sent::Acknowledged(Ack { member, at, edition, via: AckVia::Answer, claim: request.claim }));
+            return Ok(Sent::Acknowledged(Ack { member, at, edition, via: AckVia::Answer, claim: request.claim, supersede: request.supersede.clone() }));
         }
         let Some(r) = Rejection::of(&v) else { return Err(super::shape(&frame, &v)) };
         let site = r.site().clone();
@@ -381,12 +453,19 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
                 }
             }
             "claim_refused" => Refusal::ClaimRefused { edition: site.addr.as_deref().and_then(parse_address) },
+            // The plan's judgement of the daughters: the board's verdict with
+            // its entry and cause, never this frame's fault; a detail this
+            // client does not know is the board's refusal verbatim.
+            "supersede_refused" => match SupersedeCause::of(detail.as_deref(), &site) {
+                Some(cause) => Refusal::SupersedeRefused { index: site.index.unwrap_or(0), cause },
+                None => Refusal::Other(r.refused(&v)),
+            },
             "attestation_invalid:signature" if !resigned => {
-                let (retract_skipped, read_with_skipped) = skipped(door, p, request)?;
-                if retract_skipped.is_empty() && read_with_skipped.is_empty() {
+                let (retract_skipped, read_with_skipped, supersede_skipped) = skipped(door, p, request)?;
+                if retract_skipped.is_empty() && read_with_skipped.is_empty() && supersede_skipped.is_empty() {
                     Refusal::OwnFault(OwnFault::Attest { detail })
                 } else {
-                    request.without(&retract_skipped, &read_with_skipped);
+                    request.without(&retract_skipped, &read_with_skipped, &supersede_skipped);
                     resigned = true;
                     continue;
                 }
@@ -430,7 +509,7 @@ pub(crate) fn send_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, req
 /// a `claim` at the document form among them, which a board before skep
 /// #692 refused `malformed`.
 fn carries_members(request: &Request) -> bool {
-    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || request.places.iter().any(Option::is_some) || request.also_places.iter().any(AlsoPlaces::carries_a_place) || request.mint.is_some() || request.claim
+    !request.entries.is_empty() || !request.retract.is_empty() || !request.read_with.is_empty() || !request.supersede.is_empty() || request.places.iter().any(Option::is_some) || request.also_places.iter().any(AlsoPlaces::carries_a_place) || request.mint.is_some() || request.claim
 }
 
 /// Returns the draft a re-window refusal names — `site.addr`, the draft
@@ -460,9 +539,9 @@ fn lost(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, request: &Request) 
     })
 }
 
-/// Re-reads presence for every `retract` and `read_with` entry: the indices
-/// the board's plan would skip.
-fn skipped(door: &Door<'_>, p: &Publisher<'_>, request: &Request) -> Result<(Vec<usize>, Vec<usize>), Fault> {
+/// Re-reads presence for every `retract`, `read_with` and `supersede`
+/// entry: the indices the board's plan would skip.
+fn skipped(door: &Door<'_>, p: &Publisher<'_>, request: &Request) -> Result<(Vec<usize>, Vec<usize>, Vec<usize>), Fault> {
     door.step("resign");
     let mut retract = Vec::new();
     for (i, mark) in request.retract.iter().enumerate() {
@@ -480,7 +559,13 @@ fn skipped(door: &Door<'_>, p: &Publisher<'_>, request: &Request) -> Result<(Vec
             }
         }
     }
-    Ok((retract, read_with))
+    let mut supersede = Vec::new();
+    for (i, daughter) in request.supersede.iter().enumerate() {
+        if claimed_by_own(door, p, daughter)? {
+            supersede.push(i);
+        }
+    }
+    Ok((retract, read_with, supersede))
 }
 
 /// Reads the race's key: the newest row under `draft` — the draft the

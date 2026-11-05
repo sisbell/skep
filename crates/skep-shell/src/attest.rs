@@ -988,11 +988,18 @@ impl Composer<'_> {
     /// end as spelled), the retractions (`retract`, in order, each homed in
     /// its target's document) and the read-withs (`read_with`, in order,
     /// each homed in its set, `from` the edition — the trunk, or the tag at
-    /// the mint form). The two skips the plan decides are read off the board
-    /// ([`Composer::retraction_stands`], [`Composer::read_with_stands`]) and
-    /// the skipped entries' rows left out, so the body signed is the body
-    /// the board composes. A frame carrying no deposit composes no row and
-    /// makes no read.
+    /// the mint form) and the supersession claims (`supersede`, in order,
+    /// each homed in the trunk by address: the supersedes class, `from` the
+    /// daughter, `to` the member BY TAG — the one address of the claim no
+    /// signer holds before the commit; at the mint form, where no trunk
+    /// stands, homed under the edition's tag so the frame signs at all, the
+    /// board refusing every such entry at the plan — the merge bridge lane).
+    /// The three skips the plan decides are read off the board
+    /// ([`Composer::retraction_stands`], [`Composer::read_with_stands`],
+    /// [`Composer::claimed_by_own`]) and the skipped entries' rows left out,
+    /// so the body signed is the body the board composes — the group the
+    /// client's own builder spells for the same request, byte for byte. A
+    /// frame carrying no deposit composes no row and makes no read.
     ///
     /// # Errors
     ///
@@ -1055,7 +1062,43 @@ impl Composer<'_> {
             };
             push(OwnedHome::Addr(addr(set, "read_with[]")?), DepositKind::ReadWith, OwnedSlot::unit(&addr(T_READ_WITH, "read-with type")?), from, OwnedSlot::unit(&addr(set, "read_with[]")?));
         }
+        for daughter in list("supersede")? {
+            let daughter = daughter.as_str().ok_or_else(|| fault("the frame's `supersede` names an entry that is no address", daughter.to_string()))?;
+            if self.claimed_by_own(daughter)? {
+                continue;
+            }
+            let home = match &trunk {
+                Some(trunk) => OwnedHome::Addr(addr(trunk, "doc")?),
+                None => OwnedHome::Edition,
+            };
+            push(home, DepositKind::Supersede, OwnedSlot::unit(&addr(T_SUPERSEDES, "supersedes type")?), OwnedSlot::unit(&addr(daughter, "supersede[]")?), OwnedSlot::Stored(vec![OwnedElement::Member]));
+        }
         Ok(homes.into_values().flatten().collect())
+    }
+
+    /// Returns whether an ACTIVE claim of the session's account's own names
+    /// `daughter` as its `old` — the skip the board's plan decides for a
+    /// `supersede` entry, whatever the claim's `new` (wire.md §The publish
+    /// shot and head-float, the deposits): `in_claims` at the daughter on
+    /// the active view, each claim kept where its home's ω is the account.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever a read refuses ([`Composer::read`]).
+    fn claimed_by_own(&self, daughter: &str) -> Result<bool, Unattested> {
+        let v = self.read(&frames::in_claims(daughter))?;
+        let claims: Vec<&Value> = v["claims"].as_array().map(|rows| rows.iter().collect()).unwrap_or_default();
+        for claim in claims {
+            if claim["active"].as_bool() == Some(false) {
+                continue;
+            }
+            let Some(home) = claim["home"].as_str() else { continue };
+            let owner = self.read(&frames::effective_owner(home))?;
+            if owner["prefix"].as_str() == Some(self.account) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Returns the frame's `doc` term and body, as its `kind` spells them.

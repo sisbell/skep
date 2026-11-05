@@ -78,6 +78,7 @@ use crate::board::{
     frames, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Rejection, Token,
 };
 use crate::halt::Halt;
+use crate::publication::SupersedeCause;
 
 use super::compose::{base_of, compose_runs, Composed, Item, Options, Run, SideIx};
 use super::record::{self, Record, RecordKey, SideAt};
@@ -557,6 +558,22 @@ pub enum Refusal {
         /// The draft named.
         draft: Address,
     },
+    /// `supersede_refused` on the shot: the board refused a daughter the
+    /// shot names in `supersede`, the whole publication with it, nothing
+    /// committed (wire.md §The publish shot and head-float, the deposits;
+    /// the merge bridge lane) — never this library's fault. At
+    /// [`SupersedeCause::HeadMoved`] the trunk's head moved under the merge,
+    /// so the shot would have landed as a daughter and a claim would have
+    /// named a side version for good: the merge is composed again on the
+    /// head the cause names, with `retries` one higher, as the embedder
+    /// re-runs after [`Landed::AsDaughter`](super::Landed::AsDaughter).
+    SupersedeRefused {
+        /// The entry in the shot's `supersede` — the `Member` sides in
+        /// order — `site.index`; 0 at `head_moved`, the list refused whole.
+        index: u64,
+        /// The cause, the rejection's `detail`.
+        cause: SupersedeCause,
+    },
     /// The library's own fault named (A-288's own-bug class).
     ///
     /// The fault is a frame the board refused as malformed in substance, a
@@ -663,6 +680,13 @@ impl fmt::Display for Refusal {
                 NoUndo::TakenBack => write!(f, "nothing to undo: the merge in {draft} was already taken back"),
             },
             Refusal::NoMerge { draft } => write!(f, "{draft} carries no merge: nothing to undo, nothing to take out"),
+            Refusal::SupersedeRefused { index, cause } => match cause {
+                SupersedeCause::HeadMoved { head: Some(head) } => write!(f, "the head moved under the merge: the trunk's head is now {head}, so the shot would have landed as a daughter, and a shot claiming a daughter superseded is refused whole (supersede_refused, head_moved) — nothing was published; compose the merge again on {head}"),
+                SupersedeCause::HeadMoved { head: None } => f.write_str("the head moved under the merge, so the shot would have landed as a daughter, and a shot claiming a daughter superseded is refused whole (supersede_refused, head_moved) — nothing was published; compose the merge again on the trunk's head"),
+                SupersedeCause::NotMember => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, not_member): the side is no registered version member of the document's own chain — nothing was published"),
+                SupersedeCause::Base => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, base): the side is the member the shot appends to — nothing was published"),
+                SupersedeCause::Duplicate => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, duplicate): the side is named twice — nothing was published"),
+            },
             Refusal::Halt(h) => h.fmt(f),
         }
     }

@@ -565,7 +565,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
 ///
 /// It holds the claim's address, its `old`, its `new`, its home and whether
 /// it is active (wire.md §The response envelope, `claims`).
-#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Claim {
     pub(crate) claim: String,
@@ -579,7 +579,7 @@ pub(crate) struct Claim {
 ///
 /// Empty for a document that is no such answer, a row missing a member
 /// dropped — save `active`, which an absent member leaves true.
-#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+#[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn claims(v: &Value) -> Vec<Claim> {
     if v["resp"].as_str() != Some("claims") {
         return Vec::new();

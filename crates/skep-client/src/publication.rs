@@ -104,7 +104,7 @@ pub use landed::{landed, twin_precheck, Base, Missing, Recomposed, Verdict};
 pub use panel::{count, inherited, panel, windows, Count, Counterpart, Destination, Formatting, Inherited, LineCounts, Panel, Removal, Row, RowKind, Switches, TypeFold, Window};
 pub use price::{price, Price, Term};
 pub use request::{build, reread, AlsoPlaces, Answer as OriginAnswer, Built, Confirmed, End, Entry, EntryHome, Inert, Piece, Reread, Request, Restatement, Unspellable};
-pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent};
+pub use send::{send, Ack, AckVia, OwnFault, RaceKey, Refusal, Sent, SupersedeCause};
 
 /// One run of permanent content I-addresses — the selection's unit, and a
 /// request's.
@@ -320,6 +320,20 @@ pub struct Inputs {
     /// The person's own published documents, the client's own list: key
     /// (i)'s home test and the public rows' destinations.
     pub published: Vec<Address>,
+    /// THE DAUGHTERS the member takes in (wire.md §The publish shot and
+    /// head-float, the deposits; the merge bridge lane): version members of
+    /// `doc`'s own chain — a merged version's sides — in the request's
+    /// order, empty where the publication takes none in. Each is deposited
+    /// as one supersession claim homed in the trunk, `old` the daughter and
+    /// `new` the member the commit mints, signed in the body as the edition
+    /// claim is, so `in_claims` at the daughter answers the member. One an
+    /// ACTIVE claim of the person's own already names is read off the board
+    /// when the request is built and dropped from it, as the board's plan
+    /// skips it, never refused ([`Request::supersede`]); the board refuses
+    /// the whole publication where the base is not the trunk's head, a
+    /// daughter no member of the chain, the base or a repeat
+    /// ([`send::Refusal::SupersedeRefused`]). The document form's alone.
+    pub supersede: Vec<Address>,
 }
 
 impl Inputs {
@@ -639,6 +653,19 @@ pub(crate) fn shape(frame: &Value, v: &Value) -> Fault {
 /// test (§5.1), off the address and no read.
 pub(crate) fn owned_by(home: &str, account: &str) -> bool {
     account_of(home).as_deref() == Some(account)
+}
+
+/// Returns whether an active claim among `claims`, an `in_claims` answer
+/// at a daughter, is homed in a document of `account`'s own — the skip the
+/// board's plan decides for a `supersede` entry (wire.md §The publish shot
+/// and head-float, the deposits: "a daughter an ACTIVE claim of yours
+/// already names as its `old`, homed in any document of yours and whatever
+/// its `new`, is SKIPPED"), the home owned by the address's account as the
+/// owned-home test reads it ([`owned_by`]). A signer reads it before signing
+/// and spells no group for the daughter, so the body signed is the body the
+/// board composes.
+pub(crate) fn own_claim_names(claims: &[answers::Claim], account: &str) -> bool {
+    claims.iter().any(|c| c.active && owned_by(&c.home, account))
 }
 
 /// Returns the member positions `runs` tile from 1: per run its first

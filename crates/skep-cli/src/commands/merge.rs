@@ -87,7 +87,7 @@ use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
     compose, head_of, land, undo, withdraw, Choice, Family, Gap, GapId, GapKind, Inputs, Landed,
     Landing, Merged, Merger, Options, Placement, Record, RecordLanding, Refusal, Resolution,
-    ResolvedBy, Side, SideIx, Undone, Withdrawn,
+    ResolvedBy, Side, SideIx, SupersedeCause, Undone, Withdrawn,
 };
 use skep_client::sign::Signer;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
@@ -484,10 +484,12 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// take-backs' — another account's draft under `not_owner`, a published
 /// document under `published_target`, nothing to undo under
 /// `nothing_to_undo` with the library's reason, a draft carrying no merge
-/// under `no_merge`. The two `withheld` refusals — a document the reader
-/// may not read, an origin a write's run windows — name the document alone,
-/// so their detail says beside it what `step` did and did not do
-/// ([`Step::outcome`]).
+/// under `no_merge`; and the shot's own `supersede_refused`, whose detail
+/// at `head_moved` says the head moved under the merge, that nothing was
+/// published, and to run the merge again on the head it names. The two
+/// `withheld` refusals — a document the reader may not read, an origin a
+/// write's run windows — name the document alone, so their detail says
+/// beside it what `step` did and did not do ([`Step::outcome`]).
 fn refused(r: Refusal, step: Step) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -511,6 +513,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::Published { .. } => "published_target",
         Refusal::NothingToUndo { .. } => "nothing_to_undo",
         Refusal::NoMerge { .. } => "no_merge",
+        Refusal::SupersedeRefused { .. } => "supersede_refused",
     };
     match r {
         Refusal::Halt(h) => Stop::Halt(h),
@@ -518,6 +521,12 @@ fn refused(r: Refusal, step: Step) -> Stop {
             let detail = match &other {
                 Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
                     format!("{other}; {}", step.outcome())
+                }
+                Refusal::SupersedeRefused { cause: SupersedeCause::HeadMoved { head }, .. } => {
+                    format!(
+                        "{other} — run this again{} to merge against it",
+                        head.as_ref().map(|h| format!(" with --head {h}, or with no --head to take the feed's,")).unwrap_or_default()
+                    )
                 }
                 _ => other.to_string(),
             };
@@ -679,7 +688,7 @@ fn say_landed(merged: &Merged, landed: &Landed, fresh: bool) {
             talk(format!(
                 "published {address} at position {position}, the next version of {}; the record's link is {record}{}",
                 merged.inputs.doc,
-                if claims.is_empty() { String::new() } else { format!("; claims standing at the side: {}", claims.len()) }
+                if claims.is_empty() { String::new() } else { format!("; the claim{} marking the side{} superseded by it: {}", if claims.len() == 1 { "" } else { "s" }, if claims.len() == 1 { "" } else { "s" }, claims.len()) }
             ));
         }
         Landed::AsDaughter { address, position } => {

@@ -8,8 +8,9 @@
 //! slot and the record's `type` agree (D13); `verify` says Equal and Differs
 //! against another member; `current` returns the record; a second `compose`
 //! reports it as prior; a second `land` writes nothing; `head_of` follows
-//! the trunk; and `in_claims` at the daughter answers what this wire admits —
-//! no claim over version members (the landing's doc). ONE CROSS-ACCOUNT
+//! the trunk; and `in_claims` at the daughter answers THE CLAIM THE SHOT
+//! DEPOSITED — `new` the member, homed in the trunk — the record carrying
+//! it (the merge bridge lane). ONE CROSS-ACCOUNT
 //! FORK merged back (case (j)): a second account's private fork of a
 //! published version, its base the source the board serves for it, composed
 //! and landed. And ONE DRAFT SIDE (skep #743): a draft `stage` minted off
@@ -61,9 +62,11 @@ use skep_client::board::{
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::halt::Halt;
 use skep_client::merge::{
-    compose, current, head_of, land, resume, undo, verify, withdraw, Inputs, Landed, Landing,
-    Merger, NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt, Verdict,
+    compose, current, head_of, land, record_published, resume, undo, verify, withdraw, Inputs,
+    Landed, Landing, Merger, NoUndo, RecordLanding, Refusal, Role, Run, RunCounts, Side, SideAt,
+    SupersedeCause, Verdict,
 };
+use skep_client::publication;
 use skep_client::sign::{sig_hex, signer_from_seed, Signer};
 use skep_identity::{
     entry_body_empty, entry_body_publish, entry_frame, ContentFreeOp, DocTerm, EntryBody, ShotBase,
@@ -351,7 +354,12 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
         panic!("{landed:?}")
     };
     assert_eq!(member.to_string(), format!("{d}.3"), "the merge is the trunk's next member");
-    assert_eq!((claims.as_slice(), retries), (&[][..], 0));
+    assert_eq!((claims.len(), retries), (1, 0), "the claim the shot deposited: {claims:?}");
+    assert_eq!(
+        document_of(&claims[0].to_string()).as_deref(),
+        Some(d.to_string().as_str()),
+        "homed in the trunk"
+    );
     assert!(position > before);
     // The member's image over its first `placed` positions is M.
     let meta = read(&board, Some(&token), &frames::doc_metadata(&member.to_string()));
@@ -360,11 +368,14 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
         image(&board, &token, &member, 11),
         vec![(format!("{d}.0.1.1"), 4), (format!("{d}.0.1.12"), 4), (format!("{d}.0.1.5"), 3)]
     );
-    // The claim, as this wire admits it: none over version members.
+    // The claim the shot deposited: `in_claims` at the daughter answers it,
+    // `new` the member, `home` the trunk, active.
     let claims_at_daughter = read(&board, Some(&token), &frames::in_claims(&daughter.to_string()));
+    let rows = claims_at_daughter["claims"].as_array().expect("claims");
+    assert_eq!(rows.len(), 1, "{claims_at_daughter}");
     assert_eq!(
-        claims_at_daughter["claims"].as_array().map(Vec::len),
-        Some(0),
+        (rows[0]["claim"].as_str(), rows[0]["new"].as_str(), rows[0]["home"].as_str(), rows[0]["active"].as_bool()),
+        (Some(claims[0].to_string().as_str()), Some(member.to_string().as_str()), Some(d.to_string().as_str()), Some(true)),
         "{claims_at_daughter}"
     );
     // The record is found FROM the daughter by the link of the kind, and its
@@ -413,6 +424,7 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
         .expect("a current record");
     assert_eq!(record.landed, Some(RecordLanding::Member { member: member.clone(), position }));
     assert_eq!(record.link, Some(link.clone()));
+    assert_eq!(record.claims, claims, "the record carries the shot's claim");
     assert_eq!(
         record.to_value()["type"].as_str(),
         Some("merge"),
@@ -1421,16 +1433,109 @@ fn a_merge_of_many_daughters_lands_on_the_trunk_with_its_record() {
     let merger = merger(&rig, &session);
     let shot_landing = || Landing::Shot { merger, draft: None, journal: None };
     let landed = land(&rig.board, &merged, shot_landing()).expect("landed");
-    let Landed::Member { address: member, position, record: link, .. } = landed.clone() else { panic!("{landed:?}") };
+    let Landed::Member { address: member, position, claims, record: link, .. } = landed.clone() else { panic!("{landed:?}") };
     assert_eq!(member.to_string(), format!("{d}.3"), "the merge is the trunk's next member");
     assert_eq!(image(&rig.board, &token, &member, 11), as_image(&m_of(&merged)), "the member holds M");
+    assert_eq!(claims.len(), 20, "one claim per daughter: {claims:?}");
+    for daughter in &daughters {
+        let at_daughter = read(&rig.board, Some(&token), &frames::in_claims(&daughter.to_string()));
+        assert_eq!(at_daughter["claims"][0]["new"].as_str(), Some(member.to_string().as_str()), "{daughter}: {at_daughter}");
+        assert_eq!(at_daughter["claims"].as_array().map(Vec::len), Some(1), "{daughter}: one claim");
+    }
     let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
-    assert_eq!((record.landed.clone(), record.link.clone()), (Some(RecordLanding::Member { member: member.clone(), position }), Some(link)));
+    assert_eq!((record.landed.clone(), record.link.clone(), record.claims.clone()), (Some(RecordLanding::Member { member: member.clone(), position }), Some(link), claims));
     assert_eq!(record.sides.len(), 21, "the head and every daughter");
     assert_eq!(verify(&rig.board, Some(&token), &record).expect("verified"), Verdict::Equal);
     let standing = rig.position();
     assert_eq!(land(&rig.board, &merged, shot_landing()), Ok(landed), "the board answers the landing's ids again");
     assert_eq!(rig.position(), standing, "nothing written twice");
+    session.close().expect("close");
+}
+
+/// THE RECORD AFTER THE PERSON's OWN PUBLICATION on the real daemon (the
+/// merge bridge lane): the merge composed, M landed by hand in a draft
+/// staged from the head and edited — "!" typed after it, so the member will
+/// differ from M — and published through THE PUBLICATION LIBRARY's own
+/// composition, `Inputs` naming the daughter in `supersede`, the request's
+/// one group signed as the daemon's verifier composes it; the
+/// acknowledgment carries the daughter that rode, the claim stands in the
+/// trunk and `in_claims` at the daughter answers the member. Then
+/// `record_published` writes the record with NO `publish` sent — its claims
+/// the shot's, `current` answering it — and a second call writes nothing;
+/// the shot landing's read-first finds no member holding M (`resume`
+/// answers none). And THE RACE the daemon refuses: a second daughter merged
+/// on the OLD head, now behind, and landed as the shot is refused whole
+/// `supersede_refused` / `head_moved` naming the trunk's head, typed, with
+/// nothing committed and no claim at that daughter.
+#[test]
+fn the_record_call_after_a_publication_through_the_publication_library_writes_it_once() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let daughter = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+    let daughter2 = shot(&rig.board, &session, &rig.device, &rig.bare, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the cat" }]);
+    assert_eq!((daughter.to_string(), daughter2.to_string()), (format!("{d}.1.1"), format!("{d}.1.2")));
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Member(daughter.clone())], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let m = m_of(&merged);
+    assert_eq!(m, vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 3)], "the big cat");
+    // The draft the merge is landed in, by hand: staged from the head, " sat"
+    // deleted, "!" typed — the person's edit past M.
+    let staged = acked(rig.board.op(Some(&rig.bare), &frames::stage(&head.to_string(), None)));
+    let draft = addr(acked_addr(&staged).expect("the staged draft"));
+    let at = acked_at(&staged).expect("the stage's position");
+    acked(rig.board.op(Some(&rig.bare), &frames::delete(&draft.to_string(), 12, 4, at, None)));
+    insert_text(&rig.board, &rig.bare, &draft.to_string(), 12, "!");
+    let image_now = image(&rig.board, &token, &draft, 12);
+    assert_eq!(image_now[..3], as_image(&m)[..], "the draft holds M then the edit: {image_now:?}");
+    let selection: Vec<publication::Run> = image_now.iter().map(|(start, width)| publication::Run::new(addr(&document_of(start).expect("a document")), start.rsplit('.').next().unwrap().parse().unwrap(), *width)).collect();
+    // THE PUBLICATION through the library, the daughter in `supersede`.
+    let p = publication::Publisher { board: &rig.board, token: &token, account: session.account(), signer: &rig.device };
+    let pub_inputs = publication::Inputs {
+        doc: Some(d.clone()),
+        mint: None,
+        claim: false,
+        base: Some((head.clone(), 15)),
+        draft: draft.clone(),
+        also: vec![],
+        selection,
+        notes: vec![],
+        readable_drafts: vec![draft.clone()],
+        published: vec![d.clone()],
+        supersede: vec![daughter.clone()],
+    };
+    let e = publication::enumerate(&p, &pub_inputs).expect("enumerated");
+    let panel = publication::panel(&p, &pub_inputs, &e).expect("the panel");
+    let publication::Built::Request(mut request) = publication::build(&p, &pub_inputs, &e, &panel, &publication::Confirmed::default()).expect("built") else { panic!("inert") };
+    assert_eq!(request.supersede, vec![daughter.clone()], "no claim names the daughter yet");
+    let publication::Sent::Acknowledged(ack) = publication::send(&p, &pub_inputs, &mut request).expect("sent") else { panic!("refused") };
+    assert_eq!((ack.member.to_string(), ack.supersede.clone()), (format!("{d}.3"), vec![daughter.clone()]));
+    let at_daughter = read(&rig.board, Some(&token), &frames::in_claims(&daughter.to_string()));
+    assert_eq!(at_daughter["claims"].as_array().map(Vec::len), Some(1), "{at_daughter}");
+    assert_eq!((at_daughter["claims"][0]["new"].as_str(), at_daughter["claims"][0]["home"].as_str()), (Some(format!("{d}.3").as_str()), Some(d.to_string().as_str())), "{at_daughter}");
+    let claim = addr(at_daughter["claims"][0]["claim"].as_str().expect("the claim's address"));
+    // THE RECORD, no shot.
+    let publishes = rig.rows_under(&token, &d).iter().filter(|r| r["op"] == "publish").count();
+    let landed = record_published(&rig.board, &merged, merger(&rig, &session), &ack.member, ack.at, None).expect("recorded");
+    let Landed::Member { address, position, claims, record: link, retries } = landed.clone() else { panic!("{landed:?}") };
+    assert_eq!((address, position, claims.clone(), retries), (ack.member.clone(), ack.at, vec![claim], 0));
+    assert_eq!(rig.rows_under(&token, &d).iter().filter(|r| r["op"] == "publish").count(), publishes, "no publish sent");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.landed.clone(), record.link.clone(), record.claims.clone()), (Some(RecordLanding::Member { member: ack.member.clone(), position: ack.at }), Some(link), claims));
+    let standing = rig.position();
+    assert_eq!(record_published(&rig.board, &merged, merger(&rig, &session), &ack.member, ack.at, None), Ok(landed), "the standing record");
+    assert_eq!(rig.position(), standing, "nothing written twice");
+    assert_eq!(resume(&rig.board, &merged, Landing::Shot { merger: merger(&rig, &session), draft: None, journal: None }), Ok(None), "the read-first finds no member holding M: the person's edit");
+    // THE RACE: the second daughter merged on the old head, the shot refused.
+    let behind = Inputs { sides: vec![Side::Member(daughter2.clone())], ..inputs.clone() };
+    let merged2 = compose(&rig.board, Some(&token), &behind).expect("composed on the old head");
+    let standing = rig.position();
+    let err = land(&rig.board, &merged2, Landing::Shot { merger: merger(&rig, &session), draft: None, journal: None }).expect_err("refused");
+    assert_eq!(err, Refusal::SupersedeRefused { index: 0, cause: SupersedeCause::HeadMoved { head: Some(ack.member.clone()) } });
+    assert_eq!(rig.position(), standing, "nothing committed");
+    assert_eq!(read(&rig.board, Some(&token), &frames::in_claims(&daughter2.to_string()))["claims"], json!([]), "no claim at the daughter");
     session.close().expect("close");
 }
 

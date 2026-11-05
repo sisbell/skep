@@ -44,15 +44,24 @@
 //! free-standing draft, or at the document form where `doc` is an edition
 //! holding no member yet (the owner's ruling (i); skep #692), the claim row
 //! then homed in `doc`'s trunk by address, first in that home's group;
-//! `places` and `also_places` beside `runs`, neither in the signed body;
-//! the signed body through the one body builder,
-//! `entry_body_publication`, from the request AS BUILT; a fresh `id`. INERT
-//! where the request changes nothing against its base — a place in either
-//! list is a change. The price is computed on the request as built.
+//! `supersede` the daughters the caller names, each one supersession claim
+//! homed in the trunk and its group last in the trunk's (the merge bridge
+//! lane), THE SKIP READ FIRST: `in_claims` at each daughter, one an active
+//! claim of the person's own already names dropped from the list and so
+//! from the body, as the board's plan skips it, so the body signed is the
+//! body the board composes; `places` and `also_places` beside `runs`,
+//! neither in the signed body; the signed body through the one body
+//! builder, `entry_body_publication`, from the request AS BUILT; a fresh
+//! `id`. INERT where the request changes nothing against its base — a place
+//! in either list is a change, and so is a daughter claimed. The price is
+//! computed on the request as built.
 //!
 //! THE CLIENT DOES NOT DECIDE whether the edition is empty: it sends the
 //! claim where asked, and the board refuses `claim_refused` where a member
 //! already stands, which the send maps to its own arm naming the edition.
+//! Nor whether the head stands: it sends the daughters where asked, and the
+//! board refuses the whole publication `supersede_refused` where the base
+//! is not the trunk's head, which the send maps to its own arm naming it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
@@ -62,16 +71,16 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_identity::{entry_body_publication, unit_span, DepositHome, DepositKind, DepositRow, DepositSlot, EntryBody, MemberPositions, PublishBody, ShotBase, SlotElement};
 
 use crate::address::parse_address;
-use crate::board::answers::LinkSpan;
+use crate::board::answers::{self, LinkSpan};
 use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_READ_WITH};
-use crate::board::T_RETRACTION;
+use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
 use super::enumerate::{enumerate_with, place_selection, Enumeration, Placement, Record};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, RowKind};
 use super::price::{self, EndShape, EntryShape, Price, Shape};
-use super::{canonical_member_spans, fresh_id, Door, Fault, ISpan, Inputs, Publisher, Run};
+use super::{canonical_member_spans, fresh_id, own_claim_names, Door, Fault, ISpan, Inputs, Publisher, Run};
 
 /// The caller's answer at a window onto their own unpublished origin, or
 /// onto words a counterpart record names.
@@ -357,6 +366,15 @@ pub struct Request {
     pub retract: Vec<Address>,
     /// The `read_with` entries.
     pub read_with: Vec<Address>,
+    /// The `supersede` entries: the daughters the member takes in, AS KEPT
+    /// — the caller's [`Inputs::supersede`] with each daughter an active
+    /// claim of the person's own already names dropped, the skip the board's
+    /// plan decides read off the board at the build (`in_claims` at each)
+    /// and again at the one re-sign, so the frame's list and the signed
+    /// groups agree with the board's composition. Each is one group of the
+    /// signed body homed in the trunk, `from` the daughter, `to` the member
+    /// by tag (the merge bridge lane).
+    pub supersede: Vec<Address>,
     /// The switched-on links left out for want of one form, with why.
     pub unspellable: Vec<(Address, Unspellable)>,
     /// The counterparts offered at windows onto drafts the person reads.
@@ -414,6 +432,7 @@ impl Request {
         let links: Vec<Value> = self.entries.iter().map(|e| frames::link_entry(&home_text(&e.home), e.from.wire(), e.to.wire(), e.ty.wire(), e.old.as_ref().map(ToString::to_string).as_deref())).collect();
         let retract: Vec<String> = self.retract.iter().map(ToString::to_string).collect();
         let read_with: Vec<String> = self.read_with.iter().map(ToString::to_string).collect();
+        let supersede: Vec<String> = self.supersede.iter().map(ToString::to_string).collect();
         let (doc, account, base, draft) = (self.doc.as_ref().map(ToString::to_string), self.mint.as_ref().map(ToString::to_string), self.base.as_ref().map(|(m, e)| (m.to_string(), *e)), self.draft.as_ref().map(ToString::to_string));
         let also: Vec<String> = self.also.iter().map(ToString::to_string).collect();
         let also_places: Vec<(String, Vec<Value>)> = self.also_places.iter().map(|a| (a.draft.to_string(), a.places.iter().map(|p| p.map_or(Value::Null, frames::place)).collect())).collect();
@@ -432,6 +451,7 @@ impl Request {
             links: &links,
             retract: &retract.iter().map(String::as_str).collect::<Vec<_>>(),
             read_with: &read_with.iter().map(String::as_str).collect::<Vec<_>>(),
+            supersede: &supersede.iter().map(String::as_str).collect::<Vec<_>>(),
             attest,
             id: Some(&self.id),
         })
@@ -440,7 +460,14 @@ impl Request {
     /// Returns the deposit rows in the signed order: the member's, then a
     /// minted edition's, then every other home's in address order; inside a
     /// home the edition claim, the copies, the retractions, the read-withs,
-    /// each in declared order.
+    /// the supersession claims, each in declared order. A supersession
+    /// claim's group is the trunk's address, the supersedes class's unit
+    /// span, `from` the daughter's unit span and `to` the tag `member` — the
+    /// one address of the claim no signer holds before the commit — as the
+    /// daemon's composer spells it from its plan (wire.md §The publish shot
+    /// and head-float, the deposits); at the mint form, where no trunk
+    /// stands, the row is homed under the edition's tag so the frame signs
+    /// at all — the board refuses every such entry at the plan.
     pub(crate) fn rows(&self) -> Vec<OwnedRow> {
         let mut homes: BTreeMap<OwnedHome, Vec<OwnedRow>> = BTreeMap::new();
         let mut push = |home: OwnedHome, kind: DepositKind, ty: OwnedSlot, from: OwnedSlot, to: OwnedSlot| {
@@ -477,6 +504,13 @@ impl Request {
                 None => OwnedSlot::Stored(vec![OwnedElement::Edition]),
             };
             push(OwnedHome::Addr(set.clone()), DepositKind::ReadWith, OwnedSlot::unit(&address(T_READ_WITH)), from, OwnedSlot::unit(set));
+        }
+        for daughter in &self.supersede {
+            let home = match &self.doc {
+                Some(trunk) => OwnedHome::Addr(trunk.clone()),
+                None => OwnedHome::Edition,
+            };
+            push(home, DepositKind::Supersede, OwnedSlot::unit(&address(T_SUPERSEDES)), OwnedSlot::unit(daughter), OwnedSlot::Stored(vec![OwnedElement::Member]));
         }
         homes.into_values().flatten().collect()
     }
@@ -516,16 +550,52 @@ impl Request {
         })
     }
 
-    /// Re-composes the request without the entries at `retract_skipped`
-    /// and `read_with_skipped`, under a FRESH `id` — the one re-sign at
-    /// `attestation_invalid:signature` for a deposit the transaction skipped.
-    pub fn without(&mut self, retract_skipped: &[usize], read_with_skipped: &[usize]) {
+    /// Re-composes the request without the entries at `retract_skipped`,
+    /// `read_with_skipped` and `supersede_skipped`, under a FRESH `id` — the
+    /// one re-sign at `attestation_invalid:signature` for a deposit the
+    /// transaction skipped.
+    pub fn without(&mut self, retract_skipped: &[usize], read_with_skipped: &[usize], supersede_skipped: &[usize]) {
         let retract = std::mem::take(&mut self.retract);
         self.retract = retract.into_iter().enumerate().filter(|(i, _)| !retract_skipped.contains(i)).map(|(_, m)| m).collect();
         let read_with = std::mem::take(&mut self.read_with);
         self.read_with = read_with.into_iter().enumerate().filter(|(i, _)| !read_with_skipped.contains(i)).map(|(_, s)| s).collect();
+        let supersede = std::mem::take(&mut self.supersede);
+        self.supersede = supersede.into_iter().enumerate().filter(|(i, _)| !supersede_skipped.contains(i)).map(|(_, d)| d).collect();
         self.id = fresh_id();
     }
+}
+
+/// Returns whether an active claim of the person's own already names
+/// `daughter` as its `old` — the skip the board's plan decides for a
+/// `supersede` entry, read as the board reads it: `in_claims{y: the
+/// daughter, view: active}` through `door`, each claim kept where its home
+/// is the person's ([`own_claim_names`]).
+///
+/// # Errors
+///
+/// The read's faults.
+pub(crate) fn claimed_by_own(door: &Door<'_>, p: &Publisher<'_>, daughter: &Address) -> Result<bool, Fault> {
+    let daughter = daughter.to_string();
+    let v = door.answered(&daughter, &frames::in_claims(&daughter))?;
+    Ok(own_claim_names(&answers::claims(&v), p.account))
+}
+
+/// Returns `daughters` with each one an active claim of the person's own
+/// already names dropped — THE SKIP, read before signing ([`claimed_by_own`]
+/// at each), so the request's list and its signed groups agree with the
+/// board's composition.
+///
+/// # Errors
+///
+/// The reads' faults.
+fn kept_daughters(door: &Door<'_>, p: &Publisher<'_>, daughters: &[Address]) -> Result<Vec<Address>, Fault> {
+    let mut kept = Vec::with_capacity(daughters.len());
+    for daughter in daughters {
+        if !claimed_by_own(door, p, daughter)? {
+            kept.push(daughter.clone());
+        }
+    }
+    Ok(kept)
 }
 
 fn home_text(home: &EntryHome) -> String {
@@ -788,13 +858,18 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     let count = count(panel, &confirmed.switches, inputs);
     let read_with = count.read_with.clone();
 
+    // The daughters, the skip read first: one an active claim of the
+    // person's own already names is dropped, as the board's plan drops it.
+    door.step("supersede");
+    let supersede = kept_daughters(door, p, &inputs.supersede)?;
+
     // Inert where nothing changes against the base: a place in either list
     // — the rendering draft's, or an `also` draft's re-window alone — is a
-    // change to that draft.
+    // change to that draft, and a daughter claimed is a change to the trunk.
     door.step("base");
     let fresh = runs.iter().any(|r| inputs.is_named_draft(&r.origin));
     let placed = places.iter().any(Option::is_some) || also_places.iter().any(AlsoPlaces::carries_a_place);
-    if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && inputs.mint.is_none() && !placed {
+    if !fresh && entries.is_empty() && retract.is_empty() && read_with.is_empty() && supersede.is_empty() && inputs.mint.is_none() && !placed {
         if let Some((base, extent)) = &inputs.base {
             let image = door.image(&base.to_string(), 1, *extent)?;
             let same = image.len() == runs.len() && image.iter().zip(&runs).all(|(a, r)| a.prefix == r.chain() && a.first == r.i_start && a.width == r.width);
@@ -834,6 +909,7 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         entries,
         retract,
         read_with,
+        supersede,
         unspellable,
         counterparts,
         id: fresh_id(),

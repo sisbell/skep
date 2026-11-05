@@ -1,12 +1,14 @@
 //! The merge's landing — the merge record's §1.5.
 //!
 //! The landing is the one `publish` of the merged list from the head with
-//! its signed body, then the claim's read and the record in the journal with
-//! its public link, each step idempotent by reading first (P4, P14); the
-//! draft landing, ONE `set_arrangement` of the merged list into the draft
-//! (the landing lane's rulings R1, R4, R5; skep #764); and [`resume`], the
-//! residue walk that completes what a lost acknowledgment left, writing
-//! nothing twice.
+//! its signed body, the supersession claims riding it, then the claims'
+//! read and the record in the journal with its public link, each step
+//! idempotent by reading first (P4, P14); the draft landing, ONE
+//! `set_arrangement` of the merged list into the draft (the landing lane's
+//! rulings R1, R4, R5; skep #764); [`resume`], the residue walk that
+//! completes what a lost acknowledgment left, writing nothing twice; and
+//! [`record_published`], the record of a landing the merger's own
+//! publication made, written once and never a second shot.
 //!
 //! **The order, and what each step reads first.** The cap: `counts.m`
 //! against the shot's run cap before any frame (decision 13; P13). The shot:
@@ -16,13 +18,14 @@
 //! holds them and every window signed by address, re-asked once under the
 //! same per-session `id` where the acknowledgment was lost. The frame and
 //! its body go through the publication composition's request builder
-//! (`crate::publication::Request`) BARE — no `links`, `retract` or
-//! `read_with` entry, no place beside any run, the document form — the
-//! merge's one delta from a publication (the link-sets design §5.5: "the
-//! walk's base the `base` it holds"), so a request carrying no deposit
-//! signs today's body byte for byte through the one body builder. A daughter in
-//! the acknowledgment is reported at once ([`Landed::AsDaughter`]): the head
-//! moved under the merge, the library never re-runs, the embedder does with
+//! (`crate::publication::Request`) with one deposit list — `supersede`, the
+//! daughters (the claim, below) — and no `links`, `retract` or `read_with`
+//! entry, no place beside any run, the document form — the merge's delta
+//! from a publication (the link-sets design §5.5: "the walk's base the
+//! `base` it holds"), so a shot naming no daughter signs today's body byte
+//! for byte through the one body builder. A daughter in the acknowledgment
+//! is reported at once ([`Landed::AsDaughter`]): the head moved under a shot
+//! naming no daughter, the library never re-runs, the embedder does with
 //! `retries` one higher (decision 17). The record: the merger's current
 //! record for the key, read by the landing itself as the composition reads
 //! the prior records (the merge record's §1.5 (ii), §1.3's step 7) — the
@@ -121,19 +124,25 @@
 //! (wire.md §Correlation and idempotency), and only that id lets a second
 //! call over the composition meet the write it made, never make another.
 //!
-//! **The claim, as this wire admits it.** The record's step (i) files
-//! `assert_sup{home: the merger's doc 1, old: the daughter, new: the member}`
-//! over two version members. The wire's `assert_sup` takes resident links
-//! alone as its endpoints — wire.md §Links (writes): "a link named by
-//! address", `endpoint_not_resident` for "an address no link occupies" — and
-//! a version member is no link, so the claim the record spells is refused by
-//! the daemon as built, ahead of any transaction. This build therefore makes
-//! the claim's read, `in_claims{y: the daughter, view: active}`, recording a
-//! claim another writer filed, and sends no `assert_sup`. What states the
-//! supersession on this wire is the record's own public link from the
-//! merger's doc 1 to the member and the daughter under the merge kind, which
-//! a reader at the daughter finds by `find_links_ftt{ty, to}`. A claim over
-//! version members is the wire's to admit, not a frame this library sends.
+//! **The claim rides the shot** (the merge record's §1.5 (i); the merge
+//! bridge lane). The shot's `supersede` names every `Member` side — the
+//! daughters the member takes in, in side order — and never a draft side or
+//! a fork side: no public claim supersedes a private draft or another
+//! account's fork. The board deposits one supersession claim per daughter in
+//! the same commit, homed in the trunk, `old` the daughter and `new` the
+//! member it mints, signed in the body as the publication composes it
+//! (wire.md §The publish shot and head-float, the deposits). THE SKIP IS
+//! READ BEFORE SIGNING: `in_claims{y: the daughter, view: active}` at each,
+//! a daughter an active claim of the merger's own already names dropped from
+//! the list and the body, as the board's plan drops it, so the body signed
+//! is the body the board composes. A shot naming a daughter lands on the
+//! trunk or not at all: where the head moved under the merge the board
+//! refuses it whole, `supersede_refused` with `detail` `head_moved`, nothing
+//! committed, answered as [`Refusal::SupersedeRefused`] naming the trunk's
+//! head for the merge to be composed again on. After the shot the claims
+//! are read back at the daughters ([`Writer::claims_standing`]) and written
+//! into the record; a merger that loses the acknowledgment finds them with
+//! the member ([`resume`]), since a landed shot carried them.
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -149,14 +158,14 @@ use crate::board::{
     Token,
 };
 use crate::halt::{Halt, Refused};
-use crate::publication::{self, Piece};
+use crate::publication::{self, own_claim_names, Piece, SupersedeCause};
 use crate::sign::{sig_hex, Signer};
 
 use super::compose::Run;
 use super::journal;
 use super::reads::{
     comps, daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of,
-    runs_of, values_for, Family, Merged, Reader, Refusal, Role, Side,
+    runs_of, values_for, version_components, Family, Merged, Reader, Refusal, Role, Side,
 };
 use super::record::{read_record, records_of, Record, RecordLanding};
 
@@ -249,7 +258,11 @@ pub enum Landed {
         /// Where the member already stood and the feed holds no row of its
         /// mint, it is the highest `as_of` the reads answered.
         position: u64,
-        /// The supersession claims standing at the daughters, as read.
+        /// The supersession claims standing at the daughters whose `new` is
+        /// the member, as read after the shot — the claims the shot
+        /// deposited, one per `Member` side (the module's doc), homed in the
+        /// trunk; none where the shot named no daughter, or where every
+        /// daughter was already claimed by the merger's own and skipped.
         claims: Vec<Address>,
         /// The record's public link.
         ///
@@ -262,7 +275,12 @@ pub enum Landed {
     /// The head moved under the merge; the shot landed as its daughter.
     ///
     /// Reported, never a success; the embedder re-runs with the new head and
-    /// `retries` one higher (decision 17).
+    /// `retries` one higher (decision 17). Only a shot naming NO daughter
+    /// can meet it — a merge of draft or fork sides alone — or a landing
+    /// whose read-first finds a daughter of the head already holding M: a
+    /// shot naming a daughter in `supersede` is refused whole at a moved
+    /// head, [`Refusal::SupersedeRefused`], and lands as the trunk's next
+    /// member or not at all (the module's doc).
     AsDaughter {
         /// The daughter minted.
         address: Address,
@@ -350,9 +368,13 @@ impl<'a> Landing<'a> {
 ///   `H.1`, before the first write the landing would make — the shot, the
 ///   stage, the draft's one write or the record's first — with nothing
 ///   sent; and the `H.1` and `/health` reads' halts (SP-14);
-/// - the shot's: the value reads' refusals, [`Refusal::WindowWithheld`],
+/// - the shot's: the skip reads' refusals at the daughters, then the value
+///   reads', [`Refusal::WindowWithheld`],
 ///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
 ///   board's `not_owner` naming the draft side as [`Refusal::UnownedDraft`],
+///   `supersede_refused` as [`Refusal::SupersedeRefused`] — at `head_moved`
+///   the trunk's head named, the merge to compose again on it, nothing
+///   committed and nothing re-sent —
 ///   `already_published` and `publication_over_budget` verbatim as
 ///   [`Refusal::Halt`] (never the library's fault),
 ///   `attestation_invalid:board_unavailable` faced as the head the board
@@ -403,9 +425,11 @@ pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Land
 /// positions equal M — the trunk's next member, else a daughter of the
 /// head, which it reports as [`Landed::AsDaughter`] — or the draft already
 /// holding M, read as it stands, with the position its marker carries, and
-/// completes the record, after the claim's read for the trunk's member,
-/// writing nothing twice; `None` where nothing landed, with nothing
-/// written. A fresh landing names no draft to read: the merger's newest
+/// completes the record, after the claims' read for the trunk's member —
+/// a landed shot carried its claims, so the member is found with them
+/// (the module's doc) — writing nothing twice; `None` where nothing landed,
+/// with nothing written: a shot refused whole left nothing to find. A
+/// fresh landing names no draft to read: the merger's newest
 /// record for the key, read now, is its answer where it names a draft
 /// landing, else `None`. The board's head is read only before the record's
 /// writes, so a walk that finds nothing landed answers `None` whatever the
@@ -421,6 +445,66 @@ pub fn resume(
     landing: Landing<'_>,
 ) -> Result<Option<Landed>, Refusal> {
     walk(board, merged, landing, false)
+}
+
+/// Records a merge a publication of the merger's own landed (the merge
+/// record's §1.5 (ii); the merge bridge lane).
+///
+/// `member` and `position` are the member and the commit position that
+/// publication acknowledged — the editor's shot, composed through the
+/// publication family from the draft the merge was landed in and carrying
+/// the daughters as its `supersede`, or any shot of the merger's that
+/// minted the member — and `merged` the composition the record describes.
+/// No shot is sent: the claims are read at the daughters as the landing
+/// reads them after its own shot (`Writer::claims_standing`), the
+/// merger's newest record for the key is read, and the record is written
+/// through the one record writer — `landed` the member at the position,
+/// `claims` as read, `replaces` the newest — under the shot's per-session
+/// ids (the module's doc), unless the newest record already names the
+/// member as landed in, which is answered with nothing written (P4, P14).
+/// It never runs the shot landing's read-first: a member the person edited
+/// before publishing holds other runs than M, which [`land`] with
+/// [`Landing::Shot`] would read as no landing and shoot M again.
+///
+/// # Errors
+///
+/// A member outside `merged`'s document's chain, as the library's own fault
+/// ([`Refusal::Halt`]), nothing read; then as [`land`]'s from the claims'
+/// reads on: the claims' and the record's reads' refusals, a journal this
+/// merger may not read or this board does not register faced as the
+/// landing standing with its record unwritten, and the record's writes'.
+pub fn record_published(
+    board: &Board,
+    merged: &Merged,
+    merger: Merger<'_>,
+    member: &Address,
+    position: u64,
+    journal: Option<&Address>,
+) -> Result<Landed, Refusal> {
+    if version_components(&merged.inputs.doc, member).is_none() {
+        return Err(own_fault_face(
+            "the member is no version of the merged document",
+            format!("{member} lies outside the chain of {}", merged.inputs.doc),
+        ));
+    }
+    let writer = Writer::new(board, merger);
+    let claims = writer.claims_standing(merged, member)?;
+    let landed = RecordLanding::Member { member: member.clone(), position };
+    let newest = writer.newest_record(merged)?;
+    let record = match newest.naming(&landed) {
+        Some(link) => link.clone(),
+        None => {
+            let stem = Stem::of(&merged.key.text());
+            writer.write_landing_record(merged, landed, &claims, &newest, &stem, journal)?
+        }
+    };
+    Ok(Landed::Member {
+        address: member.clone(),
+        position,
+        claims,
+        record,
+        retries: merged.inputs.options.retries,
+    })
 }
 
 /// Runs the landing's steps, each read first.
@@ -752,35 +836,41 @@ impl Writer<'_> {
     /// Sends the shot, answering the member minted and the ack's position.
     ///
     /// The frame and its body go through the publication's request builder
-    /// with no member and no place — every copied run's values re-read
-    /// through the side that holds them, every window by address, the base
-    /// group the head and its extent as read — then the frame with its
-    /// `attest` and its id, one re-ask under the same id on a lost
-    /// acknowledgment, and the frame sent once more, signed, under the same
-    /// id where it went unsigned and a claim landed past the head's read
+    /// with the daughters as its one deposit list and no place — every
+    /// copied run's values re-read through the side that holds them, every
+    /// window by address, the base group the head and its extent as read,
+    /// `supersede` the `Member` sides with the skip read first
+    /// ([`Writer::daughters`]) — then the frame with its `attest` and its
+    /// id, one re-ask under the same id on a lost acknowledgment, and the
+    /// frame sent once more, signed, under the same id where it went
+    /// unsigned and a claim landed past the head's read
     /// ([`Writer::attest_after_claim`]).
     ///
     /// # Errors
     ///
     /// The head's refusal and halts ([`Writer::signing_term`]), read before
     /// the values, nothing sent, and read again after a claim, nothing sent
-    /// past it; [`Refusal::WindowWithheld`],
+    /// past it; the skip reads' refusals at the daughters;
+    /// [`Refusal::WindowWithheld`],
     /// [`Refusal::NeedsSignedSession`] and [`Refusal::NoSuchDocument`] as the
     /// board answers them; `not_owner` naming the draft side as
-    /// [`Refusal::UnownedDraft`], `already_published` and
+    /// [`Refusal::UnownedDraft`], `supersede_refused` as
+    /// [`Refusal::SupersedeRefused`] with its entry and cause,
+    /// `already_published` and
     /// `publication_over_budget` as the board's refusal verbatim, never this
     /// library's fault, and `attestation_invalid:board_unavailable` faced as
     /// the head the board owes; the value reads' refusals; the attest's
     /// fault; a body past [`SHOT_BODY_BUDGET`], a run with no address, a
     /// window of width 0, and the board's refusal of the frame's substance —
-    /// the shot's own table, a place's or a deposit's token, which this frame
-    /// never carries — as the library's own faults; an answer of a shape
-    /// this client does not know, faced; the death signal; a dial fault after
-    /// the one re-ask; the board's other refusals verbatim.
+    /// the shot's own table, a place's or another deposit's token, which this
+    /// frame never carries — as the library's own faults; an answer of a
+    /// shape this client does not know, faced; the death signal; a dial fault
+    /// after the one re-ask; the board's other refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
         let term = self.signing_term(&head_owed)?;
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
+        let supersede = self.daughters(merged)?;
         let draft_side = merged.inputs.sides.iter().find_map(|s| match s {
             Side::Draft { at, .. } => Some(at.clone()),
             _ => None,
@@ -813,8 +903,9 @@ impl Writer<'_> {
                 }
             }
         }
-        // THE REQUEST BUILDER, bare: the merge's delta from a publication is
-        // no member and no place, in either list.
+        // THE REQUEST BUILDER, with the daughters alone: the merge's delta
+        // from a publication is no other deposit and no place, in either
+        // list.
         let n = runs.len();
         let request = publication::Request {
             doc: Some(doc.clone()),
@@ -831,6 +922,7 @@ impl Writer<'_> {
             entries: Vec::new(),
             retract: Vec::new(),
             read_with: Vec::new(),
+            supersede,
             unspellable: Vec::new(),
             counterparts: Vec::new(),
             id: Stem::of(&merged.key.text()).id("publish"),
@@ -866,6 +958,15 @@ impl Writer<'_> {
             "not_owner" if site.is_some() && site == draft => match site.clone() {
                 Some(draft) => Refusal::UnownedDraft { draft },
                 None => own_fault("the shot", &r),
+            },
+            // The plan's judgement of the daughters, typed: the board's
+            // verdict, never this frame's fault; a detail this client does
+            // not know rides verbatim.
+            "supersede_refused" => match SupersedeCause::of(r.detail(), r.site()) {
+                Some(cause) => {
+                    Refusal::SupersedeRefused { index: r.site().index.unwrap_or(0), cause }
+                }
+                None => Refusal::Halt(r.refused(&v)),
             },
             "already_published" | "publication_over_budget" => Refusal::Halt(r.refused(&v)),
             "base_superseded"
@@ -966,10 +1067,33 @@ impl Writer<'_> {
         self.attest(Some(term), doc, body)
     }
 
-    /// Returns the claim's read: the active claims whose `new` is the member.
+    /// Returns the shot's `supersede`: the daughters — every `Member` side,
+    /// in side order — with THE SKIP read first, as the board's plan decides
+    /// it: `in_claims{y: the daughter, view: active}` at each, one an active
+    /// claim of the merger's own already names dropped, so the body signed
+    /// is the body the board composes (the module's doc). A draft side and a
+    /// fork side name no daughter.
     ///
-    /// They are read at each daughter — what another writer filed; this wire
-    /// admits none over version members (the module's doc).
+    /// # Errors
+    ///
+    /// The `in_claims` read's refusal at a daughter.
+    fn daughters(&self, merged: &Merged) -> Result<Vec<Address>, Refusal> {
+        let mut out = Vec::new();
+        for side in &merged.inputs.sides {
+            let Side::Member(daughter) = side else { continue };
+            let v =
+                self.reader.answered(daughter, &frames::in_claims(&daughter.to_string()), None)?;
+            if !own_claim_names(&answers::claims(&v), self.merger.account) {
+                out.push(daughter.clone());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Returns the claims' read: the active claims whose `new` is the member,
+    /// read at each daughter after the shot — the claims the shot deposited
+    /// (the module's doc), each homed in the trunk, and any another writer
+    /// filed naming the member.
     ///
     /// # Errors
     ///

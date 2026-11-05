@@ -329,6 +329,7 @@ fn inputs(seeded: &Seeded) -> Inputs {
         notes: vec![addr(&seeded.n)],
         readable_drafts: vec![addr(&seeded.d), addr(&seeded.n)],
         published: vec![addr(&seeded.e), addr(&seeded.s), addr(&seeded.s2)],
+        supersede: vec![],
     }
 }
 
@@ -520,7 +521,7 @@ fn a_moved_place_is_refused_with_its_entry_and_the_reread_restates_the_selection
     insert_text(&board, &bare_token, &d, 1, "xyz");
     let y = format!("{d}.0.1.2");
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 19)), draft: addr(&d), also: vec![], selection: vec![run(&d, 2, 2)], notes: vec![], readable_drafts: vec![addr(&d)], published: vec![addr(&e)] };
+    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 19)), draft: addr(&d), also: vec![], selection: vec![run(&d, 2, 2)], notes: vec![], readable_drafts: vec![addr(&d)], published: vec![addr(&e)], supersede: vec![] };
     let en = enumerate(&p, &inputs).unwrap();
     assert_eq!(en.placed, vec![publication::Placement::Whole { ordinal: 2 }]);
     let pn = panel(&p, &inputs, &en).unwrap();
@@ -588,7 +589,7 @@ fn cost_of_the_enumeration_and_the_panel_over_many_links() {
         make_link(&board, &session, &bare_token, &device, &s, true, spec(&e1, at, 2, &e, at), End::Addrs(vec![]), T_CITATION);
     }
     let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
-    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 1000)), draft: addr(&d), also: vec![], selection: vec![run(&e, 1, 1000), run(&d, 1, 4)], notes: vec![addr(&n)], readable_drafts: vec![addr(&d), addr(&n)], published: vec![addr(&e), addr(&s)] };
+    let inputs = Inputs { doc: Some(addr(&e)), mint: None, claim: false, base: Some((addr(&e1), 1000)), draft: addr(&d), also: vec![], selection: vec![run(&e, 1, 1000), run(&d, 1, 4)], notes: vec![addr(&n)], readable_drafts: vec![addr(&d), addr(&n)], published: vec![addr(&e), addr(&s)], supersede: vec![] };
     let mut enumerate_ms = Vec::new();
     let mut panel_ms = Vec::new();
     let mut reread_ms = Vec::new();

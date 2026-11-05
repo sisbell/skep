@@ -28,8 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use skep_address::Address;
-use skep_identity::{entry_frame, unit_span, DepositHome, DepositKind, DepositSlot, DocTerm, PublicKey, SlotElement};
+use skep_address::{Address, Span};
+use skep_identity::{entry_body_publication, entry_frame, unit_span, DepositHome, DepositKind, DepositRow, DepositSlot, DocTerm, PublicKey, SlotElement};
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
@@ -695,6 +695,34 @@ impl World {
                 }
             }
         }
+        // THE VALIDATION's (6), the daughters (the merge bridge lane): the
+        // list stands only beside a shot landing on the trunk — refused whole
+        // `head_moved` naming the head where the base is not it — then each
+        // entry a registered member of `doc`'s chain, not the base, named
+        // once; one an ACTIVE claim of the caller's own already names, homed
+        // in any document of theirs and whatever its `new`, is skipped below.
+        let supersede: Vec<String> = frame["supersede"].as_array().map(|l| l.iter().map(|x| x.as_str().unwrap().to_string()).collect()).unwrap_or_default();
+        let supersede_refused = |detail: &str, site: Value| json!({"resp": "rejected", "code": "supersede_refused", "detail": detail, "disposition": "permanent", "op": "publish", "site": site});
+        if !supersede.is_empty() {
+            if let Some(head) = self.trunk_head.get(&trunk) {
+                if base.as_deref() != Some(head.as_str()) {
+                    return supersede_refused("head_moved", json!({"index": 0, "addr": head}));
+                }
+            }
+            let mut seen: BTreeSet<&str> = BTreeSet::new();
+            for (k, daughter) in supersede.iter().enumerate() {
+                let in_chain = !mint && daughter.strip_prefix(&format!("{trunk}.")).is_some_and(|rest| !rest.is_empty()) && self.docs.contains_key(daughter);
+                if !in_chain {
+                    return supersede_refused("not_member", json!({"index": k}));
+                }
+                if base.as_deref() == Some(daughter.as_str()) {
+                    return supersede_refused("base", json!({"index": k}));
+                }
+                if !seen.insert(daughter) {
+                    return supersede_refused("duplicate", json!({"index": k}));
+                }
+            }
+        }
         // The mint: one fresh identity per draft identity, in runs' order.
         self.position += 1;
         let at = self.position;
@@ -860,6 +888,20 @@ impl World {
                 homes.push(set);
             }
         }
+        // The supersession claims, one per daughter in the trunk — `old` the
+        // daughter, `new` the member this commit minted — a daughter an
+        // active claim of the caller's own already names skipped, the entry
+        // committing nothing.
+        for daughter in &supersede {
+            let claimed = self.links.iter().any(|l| !l.retracted && l.ty.first().is_some_and(|t| t.0 == T_SUPERSEDES) && l.from.first().is_some_and(|s| s.0 == *daughter) && trunk_of(&l.home).is_some_and(|t| self.docs.get(&t).is_some_and(|d| d.owner == ACCOUNT)));
+            if claimed {
+                continue;
+            }
+            push_link(self, &trunk, vec![unit(daughter)], vec![unit(&member)], vec![unit(T_SUPERSEDES)]);
+            if !homes.contains(&trunk) {
+                homes.push(trunk.clone());
+            }
+        }
         // The re-window at the kept places, last: the rendering draft at
         // `places`, then each `also` draft at its own entry, in `also`'s
         // order — a run of a named draft's identity replaced by the fresh
@@ -1023,6 +1065,7 @@ fn inputs() -> Inputs {
         notes: vec![a(N)],
         readable_drafts: vec![a(D), a(N)],
         published: vec![a(E), a(S), a(S2)],
+        supersede: vec![],
     }
 }
 
@@ -1259,7 +1302,7 @@ fn the_count_follows_the_switches_and_the_destinations() {
     let e = enumerate(&p, &inputs).unwrap();
     let panel = panel(&p, &inputs, &e).unwrap();
     let off = count(&panel, &Switches::default(), &inputs);
-    assert_eq!(off, Count { l: 0, n: 2, r: 1, e: 1, claim: false, read_with: Vec::new() });
+    assert_eq!(off, Count { l: 0, n: 2, r: 1, e: 1, claim: false, read_with: Vec::new(), supersede: Vec::new() });
     let on = count(&panel, &switched(None).switches, &inputs);
     assert_eq!((on.l, on.n, on.r, on.e, on.read_with.len()), (5, 2, 1, 1, 0));
     let into_s2 = count(&panel, &switched(Some(S2)).switches, &inputs);
@@ -1328,6 +1371,190 @@ fn the_document_form_sends_the_claim_homed_in_the_trunk_and_maps_its_refusal() {
     let Sent::Acknowledged(ack) = send(&p2, &birth, &mut request2).unwrap() else { panic!() };
     assert_eq!((ack.member.to_string(), ack.claim), (format!("{E}.1"), true), "the acknowledgment echoes the request's claim");
     assert!(dialer2.world().links.iter().any(|l| l.home == E && l.ty[0].0 == T_EDITION && l.to[0].0 == D), "the claim homed in the edition named, to the draft");
+}
+
+// ── THE DAUGHTERS (the merge bridge lane) ────────────────────────────────
+
+/// Two daughters of `E`'s chain, `E.1.1` and `E.1.2`, each a published
+/// member in the fixture.
+fn with_daughters(world: &mut World) -> (String, String) {
+    let (e11, e12) = (format!("{E}.1.1"), format!("{E}.1.2"));
+    world.doc(&e11, true, ACCOUNT, vec![run(E, 1, 7)]);
+    world.doc(&e12, true, ACCOUNT, vec![run(E, 1, 3)]);
+    (e11, e12)
+}
+
+/// A supersession claim's group as the daemon's verifier spells it from its
+/// plan (`skep-core`'s `deposit_rows`): the trunk by address, the kind, the
+/// supersedes class's unit span, `from` the daughter's unit span, `to` the
+/// tag `member`.
+fn claim_group<'a>(trunk: &'a Address, sup_ty: &'a Span, daughter: &'a Span) -> DepositRow<'a> {
+    DepositRow { home: DepositHome::Address(trunk), kind: DepositKind::Supersede, ty: DepositSlot::Stored(vec![SlotElement::Span(sup_ty)]), from: DepositSlot::Stored(vec![SlotElement::Span(daughter)]), to: DepositSlot::Stored(vec![SlotElement::Member]) }
+}
+
+/// THE DAUGHTERS RIDE THE FRAME AND SIGN AS THE BOARD COMPOSES THEM: one
+/// daughter and two — the frame's `supersede` the list as named, the
+/// request's list and the count's clause the same, and the body
+/// BYTE-CHECKED against the one builder over the request's other rows and
+/// one group per daughter spelled as the daemon's verifier spells it, last
+/// in the trunk's group in declared order; the send acknowledged with the
+/// daughters that rode, the commit holding one claim per daughter in the
+/// trunk, `old` the daughter and `new` the member. A request naming none is
+/// today's frame and body: no `supersede` member, no group.
+#[test]
+fn the_daughters_ride_the_frame_and_sign_as_the_board_composes_them() {
+    for n in [1usize, 2] {
+        let (mut world, _) = World::base();
+        let (e11, e12) = with_daughters(&mut world);
+        let daughters: Vec<Address> = [a(&e11), a(&e12)][..n].to_vec();
+        let (dialer, board, signer) = open(world);
+        let tok = token();
+        let p = publisher(&board, &tok, &signer);
+        let asked = Inputs { supersede: daughters.clone(), ..inputs() };
+        let e = enumerate(&p, &asked).unwrap();
+        let panel = panel(&p, &asked, &e).unwrap();
+        let Built::Request(mut request) = build(&p, &asked, &e, &panel, &switched(None)).unwrap() else { panic!("{n}") };
+        let named: Vec<String> = daughters.iter().map(ToString::to_string).collect();
+        assert_eq!(request.frame(None)["supersede"], json!(named), "{n}: the frame's list as named");
+        assert_eq!((&request.supersede, &request.count.supersede), (&daughters, &daughters), "{n}: the request's list and the count's clause");
+        // The body: the member's rows, one group per daughter — the trunk's
+        // group, which holds nothing else here — then every later home's.
+        let trunk = a(E);
+        let sup_ty = unit_span(&a(T_SUPERSEDES));
+        let units: Vec<Span> = daughters.iter().map(unit_span).collect();
+        let rows = request.rows();
+        let borrowed: Vec<DepositRow<'_>> = rows.iter().map(OwnedRow::borrow).collect();
+        let members: Vec<DepositRow<'_>> = borrowed.iter().filter(|r| r.home == DepositHome::Member).cloned().collect();
+        let after: Vec<DepositRow<'_>> = borrowed.iter().filter(|r| matches!(&r.home, DepositHome::Address(h) if **h > trunk)).cloned().collect();
+        assert_eq!(members.len() + after.len() + n, borrowed.len(), "{n}: the trunk's group is the claims' alone");
+        let expected: Vec<DepositRow<'_>> = members.into_iter().chain(units.iter().map(|u| claim_group(&trunk, &sup_ty, u))).chain(after).collect();
+        assert_eq!(request.body().as_bytes(), entry_body_publication(request.shot_body(), &expected).as_bytes(), "{n}: the body the board composes, byte for byte");
+        // The send: acknowledged with the daughters that rode, one claim per
+        // daughter deposited in the trunk.
+        dialer.clear();
+        let Sent::Acknowledged(ack) = send(&p, &asked, &mut request).unwrap() else { panic!("{n}") };
+        assert_eq!((ack.member.to_string(), ack.supersede.clone()), (format!("{E}.2"), daughters.clone()));
+        let w = dialer.world();
+        let claims: Vec<(String, String)> = w.links.iter().filter(|l| l.home == E && l.ty[0].0 == T_SUPERSEDES).map(|l| (l.from[0].0.clone(), l.to[0].0.clone())).collect();
+        assert_eq!(claims, named.iter().map(|d| (d.clone(), format!("{E}.2"))).collect::<Vec<_>>(), "{n}: one claim per daughter, old the daughter and new the member");
+    }
+    // No daughter: today's frame and body.
+    let (world, _) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (_, _, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    assert!(request.frame(None).get("supersede").is_none(), "no member where none is named");
+    assert!(request.rows().iter().all(|r| r.borrow().kind != DepositKind::Supersede), "no group");
+    assert!(request.count.supersede.is_empty() && request.supersede.is_empty());
+}
+
+/// THE SKIP, read before signing as the board's plan decides it (wire.md
+/// §The publish shot and head-float, the deposits): a daughter an ACTIVE
+/// claim of the person's own already names — homed in a draft of theirs,
+/// its `new` a side version — is dropped from the request's list and its
+/// signed groups together, so the frame and the body agree with the board's
+/// composition; another account's claim and a retracted one drop nothing;
+/// the count carries the daughters as asked and the acknowledgment those
+/// that rode, the board depositing no claim for the one skipped; one
+/// `in_claims` per daughter at the build. And THE ONE RE-SIGN: an own claim
+/// landed between the build and the send is re-read at
+/// `attestation_invalid:signature`, the daughter dropped and the request
+/// re-signed once under a fresh id.
+#[test]
+fn an_own_claim_already_naming_a_daughter_drops_its_group_and_its_entry_together() {
+    let (mut world, _) = World::base();
+    let (e11, e12) = with_daughters(&mut world);
+    let e13 = format!("{E}.1.3");
+    world.doc(&e13, true, ACCOUNT, vec![run(E, 1, 5)]);
+    world.claim(N, &e11, &format!("{E}.1.1.1"));
+    world.claim(OTHER, &e12, &format!("{E}.2"));
+    let retracted = world.claim(S, &e13, &format!("{E}.2"));
+    world.retract(S, &retracted);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let asked = Inputs { supersede: vec![a(&e11), a(&e12), a(&e13)], ..inputs() };
+    let e = enumerate(&p, &asked).unwrap();
+    let panel = panel(&p, &asked, &e).unwrap();
+    dialer.clear();
+    let Built::Request(mut request) = build(&p, &asked, &e, &panel, &switched(None)).unwrap() else { panic!() };
+    let reads: Vec<String> = dialer.frames("in_claims").iter().filter_map(|f| f["y"].as_str().map(str::to_string)).filter(|y| [&e11, &e12, &e13].contains(&y)).collect();
+    assert_eq!(reads, vec![e11.clone(), e12.clone(), e13.clone()], "one in_claims per daughter, in order");
+    assert_eq!(request.supersede, vec![a(&e12), a(&e13)], "the own-claimed daughter dropped; another's claim and a retracted one drop nothing");
+    assert_eq!(request.frame(None)["supersede"], json!([e12, e13]), "the frame's list agrees");
+    assert_eq!(request.rows().iter().filter(|r| r.borrow().kind == DepositKind::Supersede).count(), 2, "and the groups");
+    assert_eq!(request.count.supersede, asked.supersede, "the count's clause carries the daughters as asked");
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &asked, &mut request).unwrap() else { panic!() };
+    assert_eq!(ack.supersede, vec![a(&e12), a(&e13)], "what rode");
+    assert_eq!(dialer.frames("publish").len(), 1, "signed once: the body named no skipped daughter");
+    let froms: Vec<String> = dialer.world().links.iter().filter(|l| l.home == E && l.ty[0].0 == T_SUPERSEDES).map(|l| l.from[0].0.clone()).collect();
+    assert_eq!(froms, vec![e12.clone(), e13.clone()], "no claim for the skipped daughter");
+    // THE RE-SIGN: an own claim lands after the build and before the send.
+    let (mut world, _) = World::base();
+    let (e11, e12) = with_daughters(&mut world);
+    let (dialer, board, signer) = open(world);
+    let p = publisher(&board, &tok, &signer);
+    let asked = Inputs { supersede: vec![a(&e11), a(&e12)], ..inputs() };
+    let e = enumerate(&p, &asked).unwrap();
+    let panel = super::panel::panel(&p, &asked, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &asked, &e, &panel, &switched(None)).unwrap() else { panic!() };
+    let first_id = request.id.clone();
+    dialer.world().claim(D, &e11, &format!("{E}.1.1.1"));
+    dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:signature", "disposition": "permanent", "op": "publish"}));
+    dialer.clear();
+    let Sent::Acknowledged(ack) = send(&p, &asked, &mut request).unwrap() else { panic!() };
+    assert_eq!((request.supersede.clone(), ack.supersede.clone()), (vec![a(&e12)], vec![a(&e12)]), "the daughter claimed meanwhile dropped");
+    assert_ne!(request.id, first_id, "a fresh id");
+    let frames = dialer.frames("publish");
+    assert_eq!(frames.len(), 2, "re-signed once");
+    assert_eq!((frames[0]["supersede"].clone(), frames[1]["supersede"].clone()), (json!([e11, e12]), json!([e12])));
+}
+
+/// `supersede_refused` REACHES THE CALLER TYPED, never as this library's
+/// fault and nothing re-sent: `head_moved` with entry 0 and the trunk's head
+/// `site.addr` names — the board's own judgement too, a shot off a base the
+/// trunk moved past refused whole with no claim deposited and nothing
+/// committed — `not_member`, `base` and `duplicate` with their entry, and a
+/// detail this client does not know the board's refusal verbatim.
+#[test]
+fn each_supersede_refusal_is_typed_and_head_moved_carries_the_head() {
+    let (mut world, _) = World::base();
+    let (e11, _) = with_daughters(&mut world);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let asked = Inputs { supersede: vec![a(&e11)], ..inputs() };
+    let e = enumerate(&p, &asked).unwrap();
+    let panel = panel(&p, &asked, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &asked, &e, &panel, &switched(None)).unwrap() else { panic!() };
+    let refuse = |detail: &str, site: Value| {
+        dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "supersede_refused", "detail": detail, "disposition": "permanent", "op": "publish", "site": site}));
+        dialer.clear();
+    };
+    let e2 = a(&format!("{E}.2"));
+    refuse("head_moved", json!({"index": 0, "addr": e2.to_string()}));
+    assert_eq!(send(&p, &asked, &mut request).unwrap(), Sent::Refused(Refusal::SupersedeRefused { index: 0, cause: SupersedeCause::HeadMoved { head: Some(e2.clone()) } }));
+    assert_eq!(dialer.frames("publish").len(), 1, "nothing re-sent");
+    for (detail, cause) in [("not_member", SupersedeCause::NotMember), ("base", SupersedeCause::Base), ("duplicate", SupersedeCause::Duplicate)] {
+        refuse(detail, json!({"index": 1}));
+        assert_eq!(send(&p, &asked, &mut request).unwrap(), Sent::Refused(Refusal::SupersedeRefused { index: 1, cause }), "{detail}");
+    }
+    refuse("later_cause", json!({"index": 0}));
+    assert!(matches!(send(&p, &asked, &mut request).unwrap(), Sent::Refused(Refusal::Other(Halt::Refused(r))) if r.code == "supersede_refused"), "an unknown detail verbatim");
+    // The board's own judgement: a sibling's shot moves the head to `E.2`
+    // after the build, and the shot off `E.1` is refused whole.
+    {
+        let mut w = dialer.world();
+        w.doc(&e2.to_string(), true, ACCOUNT, vec![run(E, 1, 19)]);
+        w.trunk_head.insert(E.to_string(), e2.to_string());
+    }
+    let position = dialer.world().position;
+    dialer.clear();
+    assert_eq!(send(&p, &asked, &mut request).unwrap(), Sent::Refused(Refusal::SupersedeRefused { index: 0, cause: SupersedeCause::HeadMoved { head: Some(e2.clone()) } }));
+    let w = dialer.world();
+    assert_eq!(w.position, position, "nothing committed");
+    assert!(!w.links.iter().any(|l| l.ty[0].0 == T_SUPERSEDES && l.from[0].0 == e11), "no claim at the daughter");
 }
 
 // ── THE PRICE ────────────────────────────────────────────────────────────
@@ -2057,7 +2284,7 @@ fn the_landed_test_passes_or_names_what_the_member_lacks() {
     let p = publisher(&board, &tok, &signer);
     let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut request).unwrap() else { panic!() };
     let member = ack.member.clone();
-    assert_eq!(landed(&p, &inputs(), &request, Base::Member(member.clone())).unwrap(), Verdict::Passed(Ack { member: member.clone(), at: ack.at, edition: None, via: AckVia::Twin, claim: false }));
+    assert_eq!(landed(&p, &inputs(), &request, Base::Member(member.clone())).unwrap(), Verdict::Passed(Ack { member: member.clone(), at: ack.at, edition: None, via: AckVia::Twin, claim: false, supersede: vec![] }));
     assert!(matches!(landed(&p, &inputs(), &request, Base::Walk).unwrap(), Verdict::Passed(Ack { via: AckVia::Walk, .. })), "the walk from the base finds the trunk's next member");
     // The twin: a re-send meets the fence and reads the refusal as the ack.
     dialer.world().refuse_next = Some(json!({"resp": "rejected", "code": "already_published", "disposition": "permanent", "op": "publish", "site": {"addr": member.to_string()}}));

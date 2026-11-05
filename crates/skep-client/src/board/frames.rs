@@ -474,6 +474,12 @@ pub struct PublishFrame<'a> {
     pub retract: &'a [&'a str],
     /// The `read_with` entries: published documents.
     pub read_with: &'a [&'a str],
+    /// The `supersede` entries: THE DAUGHTERS the member takes in (wire.md
+    /// §Arrangement, `publish`; the merge bridge lane) — version members of
+    /// `doc`'s own chain by address, each deposited as one supersession
+    /// claim in the trunk; sent only where non-empty, the document form's
+    /// alone.
+    pub supersede: &'a [&'a str],
     /// The `attest` member where the caller composed one.
     pub attest: Option<Value>,
     /// The per-session idempotency key.
@@ -497,8 +503,8 @@ pub struct AlsoPlacesFrame<'a> {
 /// (a list of `null`s is the shot as before, so it is left out),
 /// `also_places` only with the entries whose list carries a place, in
 /// `also`'s order, and only where one remains (the canonical form the codec
-/// writes), `also`, `links`, `retract` and `read_with` only where
-/// non-empty, `mint` and `claim` only where true.
+/// writes), `also`, `links`, `retract`, `read_with` and `supersede` only
+/// where non-empty, `mint` and `claim` only where true.
 pub fn publication(p: &PublishFrame<'_>) -> Value {
     let mut frame = with_id(json!({"op": "publish", "runs": p.runs}), p.id);
     if let Some(doc) = p.doc {
@@ -538,6 +544,9 @@ pub fn publication(p: &PublishFrame<'_>) -> Value {
     }
     if !p.read_with.is_empty() {
         frame["read_with"] = json!(p.read_with);
+    }
+    if !p.supersede.is_empty() {
+        frame["supersede"] = json!(p.supersede);
     }
     if let Some(a) = &p.attest {
         frame["attest"] = a.clone();

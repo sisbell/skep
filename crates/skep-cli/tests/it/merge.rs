@@ -18,10 +18,11 @@
 //! draft in one write with the newer version told, and `--new` staging a
 //! fresh draft from the head and landing there, the base and the merge
 //! recorded, a re-run reporting the standing landing and staging nothing;
-//! A DAUGHTER — the head moved before `--publish`, the shot landing
-//! as the head's daughter, reported with the re-run line and never retried,
-//! one `publish` in the feed, and the re-run with `--retries 1` landing on
-//! the new head with the count in its record; and `--fork` ADMITTED — a
+//! A MOVED HEAD — the head moved before `--publish`, the shot claiming the
+//! daughter superseded refused whole by the board, exit 1 with the head to
+//! run again on and nothing published, and the re-run with `--retries 1`
+//! landing on the new head with the count in its record and its claim
+//! marking the daughter; and `--fork` ADMITTED — a
 //! second account's fork of a published version merged from the source the
 //! board serves for it and published — while a fork of the bare document,
 //! taken before its first version, is refused with its own reason, exit 1,
@@ -445,7 +446,11 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     let member = v["landed"]["member"].as_str().expect("the member").to_string();
     assert_eq!(member, format!("{d}.3"), "the trunk's next member");
     assert_eq!(v["landed"]["retries"], json!(0));
-    assert_eq!(v["landed"]["claims"], json!([]), "this wire admits no claim over version members");
+    let claims = v["landed"]["claims"].as_array().expect("the shot's claims").clone();
+    assert_eq!(claims.len(), 1, "the shot's own claim marking the daughter superseded: {}", v["landed"]);
+    assert!(claims[0].as_str().is_some_and(|c| c.starts_with(&format!("{d}.0.2."))), "homed in the trunk: {}", claims[0]);
+    assert_eq!(rig.read(&token, &frames::in_claims(&daughter_s))["claims"][0]["new"].as_str(), Some(member.as_str()), "in_claims at the daughter answers the member");
+    assert!(r.err.contains("the claim marking the side superseded by it: 1"), "{}", r.err);
     let link = v["landed"]["record"].as_str().expect("the record's link").to_string();
     assert!(v["landed"]["position"].as_u64().is_some_and(|p| p > before), "{}", v["landed"]);
     assert_eq!(rig.image(&token, &addr(&member), 11), runs_of(&v), "the member's image over its placed positions is M");
@@ -573,14 +578,16 @@ fn the_whole_walk_composes_prints_publishes_once_and_resolves_a_gap_as_the_agent
     session.close().expect("close");
 }
 
-/// A DAUGHTER IS REPORTED, NEVER RETRIED (decision 17; the fence): the head
-/// moves between the composition and `--publish`, the shot lands as the
-/// head's daughter, the report names it with the retry count, the talk says
-/// to run again with `--retries 1`, the feed holds ONE publish from the
-/// command — and the re-run with `--retries 1` lands on the new head with
-/// the count in its record.
+/// A MOVED HEAD IS REFUSED, NEVER RETRIED (decision 17; the merge bridge
+/// lane, skep #806): the head moves between the composition and
+/// `--publish`; the shot, claiming the daughter superseded, is refused whole
+/// by the board — exit 1 under `supersede_refused`, the words saying the
+/// head moved, that nothing was published and to run again against the new
+/// head — nothing on stdout, no publish in the feed, no claim at the
+/// daughter; and the re-run with `--retries 1` lands on the new head with
+/// the count in its record and its claim marking the daughter.
 #[test]
-fn a_daughter_is_reported_with_its_retry_count_and_never_retried() {
+fn a_moved_head_is_refused_with_the_head_to_run_again_on_and_never_retried() {
     let dir = tempfile::tempdir().unwrap();
     let rig = Rig::new(dir.path());
     let session = rig.session();
@@ -598,31 +605,32 @@ fn a_daughter_is_reported_with_its_retry_count_and_never_retried() {
     assert_eq!(third.to_string(), format!("{d}.3"));
     assert_eq!(rig.image(&token, &third, 19), vec![(format!("{d}.0.1.1"), "4".into()), (format!("{d}.0.1.16"), "4".into()), (format!("{d}.0.1.12"), "4".into()), (format!("{d}.0.1.5"), "7".into())]);
     let publishes = rig.publishes_under(&token, &d);
-    // --PUBLISH against the head the merge was composed from.
+    let before = rig.board.health().unwrap().log_position();
+    // --PUBLISH against the head the merge was composed from: refused whole.
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind, "--head", &head_s, "--publish"]);
-    let v = report(&r);
-    let landed = &v["landed"];
-    assert_eq!(landed["daughter"].as_str(), Some(format!("{d}.2.1").as_str()), "the head's daughter: {landed}");
-    assert!(landed.get("member").is_none() && landed.get("record").is_none(), "no member, no record: {landed}");
-    assert_eq!(landed["retries"], json!(0));
-    assert!(landed["position"].as_u64().is_some());
-    assert_eq!(rig.image(&token, &addr(&format!("{d}.2.1")), 11), runs_of(&v), "the daughter holds M");
-    assert!(r.err.contains(&format!("the head of {d} moved under the merge: the shot landed as the daughter {d}.2.1 at position")), "{}", r.err);
-    assert!(r.err.contains("Nothing is retried here — run this again with --retries 1"), "{}", r.err);
-    assert_eq!(rig.publishes_under(&token, &d), publishes + 1, "ONE publish from the command, never a second");
-    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &daughter_s))["addrs"], json!([]), "no record for a daughter landing");
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
+    assert!(r.err.contains(&format!("the board refused: supersede_refused:the head moved under the merge: the trunk's head is now {d}.3, so the shot would have landed as a daughter")), "{}", r.err);
+    assert!(r.err.contains("nothing was published"), "{}", r.err);
+    assert!(r.err.contains(&format!("run this again with --head {d}.3, or with no --head to take the feed's, to merge against it")), "{}", r.err);
+    assert_eq!(rig.publishes_under(&token, &d), publishes, "no publish from the command");
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing committed");
+    assert_eq!(rig.read(&token, &frames::in_claims(&daughter_s))["claims"], json!([]), "no claim at the daughter");
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &daughter_s))["addrs"], json!([]), "no record");
     // THE RE-RUN, as the talk asks: against the new head with --retries 1,
-    // the count kept in the record.
+    // the count kept in the record, the claim marking the daughter.
     let r = rig.merge(&["--doc", &d_s, "--alternative", &daughter_s, "--kind", &kind, "--retries", "1", "--publish"]);
     let v = report(&r);
     assert_eq!(v["head"].as_str(), Some(format!("{d}.3").as_str()), "the new head off the feed");
     assert_eq!(v["landed"]["member"].as_str(), Some(format!("{d}.4").as_str()));
     assert_eq!(v["landed"]["retries"], json!(1));
     assert_eq!(v["record"]["retries"], json!(1), "the contention number, kept in the record");
+    assert_eq!(v["landed"]["claims"].as_array().map(Vec::len), Some(1), "{}", v["landed"]);
+    assert_eq!(rig.read(&token, &frames::in_claims(&daughter_s))["claims"][0]["new"].as_str(), Some(format!("{d}.4").as_str()), "the daughter superseded by the merge");
     assert_eq!(runs_of(&v), vec![(format!("{d}.0.1.1"), "4".into()), (format!("{d}.0.1.16"), "4".into()), (format!("{d}.0.1.12"), "4".into()), (format!("{d}.0.1.5"), "3".into())], "the new big cat");
     assert_eq!(v["gaps"], json!([]), "the head's two words between surviving anchors that stand together: no gap");
     assert_eq!(rig.image(&token, &addr(&format!("{d}.4")), 15), runs_of(&v));
-    assert_eq!(rig.publishes_under(&token, &d), publishes + 2);
+    assert_eq!(rig.publishes_under(&token, &d), publishes + 1);
     session.close().expect("close");
 }
 

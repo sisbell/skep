@@ -1162,11 +1162,12 @@ impl Shell {
     /// where the member is present and not of its declared form —
     /// `{before, after, span?}`, each anchor an I-address or `null`, `span` a
     /// non-empty list of `{start, width}` runs, `start` an I-address and
-    /// `width` a natural of 1 or more in its decimal string — never read as
-    /// absent, then naming `session`, then `session_ended`; a write under a
-    /// bare session refused `write_in_bare_session`; a `publish` frame refused
-    /// `publish_is_a_call` without a dial — a publication crosses as
-    /// `publication.confirm`, composed by the shell from the panel it holds,
+    /// `width` a natural of 1 or more in its decimal string, the whole within
+    /// the board's frame cap as compact JSON (`held::MAX_ANCHOR_BYTES`) —
+    /// never read as absent, then naming `session`, then `session_ended`; a
+    /// write under a bare session refused `write_in_bare_session`; a `publish`
+    /// frame refused `publish_is_a_call` without a dial — a publication crosses
+    /// as `publication.confirm`, composed by the shell from the panel it holds,
     /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b));
     /// then the hold's answer ([`Holds::send`]), the anchors handed to it for a
     /// burst's line — the identities on either side of the span the burst edits

@@ -98,15 +98,15 @@
 //! **The file is primary** (PATTERNS P38; §3c.3). A newer `v`, an unknown
 //! header member, or a middle line that is not a whole line of the two
 //! forms — not UTF-8, not a JSON object, a member missing or of another
-//! type, a `doc` that is no document address, an ordinal past
-//! [`MAX_ORDINAL`], a line past [`MAX_HELD_LINE_BYTES`] — halts this
-//! principal's writing at this board naming the path, and so does a whole
-//! header line that is no JSON object, names another `type` or carries no
-//! `v` of 1 or more: never rebuilt over a whole line, never moved, never
-//! removed. A misplaced file (header `board` not the directory's chain, or
-//! `principal` not the file's name) is moved aside by a rename that never
-//! overwrites (`aside_name`'s form, the index's idiom), this principal's
-//! file started fresh.
+//! type, a `doc` that is no document address, anchors past
+//! [`MAX_ANCHOR_BYTES`], an ordinal past [`MAX_ORDINAL`], a line past
+//! [`MAX_HELD_LINE_BYTES`] — halts this principal's writing at this board
+//! naming the path, and so does a whole header line that is no JSON object,
+//! names another `type` or carries no `v` of 1 or more: never rebuilt over a
+//! whole line, never moved, never removed. A misplaced file (header `board`
+//! not the directory's chain, or `principal` not the file's name) is moved
+//! aside by a rename that never overwrites (`aside_name`'s form, the index's
+//! idiom), this principal's file started fresh.
 //!
 //! **Compaction.** Once the queue holds no line, the file is removed under
 //! the lock (`file::remove`); a file is never rewritten in place, its whole
@@ -118,14 +118,17 @@
 //! every later line `AlreadyExists` and keep every burst after it in memory
 //! alone.
 //!
-//! **The store's budgets, on what a hold adds.** No line is held that would
-//! carry the queue's standing frames past [`MAX_HELD_FRAME_BYTES`], the
-//! board's own frame cap, or its lines past [`MAX_HELD_LINES`] — a line past
-//! either refused and kept nowhere. A reopened queue is read whole, past
-//! either budget where its file is past it (a `done` the device refused
-//! leaves its line on disk, and a file another writer made may hold any
-//! number), and holds nothing more until it drains below them. Each line is
-//! bounded by [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike;
+//! **The store's budgets, on what a hold adds.** A line's anchors are bounded
+//! at their one door ([`Anchors::of`]) by [`MAX_ANCHOR_BYTES`], the bridge's
+//! argument and the held file's member alike, as the burst's door bounds its
+//! frame by the board's frame cap. No line is held that would carry the
+//! queue's standing frames and anchors past [`MAX_HELD_BYTES`], one frame and
+//! one line's anchors at their bounds, or its lines past [`MAX_HELD_LINES`] —
+//! a line past either refused and kept nowhere. A reopened queue is read
+//! whole, past either budget where its file is past it (a `done` the device
+//! refused leaves its line on disk, and a file another writer made may hold
+//! any number), and holds nothing more until it drains below them. Each line
+//! is bounded by [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike;
 //! the re-marks one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark
 //! past them taken in the queue alone; and the file is read line by line,
 //! keeping the standing lines alone — so an open holds the queue it reads,
@@ -157,37 +160,53 @@ use crate::wire::{document_address, json_len, within_components, MAX_FRAME_BYTES
 /// The lock file's name, the key store's idiom (`search.md` §5.6).
 const LOCK_NAME: &str = "lock";
 
-/// The queue's budget: the board's own frame cap, [`MAX_FRAME_BYTES`].
+/// The most bytes a line's anchors may spell: the board's frame cap.
+///
+/// It is the bound [`Anchors::of`] holds the page's anchors to (SP-17), at
+/// the bridge's door and at the held file's reader alike: the length of
+/// their compact JSON, the spelling the bridge and the held file give them.
+/// The page reads its anchors off one `image` answer — at most the board's
+/// run budget of runs, each an I-address the board minted and a width — so
+/// honest anchors are kilobytes, far under it. Anchors past the bound are of
+/// no form: the bridge refuses them `malformed_args` naming `anchors`, and
+/// the reader halts on a line carrying them.
+pub const MAX_ANCHOR_BYTES: usize = MAX_FRAME_BYTES;
+
+/// The queue's budget: one frame and one line's anchors, each at its bound.
 ///
 /// It is the most bytes a hold lets a principal's standing lines' frames
-/// come to at one board, so a burst the hold admits always fits a queue
-/// holding none. The design's estimate is that hours of typing are
-/// kilobytes (§3c.3), three orders under it; a queue past it is a page
-/// holding without bound — every frame copied to disk and read back at the
+/// and anchors come to at one board — the board's own frame cap,
+/// [`MAX_FRAME_BYTES`], beside [`MAX_ANCHOR_BYTES`] — so a burst the burst's
+/// door admits, its anchors of their form, always fits a queue holding none.
+/// The design's estimate is that hours of typing are kilobytes (§3c.3),
+/// orders of magnitude under it; a queue past it is a page holding without
+/// bound — every frame and its anchors copied to disk and read back at the
 /// next open — so the line that would pass it is refused, and kept nowhere.
 /// A reopened queue is read whole, past it where its file is, and holds no
 /// line more until it drains below it.
-pub const MAX_HELD_FRAME_BYTES: usize = MAX_FRAME_BYTES;
+pub const MAX_HELD_BYTES: usize = MAX_FRAME_BYTES + MAX_ANCHOR_BYTES;
 
 /// The most bytes one line of a held file may carry, its `\n` aside.
 ///
-/// The bound holds at the writer and at the reader alike. A `held` line
-/// spells its frame (within [`MAX_HELD_FRAME_BYTES`]) and beside it the
-/// frame's own `doc` and `id` again, a second frame's worth at most, with
-/// room over for its cause and a board's verdict as a daemon answers one (a
-/// few hundred bytes). The writer copies no longer line — the queue keeps
+/// The bound holds at the writer and at the reader alike, and is spelled
+/// from the bounds of a line's own members, never from the queue's budget.
+/// A `held` line spells its frame (within [`MAX_FRAME_BYTES`], the burst's
+/// door's bound) and beside it the frame's own `doc` and `id` again, a
+/// second frame's worth at most, its anchors (within [`MAX_ANCHOR_BYTES`]),
+/// and room over for its cause and a board's verdict as a daemon answers one
+/// (a few hundred bytes). The writer copies no longer line — the queue keeps
 /// it, unwritten, as it keeps a line the device refused — and the reader
 /// halts on one as damaged, reading no more of it than one byte past the
 /// bound.
-const MAX_HELD_LINE_BYTES: usize = 2 * MAX_HELD_FRAME_BYTES + 64 * 1024;
+const MAX_HELD_LINE_BYTES: usize = 2 * MAX_FRAME_BYTES + MAX_ANCHOR_BYTES + 64 * 1024;
 
 /// The most lines a hold lets a principal's queue come to at one board.
 ///
 /// It is the queue's line budget. The resend walks the queue line by line,
 /// finding each line's document among the others, and a line costs its walk
 /// the same whatever its frame holds — so the lines a hold admits bound the
-/// walk's work as the frames' bytes bound its memory, and the byte budget
-/// alone admits a quarter of a million empty bursts held behind one
+/// walk's work as the lines' bytes bound its memory, and the byte budget
+/// alone admits hundreds of thousands of empty bursts held behind one
 /// refused. The design's outage is hours of typing in kilobytes (§3c.3), the
 /// burst machine coalescing each pause's keystrokes into one burst: at a
 /// burst per ten bytes typed, 4096 lines is hours of continuous typing.
@@ -199,8 +218,8 @@ pub const MAX_HELD_LINES: usize = 4096;
 /// The most bytes of re-mark lines one file copies, creation to compaction.
 ///
 /// It is the re-mark budget, each line counted as [`MAX_HELD_LINE_BYTES`]
-/// counts a line. A re-mark copies its whole line, frame and all, under the
-/// new reason, and the board's answers choose the reasons: a board
+/// counts a line. A re-mark copies its whole line, frame, anchors and all,
+/// under the new reason, and the board's answers choose the reasons: a board
 /// answering each probe with another hold-class cause would grow the file
 /// by a synced line at every probe for as long as it answers so, for a few
 /// hundred bytes of answer each. An honest outage re-marks a document's head
@@ -318,7 +337,9 @@ impl Reason {
 /// that carries no `span`. Made by [`Anchors::of`] alone, from the bridge's
 /// argument and from the held file's member alike, so every anchor kept is
 /// an I-address in the tumbler-string form the shift splits ([`i_address`])
-/// and every run of a span one [`SpanRun`] admits (SP-18).
+/// and every run of a span one [`SpanRun`] admits (SP-18), and the whole
+/// spells no more than [`MAX_ANCHOR_BYTES`] (SP-17), its bytes counted there
+/// once for the queue's budget ([`Anchors::bytes`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchors {
     /// The I-address of the unit just before the span; `None` at the start.
@@ -330,6 +351,8 @@ pub struct Anchors {
     /// It is `None` where the page names none, as it names none for a
     /// placement at a point.
     pub span: Option<Vec<SpanRun>>,
+    /// The length of the anchors' compact JSON, within [`MAX_ANCHOR_BYTES`].
+    bytes: usize,
 }
 
 impl Anchors {
@@ -338,9 +361,15 @@ impl Anchors {
     /// The form is `{before, after, span?}`, `before` and `after` present,
     /// each `null` or an I-address ([`i_address`]), `span` absent or a
     /// non-empty list of runs of [`SpanRun`]'s form, and nothing beside the
-    /// three; any other value is of no form, which the bridge refuses
-    /// `malformed_args` naming `anchors` and the held file's reader halts on.
+    /// three, the whole spelling no more than [`MAX_ANCHOR_BYTES`] as compact
+    /// JSON — measured first, before any member is read; any other value is
+    /// of no form, which the bridge refuses `malformed_args` naming `anchors`
+    /// and the held file's reader halts on.
     pub fn of(v: &Value) -> Option<Anchors> {
+        let bytes = json_len(v);
+        if bytes > MAX_ANCHOR_BYTES {
+            return None;
+        }
         let m = v.as_object().filter(|m| m.keys().all(|k| matches!(k.as_str(), "before" | "after" | "span")))?;
         let anchor = |name: &str| match m.get(name)? {
             Value::Null => Some(None),
@@ -352,7 +381,7 @@ impl Anchors {
             Some(Value::Array(runs)) if !runs.is_empty() => Some(runs.iter().map(SpanRun::of).collect::<Option<Vec<_>>>()?),
             Some(_) => return None,
         };
-        Some(Anchors { before: anchor("before")?, after: anchor("after")?, span })
+        Some(Anchors { before: anchor("before")?, after: anchor("after")?, span, bytes })
     }
 
     /// Returns the anchors as the bridge and the held file spell them.
@@ -363,6 +392,32 @@ impl Anchors {
         }
         v
     }
+
+    /// Returns the bytes the anchors spell, within [`MAX_ANCHOR_BYTES`].
+    ///
+    /// It is the length of their compact JSON as [`Anchors::of`] measured
+    /// it, which is the length of their spelling on the bridge and in the
+    /// held file ([`Anchors::json`]): the form's members are `null`, strings
+    /// of digits and dots and its own names, none escaped, so two spellings
+    /// of the one value differ in their members' order alone. It is what a
+    /// line's anchors spend of the queue's budget ([`MAX_HELD_BYTES`]).
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+/// Returns anchors of their form whose compact JSON is `bytes` long.
+///
+/// They are a `before` of three components, its middle one as long as the
+/// length asks, and no `after`: a suite's anchors at a bound, or past it.
+///
+/// # Panics
+///
+/// Panics where `bytes` is under 31, the shortest such anchors spell.
+#[cfg(test)]
+pub(crate) fn anchors_spelled(bytes: usize) -> Value {
+    let middle = bytes.checked_sub(30).filter(|n| *n >= 1).expect("anchors of three components spell 31 bytes at least");
+    json!({"before": format!("1.{}.1", "1".repeat(middle)), "after": null})
 }
 
 /// One I-run of the units a burst's span holds (skep #751).
@@ -485,6 +540,17 @@ pub struct HeldLine {
     pub reason: Reason,
     /// The append's wall-clock unix milliseconds.
     pub time: u64,
+}
+
+impl HeldLine {
+    /// Returns the bytes the line spends of its queue's budget.
+    ///
+    /// They are its frame's and its anchors' ([`MAX_HELD_BYTES`]'s count):
+    /// what the open sums, a rewrite recounts, a settle gives back and a
+    /// join adds, as the hold added them.
+    fn held_bytes(&self) -> usize {
+        json_len(&self.frame) + self.anchors.as_ref().map_or(0, Anchors::bytes)
+    }
 }
 
 /// What opening a principal's file yields.
@@ -949,7 +1015,7 @@ impl HeldDir {
             }
         }
         let lines: Vec<HeldLine> = standing.into_values().collect();
-        let held_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
+        let held_bytes = lines.iter().map(HeldLine::held_bytes).sum();
         // The header's account is the file's own from here: what the join
         // opens the board's file under for a principal with no session now.
         let account = header.get("account").and_then(Value::as_str).map_or_else(|| disk.account.clone(), str::to_string);
@@ -993,9 +1059,10 @@ impl HeldDir {
 /// One principal's queue, which the shell holds.
 ///
 /// It holds its un-done `held` lines in `k` order — a hold adding none past
-/// [`MAX_HELD_LINES`] — the next ordinal, the bytes its lines' frames hold
-/// ([`MAX_HELD_FRAME_BYTES`]'s count), and the file the lines are copied to
-/// — `None` where the store keeps them in memory alone (§3c.3).
+/// [`MAX_HELD_LINES`] — the next ordinal, the bytes its lines' frames and
+/// anchors hold ([`MAX_HELD_BYTES`]'s count, each line's its
+/// `HeldLine::held_bytes`), and the file the lines are copied to — `None`
+/// where the store keeps them in memory alone (§3c.3).
 #[derive(Debug)]
 pub struct HeldQueue {
     disk: Option<Disk>,
@@ -1056,12 +1123,12 @@ pub struct Entered {
 pub enum Unheld {
     /// The queue is full, by its bytes, its lines or its ordinals.
     ///
-    /// The queue's standing frames' bytes, `held_bytes`, and the line's,
-    /// `frame_bytes`, would pass [`MAX_HELD_FRAME_BYTES`] — or the queue's
-    /// lines, `held_lines`, stand at [`MAX_HELD_LINES`] already, or past it
-    /// as a reopened file can, or its next ordinal would pass
-    /// [`MAX_ORDINAL`].
-    Full { held_bytes: usize, frame_bytes: usize, held_lines: usize },
+    /// The queue's standing frames' and anchors' bytes, `held_bytes`, and
+    /// the line's, its frame's `frame_bytes` and its anchors' `anchor_bytes`,
+    /// would pass [`MAX_HELD_BYTES`] — or the queue's lines, `held_lines`,
+    /// stand at [`MAX_HELD_LINES`] already, or past it as a reopened file
+    /// can, or its next ordinal would pass [`MAX_ORDINAL`].
+    Full { held_bytes: usize, frame_bytes: usize, anchor_bytes: usize, held_lines: usize },
     /// A line no reader of the file reads.
     ///
     /// The line's `doc` is no document address in its one spelling
@@ -1141,29 +1208,33 @@ impl HeldQueue {
     /// Where the queue has a file, the line is copied to it — one `write`
     /// then `sync_data` (persist-first), the header written once first where
     /// the file is new. `anchors` are the page's, kept with the line for the
-    /// shift (skep #442), none where the burst carried none. It answers the
-    /// ordinal the line took, and why its copy failed where it did, for the
-    /// caller's answer to say (§3c.3).
+    /// shift (skep #442), none where the burst carried none; their bytes
+    /// spend the queue's budget beside the frame's. It answers the ordinal
+    /// the line took, and why its copy failed where it did, for the caller's
+    /// answer to say (§3c.3).
     ///
     /// # Errors
     ///
     /// Returns [`Unheld`], checked in this order, the first that holds
     /// answering — its `doc` or `frame` one the reader refuses
     /// ([`Unheld::Unreadable`]), else its ordinal past [`MAX_ORDINAL`], the
-    /// queue at [`MAX_HELD_LINES`] lines, or its frame carrying the queue's
-    /// past [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`]) — and the line kept
-    /// nowhere: the writer holds no line the file's reader would halt on.
+    /// queue at [`MAX_HELD_LINES`] lines, or its frame and its anchors
+    /// carrying the queue's past [`MAX_HELD_BYTES`] ([`Unheld::Full`]) — and
+    /// the line kept nowhere: the writer holds no line the file's reader would
+    /// halt on.
     pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, anchors: Option<Anchors>, reason: Reason) -> Result<Entered, Unheld> {
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
         }
         let frame_bytes = json_len(&frame);
-        if self.next_k > MAX_ORDINAL || self.lines.len() >= MAX_HELD_LINES || self.held_bytes.saturating_add(frame_bytes) > MAX_HELD_FRAME_BYTES {
-            return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, held_lines: self.lines.len() });
+        let anchor_bytes = anchors.as_ref().map_or(0, Anchors::bytes);
+        let line_bytes = frame_bytes + anchor_bytes;
+        if self.next_k > MAX_ORDINAL || self.lines.len() >= MAX_HELD_LINES || self.held_bytes.saturating_add(line_bytes) > MAX_HELD_BYTES {
+            return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, anchor_bytes, held_lines: self.lines.len() });
         }
         let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, anchors, reason, time: now_ms() };
         self.next_k += 1;
-        self.held_bytes += frame_bytes;
+        self.held_bytes += line_bytes;
         let unwritten = self.disk.as_mut().and_then(|d| d.write_line(&held_line_bytes(&line)).err());
         let k = line.k;
         self.lines.push(line);
@@ -1246,10 +1317,10 @@ impl HeldQueue {
     /// dialed: a relaunch after the dial's answer is lost reads the landed
     /// test against the positions the shell sent, never the page's. A frame
     /// the line already carries changes nothing and writes nothing. The
-    /// queue's frame bytes are recounted by the new frame — a shift changes
-    /// digits, never what the queue's budget bounds, which is what a hold
-    /// ADDS — and the queue takes the frame whatever the disk did. A line
-    /// not standing is left alone.
+    /// queue's bytes are recounted by the new frame, the line's anchors
+    /// counted as they were — a shift changes digits, never what the queue's
+    /// budget bounds, which is what a hold ADDS — and the queue takes the
+    /// frame whatever the disk did. A line not standing is left alone.
     ///
     /// # Errors
     ///
@@ -1263,10 +1334,10 @@ impl HeldQueue {
         if line.frame == frame {
             return Ok(());
         }
-        let was = json_len(&line.frame);
+        let was = line.held_bytes();
         line.frame = frame;
         line.time = now_ms();
-        self.held_bytes = self.held_bytes.saturating_sub(was).saturating_add(json_len(&line.frame));
+        self.held_bytes = self.held_bytes.saturating_sub(was).saturating_add(line.held_bytes());
         let bytes = held_line_bytes(line);
         match self.disk.as_mut() {
             Some(d) => d.write_remark(&bytes),
@@ -1302,7 +1373,7 @@ impl HeldQueue {
     pub fn done(&mut self, k: u64, done: Done) -> Result<Settled, DoneError> {
         let Some(index) = self.lines.iter().position(|l| l.k == k) else { return Err(DoneError::NoSuchLine) };
         let line = self.lines.remove(index);
-        self.held_bytes = self.held_bytes.saturating_sub(json_len(&line.frame));
+        self.held_bytes = self.held_bytes.saturating_sub(line.held_bytes());
         // The lines from `index` on are those held after it, in `k` order.
         if let Done::Kept { at: Some(at) } = done {
             raise_bases(self.lines[index..].iter_mut(), &line.doc, at);
@@ -1357,10 +1428,10 @@ impl HeldQueue {
     /// ordinal in order, and the caller re-says `held` for their documents.
     /// Each line is copied to this queue's file and synced as it enters
     /// (persist-first), its `base`, frame, anchors, reason and `time` as
-    /// `from` held them; the queue's frame bytes count them, and no budget
-    /// refuses one — the join enters what stood, as a reopen reads a file
-    /// whole, and the queue holds nothing more until it drains below its
-    /// budgets.
+    /// `from` held them; the queue's bytes count each line's frame and
+    /// anchors, and no budget refuses one — the join enters what stood, as a
+    /// reopen reads a file whole, and the queue holds nothing more until it
+    /// drains below its budgets.
     ///
     /// # Errors
     ///
@@ -1392,7 +1463,7 @@ impl HeldQueue {
             }
             // `k` is within MAX_ORDINAL, so its successor is a `u64`.
             self.next_k = k + 1;
-            self.held_bytes = self.held_bytes.saturating_add(json_len(&entered.frame));
+            self.held_bytes = self.held_bytes.saturating_add(entered.held_bytes());
             self.lines.push(entered);
             joined.renumbered |= k != line.k;
             joined.entered.push((line.k, k));

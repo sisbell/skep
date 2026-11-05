@@ -25,6 +25,7 @@
 use std::io::{Read, Write};
 
 use super::*;
+use crate::held::{anchors_spelled, MAX_ANCHOR_BYTES};
 use crate::sessions::{Facts, Open};
 use crate::shapes::{Field, CALL_ROWS};
 
@@ -129,18 +130,20 @@ pub(super) fn nowhere() -> String {
 /// limit of another type, a listing's `opts` of no object and its `under` of
 /// no address or of another spelling, an `op` naming neither form or
 /// both, and an `op`'s `anchors` of no object, naming one anchor, carrying a
-/// member beside the three, an anchor that is no I-address, or a span of no
-/// list, of a run whose start is no I-address, or of a width spelled as a
-/// number — the session form's one optional member, read in its form before
-/// the session is looked up, which the single-form cell below does not reach
-/// — each before any dial, the shell's board one nothing answers at, where a
-/// dial would answer `unreachable`, and the guest origin a listener counting
-/// every dial (the mutants that read such a member as absent act as the
-/// mode's principal, open the label box, list every key or the whole index,
-/// or dial a guest read the page never asked for; the ones that read a span
-/// of another form shift a burst by units the page never named). A `null`
-/// is the row's default: the session opens as the mode's principal and meets
-/// the board's silence.
+/// member beside the three, an anchor that is no I-address, a span of no
+/// list, of a run whose start is no I-address or of a width spelled as a
+/// number, or anchors one byte past their bound — the session form's one
+/// optional member, read in its form before the session is looked up, which
+/// the single-form cell below does not reach — each before any dial, the
+/// shell's board one nothing answers at, where a dial would answer
+/// `unreachable`, and the guest origin a listener counting every dial (the
+/// mutants that read such a member as absent act as the mode's principal,
+/// open the label box, list every key or the whole index, or dial a guest
+/// read the page never asked for; the ones that read a span of another form
+/// shift a burst by units the page never named; the one that admits anchors
+/// past their bound holds a page's bytes without bound beside its burst). A
+/// `null` is the row's default: the session opens as the mode's principal
+/// and meets the board's silence.
 #[test]
 fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let dir = TempDir::new().unwrap();
@@ -165,7 +168,8 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         // The session form's `anchors`, read in its form before the session
         // is looked up: no object, one anchor, a member beside the three, an
         // anchor that is no I-address, a span of no list, a span run whose
-        // start is no I-address, and one whose width is a number.
+        // start is no I-address, one whose width is a number, and anchors
+        // one byte past their bound.
         ("op", json!({"session": "s-x", "frame": read, "anchors": 7}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "edge": 1}}), "anchors"),
@@ -173,6 +177,7 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": 1}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "x", "width": "1"}]}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "1.0.1.0.1.0.1.2", "width": 2}]}}), "anchors"),
+        ("op", json!({"session": "s-x", "frame": read, "anchors": anchors_spelled(MAX_ANCHOR_BYTES + 1)}), "anchors"),
         // `changes`' two forms: `class` of another value or form, read before
         // the session is looked up; `class` in the guest form and a guest
         // `limit` of another form, each before the target is dialed; the

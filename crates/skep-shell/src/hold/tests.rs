@@ -882,6 +882,12 @@ fn spanned(before: Option<&str>, after: Option<&str>, runs: &[(&str, u64)]) -> A
     Anchors::of(&json!({"before": before, "after": after, "span": span})).expect("the anchors' form")
 }
 
+/// The anchors of their form whose spelling is exactly `bytes` long, read
+/// through their one door (`held::anchors_spelled`).
+fn anchors_of_len(bytes: usize) -> Anchors {
+    Anchors::of(&crate::held::anchors_spelled(bytes)).expect("the anchors' form")
+}
+
 /// The principal's held file under the ground's store, at the fake's chain.
 fn held_file(g: &Ground) -> std::path::PathBuf {
     g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held")

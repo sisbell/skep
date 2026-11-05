@@ -22,15 +22,18 @@
 //! person's `send` on a moved document — reads back with the raised base,
 //! never lowered by a raise below it or a later `done` kept below it.
 //!
-//! The budgets' cells: the queue's frames held to the board's frame cap and
-//! its lines to the line budget — a reopened queue past it read whole,
-//! holding nothing more until it drains; an unchanged re-mark writing
-//! nothing, and a board flapping between two causes growing the file no
-//! further than its re-mark budget; the ordinals held to the page's; the
-//! writer refusing a line its reader would halt on and copying none past the
-//! line bound; and the reader halting on any line it cannot read whole — no
-//! UTF-8, a member missing or of another type, an ordinal past the page's, a
-//! line past the bound — while ignoring a torn last line cut mid-character.
+//! The budgets' cells: the queue's frames and anchors held to its byte
+//! budget, each line's anchors counted beside its frame at the hold, the
+//! open, the join and the settle, and its lines to the line budget — a
+//! reopened queue past it read whole, holding nothing more until it drains;
+//! a line at every member's bound written and read back; an unchanged
+//! re-mark writing nothing, and a board flapping between two causes growing
+//! the file no further than its re-mark budget; the ordinals held to the
+//! page's; the writer refusing a line its reader would halt on and copying
+//! none past the line bound; and the reader halting on any line it cannot
+//! read whole — no UTF-8, a member missing or of another type, anchors past
+//! their bound, an ordinal past the page's, a line past the bound — while
+//! ignoring a torn last line cut mid-character.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -683,11 +686,13 @@ fn a_raised_remark_reads_back_with_its_base_and_no_later_done_lowers_it() {
 /// page's string this file keeps — each under a hold `sent: false`, one that
 /// *may* have landed, and a refused run's with the board's verdict beside it,
 /// over a frame of a multi-byte value, each without anchors, with both, with
-/// an edge on either side, and with a span of two runs; reopened, the queue
-/// is the queue that was held (the mutant reader that drops `refusal` reads
-/// a refused run back as holding, and the resend then sends what awaits the
-/// person's act; the one that drops the anchors, or their span, holds a
-/// burst the shift cannot move).
+/// an edge on either side, and with a span of two runs, each form's anchors
+/// counting the bytes of their spelling; reopened, the queue is the queue
+/// that was held (the mutant reader that drops `refusal` reads a refused run
+/// back as holding, and the resend then sends what awaits the person's act;
+/// the one that drops the anchors, or their span, holds a burst the shift
+/// cannot move; the door that counts other bytes than the anchors' spelling
+/// lets their budget drift from the file's lines).
 #[test]
 fn every_line_form_reads_back_as_it_was_held() {
     let tmp = TempDir::new().unwrap();
@@ -702,6 +707,9 @@ fn every_line_form_reads_back_as_it_was_held() {
         Some(anchors(Some("1.0.1.0.1.0.1.5"), None)),
         Some(spanned(Some("1.0.1.0.1.0.1.1"), None, &[("1.0.1.0.1.0.1.2", 3), ("1.0.1.0.2.0.1.18446744073709551615", 1)])),
     ];
+    for anchors in anchored.iter().flatten() {
+        assert_eq!(anchors.bytes(), json_len(&anchors.json()), "the anchors' bytes are their spelling's: {}", anchors.json());
+    }
     for id in [None, Some("plain"), Some("a \"quote\", a\nnewline, a \\ backslash")] {
         for reason in &reasons {
             for anchors in &anchored {
@@ -716,9 +724,9 @@ fn every_line_form_reads_back_as_it_was_held() {
 }
 
 /// The anchors a line carries: `before` and `after`, each an I-address or
-/// none, and no span.
+/// none, and no span — read through their one door.
 fn anchors(before: Option<&str>, after: Option<&str>) -> Anchors {
-    Anchors { before: before.map(str::to_string), after: after.map(str::to_string), span: None }
+    Anchors::of(&json!({"before": before, "after": after})).expect("the anchors' form")
 }
 
 /// The anchors a page sends for a span of units.
@@ -734,14 +742,15 @@ fn spanned(before: Option<&str>, after: Option<&str>, runs: &[(&str, u64)]) -> A
 /// A REWRITTEN FRAME reads back under its ordinal (skep #442): a line held
 /// with anchors, its frame rewritten — the shift's act — and the file opened
 /// again holds ONE line of that ordinal carrying the new frame, its reason,
-/// `sent`, `base`, `id` and anchors as they were, the queue's frame bytes
-/// recounted; a frame the line already carries writes nothing; a line not
-/// standing is left alone; and the rewrite spends the re-mark budget a whole
-/// frame at a time — past it the copy is refused, the queue taking the frame
-/// all the same, and a reopen reads the frame copied last (the mutant reader
-/// that takes a rewritten line as a new one lists the burst twice; the
-/// writer that keeps the frame off the disk relaunches the page's positions
-/// after a shifted answer is lost, and the landed test reads the wrong site).
+/// `sent`, `base`, `id` and anchors as they were, the queue's bytes
+/// recounted by the new frame, the anchors' kept; a frame the line already
+/// carries writes nothing; a line not standing is left alone; and the
+/// rewrite spends the re-mark budget a whole frame at a time — past it the
+/// copy is refused, the queue taking the frame all the same, and a reopen
+/// reads the frame copied last (the mutant reader that takes a rewritten line
+/// as a new one lists the burst twice; the writer that keeps the frame off
+/// the disk relaunches the page's positions after a shifted answer is lost,
+/// and the landed test reads the wrong site).
 #[test]
 fn a_rewritten_frame_reads_back_under_its_ordinal_and_spends_the_remark_budget() {
     let tmp = TempDir::new().unwrap();
@@ -759,7 +768,7 @@ fn a_rewritten_frame_reads_back_under_its_ordinal_and_spends_the_remark_budget()
     queue.rewrite(k, shifted.clone()).unwrap();
     queue.rewrite(99, json!({"op": "delete"})).unwrap();
     assert_eq!(file_len(&tmp), written, "the frame the line carries, and a line not standing, write nothing");
-    assert_eq!(queue.held_bytes, json_len(&shifted) + json_len(&json!({"op": "delete"})), "the frame bytes are recounted");
+    assert_eq!(queue.held_bytes, json_len(&shifted) + held.bytes() + json_len(&json!({"op": "delete"})), "the frame bytes are recounted, the anchors' kept");
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
     assert_eq!(ks(&reopened), [k, k + 1], "one line per ordinal");
     let line = &reopened.lines()[0];
@@ -811,31 +820,95 @@ fn file_len(tmp: &TempDir) -> u64 {
     fs::metadata(file_path(tmp)).map_or(0, |m| m.len())
 }
 
-/// THE QUEUE's BUDGET: the standing frames held to [`MAX_HELD_FRAME_BYTES`]
-/// — a frame that would pass it refused `Full`, naming the bytes held and
-/// the frame's, and NOTHING of it written; one at the budget exactly held;
-/// and room made by a `done` (the mutant that never counts, or never
-/// uncounts, holds a page's frames without bound, or refuses for good).
+/// The anchors of their form whose spelling is exactly `bytes` long, read
+/// through their one door.
+fn anchors_of_len(bytes: usize) -> Anchors {
+    Anchors::of(&anchors_spelled(bytes)).expect("the anchors' form")
+}
+
+/// THE QUEUE's BUDGET: the standing frames and anchors held to
+/// [`MAX_HELD_BYTES`] — a line one frame and one line's anchors at their
+/// bounds less a hundred bytes, and a frame that would pass the budget
+/// refused `Full`, naming the bytes held, the frame's and the anchors', and
+/// NOTHING of it written; one at the budget exactly held; and room made by a
+/// `done` (the mutant that never counts, or never uncounts, holds a page's
+/// frames without bound, or refuses for good).
 #[test]
-fn the_queue_holds_its_frames_within_its_budget_and_writes_nothing_past_it() {
+fn the_queue_holds_its_frames_and_anchors_within_its_budget_and_writes_nothing_past_it() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_FRAME_BYTES - 100), None, Reason::of("stopped", false)).unwrap().k;
+    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_FRAME_BYTES - 100), Some(anchors_of_len(MAX_ANCHOR_BYTES)), Reason::of("stopped", false)).unwrap().k;
     let written = file_len(&tmp);
     let refused = queue.hold("1.0.1.0.1", None, 0, sized_frame(200), None, Reason::of("behind", false));
-    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_FRAME_BYTES - 100, frame_bytes: 200, held_lines: 1 });
+    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_BYTES - 100, frame_bytes: 200, anchor_bytes: 0, held_lines: 1 });
     assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first]), "nothing of the refused line is kept");
     assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(100), None, Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
     queue.done(first, Done::Kept { at: Some(3) }).unwrap();
     assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(200), None, Reason::of("behind", false)).is_ok(), "a done makes room");
 }
 
+/// Checks that the queue counts each line's anchors beside its frame.
+///
+/// Three small frames on three documents, each carrying anchors of three
+/// quarters of [`MAX_ANCHOR_BYTES`]: two are held, and the third — its frame
+/// a few bytes, its anchors carrying the queue past [`MAX_HELD_BYTES`] — is
+/// refused `Full`, naming its anchors' bytes, and nothing of it written. The
+/// file reopened refuses it alike, and so does a queue in memory alone that
+/// has joined the reopened one; a `done` of the first gives its anchors'
+/// bytes back, and the third is held (the mutants that count frames alone at
+/// the hold, the open, the join or the settle hold a page's anchors without
+/// bound — every one copied to disk and read back at each launch — or refuse
+/// for good).
+#[test]
+fn the_queue_counts_each_lines_anchors_beside_its_frame() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let each = anchors_of_len(MAX_ANCHOR_BYTES * 3 / 4);
+    let hold = |queue: &mut HeldQueue, doc: &str| queue.hold(doc, None, 0, json!({"op": "insert"}), Some(each.clone()), Reason::of("behind", false));
+    let full = |held: Result<Entered, Unheld>| matches!(held, Err(Unheld::Full { anchor_bytes, held_lines: 2, .. }) if anchor_bytes == MAX_ANCHOR_BYTES * 3 / 4);
+    let first = hold(&mut queue, "1.0.1.0.1").unwrap().k;
+    hold(&mut queue, "1.0.1.0.2").unwrap();
+    let written = file_len(&tmp);
+    assert!(full(hold(&mut queue, "1.0.1.0.3")), "the third line's anchors pass the budget at the hold");
+    assert_eq!(file_len(&tmp), written, "nothing of the refused line is written");
+    let mut reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert!(full(hold(&mut reopened, "1.0.1.0.3")), "the open counts its lines' anchors");
+    let mut joined = HeldQueue::in_memory();
+    joined.join(&reopened).unwrap();
+    assert!(full(hold(&mut joined, "1.0.1.0.3")), "the join counts them too");
+    queue.done(first, Done::Dropped).unwrap();
+    assert!(hold(&mut queue, "1.0.1.0.3").is_ok(), "a done gives its anchors' bytes back");
+}
+
+/// Checks that a line at every member's bound is written and read back.
+///
+/// Its frame is the board's frame cap exactly, an `id` filling it — the
+/// line spelling that `id` a second time as its own — and its anchors are at
+/// [`MAX_ANCHOR_BYTES`]: held into an empty queue it fits the queue's budget
+/// and the line bound alike, its copy written whole, and a reopen reads it
+/// back as it was held (the mutant whose line bound leaves the anchors out
+/// keeps the line in memory alone, `unwritten`, and a relaunch loses it).
+#[test]
+fn a_line_at_every_members_bound_is_written_and_read_back() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let id = "x".repeat(MAX_FRAME_BYTES - json_len(&json!({"op": "insert", "id": ""})));
+    let frame = json!({"op": "insert", "id": id});
+    assert_eq!(json_len(&frame), MAX_FRAME_BYTES, "the frame at the board's frame cap");
+    let held = queue.hold("1.0.1.0.1", Some(id.as_str()), 0, frame, Some(anchors_of_len(MAX_ANCHOR_BYTES)), Reason::of("unreachable", false)).unwrap();
+    assert!(held.unwritten.is_none(), "the line is copied whole: {:?}", held.unwritten);
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert!(reopened.lines() == queue.lines(), "the line read back as it was held");
+}
+
 /// THE QUEUE's LINE BUDGET: [`MAX_HELD_LINES`] lines of empty bursts held —
-/// their bytes far under the frames' budget — and the next refused `Full`,
+/// their bytes far under the byte budget — and the next refused `Full`,
 /// naming the lines it holds, the queue standing at the budget; a `done`
-/// makes room for one more (the mutant that counts bytes alone holds a
-/// quarter of a million such bursts, and the resend walks them past one
+/// makes room for one more (the mutant that counts bytes alone holds such
+/// bursts by the hundred thousand, and the resend walks them past one
 /// another for days).
 #[test]
 fn the_queue_holds_no_line_past_its_line_budget() {
@@ -982,17 +1055,19 @@ fn line_with(member: &str, value: Option<Value>) -> Vec<u8> {
 /// `held` line missing a member or holding one of another type — a `doc`
 /// that is no document address, a frame that is no object, a `sent` that is
 /// no boolean, anchors of no object, naming one anchor, a member beside the
-/// three, an anchor that is no I-address, or a span of no list, of no run,
-/// or holding a run that is not one I-extent in its spelling — an ordinal
-/// past the page's (the largest a `u64` holds among them, read without a
-/// panic), and a `done` line of another form; the same file with the line
-/// whole reads live, its anchors of their form read, a span among them (the
-/// mutants that default a missing member, read text lossily, or take any
-/// ordinal, rebuild the person's text out of a file no writer of this format
-/// wrote; the one that reads anchors of another form as none shifts nothing
-/// a relaunch should; the one that takes a span run of another spelling — a
+/// three, an anchor that is no I-address, anchors one byte past their bound,
+/// or a span of no list, of no run, or holding a run that is not one
+/// I-extent in its spelling — an ordinal past the page's (the largest a
+/// `u64` holds among them, read without a panic), and a `done` line of
+/// another form; the same file with the line whole reads live, its anchors
+/// of their form read, at their bound and a span among them (the mutants
+/// that default a missing member, read text lossily, or take any ordinal,
+/// rebuild the person's text out of a file no writer of this format wrote;
+/// the one that reads anchors of another form as none shifts nothing a
+/// relaunch should; the one that takes a span run of another spelling — a
 /// width signed, of a leading zero, or past a `u64` — compares units the
-/// page never named).
+/// page never named; the one that reads anchors past their bound holds a
+/// stranger's bytes the bridge would have refused).
 #[test]
 fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let valid = line_with("sent", Some(json!(false)));
@@ -1005,6 +1080,9 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
     let span = json!({"before": "1.0.1.0.1.0.1.1", "after": null, "span": [{"start": "1.0.1.0.1.0.1.2", "width": "2"}]});
     let spanning = live(opened_over(&tmp, &line_with("anchors", Some(span))));
     assert_eq!(spanning.lines()[0].anchors, Some(spanned(Some("1.0.1.0.1.0.1.1"), None, &[("1.0.1.0.1.0.1.2", 2)])), "a span of its form read");
+    let tmp = TempDir::new().unwrap();
+    let bounded = live(opened_over(&tmp, &line_with("anchors", Some(anchors_spelled(MAX_ANCHOR_BYTES)))));
+    assert_eq!(bounded.lines()[0].anchors.as_ref().map(Anchors::bytes), Some(MAX_ANCHOR_BYTES), "anchors at their bound read, their bytes counted");
     let with_span = |span: Value| line_with("anchors", Some(json!({"before": null, "after": null, "span": span})));
     let run = |start: &str, width: Value| json!({"start": start, "width": width});
     // The bytes no UTF-8 holds sit inside a string member, so a lossy read
@@ -1019,6 +1097,7 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         ("a doc of no document", line_with("doc", Some(json!("d1")))),
         ("a doc in another spelling", line_with("doc", Some(json!("01.0.1.0.1")))),
         ("a frame of no object", line_with("frame", Some(json!("insert")))),
+        ("anchors past their bound", line_with("anchors", Some(anchors_spelled(MAX_ANCHOR_BYTES + 1)))),
         ("no frame", line_with("frame", None)),
         ("a sent of no boolean", line_with("sent", Some(json!("no")))),
         ("anchors of no object", line_with("anchors", Some(json!("1.0.1.0.1.0.1.3")))),

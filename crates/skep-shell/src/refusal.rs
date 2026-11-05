@@ -218,8 +218,11 @@ impl Name {
     pub const FRAME_TOO_LARGE: Name = Name("frame_too_large");
     /// A burst the principal's held queue has no room for.
     ///
-    /// Its standing frames or its lines hold the queue's budget already, or
-    /// its ordinals are spent — the burst refused, and kept nowhere.
+    /// Its standing frames and their anchors, or its lines, hold the queue's
+    /// budget already, or its ordinals are spent — the burst refused, and
+    /// kept nowhere. Its detail names the bytes held, the burst's frame's and
+    /// its anchors' (`held_bytes`, `frame_bytes`, `anchor_bytes`) against
+    /// `cap`, and the lines held (`held_lines`) against `line_cap`.
     pub const HELD_FULL: Name = Name("held_full");
     /// A held line handed to the person at its deadline, no landing found.
     ///

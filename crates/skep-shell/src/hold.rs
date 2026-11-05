@@ -110,7 +110,7 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Anchors, Done, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Torn, Unheld, MAX_HELD_FRAME_BYTES, MAX_HELD_LINES};
+use crate::held::{Anchors, Done, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind, Sessions};
@@ -1964,9 +1964,9 @@ impl Holds {
     ///
     /// Returns `store_halted` where the principal's file is halted
     /// ([`Holds::principal_hold`]), and `held_full` where the principal's
-    /// queue holds its budget already (`held::MAX_HELD_FRAME_BYTES`'s bytes,
-    /// or `held::MAX_HELD_LINES`'s lines) or its ordinals are spent, and
-    /// nothing held.
+    /// queue holds its budget already (`held::MAX_HELD_BYTES`'s bytes, its
+    /// lines' frames and anchors, or `held::MAX_HELD_LINES`'s lines) or its
+    /// ordinals are spent, and nothing held.
     fn enter_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason, base: u64) -> Result<LineEntered, Refusal> {
         let ph = self.principal_hold(board_hold, session)?;
         let (doc, frame, anchors) = burst.into_stored();
@@ -2425,14 +2425,16 @@ impl Holds {
 
 /// Returns the refusal for what the queue refused (`held::Unheld`).
 ///
-/// It is the principal's queue full — its frames' bytes, its lines or its
-/// ordinals — or — never for a burst [`Burst::admit`] let in — a line no
+/// It is the principal's queue full — its frames' and anchors' bytes, its
+/// lines or its ordinals — its detail naming the bytes held, the burst's
+/// frame's and its anchors' against `cap`, and the lines held against
+/// `line_cap`; or — never for a burst [`Burst::admit`] let in — a line no
 /// reader of the file reads.
 fn queue_refused(why: Unheld) -> Refusal {
     match why {
-        Unheld::Full { held_bytes, frame_bytes, held_lines } => Refusal::shell(
+        Unheld::Full { held_bytes, frame_bytes, anchor_bytes, held_lines } => Refusal::shell(
             Name::HELD_FULL,
-            json!({"held_bytes": held_bytes, "frame_bytes": frame_bytes, "cap": MAX_HELD_FRAME_BYTES, "held_lines": held_lines, "line_cap": MAX_HELD_LINES}),
+            json!({"held_bytes": held_bytes, "frame_bytes": frame_bytes, "anchor_bytes": anchor_bytes, "cap": MAX_HELD_BYTES, "held_lines": held_lines, "line_cap": MAX_HELD_LINES}),
         ),
         Unheld::Unreadable => Refusal::malformed("frame.doc"),
     }

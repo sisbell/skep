@@ -70,16 +70,19 @@
 //! newest — is replaced: a record composed from it with `landed` none and
 //! `replaces` its link is appended to the journal (`journal`, or the
 //! account's default) and linked from the merger's doc 1, so a reader of
-//! the journal sees the merge no longer stands on the draft. Where no
-//! record stands none is written, and the act stands all the same. A
-//! re-run after either act finds no marker and writes nothing — so where
-//! the record is not written after the act's write, for a lost
-//! acknowledgment at its writes, a head owed there, or a journal this
-//! merger may not read or this board does not register, the landing's
-//! record stands alone, which the halt says. A landing of the key made after
-//! either act writes a record of its own, which replaces this one: the
-//! landing's read-first takes the merger's newest record of the key, and
-//! this one names no landing (the `land` module's doc).
+//! the journal sees the merge no longer stands on the draft. A merge landed
+//! in the draft again with no take-back recorded between is the same
+//! landing (skep #790; the `land` module's doc): the undo takes back the
+//! later write, the one the marker or the feed row names, and the record it
+//! replaces is the first landing's. Where no record stands none is written,
+//! and the act stands all the same. A re-run after either act finds no
+//! marker and writes nothing — so where the record is not written after the
+//! act's write, for a lost acknowledgment at its writes, a head owed there,
+//! or a journal this merger may not read or this board does not register,
+//! the landing's record stands alone, which the halt says. A landing of the
+//! key made after either act writes a record of its own, which replaces
+//! this one: the landing's read-first takes the merger's newest record of
+//! the key, and this one names no landing (the `land` module's doc).
 //!
 //! **The head, before the write.** The board's head (`Board::board_head`;
 //! SP-14) is read before the one write, as the landing reads it: a claimed
@@ -132,11 +135,13 @@ pub struct Withdrawn {
     pub record: Option<Address>,
 }
 
-/// Puts a draft back as it stood before a merge landed in it (R6).
+/// Puts a draft back as it stood before the latest merge landed in it (R6).
 ///
-/// The dispatch, the pre-landing read, the one write and the record are
-/// the module's doc. `journal` is the merge journal the replacing record
-/// goes to, or the account's default where `None`, as a landing's.
+/// The latest landing is the write the draft's marker names, or for a
+/// baseless draft its feed row. The dispatch, the pre-landing read, the one
+/// write and the record are the module's doc. `journal` is the merge
+/// journal the replacing record goes to, or the account's default where
+/// `None`, as a landing's.
 ///
 /// # Errors
 ///

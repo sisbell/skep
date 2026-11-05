@@ -5667,6 +5667,120 @@ mod scripted {
         assert_eq!(atom["replaces"].as_str(), Some(in_u.to_string().as_str()), "U's record replaced");
     }
 
+    /// A SECOND LANDING OF ONE KEY INTO ONE DRAFT IS THE SAME LANDING (skep
+    /// #790): where the merger's newest record for the key names the draft,
+    /// a landing into it sends its one `set_arrangement` and writes no
+    /// record, the record keeping the first landing's position. (i) An edit
+    /// between: the race shape landed in `T`, `T` edited, the merge composed
+    /// again — the same key, the first record its prior — and landed in `T`.
+    /// The write lands after the edit with the marker at it, nothing is
+    /// appended or linked, and the answer is the write's position with the
+    /// first record, which stays current for the key naming the first
+    /// position and verifies equal there; a `resume` answers the same,
+    /// writing nothing; the undo is typed against the second write — the
+    /// marker's, never the record's — puts the edit back and replaces the
+    /// first record. (ii) A take-back whose record went unwritten, its link
+    /// refused for a head owed: the merge composed again and landed in `T`
+    /// is the same landing, the first record standing for it and current,
+    /// and the next undo is typed against the second write, its record
+    /// replacing the first.
+    #[test]
+    fn a_second_landing_of_one_key_into_one_draft_is_the_same_landing() {
+        let t = "1.0.1.0.5";
+        let world = || {
+            let mut w = World::race();
+            w.doc(t, false, ACCOUNT, vec![run(D, 1, 11)]);
+            w.staged(t, &format!("{D}.1"), 11);
+            w
+        };
+        let writes = ["stage", "set_arrangement", "create_new_document", "insert", "make_link"];
+        let wrote = |dialer: &Scripted| dialer.ops().into_iter().filter(|o| writes.contains(&o.as_str())).collect::<Vec<_>>();
+
+        // (i) An edit between.
+        let (dialer, board, signer) = open(world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (first_at, first) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let edited = vec![run(D, 1, 4), run(D, 12, 4)];
+        let edit_at = dialer.world().change(t, edited.clone());
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        assert_eq!(again.key, merged.key, "the premise: the same key");
+        assert_eq!(again.prior.as_ref().and_then(|p| p.link.clone()), Some(first.clone()), "the premise: the first landing's record is the prior");
+        dialer.clear();
+        let relanded = land(&board, &again, into_t()).expect("landed again");
+        let (at, _) = landing_of(&relanded);
+        assert!(at > edit_at, "the write lands after the edit: {relanded:?}");
+        assert_eq!(
+            relanded,
+            Landed::Draft { into: a(t), position: at, record: first.clone(), head_moved: None },
+            "the write's position, the first landing's record"
+        );
+        assert_eq!(wrote(&dialer), ["set_arrangement"], "one write, nothing of a record: {:?}", dialer.ops());
+        let w = dialer.world();
+        assert_eq!(w.docs.get(t).unwrap().runs, m_runs(&again), "T holds M");
+        assert_eq!(w.standing(t).1.map(|m| m.at), Some(at), "the marker at the second write");
+        drop(w);
+        let found = current(&board, Some(session.token()), &a(K), &merged.key).expect("the lookup").expect("a record");
+        assert_eq!(
+            (found.link.clone(), found.landed.clone()),
+            (Some(first.clone()), Some(RecordLanding::Draft { draft: a(t), position: first_at })),
+            "one record for the key, naming the first landing's position"
+        );
+        assert_eq!(verify(&board, Some(session.token()), &found), Ok(Verdict::Equal), "T held M at the first landing's position");
+        dialer.clear();
+        assert_eq!(resume(&board, &again, into_t()).expect("resumed"), Some(relanded.clone()), "the marker's position, the first record");
+        assert!(wrote(&dialer).is_empty(), "a resume writes nothing: {:?}", dialer.ops());
+        dialer.clear();
+        undo(&board, m, &a(t), &a(K), None).expect("undone");
+        assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the marker's position, never the record's");
+        assert_eq!(dialer.world().docs.get(t).unwrap().runs, edited, "T as it stood before the second write: the edit");
+        assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
+
+        // (ii) A take-back whose record went unwritten: the undo's link
+        // refused for a head owed past the undo's read.
+        let (dialer, board, signer) = open(world());
+        let session = sign_in(&board, &signer);
+        let m = merger(&session, &signer);
+        let into_t = || draft_landing(&session, &signer, Some(a(t)));
+        let merged = compose(&board, Some(session.token()), &race_inputs()).expect("composed");
+        let (first_at, first) = landing_of(&land(&board, &merged, into_t()).expect("landed"));
+        let link_id = format!("undo:{t}:{first_at}.link");
+        dialer.world().memo.insert(
+            link_id.clone(),
+            json!({"resp": "rejected", "code": "credential_refused", "detail": "attestation_invalid:board_unavailable", "disposition": "reorder", "op": "make_link"}),
+        );
+        let err = undo(&board, m, &a(t), &a(K), None).expect_err("the undo's link refused");
+        let Refusal::Halt(Halt::Halt(face)) = &err else { panic!("{err:?}") };
+        assert!(face.state.contains("the record of the undo is not written: this board has no H.1 yet"), "{face}");
+        assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "the premise: the undo stands");
+        dialer.world().memo.remove(&link_id);
+        let again = compose(&board, Some(session.token()), &race_inputs()).expect("composed again");
+        assert_eq!(
+            again.prior.as_ref().and_then(|p| p.link.clone()),
+            Some(first.clone()),
+            "the premise: the undo's record unlinked, the first landing's is the prior"
+        );
+        dialer.clear();
+        let relanded = land(&board, &again, into_t()).expect("landed again");
+        let (at, record) = landing_of(&relanded);
+        assert_eq!(record, first, "the same landing: {relanded:?}");
+        assert!(at > first_at, "a write of its own: {relanded:?}");
+        assert_eq!(wrote(&dialer), ["set_arrangement"], "one write, nothing of a record: {:?}", dialer.ops());
+        let found = current(&board, Some(session.token()), &a(K), &merged.key).expect("the lookup").expect("a record");
+        assert_eq!(
+            (found.link, found.landed),
+            (Some(first.clone()), Some(RecordLanding::Draft { draft: a(t), position: first_at })),
+            "the first landing's record current, its position kept"
+        );
+        dialer.clear();
+        undo(&board, m, &a(t), &a(K), None).expect("undone");
+        assert_eq!(dialer.frames("set_arrangement")[0]["as_of"].as_u64(), Some(at), "typed against the second write");
+        assert_eq!(dialer.world().docs.get(t).unwrap().runs, vec![run(D, 1, 11)], "T as it stood before the second write");
+        assert_eq!(appended_record(&dialer)["replaces"].as_str(), Some(first.to_string().as_str()), "the first landing's record replaced");
+    }
+
     /// A FRESH LANDING READS THE STANDING RECORD WHEN IT LANDS (the merge
     /// record's §1.5 (ii) and §4's currency), never the composition's
     /// `prior`. (a) A composition kept from after a fresh landing in `F`,

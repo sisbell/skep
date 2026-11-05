@@ -196,9 +196,11 @@ impl SideAt {
 /// Where a record's merge landed (§4, `landed`).
 ///
 /// It is the member minted and the ack's position, or the draft the merged
-/// list was landed into and the position of the one `set_arrangement` that
-/// landed it; where the landing found the member standing with no feed row
-/// of its mint, the position is the reads' highest `as_of`. `None` in the
+/// list was landed into and the position of the `set_arrangement` that
+/// first landed it — a later landing of the key into that draft is the same
+/// landing and writes no record (skep #790; the `land` module's doc); where
+/// the landing found the member standing with no feed row of its mint, the
+/// position is the reads' highest `as_of`. `None` in the
 /// record is the question — a merger that chose not to land (§3) — or,
 /// where the record `replaces` one naming a draft landing, the undo's or
 /// the withdrawal's testimony that the merge no longer stands on the draft
@@ -219,13 +221,19 @@ pub enum RecordLanding {
     Draft {
         /// The staging draft.
         draft: Address,
-        /// The `set_arrangement`'s commit position — the write's ack `at`.
+        /// The commit position of the `set_arrangement` that first landed
+        /// the key in the draft — the write's ack `at`.
         ///
-        /// It is the position the merge marker on the draft carries
-        /// (`doc_metadata`'s `merge.at`), so a `resume` that finds the draft
-        /// holding M with the marker of this merge's head takes the marker's
-        /// `at`; where the draft carries no such marker — a baseless draft,
-        /// an admitted fork — it is the resume's own read's `as_of`.
+        /// At that landing it is the position the merge marker on the draft
+        /// carries (`doc_metadata`'s `merge.at`), so a `resume` that finds
+        /// the draft holding M with the marker of this merge's head takes
+        /// the marker's `at`; where the draft carries no such marker — a
+        /// baseless draft, an admitted fork — it is the resume's own read's
+        /// `as_of`. The record keeps it: a later landing of the key into the
+        /// draft moves the marker and writes no record (skep #790), so the
+        /// marker, never this, names the draft's latest landing. `verify`
+        /// reads the draft at it, and a fresh landing that finds this record
+        /// standing answers it as `Landed::Draft`'s `position`.
         position: u64,
     },
 }

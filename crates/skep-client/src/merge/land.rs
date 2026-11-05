@@ -28,13 +28,17 @@
 //! the prior records (the merge record's §1.5 (ii), §1.3's step 7) — the
 //! links of the kind to each side of the key, kept to the merger's own
 //! doc 1, the newest there — standing where it names this landing's member
-//! or draft; else the journal found or minted, the atom appended at its
-//! end, the link from the merger's doc 1 to the member and every side
-//! besides the head under the kind, the record naming that newest record in
-//! `replaces` (P20: a later record from the same home names the one it
-//! replaces). A newer record of the key — an undo's, a withdrawal's, a
-//! landing of it elsewhere — replaces this landing's, so a landing after it
-//! writes its own. The composition's `Merged::prior` is what the
+//! or draft, whatever position it names; else the journal found or minted,
+//! the atom appended at its end, the link from the merger's doc 1 to the
+//! member and every side besides the head under the kind, the record naming
+//! that newest record in `replaces` (P20: a later record from the same home
+//! names the one it replaces). A newer record of the key — an undo's, a
+//! withdrawal's, a landing of it elsewhere — replaces this landing's, so a
+//! landing after it writes its own. A merge composed again and landed in
+//! the draft the newest record names, no take-back recorded between, is the
+//! same landing (skep #790): its write lands under its own ids and no record
+//! is written, the record keeping the first landing's position
+//! (`Newest::naming`). The composition's `Merged::prior` is what the
 //! composition saw, under the reader's currency, and never the landing's
 //! answer: a composition kept across a take-back, or one made before its
 //! own landing, lands by the board as it stands.
@@ -280,9 +284,16 @@ pub enum Landed {
         ///
         /// Where the landing was found standing — a `resume` that found the
         /// draft holding M, a fresh landing the merger's newest record for
-        /// the key names — it is the position that landing recorded.
+        /// the key names — it is the position that landing recorded. A
+        /// landing into the draft the standing record names is the same
+        /// landing (skep #790): `position` is this write's, and the
+        /// record's own is the first landing's.
         position: u64,
         /// The record's public link.
+        ///
+        /// It is the one written, or the one standing for this landing,
+        /// whose `landed` names the position of the write that first landed
+        /// the key in the draft.
         record: Address,
         /// The trunk's current head, where it is no longer the head the
         /// merge was composed on (R5, "land and tell").
@@ -318,11 +329,14 @@ impl<'a> Landing<'a> {
 /// composed again after an undo or a withdrawal lands as a write of its
 /// own, in the same session or another: its ids name the position it was
 /// composed at, and the take-back's record leaves no record standing for
-/// it, so it writes its own. With no draft named, the merger's newest
-/// record for the key is read before anything is staged, whatever the
-/// composition saw: a draft landing it names is the answer, in any session;
-/// a take-back's record leaves the key open, so the same `merged` landed
-/// again stages a draft of its own, the stage's id naming that record.
+/// it, so it writes its own. One composed again with no take-back between
+/// and landed in the draft the standing record names lands its write under
+/// its own ids and writes no record: the same landing (skep #790). With no
+/// draft named, the merger's newest record for the key is read before
+/// anything is staged, whatever the composition saw: a draft landing it
+/// names is the answer, in any session; a take-back's record leaves the key
+/// open, so the same `merged` landed again stages a draft of its own, the
+/// stage's id naming that record.
 ///
 /// # Errors
 ///
@@ -592,6 +606,19 @@ impl Newest {
     /// draft, whatever either's position. An undo's or a withdrawal's
     /// record names no landing and a landing of the key elsewhere names
     /// another, so either leaves nothing standing for `landed`.
+    ///
+    /// **The same landing (skep #790).** A landing of the key into the
+    /// draft the newest record names — no take-back recorded since, whether
+    /// the draft was edited in between or a take-back's record went
+    /// unwritten — is that record's landing: its write lands, and no record
+    /// is written. The record keeps the first landing's body and position,
+    /// while the draft's marker, or for a baseless draft its feed row, names
+    /// the later write. Nothing that writes reads that position: the undo
+    /// goes by the marker's `at` or the feed row, the withdrawal by its own
+    /// read, and a take-back's record names this one by its link, carrying
+    /// no landing. `verify` reads the draft at it, where the draft held the
+    /// first landing's M, and a fresh landing that finds the record standing
+    /// answers it ([`Newest::draft_landing`]).
     fn naming(&self, landed: &RecordLanding) -> Option<&Address> {
         let (link, record) = self.0.as_ref()?;
         let same = match (record.landed.as_ref()?, landed) {

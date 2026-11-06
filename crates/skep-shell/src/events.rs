@@ -88,16 +88,18 @@ pub enum EventName {
     Publication,
     /// Another shell's hold on a board's store as it moves: `another-window`.
     ///
-    /// The state (`client.md` §3c.3; skep #827) is `another_window`, under the
-    /// board it is about: `true` where a session's open or a probe finds the
-    /// lock of the board's held store held by another shell over this data
-    /// directory — every write at the board refused `another_window` from
-    /// then, nothing held and nothing sent — and `false` where this shell
-    /// takes a lock at the board, at a later session's open or at a probe
-    /// while a line held before the state stands. Emitted once at each edge,
-    /// beside the `Talk` line that says it, and never at an open or a probe
-    /// that finds no change; the `session` answer's `another_window` gives
-    /// the state as a session opens.
+    /// The state (`client.md` §3c.3; skep #827, #828) is `another_window`,
+    /// under the board it is about: `true` where a session's open or a probe
+    /// finds another shell over this data directory holding a lock of the
+    /// board's held store, its own directory's or the pending one's — every
+    /// write at the board refused `another_window` from then, nothing held
+    /// and nothing sent — and `false` where this shell takes the board's
+    /// own lock, or the pending one's while the head will not read, at a
+    /// later session's open or at a probe while a line held before the state
+    /// stands. Emitted once at each edge, beside the `Talk` line that says
+    /// it, and never at an open or a probe that finds no change; the
+    /// `session` answer's `another_window` gives the state as a session
+    /// opens.
     AnotherWindow,
 }
 

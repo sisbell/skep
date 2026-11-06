@@ -35,7 +35,12 @@
 //! memory and kept, nothing written under the lock, the state left only as a
 //! later session's open takes the lock, and each edge emitted once as
 //! `another-window`, at the open or the probe that finds it, and never at a
-//! try that finds no change (skep #827); a board away at the first touch
+//! try that finds no change (skep #827); one writer per board across its two
+//! locks (skep #828): a pending store meeting the board's own lock held as
+//! the head reads, read alone, its line counted on the pending file and sent
+//! from it under the lock this shell keeps until it takes the board's own,
+//! and a head that reads beside another shell's pending lock taking no lock
+//! and reading alone; a board away at the first touch
 //! holding in memory and joining its file once it returns, and joining it —
 //! the board's own, or the pending one — at a later probe where the device
 //! refused the join, the refusal said once and every answer meanwhile
@@ -663,6 +668,136 @@ fn a_board_away_at_the_first_touch_holds_in_memory_and_joins_its_file_later() {
     g.fake.op_refused.clear();
     g.holds.probe("b-1");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "resent and kept");
+}
+
+/// Checks that a pending store whose board's own lock another shell holds as
+/// the head reads makes the store that shell's, and its lines are sent from
+/// the pending file (§3c.3; skep #828: one writer per board).
+///
+/// The board's head record stands damaged at the session's open, so the
+/// store is the pending one, and a burst is held `head_unreadable` on its
+/// file. Another shell then takes the board's own directory's lock, and the
+/// head reads: the probe's step finds that lock held, so this shell reads
+/// alone at the board ([`Holds::another_window`]), said once on `Talk` — the
+/// line counted on the pending file, never among the lines a close loses —
+/// and emitted once, `true`. The line stays on the pending file, under this
+/// shell's lock, nothing written under the board's own directory: its
+/// resend, refused `write_busy`, leaves it standing; once the refusal clears
+/// the next probe sends it again and keeps it, its `done` written to the
+/// pending file, which compacts away, saying and emitting nothing. Once the
+/// other shell lets go, the next session's open takes the board's own lock,
+/// says so once and emits `false` once, the pending lock let go after the
+/// join, and the next line is copied to the board's file (the mutant that
+/// leaves the store pending writes beside the other shell; the one that
+/// lets the pending lock go while the line stands leaves its file to a third
+/// shell; the one that takes the line into memory leaves its `done`
+/// unwritten, for a relaunch to send it twice; the one that counts it in
+/// memory tells the operator a close loses it; the one that emits nothing
+/// leaves the page unaware of either edge).
+#[test]
+fn a_pending_store_whose_boards_own_lock_another_shell_holds_reads_alone_and_sends_its_lines_from_the_pending_file() {
+    let fake = Fake::new();
+    *fake.head_answer.lock().unwrap() = Some((200, json!({"resp": "delivery", "items": [{"atom": "not a head record"}]})));
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held, not faced") };
+    assert_eq!(held["cause"], "head_unreadable", "{held}");
+    let pending = pending_file(&g);
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "premise: the line is on the pending file");
+    assert!(edges(&g.rx).is_empty(), "premise: the pending store is this shell's, nothing emitted");
+    let other_shell = another_shell_holds(g.store.path());
+    *g.fake.head_answer.lock().unwrap() = None;
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    // Every later edge, read beside the receiver `states` reads.
+    let probed = g.bus.subscribe();
+    g.holds.probe("b-1");
+    assert!(g.holds.another_window("b-1"), "the head reads beside another shell's lock on the board's own directory: the store is another's");
+    let counted = format!("{ANOTHER_SHELLS_STORE}; the 1 held line in the pending held file stays there and is sent as the board takes it");
+    assert_eq!(said_containing(&g, "another shell holds this board's held store"), [counted], "said once, the line counted on the pending file");
+    assert_eq!(edges(&probed), [true], "and emitted once");
+    assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line resent and refused, still standing");
+    assert!(std::fs::read_to_string(&pending).unwrap().contains("\"values\":[\"a\"]"), "the line stays on the pending file");
+    assert!(!held_file(&g).exists(), "nothing is written under the other shell's lock");
+    let pending_store = HeldDir::pending(g.store.path(), g.session.board.dialed());
+    assert!(pending_store.try_lock().unwrap().is_none(), "the pending directory stays under this shell's lock while its line stands");
+    // The refusal clears: the line goes out from the pending file.
+    g.fake.op_refused.clear();
+    let _ = g.states();
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 2, "the line is sent again");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
+    assert!(!pending.exists(), "its `done` written to the pending file, which compacts away");
+    assert!(g.holds.another_window("b-1") && edges(&probed).is_empty(), "the store stays the other shell's, nothing emitted");
+    assert_eq!(said_containing(&g, "another shell holds this board's held store").len(), 1, "nothing said again");
+    // The other shell lets go: the next session's open takes the board's own
+    // lock.
+    drop(other_shell);
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 };
+    let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
+    let next_session = g.holds.sessions.register(&board, open, &mut NoSupplements);
+    g.holds.open_session(&next_session);
+    assert!(!g.holds.another_window("b-1"), "the next session's open takes the board's own lock");
+    assert_eq!(said_containing(&g, "held store now"), [THIS_SHELLS_STORE], "said once as it ends");
+    assert_eq!(edges(&probed), [false], "emitted once as it ends");
+    assert!(pending_store.try_lock().unwrap().is_some(), "the pending lock is let go once no queue is its file's");
+    let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
+    assert!(next.get("unwritable").is_none(), "the store is this shell's now: {next}");
+    assert!(std::fs::read_to_string(held_file(&g)).unwrap().contains("\"values\":[\"c\"]"), "the next line is copied to the board's file");
+}
+
+/// The pending directory under `store` for the origin the ground's board
+/// dials, locked as another shell over the same data directory holds it
+/// while the board's head will not read for it (§3c.1, §3c.3).
+fn another_shell_holds_pending(store: &Path) -> File {
+    let dir = HeldDir::pending(store, &Origin::parse("http://127.0.0.1:1").unwrap());
+    dir.ensure().unwrap();
+    dir.try_lock().unwrap().expect("the other shell holds the pending lock")
+}
+
+/// Checks that a head that reads beside another shell's pending lock takes
+/// no lock and reads alone (§3c.3; skep #828: one writer per board).
+///
+/// Another shell stands at the board's pending directory, its lock held, as
+/// this shell's session opens with the board's head reading: the pending
+/// lock is tried before the board's own and found held, so the store is
+/// another's ([`Holds::another_window`]), said once and emitted once,
+/// `true`, and no lock of the board's own is taken — the other shell's to
+/// take at its next try, the board's one writer. No file is opened and
+/// nothing is listed. Once the other shell lets go, the next session's open
+/// takes both locks, says so once and emits `false` once, lets the pending
+/// lock go after the join, and the next line is copied to the board's file
+/// (the mutant that takes the board's own lock first writes beside the
+/// other shell; the one that refuses on the pending lock found held beside
+/// the board's own holds the lock the other shell waits for, and neither
+/// writes).
+#[test]
+fn a_head_that_reads_beside_another_shells_pending_lock_takes_no_lock_and_reads_alone() {
+    let store = TempDir::new().unwrap();
+    let other_shell = another_shell_holds_pending(store.path());
+    let facts = writer_facts(&store);
+    let g = ground_in(store, facts, 0);
+    assert!(g.holds.another_window("b-1"), "the pending lock is tried first and found another shell's");
+    assert_eq!(said_containing(&g, "another shell holds this board's held store"), [ANOTHER_SHELLS_STORE], "said once as it begins");
+    assert_eq!(edges(&g.rx), [true], "and emitted once");
+    let later = g.bus.subscribe();
+    let own = HeldDir::new(g.store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+    own.ensure().unwrap();
+    assert!(own.try_lock().unwrap().is_some(), "no lock of the board's own is taken: it is the other shell's to take");
+    assert!(g.lines().is_empty() && !held_file(&g).exists() && !pending_file(&g).exists(), "no file is opened, nothing listed");
+    // The other shell lets go: the next session's open takes both locks.
+    drop(other_shell);
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 };
+    let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
+    let next_session = g.holds.sessions.register(&board, open, &mut NoSupplements);
+    g.holds.open_session(&next_session);
+    assert!(!g.holds.another_window("b-1"), "the next session's open takes the store");
+    assert_eq!(said_containing(&g, "held store now"), [THIS_SHELLS_STORE], "said once as it ends");
+    assert_eq!(edges(&later), [false], "emitted once as it ends");
+    assert!(HeldDir::pending(g.store.path(), g.session.board.dialed()).try_lock().unwrap().is_some(), "the pending lock is let go after the join");
+    let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
+    assert!(next.get("unwritable").is_none(), "the store is this shell's now: {next}");
+    assert!(std::fs::read_to_string(held_file(&g)).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
 }
 
 /// Makes `dir`, at `path`, and its lock by hand, the lock let go, then seals

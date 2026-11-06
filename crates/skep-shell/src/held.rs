@@ -192,13 +192,17 @@
 //! lines alone — so an open holds the queue it reads, never the file's
 //! history of lines done.
 //!
-//! **The lock** `held/<chain>/lock` (the key store's `flock` idiom, copied
-//! from `search::directory::BoardDir::try_lock` — the index directory's type
-//! is the index's) is held for the shell's life: ONE SHELL PER DATA
-//! DIRECTORY (§3c.3), the lock the holder's guard for the instant a second
-//! launch's hand-off has not yet closed — a shell finding it held opens no
-//! file there and reads alone at the board, every write refused at its door
-//! (`another_window`), and tries again at its next session's open.
+//! **The locks** `held/<chain>/lock` and `held/pending/<hash>/lock` (the key
+//! store's `flock` idiom, copied from `search::directory::BoardDir::try_lock`
+//! — the index directory's type is the index's) are each held by one shell
+//! at a time: a board's own for the holder's life, the pending one while a
+//! queue of the holder's is its file's or its join reads the files an
+//! earlier run left there. ONE SHELL PER DATA DIRECTORY (§3c.3), each lock
+//! its holder's guard for the instant a second launch's hand-off has not yet
+//! closed — a shell finding either held opens no file under it and reads
+//! alone at the board, every write refused at its door (`another_window`),
+//! and tries again at its next session's open (the hold's `Directory`; skep
+//! #828).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;

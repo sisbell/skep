@@ -92,9 +92,10 @@
 //!   held where the board cannot take it, and the six non-burst writes a
 //!   standing hold refuses at once with its cause; the per-(board,
 //!   principal) queue over `held`'s file, each board's under its own lock,
-//!   one shell per data directory — a board whose store another shell holds
-//!   read alone, no file of it opened (`Holds::another_window`, the shell's
-//!   write door's question), each edge of that state emitted as
+//!   one shell per data directory and one writer per board — a board whose
+//!   store another shell holds, by either of its two locks, read alone, no
+//!   file opened under the other shell's lock (`Holds::another_window`, the
+//!   shell's write door's question), each edge of that state emitted as
 //!   `another-window`; its child `resend` holds the walk the
 //!   feed thread's probe drains in bounded turns: each document read once a
 //!   pass as the walk reaches it, with §3c.5's three outcomes — a moved

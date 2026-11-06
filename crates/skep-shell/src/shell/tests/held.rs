@@ -25,9 +25,10 @@
 //! a burst on a draft just minted kept across a restart, a relaunch with its
 //! board down listing its held line — the bare mode's resending none of it,
 //! the signed mode's keeping it — the probe keeping its cadence while the
-//! board keeps committing, and a second shell over the data directory
-//! refusing every write and holding nothing, told so by its session's answer
-//! and by an event at each edge of the state (skep #789, #827).
+//! board keeps committing, a second shell over the data directory refusing
+//! every write and holding nothing, told so by its session's answer and by
+//! an event at each edge of the state (skep #789, #827), and two windows
+//! across a board's two locks leaving one writer, never none (skep #828).
 
 use super::*;
 use crate::held::Opened;
@@ -1445,5 +1446,77 @@ fn a_second_shell_is_told_another_shells_store_at_the_open_and_at_each_edge() {
     let after = open(&second, &board);
     assert!(after.get("another_window").is_none() && edges(&rx).is_empty(), "nothing once the store is this shell's: {after}");
     second.shutdown();
+    sd.shutdown();
+}
+
+/// Checks that two windows across a board's two locks leave one writer, and
+/// never none (§3c.3; skep #828).
+///
+/// The claim lands with its `H.1` refused, and the draft is minted with the
+/// seam armed again ([`claim_with_the_head_refused`]): a claimed board
+/// serving no head record. Window B's session opens while the head is owed
+/// and takes the PENDING directory's lock; B holds no burst, so no probe of
+/// B's tries a lock after. The head then lands. Window A over the same store
+/// opens a session whose read of the head names the board's own directory:
+/// the pending lock, tried first, is B's, so the store is another's — A's
+/// answer carries `another_window: true`, its burst is refused
+/// `another_window`, nothing sent (the board's position unmoved) and nothing
+/// held. B's next session reads the head and takes the board's own lock:
+/// its answer carries no `another_window`, and its burst is acked. A's next
+/// session still answers `another_window: true`, the board's own lock B's
+/// (the mutant that takes the board's own lock first leaves two writers,
+/// A's burst going out beside B's; the one that refuses on the pending lock
+/// found held beside the board's own leaves none, B refused at its step to
+/// a lock A holds).
+#[test]
+fn two_windows_across_a_boards_two_locks_leave_one_writer_and_never_none() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    let (library, bare) = claim_with_the_head_refused(&sd, &origin, &store);
+    sd.daemon().refuse_the_next_head_once();
+    let Answer::Document(minted) = library.op(Some(&bare), &skep_client::board::frames::create_document("1.0.1", false, None)).unwrap() else { panic!("the bare session stands") };
+    let draft = minted["addr"].as_str().unwrap_or_else(|| panic!("the draft is minted: {minted}")).to_string();
+    let typed = minted["at"].as_u64().unwrap();
+    assert!(library.board_term().unwrap().is_none(), "premise: the mint's turn met the seam, the head owed");
+    let open = |shell: &Shell, board: &str| -> Value {
+        let opened = shell.call("session", &json!({"board": board})).unwrap();
+        crate::shapes::assert_declared("SessionOpened", &opened);
+        opened
+    };
+    let burst = |value: &str| json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [value], "as_of": typed});
+    // Window B, the head owed: its open takes the pending lock.
+    let (b, b_lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let b_board = b.board_references().remove(0);
+    let opened = open(&b, &b_board);
+    assert!(opened.get("another_window").is_none(), "B's open takes the pending store: {opened}\n{}", b_lines.lock().unwrap().join("\n"));
+    // The head lands: a bare write's turn pays it.
+    let Answer::Document(_) = library.op(Some(&bare), &skep_client::board::frames::create_document("1.0.1", false, None)).unwrap() else { panic!("the bare session stands") };
+    assert!(library.board_term().unwrap().is_some(), "H.1 landed at the write's turn");
+    // Window A, the head read: the pending lock B holds makes the store
+    // another's, and A reads alone.
+    let (a, a_lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let a_board = a.board_references().remove(0);
+    let opened = open(&a, &a_board);
+    assert_eq!(opened["another_window"], true, "A finds the pending lock B's: {opened}\n{}", a_lines.lock().unwrap().join("\n"));
+    let a_session = opened["session"].as_str().unwrap().to_string();
+    let position = || a.call("health", &json!({"board": a_board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let before = position();
+    let refused = a.call("op", &json!({"session": a_session, "frame": burst("a")})).unwrap_err();
+    assert_eq!(refused.name(), "another_window", "{refused}");
+    assert_eq!(position(), before, "nothing is sent");
+    assert!(a.call("held", &json!({"session": a_session})).unwrap().as_array().unwrap().is_empty(), "nothing is held");
+    // B's next open reads the head and takes the board's own lock: B writes.
+    let opened = open(&b, &b_board);
+    assert!(opened.get("another_window").is_none(), "B takes the board's own lock: {opened}\n{}", b_lines.lock().unwrap().join("\n"));
+    let b_session = opened["session"].as_str().unwrap().to_string();
+    let acked = b.call("op", &json!({"session": b_session, "frame": burst("b")})).unwrap();
+    assert!(acked["at"].as_u64().is_some() && acked["resp"] != "held", "B's burst goes out and is acked: {acked}");
+    // A's next open finds the store B's still.
+    let again = open(&a, &a_board);
+    assert_eq!(again["another_window"], true, "the board's own lock is B's: {again}");
+    a.shutdown();
+    b.shutdown();
     sd.shutdown();
 }

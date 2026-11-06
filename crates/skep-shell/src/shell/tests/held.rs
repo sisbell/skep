@@ -20,6 +20,8 @@
 //! document raising its base through the changes that moved it, a face
 //! after it naming only the changes since — the close order and the relaunch
 //! listing its held line, a second principal's file untouched and unlisted,
+//! a halted file's path crossing the bridge never and the file shown in the
+//! shell's own window as often as the page asks,
 //! a burst on a draft just minted kept across a restart, a relaunch with its
 //! board down listing its held line — the bare mode's resending none of it,
 //! the signed mode's keeping it — and the probe keeping its cadence while
@@ -641,6 +643,69 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let said: Vec<String> = rx.try_iter().map(|e| e.data.to_string()).collect();
     assert!(said.iter().all(|data| !data.contains("principal-2") && !data.contains(&store.display().to_string())), "no event names the other principal's file: {said:?}");
     shell.shutdown();
+}
+
+/// Checks that a halted file's path never crosses and the page asks to show it.
+///
+/// It is §3c.3's halt under §4b.3's rule. Principal 1's held file, written
+/// by a newer skep before the shell opened, halts the principal at the
+/// board: `held(session)`, a burst's `op` and `resolve` each answer
+/// `store_halted` carrying its `why` alone (the mutant that puts the path
+/// back on the detail hands the page the data directory). `held.show` shows
+/// the file in the shell's own window, once each time it is asked, and
+/// answers `{shown: true}` and nothing more; the native side reads the same
+/// file by `Shell::halted_file`, `unknown_board` for a reference this shell
+/// never issued and nothing for a principal whose file is not halted; a
+/// principal whose file stands is shown nothing and answered `{shown:
+/// false}`; and a `held.show` naming no session is refused naming it. No
+/// answer, refusal or event names the store, the held directory or the
+/// file.
+#[test]
+fn a_halted_files_path_crosses_the_bridge_never_and_the_page_asks_to_show_it() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let term = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).board_term().unwrap().expect("H.1 stands on a claimed board");
+    let chain = skep_search::Chain::from_bytes(term.chain);
+    HeldDir::new(&store, chain).ensure().unwrap();
+    let file = store.join("held").join(chain.to_string()).join("principal-1.held");
+    std::fs::write(&file, format!("{{\"type\":\"skep-held-bursts\",\"v\":2,\"board\":\"{chain}\",\"principal\":1,\"account\":\"1.0.1\"}}\n")).unwrap();
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let rx = shell.subscribe();
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let burst = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"], "as_of": 0});
+    let refusals = [
+        shell.call("held", &json!({"session": session})).unwrap_err().to_value(),
+        shell.call("op", &json!({"session": session, "frame": burst})).unwrap_err().to_value(),
+        shell.call("resolve", &json!({"session": session, "held": 1, "act": "drop"})).unwrap_err().to_value(),
+    ];
+    for refused in &refusals {
+        assert_eq!(*refused, json!({"kind": "shell", "name": "store_halted", "why": "newer"}), "the why alone");
+    }
+    let showing = format!("principal 1's held file {} is halted (written by a newer skep)", file.display());
+    let shown = || lines.lock().unwrap().iter().filter(|line| line.contains(&showing)).count();
+    assert_eq!(shown(), 0, "nothing shows the file before the page asks: {:?}", lines.lock().unwrap());
+    let answers = [shell.call("held.show", &json!({"session": session})).unwrap(), shell.call("held.show", &json!({"session": session})).unwrap()];
+    assert_eq!(answers, [json!({"shown": true}), json!({"shown": true})], "shown, and nothing more crosses");
+    assert_eq!(shown(), 2, "shown in the shell's own window each time it is asked: {:?}", lines.lock().unwrap());
+    assert_eq!(shell.halted_file(&board, 1).unwrap(), Some(file.clone()), "the native side reads the halted file");
+    assert_eq!(shell.halted_file("b-nowhere", 1).unwrap_err().name(), "unknown_board");
+    // Principal 2, its file unhalted: nothing to show.
+    let second = shell.sessions.register(&shell.boards[0], open_bare(&shell.boards[0].board, 2).unwrap(), &mut shell.feed(&board));
+    shell.holds.open_session(&second);
+    let said_before = lines.lock().unwrap().len();
+    assert_eq!(shell.call("held.show", &json!({"session": second.reference})).unwrap(), json!({"shown": false}));
+    assert!(lines.lock().unwrap()[said_before..].iter().all(|line| !line.contains("is halted")), "nothing is shown: {:?}", lines.lock().unwrap());
+    assert_eq!(shell.halted_file(&board, 2).unwrap(), None, "no halted file of principal 2's stands");
+    assert_eq!(shell.call("held.show", &json!({})).unwrap_err().to_value()["what"], "session", "a call naming no session is refused naming it");
+    let crossed: Vec<String> = refusals.iter().chain(&answers).map(Value::to_string).chain(rx.try_iter().map(|e| e.data.to_string())).collect();
+    let store_dir = store.display().to_string();
+    assert!(crossed.iter().all(|text| !text.contains(&store_dir) && !text.contains("/held/") && !text.contains("principal-1.held")), "no path crosses: {crossed:?}");
+    shell.shutdown();
+    sd.shutdown();
 }
 
 /// Checks that a burst on a draft just minted is kept after a restart.

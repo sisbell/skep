@@ -104,7 +104,12 @@
 //! session's open, or at the first touch after it — by the principal's door,
 //! [`Holds::principal_hold`],
 //! which every act on a principal's queue takes, a burst's among them once
-//! the burst's door has let it in. The probe ([`Holds::probe`]) and the
+//! the burst's door has let it in. Where P38 halted the principal's file,
+//! the door answers every act `store_halted` with the halt's `why` alone:
+//! the file's path is the native side's — [`Holds::halted_file`] reads it,
+//! and [`Holds::show_halted`] shows it in the shell's own window as often as
+//! the page's `held.show` asks — and crosses the bridge never (§3c.3,
+//! §4b.3). The probe ([`Holds::probe`]) and the
 //! resend it lets run, which drain the queue once the board returns, are the
 //! child module `resend`'s: one read of the board's head per probe decides
 //! the directory and which documents are skipped ([`Holds::establish`]).
@@ -1038,7 +1043,10 @@ enum Custody {
     ///
     /// No burst is sent and no line held for the principal at this board,
     /// each act answered `store_halted` by the principal's door,
-    /// [`Holds::principal_hold`], which every act takes.
+    /// [`Holds::principal_hold`], which every act takes, its detail the
+    /// `why` alone. The `path` is the native side's: read by
+    /// [`Holds::halted_file`] and said in the shell's own window by
+    /// [`Holds::show_halted`], it crosses the bridge never (§4b.3; SP-15).
     Halted { path: PathBuf, why: HaltWhy },
 }
 
@@ -1227,6 +1235,17 @@ impl BoardHold {
             None
         }
     }
+
+    /// Returns the file P38 halted for `principal` at the board, and why.
+    ///
+    /// It is the principal's custody where that is the halt
+    /// ([`Custody::Halted`]), and none otherwise.
+    fn halted(&self, principal: u64) -> Option<(&Path, HaltWhy)> {
+        match &self.principals.get(&principal)?.custody {
+            Custody::Halted { path, why } => Some((path, *why)),
+            Custody::Unopened | Custody::File | Custody::Unwritable(_) => None,
+        }
+    }
 }
 
 /// One board of the holds: the board dialed, and its hold under its own lock.
@@ -1267,7 +1286,8 @@ impl BoardSlot {
 /// session reaches its board through the session — its `board_reference`
 /// the hold's key, its `board` the board dialed — and the board-wide ones
 /// (`probe`, `set_node_stopped`, `node_stopped`, `another_window`,
-/// `note_health`) take the board's reference.
+/// `note_health`) take the board's reference, as `halted_file`, the native
+/// side's read of a principal's halted file, takes it beside the principal.
 ///
 /// # Panics
 ///
@@ -1426,6 +1446,18 @@ impl Holds {
     /// left once this shell locks one.
     pub fn another_window(&self, board_reference: &str) -> bool {
         matches!(self.lock(board_reference).directory, Directory::AnotherWindow)
+    }
+
+    /// Returns the held file P38 halted for `principal` at the board.
+    ///
+    /// It is the native side's read, for the embedding app to show the file
+    /// (§3c.3): `store_halted` carries the halt's `why` alone, and no path
+    /// crosses the bridge (§4b.3; SP-15). It answers the file wherever the
+    /// principal's door answers `store_halted` — the custody stands for the
+    /// shell's life — and `None` otherwise: no file halted, or none read
+    /// yet, since nothing is opened here (P39).
+    pub fn halted_file(&self, board_reference: &str, principal: u64) -> Option<PathBuf> {
+        self.lock(board_reference).halted(principal).map(|(path, _)| path.to_path_buf())
     }
 
     /// Takes a session opened at the board (§3c.7 items 1 and 4).
@@ -1826,8 +1858,8 @@ impl Holds {
                 Directory::AnotherWindow => ph.custody = Custody::Unwritable(ANOTHER_WINDOW_HOLDS.to_string()),
             }
         }
-        if let Custody::Halted { path, why } = &ph.custody {
-            return Err(store_halted(path, *why));
+        if let Custody::Halted { why, .. } = &ph.custody {
+            return Err(store_halted(*why));
         }
         Ok(ph)
     }
@@ -2304,6 +2336,27 @@ impl Holds {
         Ok(Value::Array(ph.queue.lines().iter().map(line_json).collect()))
     }
 
+    /// Answers `held.show(session)`, the halt face's own act (§3c.3).
+    ///
+    /// The act is "show the file". The session names the principal, so a
+    /// page shows its own principal's file and learns nothing of another's
+    /// (P39), and the principal's door is taken as every act takes it. Where
+    /// P38 halted the file, the file is shown in the shell's own window
+    /// ([`halted_line`]: its path, why it is halted and the act its why asks)
+    /// as often as the person asks — each line the answer to their act, never
+    /// the standing halt said again (SP-11) — and the answer is true; nothing
+    /// is said and the answer is false otherwise. The path goes to `Talk`
+    /// alone, never to the page (§4b.3; SP-15).
+    pub fn show_halted(&self, session: &SessionEntry) -> bool {
+        let mut board_hold = self.lock(&session.board_reference);
+        // The door opens the principal's file where it is not yet read; its
+        // refusal is the halt read from the custody below.
+        let _ = self.principal_hold(&mut board_hold, session);
+        let Some((path, why)) = board_hold.halted(session.facts.principal) else { return false };
+        self.say(halted_line(session.facts.principal, path, why));
+        true
+    }
+
     /// Answers `resolve(session, {held, act})` (§3c.4, §4b.1).
     ///
     /// It is checked and acted on under the board's one lock.
@@ -2737,8 +2790,32 @@ fn queue_refused(why: Unheld) -> Refusal {
 }
 
 /// Returns P38's halt face for `held(session)` and every act (§3c.3).
-fn store_halted(path: &Path, why: HaltWhy) -> Refusal {
-    Refusal::shell(Name::STORE_HALTED, json!({"path": path.display().to_string(), "why": why.token()}))
+///
+/// Its detail is the `why` alone, no path crossing the bridge (§4b.3;
+/// SP-15): the native side reads the file ([`Holds::halted_file`]), and the
+/// page asks for its showing ([`Holds::show_halted`]).
+fn store_halted(why: HaltWhy) -> Refusal {
+    Refusal::shell(Name::STORE_HALTED, json!({"why": why.token()}))
+}
+
+/// Returns the line showing a halted held file in the shell's own window.
+///
+/// It names the file, why it is halted, and the act its why asks (§3c.3):
+/// a file a newer skep wrote, or one whose header this skep does not read,
+/// is opened by the skep that wrote it; a damaged one no skep reads whole,
+/// so it is moved aside. Either way the bursts it holds go with the file,
+/// unsent.
+fn halted_line(principal: u64, path: &Path, why: HaltWhy) -> String {
+    let open_with_the_writer = "open it with the skep that wrote it, or, with this shell stopped, move the file aside";
+    let (cause, act) = match why {
+        HaltWhy::Newer => ("written by a newer skep", open_with_the_writer),
+        HaltWhy::UnknownMember => ("its header is not one this skep reads", open_with_the_writer),
+        HaltWhy::Damaged => ("damaged: a line of it is not one this skep reads whole", "no skep reads it whole: with this shell stopped, move the file aside, and the next open begins a fresh one"),
+    };
+    format!(
+        "principal {principal}'s held file {} is halted ({cause}): every burst of the principal's at this board is refused `store_halted`, and the file is left as found — {act}; the bursts it holds go with it, unsent",
+        path.display()
+    )
 }
 
 /// Returns one held line as `held(session)` lists it (§4b.1).

@@ -157,7 +157,7 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 32, "the thirty-two calls: §4b.1's with the publication family's four and the merge family's four, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 33, "the thirty-three calls: §4b.1's with the publication family's four, the merge family's four and `held.show`, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
@@ -171,6 +171,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
         "  'merge.undo'(args: { session: string }): Promise<Outcome<Undone>>;\n",
         "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",
+        "  'held.show'(args: { session: string }): Promise<Outcome<{ shown: boolean }>>;\n",
         "  supersede: string[];\n",
         "  over_cap: boolean;\n",
         "  unrecorded?: Refusal;\n",

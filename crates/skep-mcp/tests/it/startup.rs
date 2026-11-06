@@ -31,7 +31,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{json, Value};
 use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose};
 
 use crate::common::{draft_of, embedded_catalog, stamped, Fixture, Launch, TempDir, CLAIMANT_ACCOUNT, VARIABLES};
@@ -666,10 +666,11 @@ fn tools_file_refusal(tools_file: &Path) -> String {
 /// says it leaves one burst held, and the next start says one burst is left,
 /// waiting on the agent's `resolve`. A held file a newer skep wrote halts the
 /// principal's bursts at the board: the start says the file is halted and
-/// why, and a burst is refused `store_halted`. One whose header line is no
-/// JSON object — damage, never a crash's tail, which the shell reads as
-/// fresh — halts as damaged, and its act is to set it aside, never to run a
-/// skep that wrote it.
+/// why, and a burst is refused `store_halted`, the agent answered its why and
+/// no path (the mutant that reads the path off the refusal names no file in
+/// the start's line). One whose header line is no JSON object — damage, never
+/// a crash's tail, which the shell reads as fresh — halts as damaged, and its
+/// act is to set it aside, never to run a skep that wrote it.
 #[test]
 fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let fixture = Fixture::new("held-at-start");
@@ -695,7 +696,8 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     halted.log_holding(&[&format!("held: the held file {} is halted (written by a newer skep)", file.display())], Duration::from_secs(10));
     let typed = halted.position();
     let refusal = halted.call_error("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
-    assert_eq!(refusal["name"], "store_halted", "{refusal}");
+    assert_eq!((refusal["name"].as_str(), refusal["why"].as_str()), (Some("store_halted"), Some("newer")), "{refusal}");
+    assert_no_path(&refusal, &fixture.store);
     assert!(halted.finish().success());
     std::fs::write(&file, b"[1]\n").expect("a held file whose header line is no object");
     let mut damaged = Launch::over(&fixture, 1).logged().spawn();
@@ -704,8 +706,19 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     assert!(log.contains("no skep reads it whole") && !log.contains("run the skep that wrote it"), "the act a damaged file asks:\n{log}");
     let typed = damaged.position();
     let refusal = damaged.call_error("insert", json!({"as_of": typed, "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
-    assert_eq!(refusal["name"], "store_halted", "{refusal}");
+    assert_eq!((refusal["name"].as_str(), refusal["why"].as_str()), (Some("store_halted"), Some("damaged")), "{refusal}");
+    assert_no_path(&refusal, &fixture.store);
     assert!(damaged.finish().success());
+}
+
+/// Holds that a tool result's `store_halted` names no path.
+///
+/// It carries no `path` member and no part of the store's (client.md §3c.3;
+/// SP-15): the log line names the file, read off the shell natively, and the
+/// agent is answered the halt's `why` alone.
+fn assert_no_path(refusal: &Value, store: &Path) {
+    let text = refusal.to_string();
+    assert!(refusal.get("path").is_none() && !text.contains(&store.display().to_string()) && !text.contains("principal-1.held"), "no path reaches the tool result: {refusal}");
 }
 
 /// A signal leaves the held bursts on disk, and the next start counts them.

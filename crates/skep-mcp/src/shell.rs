@@ -213,15 +213,17 @@ fn left_held(lines: &Value) -> Option<String> {
 
 /// Returns the line that says a held file the shell halted (client.md §3c.3).
 ///
-/// `path` and `why` are the `store_halted` refusal's: the file, left as found,
-/// and why the shell reads it no further. Every burst at the board is refused
-/// so, at this run and every later one, until the file is set aside, which
-/// loses its lines. The act follows the why: a file a newer skep wrote, or one
-/// whose header this skep does not read, is read by the skep that wrote it; a
-/// damaged one — what a crash before its header's sync leaves, or a copy a
-/// full disk cut short with another written after it — is read whole by none,
-/// and set aside, the next start beginning a fresh one.
-fn halted_line(path: &str, why: &str) -> String {
+/// `path` is the file, left as found, read off the shell natively
+/// (`Shell::halted_file`), since no path crosses the bridge; `why` is the
+/// `store_halted` refusal's, why the shell reads it no further. Every burst at
+/// the board is refused so, at this run and every later one, until the file
+/// is set aside, which loses its lines. The act follows the why: a file a
+/// newer skep wrote, or one whose header this skep does not read, is read by
+/// the skep that wrote it; a damaged one — what a crash before its header's
+/// sync leaves, or a copy a full disk cut short with another written after
+/// it — is read whole by none, and set aside, the next start beginning a
+/// fresh one.
+fn halted_line(path: &Path, why: &str) -> String {
     let run_the_writer = "run the skep that wrote it, or, with the adapter stopped, set the file aside";
     let (why, act) = match why {
         "newer" => ("written by a newer skep", run_the_writer),
@@ -233,7 +235,8 @@ fn halted_line(path: &str, why: &str) -> String {
         other => (other, run_the_writer),
     };
     format!(
-        "held: the held file {path} is halted ({why}): every burst the agent makes at this board — insert, delete, copy, reinstate, rearrange — is refused `store_halted`, at this run and every later one, and the file is left as found: {act} — its whole lines are bursts not known to have landed"
+        "held: the held file {} is halted ({why}): every burst the agent makes at this board — insert, delete, copy, reinstate, rearrange — is refused `store_halted`, at this run and every later one, and the file is left as found: {act} — its whole lines are bursts not known to have landed",
+        path.display()
     )
 }
 
@@ -509,8 +512,9 @@ impl Backend {
     ///
     /// Where skep-shell breaks a promise the open reads: one reference for the
     /// one board its options name (`Shell::open`), the store's key at every
-    /// board under the signed mode (`Shell::check_signed_key`), and the
-    /// `session` row's `SessionOpened` (`open_session`).
+    /// board under the signed mode (`Shell::check_signed_key`), the `session`
+    /// row's `SessionOpened` (`open_session`), and the halted held file
+    /// wherever `held` answers `store_halted` (`Shell::halted_file`).
     pub fn open(origin: Origin, store_dir: PathBuf, principal: u64, talk: Talk, on_stop: OnStop) -> Result<Backend, String> {
         let mut options = ShellOptions::new(vec![origin.clone()], store_dir.clone(), SessionMode::Signed { principal }, Arc::clone(&talk));
         options.arm = ArmConfig::Refuse;
@@ -561,8 +565,11 @@ impl Backend {
                     talk(&line);
                 }
             }
+            // The refusal carries the halt's `why` alone; the file is the
+            // native side's, read off the shell (client.md §3c.3).
             Err(Refusal::Shell { name, detail }) if name == Name::STORE_HALTED => {
-                talk(&halted_line(detail["path"].as_str().unwrap_or("named by the shell"), detail["why"].as_str().unwrap_or("halted")));
+                let file = shell.halted_file(&board, principal).ok().flatten().expect("`Shell::halted_file` answers the file wherever `held` answers `store_halted`");
+                talk(&halted_line(&file, detail["why"].as_str().unwrap_or("halted")));
             }
             Err(_) => {}
         }

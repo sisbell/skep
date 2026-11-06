@@ -206,11 +206,13 @@ impl Name {
     /// The held-burst store's file was written by a newer skep, or is damaged.
     ///
     /// It answers `held(session)`, and every act on the principal's held
-    /// lines — P38's halt (§3c.3), its detail the file's `path` and its
-    /// `why`, one of `newer` (a newer `v`), `unknown_member` (an unknown
-    /// header member, or a header off its spelling) or `damaged` (a line not
-    /// read whole, the header's or a body line's), as `held::HaltWhy::token`
-    /// spells them.
+    /// lines — P38's halt (§3c.3), its detail the `why` alone, one of `newer`
+    /// (a newer `v`), `unknown_member` (an unknown header member, or a header
+    /// off its spelling) or `damaged` (a line not read whole, the header's or
+    /// a body line's), as `held::HaltWhy::token` spells them. The file's path
+    /// crosses the bridge never (§4b.3; SP-15): the embedding app
+    /// reads it natively (`Shell::halted_file`), and the page asks the shell
+    /// to show the file by `held.show`.
     pub const STORE_HALTED: Name = Name("store_halted");
     /// `resolve(session, …)`: no held line of that ordinal stands.
     pub const NO_SUCH_HELD: Name = Name("no_such_held");

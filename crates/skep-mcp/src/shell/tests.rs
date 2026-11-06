@@ -578,7 +578,7 @@ fn a_halted_held_file_is_said_with_its_path_why_and_the_act() {
         ("unknown_member", "its header is not one this skep reads", true),
         ("damaged", "damaged: a line of it is not one this skep reads whole — what a crash before its header's sync leaves", false),
     ] {
-        let said = halted_line("/store/held/c/principal-1.held", why);
+        let said = halted_line(Path::new("/store/held/c/principal-1.held"), why);
         assert!(said.starts_with(&format!("held: the held file /store/held/c/principal-1.held is halted ({words}")), "{said}");
         assert!(said.contains("refused `store_halted`") && said.contains("set the file aside"), "the refusal it meets and the act: {said}");
         assert_eq!(said.contains("run the skep that wrote it"), runs_the_writer, "{why}: the act its why asks: {said}");

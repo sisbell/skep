@@ -54,19 +54,20 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 ///
 /// Every call parses back from its own spelling, so no two calls share one;
 /// `CALLS` is those spellings in §4b.1's order — the publication family
-/// after `op`, the merge family after it — the document index's listing
-/// `places` beside `search`; a name of no call names none, and `call`
-/// answers it `unknown_call`; and `fetch`, which streams on its transport's
-/// own route, is answered `streamed_call` through the door, whatever its
-/// arguments.
+/// after `op`, the merge family after it, `held.show` after `held` — the
+/// document index's listing `places` beside `search`; a name of no call
+/// names none, and `call` answers it `unknown_call`; and `fetch`, which
+/// streams on its transport's own route, is answered `streamed_call`
+/// through the door, whatever its arguments.
 #[test]
 fn every_call_is_named_by_its_own_spelling() {
     for call in Call::ALL {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[31]), (32, "boards", "changes"));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[32]), (33, "boards", "changes"));
     assert_eq!((CALLS[27], CALLS[28]), ("search", "places"));
+    assert_eq!(&CALLS[29..32], ["held", "held.show", "resolve"], "`held.show` stands after `held`, whose row owes it");
     assert_eq!(&CALLS[16..20], ["publication.open", "publication.count", "publication.confirm", "publication.cancel"], "the publication family stands after `op`, whose publish arm it carries");
     assert_eq!(&CALLS[20..24], ["merge.compose", "merge.land", "merge.undo", "merge.withdraw"], "the merge family stands after the publication family, whose shot its landing rides");
     assert_eq!(Call::named("verify"), None);

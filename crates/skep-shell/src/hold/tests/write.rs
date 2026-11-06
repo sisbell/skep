@@ -40,7 +40,8 @@
 //! answering once the lines are handed
 //! back, before any dial; a board the holds were not opened over stopped as
 //! the caller's bug; the stored frame without its attest; P38's halted file
-//! refusing every act at the principal's door, `resolve` among them, a copy
+//! refusing every act at the principal's door, `resolve` among them, with
+//! its `why` alone, its path read and shown on the native side alone; a copy
 //! the store cannot make, a queue kept in memory for want of its file
 //! joining the board's file as soon as the directory is this shell's, and a
 //! burst the device refused waiting with the bursts after it until the
@@ -1194,7 +1195,11 @@ fn a_held_frame_is_stored_without_its_attest() {
 /// naming why — the burst is not dialed, no line is held, `held(session)`
 /// lists nothing, `resolve` acts on no line — so no burst is sent past a
 /// file this shell may not write and none is rebuilt over (the mutants that
-/// dial past a halted file, or answer an act on it as no line).
+/// dial past a halted file, or answer an act on it as no line). The refusal
+/// carries the `why` alone, no path, in its value and its text alike (§4b.3;
+/// the mutant that puts the file's path back on the detail hands the page
+/// the data directory); the file is the native side's, answered for the
+/// halted principal alone, and shown on `Talk` each time it is asked.
 #[test]
 fn a_halted_file_refuses_every_act_and_dials_nothing() {
     let store = TempDir::new().unwrap();
@@ -1205,13 +1210,25 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     std::fs::write(&file, &newer).unwrap();
     let g = ground_in(store, bare_facts(), 0);
     let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]), g.fake.head()), None) else { panic!("a burst at a halted file is refused") };
-    assert_eq!((refused.name(), refused.to_value()["why"].as_str()), ("store_halted", Some("newer")), "{refused}");
+    assert_eq!(refused.to_value(), json!({"kind": "shell", "name": "store_halted", "why": "newer"}), "the why alone: {refused}");
+    let store_dir = g.store.path().display().to_string();
+    for text in [refused.to_value().to_string(), refused.to_string()] {
+        assert!(!text.contains(&store_dir) && !text.contains("principal-1.held"), "no path crosses: {text}");
+    }
     assert_eq!(g.fake.sends(), 0, "nothing is dialed past a halted file");
-    assert_eq!(g.holds.lines(&g.session).unwrap_err().name(), "store_halted");
+    assert_eq!(g.holds.lines(&g.session).unwrap_err(), refused, "`held(session)` answers the same halt");
     assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "store_halted", "an act on a line answers the halt, never no line");
     let held = g.hold_for(&insert(DOC, json!(["x"]), g.fake.head()), Reason::of("unreachable", false));
     assert_eq!(held.unwrap_err().name(), "store_halted", "no line is held");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
+    assert_eq!((g.holds.halted_file("b-1", 1), g.holds.halted_file("b-1", 2)), (Some(file.clone()), None), "the native side reads the halted principal's file, and no other");
+    let shown = |g: &Ground| said_containing(g, &format!("principal 1's held file {} is halted (written by a newer skep)", file.display())).len();
+    assert_eq!(shown(&g), 0, "nothing shows the file before it is asked for");
+    assert!(g.holds.show_halted(&g.session) && g.holds.show_halted(&g.session), "the file is shown");
+    assert_eq!(shown(&g), 2, "once each time it is asked: {:?}", g.said.lock().unwrap());
+    let fresh = ground();
+    assert!(!fresh.holds.show_halted(&fresh.session) && fresh.said.lock().unwrap().iter().all(|line| !line.contains("is halted")), "no halted file, nothing shown");
+    assert_eq!(fresh.holds.halted_file("b-1", 1), None);
 }
 
 /// Checks that a line the store cannot copy says why and stands (§3c.3), and

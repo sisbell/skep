@@ -461,6 +461,7 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         result: "PlacesAnswer",
     },
     CallRow { name: "held", forms: &[&[req("session", "string")]], result: "HeldRow[]" },
+    CallRow { name: "held.show", forms: &[&[req("session", "string")]], result: "{ shown: boolean }" },
     CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
     CallRow {
         name: "changes",

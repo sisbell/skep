@@ -284,9 +284,9 @@ foundation and on the stores above it.
   `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
-  record): the bridge's thirty-two calls — §4b.1's thirty, the
-  publication family's four and the merge family's four among them, the
-  document index's listing and the change feed's page — and eight events
+  record): the bridge's calls — §4b.1's, the publication family's four
+  and the merge family's four among them, the document index's listing
+  and the change feed's page — and eight events
   over
   `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC

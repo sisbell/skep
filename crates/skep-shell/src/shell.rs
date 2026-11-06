@@ -278,12 +278,13 @@ pub const WRITE_KINDS: [&str; 18] = [
 
 /// One call of the bridge, as [`Shell::call`] dispatches it.
 ///
-/// It is a call of §4b.1 — the `publication` family's four and the `merge`
-/// family's four among them — the document index's listing `places`
-/// (A-255), or the change feed's page `changes`: one arm per call, which
-/// the compiler holds exhaustive, and the list a transport admits a call
-/// by, [`CALLS`], spelled from `Call::ALL` — so no call is listed that the
-/// dispatch does not answer.
+/// It is a call of §4b.1 — the `publication` family's four, the `merge`
+/// family's four and `held.show`, the `held` row's call for the halt face's
+/// own act, among them — the document index's listing `places` (A-255), or
+/// the change feed's page `changes`: one arm per call, which the compiler
+/// holds exhaustive, and the list a transport admits a call by, [`CALLS`],
+/// spelled from `Call::ALL` — so no call is listed that the dispatch does
+/// not answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Call {
     Boards,
@@ -316,6 +317,7 @@ enum Call {
     Search,
     Places,
     Held,
+    HeldShow,
     Resolve,
     Changes,
 }
@@ -325,9 +327,9 @@ impl Call {
     ///
     /// The `publication` family stands after `op`, whose publish arm it
     /// carries, and the `merge` family after it, whose shot its landing
-    /// rides; `places` stands beside `search`, and the change feed's
-    /// `changes` last.
-    const ALL: [Call; 32] = [
+    /// rides; `places` stands beside `search`, `held.show` after `held`,
+    /// whose row owes it, and the change feed's `changes` last.
+    const ALL: [Call; 33] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -358,6 +360,7 @@ impl Call {
         Call::Search,
         Call::Places,
         Call::Held,
+        Call::HeldShow,
         Call::Resolve,
         Call::Changes,
     ];
@@ -395,6 +398,7 @@ impl Call {
             Call::Search => "search",
             Call::Places => "places",
             Call::Held => "held",
+            Call::HeldShow => "held.show",
             Call::Resolve => "resolve",
             Call::Changes => "changes",
         }
@@ -406,12 +410,12 @@ impl Call {
     }
 }
 
-/// The bridge's thirty-two calls, as it spells them, in its order.
+/// The bridge's thirty-three calls, as it spells them, in its order.
 ///
-/// They are §4b.1's thirty — the `publication` family's four and the
-/// `merge` family's four among them — the document index's listing,
-/// `places` (A-255), and the change feed's page, `changes`: the list a
-/// transport admits a call by, every name of it one [`Shell::call`]
+/// They are §4b.1's thirty-one — the `publication` family's four, the
+/// `merge` family's four and `held.show` among them — the document index's
+/// listing, `places` (A-255), and the change feed's page, `changes`: the
+/// list a transport admits a call by, every name of it one [`Shell::call`]
 /// answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
@@ -504,8 +508,9 @@ pub struct Shell {
     /// The held-burst holds (§3c).
     ///
     /// They are the one path of every `/op` the `op` row sends under a
-    /// session, the queue `held` and `resolve` read and act on, the own
-    /// node's stopped state, and the resend the boards' feed threads drive.
+    /// session, the queue `held` and `resolve` read and act on, the halted
+    /// file `held.show` shows and `halted_file` reads, the own node's stopped
+    /// state, and the resend the boards' feed threads drive.
     holds: Arc<Holds>,
     /// The publication panels (§4b.1's `publication` family).
     ///
@@ -832,6 +837,27 @@ impl Shell {
         Ok(keys)
     }
 
+    /// Returns the held file P38 halted for `principal` at a board.
+    ///
+    /// It is for the embedding app to show natively (`client.md` §3c.3), in
+    /// a native dialog or by revealing the file in its folder; the path
+    /// never crosses the bridge — the page's `store_halted` carries the
+    /// halt's `why` alone and the page asks for the showing by `held.show`
+    /// (§4b.3; SP-15). It is `Some` wherever
+    /// `held(session)`, under a session of `principal`'s at the board,
+    /// answers `store_halted`, and `None` where no halted file of the
+    /// principal's stands there — a principal this shell has opened no
+    /// session for among them, since nothing is opened here (P39).
+    ///
+    /// # Errors
+    ///
+    /// Returns `unknown_board` where this shell issued no board under
+    /// `board_reference`.
+    pub fn halted_file(&self, board_reference: &str, principal: u64) -> Result<Option<PathBuf>, Refusal> {
+        let entry = self.board_entry(&Value::from(board_reference))?;
+        Ok(self.holds.halted_file(&entry.reference, principal))
+    }
+
     fn say(&self, line: impl AsRef<str>) {
         (self.talk)(line.as_ref());
     }
@@ -956,6 +982,7 @@ impl Shell {
             Some(Call::Search) => self.search(args),
             Some(Call::Places) => self.places(args),
             Some(Call::Held) => self.held(args),
+            Some(Call::HeldShow) => self.held_show(args),
             Some(Call::Resolve) => self.resolve(args),
             Some(Call::Changes) => self.changes(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
@@ -1454,13 +1481,35 @@ impl Shell {
     /// # Errors
     ///
     /// Returns `malformed_args` naming `session`, then `session_ended`; and
-    /// `store_halted` where P38 halted the file, naming its `path` and its
-    /// `why`: `newer` (a newer `v`), `unknown_member` (an unknown header
-    /// member, or a header off its spelling) or `damaged` (a line not read
-    /// whole, the header's or a body line's).
+    /// `store_halted` where P38 halted the file, naming its `why` alone:
+    /// `newer` (a newer `v`), `unknown_member` (an unknown header member, or
+    /// a header off its spelling) or `damaged` (a line not read whole, the
+    /// header's or a body line's). No path crosses (§4b.3): the page asks for
+    /// the file's showing by `held.show`.
     fn held(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
         self.holds.lines(&session)
+    }
+
+    /// Answers `held.show(session)` with `{shown}` (§3c.3).
+    ///
+    /// It is the halt face's own act, "show the file". Where P38 halted the
+    /// acting principal's held file at the session's board, the shell shows
+    /// it in its own window — its path, why it is halted and the act its why
+    /// asks, on `Talk` — as often as the person asks, and answers `shown:
+    /// true`; else it says nothing and answers `shown: false`
+    /// (`Holds::show_halted`). The path crosses in neither direction (§4b.3;
+    /// SP-15), and the session names the principal, so a page learns nothing
+    /// of a principal not its session's (P39); the embedding app reads the
+    /// same file natively by [`Shell::halted_file`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `malformed_args` naming `session`, then `session_died` or
+    /// `session_ended` ([`Shell::session`]).
+    fn held_show(&self, args: &Value) -> Result<Value, Refusal> {
+        let session = self.session(&args["session"])?;
+        Ok(json!({"shown": self.holds.show_halted(&session)}))
     }
 
     /// Answers `resolve(session, {held, act})` with `{}` (§4b.1).

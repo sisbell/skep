@@ -48,12 +48,14 @@ search = ["acting", "dep:skep-search"]
 # with the gap report and the counts; the reads over a board; the landing,
 # one `publish` with its signed body, the claim's read and the record in a
 # merge journal with its public link; the record's verification — the
-# `merge` module. OFF BY DEFAULT, as `search` is: the default build of the
+# `merge` module — and beside it the `history` module, the restore of a
+# draft's past state over the same reader and the same one write (B3-S7).
+# OFF BY DEFAULT, as `search` is: the default build of the
 # library holds no merge, so the thirteen content-free commands and the
 # fence stay true of it; the editor's shell, the `skep` command's merge and
-# the attendant turn it on. Implies `acting`: the landing signs. Its one
-# dependency of its own, `sha2`, compiles no crate a build would not:
-# skep-identity links it in every build.
+# restore and the attendant turn it on. Implies `acting`: the landing signs.
+# Its one dependency of its own, `sha2`, compiles no crate a build would
+# not: skep-identity links it in every build.
 merge = ["acting", "dep:sha2"]
 
 [dependencies]

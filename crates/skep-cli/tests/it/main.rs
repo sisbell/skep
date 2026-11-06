@@ -8,8 +8,11 @@
 //! versions by hand and drives the fourteenth command, `skep merge`,
 //! against them; `share` drives the fifteenth, `skep share` — the usage
 //! forms against a dead port, then the share, the revoke, the re-share, the
-//! privash and the lists on a claimed board; `tidy` reads the crate's own
-//! source for the arrangement `ARCHITECTURE.md` §The command states.
+//! privash and the lists on a claimed board; `restore` drives the
+//! sixteenth, `skep restore` — the usage forms against a dead port, then a
+//! draft put back to a past state on a claimed board over the merge
+//! suite's rig; `tidy` reads the crate's own source for the arrangement
+//! `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
 mod cli;
@@ -17,6 +20,7 @@ mod common;
 mod dev;
 mod hostile;
 mod merge;
+mod restore;
 mod serve;
 mod share;
 mod tidy;

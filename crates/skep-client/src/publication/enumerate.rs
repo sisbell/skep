@@ -113,6 +113,25 @@ pub struct Record {
 }
 
 impl Record {
+    /// Reads the stored link `value` at `link` as a counterpart record of
+    /// `account`'s — THE ONE READER OF THE RECORD SHAPE.
+    ///
+    /// It is a record where the link's home is owned by `account` exactly
+    /// (the owned-home test, off the address), its stored type slot is the
+    /// correspondence class exactly, and its `from` and `to` each open with
+    /// a content I-span (wire.md §The publish shot and head-float, the
+    /// correspondence records). `None` for a link of another home, another
+    /// type or another shape, and for an address this client cannot spell.
+    pub fn of(link: &str, value: &LinkValue, account: &str) -> Option<Record> {
+        let home = home_of_link(link)?;
+        if !owned_by(home, account) || !value.typed_exactly(T_CORRESPONDENCE) {
+            return None;
+        }
+        let from = value.from.first().and_then(ISpan::of)?;
+        let to = value.to.first().and_then(ISpan::of)?;
+        Some(Record { link: parse_address(link)?, home: parse_address(home)?, from, to, at: value.at })
+    }
+
     /// Maps `[first, reach)` on the record's `from` chain onto the `to` span
     /// at the same offset, where the record covers it.
     pub fn map(&self, chain: &str, first: u64, reach: u64) -> Option<ISpan> {
@@ -446,17 +465,15 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
             if !record_seen.insert(hit.clone()) {
                 continue;
             }
-            let Some(home) = home_of_link(&hit) else { continue };
-            if !owned_by(home, p.account) {
+            // The home judged off the address before the read, so a record
+            // of another's draft costs no `read_link`.
+            if !home_of_link(&hit).is_some_and(|home| owned_by(home, p.account)) {
                 continue;
             }
             let Some(value) = door.link(&hit)? else { continue };
-            if !value.typed_exactly(T_CORRESPONDENCE) {
-                continue;
+            if let Some(record) = Record::of(&hit, &value, p.account) {
+                records.push(record);
             }
-            let (Some(from), Some(to)) = (value.from.first().and_then(ISpan::of), value.to.first().and_then(ISpan::of)) else { continue };
-            let (Some(link), Some(home)) = (parse_address(&hit), parse_address(home)) else { continue };
-            records.push(Record { link, home, from, to, at: value.at });
         }
     }
 

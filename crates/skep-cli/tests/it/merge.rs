@@ -75,7 +75,7 @@ const FORKER: u64 = 2;
 /// refusal judged ahead of it is seen to open no socket.
 const DEAD: &str = "http://127.0.0.1:1";
 
-fn addr(text: &str) -> Address {
+pub(crate) fn addr(text: &str) -> Address {
     parse_address(text).expect("an address")
 }
 
@@ -94,7 +94,7 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> Fingerprint 
 
 /// One run of the binary's stdout read whole as ONE JSON document: exit 0,
 /// one line, nothing beside it.
-fn report(r: &Run) -> Value {
+pub(crate) fn report(r: &Run) -> Value {
     assert_eq!(r.code, 0, "{r:?}");
     assert_eq!(r.out.lines().count(), 1, "one JSON document on one line, nothing else on stdout: {}", r.out);
     serde_json::from_str(&r.out).unwrap_or_else(|e| panic!("stdout is one JSON document: {e}\n{}", r.out))
@@ -117,18 +117,18 @@ enum Staged<'a> {
 
 /// A claimed PERMISSIVE board (bare sessions mint the staging drafts), its
 /// store, the device key's signer, a bare token, and the facts the shots
-/// sign with.
-struct Rig {
+/// sign with — the restore suite's rig too (`restore.rs`).
+pub(crate) struct Rig {
     _daemon: Skepd,
-    origin: String,
-    store: PathBuf,
-    board: Board,
-    device: HybridSigner,
-    bare: Token,
+    pub(crate) origin: String,
+    pub(crate) store: PathBuf,
+    pub(crate) board: Board,
+    pub(crate) device: HybridSigner,
+    pub(crate) bare: Token,
 }
 
 impl Rig {
-    fn new(dir: &Path) -> Rig {
+    pub(crate) fn new(dir: &Path) -> Rig {
         let daemon = spawn(&dir.join("board"), true);
         let origin = origin(daemon.port());
         let store = dir.join("store");
@@ -144,7 +144,7 @@ impl Rig {
     }
 
     /// A content session under the device key, the seeding shots' hand.
-    fn session(&self) -> Session<'_> {
+    pub(crate) fn session(&self) -> Session<'_> {
         handshake(&self.board, Scope::Content, &self.device, PRINCIPAL, Site::Session).expect("a content session")
     }
 
@@ -166,14 +166,14 @@ impl Rig {
     }
 
     /// A read's document under `token`, never a rejection.
-    fn read(&self, token: &Token, frame: &Value) -> Value {
+    pub(crate) fn read(&self, token: &Token, frame: &Value) -> Value {
         let Answer::Document(v) = self.board.op(Some(token), frame).expect("the read") else { panic!("closed") };
         assert_ne!(v["resp"].as_str(), Some("rejected"), "{v}");
         v
     }
 
     /// An acked write's document.
-    fn acked(answer: Result<Answer, skep_client::Halt>) -> Value {
+    pub(crate) fn acked(answer: Result<Answer, skep_client::Halt>) -> Value {
         match answer.expect("the exchange") {
             Answer::Document(v) => {
                 assert!(matches!(v["resp"].as_str(), Some("ack" | "ack_addr")), "the board refused: {v}");
@@ -185,13 +185,13 @@ impl Rig {
 
     /// `image` over content ordinals `1 ..= width` of `doc`, as `(i_start,
     /// width)`.
-    fn image(&self, token: &Token, doc: &Address, width: u64) -> Vec<(String, String)> {
+    pub(crate) fn image(&self, token: &Token, doc: &Address, width: u64) -> Vec<(String, String)> {
         let v = self.read(token, &frames::image(&doc.to_string(), 1, width));
         v["runs"].as_array().expect("runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().to_string())).collect()
     }
 
     /// A private draft minted into the account from the bare session.
-    fn draft(&self) -> Address {
+    pub(crate) fn draft(&self) -> Address {
         let v = Rig::acked(self.board.op(Some(&self.bare), &json!({"op": "create_new_document", "account": ACCOUNT})));
         addr(acked_addr(&v).expect("a minted address"))
     }

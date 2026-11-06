@@ -1670,7 +1670,7 @@ impl Writer<'_> {
 }
 
 /// Returns the death signal under the session, faced.
-pub(super) fn closed(during: &str) -> Halt {
+pub(crate) fn closed(during: &str) -> Halt {
     Halt::face(
         format!("the session ended while {during}"),
         "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
@@ -1765,12 +1765,12 @@ pub(super) fn own_fault(what: &str, r: &Rejection) -> Refusal {
 /// Returns this library's own fault, faced.
 ///
 /// There is no user-facing act to offer.
-pub(super) fn own_fault_face(state: impl Into<String>, cause: impl Into<String>) -> Refusal {
+pub(crate) fn own_fault_face(state: impl Into<String>, cause: impl Into<String>) -> Refusal {
     Refusal::Halt(Halt::face(state, cause, "this is a fault in this library, not in your keys or your act; nothing further was written"))
 }
 
 /// Faces an answer without the shape the write's ack promises.
-pub(super) fn shape_face(op: &str, v: &Value) -> Halt {
+pub(crate) fn shape_face(op: &str, v: &Value) -> Halt {
     Halt::face(
         format!("`{op}` answered a document this client cannot read"),
         crate::halt::clipped(&v.to_string(), 200).to_string(),

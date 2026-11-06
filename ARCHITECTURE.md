@@ -302,13 +302,13 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, fifteen commands:
+- `skep-cli` — the `skep` command over `skep-client`, sixteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
-  `merge`, the one over the library's `merge` feature, which this crate
-  alone turns on, and `share`, which shares a draft or an account with
-  one account, privashes a draft, revokes a share and lists the grants
-  over the library's `share` module; flag
+  `merge` and `restore`, the two over the library's `merge` feature, which
+  this crate alone turns on, and `share`, which shares a draft or an
+  account with one account, privashes a draft, revokes a share and lists
+  the grants over the library's `share` module; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
@@ -713,10 +713,16 @@ each ceremony:
   `merge/land.rs` the LANDING and `resume`; `merge/record.rs` the `merge`
   record kind, its currency and `verify`; `merge/journal.rs` the merge
   journal — its unit suite in `merge/tests.rs` over the record's vectors
-  and a scripted board, its daemon walk in `tests/it/merge.rs`. Of the
-  SURFACES the `skep merge` command is built — `skep-cli`'s
-  `commands/merge.rs`, the one embedder that turns the feature on (§The
-  command) — and no agent surface is.
+  and a scripted board, its daemon walk in `tests/it/merge.rs`. Beside it
+  under the same feature, `history.rs` THE RESTORE — a draft's past state
+  made current over the merge's reader and the take-backs' one
+  `set_arrangement`, the state mapped through the publication's
+  correspondence records — its unit suite in `history/tests.rs` over the
+  fake board, its daemon walk in `tests/it/restore.rs`. Of the
+  SURFACES the `skep merge` and `skep restore` commands are built —
+  `skep-cli`'s `commands/merge.rs` and `commands/restore.rs`, the one
+  embedder that turns the feature on (§The command) — and no agent surface
+  is.
 - Under `acting`, beside `merge` and naming no ceremony — THE PUBLICATION
   COMPOSITION, a draft's one `publish` request as one composition family
   (P28): `publication.rs` the module, the reading door and the shared
@@ -895,7 +901,7 @@ and `keygen` sequence the library's compositions themselves, and so carry
 their own text. Its modules, in the order `src/main.rs` declares them,
 each naming only those above it:
 
-- `args.rs` `Command`, one of the fifteen, the verb `main` dispatches on;
+- `args.rs` `Command`, one of the sixteen, the verb `main` dispatches on;
   the grammar — one row per command and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
   the text that documents it; and `CommandLine`, one parsed command line
@@ -916,13 +922,15 @@ each naming only those above it:
   renders under a `Program`), `help`, and the plumbing from the flags to a
   board (`board_of`), a store (`store_of`), a principal
   (`principal_or_bound`) and a key (`select_key`, under `Purpose`).
-- `commands.rs` what the fifteen commands share among themselves alone:
+- `commands.rs` what the sixteen commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
   the three facts' one spelling (`print_facts`); `binding_said`; the
-  outstanding-act line `keygen` and `fingerprint` share; and the whole-set
-  compare (`held_set`, `compare_genesis`). Beneath it, `commands/<name>.rs`,
+  outstanding-act line `keygen` and `fingerprint` share; the whole-set
+  compare (`held_set`, `compare_genesis`); and the merge library's
+  refusals rendered as the board's verdict (`refused`, under a `Step`),
+  which `merge` and `restore` share. Beneath it, `commands/<name>.rs`,
   one file per command, each the
   `pub fn <name>(&CommandLine) -> Result<(), Stop>` that `main` dispatches
   to, taking the shared names through `super::`.

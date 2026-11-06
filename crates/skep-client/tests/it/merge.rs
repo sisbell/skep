@@ -89,14 +89,14 @@ const PRINCIPAL: u64 = 1;
 const FORKER_ACCOUNT: &str = "1.0.1.2";
 const FORKER: u64 = 2;
 
-fn addr(text: &str) -> Address {
+pub(crate) fn addr(text: &str) -> Address {
     parse_address(text).expect("an address")
 }
 
 /// The `attest` member over `body` for a write whose `doc` row is `doc`,
 /// under `account`, signed by the device key — the one composer,
 /// `skep_identity::entry_frame`.
-fn attest(
+pub(crate) fn attest(
     board: &Board,
     signer: &HybridSigner,
     account: &Address,
@@ -111,7 +111,7 @@ fn attest(
 }
 
 /// The response document of an acked exchange.
-fn acked(answer: Result<Answer, skep_client::Halt>) -> Value {
+pub(crate) fn acked(answer: Result<Answer, skep_client::Halt>) -> Value {
     match answer.expect("the exchange") {
         Answer::Document(v) => {
             assert!(
@@ -125,7 +125,7 @@ fn acked(answer: Result<Answer, skep_client::Halt>) -> Value {
 }
 
 /// A guest read's document, not a rejection.
-fn read(board: &Board, token: Option<&Token>, frame: &Value) -> Value {
+pub(crate) fn read(board: &Board, token: Option<&Token>, frame: &Value) -> Value {
     let Answer::Document(v) = board.op(token, frame).expect("the read") else { panic!("closed") };
     assert_ne!(v["resp"].as_str(), Some("rejected"), "{v}");
     v
@@ -143,7 +143,7 @@ fn read_at(board: &Board, token: Option<&Token>, at: u64, frame: &Value) -> Valu
 
 /// `image` over content ordinals `1 ..= width` of `doc`: the runs as
 /// `(i_start, width)`.
-fn image(board: &Board, token: &Token, doc: &Address, width: u64) -> Vec<(String, u64)> {
+pub(crate) fn image(board: &Board, token: &Token, doc: &Address, width: u64) -> Vec<(String, u64)> {
     let v = read(board, Some(token), &frames::image(&doc.to_string(), 1, width));
     v["runs"]
         .as_array()
@@ -160,7 +160,7 @@ fn image(board: &Board, token: &Token, doc: &Address, width: u64) -> Vec<(String
 
 /// A published document minted into the claimant's account from the signed
 /// session with its attest.
-fn published_document(board: &Board, session: &Session<'_>, signer: &HybridSigner) -> Address {
+pub(crate) fn published_document(board: &Board, session: &Session<'_>, signer: &HybridSigner) -> Address {
     let account = addr(ACCOUNT);
     let mut frame = json!({"op": "create_new_document", "account": ACCOUNT, "published": true});
     frame["attest"] = attest(
@@ -175,7 +175,7 @@ fn published_document(board: &Board, session: &Session<'_>, signer: &HybridSigne
 
 /// One run of a shot as the test stages it: the document's own positions by
 /// reference, or a staging draft's fresh text.
-enum Staged<'a> {
+pub(crate) enum Staged<'a> {
     /// `width` positions of `doc`'s own I-space from ordinal `from`, whose
     /// bytes are `text`.
     Own { from: u64, text: &'a str },
@@ -187,7 +187,7 @@ enum Staged<'a> {
 /// each own run by reference and each fresh run through a staging draft, the
 /// body the copied values one per position with the base group, attested;
 /// the member minted.
-fn shot(
+pub(crate) fn shot(
     board: &Board,
     session: &Session<'_>,
     signer: &HybridSigner,
@@ -802,7 +802,7 @@ fn a_draft_side_merges_from_the_base_the_board_records() {
 }
 
 /// M's runs as `image` spells them, `(i_start, width)`.
-fn as_image(runs: &[Run]) -> Vec<(String, u64)> {
+pub(crate) fn as_image(runs: &[Run]) -> Vec<(String, u64)> {
     runs.iter().map(|r| (format!("{}.0.1.{}", r.origin, r.i_start), r.width)).collect()
 }
 
@@ -983,20 +983,23 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     session.close().expect("close");
 }
 
-/// The take-backs' rig: a claimed permissive board, the device key's signer
-/// and the claimant's bare token. The daemon is dropped before its directory.
-struct Rig {
-    _sd: skepd::Skepd,
+/// The take-backs' rig, the restore suite's too (`restore.rs`): a claimed
+/// permissive board, the device key's signer and the claimant's bare token.
+/// The daemon is dropped before its directory.
+pub(crate) struct Rig {
+    /// The daemon in-process, its `test-hooks` seam the restore suite's door
+    /// to the checkpoint that raises the retention floor.
+    pub(crate) sd: skepd::Skepd,
     _dir: tempfile::TempDir,
-    board: Board,
-    device: HybridSigner,
-    bare: Token,
+    pub(crate) board: Board,
+    pub(crate) device: HybridSigner,
+    pub(crate) bare: Token,
     /// The claim's two anchor files, under `a` and `b`.
     anchors: std::path::PathBuf,
 }
 
 impl Rig {
-    fn new() -> Rig {
+    pub(crate) fn new() -> Rig {
         let dir = tempfile::tempdir().expect("tempdir");
         let sd = spawn(&dir.path().join("board"), true);
         let board = board(sd.port());
@@ -1006,26 +1009,26 @@ impl Rig {
         claim(&board, &store, &anchors);
         let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
         let bare = bare(&board, PRINCIPAL);
-        Rig { _sd: sd, _dir: dir, board, device, bare, anchors }
+        Rig { sd, _dir: dir, board, device, bare, anchors }
     }
 
     /// A content session under the device key.
-    fn session(&self) -> Session<'_> {
+    pub(crate) fn session(&self) -> Session<'_> {
         handshake(&self.board, Scope::Content, &self.device, PRINCIPAL, Site::Session).expect("a content session")
     }
 
     /// The board's committed head.
-    fn position(&self) -> u64 {
+    pub(crate) fn position(&self) -> u64 {
         self.board.health().unwrap().log_position()
     }
 
-    fn metadata(&self, token: &Token, doc: &Address) -> Value {
+    pub(crate) fn metadata(&self, token: &Token, doc: &Address) -> Value {
         read(&self.board, Some(token), &frames::doc_metadata(&doc.to_string()))
     }
 
     /// A fresh document with its base version `D.1` "the cat sat" and its
     /// head `D.2` "the big cat sat".
-    fn race(&self, session: &Session<'_>) -> (Address, Address, Address) {
+    pub(crate) fn race(&self, session: &Session<'_>) -> (Address, Address, Address) {
         let d = published_document(&self.board, session, &self.device);
         let base = shot(&self.board, session, &self.device, &self.bare, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
         let head = shot(
@@ -1042,7 +1045,7 @@ impl Rig {
     }
 
     /// A draft staged from `from` with `text` typed at ordinal `at`.
-    fn staged(&self, from: &Address, at: u64, text: &str) -> Address {
+    pub(crate) fn staged(&self, from: &Address, at: u64, text: &str) -> Address {
         let staged = acked(self.board.op(Some(&self.bare), &frames::stage(&from.to_string(), None)));
         let draft = addr(acked_addr(&staged).expect("the staged draft's address"));
         insert_text(&self.board, &self.bare, &draft.to_string(), at, text);
@@ -1050,7 +1053,7 @@ impl Rig {
     }
 
     /// Every row of the feed under `doc` on the supplement, oldest first.
-    fn rows_under(&self, token: &Token, doc: &Address) -> Vec<Value> {
+    pub(crate) fn rows_under(&self, token: &Token, doc: &Address) -> Vec<Value> {
         let under = doc.to_string();
         let (mut since, mut rows) = (0u64, Vec::new());
         loop {
@@ -1070,12 +1073,12 @@ impl Rig {
 }
 
 /// The merger's facts off a session, with the rig's device key as its hand.
-fn merger<'s>(rig: &'s Rig, session: &'s Session<'_>) -> Merger<'s> {
+pub(crate) fn merger<'s>(rig: &'s Rig, session: &'s Session<'_>) -> Merger<'s> {
     Merger { token: session.token(), account: session.account(), signer: &rig.device }
 }
 
 /// M's runs off a composition.
-fn m_of(merged: &skep_client::merge::Merged) -> Vec<Run> {
+pub(crate) fn m_of(merged: &skep_client::merge::Merged) -> Vec<Run> {
     merged.composed.runs.iter().map(|p| p.run.clone()).collect()
 }
 

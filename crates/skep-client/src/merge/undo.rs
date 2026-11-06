@@ -336,11 +336,16 @@ pub fn withdraw(
     Ok(Withdrawn { draft: draft.clone(), position, record })
 }
 
-/// Which act a write is, for its words.
+/// Which act a `set_arrangement` is, for its words.
+///
+/// The three acts that send a draft one `set_arrangement` of a state the
+/// board already held: the two take-backs here, and the `history` module's
+/// restore, whose write is judged by [`judge`] as theirs are.
 #[derive(Clone, Copy)]
-enum Act {
+pub(crate) enum Act {
     Undo,
     Withdraw,
+    Restore,
 }
 
 impl Act {
@@ -349,6 +354,7 @@ impl Act {
         match self {
             Act::Undo => "the undo",
             Act::Withdraw => "the withdrawal",
+            Act::Restore => "the restore",
         }
     }
 }
@@ -472,7 +478,7 @@ fn latest_landing_row(board: &Board, token: &Token, draft: &Address) -> Result<O
 /// # Errors
 ///
 /// A run with no address, as the library's own fault.
-fn frame_runs(runs: &[Run]) -> Result<Vec<Value>, Refusal> {
+pub(crate) fn frame_runs(runs: &[Run]) -> Result<Vec<Value>, Refusal> {
     runs.iter()
         .map(|r| {
             let i_start = r
@@ -486,7 +492,7 @@ fn frame_runs(runs: &[Run]) -> Result<Vec<Value>, Refusal> {
 /// Sends the one write, answering its position.
 ///
 /// The board's head is read first (SP-14), then the frame under the
-/// merger's token; its refusals are mapped as the module's doc lists them.
+/// merger's token; its answer is judged by [`judge`].
 ///
 /// # Errors
 ///
@@ -505,12 +511,32 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
         match act {
             Act::Undo => "taking the merge back out of the draft",
             Act::Withdraw => "taking the merge out of the draft",
+            Act::Restore => "restoring the draft",
         },
     )?;
-    if let Some(at) = acked_at(&v) {
+    judge(&v, draft, as_of, act)
+}
+
+/// Judges a `set_arrangement`'s answer `v`, answering the write's position.
+///
+/// The frame was typed against `as_of` for `act`; its refusals are mapped
+/// as the module's doc lists them, each the same at every act but
+/// `arrangement_moved`, whose words are the act's own.
+///
+/// # Errors
+///
+/// As [`undo`]'s one write's: `arrangement_moved` as the board's verdict in
+/// the person's words; [`Refusal::WindowWithheld`],
+/// [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`],
+/// [`Refusal::NotOwner`] and [`Refusal::Published`] by their codes; the
+/// refusals of what the library composed as its own fault; the board's
+/// other refusals verbatim; an answer that is no acknowledgment and no
+/// rejection, faced.
+pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<u64, Refusal> {
+    if let Some(at) = acked_at(v) {
         return Ok(at);
     }
-    let Some(r) = Rejection::of(&v) else { return Err(shape_face("set_arrangement", &v).into()) };
+    let Some(r) = Rejection::of(v) else { return Err(shape_face("set_arrangement", v).into()) };
     let site = r.site().addr.as_deref().and_then(parse_address);
     Err(match r.key() {
         // Another hand's edit past the typed position: the board's verdict,
@@ -524,7 +550,7 @@ fn send(writer: &Writer<'_>, frame: &Value, draft: &Address, as_of: u64, act: Ac
             };
             let detail = match act {
                 Act::Undo => format!("{draft} changed since the merge landed{} — nothing was changed; undo the later changes first, or edit", since("the merge landed")),
-                Act::Withdraw => format!("{draft} changed since it was read{} — nothing was changed; run this again, which reads the draft as it stands", since("read")),
+                Act::Withdraw | Act::Restore => format!("{draft} changed since it was read{} — nothing was changed; run this again, which reads the draft as it stands", since("read")),
             };
             Refusal::Halt(Halt::Refused(Refused {
                 status: 200,

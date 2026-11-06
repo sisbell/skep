@@ -504,11 +504,13 @@ pub enum Refusal {
     /// Its words name the origin and the code alone, the same at every
     /// write; the embedder says what the act did (SP-10).
     WindowWithheld(Address),
-    /// The merged list holds more runs than one shot may name.
+    /// A run list holds more runs than one write may name.
     ///
-    /// Refused with the count, never split (decision 13).
+    /// It is the merged list at a landing, `counts.m` (decision 13), or a
+    /// past state at a restore, the runs the write would send: refused with
+    /// the count before any frame, never split.
     OverCap {
-        /// `counts.m`.
+        /// The runs the list holds.
         runs: usize,
         /// [`SHOT_RUN_CAP`].
         cap: usize,
@@ -557,6 +559,18 @@ pub enum Refusal {
     NoMerge {
         /// The draft named.
         draft: Address,
+    },
+    /// A restore named a position at or past the draft's current one: no
+    /// past state lies there, and nothing is read at a position (the
+    /// `history` module; B3-S7).
+    NotPast {
+        /// The draft named.
+        draft: Address,
+        /// The position named.
+        at: u64,
+        /// The position the draft stands at — the `as_of` of its
+        /// `doc_metadata` read at the head.
+        current: u64,
     },
     /// `supersede_refused` on the shot: the board refused a daughter the
     /// shot names in `supersede`, the whole publication with it, nothing
@@ -669,7 +683,7 @@ impl fmt::Display for Refusal {
             Refusal::ForkBaseMoved { fork, source, head } => write!(f, "{fork} was forked from {source}, and this merge was composed on {head} — fork {head} afresh and land the merge there; nothing was merged"),
             Refusal::BaseNotInChain { into, head } => write!(f, "{into} is a draft of another document: its recorded base is no version of the document {head} heads — land the merge in a draft staged from that document; nothing was merged"),
             Refusal::WindowWithheld(origin) => write!(f, "{origin} is not shared with you (withheld), and a run this write sends windows it"),
-            Refusal::OverCap { runs, cap } => write!(f, "the merged list is in more pieces than one publication can carry — {runs}, where {cap} is the most; publishing this merge is not offered"),
+            Refusal::OverCap { runs, cap } => write!(f, "the list is in more pieces than one write can carry — {runs}, where {cap} is the most; nothing was sent"),
             Refusal::NeedsSignedSession => f.write_str("a signed session is needed to land a merge on a claimed board (signed_session_required)"),
             Refusal::UnownedDraft { draft } => write!(f, "the draft {draft} is another account's (not_owner): a publication keeps its records in the draft it was staged in, so the shot is refused; nothing was published"),
             Refusal::NotOwner { draft } => write!(f, "{draft} is another account's draft (not_owner): a merge is taken out of a draft by its owner alone; nothing was changed"),
@@ -680,6 +694,7 @@ impl fmt::Display for Refusal {
                 NoUndo::TakenBack => write!(f, "nothing to undo: the merge in {draft} was already taken back"),
             },
             Refusal::NoMerge { draft } => write!(f, "{draft} carries no merge: nothing to undo, nothing to take out"),
+            Refusal::NotPast { draft, at, current } => write!(f, "position {at} is not before the state {draft} stands at (position {current}): a restore names a position before the draft's current one, and nothing was read or sent"),
             Refusal::SupersedeRefused { index, cause } => match cause {
                 SupersedeCause::HeadMoved { head: Some(head) } => write!(f, "the head moved under the merge: the trunk's head is now {head}, so the shot would have landed as a daughter, and a shot claiming a daughter superseded is refused whole (supersede_refused, head_moved) — nothing was published; compose the merge again on {head}"),
                 SupersedeCause::HeadMoved { head: None } => f.write_str("the head moved under the merge, so the shot would have landed as a daughter, and a shot claiming a daughter superseded is refused whole (supersede_refused, head_moved) — nothing was published; compose the merge again on the trunk's head"),
@@ -730,7 +745,7 @@ pub(super) fn content_prefix(origin: &Address) -> String {
 ///
 /// A run whose `i_start` is no content I-address is the board's fault,
 /// named.
-pub(super) fn runs_of(imaged: &[IRun]) -> Result<Vec<Run>, Halt> {
+pub(crate) fn runs_of(imaged: &[IRun]) -> Result<Vec<Run>, Halt> {
     let mut out: Vec<Run> = Vec::new();
     for r in imaged {
         let i_start = format!("{}.{}", r.prefix, r.first);
@@ -820,7 +835,7 @@ pub(super) fn last_component(a: &Address) -> Option<u64> {
 /// runs as served, each run's `ordinal` the document's own V-ordinal, and
 /// the position the answers named.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Imaged {
+pub(crate) struct Imaged {
     /// The document imaged — a member, or a draft.
     pub(super) doc: Address,
     /// The position the document was read at; `None` the head.
@@ -831,9 +846,9 @@ pub(super) struct Imaged {
     /// stands.
     pub(super) at: Option<u64>,
     /// The content extent.
-    pub(super) extent: u64,
+    pub(crate) extent: u64,
     /// The runs, in V order.
-    pub(super) runs: Vec<IRun>,
+    pub(crate) runs: Vec<IRun>,
     /// The highest `as_of` the extent's and the image's answers carried.
     ///
     /// It is `at` where the document was read as of a position, which the
@@ -843,11 +858,12 @@ pub(super) struct Imaged {
     pub(super) as_of: Option<u64>,
 }
 
-/// The door of the merge's frame reads: a board and the caller's token.
+/// The door of the merge's frame reads, and the restore's: a board and the
+/// caller's token.
 ///
 /// The highest `as_of` its answers carry is kept. The feed walk and the
 /// journal's reads ask the board directly.
-pub(super) struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     board: &'a Board,
     token: Option<&'a Token>,
     as_of: Cell<u64>,
@@ -855,7 +871,7 @@ pub(super) struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     /// Returns a reader at `board` as `token`'s principal, or as a guest.
-    pub(super) fn new(board: &'a Board, token: Option<&'a Token>) -> Reader<'a> {
+    pub(crate) fn new(board: &'a Board, token: Option<&'a Token>) -> Reader<'a> {
         Reader { board, token, as_of: Cell::new(0) }
     }
 
@@ -886,7 +902,7 @@ impl<'a> Reader<'a> {
     /// [`Refusal::NotAPosition`], each the caller's position and never read
     /// at the head instead; [`Refusal::HistoryBusy`] past the retries;
     /// [`Board::op`]'s and [`Board::op_at`]'s other errors.
-    pub(super) fn read(&self, frame: &Value, at: Option<u64>) -> Result<Value, Refusal> {
+    pub(crate) fn read(&self, frame: &Value, at: Option<u64>) -> Result<Value, Refusal> {
         let Some(at) = at else {
             return match self.board.op(self.token, frame)? {
                 Answer::Closed => Err(closed("reading").into()),
@@ -945,7 +961,7 @@ impl<'a> Reader<'a> {
     ///
     /// A rejection, mapped by [`Reader::refuse`]; otherwise [`Reader::read`]'s
     /// errors.
-    pub(super) fn answered(
+    pub(crate) fn answered(
         &self,
         doc: &Address,
         frame: &Value,
@@ -976,7 +992,7 @@ impl<'a> Reader<'a> {
     /// # Errors
     ///
     /// As [`Reader::metadata`]'s.
-    pub(super) fn metadata_read(&self, doc: &Address, at: Option<u64>) -> Result<(Metadata, Option<u64>), Refusal> {
+    pub(crate) fn metadata_read(&self, doc: &Address, at: Option<u64>) -> Result<(Metadata, Option<u64>), Refusal> {
         let v = self.answered(doc, &frames::doc_metadata(&doc.to_string()), at)?;
         let meta = answers::metadata(&v).ok_or_else(|| shape("doc_metadata", &v))?;
         Ok((meta, answers::as_of(&v)))
@@ -1088,7 +1104,7 @@ impl<'a> Reader<'a> {
     /// # Errors
     ///
     /// [`Reader::span_set`]'s and [`Reader::image_read`]'s errors.
-    pub(super) fn imaged(&self, doc: &Address, at: Option<u64>) -> Result<Imaged, Refusal> {
+    pub(crate) fn imaged(&self, doc: &Address, at: Option<u64>) -> Result<Imaged, Refusal> {
         let (extent, as_of) = self.span_set(doc, at)?;
         let (runs, imaged_as_of) = self.image_read(doc, at, 1, extent)?;
         Ok(Imaged { doc: doc.clone(), at, extent, runs, as_of: as_of.max(imaged_as_of) })
@@ -1187,7 +1203,7 @@ fn closed(during: &str) -> Halt {
 }
 
 /// Faces an answer without the shape the frame's `resp` promises.
-fn shape(op: &str, v: &Value) -> Halt {
+pub(crate) fn shape(op: &str, v: &Value) -> Halt {
     Halt::face(
         format!("`{op}` answered a document this client cannot read"),
         crate::halt::clipped(&v.to_string(), 200).to_string(),

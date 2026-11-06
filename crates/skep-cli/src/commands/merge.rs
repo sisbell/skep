@@ -52,7 +52,10 @@
 //! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
 //! session opened as `skep session` opens its, and closed on every exit —
 //! the shot and the record's link are signed by that key, so `SKEP_SESSION`
-//! is never read here: a token cannot sign.
+//! is never read here: a token cannot sign. The library's refusals come to
+//! their stops through the renderer the commands share (`commands.rs`'s
+//! `refused`, under a `Step`), the take-backs' `history_reclaimed` worded
+//! here ([`refused_taking_out`]).
 //!
 //! **A daughter is reported, never retried (decision 17).** Where the head
 //! moved under the merge the shot lands as the head's daughter, the report
@@ -87,14 +90,14 @@ use skep_client::halt::{Halt, Refused};
 use skep_client::merge::{
     compose, head_of, land, undo, withdraw, Choice, Family, Gap, GapId, GapKind, Inputs, Landed,
     Landing, Merged, Merger, Options, Placement, Record, RecordLanding, Refusal, Resolution,
-    ResolvedBy, Side, SideIx, SupersedeCause, Undone, Withdrawn,
+    ResolvedBy, Side, SideIx, Undone, Withdrawn,
 };
 use skep_client::sign::Signer;
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{
-    board_of, data_verbatim, has_terminal, key_named, principal_or_bound, select_key, store_of,
-    talk, Stop,
+    board_of, data_verbatim, has_terminal, key_named, principal_or_bound, refused, select_key,
+    store_of, talk, Step, Stop,
 };
 use crate::args::{CommandLine, Usage};
 
@@ -115,38 +118,6 @@ impl Land {
         match self {
             Land::Publish => Step::Publish,
             Land::Into(_) | Land::New => Step::Draft,
-        }
-    }
-}
-
-/// The step of the run a library refusal answers ([`refused`]).
-///
-/// The library's two `withheld` refusals name the document and the code
-/// alone, the same at every act (SP-10); the step is what the run says
-/// beside them — what it did, and what it did not, before the refusal.
-#[derive(Clone, Copy)]
-enum Step {
-    /// The composition.
-    Compose,
-    /// `--publish`'s landing, after the composition.
-    Publish,
-    /// `--into`'s or `--new`'s landing, after the composition.
-    Draft,
-    /// `--undo`.
-    Undo,
-    /// `--withdraw`.
-    Withdraw,
-}
-
-impl Step {
-    /// Returns what the run did, and did not, before a refusal at this step.
-    fn outcome(self) -> &'static str {
-        match self {
-            Step::Compose => "nothing was composed",
-            Step::Publish => "the merge was composed, and nothing was published",
-            Step::Draft => "the merge was composed, and nothing was merged",
-            Step::Undo => "nothing was taken back",
-            Step::Withdraw => "nothing was taken out",
         }
     }
 }
@@ -463,81 +434,6 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
         (Side::Draft { at, .. }, Some(b)) => format!("the draft {at} (staged from {b})"),
         (Side::Draft { at, .. }, None) => format!("the draft {at}"),
         (Side::Fork(f), _) => format!("the fork {f}"),
-    }
-}
-
-/// Returns the stop a library refusal comes to (§2.3's exit 1).
-///
-/// The exit is "the board refused": a halt the library faced keeps its own
-/// code; every typed refusal is the board's verdict under the wire code the
-/// refusal is named for, its detail the refusal's own words — the side
-/// whose base cannot be read, the second draft, a fork's bare source or a
-/// draft's bare base, a base named for a fork and a base named for a draft
-/// that the board's record does not derive, which the library refuses
-/// before any image, among them, under their own names; the unowned draft
-/// side under `not_owner`, its detail naming the draft; the draft landing's
-/// two — a fork composed on another head than its source under
-/// `fork_base_moved`, a draft of another document under
-/// `base_not_in_chain`; a composition position the board does not
-/// answer under its own fault's code — no longer, `history_reclaimed`; past
-/// its head, `beyond_head`; inside one commit, `not_a_position`; and the
-/// take-backs' — another account's draft under `not_owner`, a published
-/// document under `published_target`, nothing to undo under
-/// `nothing_to_undo` with the library's reason, a draft carrying no merge
-/// under `no_merge`; and the shot's own `supersede_refused`, whose detail
-/// at `head_moved` says the head moved under the merge, that nothing was
-/// published, and to run the merge again on the head it names. The two
-/// `withheld` refusals — a document the reader may not read, an origin a
-/// write's run windows — name the document alone, so their detail says
-/// beside it what `step` did and did not do ([`Step::outcome`]).
-fn refused(r: Refusal, step: Step) -> Stop {
-    let code = match &r {
-        Refusal::Halt(_) => "",
-        Refusal::BaseUnknown(_) => "base_unknown",
-        Refusal::BareSource { .. } => "bare_source",
-        Refusal::ForkBaseNamed { .. } => "fork_base_named",
-        Refusal::DraftBaseDisagrees { .. } => "draft_base_disagrees",
-        Refusal::TwoDrafts => "two_drafts",
-        Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => "withheld",
-        Refusal::NoSuchDocument(_) => "doc_not_registered",
-        Refusal::TooFragmented { .. } => "image_too_large",
-        Refusal::HistoryBusy => "history_busy",
-        Refusal::HistoryReclaimed { .. } => "history_reclaimed",
-        Refusal::BeyondHead { .. } => "beyond_head",
-        Refusal::NotAPosition { .. } => "not_a_position",
-        Refusal::OverCap { .. } => "too_many_runs",
-        Refusal::NeedsSignedSession => "signed_session_required",
-        Refusal::UnownedDraft { .. } | Refusal::NotOwner { .. } => "not_owner",
-        Refusal::ForkBaseMoved { .. } => "fork_base_moved",
-        Refusal::BaseNotInChain { .. } => "base_not_in_chain",
-        Refusal::Published { .. } => "published_target",
-        Refusal::NothingToUndo { .. } => "nothing_to_undo",
-        Refusal::NoMerge { .. } => "no_merge",
-        Refusal::SupersedeRefused { .. } => "supersede_refused",
-    };
-    match r {
-        Refusal::Halt(h) => Stop::Halt(h),
-        other => {
-            let detail = match &other {
-                Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
-                    format!("{other}; {}", step.outcome())
-                }
-                Refusal::SupersedeRefused { cause: SupersedeCause::HeadMoved { head }, .. } => {
-                    format!(
-                        "{other} — run this again{} to merge against it",
-                        head.as_ref().map(|h| format!(" with --head {h}, or with no --head to take the feed's,")).unwrap_or_default()
-                    )
-                }
-                _ => other.to_string(),
-            };
-            Stop::Halt(Halt::Refused(Refused {
-                status: 200,
-                code: code.to_string(),
-                detail: Some(detail),
-                op: None,
-                body: Value::Null,
-            }))
-        }
     }
 }
 

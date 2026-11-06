@@ -63,7 +63,7 @@ use crate::board::{ChangesAnswer, ChangesQuery, T_RETRACTION};
 use super::enumerate::Record;
 use super::request::{AlsoPlaces, End, EntryHome, Request};
 use super::send::{Ack, AckVia};
-use super::{home_of_link, owned_by, resolve_member_spans, trunk_of, Door, Fault, ISpan, Inputs, Publisher, Run};
+use super::{home_of_link, owned_by, resolve_member_spans, trunk_of, Door, Fault, Inputs, Publisher, Run};
 
 /// The runs and places after the twin pre-check re-composed what the
 /// draft's records already name.
@@ -207,19 +207,14 @@ impl Recomposed {
 }
 
 /// Reads one record by address: `None` where it is absent, of another type,
-/// another account's, or of no I-span shape.
+/// another account's, or of no I-span shape (`Record::of`); the home is
+/// judged off the address first, so another's record costs no read.
 pub(crate) fn read_record(door: &Door<'_>, p: &Publisher<'_>, hit: &str) -> Result<Option<Record>, Fault> {
-    let Some(home) = home_of_link(hit) else { return Ok(None) };
-    if !owned_by(home, p.account) {
+    if !home_of_link(hit).is_some_and(|home| owned_by(home, p.account)) {
         return Ok(None);
     }
     let Some(value) = door.link(hit)? else { return Ok(None) };
-    if !value.typed_exactly(T_CORRESPONDENCE) {
-        return Ok(None);
-    }
-    let (Some(from), Some(to)) = (value.from.first().and_then(ISpan::of), value.to.first().and_then(ISpan::of)) else { return Ok(None) };
-    let (Some(link), Some(home)) = (parse_address(hit), parse_address(home)) else { return Ok(None) };
-    Ok(Some(Record { link, home, from, to, at: value.at }))
+    Ok(Record::of(hit, &value, p.account))
 }
 
 /// Where the landed test starts.

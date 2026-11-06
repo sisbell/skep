@@ -1,9 +1,10 @@
-//! The fifteen commands, one file each beneath this one, and what they share.
+//! The sixteen commands, one file each beneath this one, and what they share.
 //!
 //! The commands are `client.md` §2.2's thirteen, each exactly as it writes
-//! it, `merge`, the fourteenth, as the merge record's §6 writes it, and
+//! it, `merge`, the fourteenth, as the merge record's §6 writes it,
 //! `share`, the fifteenth, as the grant rules write it (PUB-5.29;
-//! PUB-5.108) — each a `pub fn` that `main` dispatches to and that answers
+//! PUB-5.108), and `restore`, the sixteenth, as B3-S7 draws it — each a
+//! `pub fn` that `main` dispatches to and that answers
 //! `Ok` or the [`Stop`] it came to, every walk a library call. What they
 //! share among themselves alone is private here and so visible to each of
 //! them: `require_terminal`, the person doors' check, whose refusal is a
@@ -12,8 +13,10 @@
 //! ([`BoxDefault`]); the three facts' one spelling (`print_facts`); a
 //! landed binding line said as the store reads it back (`binding_said`);
 //! the outstanding-act line `keygen` and `fingerprint` share
-//! (`OUTSTANDING_ACT`); and the whole-set compare, from the held set to its
-//! halt (`held_set`, `compare_genesis`). What the dev binary shares with
+//! (`OUTSTANDING_ACT`); the whole-set compare, from the held set to its
+//! halt (`held_set`, `compare_genesis`); and the merge library's refusals
+//! rendered as the board's verdict under the step that met them
+//! (`refused`, [`Step`]), which `merge` and `restore` share. What the dev binary shares with
 //! them — the two streams, the stops and their exit codes, the plumbing
 //! from the flags to a board, a store, a principal and a key — is
 //! `shared.rs`'s, taken here and handed down to the command files — the one
@@ -31,6 +34,7 @@ mod health;
 mod keygen;
 mod merge;
 mod recover;
+mod restore;
 mod retire;
 mod rotate;
 mod session;
@@ -47,6 +51,7 @@ pub use health::health;
 pub use keygen::keygen;
 pub use merge::merge;
 pub use recover::recover;
+pub use restore::restore;
 pub use retire::retire;
 pub use rotate::rotate;
 pub use session::session;
@@ -57,10 +62,12 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
+use serde_json::Value;
 use skep_client::board::Board;
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
 use skep_client::derive::Walk;
-use skep_client::halt::Halt;
+use skep_client::halt::{Halt, Refused};
+use skep_client::merge::{Refusal, SupersedeCause};
 use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{Binding, FileStore, KeyFacts, KeySelector, Purpose};
 use skep_identity::{Fingerprint, LabelError, PublicKey, MAX_RECORD_BYTES};
@@ -423,6 +430,118 @@ fn difference_lines(diffs: &[Difference]) -> Vec<String> {
 /// genesis record.
 fn later_line(act: &Held) -> String {
     format!("later act: {} anchor={} label={}", act.fingerprint, act.anchor, act.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into()))
+}
+
+/// The step of a run a merge library refusal answers ([`refused`]).
+///
+/// The library's two `withheld` refusals name the document and the code
+/// alone, the same at every act (SP-10); the step is what the run says
+/// beside them — what it did, and what it did not, before the refusal.
+#[derive(Clone, Copy)]
+enum Step {
+    /// `merge`'s composition.
+    Compose,
+    /// `merge --publish`'s landing, after the composition.
+    Publish,
+    /// `merge --into`'s or `--new`'s landing, after the composition.
+    Draft,
+    /// `merge --undo`.
+    Undo,
+    /// `merge --withdraw`.
+    Withdraw,
+    /// `restore`.
+    Restore,
+}
+
+impl Step {
+    /// Returns what the run did, and did not, before a refusal at this step.
+    fn outcome(self) -> &'static str {
+        match self {
+            Step::Compose => "nothing was composed",
+            Step::Publish => "the merge was composed, and nothing was published",
+            Step::Draft => "the merge was composed, and nothing was merged",
+            Step::Undo => "nothing was taken back",
+            Step::Withdraw => "nothing was taken out",
+            Step::Restore => "nothing was restored",
+        }
+    }
+}
+
+/// Returns the stop a merge library refusal comes to (§2.3's exit 1).
+///
+/// The exit is "the board refused": a halt the library faced keeps its own
+/// code; every typed refusal is the board's verdict under the wire code the
+/// refusal is named for, its detail the refusal's own words — the side
+/// whose base cannot be read, the second draft, a fork's bare source or a
+/// draft's bare base, a base named for a fork and a base named for a draft
+/// that the board's record does not derive, which the library refuses
+/// before any image, among them, under their own names; the unowned draft
+/// side under `not_owner`, its detail naming the draft; the draft landing's
+/// two — a fork composed on another head than its source under
+/// `fork_base_moved`, a draft of another document under
+/// `base_not_in_chain`; a position the board does not answer under its own
+/// fault's code — no longer, `history_reclaimed`; past its head,
+/// `beyond_head`; inside one commit, `not_a_position`; and the take-backs'
+/// — another account's draft under `not_owner`, a published document under
+/// `published_target`, nothing to undo under `nothing_to_undo` with the
+/// library's reason, a draft carrying no merge under `no_merge`; the
+/// restore's position at or past the draft's own under `not_past`; and the
+/// shot's own `supersede_refused`, whose detail at `head_moved` says the
+/// head moved under the merge, that nothing was published, and to run the
+/// merge again on the head it names. The two `withheld` refusals — a
+/// document the reader may not read, an origin a write's run windows —
+/// name the document alone, so their detail says beside it what `step`
+/// did and did not do ([`Step::outcome`]).
+fn refused(r: Refusal, step: Step) -> Stop {
+    let code = match &r {
+        Refusal::Halt(_) => "",
+        Refusal::BaseUnknown(_) => "base_unknown",
+        Refusal::BareSource { .. } => "bare_source",
+        Refusal::ForkBaseNamed { .. } => "fork_base_named",
+        Refusal::DraftBaseDisagrees { .. } => "draft_base_disagrees",
+        Refusal::TwoDrafts => "two_drafts",
+        Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => "withheld",
+        Refusal::NoSuchDocument(_) => "doc_not_registered",
+        Refusal::TooFragmented { .. } => "image_too_large",
+        Refusal::HistoryBusy => "history_busy",
+        Refusal::HistoryReclaimed { .. } => "history_reclaimed",
+        Refusal::BeyondHead { .. } => "beyond_head",
+        Refusal::NotAPosition { .. } => "not_a_position",
+        Refusal::OverCap { .. } => "too_many_runs",
+        Refusal::NeedsSignedSession => "signed_session_required",
+        Refusal::UnownedDraft { .. } | Refusal::NotOwner { .. } => "not_owner",
+        Refusal::ForkBaseMoved { .. } => "fork_base_moved",
+        Refusal::BaseNotInChain { .. } => "base_not_in_chain",
+        Refusal::Published { .. } => "published_target",
+        Refusal::NothingToUndo { .. } => "nothing_to_undo",
+        Refusal::NoMerge { .. } => "no_merge",
+        Refusal::NotPast { .. } => "not_past",
+        Refusal::SupersedeRefused { .. } => "supersede_refused",
+    };
+    match r {
+        Refusal::Halt(h) => Stop::Halt(h),
+        other => {
+            let detail = match &other {
+                Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
+                    format!("{other}; {}", step.outcome())
+                }
+                Refusal::SupersedeRefused { cause: SupersedeCause::HeadMoved { head }, .. } => {
+                    format!(
+                        "{other} — run this again{} to merge against it",
+                        head.as_ref().map(|h| format!(" with --head {h}, or with no --head to take the feed's,")).unwrap_or_default()
+                    )
+                }
+                _ => other.to_string(),
+            };
+            Stop::Halt(Halt::Refused(Refused {
+                status: 200,
+                code: code.to_string(),
+                detail: Some(detail),
+                op: None,
+                body: Value::Null,
+            }))
+        }
+    }
 }
 
 #[cfg(test)]

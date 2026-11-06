@@ -122,6 +122,12 @@
 //!   recomputed; the record kind and the journal. The surfaces — the
 //!   command, the attendant's call, the agent tool — are not this crate's:
 //!   the command is skep-cli's `skep merge`.
+//! * `history` — the restore, a draft's past state made current (B3-S7):
+//!   `past`, the state read at a position through the merge's reader and
+//!   mapped through the correspondence records so published words come back
+//!   as published; `restore`, the one `set_arrangement` of it, no base and
+//!   no merge, typed against the read. Behind `merge` because it rides that
+//!   module's reader and write; the command is skep-cli's `skep restore`.
 //!
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save
@@ -165,6 +171,8 @@ pub mod verify;
 #[cfg(feature = "search")]
 pub mod search;
 
+#[cfg(feature = "merge")]
+pub mod history;
 #[cfg(feature = "merge")]
 pub mod merge;
 

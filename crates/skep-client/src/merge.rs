@@ -85,10 +85,10 @@
 
 mod compose;
 pub mod journal;
-mod land;
-mod reads;
+pub(crate) mod land;
+pub(crate) mod reads;
 pub mod record;
-mod undo;
+pub(crate) mod undo;
 
 #[cfg(test)]
 mod tests;

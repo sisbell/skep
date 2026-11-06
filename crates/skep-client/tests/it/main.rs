@@ -18,7 +18,10 @@
 //! the face a cut-short anchor file meets at the import; `publication`
 //! drives the `publication` module — the enumeration against the daemon's
 //! own filter, the one request, the acknowledgment, the twin, a moved place
-//! and a cut connection — over a claimed permissive board.
+//! and a cut connection — over a claimed permissive board; `restore` drives
+//! the `history` module — a draft put back to a past state, the records'
+//! mapping across a publication, the refusals at a moved draft, a reclaimed
+//! position and a marked draft — over the merge suite's rig.
 
 mod backup;
 mod claim;
@@ -33,6 +36,7 @@ mod merge;
 mod publication;
 mod recover;
 mod removals;
+mod restore;
 mod retire;
 mod rotate;
 mod search;

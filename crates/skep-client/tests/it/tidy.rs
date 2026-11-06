@@ -23,7 +23,9 @@
 //! `client.md` §1.1's fence holds of it as written — the third test below.
 //!
 //! THE MERGE, GATED: `merge` compiles only under the `merge` feature — OFF
-//! by default, so the default build holds no merge — the fourth test below.
+//! by default, so the default build holds no merge — the fourth test below;
+//! and `history`, the restore over the merge's reader, under the same
+//! feature — the fifth.
 
 use std::path::{Path, PathBuf};
 
@@ -158,6 +160,24 @@ fn the_merge_module_compiles_only_under_the_merge_feature_which_is_off_by_defaul
     let default = manifest.lines().find(|l| l.trim_start().starts_with("default =")).expect("a `default` feature line");
     assert!(!default.contains("merge"), "Cargo.toml: `merge` is on by default: {default}");
     assert!(manifest.lines().any(|l| l.trim_start().starts_with("merge = [") && l.contains("\"acting\"")), "Cargo.toml: the `merge` feature implies `acting`");
+}
+
+/// THE RESTORE, GATED WITH THE MERGE (`client.md` §4b.1's `history.restore`
+/// row; B3-S7): `pub mod history;` in `src/lib.rs` is gated on the `merge`
+/// feature, whose reader and one write it rides, so the default build of the
+/// library exports no restore either.
+#[test]
+fn the_history_module_compiles_only_under_the_merge_feature() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(root.join("src/history.rs").is_file(), "src/history.rs: the module this check reads has moved");
+    let text = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim() == "pub mod history;")
+        .expect("src/lib.rs declares `pub mod history;`: the declaration this check reads has moved");
+    let gate = lines[..at].iter().rev().take_while(|l| l.trim_start().starts_with("#[")).find(|l| l.contains(r#"feature = "merge""#) && l.trim().starts_with("#[cfg(") && !l.contains("not("));
+    assert!(gate.is_some(), "src/lib.rs:{}: `pub mod history;` compiles without the `merge` feature", at + 1);
 }
 
 /// Where a module stands against the ceremony.

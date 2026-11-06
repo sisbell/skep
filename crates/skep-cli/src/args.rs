@@ -2,8 +2,9 @@
 //!
 //! The style is `skepd/src/main.rs`'s `parse_args` and `from_env`. A
 //! command line opens with its [`Command`], one of §2.1's thirteen,
-//! `merge`, the fourteenth (the merge record's §6), or `share`, the
-//! fifteenth (PUB-5.29; PUB-5.108), and is judged against `GRAMMAR`, one
+//! `merge`, the fourteenth (the merge record's §6), `share`, the
+//! fifteenth (PUB-5.29; PUB-5.108), or `restore`, the sixteenth (B3-S7),
+//! and is judged against `GRAMMAR`, one
 //! row per command beside `HELP`, the text that documents it: a flag in no
 //! row, a flag of another command's, a missing value, a value that is
 //! empty or is itself one of the grammar's flags, a second value of a flag
@@ -100,12 +101,14 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of the fifteen commands: the verb a command line opens with.
+/// One of the sixteen commands: the verb a command line opens with.
 ///
-/// The fifteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
-/// (the merge record's §6), and `share`, the fifteenth (PUB-5.29;
-/// PUB-5.108). A command is what `GRAMMAR`'s rows are keyed by, and what
-/// `main` dispatches on, one arm each, which the compiler holds exhaustive.
+/// The sixteen are `client.md` §2.1's thirteen, `merge`, the fourteenth
+/// (the merge record's §6), `share`, the fifteenth (PUB-5.29; PUB-5.108),
+/// and `restore`, the sixteenth (B3-S7; `client.md` §4b.1's
+/// `history.restore` row). A command is what `GRAMMAR`'s rows are keyed
+/// by, and what `main` dispatches on, one arm each, which the compiler
+/// holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     Keygen,
@@ -123,6 +126,7 @@ pub enum Command {
     Accept,
     Merge,
     Share,
+    Restore,
 }
 
 impl Command {
@@ -144,6 +148,7 @@ impl Command {
             Command::Accept => "accept",
             Command::Merge => "merge",
             Command::Share => "share",
+            Command::Restore => "restore",
         }
     }
 }
@@ -168,7 +173,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the fifteen, and its flags.
+/// The `skep` command's line: one of the sixteen, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes, each taking one value.
@@ -236,9 +241,10 @@ impl Form {
     }
 }
 
-/// The grammar: the fifteen commands, each with its flags and its forms.
+/// The grammar: the sixteen commands, each with its flags and its forms.
 ///
-/// The commands are `client.md` §2.1's in set, `merge` and `share`, each
+/// The commands are `client.md` §2.1's in set, `merge`, `share` and
+/// `restore`, each
 /// with the flags §2.2 gives it and `HELP` documents, and the rules its
 /// forms hold them to — the forms the record's synopses draw:
 /// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
@@ -257,10 +263,12 @@ impl Form {
 /// at `keygen` and `fingerprint`, where it prints. `--yes` is in `share`'s
 /// row alone, standing for the typed answer where no terminal stands; a
 /// retirement's confirmation is a typed answer at the terminal, never a
-/// flag (AUTH-5.46). That a side and `--doc` are required at `merge`, and a
-/// reader at `share`, is the command's judgment, as `retire` judges its
+/// flag (AUTH-5.46). `restore`'s row is its two flags, `--draft` and
+/// `--at`, each once, in the one form the command has. That a side and
+/// `--doc` are required at `merge`, a reader at `share` and both flags at
+/// `restore`, is the command's judgment, as `retire` judges its
 /// `--fingerprint`: no form says "one of".
-const GRAMMAR: [Row<Command>; 15] = [
+const GRAMMAR: [Row<Command>; 16] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -374,9 +382,10 @@ const GRAMMAR: [Row<Command>; 15] = [
             Form::Apart("--yes", "--list"),
         ],
     },
+    Row { command: Command::Restore, once: &["--draft", "--at"], repeated: &[], switches: &[], forms: &[] },
 ];
 
-/// The help text: the fifteen commands and the flags each takes.
+/// The help text: the sixteen commands and the flags each takes.
 ///
 /// Each command is as the design writes it, and the text is the grammar
 /// above, documented beside it.
@@ -434,26 +443,34 @@ usage: skep <command> [flags]
                is privashed here; the statement before the act, then a
                typed confirmation at a terminal — --yes stands for it
                elsewhere; one JSON document on stdout; no person door
+  restore      put a draft back as it stood at an earlier position: the
+               state read as of --at is set as the draft's whole
+               arrangement in one write, words a publication since made
+               public coming back as the published words they became;
+               refused where the draft changed between the read and the
+               write; a merge the draft carries stands, and is said; one
+               JSON document on stdout, naming the position that puts the
+               restore back; no person door
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
   --key <path>          one key file, bypassing the store's lookup (env
                         SKEP_KEY): read at session, verify, bind,
-                        fingerprint, merge, share and accept --reprint, an
-                        anchor file refused where the key signs; refused
-                        where enroll and retire sign, their walks taking
-                        none yet; not consulted elsewhere
+                        fingerprint, merge, share, restore and accept
+                        --reprint, an anchor file refused where the key
+                        signs; refused where enroll and retire sign, their
+                        walks taking none yet; not consulted elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL), read at
                         session, verify, enroll, recover, retire, rotate,
-                        handoff, merge and share — where omitted, the
-                        store's one binding at the board; at bind, the
+                        handoff, merge, share and restore — where omitted,
+                        the store's one binding at the board; at bind, the
                         reply's where omitted; at claim, the new account's
                         id, 1 where omitted; not consulted elsewhere
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
-                        fingerprint; merge and share print one always, so
-                        the flag changes nothing there)
+                        fingerprint; merge, share and restore print one
+                        always, so the flag changes nothing there)
   --version             this program's version and the commit it was
                         built from, one line on stdout
   keygen:   [--payload]  [--anchors, and with it  [--paper]
@@ -499,6 +516,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
             or --doc <D> --privash; or --revoke <grant>; or --list; and
             [--yes] at a share, a privash or a revoke, required where
             stdin and stderr are not both a terminal
+  restore:  --draft <S>  --at <n> (a commit position before the draft's
+            current one, as the change feed and the acknowledgments
+            number them)
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. A retirement's

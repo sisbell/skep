@@ -21,18 +21,18 @@
 //! sending it unsigned (`SessionEntry::attest`; SP-14). One composer: the
 //! body builders are `skep-identity`'s, as the daemon's verifier composes
 //! through them (`skep-core`'s `auth/entry.rs`), the slots as stored — an
-//! address-form slot's unit spans, a V-spec slot's I-extents resolved
-//! through `image`, as `skep-dev seed`'s link is — and a `publish`'s copied
-//! runs by their values, read back through the origin's arrangement under
-//! the session's own token, a window by its address. A frame the composer
-//! cannot make — a value it cannot read, a slot source it may not read, a
-//! term it cannot spell — halts naming what stopped it, and nothing is
-//! sent: the shell never sends a frame it could not sign. A death signal
-//! met at one of those reads is no halt of the composer's but the session's
-//! end ([`Unattested::Died`]), which its caller runs. The wire's value
-//! forms, both ways, are `wire`'s: the composer spells a frame's `values`
-//! and reads a delivery back through them, and faces what they refuse as
-//! its own halt.
+//! address-form slot's unit spans, an I-span slot's spans as given, a V-spec
+//! slot's I-extents resolved through `image`, as `skep-dev seed`'s link is —
+//! and a `publish`'s copied runs by their values, read back through the
+//! origin's arrangement under the session's own token, a window by its
+//! address. A frame the composer cannot make — a value it cannot read, a
+//! slot source it may not read, a term it cannot spell — halts naming what
+//! stopped it, and nothing is sent: the shell never sends a frame it could
+//! not sign. A death signal met at one of those reads is no halt of the
+//! composer's but the session's end ([`Unattested::Died`]), which its caller
+//! runs. The wire's value forms, both ways, are `wire`'s: the composer
+//! spells a frame's `values` and reads a delivery back through them, and
+//! faces what they refuse as its own halt.
 //!
 //! **The board's budgets, kept as the board keeps them.** Every read the
 //! composer makes is one a page's frame names, and every value it holds is
@@ -540,6 +540,24 @@ fn extent_span(i_start: &str, width: u64) -> Option<Span> {
     Span::new(start, Tumbler::new(comps).ok()?).ok()
 }
 
+/// Returns one span of the wire's I-span form as stored.
+///
+/// The form is `{"start": "<address>", "width": "<n>"}`, `width` positions
+/// from the content address `start` (wire.md §Links (writes)): stored
+/// verbatim as the content extent [`extent_span`] builds, what a V-spec over
+/// the same positions resolves to. A link slot and a deposit's end read it
+/// here alike.
+///
+/// # Errors
+///
+/// Returns a halt where `width` is no decimal count, or where `start` is no
+/// tumbler or the pair no span — a zero width among them, which the board
+/// refuses `malformed`.
+fn ispan(s: &Value, what: &str) -> Result<Span, Halt> {
+    let width: u64 = s["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(|| fault(format!("the frame's `{what}` span has no width"), s.to_string()))?;
+    s["start"].as_str().and_then(|start| extent_span(start, width)).ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), s.to_string()))
+}
+
 /// Splits an I-address at its last component.
 ///
 /// It answers the prefix, and the last component as a number — the
@@ -706,28 +724,41 @@ impl Composer<'_> {
 
     /// Returns a slot's spans as stored.
     ///
-    /// They are the address form's unit spans; a V-spec list's I-extents
-    /// resolved through `image` — bare, as `make_link`'s slots spell it, or
-    /// as `edit_link`'s successor `ty` spells it, `{"resolve": […]}` (wire.md
-    /// §Links (writes)); or a span list verbatim (`emit`'s `ty`). The list is
-    /// held within [`MAX_WIRE_LIST`] before its first element is read, and
-    /// its spans within [`MAX_SLOT_SPANS`] as they resolve.
+    /// They are the address form's unit spans; the I-span form's spans,
+    /// `{"spans": [{"start", "width"}]}`, each `width` positions from its
+    /// content address `start` as a content extent ([`ispan`]) — what a
+    /// V-spec slot over the same positions stores, no read made for it; a
+    /// V-spec list's I-extents resolved through `image` — bare, as
+    /// `make_link`'s slots spell it, or as `edit_link`'s successor `ty`
+    /// spells it, `{"resolve": […]}` (wire.md §Links (writes)); or a span
+    /// list verbatim (`emit`'s `ty`). The list is held within
+    /// [`MAX_WIRE_LIST`] before its first element is read, and its spans
+    /// within [`MAX_SLOT_SPANS`] as they resolve.
     ///
     /// # Errors
     ///
-    /// Returns a halt where the slot is of neither form, its list passes
+    /// Returns a halt where the slot is of no form, its list passes
     /// [`MAX_WIRE_LIST`], an address, a V-spec's span or a span does not
-    /// parse, an element is of no known form, `image` answers no runs or a
-    /// run that is no content extent, or the spans pass [`MAX_SLOT_SPANS`];
-    /// and whatever an `image` read refuses ([`Composer::read`]).
+    /// parse, an I-span names no width, an element is of no known form,
+    /// `image` answers no runs or a run that is no content extent, or the
+    /// spans pass [`MAX_SLOT_SPANS`]; and whatever an `image` read refuses
+    /// ([`Composer::read`]).
     fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Unattested> {
         if let Some(addrs) = slot["addrs"].as_array() {
             check_wire_list(addrs, what)?;
             return addrs.iter().map(|a| Ok(unit_span(&addr(a.as_str().unwrap_or(""), what)?))).collect();
         }
+        if let Some(ispans) = slot["spans"].as_array() {
+            check_wire_list(ispans, what)?;
+            let mut spans = Vec::new();
+            for s in ispans {
+                push_span(&mut spans, ispan(s, what)?, what)?;
+            }
+            return Ok(spans);
+        }
         let Some(list) = slot["resolve"].as_array().or_else(|| slot.as_array()) else {
             return Err(
-                fault(format!("the frame's `{what}` slot is neither the address form nor a list"), "a slot is `{\"addrs\": […]}`, `{\"resolve\": [V-specs]}`, a V-spec list, or a span list").into()
+                fault(format!("the frame's `{what}` slot is of no form"), "a slot is `{\"addrs\": […]}`, `{\"spans\": [I-spans]}`, `{\"resolve\": [V-specs]}`, a V-spec list, or a span list").into()
             );
         };
         check_wire_list(list, what)?;
@@ -1308,14 +1339,7 @@ fn deposit_end(end: &Value, what: &str) -> Result<OwnedSlot, Halt> {
     }
     if let Some(spans) = end["spans"].as_array() {
         check_wire_list(spans, what)?;
-        let elements = spans
-            .iter()
-            .map(|s| {
-                let width: u64 = s["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(|| fault(format!("the frame's `{what}` span has no width"), s.to_string()))?;
-                let span = s["start"].as_str().and_then(|start| extent_span(start, width)).ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), s.to_string()))?;
-                Ok(OwnedElement::Span(span))
-            })
-            .collect::<Result<Vec<_>, Halt>>()?;
+        let elements = spans.iter().map(|s| Ok(OwnedElement::Span(ispan(s, what)?))).collect::<Result<Vec<_>, Halt>>()?;
         return Ok(OwnedSlot::Stored(elements));
     }
     if let Some(positions) = end["member"].as_array() {

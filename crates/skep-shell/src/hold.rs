@@ -282,8 +282,9 @@ pub const UNHOLDABLE_WRITES: [&str; 8] =
 ///
 /// §3c.4 says "on a draft under the session" — the kind test is the
 /// shell's; a write on a document that is no draft is the board's refusal,
-/// permanent, and so a refused run.
-fn is_burst(frame: &Value) -> bool {
+/// permanent, and so a refused run. The `op` row's table of the bursts a
+/// follower may follow asks it too (`shell/follow.rs`).
+pub(crate) fn is_burst(frame: &Value) -> bool {
     frame["op"].as_str().is_some_and(|op| BURST_KINDS.contains(&op))
 }
 

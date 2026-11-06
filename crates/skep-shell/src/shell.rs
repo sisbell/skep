@@ -46,7 +46,12 @@
 //! with the compositions they stand on. The `history.restore` row — a
 //! draft's past state made current by one write, typed against the page's
 //! own state of the draft (B3-S7) — is the child module `history`'s,
-//! `pub(super)` to the door.
+//! `pub(super)` to the door. The bursts a session sends with an `id`, and
+//! the FOLLOWER writes the page hands over with them — a `make_link` or a
+//! `nullify` sent with `after`, written at its burst's ack, its pieces
+//! resolved against the insert's words, and at the shell's stop before any
+//! session closes (§3c.6) — are the child module `follow`'s table, which the
+//! `op` row enters and waits on.
 //!
 //! **What the shell refuses without asking.** A write frame in the guest
 //! form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so no
@@ -64,7 +69,10 @@
 //! `publish` frame under a session (`publish_is_a_call`: a publication
 //! crosses as `publication.confirm`, the shell composing the one request
 //! from the panel it holds, since the page composes no write — §4b.1's `op`
-//! row, decision 1 (b)); and a call's
+//! row, decision 1 (b)); an `after` in the guest form, beside an `/op-at`
+//! frame or a frame that is no `make_link` and no `nullify`, and a piece of
+//! a follower's end standing anywhere but among a `make_link`'s `from` or
+//! `to` spans, each `malformed_args` (`Follower::of`); and a call's
 //! arguments not of its row's form (`shapes`' declarations): a required
 //! member absent or of another form (`accept`'s `address`, absent, answers
 //! `no_address`), and an optional member present in another form, refused
@@ -119,10 +127,12 @@ use crate::wire::{bounded_address, json_len};
 use crate::Talk;
 
 mod ceremony;
+mod follow;
 mod publication;
 mod history;
 mod merge;
 
+use follow::{Followed, Follower, Followers, FOLLOW_AT_STOP};
 use merge::Merges;
 use publication::Publications;
 
@@ -536,6 +546,13 @@ pub struct Shell {
     /// One per (board, principal), the latest composed standing, dying with
     /// the session it stands under as the panels do.
     merges: Arc<Merges>,
+    /// The bursts each session sent with an `id`, and the follower writes
+    /// waiting on them (§3c.6; the `op` row's `after`).
+    ///
+    /// A session's table goes at its `session-died`, by the bus's watcher as
+    /// the panels do, and the shell's stop waits on its followers before any
+    /// session closes.
+    followers: Arc<Followers>,
     session_mode: SessionMode,
     talk: Talk,
     /// The own node's board reference, where the shell runs one.
@@ -741,12 +758,16 @@ impl Shell {
         // the same watcher, saying nothing: a composition's state crosses
         // in its calls' answers alone.
         let merges = Arc::new(Merges::default());
-        let (watched, watched_merges) = (Arc::clone(&publications), Arc::clone(&merges));
+        // A session's followed bursts go with it the same way: every follower
+        // still waiting on one answers as a call on the ended session does.
+        let followers = Arc::new(Followers::new(Arc::clone(&opts.talk)));
+        let (watched, watched_merges, watched_followers) = (Arc::clone(&publications), Arc::clone(&merges), Arc::clone(&followers));
         bus.watch(move |bus, event| {
             if event.name == EventName::SessionDied {
                 if let Some(session) = event.data["session"].as_str() {
                     watched.ended(bus, session);
                     watched_merges.ended(session);
+                    watched_followers.ended(session);
                 }
             }
         });
@@ -767,6 +788,7 @@ impl Shell {
             holds,
             publications,
             merges,
+            followers,
             session_mode: opts.session_mode,
             talk: opts.talk,
             own_node_reference,
@@ -1218,44 +1240,62 @@ impl Shell {
     /// the attest needed, or at a read a stale burst's shift or moved hold
     /// makes ends the session.
     ///
+    /// **The follower** (§3c.6). A burst carrying an `id` is entered in the
+    /// session's table before its dial and its answer after
+    /// (`Followers::sent`), whichever arm gives it. A `make_link` or a
+    /// `nullify` sent with `after`, the `id` of a burst the session sent, is
+    /// a follower: it waits for that burst's answer and for the followers of
+    /// it before it, its pieces are resolved against an insert's ack, and it
+    /// goes by the hold's one path as every session write does
+    /// ([`Shell::follow`]) — at the shell's stop too, which waits on it
+    /// before any session closes.
+    ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `frame` where it is no object,
-    /// then the form's (`guest_form`). In the guest form, the target's
-    /// (`unknown_board`, `not_canonical`, `malformed_args`), then a write
-    /// refused without a dial (`write_in_guest_form`), then the board's verdict
-    /// or `unreachable`. In the session form, `malformed_args` naming `anchors`
-    /// where the member is present and not of its declared form —
-    /// `{before, after, span?}`, each anchor an I-address or `null`, `span` a
-    /// non-empty list of `{start, width}` runs, `start` an I-address and
-    /// `width` a natural of 1 or more in its decimal string, the whole within
-    /// the board's frame cap as compact JSON (`held::MAX_ANCHOR_BYTES`) —
-    /// never read as absent, then naming `session`, then `session_ended`; a
+    /// then the form's (`guest_form`). In the guest form, `malformed_args`
+    /// naming `after` where one is given, then the target's (`unknown_board`,
+    /// `not_canonical`, `malformed_args`), then a write refused without a dial
+    /// (`write_in_guest_form`), then the board's verdict or `unreachable`. In
+    /// the session form, `malformed_args` naming `anchors` where the member is
+    /// present and not of its declared form — `{before, after, span?}`, each
+    /// anchor an I-address or `null`, `span` a non-empty list of `{start,
+    /// width}` runs, `start` an I-address and `width` a natural of 1 or more
+    /// in its decimal string, the whole within the board's frame cap as
+    /// compact JSON (`held::MAX_ANCHOR_BYTES`) — never read as absent; then
+    /// naming `after` or a slot of the frame where the follower is not of its
+    /// form (`Follower::of`); then naming `session`, then `session_ended`; a
     /// write refused at the write door ([`Shell::write_door`]) —
     /// `write_in_bare_session` under a bare session, then `another_window` at
     /// a board whose held store another shell holds; a `publish`
     /// frame refused `publish_is_a_call` without a dial — a publication crosses
     /// as `publication.confirm`, composed by the shell from the panel it holds,
     /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b));
-    /// then the hold's answer ([`Holds::send`]), the anchors handed to it for a
-    /// burst's line — the identities on either side of the span the burst edits
-    /// and, for a delete or a rearrange, of the units it holds, by which the
-    /// shell shifts the burst where the board refuses it as typed against an
-    /// older state (skep #442, #751); absent, the burst is admitted as one the
-    /// shell cannot shift, held as a moved document there — an unholdable write
-    /// under a standing hold refused `stopped`, `poisoned` or `halted` (§3c.4)
-    /// — or for an `/op-at` frame the board's verdict or `unreachable`; and
-    /// `session_died` where a death signal met at the dial or at a read the
-    /// attest needed ends the session — save for a burst, which the hold
-    /// holds `session_died` before the end (§3c.4), the signal met at its
-    /// dial or at the read its shift or its moved hold makes, the call
-    /// answering `held` once its line carries the death's reason, or the
-    /// hold's own refusal (`held_full`, `store_halted`) where it could not
-    /// hold it.
+    /// for a follower, the follow's answer ([`Shell::follow`]) — `not_followed`,
+    /// `no_such_burst`, `malformed_args` naming a slot whose piece its burst
+    /// cannot name, or its own answer; else the hold's answer ([`Holds::send`]),
+    /// the anchors handed to it for a burst's line — the identities on either
+    /// side of the span the burst edits and, for a delete or a rearrange, of
+    /// the units it holds, by which the shell shifts the burst where the board
+    /// refuses it as typed against an older state (skep #442, #751); absent,
+    /// the burst is admitted as one the shell cannot shift, held as a moved
+    /// document there — an unholdable write under a standing hold refused
+    /// `stopped`, `poisoned` or `halted` (§3c.4) — or for an `/op-at` frame the
+    /// board's verdict or `unreachable`; and `session_died` where a death
+    /// signal met at the dial or at a read the attest needed ends the session
+    /// — save for a burst, which the hold holds `session_died` before the end
+    /// (§3c.4), the signal met at its dial or at the read its shift or its
+    /// moved hold makes, the call answering `held` once its line carries the
+    /// death's reason, or the hold's own refusal (`held_full`, `store_halted`)
+    /// where it could not hold it.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");
         if guest_form(args)? {
+            // A follower waits on a session's burst, and a guest sends none.
+            if !args["after"].is_null() {
+                return Err(Refusal::malformed("after"));
+            }
             let board = self.guest_board(args)?;
             if WRITE_KINDS.contains(&op) {
                 return Err(Refusal::shell(Name::WRITE_IN_GUEST_FORM, json!({"op": op})));
@@ -1269,6 +1309,7 @@ impl Shell {
             };
         }
         let anchors = optional(args, "anchors", Anchors::of)?;
+        let follower = Follower::of(args, &frame, at)?;
         let session = self.session(&args["session"])?;
         if WRITE_KINDS.contains(&op) {
             self.write_door(&session, json!({"op": op}))?;
@@ -1277,7 +1318,14 @@ impl Shell {
             return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
         }
         let Some(at) = at else {
-            return match self.holds.send(&session, frame, anchors) {
+            if let Some(follower) = follower {
+                return self.follow(&session, follower, frame);
+            }
+            // A burst with an `id` is kept for its followers, its outcome the
+            // answer below, whichever arm gives it.
+            let stands = || self.sessions.get(&session.reference).is_some();
+            let sent = self.followers.sent(&session.reference, &frame, stands);
+            let answer = match self.holds.send(&session, frame, anchors) {
                 OpAnswer::Answered(answer) => answer,
                 // The session ends first, so the death's reason is derived;
                 // a burst the hold held at it is then answered `held`, its
@@ -1291,6 +1339,10 @@ impl Shell {
                     }
                 }
             };
+            if let Some(sent) = sent {
+                sent.settle(&answer);
+            }
+            return answer;
         };
         match session.board.op_at(Some(&session.token), at, &frame)? {
             AtAnswer::Document(v) => Self::document_answer(v),
@@ -1324,6 +1376,34 @@ impl Shell {
             return Err(Refusal::shell(Name::ANOTHER_WINDOW, named));
         }
         Ok(())
+    }
+
+    /// Sends a follower write once the burst it names is answered (§3c.6).
+    ///
+    /// It waits on the burst in the session's table (`Followers::follow`),
+    /// and goes, once its pieces are resolved against the burst's ack, by
+    /// the hold's one path under `session`, as every session write does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the follow's refusals — `not_followed`, `no_such_burst`,
+    /// `malformed_args` naming a slot whose piece the burst cannot name —
+    /// and the write's own answer: the hold's refusals, the board's verdict,
+    /// and `session_died` where its dial met the death signal, the session
+    /// ended by the one sequence. Where the session ended while the follower
+    /// waited, it is answered as [`Shell::session`] answers a reference no
+    /// live session stands under.
+    fn follow(&self, session: &SessionEntry, follower: Follower, frame: Value) -> Result<Value, Refusal> {
+        let stands = || self.sessions.get(&session.reference).is_some();
+        let dial = |frame| match self.holds.send(session, frame, None) {
+            OpAnswer::Answered(answer) => answer,
+            // A follower is no burst: the hold held nothing at the death.
+            OpAnswer::Died(_) => Err(self.died(session)),
+        };
+        match self.followers.follow(&session.reference, follower, frame, stands, dial) {
+            Followed::Answered(answer) => answer,
+            Followed::Ended => Err(self.session_gone(&session.reference)),
+        }
     }
 
     /// Answers `upload(session, target)`: not reached at this pin.
@@ -1677,34 +1757,42 @@ impl Shell {
     /// Runs the clean stop.
     ///
     /// Every pending moment is cancelled and the moment table closed, so a
-    /// walk that asks the page after the stop is abandoned at once; every
-    /// session is out of the table and its close sent to its board — a board
-    /// that does not answer keeps the token until its restart, said on `Talk`
-    /// as `close` says it; the shell's dialer is stopped; every board's feed
-    /// threads are stopped — each `/events` reader asked to stop, ending at
-    /// its next read, each consumer saved and closed, each feed thread
-    /// joined, so the `held/<chain>/` locks its holds kept are free once this
-    /// returns. The dialer stops after the sessions' closes, which dial, and
-    /// before the threads are asked to stop: from then on every dial is
-    /// refused as one that made no connection (`ShellDialer::stop`), so a
-    /// feed thread a board holds in a read without end — pages whose `more`
-    /// never ends — is freed at its next exchange, and the stop waits on no
-    /// board past one exchange's bound. A second stop finds nothing left to
+    /// walk that asks the page after the stop is abandoned at once; the
+    /// follower writes the page handed over with their bursts are waited on —
+    /// each burst's dial, then the follower's own, under the session still
+    /// open — for at most `FOLLOW_AT_STOP`, each one still waiting then
+    /// refused `not_followed` and said on `Talk` (`Followers::drain`; §3c.6
+    /// step (2)); every session is out of the table and its close sent to
+    /// its board — a board that does not answer keeps the token until its
+    /// restart, said on `Talk` as `close` says it; the shell's dialer is
+    /// stopped; every board's feed threads are stopped — each `/events`
+    /// reader asked to stop, ending at its next read, each consumer saved and
+    /// closed, each feed thread joined, so the `held/<chain>/` locks its holds
+    /// kept are free once this returns. The dialer stops after the sessions'
+    /// closes, which dial, and before the threads are asked to stop: from
+    /// then on every dial is refused as one that made no connection
+    /// (`ShellDialer::stop`), so a feed thread a board holds in a read
+    /// without end — pages whose `more` never ends — is freed at its next
+    /// exchange, and past the followers' wait the stop waits on no board past
+    /// one exchange's bound. A second stop finds nothing left to
     /// stop, and dropping the shell runs it. Nothing of the held-burst store
     /// is written here — every held line is already synced at its `op`
     /// (persist-first, §3c.6's step 3).
     ///
     /// **Unverified here** (the record §7 item 1): that the desktop
-    /// framework's close hook runs this, and that the page's last `op`
-    /// reaches the shell before the webview is destroyed, is the framework's
-    /// to prove — no Tauri source is on this machine; a crash loses at most
-    /// the open or in-flight burst (R14).
+    /// framework's close hook runs this, that the page's last `op` — a
+    /// follower's among them — reaches the shell before the webview is
+    /// destroyed, and that a follower's call outlives the webview, is the
+    /// framework's to prove — no Tauri source is on this machine; a crash
+    /// loses at most the open or in-flight burst (R14), and that burst's
+    /// followers with it.
     ///
     /// # Panics
     ///
     /// Panics where the feed threads' lock is poisoned.
     pub fn shutdown(&self) {
         self.pending.cancel_all();
+        self.followers.drain(Instant::now() + FOLLOW_AT_STOP);
         for session in self.sessions.all() {
             if self.sessions.close(&session.reference).is_some() {
                 if let Err(h) = session.board.session_close(&session.token) {

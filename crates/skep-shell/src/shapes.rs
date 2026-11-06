@@ -193,6 +193,12 @@ const SHAPES: &[Shape] = &[
         fields: &[req("before", "string | null"), req("after", "string | null"), opt("span", "{ start: string; width: string }[]")],
     },
     Shape {
+        name: "BurstPiece",
+        open: false,
+        doc: "a PIECE of a follower write's end (§3c.6; the `op` row's `after`): an element of a `make_link`'s `from` or `to` in the I-span form `{spans: […]}`, beside its `{start, width}` spans, naming `width` positions of the words of the insert `burst` — the follower's own `after` — from its `offset`, counted from 0 in positions as the board seats them: a byte of a string, one per atom, never characters; resolved at the insert's ack to the I-span `{start: <the ack's I-address advanced by offset>, width: '<width>'}`, so a mark over the words of two bursts is sent as two followers. A FOLLOWER is a `make_link` or a `nullify` sent with `after`, the `id` of a burst its session sent — any of the five kinds, a piece after an insert alone (else `malformed_args` naming the slot, as for a piece past the insert's positions): it waits for that burst's answer and the followers of it before it, then is sent and answered with its own answer where the burst was acked — and at the shell's stop, behind the window, before any session closes; refused `not_followed` `{after, why, cause?}`, nothing written and nothing held, with `why` `burst` and the burst's `cause` — the hold's token, or the refusal's name — where the burst was not acked, `ahead` where a follower of the same burst before it was not acked (a chord's writes are one step), `ack` where the burst's ack names no I-address its pieces resolve against, `stop` where the shell's stop came before the burst's answer; `no_such_burst` `{after}` where no burst of that `id` reached the session's table within a second of the follower; a session that ends under a follower answers it as a call on the ended session",
+        fields: &[req("burst", "string"), req("offset", "number"), req("width", "number")],
+    },
+    Shape {
         name: "HeldEvent",
         open: false,
         doc: "`held(board, session, {doc, held, state, cause?, hands?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`; `hands` with the `moved` state, EACH HAND ONCE, read off the `under=` rows since the burst's typed state or the person's last `send` on the document, whichever is later (a document moved again after that `send` names only the hands since it) — the board's refusal of it as typed against an older state (`arrangement_moved`), at its first dial or at a resend, where the shell could not shift the burst through the change exactly (no anchors, a delete or a rearrange without its span, an anchor lost or at two places, the span between them cut or refilled), is the one route to `moved`; a burst it shifts is sent again and lands, no `moved` said; the resend's read judges only whether the line's own write landed (§3c.5); emitted at a hold's start, at each line's resolution or drop, and at each state the resend moves the document through — never when a principal's file is read at its session's open, whose lines `held(session)` lists, nor for a line a call enters, shifts and settles within itself",
@@ -427,7 +433,10 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "probe", forms: &[&[]], result: "Probe" },
     CallRow {
         name: "op",
-        forms: &[&[req("session", "string"), req("frame", "unknown"), opt("anchors", "Anchors")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("frame", "unknown")]],
+        forms: &[
+            &[req("session", "string"), req("frame", "unknown"), opt("anchors", "Anchors"), opt("after", "string")],
+            &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("frame", "unknown")],
+        ],
         result: "unknown",
     },
     CallRow {

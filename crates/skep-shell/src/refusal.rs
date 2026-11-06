@@ -255,6 +255,25 @@ impl Name {
     pub const ANSWERS_LOST: Name = Name("answers_lost");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");
+    /// A follower write whose `after` names no burst its session keeps.
+    ///
+    /// No burst of that `id` reached the session's table within a second of
+    /// the follower: the session sent none under it, or its table let it go,
+    /// keeping its newest answered bursts (`shell/follow.rs`; §3c.6). The
+    /// detail names the `after`.
+    pub const NO_SUCH_BURST: Name = Name("no_such_burst");
+    /// A follower write not sent: its burst, or the shell's stop, stood in
+    /// its way (§3c.6).
+    ///
+    /// Nothing of it was written and it is held nowhere, a link write being
+    /// none of the held kinds: the page takes off the mark it drew. The
+    /// detail names the `after` and `why`: `burst` where the burst was not
+    /// acked — held, with the hold's `cause`, or refused, with the refusal's
+    /// name as `cause`; `ahead` where a follower of the same burst before it
+    /// was not acked, a chord's writes being one step (D6 BM-69); `ack` where
+    /// the burst's ack names no I-address its pieces resolve against; `stop`
+    /// where the shell's stop came before the burst's answer.
+    pub const NOT_FOLLOWED: Name = Name("not_followed");
     /// A `merge.land` or a `merge.undo` with no composition standing, or a
     /// `merge.withdraw` of a draft carrying no merge.
     ///

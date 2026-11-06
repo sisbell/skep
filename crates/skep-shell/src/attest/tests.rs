@@ -270,12 +270,13 @@ fn vspec(source: &str) -> Value {
     json!({"source": source, "span": {"start": "1.1", "width": "0.1"}})
 }
 
-/// A SLOT is held to the wire's list before its first read — a V-spec list or
-/// an address list one past [`MAX_WIRE_LIST`] refused with no op dialed, one
-/// at it composed — and to [`MAX_SLOT_SPANS`] as it resolves: a source whose
-/// `image` answers one span past the budget refused at the first read, one
-/// at it composed (the mutants that drop either check compose a slot the
-/// store refuses, after reads the frame should never have cost).
+/// A SLOT is held to the wire's list before its first read — a V-spec list,
+/// an address list or an I-span list one past [`MAX_WIRE_LIST`] refused with
+/// no op dialed, one at it composed — and to [`MAX_SLOT_SPANS`] as it
+/// resolves: a source whose `image` answers one span past the budget refused
+/// at the first read, one at it composed (the mutants that drop either check
+/// compose a slot the store refuses, after reads the frame should never have
+/// cost).
 #[test]
 fn a_slot_is_held_to_the_wire_list_and_its_span_budget() {
     let mut fake = Fake::default();
@@ -293,6 +294,41 @@ fn a_slot_is_held_to_the_wire_list_and_its_span_budget() {
     assert!(refused.to_string().contains("spans"), "{refused}");
     assert_eq!(g.fake.dialed(), ["image"], "refused at the first read past the budget");
     assert_eq!(c.slot(&json!([vspec("1.0.1.0.9")]), "from").unwrap().len(), MAX_SLOT_SPANS);
+    let ispans = |n: usize| json!({"spans": vec![json!({"start": "1.0.1.0.2.0.1.1", "width": "1"}); n]});
+    g.fake.dialed.lock().unwrap().clear();
+    assert!(c.slot(&ispans(MAX_WIRE_LIST + 1), "to").is_err());
+    assert_eq!(c.slot(&ispans(MAX_WIRE_LIST), "to").unwrap().len(), MAX_WIRE_LIST, "an I-span list at the wire's is composed");
+    assert!(g.fake.dialed().is_empty(), "an I-span slot reads nothing: {:?}", g.fake.dialed());
+}
+
+/// A LINK SLOT in the I-span form is signed as stored (wire.md §Links
+/// (writes)): each span `width` positions from its `start`, the content
+/// extent verbatim, no read made — a `make_link`'s `to` and an `edit_link`
+/// successor's `to` alike, each body the signer's own builder over the same
+/// spans — and a span of zero width, or of no decimal width, is the
+/// composer's halt, nothing read (the mutant that reads no `{"spans"}`
+/// slot refuses every follower's mark unsent, `attest_not_composed`).
+#[test]
+fn a_link_slot_in_the_i_span_form_is_signed_as_stored() {
+    let g = Ground::over(Fake::default());
+    let c = g.composer();
+    let a = |text: &str| parse_address(text).unwrap();
+    let to = json!({"spans": [{"start": "1.0.1.0.2.0.1.3", "width": "4"}, {"start": "1.0.1.0.2.0.1.9", "width": "1"}]});
+    let ty = json!({"addrs": ["1.1.0.1.0.1.0.3.13"]});
+    let spans = [extent_span("1.0.1.0.2.0.1.3", 4).unwrap(), extent_span("1.0.1.0.2.0.1.9", 1).unwrap()];
+    let ty_unit = [unit_span(&a("1.1.0.1.0.1.0.3.13"))];
+    let slots = LinkSlots { from: EntrySlot(&[]), to: EntrySlot(&spans), ty: EntrySlot(&ty_unit) };
+    let make_link = json!({"op": "make_link", "home": "1.0.1.0.1", "from": {"addrs": []}, "to": to, "ty": ty});
+    let (term, body) = c.doc_term_and_body(CheckedKind::MakeLink, &make_link).unwrap();
+    assert_eq!((term.as_doc_term(), body), (DocTerm::One(&a("1.0.1.0.1")), entry_body_make_link(slots)));
+    let edit_link = json!({"op": "edit_link", "original": "1.0.1.0.1.0.2.1", "d_s": "1.0.1.0.1", "d_a": "1.0.1.0.3", "successor": {"from": {"spans": []}, "to": to, "ty": ty}});
+    let (_, body) = c.doc_term_and_body(CheckedKind::EditLink, &edit_link).unwrap();
+    assert_eq!(body, entry_body_edit_link(slots, &unit_span(&a("1.0.1.0.1.0.2.1"))));
+    for (cell, span) in [("a zero width", json!({"start": "1.0.1.0.2.0.1.3", "width": "0"})), ("a width of no decimal", json!({"start": "1.0.1.0.2.0.1.3", "width": "0.4"}))] {
+        let refused = c.slot(&json!({"spans": [span]}), "to").unwrap_err();
+        assert!(refused.to_string().contains("`to` span"), "{cell}: {refused}");
+    }
+    assert!(g.fake.dialed().is_empty(), "the form reads nothing: {:?}", g.fake.dialed());
 }
 
 /// A run copied in from `origin` at `i_start`, `width` wide.

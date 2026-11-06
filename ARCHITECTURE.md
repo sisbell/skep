@@ -841,6 +841,10 @@ re-exports counted as the module it is brought from (held by
   `answer`, `cancel`, `shutdown`; `ShellOptions` and `set_node_state`.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
+- `shell/follow.rs` `Followers`: the bursts each session sent with an `id`
+  and the FOLLOWER writes `op`'s `after` hands over with them, which the
+  `op` row enters and waits on and `shutdown` drains before any session
+  closes, each session's table going with it through the bus's watcher.
 - `shell/publication.rs` the four `publication` rows — `open`, `count`,
   `confirm`, `cancel` over `skep_client::publication` — `pub(super)` to
   `call`, and `Publications`, the panels they stand on: one family per
@@ -883,8 +887,8 @@ Rules that hold across its files:
 
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
-it; `modes`, `ceremonies`, `boards`, `held`, `publication` and `merge`
-against a daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`
+it; `modes`, `ceremonies`, `boards`, `held`, `publication`, `merge` and
+`follow` against a daemon spawned in-process over a temp data dir. `hold/tests.rs` and its children `write`
 and `resend` drive the hold over a fake board; the other modules test
 themselves over fakes and temp dirs; and `tests/it/tidy.rs` holds the
 arrangement — the declaration order, every file under `src/` declared by

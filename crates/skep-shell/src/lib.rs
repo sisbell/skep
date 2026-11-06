@@ -125,13 +125,15 @@
 //!   they stand on in its child `merge`, and the restore, `history.restore`,
 //!   a draft's past state made current by one write typed against the
 //!   page's own state of it, in its child `history` — each row taking and
-//!   answering values shaped
-//!   exactly as the row's columns — an argument of another form refused,
-//!   never read as absent; [`Shell::fetch`] is public beside it because it
-//!   streams, and logs its own call. Dropping a shell stops it: no feed
-//!   thread, open
-//!   session or `held/<chain>/` lock of it outlives it, and each board's
-//!   `/events` reader, asked to stop, ends at its next read.
+//!   answering values shaped exactly as the row's columns — an argument of
+//!   another form refused, never read as absent; in its child `follow`, the
+//!   bursts each session sends with an `id` and the follower writes the page
+//!   hands over with them (`op`'s `after`, §3c.6), each written at its
+//!   burst's ack and at the stop before any session closes;
+//!   [`Shell::fetch`] is public beside it because it streams, and logs its
+//!   own call. Dropping a shell stops it: no feed thread, open session or
+//!   `held/<chain>/` lock of it outlives it, and each board's `/events`
+//!   reader, asked to stop, ends at its next read.
 //! * [`shapes`] — the declarations: [`shapes::declarations`], a TypeScript
 //!   declaration file for every value that crosses the bridge, pinned by a
 //!   test that round-trips each type's JSON against the declared fields.

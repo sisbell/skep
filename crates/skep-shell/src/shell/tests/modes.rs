@@ -337,7 +337,9 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// leaves unsent goes to the daemon here: a shot with a base group and a
 /// window segment, `fork`, `version`, `nullify`, `assert_sup`, `edit_link`
 /// with its successor's type in each of the wire's two forms,
-/// `{"addrs": […]}` and `{"resolve": […]}`, and an `emit` of the PredDef
+/// `{"addrs": […]}` and `{"resolve": […]}`, a `make_link` and an
+/// `edit_link` whose ends are in the I-span form, `{"spans": […]}` — the
+/// form a follower's resolved pieces take — and an `emit` of the PredDef
 /// class — Unary, so its `to` is empty, and a class that confers no behavior
 /// on what it names (wire.md's own example takes Retired, whose read filter
 /// would hide the member the edit cells read). Each frame goes first under a
@@ -352,8 +354,8 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// same, and acked under the signed one (a composer arm that spells a doc
 /// term or a slot otherwise, signs over the member named, drops the declared
 /// deposit, or reads an atom as its bytes, is refused
-/// `attestation_invalid:signature`; one that reads no `{"resolve"}` slot
-/// refuses the edit unsent, `attest_not_composed`).
+/// `attestation_invalid:signature`; one that reads no `{"resolve"}` or no
+/// `{"spans"}` slot refuses the write unsent, `attest_not_composed`).
 #[test]
 fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session() {
     let dir = TempDir::new().unwrap();
@@ -410,8 +412,9 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     let (member_run, other_run) = (first_run(&member, 3), first_run(&other_member, 2));
     let citation = "1.1.0.1.0.1.0.3.13";
     let link_to = |to: &String| addr(write(json!({"op": "make_link", "home": doc, "from": {"addrs": [member]}, "to": {"addrs": [to]}, "ty": {"addrs": [citation]}})));
-    let [edited, retracted, old, new, resolved] = [&draft, &doc, &other, &other_member, &member].map(link_to);
+    let [edited, retracted, old, new, resolved, respanned] = [&draft, &doc, &other, &other_member, &member, &draft].map(link_to);
     let vspec = |start: &str| json!({"source": member, "span": {"start": start, "width": "0.1"}});
+    let ispans = |run: &Value, width: &str| json!({"spans": [{"start": run["i_start"], "width": width}]});
     // The shot with a base group and a window segment: judged under the bare
     // session as every kind is, and acked through the composer's publish
     // arm — `op` refuses the frame as a call before any dial.
@@ -433,6 +436,12 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         (
             "edit_link, its type resolved",
             json!({"op": "edit_link", "original": resolved, "d_s": other, "d_a": doc, "successor": {"from": [vspec("1.1")], "to": [vspec("1.2")], "ty": {"resolve": [vspec("1.3")]}}}),
+        ),
+        // Ends in the I-span form: each slot row the spans as given.
+        ("make_link, its ends I-spans", json!({"op": "make_link", "home": doc, "from": ispans(&member_run, "2"), "to": {"addrs": [draft]}, "ty": {"addrs": [citation]}})),
+        (
+            "edit_link, its successor's ends I-spans",
+            json!({"op": "edit_link", "original": respanned, "d_s": doc, "d_a": other, "successor": {"from": ispans(&member_run, "1"), "to": ispans(&other_run, "2"), "ty": {"addrs": [citation]}}}),
         ),
         // A typed relation of the PredDef class: Unary, so `to` is empty.
         ("emit", json!({"op": "emit", "home": doc, "ty": [{"start": "1.1.0.1.0.1.0.1.1", "width": "0.0.0.0.0.0.0.0.1"}], "from": member, "to": []})),

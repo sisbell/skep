@@ -136,18 +136,25 @@ pub(super) fn nowhere() -> String {
 /// both, and an `op`'s `anchors` of no object, naming one anchor, carrying a
 /// member beside the three, an anchor that is no I-address, a span of no
 /// list, of a run whose start is no I-address or of a width spelled as a
-/// number, or anchors one byte past their bound — the session form's one
-/// optional member, read in its form before the session is looked up, which
-/// the single-form cell below does not reach — each before any dial, the
-/// shell's board one nothing answers at, where a dial would answer
-/// `unreachable`, and the guest origin a listener counting every dial (the
-/// mutants that read such a member as absent act as the mode's principal,
-/// open the label box, list every key or the whole index, or dial a guest
-/// read the page never asked for; the ones that read a span of another form
-/// shift a burst by units the page never named; the one that admits anchors
-/// past their bound holds a page's bytes without bound beside its burst). A
-/// `null` is the row's default: the session opens as the mode's principal
-/// and meets the board's silence.
+/// number, or anchors one byte past their bound; and an `op`'s `after` of no
+/// string or past its bound, beside an `/op-at` frame or a frame that follows
+/// nothing, or in the guest form, and a piece of a follower's end in a
+/// `make_link`'s `ty`, outside the I-span form of its `to`, in a `nullify`'s
+/// target, naming another burst, of no natural offset, of a zero width,
+/// carrying a member beside its three, or in a frame with no `after` — the
+/// session form's two optional members, read in their forms before the
+/// session is looked up, which the single-form cell below does not reach —
+/// each before any dial, the shell's board one nothing answers at, where a
+/// dial would answer `unreachable`, and the guest origin a listener counting
+/// every dial (the mutants that read such a member as absent act as the
+/// mode's principal, open the label box, list every key or the whole index,
+/// or dial a guest read the page never asked for; the ones that read a span
+/// of another form shift a burst by units the page never named; the one that
+/// admits anchors past their bound holds a page's bytes without bound beside
+/// its burst; the one that reads no `after` sends a follower ahead of the
+/// words it names, and the board refuses a piece it cannot parse). A `null`
+/// is the row's default: the session opens as the mode's principal and
+/// meets the board's silence.
 #[test]
 fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let dir = TempDir::new().unwrap();
@@ -156,6 +163,9 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let board = shell.board_references().remove(0);
     let (listener, dials) = counting_listener();
     let read = json!({"op": "doc_metadata", "doc": "1.0.1.0.1"});
+    // A follower's mark, its `to` the I-span form holding `piece`.
+    let mark = |piece: Value| json!({"op": "make_link", "home": "1.0.1.0.1", "from": {"spans": []}, "to": {"spans": [piece]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
+    let piece = json!({"burst": "b-1", "offset": 0, "width": 1});
     let cases = [
         ("session", json!({"board": board, "principal": "1"}), "principal"),
         ("session", json!({"board": board, "principal": 1u64 << 53}), "principal"),
@@ -182,6 +192,27 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "x", "width": "1"}]}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": {"before": null, "after": null, "span": [{"start": "1.0.1.0.1.0.1.2", "width": 2}]}}), "anchors"),
         ("op", json!({"session": "s-x", "frame": read, "anchors": anchors_spelled(MAX_ANCHOR_BYTES + 1)}), "anchors"),
+        // The session form's `after`, read with its frame before the session
+        // is looked up: no string, past its bound, beside an `/op-at` frame
+        // and beside a read, which follows nothing; then a follower's piece
+        // in its `ty`, in a V-spec list, in a `nullify`'s target, naming
+        // another burst, of a negative or a spelled offset, of a zero width,
+        // with a member beside its three, and a piece with no `after`; and
+        // `after` in the guest form, before its target is dialed.
+        ("op", json!({"session": "s-x", "frame": mark(piece.clone()), "after": 7}), "after"),
+        ("op", json!({"session": "s-x", "frame": mark(piece.clone()), "after": "b".repeat(crate::shell::follow::MAX_BURST_ID_BYTES + 1)}), "after"),
+        ("op", json!({"session": "s-x", "frame": {"at": 3, "frame": mark(piece.clone())}, "after": "b-1"}), "after"),
+        ("op", json!({"session": "s-x", "frame": read, "after": "b-1"}), "after"),
+        ("op", json!({"session": "s-x", "frame": {"op": "make_link", "home": "1.0.1.0.1", "from": {"spans": []}, "to": {"spans": []}, "ty": {"spans": [piece.clone()]}}, "after": "b-1"}), "frame.ty"),
+        ("op", json!({"session": "s-x", "frame": {"op": "make_link", "from": {"spans": []}, "to": [piece.clone()]}, "after": "b-1"}), "frame.to"),
+        ("op", json!({"session": "s-x", "frame": {"op": "nullify", "home": "1.0.1.0.1", "target": piece.clone()}, "after": "b-1"}), "frame.target"),
+        ("op", json!({"session": "s-x", "frame": mark(piece.clone()), "after": "b-2"}), "frame.to"),
+        ("op", json!({"session": "s-x", "frame": mark(json!({"burst": "b-1", "offset": -1, "width": 1})), "after": "b-1"}), "frame.to"),
+        ("op", json!({"session": "s-x", "frame": mark(json!({"burst": "b-1", "offset": "0", "width": 1})), "after": "b-1"}), "frame.to"),
+        ("op", json!({"session": "s-x", "frame": mark(json!({"burst": "b-1", "offset": 0, "width": 0})), "after": "b-1"}), "frame.to"),
+        ("op", json!({"session": "s-x", "frame": mark(json!({"burst": "b-1", "offset": 0, "width": 1, "start": "1.0.1.0.1.0.1.1"})), "after": "b-1"}), "frame.to"),
+        ("op", json!({"session": "s-x", "frame": mark(piece.clone())}), "after"),
+        ("op", json!({"guest": true, "origin": listener, "frame": read, "after": "b-1"}), "after"),
         // `changes`' two forms: `class` of another value or form, read before
         // the session is looked up; `class` in the guest form and a guest
         // `limit` of another form, each before the target is dialed; the

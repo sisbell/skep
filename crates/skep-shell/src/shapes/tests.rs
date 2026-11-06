@@ -72,6 +72,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable", "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
         ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "unreachable", "sent": false, "time": 1})),
         ("Anchors", crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]})).expect("the anchors' form").json()),
+        ("BurstPiece", json!({"burst": "b-1", "offset": 6, "width": 5})),
         ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}]})),
         ("Hand", json!({"key": "other", "fingerprint": "ab", "label": "phone"})),
         ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
@@ -165,7 +166,7 @@ fn the_file_names_every_shape_call_and_event() {
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
-        "  op(args: { session: string; frame: unknown; anchors?: Anchors } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
+        "  op(args: { session: string; frame: unknown; anchors?: Anchors; after?: string } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
         "  'publication.open'(args: { session: string; draft: string; also?: string[]; doc?: string; mint?: string; claim?: boolean; selection?: Run[]; notes?: string[]; readable_drafts?: string[]; published?: string[] }): Promise<Outcome<PublicationPanel>>;\n",
         "  'publication.count'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<{ count: Count; price: Price }>>;\n",
         "  'publication.confirm'(args: { session: string; switches?: Switches; answers?: Record<string, OriginAnswer> }): Promise<Outcome<Acknowledged | Restated | PublicationRefused>>;\n",

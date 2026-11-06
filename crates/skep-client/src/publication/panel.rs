@@ -44,6 +44,12 @@
 //! written in ⟨D⟩ publish as ⟨E⟩'s own words; ⟨D⟩ keeps a record of where
 //! they went"), consecutive runs of one origin in the selection's V-order
 //! counted once; the rendering draft's own words are counted nowhere.
+//!
+//! **Ends read through the records.** The line's ⟨c⟩, ⟨d⟩ and far
+//! documents, the formatting line's cut and its re-make test read a
+//! candidate's ends as the filter reads them (`RecordWalk`), so an end on
+//! words an earlier shot published counts as the published words the
+//! request spells it on, never as words of this draft left out.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,7 +60,7 @@ use crate::board::answers::LinkValue;
 use crate::board::frames::{self, Slot, REGISTRY_DOCUMENT, T_CORRESPONDENCE, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::T_RETRACTION;
 
-use super::enumerate::{touches, Candidate, Enumeration};
+use super::enumerate::{selected_ranges, touches, Candidate, EndPiece, Enumeration, RecordWalk, Via};
 use super::landed::read_record;
 use super::{home_of_link, owned_by, Door, Fault, ISpan, Inputs, Publisher, Run};
 
@@ -349,17 +355,32 @@ pub fn is_formatting(value: &LinkValue) -> bool {
     named == 1
 }
 
-/// Returns the positions of `value`'s ends on `selection`, as ranges.
-fn on_selection(value: &LinkValue, selection: &[super::Run]) -> Vec<(String, u64, u64)> {
-    let mut out = Vec::new();
-    for s in value.from.iter().chain(&value.to).filter_map(ISpan::of) {
-        for r in selection {
-            if let Some((lo, hi)) = r.overlap(&s.chain, s.first, s.reach()) {
-                out.push((s.chain.clone(), lo, hi));
-            }
-        }
+/// One stored content span of a candidate's end, read through the records
+/// against the selection.
+struct SpanReading {
+    /// The pieces the walk reads the span in (`RecordWalk::pieces`).
+    pieces: Vec<EndPiece>,
+    /// Whether some piece holds a position the selection holds.
+    touching: bool,
+    /// Whether every piece lies in the selection.
+    within: bool,
+}
+
+impl SpanReading {
+    /// Reads `span`, an end of a candidate reached `via`, through `walk`
+    /// against `selection`.
+    fn of(walk: &RecordWalk<'_>, span: &ISpan, via: &Via, selection: &[Run]) -> SpanReading {
+        let pieces = walk.pieces(span, via);
+        let touching = pieces.iter().any(|p| p.span.touches(selection));
+        let within = pieces.iter().all(|p| p.span.within(selection));
+        SpanReading { pieces, touching, within }
     }
-    out
+
+    /// Returns whether the span runs past the selection's cut: on the
+    /// selection, and not wholly.
+    fn past_the_cut(&self) -> bool {
+        self.touching && !self.within
+    }
 }
 
 fn ranges_overlap(a: &[(String, u64, u64)], b: &[(String, u64, u64)]) -> bool {
@@ -381,13 +402,20 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     let draft = inputs.draft.to_string();
     let trunk = inputs.doc.as_ref().map(ToString::to_string);
 
+    // Every candidate's ends read through the records, as the filter reads
+    // them and the request spells them.
+    let walk = RecordWalk::new(inputs, &e.records);
+
     // The formatting line: the draft's own set's marks by the line's test.
     door.step("formatting");
     let own: Vec<usize> = e.homes.iter().find(|(h, _)| *h == inputs.draft).map(|(_, i)| i.clone()).unwrap_or_default();
     let marks: Vec<usize> = own.iter().copied().filter(|&i| e.candidates[i].offered() && is_formatting(&e.candidates[i].value)).collect();
     let cut = marks
         .iter()
-        .filter(|&&i| e.candidates[i].end_spans().iter().any(|s| s.touches(&inputs.selection) && !s.within(&inputs.selection)))
+        .filter(|&&i| {
+            let c = &e.candidates[i];
+            c.end_spans().iter().any(|s| SpanReading::of(&walk, s, &c.via, &inputs.selection).past_the_cut())
+        })
         .count();
 
     // The held removals: D's 3.24 records, the mark read, the retraction read.
@@ -410,10 +438,11 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         let (Some(record), Some(mark_addr)) = (parse_address(&hit), parse_address(&mark)) else { continue };
         let remake = (on_selection && !spent)
             .then(|| {
-                let mark_on = on_selection_of(&mark_value, &inputs.selection);
+                let mark_spans: Vec<ISpan> = mark_value.from.iter().chain(&mark_value.to).filter_map(ISpan::of).collect();
+                let mark_on = selected_ranges(&mark_spans, &inputs.selection);
                 marks.iter().copied().find(|&i| {
                     let c = &e.candidates[i];
-                    c.value.type_address() == mark_value.type_address() && ranges_overlap(&on_selection_of(&c.value, &inputs.selection), &mark_on)
+                    c.value.type_address() == mark_value.type_address() && ranges_overlap(&selected_ranges(&walk.spans(c), &inputs.selection), &mark_on)
                 })
             })
             .flatten();
@@ -452,7 +481,7 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
         let mut line = row.line;
         for &i in &row.links {
             let c: &Candidate = &e.candidates[i];
-            if matches!(c.via, super::enumerate::Via::ReadThrough(_)) {
+            if matches!(c.via, Via::ReadThrough(_)) {
                 row.read_through += 1;
             }
             let mut far: BTreeSet<String> = BTreeSet::new();
@@ -460,16 +489,18 @@ pub(crate) fn panel_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
             for span in c.value.from.iter().chain(&c.value.to) {
                 match ISpan::of(span) {
                     Some(s) => {
-                        let touching = s.touches(&inputs.selection);
-                        if touching && !s.within(&inputs.selection) {
+                        let read = SpanReading::of(&walk, &s, &c.via, &inputs.selection);
+                        if read.past_the_cut() {
                             c_hit = true;
                         }
-                        if !touching {
-                            let doc = s.document().unwrap_or_default();
-                            if doc == draft {
-                                d_hit = true;
-                            } else if !doc.is_empty() {
-                                far.insert(doc);
+                        if !read.touching {
+                            for piece in &read.pieces {
+                                let doc = piece.span.document().unwrap_or_default();
+                                if doc == draft {
+                                    d_hit = true;
+                                } else if !doc.is_empty() {
+                                    far.insert(doc);
+                                }
                             }
                         }
                     }
@@ -593,10 +624,6 @@ fn counterpart_of(door: &Door<'_>, p: &Publisher<'_>, i: usize, run: &Run, origi
         }
     }
     Ok(None)
-}
-
-fn on_selection_of(value: &LinkValue, selection: &[super::Run]) -> Vec<(String, u64, u64)> {
-    on_selection(value, selection)
 }
 
 /// Returns an address's components as numbers, the address order's key.

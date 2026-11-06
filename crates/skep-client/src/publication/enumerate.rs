@@ -42,20 +42,35 @@
 //! theirs, off the claim's address — names, as its `new`, a successor that
 //! drops it by one of two arms. A public successor, homed in a published
 //! document of theirs off the caller's own list and no read, drops it where
-//! it COVERS every position of the candidate this publication publishes,
-//! read off one `read_link` of the successor (keys (i) and (iii); no
-//! liveness key — sweep 5 S1), so a copy an earlier selection cut leaves its
-//! original offered, to be re-made over the whole run (W4). Any other
-//! successor drops it where it is itself a candidate of this enumeration,
-//! dropped or offered — a retype or an end move made in the draft before
-//! the shot (B3-S12), a move into another set of theirs (§2) — read off the
-//! candidates' own addresses and no read (proposal 23): one since retracted
-//! is no candidate, nor is one touching nothing selected, and its original
-//! is offered. And where an `out_claims` row of the person's names an `old`
-//! — the candidate a successor — that original's `in_claims`, the candidate
-//! dropped as REVISED where an accept's claim of the person's names a
-//! public copy, wherever the original's ends lie (W17). The candidates are
-//! grouped BY HOME in the order their homes first answered.
+//! its ends as stored, read off one `read_link` of the successor, COVER
+//! every position of the candidate this publication publishes — the
+//! candidate's ends read through the records, below (keys (i) and (iii); no
+//! liveness key — sweep 5 S1) — so a copy an earlier selection cut leaves
+//! its original offered, to be re-made over the whole run (W4), and a copy
+//! an earlier shot made over the words it re-minted drops its original at
+//! every later publication. Any other successor drops it where it is itself
+//! a candidate of this enumeration, dropped or offered — a retype or an end
+//! move made in the draft before the shot (B3-S12), a move into another set
+//! of theirs (§2) — read off the candidates' own addresses and no read
+//! (proposal 23): one since retracted is no candidate, nor is one touching
+//! nothing selected, and its original is offered. And where an `out_claims`
+//! row of the person's names an `old` — the candidate a successor — that
+//! original's `in_claims`, the candidate dropped as REVISED where an
+//! accept's claim of the person's names a public copy, wherever the
+//! original's ends lie (W17). The candidates are grouped BY HOME in the
+//! order their homes first answered.
+//!
+//! **The walk through the records.** A link on a record's `from` run "is a
+//! candidate as a link on its `to` run is" (§5.1), so a candidate's ends
+//! are read as the request spells them. Every end of a candidate the
+//! read-through reached, and a span on a named draft's own words of any
+//! candidate, is walked through the counterpart records the enumeration
+//! holds: the record covering the first position not yet read maps the
+//! piece, up to the end of its `from`, onto the published words of its
+//! `to`, and a piece no record covers runs as stored up to the next record's
+//! first position. Every other span is read as stored. Key (iii), the
+//! panel's line counts and the request's `spell_end` read this one walk,
+//! `RecordWalk`, so a candidate is judged on the words its entry sends.
 //!
 //! What it does not read: other people's links, left out by the owned-homes
 //! rule and no refusal; links of the person's touching no span of the
@@ -170,8 +185,9 @@ pub struct Successor {
     /// (i) `new`'s home is a published document of the person's, off the
     /// caller's list.
     pub published_home: bool,
-    /// (iii) `new`'s ends cover every position of the candidate this
-    /// publication publishes.
+    /// (iii) `new`'s ends, as stored, cover every position of the candidate
+    /// this publication publishes: its ends read through the records as the
+    /// request spells them (`RecordWalk`).
     pub covers: bool,
     /// Whether `new` is another candidate of this enumeration.
     ///
@@ -222,10 +238,81 @@ impl Candidate {
         !self.revised && !self.successors.iter().any(Successor::drops)
     }
 
-    /// Returns the candidate's ends as I-spans — `from` then `to`, the unit
-    /// spans at non-content addresses left out.
+    /// Returns the candidate's ends as stored, as I-spans — `from` then
+    /// `to`, the unit spans at non-content addresses left out.
+    ///
+    /// The filter, the panel and the request read them through the records
+    /// (`RecordWalk`).
     pub fn end_spans(&self) -> Vec<ISpan> {
         self.value.from.iter().chain(&self.value.to).filter_map(ISpan::of).collect()
+    }
+}
+
+/// One piece of a candidate's stored span, as the publication reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EndPiece {
+    /// The positions: on the record's `to` where `mapped`, else as stored.
+    pub(crate) span: ISpan,
+    /// Whether a record mapped the piece onto the published words it became.
+    pub(crate) mapped: bool,
+}
+
+/// The walk through the records: how the publication reads a candidate's
+/// stored ends (§5.1).
+///
+/// The walk takes every end of a candidate the read-through reached,
+/// whatever its chain, and a span of any candidate on a named draft's own
+/// words. A taken span is read from its first position: the record covering
+/// the position maps the piece up to the end of the record's `from` onto
+/// its `to`, and a piece no record covers runs as stored up to the next
+/// record's first position. Every other span is read as stored. The filter's
+/// key (iii), the panel's line counts and the request's spelling read this
+/// one walk.
+pub(crate) struct RecordWalk<'r> {
+    records: &'r [Record],
+    named_chains: Vec<String>,
+}
+
+impl<'r> RecordWalk<'r> {
+    /// Returns the walk through `records` for the drafts `inputs` names.
+    pub(crate) fn new(inputs: &Inputs, records: &'r [Record]) -> RecordWalk<'r> {
+        RecordWalk { records, named_chains: inputs.named_drafts().map(|d| format!("{d}.0.1")).collect() }
+    }
+
+    /// Returns whether `chain` is a named draft's content chain, whose words
+    /// the shot re-mints.
+    pub(crate) fn is_named_chain(&self, chain: &str) -> bool {
+        self.named_chains.iter().any(|c| c == chain)
+    }
+
+    /// Returns `span`, an end of a candidate reached `via`, as the pieces the
+    /// publication reads it in: the walk's, in order, or the span itself
+    /// where the walk does not take it.
+    pub(crate) fn pieces(&self, span: &ISpan, via: &Via) -> Vec<EndPiece> {
+        if !matches!(via, Via::ReadThrough(_)) && !self.is_named_chain(&span.chain) {
+            return vec![EndPiece { span: span.clone(), mapped: false }];
+        }
+        let mut out = Vec::new();
+        let mut cursor = span.first;
+        while cursor < span.reach() {
+            let covering = self.records.iter().find(|r| r.from.overlap(&span.chain, cursor, cursor + 1).is_some());
+            let end = match covering {
+                Some(r) => r.from.reach().min(span.reach()),
+                None => self.records.iter().filter_map(|r| (r.from.chain == span.chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(span.reach()).min(span.reach()),
+            };
+            out.push(match covering.and_then(|r| r.map(&span.chain, cursor, end)) {
+                Some(to) => EndPiece { span: to, mapped: true },
+                None => EndPiece { span: ISpan { chain: span.chain.clone(), first: cursor, width: end - cursor }, mapped: false },
+            });
+            cursor = end;
+        }
+        out
+    }
+
+    /// Returns `candidate`'s ends as the publication reads them: `from`
+    /// then `to`, each content span's pieces in order.
+    pub(crate) fn spans(&self, candidate: &Candidate) -> Vec<ISpan> {
+        candidate.end_spans().iter().flat_map(|s| self.pieces(s, &candidate.via)).map(|p| p.span).collect()
     }
 }
 
@@ -358,7 +445,7 @@ pub fn touches(value: &LinkValue, selection: &[Run]) -> bool {
 
 /// Returns the positions of `spans` that lie in `selection`, as
 /// `(chain, lo, hi)` ranges.
-fn on_selection(spans: &[ISpan], selection: &[Run]) -> Vec<(String, u64, u64)> {
+pub(crate) fn selected_ranges(spans: &[ISpan], selection: &[Run]) -> Vec<(String, u64, u64)> {
     let mut out = Vec::new();
     for s in spans {
         for r in selection {
@@ -532,9 +619,12 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     // Candidacy reads every candidate, dropped ones included, so an original
     // still drops where a covering copy has superseded its successor in turn.
     let held: BTreeSet<Address> = candidates.iter().map(|c| c.link.clone()).collect();
+    // Key (iii) reads the candidate's ends through the records, as the
+    // request spells them, and the successor's ends as stored.
+    let walk = RecordWalk::new(inputs, &records);
     for c in &mut candidates {
         let link = c.link.to_string();
-        let on = on_selection(&c.end_spans(), &inputs.selection);
+        let on = selected_ranges(&walk.spans(c), &inputs.selection);
         let ins = answers::claims(&door.answered(&link, &frames::in_claims(&link))?);
         for row in ins.iter().filter(|r| r.active && owned_by(&r.home, p.account)) {
             let (Some(claim), Some(new)) = (parse_address(&row.claim), parse_address(&row.new)) else { continue };

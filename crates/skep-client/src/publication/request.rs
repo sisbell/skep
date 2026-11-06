@@ -33,10 +33,11 @@
 //! there through the record; the twin pre-check re-composing what the
 //! draft's records already name; then `links` — each switched-on row's offered
 //! links and the formatting line's marks, `home` the tag `member` or the
-//! row's picked set, `from`/`to` in the address form, the I-span form or THE
-//! MEMBER-POSITION FORM for an end on this shot's new words, spelled
-//! CANONICALLY from the client's own runs (the lowest positions holding each
-//! value, consecutive positions merged), `ty` verbatim, `old` the original;
+//! row's picked set, `from`/`to` read through the records (`RecordWalk`)
+//! and spelled in the address form, the I-span form or THE MEMBER-POSITION
+//! FORM for an end on this shot's new words, spelled CANONICALLY from the
+//! client's own runs (the lowest positions holding each value, consecutive
+//! positions merged), `ty` verbatim, `old` the original;
 //! `retract` the job list's marks; `read_with` the switched-on rows'
 //! destinations other than the edition, once each, none where the edition
 //! is already read with it; `claim` where the caller asks it, at either
@@ -76,7 +77,7 @@ use crate::board::frames::{self, AlsoPlacesFrame, PublishFrame, T_EDITION, T_REA
 use crate::board::{T_RETRACTION, T_SUPERSEDES};
 
 use super::base::Standing;
-use super::enumerate::{enumerate_with, place_selection, Enumeration, Placement, Record};
+use super::enumerate::{enumerate_with, place_selection, Enumeration, Placement, Record, RecordWalk, Via};
 use super::landed::twin_precheck_with;
 use super::panel::{count, panel_with, Count, Counterpart, Destination, Panel, RowKind};
 use super::price::{self, EndShape, EntryShape, Price, Shape};
@@ -830,10 +831,10 @@ pub(crate) fn build_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs, e:
     door.step("entries");
     let mut entries: Vec<Entry> = Vec::new();
     let mut unspellable: Vec<(Address, Unspellable)> = Vec::new();
-    let ctx = SpellContext { native_chains: inputs.named_drafts().map(|d| format!("{d}.0.1")).collect(), runs: &runs, records: &records };
+    let ctx = SpellContext { walk: RecordWalk::new(inputs, &records), runs: &runs };
     let mut add = |candidate: usize, home: EntryHome| {
         let c = &e.candidates[candidate];
-        let ends = (spell_end(&c.value.from, &ctx), spell_end(&c.value.to, &ctx), spell_type(&c.value.ty));
+        let ends = (spell_end(&c.value.from, &c.via, &ctx), spell_end(&c.value.to, &c.via, &ctx), spell_type(&c.value.ty));
         match ends {
             (Ok(from), Ok(to), Ok(ty)) => entries.push(Entry { home, from, to, ty, old: Some(c.link.clone()), candidate }),
             (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => unspellable.push((c.link.clone(), why)),
@@ -959,27 +960,25 @@ pub(crate) fn also_places_of(e: &Enumeration, runs: &[Run]) -> Vec<AlsoPlaces> {
 
 /// What spelling an end needs.
 struct SpellContext<'a> {
-    /// The content chains of the named drafts — the rendering draft's and
-    /// each `also` draft's — whose words this shot re-mints.
-    native_chains: Vec<String>,
+    /// The walk through the records — the enumeration's and the twin
+    /// pre-check's — that reads a candidate's ends as the filter reads them.
+    walk: RecordWalk<'a>,
     runs: &'a [Run],
-    records: &'a [Record],
 }
 
-impl SpellContext<'_> {
-    /// Returns whether `chain` is a named draft's content chain.
-    fn is_native_chain(&self, chain: &str) -> bool {
-        self.native_chains.iter().any(|c| c == chain)
-    }
-}
-
-/// Spells one end from its stored slot: the address form where every span
-/// is a unit span at a non-content address; else the I-span form over
-/// permanent spans — a span on a named draft's own words mapped through the
-/// records onto the published words where an earlier shot minted them, a
-/// left-out span cut — or the member-position form where any span lies on
-/// this shot's new words, every span of the end then one the member holds.
-fn spell_end(slot: &[LinkSpan], ctx: &SpellContext<'_>) -> Result<End, Unspellable> {
+/// Spells one end of a candidate reached `via` from its stored slot.
+///
+/// The address form where every span is a unit span at a non-content
+/// address. Otherwise each span is read in the pieces the walk through the
+/// records reads it in (`RecordWalk`), in the stored order: a piece a
+/// record maps is the published words it became, a piece of a named
+/// draft's own words no record maps is this shot's new words where the
+/// shot's runs hold them and is cut where they do not, and any other piece
+/// is kept as stored. The end is the member-position form where a piece
+/// lies on this shot's new words, every other piece then one the member
+/// holds; else the I-span form over the pieces kept, or over the stored
+/// spans as written where every piece was cut.
+fn spell_end(slot: &[LinkSpan], via: &Via, ctx: &SpellContext<'_>) -> Result<End, Unspellable> {
     if slot.is_empty() {
         return Ok(End::Addrs(Vec::new()));
     }
@@ -991,59 +990,47 @@ fn spell_end(slot: &[LinkSpan], ctx: &SpellContext<'_>) -> Result<End, Unspellab
         return Err(Unspellable::MixedAddress);
     }
     let spans: Vec<ISpan> = spans.into_iter().flatten().collect();
-    let mut kept: Vec<ISpan> = Vec::new();
-    let mut member_pieces: Vec<ISpan> = Vec::new();
-    let mut any_native = false;
+    // The pieces the end sends, in the stored order, each with whether it
+    // lies on this shot's new words.
+    let mut sent: Vec<(ISpan, bool)> = Vec::new();
     for s in &spans {
-        if ctx.is_native_chain(&s.chain) {
-            // The shot's runs of this span's own chain: the new words of the
-            // named draft the span lies in.
-            let native_runs: Vec<&Run> = ctx.runs.iter().filter(|r| r.chain() == s.chain).collect();
-            // Through the records first, then this shot's new words, the rest cut.
-            let mut cursor = s.first;
-            while cursor < s.reach() {
-                if let Some(mapped) = ctx.records.iter().find_map(|r| r.map(&s.chain, cursor, s.reach())) {
-                    let width = mapped.width;
-                    kept.push(mapped);
-                    cursor += width;
-                    continue;
-                }
-                if let Some(run) = native_runs.iter().find(|r| r.i_start <= cursor && cursor < r.reach()) {
-                    let end = run.reach().min(s.reach());
-                    member_pieces.push(ISpan { chain: s.chain.clone(), first: cursor, width: end - cursor });
-                    any_native = true;
-                    cursor = end;
-                    continue;
-                }
-                // Left out: cut at the next record or run boundary.
-                let next = ctx.records.iter().filter(|r| r.from.chain == s.chain && r.from.first > cursor).map(|r| r.from.first).chain(native_runs.iter().filter(|r| r.i_start > cursor).map(|r| r.i_start)).min().unwrap_or(s.reach()).min(s.reach());
-                cursor = next;
+        for piece in ctx.walk.pieces(s, via) {
+            let p = piece.span;
+            if piece.mapped || !ctx.walk.is_named_chain(&p.chain) {
+                sent.push((p, false));
+                continue;
             }
-        } else {
-            kept.push(s.clone());
+            // The shot's runs of the piece's own chain hold the named
+            // draft's new words; the rest is left out and cut.
+            let native_runs: Vec<&Run> = ctx.runs.iter().filter(|r| r.chain() == p.chain).collect();
+            let mut cursor = p.first;
+            while cursor < p.reach() {
+                match native_runs.iter().find(|r| r.i_start <= cursor && cursor < r.reach()) {
+                    Some(run) => {
+                        let end = run.reach().min(p.reach());
+                        sent.push((ISpan { chain: p.chain.clone(), first: cursor, width: end - cursor }, true));
+                        cursor = end;
+                    }
+                    None => cursor = native_runs.iter().filter(|r| r.i_start > cursor).map(|r| r.i_start).min().unwrap_or(p.reach()).min(p.reach()),
+                }
+            }
         }
     }
-    if any_native {
-        // Every span of the end must be one the member holds.
-        let mut pieces = member_pieces;
-        for k in &kept {
-            if !k.within(ctx.runs) {
-                return Err(Unspellable::MixedForms);
-            }
-            pieces.push(k.clone());
+    if sent.iter().any(|(_, new)| *new) {
+        // Every other piece of the end must be one the member holds.
+        if sent.iter().any(|(s, new)| !new && !s.within(ctx.runs)) {
+            return Err(Unspellable::MixedForms);
         }
-        // In the stored order: re-sort the pieces by their place in `spans`.
-        let order = |p: &ISpan| spans.iter().position(|s| s.chain == p.chain && s.first <= p.first && p.first < s.reach()).unwrap_or(usize::MAX);
-        pieces.sort_by_key(order);
+        let pieces: Vec<ISpan> = sent.into_iter().map(|(s, _)| s).collect();
         let canonical = canonical_member_spans(ctx.runs, &pieces).ok_or(Unspellable::MixedForms)?;
         return Ok(End::Member(canonical));
     }
-    if kept.is_empty() {
+    if sent.is_empty() {
         // Wholly on left-out words of the draft: decision 5's far end with
         // this draft as its document, written as it is.
         return Ok(End::Spans(spans));
     }
-    Ok(End::Spans(kept))
+    Ok(End::Spans(sent.into_iter().map(|(s, _)| s).collect()))
 }
 
 /// Spells the type slot: the address form where every span is a unit span,

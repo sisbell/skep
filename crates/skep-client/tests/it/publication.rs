@@ -21,8 +21,9 @@
 //! each home, the claim in the original's home, the read-with written, the
 //! retraction standing, the kept place re-windowing the draft — the cut
 //! connection with the records read after it, `already_published` on a
-//! re-send read as the acknowledgment, and `kept_place_moved` after a move
-//! with its re-statement.
+//! re-send read as the acknowledgment, `kept_place_moved` after a move
+//! with its re-statement, and a second publication off the member the first
+//! made, offering nothing the first accepted on the words it re-minted.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
@@ -539,6 +540,70 @@ fn a_link_retyped_before_the_shot_is_offered_in_its_originals_place_until_the_re
     assert_eq!(in_notes(&en), vec![l1_n.clone()], "the original offered again");
     let original = en.candidates.iter().find(|c| c.link.to_string() == *l1_n).expect("the original a candidate");
     assert_eq!(original.successors.iter().map(|s| (s.new.to_string(), s.candidate)).collect::<Vec<_>>(), vec![(retyped, false)], "the claim read active, naming a successor no longer a candidate");
+    session.close().expect("close");
+}
+
+/// Checks against the daemon that a second publication offers nothing the
+/// first accepted on the words it re-minted.
+///
+/// The seeded draft publishes as the first test's request does, landing
+/// `E.2` and re-windowing `D` onto the member's identity; a word is typed
+/// into `D` and the whole draft published again off the base the board
+/// moved to `E.2`. The draft's bold, heading and citation, which the region
+/// read no longer reaches, come back by the read-through, and each one's
+/// copy in `E.2` covers its ends read through `D`'s record (§5.1), so none
+/// is offered: the private groups are empty, as the daemon's own filter
+/// over the region finds them, the formatting line holds nothing, and the
+/// request, carrying no entry, lands `E.3` with no copy in it.
+#[test]
+fn a_second_publication_offers_nothing_the_first_accepted_on_the_words_it_re_minted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, s, s2, d, o, .. } = &seeded;
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let first = inputs(&seeded);
+    let en = enumerate(&p, &first).expect("enumerated");
+    let pn = panel(&p, &first, &en).expect("the panel");
+    let Built::Request(mut request) = build(&p, &first, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    let Sent::Acknowledged(ack) = send(&p, &first, &mut request).expect("sent") else { panic!("refused") };
+    let e2 = format!("{e}.2");
+    assert_eq!(ack.member.to_string(), e2);
+    // A word typed into the re-windowed draft, then the whole draft again.
+    insert_text(&board, &bare_token, d, 30, "!");
+    let typed = vec![(format!("{e}.0.1.1"), 29), (format!("{d}.0.1.11"), 1), (format!("{o}.0.1.1"), 5)];
+    assert_eq!(image(&board, &bare_token, d, 1, 35), typed, "the premise: the member's words, the new one, the window");
+    assert_eq!(publication::draft_base(&p, &addr(e), &addr(d)), Ok(publication::base::Base::Recorded { base: addr(&e2), copied: 34 }), "the board moved D's base to E.2");
+    let second = Inputs { base: Some((addr(&e2), 34)), selection: vec![run(e, 1, 29), run(d, 11, 1), run(o, 1, 5)], ..inputs(&seeded) };
+    let en = enumerate(&p, &second).expect("enumerated");
+    for link in [&seeded.mark_d, &seeded.heading_d, &seeded.cite_d] {
+        let c = en.candidates.iter().find(|c| c.link.to_string() == *link).unwrap_or_else(|| panic!("{link} is a candidate"));
+        assert!(matches!(c.via, publication::Via::ReadThrough(_)), "{link}: reached by the read-through: {:?}", c.via);
+        let keys: Vec<(bool, bool, bool)> = c.successors.iter().map(|s| (s.published_home, s.covers, s.candidate)).collect();
+        assert_eq!(keys, vec![(true, true, false)], "{link}: its copy in E.2 covers its ends read through D's record");
+        assert!(!c.offered(), "{link}");
+    }
+    let private: Vec<(String, Vec<String>)> =
+        en.offered_by_home().into_iter().filter(|(h, _)| h.to_string() != *s && h.to_string() != *s2).map(|(h, links)| (h.to_string(), links.iter().map(ToString::to_string).collect())).collect();
+    assert_eq!(private, Vec::<(String, Vec<String>)>::new(), "nothing private the first publication accepted is offered");
+    assert_eq!(private, offered_oracle(&board, &token, d, 1, 35), "as the daemon's own filter over the region offers it");
+    let pn = panel(&p, &second, &en).expect("the panel");
+    assert!(pn.formatting.marks.is_empty(), "no mark on the line");
+    let Built::Request(mut request) = build(&p, &second, &en, &pn, &confirmed(&seeded)).expect("built") else { panic!("inert") };
+    assert!(request.entries.is_empty(), "{:?}", request.entries);
+    let sent = send(&p, &second, &mut request).expect("sent");
+    let Sent::Acknowledged(ack) = sent else { panic!("{sent:?}") };
+    let e3 = format!("{e}.3");
+    assert_eq!(ack.member.to_string(), e3);
+    assert!(read(&board, &token, &frames::read_link(&format!("{e3}.0.2.1")))["link"].is_null(), "no copy in E.3");
     session.close().expect("close");
 }
 

@@ -4,9 +4,11 @@
 //! claims as supersession links, the feed's rows, the drafts' recorded bases
 //! — which APPLIES a publication as the daemon does (a frame with no
 //! `attest` refused at a claimed board serving `H.1`, the twin fence, the
-//! kept places, one fresh identity per draft identity, the records, the
-//! copies resolved from the member's positions, the claims, the retractions,
-//! the read-withs, the re-window, the base's move, the memo) and keeps every
+//! kept places, an `old` refused `superseded` where a public successor an
+//! active claim of the person's names covers the entry's published spans,
+//! one fresh identity per draft identity, the records, the copies resolved
+//! from the member's positions, the claims, the retractions, the
+//! read-withs, the re-window, the base's move, the memo) and keeps every
 //! frame it served, so a test pins what each step reads, in what order and
 //! how many frames, and what the composition makes of each answer, with no
 //! daemon. The suites that need
@@ -33,6 +35,7 @@ use skep_identity::{entry_body_publication, entry_frame, unit_span, DepositHome,
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
+use crate::board::answers::LinkSpan;
 use crate::board::frames::{T_CORRESPONDENCE, T_EDITION, T_HELD_REMOVAL, T_READ_WITH};
 use crate::board::{Board, Token, HEAD_MEMBER_1, T_RETRACTION, T_SUPERSEDES};
 use crate::dial::{DialError, Dialer, Headers, Request as DialRequest, RequestHead, Response, StreamedResponse};
@@ -40,6 +43,7 @@ use crate::origin::Origin;
 use crate::sign::Signer;
 
 use super::base::Base as DraftBase;
+use super::enumerate::RecordWalk;
 use super::panel::Destination;
 use super::request::{Answer as OriginAnswer, Confirmed, Inert, OwnedRow, Piece};
 use super::send::{AckVia, OwnFault, Refusal, Sent};
@@ -375,6 +379,62 @@ impl World {
         json!({"resp": "claims", "as_of": self.position, "claims": claims})
     }
 
+    /// The active supersession claims homed in a document the person owns
+    /// exactly, each kept where `keep` holds.
+    fn own_claims<'w>(&'w self, keep: impl Fn(&LinkRow) -> bool + 'w) -> impl Iterator<Item = &'w LinkRow> + 'w {
+        let owned = |home: &str| trunk_of(home).and_then(|t| self.docs.get(&t)).is_some_and(|d| d.owner == ACCOUNT);
+        self.links.iter().filter(move |l| !l.retracted && l.ty.first().is_some_and(|t| t.0 == T_SUPERSEDES) && owned(&l.home) && keep(l))
+    }
+
+    /// The content spans of a `links` entry's two ends on published
+    /// identity, as the plan's `published_spans` reads them: the I-span form
+    /// as given and the member-position form resolved through the request's
+    /// runs, every span of a named draft's own words left out.
+    fn published_spans(entry: &Value, runs: &[Run], named: &[String]) -> Vec<ISpan> {
+        let mut out = Vec::new();
+        for end in [&entry["from"], &entry["to"]] {
+            let spans: Vec<ISpan> = if let Some(list) = end["spans"].as_array() {
+                list.iter()
+                    .map(|x| {
+                        let (chain, first) = x["start"].as_str().unwrap().rsplit_once('.').unwrap();
+                        ISpan { chain: chain.to_string(), first: first.parse().unwrap(), width: x["width"].as_str().unwrap().parse().unwrap() }
+                    })
+                    .collect()
+            } else if let Some(list) = end["member"].as_array() {
+                let spans: Vec<(u64, u64)> = list.iter().map(|x| (x["ordinal"].as_str().unwrap().parse().unwrap(), x["width"].as_str().unwrap().parse().unwrap())).collect();
+                resolve_member_spans(runs, &spans).expect("inside the placed positions")
+            } else {
+                Vec::new()
+            };
+            out.extend(spans.into_iter().filter(|s| !s.document().is_some_and(|d| named.contains(&d))));
+        }
+        out
+    }
+
+    /// Whether an active claim of the person's names `old` and a successor
+    /// homed in a published document of theirs whose ends hold each of
+    /// `spans` within one of their spans — the plan's
+    /// `superseded_by_own_claim`, no liveness of the successor asked; never
+    /// where `spans` is empty.
+    fn superseded_by_own_claim(&self, old: &str, spans: &[ISpan]) -> bool {
+        if spans.is_empty() {
+            return false;
+        }
+        self.own_claims(|c| c.from.first().is_some_and(|s| s.0 == old)).any(|claim| {
+            let new = &claim.to[0].0;
+            let public = home_of_link(new).and_then(|h| self.docs.get(h)).is_some_and(|d| d.published && d.owner == ACCOUNT);
+            let Some(successor) = self.links.iter().find(|l| l.addr == *new) else { return false };
+            let ends: Vec<ISpan> = successor.from.iter().chain(&successor.to).filter_map(|(start, width)| ISpan::of(&LinkSpan { start: start.clone(), width: width.clone() })).collect();
+            public && spans.iter().all(|s| ends.iter().any(|e| e.chain == s.chain && e.first <= s.first && s.reach() <= e.reach()))
+        })
+    }
+
+    /// The originals `y` revises: the `old` of each active claim of the
+    /// person's naming `y` as its `new` — the plan's `originals_of`.
+    fn originals_of(&self, y: &str) -> Vec<String> {
+        self.own_claims(|c| c.to.first().is_some_and(|s| s.0 == y)).map(|c| c.from[0].0.clone()).collect()
+    }
+
     fn op(&mut self, frame: &Value) -> Result<Response, DialError> {
         let op = frame["op"].as_str().unwrap_or("?").to_string();
         let position = self.position;
@@ -693,6 +753,14 @@ impl World {
                     None => return json!({"resp": "rejected", "code": "old_refused", "detail": "absent", "disposition": "permanent", "op": "publish", "site": {"index": k}}),
                     Some(l) if l.retracted => return json!({"resp": "rejected", "code": "old_refused", "detail": "retracted", "disposition": "permanent", "op": "publish", "site": {"index": k}}),
                     _ => {}
+                }
+                // Superseded, as the plan's `check_old` judges it: the
+                // entry's published spans covered by a public successor an
+                // active claim of the person's names from `old`, or from an
+                // original `old` itself revises.
+                let spans = Self::published_spans(entry, &runs, &named);
+                if self.superseded_by_own_claim(old, &spans) || self.originals_of(old).iter().any(|o| self.superseded_by_own_claim(o, &spans)) {
+                    return json!({"resp": "rejected", "code": "old_refused", "detail": "superseded", "disposition": "permanent", "op": "publish", "site": {"index": k}});
                 }
             }
         }
@@ -1365,6 +1433,78 @@ fn a_cut_copy_in_a_public_set_is_a_candidate_and_leaves_its_original_offered() {
     assert_eq!((keys_of(original), original.offered()), ((true, false, true), true), "public and cut: offered, though its copy is a candidate");
 }
 
+/// Checks the walk through the records piece by piece.
+///
+/// The draft's 3..10, over records naming its 5..7 and its 9, is read in
+/// five pieces, each record's words mapped onto its `to` at their offset
+/// and the rest as stored. A span on a chain no named draft owns is walked
+/// for a candidate the read-through reached and read as stored for one the
+/// region read reached.
+#[test]
+fn the_walk_maps_each_piece_a_record_covers_and_reads_the_rest_as_stored() {
+    let span = |doc: &str, first: u64, width: u64| ISpan { chain: format!("{doc}.0.1"), first, width };
+    let record = |home: &str, n: u64, from: ISpan, to: ISpan| Record { link: a(&format!("{home}.0.2.{n}")), home: a(home), from, to, at: None };
+    let records = [record(D, 90, span(D, 5, 3), span(E, 30, 3)), record(D, 91, span(D, 9, 1), span(E, 40, 1)), record(O, 90, span(O, 1, 4), span(E, 5, 4))];
+    let inputs = inputs();
+    let walk = RecordWalk::new(&inputs, &records);
+    let read = |s: ISpan, via: Via| walk.pieces(&s, &via).into_iter().map(|p| (p.span, p.mapped)).collect::<Vec<_>>();
+    assert_eq!(read(span(D, 3, 8), Via::Region), vec![(span(D, 3, 2), false), (span(E, 30, 3), true), (span(D, 8, 1), false), (span(E, 40, 1), true), (span(D, 10, 1), false)]);
+    assert_eq!(read(span(D, 6, 1), Via::Region), vec![(span(E, 31, 1), true)], "a piece inside a record, at its offset");
+    assert_eq!(read(span(O, 2, 4), Via::Region), vec![(span(O, 2, 4), false)], "another chain, reached by the region read: as stored");
+    assert_eq!(read(span(O, 2, 4), Via::ReadThrough(vec![])), vec![(span(E, 6, 3), true), (span(O, 5, 1), false)], "reached by the read-through: walked");
+}
+
+/// Checks that an accepted link the read-through reaches stays dropped.
+///
+/// `l_rt`, on the draft's words an earlier shot published as `E`'s 16..19,
+/// accepted with its copy at `E.1` over those words: the read-through
+/// reaches it, key (iii) reads its ends through the record as `E`'s words,
+/// the copy covers them, and it is offered at no later publication (§5.1).
+#[test]
+fn an_accepted_link_the_read_through_reaches_is_dropped_by_its_copy_over_the_published_words() {
+    let (mut world, named) = World::base();
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 16, 4)], vec![ispan(N, 1, 2)], T_CITATION);
+    world.claim(N, &named.l_rt, &copy);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    let l_rt = candidate_at(&e, &named.l_rt);
+    assert_eq!(l_rt.via, Via::ReadThrough(vec![a(&named.record)]), "reached through its record");
+    assert_eq!((keys_of(l_rt), l_rt.offered()), ((true, true, false), false), "its copy covers its ends read through the record");
+    let pn = panel(&p, &inputs(), &e).unwrap();
+    assert_eq!((pn.rows[1].home.to_string(), links_of(&e, &pn.rows[1].links)), (N.to_string(), vec![named.l1_n.clone()]), "the notes' row without it");
+}
+
+/// Checks that an end on words published since its copy is offered again.
+///
+/// A note from `E`'s 5..9 to the draft's 21..22, accepted while 21..22 were
+/// left out, so its copy at `E.1` holds them verbatim; the draft's 20..23
+/// published since as `E`'s 16..19. The region read reaches the note, its
+/// `to` reads through the record as `E`'s 17..18, words its copy never
+/// covered, so it is offered again (§5.1), its entry spelled on `E`'s words,
+/// and the board takes it.
+#[test]
+fn an_end_on_words_published_since_its_copy_is_offered_again_over_them() {
+    let (mut world, _) = World::base();
+    let note = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(D, 21, 2)], T_CITATION);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 5, 5)], vec![ispan(D, 21, 2)], T_CITATION);
+    world.claim(N, &note, &copy);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let first = enumerate(&p, &inputs()).unwrap();
+    let c = candidate_at(&first, &note);
+    assert_eq!(c.via, Via::Region);
+    assert_eq!((keys_of(c), c.offered()), ((true, false, false), true), "its copy covers E's 5..9, not the 17..18 its `to` reads as");
+    let (e, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == note).expect("the note's entry");
+    let on_e = |first: u64, width: u64| End::Spans(vec![ISpan { chain: format!("{E}.0.1"), first, width }]);
+    assert_eq!((entry.from.clone(), entry.to.clone()), (on_e(5, 5), on_e(17, 2)), "both ends on E's words");
+    let sent = send(&p, &inputs(), &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "no successor covers it on E's words: {sent:?}");
+}
+
 /// Checks that the formatting line takes a retype in its original's place.
 ///
 /// A bold of the draft's own set retyped to emphasis before the shot stands
@@ -1455,7 +1595,7 @@ fn the_panel_orders_the_rows_and_counts_each_line() {
     assert_eq!(own.types, vec![TypeFold { ty: T_CITATION.into(), n: 3, far: vec![Z.into()] }]);
     let notes = &panel.rows[1];
     assert_eq!(links_of(&e, &notes.links), [named.l1_n.clone(), named.l_rt.clone()]);
-    assert_eq!((notes.line.u, notes.line.p, notes.read_through), (1, 2, 1), "the revision counted, the far ends private, one link read through");
+    assert_eq!((notes.line, notes.read_through), (LineCounts { p: 2, d: 0, c: 0, t: 0, u: 1 }, 1), "the revision counted, the far ends private, one link read through on its record's words");
     assert_eq!(notes.label, b"notes here".to_vec());
     assert_eq!(panel.rows[2].label, b"set one".to_vec());
     assert_eq!(links_of(&e, &panel.formatting.marks), [named.mark_d.clone(), named.heading_d.clone(), named.mark_d2.clone()]);
@@ -1466,6 +1606,50 @@ fn the_panel_orders_the_rows_and_counts_each_line() {
     assert_eq!(panel.read_with, BTreeMap::from([(a(S), true), (a(S2), false)]));
     let steps: Vec<&str> = panel.frames.iter().map(|(s, _)| *s).collect();
     assert_eq!(steps, ["removals", "homes", "far", "labels", "read_with", "windows"], "the formatting line's test sends no frame; the windows read last");
+}
+
+/// Checks that an end over words before a record reads both.
+///
+/// A note in `N` from the draft's 18..23, whose 20..23 the record names as
+/// `E`'s 16..19 and whose 18..19 stay the draft's own, left out: its end
+/// runs past the selection's cut, ⟨c⟩, and lies wholly on no left-out words,
+/// so no ⟨d⟩; and its entry spells `E`'s 16..19 once, the words before the
+/// record read and cut.
+#[test]
+fn an_end_over_words_before_a_record_runs_past_the_cut_and_spells_the_records_words_once() {
+    let (mut world, named) = World::base();
+    let ahead = world.typed(N, vec![ispan(D, 18, 6)], vec![ispan(N, 3, 2)], T_CITATION);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (e, pn, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let notes = &pn.rows[1];
+    assert_eq!(links_of(&e, &notes.links), [named.l1_n.clone(), named.l_rt.clone(), ahead.clone()]);
+    assert_eq!(notes.line, LineCounts { p: 3, d: 0, c: 1, t: 0, u: 1 }, "past the cut, never wholly on left-out words");
+    let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == ahead).expect("its entry");
+    assert_eq!(entry.from, End::Spans(vec![ISpan { chain: format!("{E}.0.1"), first: 16, width: 4 }]), "the record's words once, the words before it cut");
+}
+
+/// Checks that the formatting line reads its marks through the records.
+///
+/// Two marks of the draft's own set on its 20..23, which an earlier shot
+/// published as `E`'s 16..19, both reached by the read-through: a bold over
+/// 20..25 runs past the selection's cut once 20..23 read as `E`'s words,
+/// and a heading over 20..23 re-makes the published heading over `E`'s
+/// 15..19, whose held removal the line lists.
+#[test]
+fn the_formatting_line_reads_its_marks_through_the_records() {
+    let (mut world, named) = World::base();
+    let bold = world.typed(D, vec![], vec![ispan(D, 20, 6)], T_STRONG);
+    let heading = world.typed(D, vec![], vec![ispan(D, 20, 4)], T_HEADING);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    let pn = panel(&p, &inputs(), &e).unwrap();
+    assert_eq!(links_of(&e, &pn.formatting.marks), [named.mark_d.clone(), named.heading_d.clone(), named.mark_d2.clone(), bold, heading.clone()], "both on the line");
+    assert_eq!(pn.formatting.cut, 2, "the heading over the draft's own words and the bold run past the cut");
+    let remade: Vec<(String, Option<String>)> = pn.formatting.removals.iter().map(|r| (r.mark.to_string(), r.remake.map(|i| e.candidates[i].link.to_string()))).collect();
+    assert_eq!(remade, [(named.mpub.clone(), Some(named.mark_d2.clone())), (named.mpub2.clone(), None), (named.mpub3.clone(), Some(heading))], "the published heading re-made on E's words");
 }
 
 /// THE COUNT (PUB-3.8): ⟨l⟩ the switched-on sets' entries plus the read-with
@@ -2087,6 +2271,39 @@ fn an_unchanged_request_is_inert() {
     assert_eq!(build(&p, &inputs, &e, &panel, &Confirmed::default()).unwrap(), Built::Inert(Inert::Unchanged));
 }
 
+/// Checks that an end reached through another draft's record is spelled on
+/// the words that record published.
+///
+/// `O`'s words published before as `E`'s 5..8, the record in `O`, and a
+/// note on them accepted while the draft windowed `O`, so its copy at `E.1`
+/// holds `O`'s identity; the draft windows `O` no longer. The read-through
+/// reaches the note through `O`'s record, of a draft the request does not
+/// name, and its end is read and spelled through that record as `E`'s 5..8,
+/// words its copy never covered, so the board takes it.
+#[test]
+fn an_end_reached_through_another_drafts_record_is_spelled_on_the_words_it_published() {
+    let (mut world, _) = World::base();
+    world.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 19), run(D, 1, 10)];
+    let record = world.typed(O, vec![ispan(O, 1, 4)], vec![ispan(E, 5, 4)], T_CORRESPONDENCE);
+    let note = world.typed(N, vec![ispan(O, 1, 4)], vec![ispan(N, 6, 2)], T_CITATION);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(O, 1, 4)], vec![ispan(N, 6, 2)], T_CITATION);
+    world.claim(N, &note, &copy);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let unwindowed = Inputs { selection: vec![run(E, 1, 19), run(D, 1, 10)], ..inputs() };
+    let e = enumerate(&p, &unwindowed).unwrap();
+    let c = candidate_at(&e, &note);
+    assert_eq!(c.via, Via::ReadThrough(vec![a(&record)]));
+    assert_eq!((keys_of(c), c.offered()), ((true, false, false), true), "its copy holds O's words, not E's 5..8");
+    let pn = panel(&p, &unwindowed, &e).unwrap();
+    let Built::Request(mut request) = build(&p, &unwindowed, &e, &pn, &switched(None)).unwrap() else { panic!("inert") };
+    let entry = request.entries.iter().find(|en| e.candidates[en.candidate].link.to_string() == note).expect("the note's entry");
+    assert_eq!(entry.from, End::Spans(vec![ISpan { chain: format!("{E}.0.1"), first: 5, width: 4 }]), "spelled through O's record");
+    let sent = send(&p, &unwindowed, &mut request).unwrap();
+    assert!(matches!(sent, Sent::Acknowledged(_)), "no successor covers it on E's words: {sent:?}");
+}
+
 // ── THE SEND AND THE LANDED TEST ─────────────────────────────────────────
 
 /// THE ACKNOWLEDGMENT: the frame under the token with its `id` and an
@@ -2128,6 +2345,72 @@ fn the_send_is_acknowledged_and_the_commit_holds_every_deposit() {
     let again = send(&p, &inputs(), &mut request).unwrap();
     assert!(matches!(again, Sent::Acknowledged(ref a2) if a2.member == ack.member && a2.at == ack.at));
     assert_eq!(dialer.world().position, position, "the memo, not a second commit");
+}
+
+/// Checks that the scripted board refuses an entry its own copy covers.
+///
+/// `l_rt` accepted with its copy at `E.1` over `E`'s 16..19: an entry
+/// carrying it again over those words is refused `old_refused`,
+/// `superseded`, naming the entry, as the plan's `check_old` refuses it,
+/// and nothing is committed.
+#[test]
+fn the_board_refuses_an_entry_re_offering_an_original_its_copy_covers() {
+    let (mut world, named) = World::base();
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 16, 4)], vec![ispan(N, 1, 2)], T_CITATION);
+    world.claim(N, &named.l_rt, &copy);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let (e, _, mut request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let candidate = e.candidates.iter().position(|c| c.link.to_string() == named.l_rt).expect("a candidate");
+    let span = |doc: &str, first: u64, width: u64| End::Spans(vec![ISpan { chain: format!("{doc}.0.1"), first, width }]);
+    request.entries.push(Entry { home: EntryHome::Member, from: span(E, 16, 4), to: span(N, 1, 2), ty: End::Addrs(vec![T_CITATION.into()]), old: Some(a(&named.l_rt)), candidate });
+    let index = request.entries.len() as u64 - 1;
+    let position = dialer.world().position;
+    assert_eq!(send(&p, &inputs(), &mut request).unwrap(), Sent::Refused(Refusal::OwnFault(OwnFault::Deposit { code: "old_refused".into(), index: Some(index), detail: Some("superseded".into()) })));
+    assert_eq!(dialer.world().position, position, "nothing committed");
+}
+
+/// Checks that a second publication offers nothing the first accepted.
+///
+/// The draft publishes its whole selection, its own words re-minted as
+/// `E`'s 20..29 and the draft re-windowed onto them; a word typed, it
+/// publishes again off the member the first one made. Every link the first
+/// one accepted on the draft's own words — the bold, the heading, the
+/// citations and the note on an earlier shot's words — comes back by the
+/// read-through, and its copy covers its ends read through the records, so
+/// none is offered, the request carries no entry, and the board takes it.
+#[test]
+fn a_second_publication_offers_nothing_the_first_accepted_and_lands() {
+    let (world, named) = World::base();
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let (_, _, mut first) = built(&dialer, &board, &tok, &signer, &switched(None));
+    let Sent::Acknowledged(ack) = send(&p, &inputs(), &mut first).unwrap() else { panic!("refused") };
+    let e2 = format!("{E}.2");
+    assert_eq!(ack.member.to_string(), e2);
+    {
+        let mut w = dialer.world();
+        assert_eq!(w.docs[D].runs, vec![run(E, 1, 29), run(O, 1, 5)], "the premise: the draft re-windowed onto the member's words");
+        w.text(D, 30, "!");
+        w.docs.get_mut(D).unwrap().runs = vec![run(E, 1, 29), run(D, 30, 1), run(O, 1, 5)];
+    }
+    let again = Inputs { base: Some((a(&e2), 34)), selection: vec![run(E, 1, 29), run(D, 30, 1), run(O, 1, 5)], ..inputs() };
+    let e = enumerate(&p, &again).unwrap();
+    for link in [&named.mark_d, &named.heading_d, &named.cite_d, &named.cut_d, &named.l_rt] {
+        let c = candidate_at(&e, link);
+        assert!(matches!(c.via, Via::ReadThrough(_)), "{link}: reached by the read-through");
+        assert_eq!((keys_of(c), c.offered()), ((true, true, false), false), "{link}: its copy covers its ends read through the records");
+    }
+    let private: Vec<String> = e.offered_by_home().into_iter().filter(|(h, _)| ![S, S2].contains(&h.to_string().as_str())).flat_map(|(_, links)| links.into_iter().map(|l| l.to_string())).collect();
+    assert!(private.is_empty(), "nothing private the first publication accepted is offered: {private:?}");
+    let pn = panel(&p, &again, &e).unwrap();
+    assert!(pn.formatting.marks.is_empty(), "no mark on the line: {:?}", links_of(&e, &pn.formatting.marks));
+    let Built::Request(mut request) = build(&p, &again, &e, &pn, &switched(None)).unwrap() else { panic!("inert") };
+    assert!(request.entries.is_empty(), "{:?}", request.entries);
+    let sent = send(&p, &again, &mut request).unwrap();
+    assert!(matches!(&sent, Sent::Acknowledged(ack) if ack.member.to_string() == format!("{E}.3")), "{sent:?}");
 }
 
 /// Checks that a claimed board serving no head record sends nothing.

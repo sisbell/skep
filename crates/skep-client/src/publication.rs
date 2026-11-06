@@ -32,8 +32,9 @@
 //!    four-set reads; the filter's `in_claims` and `out_claims` per
 //!    candidate, a candidate dropped where an active claim of the person's
 //!    names a public successor homed in a published document of theirs
-//!    covering the published spans, or any other successor that is itself
-//!    a candidate; the candidates grouped by HOME.
+//!    covering the published spans — the candidate's ends read through the
+//!    records, as the request spells them — or any other successor that is
+//!    itself a candidate; the candidates grouped by HOME.
 //! 2. [`panel`](mod@panel) — THE PANEL's DATA (§5.2): the rows by home in the design's
 //!    order with each set's state and label, the links folded by type with
 //!    their far documents, the line counts, the formatting line by its test,

@@ -190,6 +190,63 @@ fn an_https_origin_puts_no_plaintext_request_on_the_wire() {
     assert!(got.first().is_none_or(|b| *b == 0x16), "not a TLS handshake record: {got:?}");
 }
 
+/// A TLS handshake that does not finish is a connection never made, in both
+/// forms of the dial: the handshake runs to its end before a byte of the
+/// request is written, so a peer that stalls it is `DialError::Connect` and
+/// one the TLS layer refuses — here a plain HTTP answer to the client's
+/// hello — is `DialError::Tls`, a write its caller holds held unsent either
+/// way (client.md §3c.2); nothing that reaches the peer is the request (the
+/// mutant that runs the handshake inside the request's first write names a
+/// stall a read's `Timeout` and a refusal `Io`, answers lost for a write
+/// that never left).
+#[cfg(feature = "tls")]
+#[test]
+fn a_tls_handshake_that_does_not_finish_is_a_connection_never_made() {
+    let refusal: &'static [u8] = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+    let token = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+    for (cell, answer) in [("stalled", None), ("refused", Some(refusal))] {
+        for form in ["exchange", "stream"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            // The peer reads the client's hello, answers it where the cell
+            // does, and keeps what arrives until the client hangs up.
+            let server = thread::spawn(move || {
+                let (mut s, _) = listener.accept().unwrap();
+                s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut got = vec![0u8; 16 * 1024];
+                let n = s.read(&mut got).unwrap_or(0);
+                got.truncate(n);
+                if let Some(answer) = answer {
+                    s.write_all(answer).unwrap();
+                }
+                let mut buf = [0u8; 4096];
+                while let Ok(n @ 1..) = s.read(&mut buf) {
+                    got.extend_from_slice(&buf[..n]);
+                }
+                got
+            });
+            let origin = Origin::parse(&format!("https://127.0.0.1:{port}")).unwrap();
+            let dialer = PlainHttp { io_timeout: Duration::from_millis(300), ..PlainHttp::new() };
+            let err = if form == "exchange" {
+                dialer.exchange(&origin, &Request::post("/op", b"{}".to_vec()).header("Skepd-Session", token)).unwrap_err()
+            } else {
+                let headers = vec![("Skepd-Session".to_string(), token.to_string())];
+                let head = RequestHead { method: Method::Get, path: "/events".into(), headers, content_length: None };
+                dialer.stream(&origin, &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err()
+            };
+            let got = server.join().unwrap();
+            match cell {
+                "stalled" => assert!(matches!(err, DialError::Connect(_)), "{cell} {form}: {err:?}"),
+                _ => assert!(matches!(err, DialError::Tls(_)), "{cell} {form}: {err:?}"),
+            }
+            assert!(
+                !got.windows(8).any(|w| w == b"HTTP/1.1") && !got.windows(13).any(|w| w == b"Skepd-Session"),
+                "{cell} {form}: plaintext on the wire: {got:?}"
+            );
+        }
+    }
+}
+
 /// A board that trickles its answer a byte at a time, each inside the
 /// per-call bound, is cut off at the exchange's DEADLINE: the dialer arms
 /// every read with the time left, and answers `Timeout` once it is spent —
@@ -287,6 +344,42 @@ fn a_streamed_head_that_waits_past_its_bound_is_a_timeout() {
     let err = dialer.stream(&origin, &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err();
     assert!(matches!(err, DialError::Timeout(_)), "{err}");
     server.join().unwrap();
+}
+
+/// A connection attempt past its bound is a connection never made,
+/// `DialError::Connect`, in both forms of the dial, as a refused one is: no
+/// byte of the request was written, so a caller holding a write holds it
+/// unsent (client.md §3c.2, §3c.4). The listener never accepts and the
+/// connect bound is a nanosecond, so a connect the kernel leaves in progress
+/// runs past it — every one on a clock that ticks in nanoseconds, a share of
+/// them on a coarser one; a connect that beats it is answered by no one and
+/// times out on its read, the phase after (the mutant that names a connect
+/// past its bound a timeout tells the shell an answer was lost for a write
+/// that never left this machine).
+#[test]
+fn a_connect_past_its_bound_is_a_connection_never_made() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+    let dialer = PlainHttp { connect_timeout: Duration::from_nanos(1), io_timeout: Duration::from_millis(50), ..PlainHttp::new() };
+    let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };
+    let mut past_the_bound = 0;
+    for n in 0..32 {
+        let err = if n % 2 == 0 {
+            dialer.exchange(&origin, &Request::post("/op", b"{}".to_vec())).unwrap_err()
+        } else {
+            dialer.stream(&origin, &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err()
+        };
+        let text = err.to_string();
+        if text.contains(": connect: ") {
+            assert!(text.contains("timed out"), "dial {n}: a connect that did not run past its bound: {err:?}");
+            assert!(matches!(err, DialError::Connect(_)), "dial {n}: a connect past its bound: {err:?}");
+            past_the_bound += 1;
+        } else {
+            assert!(matches!(err, DialError::Timeout(_)), "dial {n}: a connection made, unanswered: {err:?}");
+        }
+    }
+    assert!(past_the_bound > 0, "no dial's connect ran past its bound");
+    drop(listener);
 }
 
 /// The request target and the headers are written as given, so a line

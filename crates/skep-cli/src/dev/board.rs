@@ -209,8 +209,8 @@ impl Retries {
 ///
 /// It may have carried it to the board at every phase but the four that end
 /// before a byte of it is written — a scheme no transport holds, a host
-/// unresolved, a connection refused, a request this client refuses to
-/// write.
+/// unresolved, a connection never made (refused, past its bound, or its TLS
+/// handshake broken off), a request this client refuses to write.
 fn may_have_sent(d: &DialError) -> bool {
     !matches!(d, DialError::NotHeld(_) | DialError::Resolve(_) | DialError::Connect(_) | DialError::Request(_))
 }

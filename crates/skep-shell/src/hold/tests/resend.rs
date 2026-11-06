@@ -1694,6 +1694,35 @@ fn the_first_dials_lost_answer_starts_the_clock() {
     assert!(lines[0]["refusal"]["elapsed_ms"].as_u64().is_some_and(|ms| ms >= 121_000), "counted from the first dial: {lines:?}");
 }
 
+/// Checks that the first dial's connection never made starts no clock.
+///
+/// The person's own first dial is no failed send where its connection is
+/// never made — the board away, no request leaving (§3c.4): the burst is
+/// answered `held`, `unreachable`, `sent: false`. With the board away
+/// through three probes and the clock moved far past `HAND_OVER_DEADLINE`
+/// after each, the line holds, never handed over; the probe after the board
+/// answers sends it once and keeps it (the mutant that reads the first
+/// dial's connection never made as a failed send hands an outage's line to
+/// the person under `answers_lost`, undialed).
+#[test]
+fn the_first_dials_connection_never_made_starts_no_clock() {
+    let g = ground();
+    g.fake.op_unreachable.store(true, Ordering::SeqCst);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held, its connection never made") };
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str(), g.lines()[0]["sent"].as_bool()), (Some("held"), Some("unreachable"), Some(false)), "{held}");
+    for _ in 0..3 {
+        g.holds.probe("b-1");
+        g.holds.advance(HAND_OVER_DEADLINE * 10);
+    }
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines[0]["cause"].as_str()), (0, Some("unreachable")), "the board away: held, never handed over: {lines:?}");
+    g.fake.op_unreachable.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "the board answering, the line is sent once");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "kept, never refused");
+}
+
 /// Checks that "sent again" is said once per change of the failure.
 ///
 /// It is said as the failure changes (§3c.4; skep #720). A line held before any

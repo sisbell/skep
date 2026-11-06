@@ -35,6 +35,15 @@
 //! the declared size and its body, read by its caller, keeps that per-call
 //! bound alone.
 //!
+//! **A connection never made.** The connection stands before a byte of the
+//! request is written: the TCP connect, and for `https://` the TLS
+//! handshake over it, run to their end first. So a connect or a handshake
+//! that fails — refused, unreachable, broken off or past its bound — is
+//! [`DialError::Connect`], or [`DialError::Tls`] where the TLS layer
+//! refused the peer: nothing left, and a write its caller holds is held
+//! `sent: false` (`client.md` §3c.2, §3c.4). [`DialError::Timeout`] is a
+//! read or a write past its bound once the connection stands.
+//!
 //! The request target and the headers are written as given, so each is
 //! checked first for what would end the request line or a header early —
 //! refused as [`DialError::Request`] before any connection opens.
@@ -58,7 +67,9 @@ mod tests;
 /// The bound on each connection attempt.
 ///
 /// A dead local daemon answers `connection refused` at once; this bounds
-/// the pathological cases — an unroutable address, a filtered port.
+/// the pathological cases — an unroutable address, a filtered port. An
+/// attempt past it is a connection never made, [`DialError::Connect`], as a
+/// refused one is.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The per-call read/write bound for a frame.
@@ -232,20 +243,24 @@ pub enum DialError {
     NotHeld(String),
     /// The host did not resolve to an address.
     Resolve(String),
-    /// No address the host yields took the connection.
+    /// No connection was made, and no byte of the request was written.
     ///
-    /// Each attempt was refused or timed out, the last failing by other than
-    /// a timeout.
+    /// Each address the host yields refused the connection, was unreachable
+    /// or did not take it within [`CONNECT_TIMEOUT`]; or the TLS handshake
+    /// over it broke off or ran past its bound.
     Connect(String),
-    /// The last connection attempt, a read or a write ran past its bound.
+    /// A read or a write ran past its bound once the connection was made.
+    ///
+    /// It is the exchange run past its deadline too. A connection attempt
+    /// past its bound is [`DialError::Connect`].
     Timeout(String),
     /// The request could not be written or the response read.
     ///
     /// It covers a connection closed before its answer's head was whole —
     /// nothing sent, or a head that opened as a status line and was cut off
-    /// — the TLS handshake's and record layer's refusals, met mid-exchange,
-    /// and a socket whose timeout cannot be set. Its text quotes no byte of
-    /// the answer (SP-15).
+    /// — the TLS record layer's refusals once the handshake is done, and a
+    /// socket whose timeout cannot be set. Its text quotes no byte of the
+    /// answer (SP-15).
     Io(String),
     /// The bytes read were no HTTP response, or no answer the wire gives.
     ///
@@ -259,9 +274,11 @@ pub enum DialError {
     Truncated { declared: usize, got: usize },
     /// The answer ran past the cap and was read no further.
     TooLarge { cap: usize },
-    /// The TLS layer refused the server name or its configuration.
+    /// The TLS layer refused the server name, its configuration or the peer.
     ///
-    /// A handshake refused during the exchange is [`DialError::Io`].
+    /// The peer is refused in the handshake — an untrusted certificate, an
+    /// alert, bytes that are no TLS — which ends before a byte of the request
+    /// is written.
     Tls(String),
     /// The request was refused before any connection opened.
     ///
@@ -439,8 +456,8 @@ impl PlainHttp {
     /// # Errors
     ///
     /// [`DialError::Resolve`] where the host yields no address;
-    /// [`DialError::Timeout`] where the last attempt timed out and
-    /// [`DialError::Connect`] where it failed otherwise;
+    /// [`DialError::Connect`] where no address took the connection, the last
+    /// attempt refused, unreachable or past the connect bound;
     /// [`DialError::Io`] where a timeout cannot be set.
     ///
     /// # Panics
@@ -470,11 +487,7 @@ impl PlainHttp {
             Some(s) => s,
             None => {
                 let e = last.expect("at least one address was tried");
-                return Err(if e.kind() == io::ErrorKind::TimedOut {
-                    DialError::Timeout(Self::fail(origin, "connect", e))
-                } else {
-                    DialError::Connect(Self::fail(origin, "connect", e))
-                });
+                return Err(DialError::Connect(Self::fail(origin, "connect", e)));
             }
         };
         stream.set_read_timeout(Some(read_timeout)).map_err(|e| DialError::Io(Self::fail(origin, "socket", e)))?;
@@ -489,14 +502,17 @@ impl PlainHttp {
     /// Opens the connection to `origin`.
     ///
     /// It is plain TCP for `http://`; an `https://` origin is the `tls`
-    /// module's whole — TLS over TCP where the build holds the arm, refused
-    /// before any connection opens where it does not.
+    /// module's whole — TLS over TCP, its handshake run to its end, where the
+    /// build holds the arm, refused before any connection opens where it
+    /// does not.
     ///
     /// # Errors
     ///
     /// `tcp`'s errors; for an `https://` origin, [`DialError::NotHeld`]
-    /// where the build holds no TLS arm and [`DialError::Tls`] where the TLS
-    /// layer refuses the server name or its configuration.
+    /// where the build holds no TLS arm, [`DialError::Tls`] where the TLS
+    /// layer refuses the server name, its configuration or the peer, and
+    /// [`DialError::Connect`] where the handshake breaks off or runs past its
+    /// bound.
     fn connect(&self, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
         if origin.is_https() {
             return tls::connect(self, origin, read_timeout, budget);
@@ -841,6 +857,7 @@ mod tls {
     //! `ring`, named explicitly so the build's provider never depends on
     //! which features another crate turned on.
 
+    use std::io;
     use std::sync::{Arc, OnceLock};
     use std::time::Duration;
 
@@ -868,21 +885,58 @@ mod tls {
             .map_err(DialError::Tls)
     }
 
-    /// Opens the TCP connection to `origin` with rustls over it.
+    /// Opens the TCP connection to `origin` and runs the TLS handshake over it.
     ///
+    /// The handshake runs to its end here, before a byte of the request is
+    /// written, so one that does not finish is a connection never made.
     /// Every socket call the TLS layer makes is held to the connection's
     /// deadline, where one stands.
     ///
     /// # Errors
     ///
-    /// `tcp`'s errors, and [`DialError::Tls`] where the server name or the
-    /// TLS configuration is refused.
+    /// `tcp`'s errors; [`DialError::Tls`] where the server name or the TLS
+    /// configuration is refused; `handshake_fault`'s error where the
+    /// handshake does not finish, and [`DialError::Connect`] where rustls
+    /// answers that it can make no progress.
     pub(super) fn connect(dialer: &PlainHttp, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
-        let tcp = dialer.tcp(origin, read_timeout, budget)?;
+        let mut tcp = dialer.tcp(origin, read_timeout, budget)?;
         let name = ServerName::try_from(origin.dial_host().to_string())
             .map_err(|e| DialError::Tls(PlainHttp::fail(origin, "server name", e)))?;
-        let conn = ClientConnection::new(config()?, name).map_err(|e| DialError::Tls(PlainHttp::fail(origin, "tls", e)))?;
+        let mut conn = ClientConnection::new(config()?, name).map_err(|e| DialError::Tls(PlainHttp::fail(origin, "tls", e)))?;
+        // `complete_io` can answer mid-handshake — a read past its bound
+        // after earlier progress — so it is driven to the handshake's end; an
+        // answer of no progress at all ends the loop, which no socket call
+        // would bound.
+        while conn.is_handshaking() {
+            match conn.complete_io(&mut tcp) {
+                Ok((0, 0)) => {
+                    let stalled = PlainHttp::fail(origin, "tls handshake", "it made no progress");
+                    return Err(DialError::Connect(stalled));
+                }
+                Ok(_) => {}
+                Err(e) => return Err(handshake_fault(origin, e)),
+            }
+        }
         Ok(Box::new(StreamOwned::new(conn, tcp)))
+    }
+
+    /// Returns the fault of a TLS handshake that did not finish.
+    ///
+    /// No byte of the request was written, so it is a connection never made:
+    /// [`DialError::Tls`] where the TLS layer refused the peer (`InvalidData`
+    /// — an untrusted certificate, an alert, bytes that are no TLS), and
+    /// [`DialError::Connect`] where the peer stalled past the bound or broke
+    /// the connection off.
+    fn handshake_fault(origin: &Origin, e: io::Error) -> DialError {
+        match e.kind() {
+            io::ErrorKind::InvalidData => {
+                DialError::Tls(PlainHttp::fail(origin, "tls handshake", e))
+            }
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => {
+                DialError::Connect(PlainHttp::fail(origin, "tls handshake timed out", e))
+            }
+            _ => DialError::Connect(PlainHttp::fail(origin, "tls handshake", e)),
+        }
     }
 }
 

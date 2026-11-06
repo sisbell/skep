@@ -36,18 +36,26 @@
 //! its home is a PRIVATE one of the person's (the read-through is
 //! private-only: a public link there is the carriage v1 does not make) and
 //! mapped back to the records whose `from` it overlaps; (6) `claims` — THE
-//! FILTER: one `in_claims` and one `out_claims`, both `view: "active"`, per
-//! candidate; a candidate DROPPED where an active claim of the person's —
-//! homed in a home whose account is theirs, off the claim's address — names
-//! a public successor homed in a published document of theirs, off the
-//! caller's own list and no read, COVERING every position of the candidate
-//! this publication publishes, read off one `read_link` of the successor
-//! (keys (i) and (iii); no liveness key — sweep 5 S1); and where an
-//! `out_claims` row of the person's names an `old` — the candidate a
-//! successor — that original's `in_claims`, the candidate dropped as REVISED
-//! where an accept's claim of the person's names a public copy, wherever
-//! the original's ends lie (W17). The candidates are grouped BY HOME in the
-//! order their homes first answered.
+//! FILTER, run once every candidate is known: one `in_claims` and one
+//! `out_claims`, both `view: "active"`, per candidate; a candidate DROPPED
+//! where an active claim of the person's — homed in a home whose account is
+//! theirs, off the claim's address — names, as its `new`, a successor that
+//! drops it by one of two arms. A public successor, homed in a published
+//! document of theirs off the caller's own list and no read, drops it where
+//! it COVERS every position of the candidate this publication publishes,
+//! read off one `read_link` of the successor (keys (i) and (iii); no
+//! liveness key — sweep 5 S1), so a copy an earlier selection cut leaves its
+//! original offered, to be re-made over the whole run (W4). Any other
+//! successor drops it where it is itself a candidate of this enumeration,
+//! dropped or offered — a retype or an end move made in the draft before
+//! the shot (B3-S12), a move into another set of theirs (§2) — read off the
+//! candidates' own addresses and no read (proposal 23): one since retracted
+//! is no candidate, nor is one touching nothing selected, and its original
+//! is offered. And where an `out_claims` row of the person's names an `old`
+//! — the candidate a successor — that original's `in_claims`, the candidate
+//! dropped as REVISED where an accept's claim of the person's names a
+//! public copy, wherever the original's ends lie (W17). The candidates are
+//! grouped BY HOME in the order their homes first answered.
 //!
 //! What it does not read: other people's links, left out by the owned-homes
 //! rule and no refusal; links of the person's touching no span of the
@@ -149,8 +157,10 @@ pub enum Via {
     ReadThrough(Vec<Address>),
 }
 
-/// One successor an active claim of the person's names, with the two keys
-/// read for it.
+/// One successor an active claim of the person's names, with its keys.
+///
+/// Keys (i) and (iii) judge a public successor; whether it is a candidate
+/// judges any other (§5.1, proposal 23).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Successor {
     /// The claim.
@@ -163,12 +173,26 @@ pub struct Successor {
     /// (iii) `new`'s ends cover every position of the candidate this
     /// publication publishes.
     pub covers: bool,
+    /// Whether `new` is another candidate of this enumeration.
+    ///
+    /// Read off the candidates' own addresses, dropped ones among them, and
+    /// no read (proposal 23).
+    pub candidate: bool,
 }
 
 impl Successor {
-    /// Whether this successor drops its original from the list: both keys.
+    /// Returns whether this successor drops its original from the list.
+    ///
+    /// A public successor drops it where it covers, keys (i) and (iii), so a
+    /// copy an earlier selection cut drops nothing (W4); any other drops it
+    /// where it is a candidate — the retype, end move or move the person
+    /// made in the draft before the shot (§5.1, proposal 23; B3-S12).
     pub fn drops(&self) -> bool {
-        self.published_home && self.covers
+        if self.published_home {
+            self.covers
+        } else {
+            self.candidate
+        }
     }
 }
 
@@ -505,6 +529,9 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
     }
 
     door.step("claims");
+    // Candidacy reads every candidate, dropped ones included, so an original
+    // still drops where a covering copy has superseded its successor in turn.
+    let held: BTreeSet<Address> = candidates.iter().map(|c| c.link.clone()).collect();
     for c in &mut candidates {
         let link = c.link.to_string();
         let on = on_selection(&c.end_spans(), &inputs.selection);
@@ -516,7 +543,8 @@ pub(crate) fn enumerate_with(door: &Door<'_>, p: &Publisher<'_>, inputs: &Inputs
                 Some(value) => !on.is_empty() && covered(&on, &value.from.iter().chain(&value.to).filter_map(ISpan::of).collect::<Vec<_>>()),
                 None => false,
             };
-            c.successors.push(Successor { claim, new, published_home, covers });
+            let candidate = held.contains(&new);
+            c.successors.push(Successor { claim, new, published_home, covers, candidate });
         }
         let outs = answers::claims(&door.answered(&link, &frames::out_claims(&link))?);
         for row in outs.iter().filter(|r| r.active && owned_by(&r.home, p.account)) {

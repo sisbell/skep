@@ -499,6 +499,49 @@ fn the_composition_enumerates_as_the_daemon_filters_and_its_one_request_lands() 
     session.close().expect("close");
 }
 
+/// Checks against the daemon that a retype stands in its original's place.
+///
+/// The note `l1_n` retyped to `mark` by `edit_link` (proposal 23; B3-S12) —
+/// its successor homed in the notes beside it, the original left standing,
+/// the claim in the notes — is offered in its original's place, the notes'
+/// group the successor alone; the successor retracted at its home, the
+/// original is offered again, the claim still active and its `new` no
+/// candidate.
+#[test]
+fn a_link_retyped_before_the_shot_is_offered_in_its_originals_place_until_the_retype_is_retracted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session).expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+    let seeded = seed(&board, &session, &device, &bare_token, &dir.path().join("anchors"));
+    let Seeded { e, e1, n, l1_n, .. } = &seeded;
+    let edit = json!({"op": "edit_link", "d_s": n, "d_a": n, "original": l1_n, "successor": {"from": spec(e1, 5, 5, e, 5).wire(), "to": spec(n, 1, 5, n, 1).wire(), "ty": {"addrs": [T_MARK]}}});
+    let Answer::Document(edited) = board.op(Some(&bare_token), &edit).expect("the edit") else { panic!("closed") };
+    assert_eq!(edited["resp"].as_str(), Some("ack_edit"), "{edited}");
+    let retyped = edited["successor"].as_str().expect("the successor").to_string();
+    let p = Publisher { board: &board, token: &token, account: ACCOUNT, signer: &device };
+    let inputs = inputs(&seeded);
+    let in_notes = |en: &publication::Enumeration| -> Vec<String> {
+        en.offered_by_home().into_iter().filter(|(h, _)| h.to_string() == *n).flat_map(|(_, links)| links.iter().map(ToString::to_string).collect::<Vec<_>>()).collect()
+    };
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    assert_eq!(in_notes(&en), vec![retyped.clone()], "the retype offered, its original not");
+    // The retype retracted at its home: the claim stands, its `new` no
+    // candidate, and the original is offered again.
+    acked(board.op(Some(&bare_token), &json!({"op": "nullify", "home": n, "target": retyped})));
+    let en = enumerate(&p, &inputs).expect("enumerated");
+    assert_eq!(in_notes(&en), vec![l1_n.clone()], "the original offered again");
+    let original = en.candidates.iter().find(|c| c.link.to_string() == *l1_n).expect("the original a candidate");
+    assert_eq!(original.successors.iter().map(|s| (s.new.to_string(), s.candidate)).collect::<Vec<_>>(), vec![(retyped, false)], "the claim read active, naming a successor no longer a candidate");
+    session.close().expect("close");
+}
+
 /// A MOVED PLACE: a second draft whose words are swapped after the request
 /// was built is refused `kept_place_moved` naming the entry, with the race's
 /// key off the feed; the re-read then re-states the selection's new places

@@ -61,6 +61,7 @@ const Z: &str = "1.0.1.0.8";
 const SUB: &str = "1.0.1.2.0.1";
 const OTHER: &str = "1.0.2.0.1";
 const T_STRONG: &str = "1.1.0.1.0.1.0.3.23.2";
+const T_EMPHASIS: &str = "1.1.0.1.0.1.0.3.23.1";
 const T_HEADING: &str = "1.1.0.1.0.1.0.3.20";
 const T_MARK: &str = "1.1.0.1.0.1.0.3.23.4";
 const T_CITATION: &str = "1.1.0.1.0.1.0.3.13";
@@ -1077,6 +1078,25 @@ fn links_of(e: &Enumeration, indices: &[usize]) -> Vec<String> {
     indices.iter().map(|i| e.candidates[*i].link.to_string()).collect()
 }
 
+/// Returns the candidate at `link`.
+///
+/// # Panics
+///
+/// Where `link` is no candidate of `e`.
+fn candidate_at<'e>(e: &'e Enumeration, link: &str) -> &'e Candidate {
+    e.candidates.iter().find(|c| c.link.to_string() == link).unwrap_or_else(|| panic!("{link} is no candidate"))
+}
+
+/// Returns the keys read for `c`'s one successor: (i), (iii) and candidacy.
+///
+/// # Panics
+///
+/// Where `c` has no successor, or more than one.
+fn keys_of(c: &Candidate) -> (bool, bool, bool) {
+    let [s] = c.successors.as_slice() else { panic!("{}: {} successors, not one", c.link, c.successors.len()) };
+    (s.published_home, s.covers, s.candidate)
+}
+
 /// The switches: the draft's own set and the notes ON, the notes into
 /// `dest` where one is named.
 fn switched(dest: Option<&str>) -> Confirmed {
@@ -1142,7 +1162,7 @@ fn the_enumeration_reads_in_order_and_keeps_the_owned_homes_links_on_the_words()
     }
     let acc = e.candidates.iter().find(|c| c.link.to_string() == named.l_acc).expect("the accepted original is a candidate");
     assert_eq!(acc.successors.len(), 1);
-    assert_eq!((acc.successors[0].new.to_string(), acc.successors[0].published_home, acc.successors[0].covers), (named.copy.clone(), true, true));
+    assert_eq!((acc.successors[0].new.to_string(), keys_of(acc)), (named.copy.clone(), (true, true, false)), "the copy at `E.1` is no candidate");
     assert!(!acc.offered(), "dropped on both keys");
     let rev = e.candidates.iter().find(|c| c.link.to_string() == named.l_rev).expect("the revision is a candidate");
     assert!(rev.revised && !rev.offered(), "the revision of a published original is not offered");
@@ -1161,23 +1181,27 @@ fn the_enumeration_reads_in_order_and_keeps_the_owned_homes_links_on_the_words()
     assert_eq!(dialer.frames("out_claims").len(), e.candidates.len());
 }
 
-/// THE FILTER's keys, one at a time: a successor homed in a PRIVATE document
-/// of the person's fails (i) and the original is offered; one whose ends do
-/// not cover the published spans fails (iii) and the original is offered; a
-/// claim of ANOTHER's naming a public copy drops nothing.
+/// Checks THE FILTER's public arm one key at a time.
+///
+/// A successor homed in a PRIVATE document of the person's fails (i) and,
+/// retracted since, is no candidate, though its value is still read and
+/// covers, so the original is offered; one whose ends do not cover the
+/// published spans fails (iii) and the original is offered; a claim of
+/// ANOTHER's naming a public copy drops nothing.
 #[test]
 fn the_filter_drops_only_on_both_keys_of_the_persons_own_claim() {
     let (mut world, named) = World::base();
-    // (i) fails: the copy homed in the private N.
+    // (i) fails: the copy homed in the private N, retracted since.
     let private_copy = world.typed(N, vec![ispan(E, 10, 5)], vec![ispan(N, 1, 5)], T_CITATION);
+    world.retract(N, &private_copy);
     let claim = world.links.iter().position(|l| l.addr == named.claim_acc).unwrap();
     world.links[claim].to = vec![unit(&private_copy)];
     let (_, board, signer) = open(world);
     let tok = token();
     let p = publisher(&board, &tok, &signer);
     let e = enumerate(&p, &inputs()).unwrap();
-    let acc = e.candidates.iter().find(|c| c.link.to_string() == named.l_acc).unwrap();
-    assert_eq!((acc.successors[0].published_home, acc.successors[0].covers, acc.offered()), (false, true, true));
+    let acc = candidate_at(&e, &named.l_acc);
+    assert_eq!((keys_of(acc), acc.offered()), ((false, true, false), true));
 
     // (iii) fails: the copy covers other words.
     let (mut world, named) = World::base();
@@ -1186,8 +1210,8 @@ fn the_filter_drops_only_on_both_keys_of_the_persons_own_claim() {
     let (_, board, signer) = open(world);
     let p = publisher(&board, &tok, &signer);
     let e = enumerate(&p, &inputs()).unwrap();
-    let acc = e.candidates.iter().find(|c| c.link.to_string() == named.l_acc).unwrap();
-    assert_eq!((acc.successors[0].published_home, acc.successors[0].covers, acc.offered()), (true, false, true));
+    let acc = candidate_at(&e, &named.l_acc);
+    assert_eq!((keys_of(acc), acc.offered()), ((true, false, false), true));
 
     // Another's claim: homed in a sub-account's document, not the person's.
     let (mut world, named) = World::base();
@@ -1200,6 +1224,164 @@ fn the_filter_drops_only_on_both_keys_of_the_persons_own_claim() {
     let e = enumerate(&p, &inputs()).unwrap();
     let acc = e.candidates.iter().find(|c| c.link.to_string() == named.l_acc).unwrap();
     assert!(acc.successors.is_empty() && acc.offered(), "another's claim is never read as the person's");
+}
+
+/// Checks that a retype is offered in its original's place until retracted.
+///
+/// THE FILTER's other arm (proposal 23) at a retype made in the draft
+/// before the shot (B3-S12): the successor, the same ends typed `mark`
+/// beside its original in the notes, is a candidate, so the original is not
+/// offered and the successor stands in the notes' row in its place; the
+/// successor retracted, it is no candidate, and the original is offered
+/// again.
+#[test]
+fn a_retyped_link_is_offered_in_its_originals_place_until_the_retype_is_retracted() {
+    let (mut world, named) = World::base();
+    let retyped = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(N, 1, 5)], T_MARK);
+    world.claim(N, &named.l1_n, &retyped);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    assert_eq!(keys_of(candidate_at(&e, &named.l1_n)), (false, true, true), "private, covering, a candidate");
+    let offered = links_of(&e, &e.offered());
+    assert!(offered.contains(&retyped) && !offered.contains(&named.l1_n), "the retype offered, not its original: {offered:?}");
+    let pn = panel(&p, &inputs(), &e).unwrap();
+    assert_eq!((pn.rows[1].home.to_string(), links_of(&e, &pn.rows[1].links)), (N.to_string(), vec![retyped.clone(), named.l_rt.clone()]), "the notes' row: the retype in its original's place");
+    dialer.world().retract(N, &retyped);
+    let e = enumerate(&p, &inputs()).unwrap();
+    assert!(!e.candidates.iter().any(|c| c.link.to_string() == retyped), "a retracted successor is no candidate");
+    let l1_n = candidate_at(&e, &named.l1_n);
+    assert_eq!((keys_of(l1_n), l1_n.offered()), ((false, true, false), true), "offered again");
+}
+
+/// Checks that a link moved into another set leaves its row for the new one.
+///
+/// The note moved into the person's private `Z` (§2) leaves the notes' row,
+/// and its successor stands in `Z`'s.
+#[test]
+fn a_link_moved_into_another_set_leaves_its_old_row_for_its_new_one() {
+    let (mut world, named) = World::base();
+    let moved = world.typed(Z, vec![ispan(E, 5, 5)], vec![ispan(N, 1, 5)], T_CITATION);
+    world.claim(N, &named.l1_n, &moved);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    assert_eq!(keys_of(candidate_at(&e, &named.l1_n)), (false, true, true));
+    let pn = panel(&p, &inputs(), &e).unwrap();
+    let row = |home: &str| pn.rows.iter().find(|r| r.home.to_string() == home).unwrap_or_else(|| panic!("no row for {home}"));
+    assert_eq!(links_of(&e, &row(N).links), vec![named.l_rt.clone()], "the original gone from its home's row");
+    assert_eq!((row(Z).kind.clone(), links_of(&e, &row(Z).links)), (RowKind::Private, vec![moved]), "the successor in its new home's");
+}
+
+/// Checks that an end moved before the shot drops the original.
+///
+/// Widened over the original's words, or moved off part of them (B3-S12),
+/// the successor is offered and the original is not: coverage is no key of
+/// this arm.
+#[test]
+fn an_end_moved_before_the_shot_drops_the_original_whether_or_not_its_successor_covers() {
+    let tok = token();
+    for (what, from, covers) in [("widened", ispan(D, 4, 7), true), ("moved off part of its words", ispan(D, 4, 5), false)] {
+        let (mut world, named) = World::base();
+        let moved = world.typed(D, vec![from], vec![ispan(Z, 1, 3)], T_CITATION);
+        world.claim(D, &named.cite_d, &moved);
+        let (_, board, signer) = open(world);
+        let p = publisher(&board, &tok, &signer);
+        let e = enumerate(&p, &inputs()).unwrap();
+        assert_eq!(keys_of(candidate_at(&e, &named.cite_d)), (false, covers, true), "{what}");
+        let offered = links_of(&e, &e.offered());
+        assert!(offered.contains(&moved) && !offered.contains(&named.cite_d), "{what}: the successor offered, not its original: {offered:?}");
+    }
+}
+
+/// Checks that a selection reaching only the original's words offers it.
+///
+/// The selection holds the original's words, `E`'s 5..9, and not its
+/// successor's, moved onto `E`'s 15..17: the successor touches nothing
+/// selected and is no candidate, and the original is offered.
+#[test]
+fn a_selection_reaching_only_the_originals_words_offers_the_original() {
+    let (mut world, named) = World::base();
+    let moved = world.typed(N, vec![ispan(E, 15, 3)], vec![ispan(N, 1, 5)], T_CITATION);
+    world.claim(N, &named.l1_n, &moved);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &Inputs { selection: vec![run(E, 5, 5)], ..inputs() }).unwrap();
+    assert!(!e.candidates.iter().any(|c| c.link.to_string() == moved), "the successor touches nothing selected");
+    let l1_n = candidate_at(&e, &named.l1_n);
+    assert_eq!((keys_of(l1_n), l1_n.offered()), ((false, false, false), true), "the original offered");
+}
+
+/// Checks that an original drops where its successor was dropped in turn.
+///
+/// A successor a covering copy has superseded — the retype accepted at
+/// `E.1` — is still a candidate, dropped itself by the public arm, and so
+/// drops its own original by the other: neither is offered.
+#[test]
+fn an_original_drops_where_its_successor_is_a_candidate_dropped_in_turn() {
+    let (mut world, named) = World::base();
+    let retyped = world.typed(N, vec![ispan(E, 5, 5)], vec![ispan(N, 1, 5)], T_MARK);
+    world.claim(N, &named.l1_n, &retyped);
+    let copy = world.typed(&format!("{E}.1"), vec![ispan(E, 5, 5)], vec![ispan(N, 1, 5)], T_MARK);
+    world.claim(N, &retyped, &copy);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let e = enumerate(&p, &inputs()).unwrap();
+    let successor = candidate_at(&e, &retyped);
+    assert_eq!((keys_of(successor), successor.offered()), ((true, true, false), false), "the retype dropped by its covering copy");
+    let original = candidate_at(&e, &named.l1_n);
+    assert_eq!((keys_of(original), original.offered()), ((false, true, true), false), "the original dropped by its successor's candidacy");
+}
+
+/// Checks that a cut copy in a public set leaves its original offered.
+///
+/// An original on an earlier shot's words and on new words beside them, its
+/// copy in the public set `S` cut at the earlier selection — over `E`'s
+/// words the record names — is offered again at the shot that publishes the
+/// rest (W4): the copy touches the selection and is a candidate, but a
+/// public successor drops its original only where it covers.
+#[test]
+fn a_cut_copy_in_a_public_set_is_a_candidate_and_leaves_its_original_offered() {
+    let (mut world, _) = World::base();
+    // D's words 24..27, new beside the record's 20..23, which `E`'s 16..19
+    // published.
+    world.text(D, 24, "more");
+    world.docs.get_mut(D).unwrap().runs.push(run(D, 24, 4));
+    let original = world.typed(N, vec![ispan(D, 20, 8)], vec![ispan(N, 1, 2)], T_CITATION);
+    let cut = world.typed(S, vec![ispan(E, 16, 4)], vec![ispan(N, 1, 2)], T_CITATION);
+    world.claim(N, &original, &cut);
+    let (_, board, signer) = open(world);
+    let tok = token();
+    let p = publisher(&board, &tok, &signer);
+    let rest = Inputs { selection: vec![run(E, 1, 19), run(D, 1, 10), run(O, 1, 5), run(D, 24, 4)], ..inputs() };
+    let e = enumerate(&p, &rest).unwrap();
+    let in_s: Vec<String> = e.homes.iter().filter(|(h, _)| h.to_string() == S).flat_map(|(_, indices)| links_of(&e, indices)).collect();
+    assert!(in_s.contains(&cut), "the cut copy a candidate in S: {in_s:?}");
+    let original = candidate_at(&e, &original);
+    assert_eq!((keys_of(original), original.offered()), ((true, false, true), true), "public and cut: offered, though its copy is a candidate");
+}
+
+/// Checks that the formatting line takes a retype in its original's place.
+///
+/// A bold of the draft's own set retyped to emphasis before the shot stands
+/// on the line in its original's place, and the one request carries one
+/// entry for those words, the retype's: the line has no switch, so an
+/// original left on it would be published beside its retype unasked.
+#[test]
+fn the_formatting_line_takes_a_retyped_mark_in_place_of_its_original() {
+    let (mut world, named) = World::base();
+    let retyped = world.typed(D, vec![], vec![ispan(D, 2, 3)], T_EMPHASIS);
+    world.claim(D, &named.mark_d, &retyped);
+    let (dialer, board, signer) = open(world);
+    let tok = token();
+    let (e, pn, request) = built(&dialer, &board, &tok, &signer, &switched(None));
+    assert_eq!(links_of(&e, &pn.formatting.marks), [named.heading_d.clone(), named.mark_d2.clone(), retyped.clone()], "the retype on the line, its original not");
+    let on_the_words: Vec<String> = request.entries.iter().filter(|en| en.to == End::Member(vec![(21, 3)])).map(|en| e.candidates[en.candidate].link.to_string()).collect();
+    assert_eq!(on_the_words, [retyped], "one entry for the retyped words: the retype's");
 }
 
 /// A `scan_busy` on the region read is reissued under a short backoff and

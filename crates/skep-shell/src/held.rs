@@ -10,11 +10,12 @@
 //! two forms and no third — a `held` line (a burst the board could not
 //! take) and a `done` line (its resolution) — where a `held` line of an
 //! ordinal that already stands re-marks it: the reader takes it in the
-//! earlier line's place. Each line is one `write` followed by `sync_data`
-//! before `op` answers `held` — persist-first: the answer is a promise the
-//! disk already keeps. A reader ignores a final line without `\n` within
-//! [`MAX_HELD_LINE_BYTES`] (a torn last line is the burst a crash caught
-//! mid-append, R14's one).
+//! earlier line's place. Each line is written with its `\n` in one `write`,
+//! with every copy owed before it where the file owes some (the retry,
+//! below), and synced by `sync_data` before `op` answers `held` —
+//! persist-first: the answer is a promise the disk already keeps. A reader
+//! ignores a final line without `\n` within [`MAX_HELD_LINE_BYTES`] (a torn
+//! last line is the burst a crash caught mid-append, R14's one).
 //!
 //! **A torn line is only ever the tail.** Every line is written where the
 //! file's last whole line ends (`file::Appender`, trusting the count the
@@ -61,35 +62,42 @@
 //! positions the shell last sent, never the page's.
 //!
 //! **A refused copy waits, and every copy after it** (§3c.3; skep #813,
-//! #821). The file owes the queue each line's first copy and, for a line on
-//! disk, one copy of the changes made to it since — a re-mark, a raise or a
-//! shift ([`HeldQueue::remark`], [`HeldQueue::remark_raised`],
+//! #821, #822). The file owes the queue each line's first copy and, for a
+//! line on disk, one copy of the changes made to it since — a re-mark, a
+//! raise or a shift ([`HeldQueue::remark`], [`HeldQueue::remark_raised`],
 //! [`HeldQueue::rewrite`]) — or its `done` once it leaves the queue
-//! ([`HeldQueue::done`]). A copy the device refuses — its write cut short or
-//! its sync refused, its bytes then cut back off the file — is OWED: kept in
-//! memory, its refusal answered ([`Waiting`]), and written by the retry
-//! ([`HeldQueue::retry`]), which makes every copy the queue makes — a hold's,
-//! a re-mark's, a shift's, a `done`'s and a join's — and which the shell runs
-//! at every probe of the board, whatever the board's state, so space freed
-//! while no one types is enough. The retry writes the copies owed the lines
-//! on disk, then the first copies, each in `k` order, and stops at the first
-//! one refused again, every copy after it waiting on: so no copy of a line
-//! is written while a copy owed a line before it waits, the file never holds
-//! a line without every line standing before it, and a reopen never resends
-//! a burst ahead of the one it was composed after. A line on disk owes one
-//! copy at most, written in its state then: a change made while it is owed
-//! rides it, and its `done` takes the place of a re-mark owed before it, so
-//! no re-mark is written after its line's `done`, where the reader would take
-//! it for a new line. A line waiting for its first copy owes nothing more — a
-//! re-mark or a shift made while it waits is carried in its first copy,
-//! spending none of the re-mark budget, as the reader counts a line's first
-//! copy — and, leaving the queue, writes no `done`, nothing of it standing on
-//! disk. A re-mark or a shift the WRITER refuses before any I/O — past the
-//! file's [`MAX_HELD_REMARK_BYTES`], or its line past [`MAX_HELD_LINE_BYTES`]
-//! — is owed never, the file keeping the line's copy before it; a first copy
-//! the writer refuses waits as one the device refused does, until its line
-//! leaves. A join meeting a copy owed enters nothing. A close loses every copy
-//! still owed: a relaunch reads each line as the file last held it.
+//! ([`HeldQueue::done`]). Every such copy is written by the retry
+//! ([`HeldQueue::retry`]), which the queue runs before each copy it makes,
+//! a join's lines among them, and the shell at every probe of the board,
+//! whatever the board's state, so space freed while no one types is enough.
+//! The retry writes the copies owed the lines on disk, then the first
+//! copies, each in `k` order, as ONE copy — one `write`, then one
+//! `sync_data`, the header its own copy before them where the file is new —
+//! so a retry the device takes costs one sync whatever the queue holds;
+//! only where the device refuses that copy does it write them one by one,
+//! in the same order, so a device with room for some takes each that fits.
+//! A copy the device refuses — its write cut short or its sync refused, its
+//! bytes then cut back off the file — is OWED: kept in memory, its refusal
+//! answered ([`Waiting`]), and written by a later retry; the retry stops at
+//! the first copy the device refuses when written alone, every copy after it
+//! waiting on: so no copy of a line is written while a copy owed a line
+//! before it waits, the file never holds a line without every line standing
+//! before it, and a reopen never resends a burst ahead of the one it was
+//! composed after. A line on disk owes one copy at most, written in its
+//! state then: a change made while it is owed rides it, and its `done` takes
+//! the place of a re-mark owed before it, so no re-mark is written after its
+//! line's `done`, where the reader would take it for a new line. A line
+//! waiting for its first copy owes nothing more — a re-mark or a shift made
+//! while it waits is carried in its first copy, spending none of the re-mark
+//! budget, as the reader counts a line's first copy — and, leaving the
+//! queue, writes no `done`, nothing of it standing on disk. A re-mark or a
+//! shift the WRITER refuses before any I/O — past the file's
+//! [`MAX_HELD_REMARK_BYTES`], or its line past [`MAX_HELD_LINE_BYTES`] — is
+//! owed never, the file keeping the line's copy before it; a first copy the
+//! writer refuses waits as one the device refused does, until its line
+//! leaves, the copies before it written. A join meeting a copy owed enters
+//! nothing. A close loses every copy still owed: a relaunch reads each line
+//! as the file last held it.
 //!
 //! **The pending directory** (§3c.1; skep #725). A board whose head record
 //! stands and cannot be read, or a claimed board serving none — the shell's
@@ -1340,6 +1348,25 @@ impl Due {
     }
 }
 
+/// One copy the retry writes ([`HeldQueue::retry`]).
+///
+/// It is the ordinal of the line it is owed, which of the line's copies it
+/// is, and its exact bytes — one line and its `\n` — so a refusal of it
+/// waits under the copy it names.
+#[derive(Debug)]
+struct OwedCopy {
+    k: u64,
+    owed: Owed,
+    bytes: Vec<u8>,
+}
+
+impl OwedCopy {
+    /// Returns the wait a refusal of this copy leaves, from this copy on.
+    fn refused(&self, error: io::Error) -> Waiting {
+        Waiting { first: self.k, owed: self.owed, error }
+    }
+}
+
 /// Why a line was not held, and is kept nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unheld {
@@ -1423,11 +1450,11 @@ impl HeldQueue {
 
     /// Holds a line: enters it in the queue under the next ordinal.
     ///
-    /// Where the queue has a file, the line is copied to it — one `write`
-    /// then `sync_data` (persist-first), the header written once first where
-    /// the file is new — by the retry, behind every copy the file still owes,
-    /// which it writes first, in `k` order ([`HeldQueue::retry`]); a copy
-    /// refused, its own or one before it, leaves the line waiting for its
+    /// Where the queue has a file, the line is copied to it by the retry,
+    /// behind every copy the file still owes, in `k` order — the copies and
+    /// the line one `write` then one `sync_data` (persist-first), the header
+    /// written once first where the file is new ([`HeldQueue::retry`]); a
+    /// copy refused, its own or one before it, leaves the line waiting for its
     /// first copy. `anchors` are the page's, kept with the line for the shift
     /// (skep #442), none where the burst carried none; their bytes spend the
     /// queue's budget beside the frame's. It answers the ordinal the line took
@@ -1486,16 +1513,22 @@ impl HeldQueue {
         self.disk.as_ref()?.owing.as_ref()?.stopped.as_ref()
     }
 
-    /// Writes the copies the file owes, in `k` order (§3c.3; skep #813, #821).
+    /// Writes the copies the file owes, in `k` order, as one copy.
     ///
-    /// It is the retry, which makes every copy the queue makes: first the
-    /// copies owed the lines on disk, each line's state now or its `done`,
-    /// then the first copies of the lines that wait, each made whole in its
-    /// state now — one `write` then `sync_data` each, as a hold's copy is,
-    /// spending none of the re-mark budget, which a re-mark spent as it was
-    /// first tried. The first copy refused again stops it, by the device or
-    /// by the writer — a first copy past [`MAX_HELD_LINE_BYTES`], or a line
-    /// owed a re-mark that a raise of its base has carried past it since — and
+    /// It is the retry (§3c.3; skep #813, #821, #822), which makes every copy
+    /// the queue makes but a join's lines: first the copies owed the lines on
+    /// disk, each line's state now or its `done`, then the first copies of
+    /// the lines that wait, each made whole in its state now, spending none
+    /// of the re-mark budget, which a re-mark spent as it was first tried.
+    /// They are ONE copy — every line of them in one `write`, then one
+    /// `sync_data`, the header its own copy before them where the file is new
+    /// ([`Disk::write_copies`]) — so a retry the device takes costs one sync
+    /// whatever the queue holds; only where the device refuses that copy are
+    /// they copied one by one, in the same order, so a device with room for
+    /// some takes each that fits. The first copy refused stops it — by the
+    /// writer, a first copy past [`MAX_HELD_LINE_BYTES`] or a line owed a
+    /// re-mark that a raise of its base has carried past it since, the copies
+    /// before it written all the same; or by the device, written alone — and
     /// every copy from that one on waits under its refusal ([`Waiting`]); a
     /// `done` that lands gives its line's bytes back to the queue's budget.
     /// It runs before every copy the queue makes, and the shell runs it at
@@ -1504,35 +1537,45 @@ impl HeldQueue {
     pub fn retry(&mut self) {
         let Some(disk) = self.disk.as_mut() else { return };
         let Some(mut owing) = disk.owing.take() else { return };
-        while let Some((&k, &due)) = owing.owed.first_key_value() {
-            let copied = match due {
-                Due::Mark => match self.lines.binary_search_by_key(&k, |l| l.k) {
-                    Ok(index) => disk.write_line(&held_line_bytes(&self.lines[index])),
-                    // A line no longer standing owes no copy of its state.
-                    Err(_) => Ok(()),
-                },
-                Due::Done { done, .. } => disk.write_line(&done_line_bytes(k, done)),
+        // The copies in the order they are written, up to the first the
+        // writer refuses, which stops the retry there.
+        let on_disk = owing.owed.iter().filter_map(|(&k, &due)| {
+            let bytes = match due {
+                // A line no longer standing owes no copy of its state.
+                Due::Mark => held_line_bytes(&self.lines[self.lines.binary_search_by_key(&k, |l| l.k).ok()?]),
+                Due::Done { done, .. } => done_line_bytes(k, done),
             };
-            if let Err(error) = copied {
-                owing.stopped = Some(Waiting { first: k, owed: due.owed(), error });
-                disk.owing = Some(owing);
-                return;
+            Some(OwedCopy { k, owed: due.owed(), bytes })
+        });
+        let start = owing.waits_from.map_or(self.lines.len(), |from| self.lines.partition_point(|l| l.k < from));
+        let first = self.lines[start..].iter().map(|line| OwedCopy { k: line.k, owed: Owed::Line, bytes: held_line_bytes(line) });
+        let mut copies = Vec::new();
+        let mut stop = None;
+        for copy in on_disk.chain(first) {
+            if let Some(refused) = past_the_line_bound(&copy.bytes) {
+                stop = Some(copy.refused(refused));
+                break;
             }
-            owing.owed.remove(&k);
-            if let Due::Done { bytes, .. } = due {
+            copies.push(copy);
+        }
+        let landed = match disk.write_copies(&copies) {
+            Ok(()) => copies.len(),
+            Err((n, error)) => {
+                stop = Some(copies[n].refused(error));
+                n
+            }
+        };
+        for copy in copies[..landed].iter().filter(|copy| copy.owed != Owed::Line) {
+            if let Some(Due::Done { bytes, .. }) = owing.owed.remove(&copy.k) {
                 self.held_bytes = self.held_bytes.saturating_sub(bytes);
             }
         }
-        if let Some(from) = owing.waits_from {
-            let start = self.lines.partition_point(|l| l.k < from);
-            for line in &self.lines[start..] {
-                if let Err(error) = disk.write_line(&held_line_bytes(line)) {
-                    owing.waits_from = Some(line.k);
-                    owing.stopped = Some(Waiting { first: line.k, owed: Owed::Line, error });
-                    disk.owing = Some(owing);
-                    return;
-                }
+        if let Some(waiting) = stop {
+            if waiting.owed == Owed::Line {
+                owing.waits_from = Some(waiting.first);
             }
+            owing.stopped = Some(waiting);
+            disk.owing = Some(owing);
         }
     }
 
@@ -1926,6 +1969,41 @@ impl Disk {
         self.append(bytes)
     }
 
+    /// Writes the retry's copies in order: one copy, or one by one if refused.
+    ///
+    /// It is the retry's write (§3c.3; skep #822). The header goes first
+    /// where the file is new ([`Disk::ensure_header`]), its own copy. Two
+    /// copies or more are then ONE append ([`Disk::append`]) — every line of
+    /// them in one `write`, then one `sync_data` — so they cost one sync
+    /// whatever their number; only where the device refuses it, its bytes
+    /// cut back off the file, are they appended one by one, in order, up to
+    /// the first refused again. A lone copy is tried once. Each copy is one
+    /// line within [`MAX_HELD_LINE_BYTES`], as the retry checked it, so the
+    /// one append is no line of its own: it passes the bound where its lines'
+    /// sum does, and the reader reads each line whole.
+    ///
+    /// # Errors
+    ///
+    /// Returns the position in `copies` of the first copy not written, every
+    /// copy before it on disk, and its refusal: the header's, at the first
+    /// copy, or the device's, of that copy appended alone.
+    fn write_copies(&mut self, copies: &[OwedCopy]) -> Result<(), (usize, io::Error)> {
+        if copies.is_empty() {
+            return Ok(());
+        }
+        self.ensure_header().map_err(|e| (0, e))?;
+        if copies.len() > 1 {
+            let lines: Vec<&[u8]> = copies.iter().map(|copy| copy.bytes.as_slice()).collect();
+            if self.append(&lines.concat()).is_ok() {
+                return Ok(());
+            }
+        }
+        for (n, copy) in copies.iter().enumerate() {
+            self.append(&copy.bytes).map_err(|e| (n, e))?;
+        }
+        Ok(())
+    }
+
     /// Owes line `k` a copy of its state now, spelled `bytes`, which the
     /// retry writes (`HeldQueue::retry`).
     ///
@@ -2003,36 +2081,41 @@ impl Disk {
         Ok(())
     }
 
-    /// Appends one line where the file's last whole line ends, and syncs it.
+    /// Appends `bytes` where the file's last whole line ends, and syncs them.
     ///
-    /// The sync comes before the caller builds its answer (persist-first).
+    /// They are one line and its `\n`, or several lines each with its own —
+    /// the retry's one copy ([`Disk::write_copies`]). The sync comes before
+    /// the caller builds its answer (persist-first).
     ///
     /// It is `file::Appender`, opened at the count of whole lines this store
     /// made or read (`open_at`), with this store's copy body
     /// ([`write_synced`]) and `OnTail::Cut`: a tail past the whole lines — a
     /// crash's torn line, or a refused copy whose cut-back failed — is cut
-    /// off first, so the line is never written after bytes no reader reads,
-    /// which would glue the two into one line the reader halts on (P38);
-    /// the cut takes only a tail, never a byte of a whole line. A copy the
-    /// device refuses — its write cut short, or its sync refused — is cut
-    /// back off the file, best effort, so the file holds its whole lines
-    /// alone and no later line lands behind pages a refused sync may never
-    /// have written; where that cut fails, its failure is named beside the
-    /// refusal and the next copy's first cut takes the tail. A
-    /// `#[cfg(test)]` seam reads the file after the sync, so a suite pins
-    /// the line on disk before the answer is built.
+    /// off first, so no line is written after bytes no reader reads, which
+    /// would glue the two into one line the reader halts on (P38); the cut
+    /// takes only a tail, never a byte of a whole line. A copy the device
+    /// refuses — its write cut short, or its sync refused — is cut back off
+    /// the file, best effort, so the file holds its whole lines alone and no
+    /// later line lands behind pages a refused sync may never have written;
+    /// where that cut fails, its failure is named beside the refusal and the
+    /// next copy's first cut takes the tail. A `#[cfg(test)]` seam reads the
+    /// file after the sync, so a suite pins the lines on disk before the
+    /// answer is built.
     ///
     /// **Unverified here** (§3c.3, the record §7 items 2–3): that one small
-    /// `write_all` is one `write(2)` (and may split for a large buffer — the
-    /// torn-last-line rule and the cut before each copy cover either), and
-    /// that `sync_data` orders the line before the answer, is Rust's std and
-    /// APFS's `F_FULLFSYNC` — the barrier the kernel's own durability assumes,
-    /// not measured here. The write-ahead variant (every burst appended before
-    /// its dial, tombstoned at its ack, so even the burst in flight survives a
-    /// crash) is named and not taken for a burst's first dial (§3c.6): R14's
-    /// bound does not ask it, and the typing cadence would pay a synced append
-    /// and tombstone churn. A held line's resend marks the line `sent` before
-    /// it dials: its one write ahead of a dial, a re-mark of a line on disk.
+    /// `write_all` is one `write(2)` (and may split for a large buffer, as a
+    /// copy of many lines is — the torn-last-line rule and the cut before
+    /// each copy cover either, a crash before the sync taken to leave the
+    /// copy's bytes in their order, its whole lines read and its last torn),
+    /// and that `sync_data` orders the lines before the answer, is Rust's std
+    /// and APFS's `F_FULLFSYNC` — the barrier the kernel's own durability
+    /// assumes, not measured here. The write-ahead variant (every burst
+    /// appended before its dial, tombstoned at its ack, so even the burst in
+    /// flight survives a crash) is named and not taken for a burst's first
+    /// dial (§3c.6): R14's bound does not ask it, and the typing cadence would
+    /// pay a synced append and tombstone churn. A held line's resend marks the
+    /// line `sent` before it dials: its one write ahead of a dial, a re-mark
+    /// of a line on disk.
     ///
     /// # Errors
     ///
@@ -2075,8 +2158,9 @@ impl Disk {
 
 /// Writes `bytes` whole to `file`, then syncs them: one copy's body.
 ///
-/// It is the body of the header's copy and of every line's — handed to
-/// `file::write_once_by` and `file::Appender::append_by` as the write — its
+/// It is the body of the header's copy and of every copy of lines — one
+/// line, or the retry's several (`Disk::write_copies`) — handed to
+/// `file::write_once_by` and `file::Appender::append_by` as the write, its
 /// `sync_data` run before the caller builds its answer (persist-first). Two
 /// `#[cfg(test)]` seams stand in for a device that refuses part-way: the
 /// first bytes written and the rest refused, as a full disk does

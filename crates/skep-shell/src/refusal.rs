@@ -96,9 +96,9 @@ impl Name {
     /// to the running client and exits, a shell finding the lock of a board's
     /// held store held by another shell over its data directory reads alone
     /// at that board — every write frame through `op`, `/op-at`'s too, and
-    /// every row of the publication and merge families refused without a
-    /// dial, nothing held and nothing sent, the writes the other window's to
-    /// make. The detail names the `op`, or the `call`.
+    /// every row of the publication and merge families and `history.restore`
+    /// refused without a dial, nothing held and nothing sent, the writes the
+    /// other window's to make. The detail names the `op`, or the `call`.
     pub const ANOTHER_WINDOW: Name = Name("another_window");
     /// A `publish` frame through `op` under a session, refused without a dial.
     ///
@@ -109,20 +109,22 @@ impl Name {
     pub const PUBLISH_IS_A_CALL: Name = Name("publish_is_a_call");
     /// A non-burst write while the own node stands stopped (§3c.4).
     ///
-    /// One of the six — `fork`, `version`, `make_link`, `nullify`,
-    /// `edit_link`, `publish` — and `publication.confirm`'s send, refused at
-    /// once with the hold's cause as its token, never held and never dialed;
-    /// the detail names the `op`.
+    /// One of the eight §3c.4 names through `op` (`hold`'s
+    /// `UNHOLDABLE_WRITES`), `publication.confirm`'s send and
+    /// `history.restore`'s write, refused at once with the hold's cause as
+    /// its token, never held and never dialed; the detail names the `op` —
+    /// `publish` for the confirm, `set_arrangement` for the restore.
     pub const STOPPED: Name = Name("stopped");
     /// A non-burst write while the board's write path stands poisoned (§3c.4).
     ///
     /// The hold noted a `poisoned` answer and no `/health` read has said
-    /// writes go since; the same six and the detail as [`Name::STOPPED`]'s.
+    /// writes go since; the same writes and the detail as
+    /// [`Name::STOPPED`]'s.
     pub const POISONED: Name = Name("poisoned");
     /// A non-burst write while the board's writes stand halted (§3c.4).
     ///
     /// The feed's last `/health` read answered `writes.halted` true; the same
-    /// six and the detail as [`Name::STOPPED`]'s.
+    /// writes and the detail as [`Name::STOPPED`]'s.
     pub const HALTED: Name = Name("halted");
     /// A `publication.count` or `publication.confirm` with no panel standing.
     ///
@@ -284,18 +286,20 @@ impl Name {
     ///
     /// `skep_client::merge::Refusal::OverCap`, met at `merge.compose` with
     /// nothing landed (the merge record's decision 13, "refuse with count";
-    /// B3-S11's cap face at the act); the detail names `n`, the runs, and
-    /// the `cap`.
+    /// B3-S11's cap face at the act), and at `history.restore` where the
+    /// state, mapped through the records, is in more runs than one write may
+    /// name, nothing sent; the detail names `n`, the runs, and the `cap`.
     pub const OVER_CAP: Name = Name("over_cap");
-    /// A draft the merge family would write into that is another account's,
-    /// or published.
+    /// A draft the merge family or the restore would write into that is
+    /// another account's, or published.
     ///
     /// The draft `merge.compose` is to land into (`into`), read off its
     /// `doc_metadata` before anything is composed — the page's member,
     /// UNTRUSTED (skep #799) — or the one an undo or a withdrawal is to
-    /// take a merge out of, as the board refuses it (`not_owner`,
-    /// `published_target`; `skep_client::merge::Refusal::{NotOwner,
-    /// UnownedDraft, Published}`); the detail names the `addr`.
+    /// take a merge out of, or a restore to set, as the library's read or
+    /// the board refuses it (`not_owner`, `published_target`;
+    /// `skep_client::merge::Refusal::{NotOwner, UnownedDraft, Published}`);
+    /// the detail names the `addr`.
     pub const NOT_OWNER: Name = Name("not_owner");
     /// Nothing to undo on the draft the composition landed in.
     ///
@@ -309,13 +313,15 @@ impl Name {
     ///
     /// Each crosses as typed data under this one name, its `arm` the
     /// library's arm in snake case and the arm's members beside it
-    /// (`shell/merge.rs`'s `merge_refusal`): `too_fragmented {doc,
-    /// runs_seen}`, `history_busy`, `history_reclaimed {at, floor}`,
-    /// `beyond_head {at, head}`, `not_a_position {at, nearest}`,
-    /// `fork_base_moved {fork, source, head}`, `base_not_in_chain {into,
-    /// head}`, `window_withheld {origin}`, `needs_signed_session`,
-    /// `fork_base_named {fork, base}`, `supersede_refused {index, detail,
-    /// head}`.
+    /// (`shell/merge.rs`'s `merge_refusal`, which `history.restore`'s
+    /// refusals cross through too): `too_fragmented {doc, runs_seen}`,
+    /// `history_busy`, `history_reclaimed {at, floor}`, `beyond_head {at,
+    /// head}`, `not_a_position {at, nearest}`, `not_past {draft, at,
+    /// current}` (a restore's `at` at or past `current`, the draft's
+    /// position), `fork_base_moved {fork, source, head}`,
+    /// `base_not_in_chain {into, head}`, `window_withheld {origin}`,
+    /// `needs_signed_session`, `fork_base_named {fork, base}`,
+    /// `supersede_refused {index, detail, head}`.
     pub const MERGE_REFUSED: Name = Name("merge_refused");
 
     // ── The halts' armed names: `Refusal::named`, `Refusal::of_named` ────

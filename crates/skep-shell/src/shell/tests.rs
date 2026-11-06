@@ -1,4 +1,4 @@
-//! THE SHELL's SUITE, its cells in five children over the ground shared
+//! THE SHELL's SUITE, its cells in nine children over the ground shared
 //! here: a real daemon spawned in-process over a temp data dir and started
 //! again at its port (`spawn`, `spawn_at`), a shell opened over it as a
 //! transport opens one (`open_shell`), the board claimed through the
@@ -16,7 +16,9 @@
 //! board; `publication` the publication family — the rules the shell alone
 //! keeps, and the panel, the count, the confirm and the cancel against the
 //! daemon; `merge` the merge family — the compose, the land, the undo and
-//! the withdrawal against the daemon, and the rules the shell alone keeps.
+//! the withdrawal against the daemon, and the rules the shell alone keeps;
+//! `history` the restore — its typing, its way back and its note in the
+//! hold against the daemon, and the rules the shell alone keeps.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -41,6 +43,7 @@ mod ceremonies;
 mod changes;
 mod door;
 mod held;
+mod history;
 mod merge;
 mod modes;
 mod publication;

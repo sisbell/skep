@@ -83,11 +83,11 @@ recorded.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the thirty-three calls of `skep-shell`'s
-`CALLS`, `client.md` §4b.1's thirty-one — the publication family's four,
-the merge family's four and `held.show` among them — `places`, the
-document index's listing, and `changes`, the
-change feed's page (`{result}` or `{refused}` back, HTTP 200 either way;
+`POST /bridge/<call>` for the thirty-four calls of `skep-shell`'s
+`CALLS`, `client.md` §4b.1's thirty-two — the publication family's four,
+the merge family's four, `history.restore` and `held.show` among them —
+`places`, the document index's listing, and `changes`, the change feed's
+page (`{result}` or `{refused}` back, HTTP 200 either way;
 a 4xx is the provider's own refusal), `GET /bridge/events` for the eight
 events of §4b.2 (`event:` and `data:` lines, a `:ka` comment every fifteen
 seconds), `POST /bridge/answer` and `/bridge/cancel` for a moment's two

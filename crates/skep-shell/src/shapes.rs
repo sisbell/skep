@@ -5,11 +5,12 @@
 //! [`declarations`] renders one TypeScript declaration file — every call's
 //! input and output, every event, the refusal, the `feed` update's shape (a
 //! `changes` entry's too), the index state's ten arms, the publication
-//! family's panel, inputs and outcomes, and the merge family's report and
-//! outcomes — from the table below, which is
+//! family's panel, inputs and outcomes, the merge family's report and
+//! outcomes, and the restore's answer with the merge marker it carries —
+//! from the table below, which is
 //! written by hand beside the code that builds each value (`shell`,
-//! `shell::publication`, `shell::merge`, `feed`, `sessions`, `refusal`,
-//! `person`, `hold`)
+//! `shell::publication`, `shell::merge`, `shell::history`, `feed`,
+//! `sessions`, `refusal`, `person`, `hold`)
 //! and pinned by this module's suite: a sample of each type, built as the
 //! code builds it,
 //! is round-tripped through `serde_json` and its field names held equal to
@@ -369,6 +370,18 @@ const SHAPES: &[Shape] = &[
         doc: "`merge.withdraw(session, {draft})` — THE WITHDRAWAL, in any session: ONE `set_arrangement` of the draft's current runs with its recorded base re-sent unmoved and no `merge`, clearing the marker and keeping the words, typed against the shell's read of the draft; `draft` the draft, `position` the write's commit, `record` the replacing record's public link (null where no record of the landing stood); `no_merge {draft}` where the draft carries no marker, `not_owner {addr}` where it is another account's or published",
         fields: &[req("draft", "string"), req("position", "number"), req("record", "string | null")],
     },
+    Shape {
+        name: "Restored",
+        open: false,
+        doc: "`history.restore(session, {draft, at, as_of})` — A PAST STATE MADE CURRENT (B3-S7): ONE `set_arrangement` of the draft's runs as read at `at`, mapped through the person's correspondence records so words published since come back as the published words they became, naming no base and no merge — the draft's recorded base and its marker stand — typed against the call's `as_of`, THE TYPED STATE, the page's own state of the draft as its burst frames on it carry it, and refused `arrangement_moved` where the draft's arrangement changed past it, nothing changed; `at` at or past the draft's position refused `merge_refused` with `not_past`: `draft` the draft, `at` the position restored, `position` the write's commit, `as_of` the position the draft stood at as the shell's read found it before the write — the way back, `history.restore` again at `{at: as_of}` typed at `position` — and `marker` the draft's merge marker as it stands, which a restore never takes out, or null",
+        fields: &[req("draft", "string"), req("at", "number"), req("position", "number"), req("as_of", "number"), req("marker", "MergeMarker | null")],
+    },
+    Shape {
+        name: "MergeMarker",
+        open: false,
+        doc: "a draft's merge marker as `doc_metadata` serves it: `sides` the merge's sides by address, `head` the trunk member the merge was composed on, `head_copied` that member's content count as read at the compose, a decimal string, or null where the board serves none, `at` the position of the commit that put the marker on the draft, or null where the board serves none",
+        fields: &[req("sides", "string[]"), req("head", "string"), req("head_copied", "string | null"), req("at", "number | null")],
+    },
 ];
 
 /// One call of the bridge as the file declares it.
@@ -440,6 +453,7 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     CallRow { name: "merge.land", forms: &[&[req("session", "string"), opt("resolutions", "Record<string, MergeChoice>")]], result: "MergeLanded | Restated | PublicationRefused" },
     CallRow { name: "merge.undo", forms: &[&[req("session", "string")]], result: "Undone" },
     CallRow { name: "merge.withdraw", forms: &[&[req("session", "string"), req("draft", "string")]], result: "Withdrawn" },
+    CallRow { name: "history.restore", forms: &[&[req("session", "string"), req("draft", "string"), req("at", "number"), req("as_of", "number")]], result: "Restored" },
     CallRow { name: "upload", forms: &[&[req("session", "string"), req("target", "string"), req("path", "string")]], result: "never" },
     CallRow {
         name: "fetch",
@@ -548,7 +562,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four and the `merge` family's four among them — the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1 — the `publication` family's four, the `merge` family's four and `history.restore` among them — the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

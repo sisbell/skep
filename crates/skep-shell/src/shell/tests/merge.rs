@@ -31,14 +31,14 @@ use crate::sessions::Facts;
 /// behind — published as the daughter E.1.1 ("the fox today"): the merge
 /// of E.2 with E.1.1 over base E.1 has both sides adding at one spot, an
 /// `order` gap.
-struct Family {
-    edition: String,
-    e1: String,
-    e2: String,
-    e11: String,
+pub(super) struct Family {
+    pub(super) edition: String,
+    pub(super) e1: String,
+    pub(super) e2: String,
+    pub(super) e11: String,
 }
 
-fn family(g: &Ground) -> Family {
+pub(super) fn family(g: &Ground) -> Family {
     let edition = g.addr(json!({"op": "create_new_document", "account": "1.0.1", "published": true}));
     let open = |draft: &str| g.call("publication.open", json!({"session": g.session, "draft": draft, "doc": edition, "readable_drafts": [draft], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
     let confirm = || g.call("publication.confirm", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
@@ -81,7 +81,7 @@ fn assert_report_declared(report: &Value) {
 
 /// The `set_arrangement` rows under `doc` since `since`, each as
 /// `(base present, merge present)`.
-fn arrangement_rows(g: &Ground, doc: &str, since: u64) -> Vec<(bool, bool)> {
+pub(super) fn arrangement_rows(g: &Ground, doc: &str, since: u64) -> Vec<(bool, bool)> {
     let entry = g.shell.sessions.get(&g.session).unwrap();
     changes_under(&entry.board, &entry.token, doc, since).iter().filter(|r| r["op"] == "set_arrangement").map(|r| (r["base"].is_string(), r["merge"].is_object())).collect()
 }

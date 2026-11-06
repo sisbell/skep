@@ -118,8 +118,10 @@
 //!   compiler holds to one arm per call — the ten ceremonial rows in its child
 //!   `ceremony`, the four `publication` rows and the panels they stand on in
 //!   its child `publication`, the four `merge` rows and the compositions
-//!   they stand on in its child `merge` — each row taking and answering
-//!   values shaped
+//!   they stand on in its child `merge`, and the restore, `history.restore`,
+//!   a draft's past state made current by one write typed against the
+//!   page's own state of it, in its child `history` — each row taking and
+//!   answering values shaped
 //!   exactly as the row's columns — an argument of another form refused,
 //!   never read as absent; [`Shell::fetch`] is public beside it because it
 //!   streams, and logs its own call. Dropping a shell stops it: no feed

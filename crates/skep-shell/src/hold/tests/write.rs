@@ -5,7 +5,8 @@
 //! three; the `base` a hold takes from every kind of ack, an ack read after
 //! a later one lowering it never; the position of the principal's latest
 //! arrangement write, a burst's or a `set_arrangement`'s alone, never a
-//! link's or a mint's, and a landing the resend's read found; the refused
+//! link's or a mint's, a landing the resend's read found, and a restore,
+//! noted as a `set_arrangement`'s ack; the refused
 //! run's `resolve(drop)`
 //! dropping it and every line held behind it on its own document alone,
 //! and a drop's `held` event saying the state of the line that stands
@@ -273,6 +274,30 @@ fn the_arrangement_position_is_an_arrangement_writes_alone_never_a_links_or_a_mi
     g.holds.probe("b-1");
     assert!(g.lines().is_empty() && g.fake.sends() == 0, "the premise: the landing found and kept, nothing re-sent");
     assert_eq!(g.holds.last_arranged(&g.session, DOC), Some(77), "the landing the read found");
+}
+
+/// Checks that a restore is noted as an acknowledged `set_arrangement` on
+/// its draft (B3-S7; P3).
+///
+/// The `history.restore` row's write — the library's, dialed outside the
+/// one path — is noted as an ack of a `set_arrangement` on its draft: its
+/// position the principal's latest arrangement write there, the base of the
+/// next hold on the draft, and one of the board's acked positions; an
+/// earlier restore noted after a later write lowers neither, and another
+/// document is noted nothing (the mutant that notes no restore types a
+/// merge's undo below the person's own restore; the one that raises no base
+/// reads a later held line's landing from below the restore).
+#[test]
+fn a_restore_is_noted_as_an_acknowledged_set_arrangement_on_its_draft() {
+    let g = writer_at(60);
+    let draft = "1.0.1.0.4";
+    let restored = |at: u64, position: u64| Restored { draft: crate::wire::bounded_address(draft).unwrap(), at, position };
+    g.holds.note_restored(&g.session, &restored(5, 80));
+    assert_eq!((g.holds.last_arranged(&g.session, draft), g.base_of(draft), g.holds.acked("b-1", 80)), (Some(80), 80, true), "the restore's position, as an ack's");
+    g.holds.note_ack(&g.session, &insert(draft, json!(["x"]), 80), &json!({"resp": "ack_addr", "addr": i(1), "at": 81}));
+    g.holds.note_restored(&g.session, &restored(6, 78));
+    assert_eq!((g.holds.last_arranged(&g.session, draft), g.base_of(draft)), (Some(81), 81), "an earlier restore noted after a later write lowers neither");
+    assert_eq!((g.holds.last_arranged(&g.session, DOC), g.base_of(DOC)), (None, 60), "another document noted nothing");
 }
 
 /// Checks that a refused run's drop drops its `behind` lines.

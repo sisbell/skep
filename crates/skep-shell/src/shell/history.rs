@@ -1,0 +1,135 @@
+//! The restore row of `client.md` §4b.1 — `history.restore`, drawn in the
+//! merge row — reached from [`Shell::call`] alone: a draft's past state
+//! made current by one write (B3-S7), over `skep_client::history`'s two
+//! calls, the reads and the write.
+//!
+//! **The row.** `history.restore(session, {draft, at, as_of})` reads the
+//! draft's state as of the position `at` and the person's correspondence
+//! records at the head, the state's runs mapped through them so words
+//! published since come back as the published words they became
+//! (`skep_client::history::past`), then sets the mapped state as the
+//! draft's whole arrangement by ONE `set_arrangement` naming no base and no
+//! merge (`skep_client::history::restore`): the draft's recorded base and
+//! its merge marker stand as they are. The reads and the mapping are the
+//! library's, never the page's, so no page sends as draft-native words a
+//! run a record names, which the board refuses `already_published`.
+//!
+//! **The typed state is the page's.** The write is typed against `as_of`,
+//! the page's own state of the draft — the `as_of` its burst frames on the
+//! draft carry, the read its view came from raised by the page's own acks
+//! there (B3-S7: "typed against this editor's own last ack as every burst
+//! is"; wire.md §Arrangement). It is never the position the shell's read
+//! finds, under which a change the page never showed would be written
+//! over, nor the shell's own last acknowledgment on the draft
+//! (`Holds::last_arranged`), which knows nothing of a change the page has
+//! read since, of the library's writes, or of the shell's earlier runs. A
+//! draft whose arrangement changed past the page's state is refused
+//! `arrangement_moved`, the board's verdict — `site.as_of` the page's
+//! state, `site.current` the draft's — nothing changed; the page reads the
+//! change and restores from there.
+//!
+//! **The order.** The members are read before the session — `draft` an
+//! address in its one spelling, `at` and `as_of` non-negative integers —
+//! then the session; then the write door and the session's hand, as the
+//! publication and merge families take them (`Shell::signed`); then the
+//! hold standing at the board, which refuses the `set_arrangement` at once
+//! under its cause, before any read (§3c.4; `Holds::unholdable_refusal`);
+//! then the reads; then the write.
+//!
+//! **The answer** is `{draft, at, position, as_of, marker}`: `position` the
+//! write's commit; `as_of` the position the draft stood at as the shell's
+//! read found it, before the write — the way back, this row again at
+//! `{at: as_of}` typed at `position`; and `marker` the draft's merge marker
+//! as it stands, which a restore never takes out, or null.
+//!
+//! **The note.** The write's position is noted in the hold as an
+//! acknowledged arrangement write of the principal's on the draft
+//! (`Holds::note_restored`): `merge.undo`, typed against the editor's own
+//! last arrangement write on the draft (P3), takes a restore of the
+//! person's as their own, and the next hold on the draft reads from past it.
+//!
+//! **The refusals** cross as the merge family's (`Shell::merge_refusal`):
+//! `not_owner` for a published document or another account's draft,
+//! `no_such_document`, `unreadable`, `over_cap` where the mapped state is in
+//! more runs than one write may name, `merge_refused` with `not_past` where
+//! `at` is at or past the draft's position, or with `history_reclaimed`,
+//! `not_a_position`, `history_busy`, `too_fragmented`, `window_withheld` or
+//! `needs_signed_session`; the board's verdicts verbatim, `arrangement_moved`
+//! among them; `session_died` where a read or the write met the death
+//! signal; every other halt as itself.
+
+use serde_json::{json, Value};
+use skep_client::board::MergeMarker;
+use skep_client::history;
+
+use super::publication::address_arg;
+use super::Shell;
+use crate::refusal::Refusal;
+
+impl Shell {
+    /// Answers `history.restore`: the draft's state at `at` made current.
+    ///
+    /// The call is `history.restore(session, {draft, at, as_of})`, its
+    /// answer `{draft, at, position, as_of, marker}` (the module doc;
+    /// `shapes`' `Restored`).
+    ///
+    /// # Errors
+    ///
+    /// In this order:
+    ///
+    /// 1. `malformed_args` naming `draft` where it is no address in its one
+    ///    spelling, then naming `at`, then `as_of`, where it is no
+    ///    non-negative integer;
+    /// 2. `malformed_args` naming `session`, then `session_died` or
+    ///    `session_ended` ([`Shell::session`]);
+    /// 3. `write_in_bare_session`, then `another_window`, naming the call;
+    ///    `store_unreadable`, `no_account` (`Shell::signed`);
+    /// 4. `stopped`, `poisoned` or `halted` naming the op, `set_arrangement`,
+    ///    where a hold stands at the board, nothing read and nothing sent;
+    /// 5. the reads' (`skep_client::history::past`): `unreadable` and
+    ///    `no_such_document` at the draft's read, then `not_owner` with
+    ///    `published` for a published document; `merge_refused` with
+    ///    `not_past`, before any read at a position; at the state's reads,
+    ///    `merge_refused` with `history_reclaimed`, `not_a_position`,
+    ///    `history_busy` or `too_fragmented`, and `no_such_document` for a
+    ///    draft that did not exist then; the records' reads' refusals; then
+    ///    `over_cap`;
+    /// 6. the write's (`skep_client::history::restore`): the board's
+    ///    `arrangement_moved` verbatim where the draft's arrangement changed
+    ///    past `as_of`, nothing changed; `not_owner`; `no_such_document`;
+    ///    `merge_refused` with `window_withheld` or `needs_signed_session`;
+    ///    the board's other verdicts verbatim; a halt's face where the
+    ///    acknowledgment was lost;
+    /// 7. `session_died` where a read or the write met the death signal,
+    ///    and `unreachable` where a dial failed, at either step.
+    pub(super) fn history_restore(&self, args: &Value) -> Result<Value, Refusal> {
+        let draft = address_arg(&args["draft"]).ok_or_else(|| Refusal::malformed("draft"))?;
+        let at = args["at"].as_u64().ok_or_else(|| Refusal::malformed("at"))?;
+        let as_of = args["as_of"].as_u64().ok_or_else(|| Refusal::malformed("as_of"))?;
+        let session = self.session(&args["session"])?;
+        let account = self.signed(&session, "history.restore")?.account;
+        if let Some(refusal) = self.holds.unholdable_refusal(&session.board_reference, "set_arrangement") {
+            return Err(refusal);
+        }
+        let mut past = history::past(&session.board, &session.token, &account, &draft, at).map_err(|r| self.merge_refusal(&session, r))?;
+        // The write typed against the page's state; the read's position
+        // kept for the answer, the way back.
+        let read_at = std::mem::replace(&mut past.as_of, as_of);
+        let restored = history::restore(&session.board, &session.token, &past).map_err(|r| self.merge_refusal(&session, r))?;
+        self.holds.note_restored(&session, &restored);
+        Ok(json!({
+            "draft": restored.draft.to_string(),
+            "at": restored.at,
+            "position": restored.position,
+            "as_of": read_at,
+            "marker": past.marker.as_ref().map(marker_json),
+        }))
+    }
+}
+
+/// Returns a merge marker as the page reads it (`shapes`' `MergeMarker`).
+///
+/// Its `head_copied` is the decimal string `doc_metadata` serves it as.
+fn marker_json(m: &MergeMarker) -> Value {
+    json!({"sides": m.sides, "head": m.head, "head_copied": m.head_copied.map(|n| n.to_string()), "at": m.at})
+}

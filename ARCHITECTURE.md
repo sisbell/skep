@@ -852,6 +852,9 @@ re-exports counted as the module it is brought from (held by
   `Merges`, the compositions they stand on: one per (board, principal), the
   latest standing, dying with its session through the bus's watcher; the
   shot of `land` goes through `shell/publication.rs`'s panel and send.
+- `shell/history.rs` the `history.restore` row over `skep_client::history`
+  — `pub(super)` to `call` — its refusals crossing through
+  `shell/merge.rs`'s mapping and its write noted in `hold.rs`'s holds.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
   suite — the board's verdict with its `site`, the publication family's
   panel, inputs, outcomes and event among them.
@@ -860,8 +863,8 @@ Rules that hold across its files:
 
 - **One door per call.** Every call reaches its row through `Shell::call`,
   which logs it; the row methods are `shell`'s alone — private, or
-  `pub(super)` in `shell/ceremony.rs`, `shell/publication.rs` and
-  `shell/merge.rs` — so a
+  `pub(super)` in `shell/ceremony.rs`, `shell/publication.rs`,
+  `shell/merge.rs` and `shell/history.rs` — so a
   transport cannot serve a call the log never saw. `Shell::fetch` is the
   one public row, because it streams, and logs its own call.
   `tests/it/tidy.rs` pins `Shell`'s public methods across every

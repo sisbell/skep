@@ -41,7 +41,10 @@
 //! The four `merge` rows — the composition landed in a draft, the shot
 //! carrying the supersession claim with the record after it, the undo, the
 //! withdrawal — are the child module `merge`'s, `pub(super)` to the door,
-//! with the compositions they stand on.
+//! with the compositions they stand on. The `history.restore` row — a
+//! draft's past state made current by one write, typed against the page's
+//! own state of the draft (B3-S7) — is the child module `history`'s,
+//! `pub(super)` to the door.
 //!
 //! **What the shell refuses without asking.** A write frame in the guest
 //! form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so no
@@ -50,11 +53,12 @@
 //! state 3), so no `bare` write of this shell's is ever committed
 //! (`write_in_bare_session`, `SessionEntry::may_write`); a write frame at a
 //! board whose held store another shell holds, and every row of the
-//! publication and merge families there — ONE SHELL PER DATA DIRECTORY
-//! (§3c.3): until a second launch hands its address to the running client
-//! and exits, the second window reads alone at the board, nothing held and
-//! nothing sent (`another_window`, `Holds::another_window`), each write met
-//! at the one door the two refusals share ([`Shell::write_door`]); a
+//! publication and merge families and the restore there — ONE SHELL PER
+//! DATA DIRECTORY (§3c.3): until a second launch hands its address to the
+//! running client and exits, the second window reads alone at the board,
+//! nothing held and nothing sent (`another_window`, `Holds::another_window`),
+//! each write met at the one door the two refusals share
+//! ([`Shell::write_door`]); a
 //! `publish` frame under a session (`publish_is_a_call`: a publication
 //! crosses as `publication.confirm`, the shell composing the one request
 //! from the panel it holds, since the page composes no write — §4b.1's `op`
@@ -74,11 +78,11 @@
 //! are refused at once with its cause (`stopped`, `poisoned`, `halted`),
 //! never held and never dialed — and what a signed
 //! session's attest signs is `SessionEntry::attest`'s. Where the library
-//! does not reach a row at this pin — `upload` and `restore`, whose media
-//! walk is not in `skep-client` — the call answers `not_reached` naming
-//! where it stops, never a silent stub; `fetch` reaches the dialer's
-//! streamed form and no further (the §Recovery order of the media design is
-//! not run here).
+//! does not reach a row at this pin — `upload` and `restore`, the media rows,
+//! whose walk is not in `skep-client` (the past state's `history.restore` is
+//! another row) — the call answers `not_reached` naming where it stops,
+//! never a silent stub; `fetch` reaches the dialer's streamed form and no
+//! further (the §Recovery order of the media design is not run here).
 
 use std::fmt;
 use std::io::{self, Read};
@@ -114,6 +118,7 @@ use crate::Talk;
 
 mod ceremony;
 mod publication;
+mod history;
 mod merge;
 
 use merge::Merges;
@@ -279,7 +284,8 @@ pub const WRITE_KINDS: [&str; 18] = [
 /// One call of the bridge, as [`Shell::call`] dispatches it.
 ///
 /// It is a call of §4b.1 — the `publication` family's four, the `merge`
-/// family's four and `held.show`, the `held` row's call for the halt face's
+/// family's four, `history.restore`, the past state the merge row draws
+/// beside them, and `held.show`, the `held` row's call for the halt face's
 /// own act, among them — the document index's listing `places` (A-255), or
 /// the change feed's page `changes`: one arm per call, which the compiler
 /// holds exhaustive, and the list a transport admits a call by, [`CALLS`],
@@ -311,6 +317,7 @@ enum Call {
     MergeLand,
     MergeUndo,
     MergeWithdraw,
+    HistoryRestore,
     Upload,
     Fetch,
     Restore,
@@ -327,9 +334,10 @@ impl Call {
     ///
     /// The `publication` family stands after `op`, whose publish arm it
     /// carries, and the `merge` family after it, whose shot its landing
-    /// rides; `places` stands beside `search`, `held.show` after `held`,
-    /// whose row owes it, and the change feed's `changes` last.
-    const ALL: [Call; 33] = [
+    /// rides, `history.restore` closing the merge row that draws it;
+    /// `places` stands beside `search`, `held.show` after `held`, whose row
+    /// owes it, and the change feed's `changes` last.
+    const ALL: [Call; 34] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -354,6 +362,7 @@ impl Call {
         Call::MergeLand,
         Call::MergeUndo,
         Call::MergeWithdraw,
+        Call::HistoryRestore,
         Call::Upload,
         Call::Fetch,
         Call::Restore,
@@ -392,6 +401,7 @@ impl Call {
             Call::MergeLand => "merge.land",
             Call::MergeUndo => "merge.undo",
             Call::MergeWithdraw => "merge.withdraw",
+            Call::HistoryRestore => "history.restore",
             Call::Upload => "upload",
             Call::Fetch => "fetch",
             Call::Restore => "restore",
@@ -410,13 +420,13 @@ impl Call {
     }
 }
 
-/// The bridge's thirty-three calls, as it spells them, in its order.
+/// The bridge's thirty-four calls, as it spells them, in its order.
 ///
-/// They are §4b.1's thirty-one — the `publication` family's four, the
-/// `merge` family's four and `held.show` among them — the document index's
-/// listing, `places` (A-255), and the change feed's page, `changes`: the
-/// list a transport admits a call by, every name of it one [`Shell::call`]
-/// answers.
+/// They are §4b.1's thirty-two — the `publication` family's four, the
+/// `merge` family's four, `history.restore` and `held.show` among them —
+/// the document index's listing, `places` (A-255), and the change feed's
+/// page, `changes`: the list a transport admits a call by, every name of it
+/// one [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -981,6 +991,7 @@ impl Shell {
             Some(Call::MergeLand) => self.merge_land(args),
             Some(Call::MergeUndo) => self.merge_undo(args),
             Some(Call::MergeWithdraw) => self.merge_withdraw(args),
+            Some(Call::HistoryRestore) => self.history_restore(args),
             Some(Call::Upload) => self.upload(args),
             Some(Call::Fetch) => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),
             Some(Call::Restore) => self.restore(args),
@@ -1287,9 +1298,10 @@ impl Shell {
     ///
     /// It is the one door every write the shell sends under a session meets
     /// first: a write frame through `op` — `/op-at`'s too — and every row of
-    /// the publication and merge families, through `Shell::signed`. `named`
-    /// is the refusal's detail, the `op` or the `call`. A write that met the
-    /// door is followed to its end, never refused at it again mid-way.
+    /// the publication and merge families and `history.restore`, through
+    /// `Shell::signed`. `named` is the refusal's detail, the `op` or the
+    /// `call`. A write that met the door is followed to its end, never
+    /// refused at it again mid-way.
     ///
     /// # Errors
     ///

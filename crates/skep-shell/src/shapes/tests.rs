@@ -21,10 +21,11 @@ use crate::sessions;
 /// emits for it — the refusals through `Refusal::to_value`, the search
 /// answer through `feed::answer_without_index`, the listing through
 /// `feed::places_without_index`, the index state through `feed::state_json`,
-/// the death through `sessions`, the rest in the shape `shell`'s and
-/// `shell::publication`'s `json!` spell (the publication family's answers
-/// are held to their declarations against the real board by the shell's
-/// own suite, `shell/tests/publication.rs`).
+/// the death through `sessions`, the rest in the shape `shell`'s and its
+/// rows' children's `json!` spell (the publication family's, the merge
+/// family's and the restore's answers are held to their declarations
+/// against the real board by the shell's own suite,
+/// `shell/tests/publication.rs`, `merge.rs` and `history.rs`).
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -112,6 +113,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("MergeLanded", json!({"outcome": "landed", "member": "1.0.1.0.2.2", "at": 412, "via": "answer", "claim": false, "supersede": ["1.0.1.0.2.1.1"], "daughter": false, "record": "1.0.1.0.1.0.2.3", "claims": ["1.0.1.0.2.0.2.1"], "retries": 0})),
         ("Undone", json!({"draft": "1.0.1.0.5", "position": 14, "record": null, "restored": {"base": "1.0.1.0.2.1", "extent": 19}})),
         ("Withdrawn", json!({"draft": "1.0.1.0.5", "position": 14, "record": "1.0.1.0.1.0.2.4"})),
+        ("Restored", json!({"draft": "1.0.1.0.5", "at": 9, "position": 16, "as_of": 15, "marker": {"sides": ["1.0.1.0.2.1.1"], "head": "1.0.1.0.2.2", "head_copied": "13", "at": 12}})),
+        ("MergeMarker", json!({"sides": ["1.0.1.0.2.1.1"], "head": "1.0.1.0.2.2", "head_copied": null, "at": null})),
     ]
 }
 
@@ -157,7 +160,7 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", method_name(row.name))), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 33, "the thirty-three calls: §4b.1's with the publication family's four, the merge family's four and `held.show`, the document index's listing and the change feed's page");
+    assert_eq!(CALL_ROWS.len(), 34, "the thirty-four calls: §4b.1's with the publication family's four, the merge family's four, `history.restore` and `held.show`, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
@@ -171,6 +174,9 @@ fn the_file_names_every_shape_call_and_event() {
         "  'merge.land'(args: { session: string; resolutions?: Record<string, MergeChoice> }): Promise<Outcome<MergeLanded | Restated | PublicationRefused>>;\n",
         "  'merge.undo'(args: { session: string }): Promise<Outcome<Undone>>;\n",
         "  'merge.withdraw'(args: { session: string; draft: string }): Promise<Outcome<Withdrawn>>;\n",
+        "  'history.restore'(args: { session: string; draft: string; at: number; as_of: number }): Promise<Outcome<Restored>>;\n",
+        "  marker: MergeMarker | null;\n",
+        "  head_copied: string | null;\n",
         "  'held.show'(args: { session: string }): Promise<Outcome<{ shown: boolean }>>;\n",
         "  supersede: string[];\n",
         "  over_cap: boolean;\n",

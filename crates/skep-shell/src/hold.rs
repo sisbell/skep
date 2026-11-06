@@ -13,7 +13,9 @@
 //! names (§3c.2), and an arrangement write's as the principal's latest one
 //! on its document, the editor's own last ack a merge's undo is typed
 //! against ([`Holds::last_arranged`]; P3), a later position never lowered
-//! by an earlier one read after it, and entered in the board's acked
+//! by an earlier one read after it — a restore the `history.restore` row
+//! made, the library's write and none of this path's, noted so too
+//! ([`Holds::note_restored`]) — and entered in the board's acked
 //! positions, which the resend's read never takes for a line's lost landing
 //! ([`BoardHold::acked`]); a
 //! reissue-class answer reissued within the call, a
@@ -40,12 +42,12 @@
 //! hold never holds is faced where a burst's would be held (§3c.4: "a
 //! non-burst write that fails … is faced at its act") — and the eight of
 //! them §3c.4 names ([`UNHOLDABLE_WRITES`], `publication.confirm`'s send
-//! beside them) meeting a hold that stands at the board before any dial —
-//! the own node stopped, the write path poisoned, the writes halted — are
-//! REFUSED at once with the hold's cause as the refusal's name
-//! ([`Holds::unholdable_refusal`]), never held and never dialed, the page
-//! answering before it composes; a board that is unreachable is no such
-//! hold, its dial failing as it fails.
+//! and `history.restore`'s write beside them) meeting a hold that stands at
+//! the board before any dial — the own node stopped, the write path
+//! poisoned, the writes halted — are REFUSED at once with the hold's cause
+//! as the refusal's name ([`Holds::unholdable_refusal`]), never held and
+//! never dialed, the page answering before it composes; a board that is
+//! unreachable is no such hold, its dial failing as it fails.
 //! A write takes that path under a session that may write alone, at a board
 //! whose held store no other shell holds: the `op` row refuses a bare
 //! session's write before any dial (`SessionEntry::may_write`), and refuses
@@ -135,6 +137,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, Answer, Board, ChangesAnswer, ChangesQuery, Health, Rejection};
 use skep_client::halt::Halt;
+use skep_client::history::Restored;
 use skep_client::sheet::render_inert;
 use skep_client::store::{FileStore, KeyFacts};
 use skep_client::{DialError, Origin};
@@ -204,8 +207,9 @@ const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearra
 /// `set_arrangement`, a draft's whole arrangement set in one write (the
 /// landing lane, skep #764), takes it too — no burst, since it is the
 /// landing of a merge and no act of the page's hand, and a landing held
-/// would land over whatever the hand wrote meanwhile. Every other write
-/// outside the five bursts dials as it dials.
+/// would land over whatever the hand wrote meanwhile — and the restore's
+/// write, `history.restore`'s, takes it as `set_arrangement`. Every other
+/// write outside the five bursts dials as it dials.
 pub const UNHOLDABLE_WRITES: [&str; 8] =
     ["fork", "version", "stage", "set_arrangement", "make_link", "nullify", "edit_link", "publish"];
 
@@ -1064,7 +1068,8 @@ impl Custody {
 ///
 /// It holds where its lines are kept, the queue, the position of its latest
 /// write per document whose position the shell knows — the greatest of its
-/// acks' and of the landings the resend's read found, each noted by
+/// acks', a restore's among them, and of the landings the resend's read
+/// found, each noted by
 /// [`PrincipalHold::note_position`]: the `base` a hold on that document
 /// takes ([`PrincipalHold::base_of`], §3c.2), the position the resend's
 /// read of the line starts from, read before the burst's dial so an ack
@@ -1098,7 +1103,8 @@ struct PrincipalHold {
     ///
     /// It is the greatest of the acks of the writes that change a
     /// document's arrangement — the five bursts and `set_arrangement`, each
-    /// on its `doc` (wire.md §Arrangement, the typed state) — and of the
+    /// on its `doc` (wire.md §Arrangement, the typed state), through `op` or
+    /// as a restore ([`Holds::note_restored`]) — and of the
     /// landings the resend's read found, each a burst's, noted by
     /// [`PrincipalHold::note_arranged`] and never lowered: the position the
     /// editor's undo of a merge landed in the document is typed against
@@ -1203,8 +1209,9 @@ struct BoardHold {
     /// The positions this shell acked at the board (§3c.5).
     ///
     /// Every ack [`Holds::note_ack`] reads enters its `at`, whatever
-    /// documents its row names, and every landing the resend's read finds
-    /// enters its position; in memory, for the shell's life. The resend's
+    /// documents its row names, and every restore [`Holds::note_restored`]
+    /// notes and every landing the resend's read finds enter their
+    /// positions; in memory, for the shell's life. The resend's
     /// landed test skips a row at one of them: a write this shell was
     /// answered for is never the lost landing of a line, though its hand is
     /// the same key and its kind the head's — a sibling session's burst
@@ -1941,7 +1948,8 @@ impl Holds {
     /// kind is not of the seven, the write then dialing as it dials — a board
     /// that is unreachable is no hold of this kind. The `op` row's session
     /// form asks it through [`Holds::send`]; `publication.confirm` asks it
-    /// with `publish` before it composes.
+    /// with `publish` before it composes, and `history.restore` with
+    /// `set_arrangement` before its reads.
     ///
     /// # Panics
     ///
@@ -2334,17 +2342,50 @@ impl Holds {
     /// nothing.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
+        self.note_written(session, at, &written_docs(frame, ack), arranged_doc(frame));
+    }
+
+    /// Notes a restore `session` made: the `history.restore` row's write
+    /// (B3-S7; P3).
+    ///
+    /// The restore's one `set_arrangement` is the library's
+    /// (`skep_client::history::restore`), dialed outside [`Holds::send`], and
+    /// is noted as [`Holds::note_ack`] notes an acknowledged
+    /// `set_arrangement`: its position enters the board's acked positions
+    /// ([`BoardHold::acked`]), becomes the `base` of the next hold on the
+    /// draft where it is past the position noted there
+    /// ([`PrincipalHold::note_position`]), and is the principal's latest
+    /// arrangement write on the draft ([`PrincipalHold::note_arranged`]) —
+    /// the editor's own last ack a merge's undo is typed against
+    /// ([`Holds::last_arranged`]), so a restore of the person's never stands
+    /// as another hand's change under it.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub fn note_restored(&self, session: &SessionEntry, restored: &Restored) {
+        let draft = restored.draft.to_string();
+        self.note_written(session, restored.position, &[draft.as_str()], Some(draft.as_str()));
+    }
+
+    /// Notes `at`, the position of a write of the session's principal's.
+    ///
+    /// It enters the board's acked positions, raises the `base` on each of
+    /// `docs`, the documents its row names, and, where the write set
+    /// `arranged`'s arrangement, the principal's latest arrangement write
+    /// there ([`Holds::note_ack`]'s and [`Holds::note_restored`]'s one body).
+    fn note_written(&self, session: &SessionEntry, at: u64, docs: &[&str], arranged: Option<&str>) {
         let mut board_hold = self.lock(&session.board_reference);
         board_hold.acked.insert(at);
-        let docs = written_docs(frame, ack);
         if docs.is_empty() {
             return;
         }
         let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(|| PrincipalHold::new(session.facts.account.as_deref().unwrap_or("")));
-        for doc in docs {
+        for &doc in docs {
             ph.note_position(doc, at);
         }
-        if let Some(doc) = arranged_doc(frame) {
+        if let Some(doc) = arranged {
             ph.note_arranged(doc, at);
         }
     }
@@ -2356,8 +2397,9 @@ impl Holds {
     /// no hold opened: the position `merge.undo` hands the library's undo as
     /// the editor's own last acknowledgment on the draft
     /// (`skep_client::merge::undo`). `None` where no arrangement write of the
-    /// principal's on `doc` was acknowledged through this shell, or found
-    /// landed by its resend.
+    /// principal's on `doc` was acknowledged through this shell — through
+    /// `op`, or a restore's ([`Holds::note_restored`]) — or found landed by
+    /// its resend.
     ///
     /// # Panics
     ///

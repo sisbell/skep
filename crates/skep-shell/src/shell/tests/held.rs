@@ -1323,15 +1323,15 @@ fn a_burst_held_while_the_head_will_not_read_survives_a_relaunch_and_is_sent_onc
 /// the running client: a second signed shell over the first's store opens a
 /// session at the board, finds the store the first's and says so once on
 /// `Talk`; every write it is asked for — a burst, a burst through `/op-at`,
-/// a mint, a link, a publication's open, a merge's withdrawal — is refused
-/// `another_window` naming its `op` or its `call`, nothing sent (the board's
-/// position unmoved) and nothing held (`held` lists nothing, no held file
-/// stands); a read and the change feed still answer. The first shell gone,
-/// the second's next session takes the store, says so once, and its burst
-/// is acked (the mutant that keeps a second shell's bursts in memory loses
-/// them at its close; the one that refuses at the hold alone dials the
-/// non-burst writes; the one that never tries the lock again leaves the
-/// window reading alone for its life).
+/// a mint, a link, a publication's open, a merge's withdrawal, a restore —
+/// is refused `another_window` naming its `op` or its `call`, nothing sent
+/// (the board's position unmoved) and nothing held (`held` lists nothing,
+/// no held file stands); a read and the change feed still answer. The first
+/// shell gone, the second's next session takes the store, says so once, and
+/// its burst is acked (the mutant that keeps a second shell's bursts in
+/// memory loses them at its close; the one that refuses at the hold alone
+/// dials the non-burst writes; the one that never tries the lock again
+/// leaves the window reading alone for its life).
 #[test]
 fn a_second_shell_over_the_data_directory_refuses_every_write_and_holds_nothing() {
     let dir = TempDir::new().unwrap();
@@ -1359,7 +1359,11 @@ fn a_second_shell_over_the_data_directory_refuses_every_write_and_holds_nothing(
         let op = frame["op"].as_str().or(frame["frame"]["op"].as_str());
         assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("another_window", Some("shell"), op), "{frame}: {v}");
     }
-    for (call, args) in [("publication.open", json!({"session": session, "draft": draft, "doc": "1.0.1.0.1"})), ("merge.withdraw", json!({"session": session, "draft": draft}))] {
+    for (call, args) in [
+        ("publication.open", json!({"session": session, "draft": draft, "doc": "1.0.1.0.1"})),
+        ("merge.withdraw", json!({"session": session, "draft": draft})),
+        ("history.restore", json!({"session": session, "draft": draft, "at": at, "as_of": before})),
+    ] {
         let refused = second.call(call, &args).unwrap_err();
         assert_eq!((refused.name(), refused.to_value()["call"].as_str()), ("another_window", Some(call)), "{refused}");
     }

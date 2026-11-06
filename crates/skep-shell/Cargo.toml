@@ -20,9 +20,11 @@ readme = "README.md"
 # `shell`'s `search` row reading the call's bound and options beside it;
 # and its `merge` feature on: the merge library — the composition, the
 # one-write landing, the record, the undo and the withdrawal — which the
-# `merge` family's four rows (`shell/merge.rs`) run for the page, the editor
-# being the shell the feature's doc names. `acting` (default on) holds the
-# store, the signer, the person seam and the walks.
+# `merge` family's four rows (`shell/merge.rs`) run for the page, and the
+# restore behind it (`skep_client::history`), which `history.restore`
+# (`shell/history.rs`) runs, the editor being the shell the feature's doc
+# names. `acting` (default on) holds the store, the signer, the person seam
+# and the walks.
 skep-client = { path = "../skep-client", features = ["search", "merge"] }
 # The entry frame and its body builders, which the attest a signed session
 # composes is made through (one composer, never a second `entry_frame`), and

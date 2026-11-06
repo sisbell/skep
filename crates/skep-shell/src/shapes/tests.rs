@@ -69,7 +69,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("MomentEvent", json!({"id": "m-0", "kind": "label", "data": {}, "walk": "claim", "board": "b-0", "answerable": true})),
         ("Answer", json!({"id": "m-0", "value": "phone"})),
         ("Cancel", json!({"id": "m-0"})),
-        ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable"})),
+        ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable", "unwritable": "No space left on device (os error 28)", "unwritable_class": "full"})),
         ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "delete"}, "anchors": {"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]}, "cause": "unreachable", "sent": false, "time": 1})),
         ("Anchors", crate::held::Anchors::of(&json!({"before": "1.0.1.0.1.0.1.3", "after": null, "span": [{"start": "1.0.1.0.1.0.1.4", "width": "2"}]})).expect("the anchors' form").json()),
         ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "moved", "hands": [{"key": "bare"}]})),
@@ -199,6 +199,7 @@ fn the_file_names_every_shape_call_and_event() {
         "  before: string | null;\n",
         "  span?: { start: string; width: string }[];\n",
         "  site: { addr?: string; index?: number; operand?: 'first' | 'second'; region?: number; slot?: number; fault?: string; as_of?: number; current?: number };\n",
+        "  unwritable?: string;\n  unwritable_class?: 'full' | 'read_only' | 'other';\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }

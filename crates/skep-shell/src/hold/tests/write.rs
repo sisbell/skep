@@ -56,7 +56,10 @@
 //! the door's refusal said once (skep #823), and a
 //! burst the device refused waiting with the bursts after it until the
 //! probe's clock copies them in order, its node stopped, the wait said at
-//! its two edges; no
+//! its two edges; each such answer carrying its refusal's class beside the
+//! words — a full disk's, a read-only volume's, a file this shell may not
+//! read, or another cause — the line waiting behind it the same (skep #820);
+//! no
 //! `held` event when a session's open reads its file, and a misplaced file
 //! set aside and said on `Talk` alone.
 //!
@@ -1618,42 +1621,68 @@ fn a_queue_kept_in_memory_when_the_head_then_will_not_read_joins_the_pending_fil
 ///
 /// The held file's name taken by a directory before the session opens, the
 /// door's read is refused and said once on `Talk`, naming the loss a close
-/// makes; a burst is held in memory, its answer carrying the refusal. A
-/// probe while the name stands taken says nothing more. The name freed, the
-/// next probe — the line's resend refused `write_busy` — joins the line into
-/// the file, said once (the mutant that opens the file only at an empty
-/// queue keeps every line in memory while one stands; the one that leaves
-/// the door's refusal unsaid tells the page alone that a close loses the
-/// line).
+/// makes; a burst is held in memory, its answer carrying the refusal and its
+/// class — `other`, a name taken being no full disk and no read-only volume
+/// (skep #820). A probe while the name stands taken says nothing more. The
+/// name freed, the next probe — the line's resend refused `write_busy` —
+/// joins the line into the file, said once. On unix, a file this shell may
+/// not read refuses the door the same way, its answer of the class
+/// `read_only` (the mutant that opens the file only at an empty queue keeps
+/// every line in memory while one stands; the one that leaves the door's
+/// refusal unsaid tells the page alone that a close loses the line; the one
+/// that keeps the door's refusal as words alone gives the page no class to
+/// key its act by).
 #[test]
 fn a_held_file_the_door_could_not_read_joins_once_it_reads() {
+    door_read_refused_then_joined("a directory at the file's name", "other", |file| std::fs::create_dir_all(file).unwrap(), |file| std::fs::remove_dir(file).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let header = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", "ab".repeat(32));
+        let unreadable = |file: &Path| {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, &header).unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        };
+        let readable = |file: &Path| std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        door_read_refused_then_joined("a file this shell may not read", "read_only", unreadable, readable);
+    }
+}
+
+/// Runs one cell of the door's refused read and the join once it reads.
+///
+/// It is a cell of [`a_held_file_the_door_could_not_read_joins_once_it_reads`]:
+/// `refuse` makes the held file's read refused before the session opens, its
+/// answer of `class`, and `free` lets it read again.
+fn door_read_refused_then_joined(cell: &str, class: &str, refuse: impl Fn(&Path), free: impl Fn(&Path)) {
     let store = TempDir::new().unwrap();
     let file = store.path().join("held").join("ab".repeat(32)).join("principal-1.held");
-    std::fs::create_dir_all(&file).unwrap();
+    refuse(&file);
     let facts = writer_facts(&store);
     let g = ground_in(store, facts, 0);
     let said = said_containing(&g, "held file could not be read");
-    assert!(said.len() == 1 && said[0].contains("a close before then loses them"), "the door's refused read said once: {said:?}");
+    assert!(said.len() == 1 && said[0].contains("a close before then loses them"), "{cell}: the door's refused read said once: {said:?}");
     let answer = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
-    assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be read")), "the refusal rides the answer: {answer}");
+    assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be read")), "{cell}: the refusal rides the answer: {answer}");
+    assert_eq!(answer["unwritable_class"].as_str(), Some(class), "{cell}: its class beside it: {answer}");
     g.fake.op_refused.every((503, json!({"error": "write_busy"})));
     g.holds.probe("b-1");
-    assert_eq!(said_containing(&g, "held file could not be read").len(), 1, "a retry the same cause refuses says nothing more: {:?}", g.said.lock().unwrap());
-    std::fs::remove_dir(&file).unwrap();
+    assert_eq!(said_containing(&g, "held file could not be read").len(), 1, "{cell}: a retry the same cause refuses says nothing more: {:?}", g.said.lock().unwrap());
+    free(&file);
     g.holds.probe("b-1");
-    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"a\"]"), "the line joined the file once it reads");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"a\"]"), "{cell}: the line joined the file once it reads");
     let joined = said_containing(&g, "joined the board's held file");
-    assert!(joined.len() == 1 && joined[0].contains("1 held line joined"), "{joined:?}");
-    assert_eq!(g.lines().len(), 1, "the line stands in the file, its resend refused");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined"), "{cell}: {joined:?}");
+    assert_eq!(g.lines().len(), 1, "{cell}: the line stands in the file, its resend refused");
 }
 
 /// Checks that the probe's clock copies the bursts the device refused.
 ///
 /// It is §3c.3's wait (skep #813). The held file's name taken by a
-/// directory, a burst is held `unwritable` under the device's refusal and
-/// the next burst is held `behind` it under the same refusal, neither on
-/// disk; the wait is said once in the shell's own window. The node stopped
-/// and the name freed, the next probe — which
+/// directory, a burst is held `unwritable` under the device's refusal, of
+/// the class `other`, and the next burst is held `behind` it under the same
+/// refusal and class, neither on disk; the wait is said once in the shell's
+/// own window. The node stopped and the name freed, the next probe — which
 /// dials nothing while the node is stopped — copies both in `k` order and
 /// says the wait's end once, and a second probe says nothing more (the
 /// mutant that retries at a hold alone keeps both in memory while no one
@@ -1666,8 +1695,10 @@ fn a_burst_the_device_refused_waits_with_the_bursts_after_it_and_the_probes_cloc
     std::fs::create_dir(&file).unwrap();
     let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     let why = first["unwritable"].as_str().unwrap_or_else(|| panic!("the device's refusal rides the answer: {first}")).to_string();
+    assert_eq!(first["unwritable_class"], "other", "a name a directory takes is no full disk and no read-only volume: {first}");
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the first") };
-    assert_eq!((behind["cause"].as_str(), behind["unwritable"].as_str()), (Some("behind"), Some(why.as_str())), "the line behind waits under the same refusal: {behind}");
+    let waits = (behind["cause"].as_str(), behind["unwritable"].as_str(), behind["unwritable_class"].as_str());
+    assert_eq!(waits, (Some("behind"), Some(why.as_str()), Some("other")), "the line behind waits under the same refusal: {behind}");
     assert_eq!(said_containing(&g, "could not be copied to its held file").len(), 1, "the wait said once as it begins: {:?}", g.said.lock().unwrap());
     g.holds.set_node_stopped("b-1", true);
     std::fs::remove_dir(&file).unwrap();
@@ -1679,6 +1710,39 @@ fn a_burst_the_device_refused_waits_with_the_bursts_after_it_and_the_probes_cloc
     g.holds.probe("b-1");
     let said = (said_containing(&g, "could not be copied").len(), said_containing(&g, "wait in memory no more").len());
     assert_eq!(said, (1, 1), "a second probe says nothing more: {:?}", g.said.lock().unwrap());
+}
+
+/// Checks that a refusal at the writer reaches the page with its class.
+///
+/// It is §3c.3's face, its act keyed by cause (skep #820). The device refuses
+/// every copy — as a full disk, then as a read-only volume: a burst is held
+/// with the device's words as `unwritable` and their class beside them as
+/// `unwritable_class`, `full` or `read_only`, and the next burst, held
+/// `behind` it and waiting behind its copy, carries the same words and the
+/// same class. The device taking copies again, the next hold copies all
+/// three and carries neither member (the mutant that reads the class off the
+/// words, or drops it, gives a read-only volume the full disk's act; the one
+/// that leaves the class beside a line copied tells the page a copy on disk
+/// is not).
+#[test]
+fn a_refusal_at_the_writer_reaches_the_page_with_its_class() {
+    for (kind, class) in [(std::io::ErrorKind::StorageFull, "full"), (std::io::ErrorKind::ReadOnlyFilesystem, "read_only")] {
+        let g = ground();
+        crate::held::tests::refuse_copies_as(kind);
+        let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+        let behind = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None);
+        crate::held::tests::take_copies();
+        let why = first["unwritable"].as_str().unwrap_or_else(|| panic!("{class}: the device's refusal rides the answer: {first}"));
+        assert_eq!(first["unwritable_class"].as_str(), Some(class), "{class}: its class beside it: {first}");
+        let OpAnswer::Answered(Ok(behind)) = behind else { panic!("{class}: held behind the first") };
+        crate::shapes::assert_declared("HeldAnswer", &behind);
+        let waits = (behind["cause"].as_str(), behind["unwritable"].as_str(), behind["unwritable_class"].as_str());
+        assert_eq!(waits, (Some("behind"), Some(why), Some(class)), "{class}: the line behind carries the refusal it waits behind: {behind}");
+        let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
+        assert!(next.get("unwritable").is_none() && next.get("unwritable_class").is_none(), "{class}: the device takes copies again: {next}");
+        let copied: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|line| line["held"].as_u64().unwrap()).collect();
+        assert_eq!(copied, [1, 2, 3], "{class}: all three copied, in `k` order");
+    }
 }
 
 /// Checks that no `held` event goes out when a session's open reads its file.

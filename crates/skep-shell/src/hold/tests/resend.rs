@@ -37,9 +37,12 @@
 //! holding in memory and joining its file once it returns, and joining it —
 //! the board's own, or the pending one — at a later probe where the device
 //! refused the join, the refusal said once and every answer meanwhile
-//! carrying it (skep #823), and the lines a refused join's copy left
-//! standing in the file, their cut-back refused, never read back once their
-//! bursts are sent from memory (skep #817, #821); every
+//! carrying it (skep #823) and its class (skep #820); a held store this
+//! shell may not make answering `read_only` and joining once it can, and a
+//! queue kept in memory answering the store's refusal that stands once the
+//! board returns, never the board away; and the lines a refused join's copy
+//! left standing in the file, their cut-back refused, never read back once
+//! their bursts are sent from memory (skep #817, #821); every
 //! principal's lines resent by one probe, a bare session's line resent by
 //! none until a session
 //! of its principal's that may write stands, and a probe with no line
@@ -675,21 +678,23 @@ fn unseal(sealed: &Path) {
 /// Checks that a queue kept in memory whose join the device refuses joins
 /// the board's file at a later probe (§3c.1, §3c.3; skep #823).
 ///
-/// The board away at the session's open, a burst is held in memory. The
-/// board's directory stands sealed, so when the board returns the probe's
-/// step takes its lock and the join is refused at the file's create: the
-/// line stands in memory, its resend refused `write_busy`, and the refusal
-/// is said once on `Talk` — naming the loss a close makes, and no launch
-/// memory does not survive. The next burst, held `behind` it, answers the
-/// device's own refusal as its `unwritable`, never the board away. A second
+/// The board away at the session's open, a burst is held in memory, of the
+/// class `other`. The board's directory stands sealed, so when the board
+/// returns the probe's step takes its lock and the join is refused at the
+/// file's create: the line stands in memory, its resend refused
+/// `write_busy`, and the refusal is said once on `Talk` — naming the loss a
+/// close makes, and no launch memory does not survive. The next burst, held
+/// `behind` it, answers the device's own refusal as its `unwritable`, never
+/// the board away, of its kind's class, `read_only` (skep #820). A second
 /// probe, still sealed, says nothing more. The node stopped and the
 /// directory opened, the next probe — which dials nothing — joins both lines
 /// into the board's file in `k` order and says so once (the mutant that
 /// never retries the join keeps every line in memory for a close to lose;
 /// the one that gates the retry on the node keeps them while the person has
 /// stopped it; the one that leaves the custody's why as it stood tells the
-/// page the board is away; the one that says each refusal tells the window
-/// at every probe).
+/// page the board is away; the one that reads the class off the line's own
+/// copy alone gives the sealed directory the class `other`; the one that
+/// says each refusal tells the window at every probe).
 #[cfg(unix)]
 #[test]
 fn a_queue_kept_in_memory_whose_join_the_device_refuses_joins_once_the_device_takes_it() {
@@ -700,6 +705,7 @@ fn a_queue_kept_in_memory_whose_join_the_device_refuses_joins_once_the_device_ta
     let g = ground_over(fake, store, facts, 0);
     let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
     assert!(first["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {first}");
+    assert_eq!(first["unwritable_class"], "other", "the board away is no device's refusal: {first}");
     let (sealed, refused) = seal_the_boards_directory(g.store.path());
     g.fake.head_unreachable.store(false, Ordering::SeqCst);
     g.fake.op_refused.every((503, json!({"error": "write_busy"})));
@@ -711,6 +717,7 @@ fn a_queue_kept_in_memory_whose_join_the_device_refuses_joins_once_the_device_ta
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the standing line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     assert_eq!(behind["unwritable"].as_str(), Some(refused.as_str()), "the device's refusal, never the board away: {behind}");
+    assert_eq!(behind["unwritable_class"], "read_only", "the sealed directory's refusal, of its kind's class: {behind}");
     g.holds.probe("b-1");
     assert_eq!(said_containing(&g, "could not join").len(), 1, "a second refused probe says nothing more: {:?}", g.said.lock().unwrap());
     // The node stopped and the directory opened: the probe joins both.
@@ -766,6 +773,84 @@ fn a_queue_kept_in_memory_whose_pending_join_the_device_refuses_joins_at_a_later
     let landed = said_containing(&g, "joined the pending held file");
     assert!(landed.len() == 1 && landed[0].contains("1 held line joined"), "{landed:?}");
     assert_eq!(g.fake.sends(), 0, "nothing sent unsigned");
+}
+
+/// Makes `held/` under `store` by hand and seals it (`0500`), so no board's
+/// held directory can be made under it; returns its path, for [`unseal`].
+#[cfg(unix)]
+fn seal_the_held_store(store: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let held = store.join("held");
+    std::fs::create_dir(&held).unwrap();
+    std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o500)).unwrap();
+    held
+}
+
+/// Checks that a held store this shell may not make answers `read_only`.
+///
+/// It is §3c.3's store out of reach (skep #820). With `held/` sealed before
+/// the session opens, the board's directory cannot be made under it, so the
+/// store is not yet this shell's. A burst is held in memory, its answer
+/// naming the store's refusal — "could not be made or locked" — of the class
+/// `read_only`, which no space freed ends. Opened again, the next probe makes
+/// the directory and joins the line into the board's file, its resend
+/// refused `write_busy` (the mutant that keeps the directory's refusal as
+/// words alone gives a data directory this shell may not write the class
+/// `other`).
+#[cfg(unix)]
+#[test]
+fn a_held_directory_the_shell_may_not_make_answers_read_only_and_joins_once_it_can() {
+    let store = TempDir::new().unwrap();
+    let held = seal_the_held_store(store.path());
+    let facts = writer_facts(&store);
+    let g = ground_in(store, facts, 0);
+    let answer = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be made or locked")), "the store's refusal rides the answer: {answer}");
+    assert_eq!(answer["unwritable_class"], "read_only", "{answer}");
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    unseal(&held);
+    g.holds.probe("b-1");
+    assert!(std::fs::read_to_string(held_file(&g)).unwrap().contains("\"values\":[\"a\"]"), "the line joined the board's file once its directory could be made");
+    assert_eq!(g.lines().len(), 1, "the line stands in the file, its resend refused");
+}
+
+/// Checks that a queue in memory answers the store's refusal that stands now.
+///
+/// It is §3c.3's store out of reach, once the board returns (skep #820).
+/// The board away at the session's open, a burst is held in memory, its
+/// answer naming the board away, of the class `other`. `held/` is then
+/// sealed and the board returns: the probe's step finds the board's
+/// directory cannot be made, so the store is still not this shell's, and the
+/// line, resent and refused `write_busy`, stands. The next burst, held
+/// `behind` it, answers the directory's refusal, of the class `read_only`,
+/// never the board away. Opened again, the next probe joins both lines into
+/// the board's file in `k` order (the mutant that leaves a standing memory
+/// custody's why at a step between two such tries tells the page the board
+/// is away, the person's act to wait).
+#[cfg(unix)]
+#[test]
+fn a_queue_kept_in_memory_answers_the_directorys_refusal_once_the_board_returns() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let first = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(first["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {first}");
+    assert_eq!(first["unwritable_class"], "other", "{first}");
+    let held = seal_the_held_store(g.store.path());
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line resent and refused, still standing");
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]), g.fake.head()), None) else { panic!("held behind the standing line") };
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    assert!(behind["unwritable"].as_str().is_some_and(|why| why.contains("could not be made or locked")), "the store's refusal, never the board away: {behind}");
+    assert_eq!(behind["unwritable_class"], "read_only", "{behind}");
+    unseal(&held);
+    g.holds.probe("b-1");
+    let joined: Vec<u64> = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap()).iter().map(|line| line["held"].as_u64().unwrap()).collect();
+    assert_eq!(joined, [1, 2], "both lines joined the board's file, in `k` order");
 }
 
 /// Returns the hands a moved document's `held` event names, over `rows` —

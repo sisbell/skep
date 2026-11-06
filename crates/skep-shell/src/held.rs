@@ -1284,12 +1284,12 @@ struct Owing {
 /// One line entered in the queue: the ordinal it took, and why no copy stands.
 ///
 /// The why is given where no copy of the line stands (§3c.3's
-/// `store_unwritable`, which the `held` answer carries as `unwritable`): the
-/// refusal of its copy — the device's, a full disk or a read-only volume, or
-/// the writer's, a line past [`MAX_HELD_LINE_BYTES`] — or the refusal of a
-/// copy owed before it — an earlier line's first copy, its re-mark or its
-/// `done` — behind which it waits ([`Waiting`]). The line stands in the queue
-/// either way.
+/// `store_unwritable`, which the `held` answer carries as `unwritable`, and
+/// its kind's class as `unwritable_class`): the refusal of its copy — the
+/// device's, a full disk or a read-only volume, or the writer's, a line past
+/// [`MAX_HELD_LINE_BYTES`] — or the refusal of a copy owed before it — an
+/// earlier line's first copy, its re-mark or its `done` — behind which it
+/// waits ([`Waiting`]). The line stands in the queue either way.
 #[derive(Debug)]
 pub struct Entered {
     pub k: u64,
@@ -1327,7 +1327,8 @@ impl Waiting {
     /// Returns the refusal of the copy the retry stopped at.
     ///
     /// It is the refusal's kind and its words, which every line waiting for
-    /// its first copy answers as why no copy of it stands.
+    /// its first copy answers as why no copy of it stands — the words as
+    /// `unwritable`, and the kind's class as `unwritable_class`.
     pub fn refusal(&self) -> io::Error {
         io::Error::new(self.error.kind(), self.error.to_string())
     }
@@ -2289,7 +2290,8 @@ impl Disk {
 /// `#[cfg(test)]` seams stand in for a device that refuses part-way: the
 /// first bytes written and the rest refused, as a full disk does
 /// (`tests::torn_write`), or the sync refused (`store_unwritable`, which the
-/// `held` answer carries as `unwritable`).
+/// `held` answer carries as `unwritable`), its kind the one a suite sets —
+/// a full disk's, or a read-only volume's (`tests::refused_as`).
 ///
 /// # Errors
 ///
@@ -2304,7 +2306,7 @@ fn write_synced(file: &mut File, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)?;
     #[cfg(test)]
     if tests::fail_sync() {
-        return Err(io::Error::new(io::ErrorKind::StorageFull, "the held store's sync was made to fail"));
+        return Err(io::Error::new(tests::refused_as(), "the held store's sync was made to fail"));
     }
     file.sync_data()
 }

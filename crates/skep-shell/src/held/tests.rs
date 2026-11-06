@@ -80,6 +80,7 @@ type Seam = Box<dyn Fn(&Path)>;
 
 thread_local! {
     static FAIL_SYNC: Cell<bool> = const { Cell::new(false) };
+    static REFUSED_AS: Cell<std::io::ErrorKind> = const { Cell::new(std::io::ErrorKind::StorageFull) };
     static TORN_WRITE: Cell<Option<usize>> = const { Cell::new(None) };
     static REFUSE_CUT_BACK: Cell<bool> = const { Cell::new(false) };
     static AFTER_SYNC: RefCell<Option<Seam>> = const { RefCell::new(None) };
@@ -111,6 +112,22 @@ pub(super) fn cut_back_refused(path: &Path, line: &[u8], mut failed: skep_util::
 /// which the `held` answer carries as `unwritable`).
 pub(super) fn fail_sync() -> bool {
     FAIL_SYNC.with(Cell::get)
+}
+
+/// Returns the kind a forced sync failure is refused with: a full disk's,
+/// unless [`refuse_copies_as`] set another.
+pub(super) fn refused_as() -> std::io::ErrorKind {
+    REFUSED_AS.with(Cell::get)
+}
+
+/// Refuses every copy's sync with `kind` until [`take_copies`] clears it.
+///
+/// It stands in for the device's refusal of each class the `held` answer
+/// tells apart (`unwritable_class`) — a full disk's `StorageFull`, a
+/// read-only volume's `ReadOnlyFilesystem` — for this suite and the hold's.
+pub(crate) fn refuse_copies_as(kind: std::io::ErrorKind) {
+    REFUSED_AS.with(|r| r.set(kind));
+    FAIL_SYNC.with(|f| f.set(true));
 }
 
 /// Returns the bytes the next copy writes before its write is refused.
@@ -158,10 +175,11 @@ pub(crate) fn count_copies() -> Rc<Cell<usize>> {
 }
 
 /// Makes the device take copies again: the refusal [`refuse_copies_after`]
-/// armed, cleared.
+/// or [`refuse_copies_as`] armed, cleared, its kind a full disk's again.
 pub(crate) fn take_copies() {
     AFTER_SYNC.with(|s| *s.borrow_mut() = None);
     FAIL_SYNC.with(|f| f.set(false));
+    REFUSED_AS.with(|r| r.set(std::io::ErrorKind::StorageFull));
 }
 
 /// The principal-1 file's path under `tmp`.

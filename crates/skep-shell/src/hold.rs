@@ -138,6 +138,18 @@
 //! `resend`'s: one read of the board's head per probe decides the directory
 //! and which documents are skipped ([`Holds::establish`]).
 //!
+//! **Why a line stands off disk** rides its `held` answer whatever keeps it
+//! there ([`Unwritable`]; §3c.3; skep #820): `unwritable`, the words — the
+//! device's refusal, the file's or the directory's, or the store out of
+//! reach — and `unwritable_class` beside them, read off a refusal's kind
+//! alone, never its words, which differ by platform ([`UnwritableClass`]):
+//! `full` (a full device, a spent quota), `read_only` (a read-only volume, a
+//! write the shell has no right to make) or `other` (every other kind, and
+//! every cause no device gave), so the page keys its act by cause (§3c.3's
+//! face): space freed ends a `full` refusal, the retry then writing the
+//! line, and none ends a `read_only` one. A line waiting behind a refused
+//! copy carries that copy's refusal unchanged.
+//!
 //! **Each board's hold its own lock**, the boards fixed at the open: a
 //! board's appends, each synced to disk, its file's read at a session's open
 //! and its resend's bookkeeping hold that board's lock alone, so no board's
@@ -1016,6 +1028,86 @@ fn awaits_act(line: &HeldLine) -> bool {
 /// sent as the board takes it, and lost at a close before then.
 const ANOTHER_WINDOW_HOLDS: &str = "another shell holds this board's held store — one shell per data directory — so this line, sent before that was found, is kept in memory alone until the board takes it, and a close before then loses it";
 
+/// Why a held line stands with no copy on disk, as the `held` answer says it
+/// (§3c.3; skep #820).
+///
+/// It is the words the answer carries as `unwritable` and their class, which
+/// it carries beside them as `unwritable_class`, both made from one cause so
+/// neither is said without the other: an I/O refusal's words with its kind's
+/// class ([`UnwritableClass::of`]), or a cause no device gave — the board
+/// unclaimed or away, another shell's store, a halted or misnamed file — of
+/// the class `other`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Unwritable {
+    why: String,
+    class: UnwritableClass,
+}
+
+impl Unwritable {
+    /// Returns a why no I/O refusal gives, of the class `other`.
+    fn other(why: impl Into<String>) -> Unwritable {
+        Unwritable { why: why.into(), class: UnwritableClass::Other }
+    }
+
+    /// Returns the I/O refusal `e` said after `lead`, as `<lead>: <e>`, of
+    /// its kind's class.
+    fn of(lead: &str, e: &io::Error) -> Unwritable {
+        Unwritable { why: format!("{lead}: {e}"), class: UnwritableClass::of(e.kind()) }
+    }
+
+    /// Sets the `held` answer's two members: `unwritable`, the words, and
+    /// `unwritable_class`, their class.
+    fn answer_in(&self, answer: &mut Value) {
+        answer["unwritable"] = Value::from(self.why.as_str());
+        answer["unwritable_class"] = Value::from(self.class.as_str());
+    }
+}
+
+impl From<&io::Error> for Unwritable {
+    /// Returns the I/O refusal `e` in its own words, of its kind's class.
+    fn from(e: &io::Error) -> Unwritable {
+        Unwritable { why: e.to_string(), class: UnwritableClass::of(e.kind()) }
+    }
+}
+
+/// The class of a cause that keeps a held line off disk: the act the page
+/// offers turns on it (§3c.3, the face's act keyed by cause; skep #820).
+///
+/// It is read off an I/O refusal's kind alone, never its words, which differ
+/// by platform: `full` where freeing space lets the copy land, `read_only`
+/// where the volume, or this shell's rights on the data directory, refuse
+/// the write, which no space freed ends, and `other` for every other kind,
+/// and for every cause no device gave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnwritableClass {
+    /// A device with no room left, or a quota spent.
+    Full,
+    /// A read-only volume, or a write this shell has no right to make.
+    ReadOnly,
+    /// Any other cause.
+    Other,
+}
+
+impl UnwritableClass {
+    /// Returns the class of an I/O refusal of `kind`: the one table.
+    fn of(kind: io::ErrorKind) -> UnwritableClass {
+        match kind {
+            io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => UnwritableClass::Full,
+            io::ErrorKind::ReadOnlyFilesystem | io::ErrorKind::PermissionDenied => UnwritableClass::ReadOnly,
+            _ => UnwritableClass::Other,
+        }
+    }
+
+    /// Returns the class as the `held` answer's `unwritable_class` spells it.
+    fn as_str(self) -> &'static str {
+        match self {
+            UnwritableClass::Full => "full",
+            UnwritableClass::ReadOnly => "read_only",
+            UnwritableClass::Other => "other",
+        }
+    }
+}
+
 /// A held directory under this shell's lock (§3c.3).
 ///
 /// It is the directory and the `flock` on its `lock`, held while the value
@@ -1033,13 +1125,14 @@ enum Directory {
     /// Not this shell's yet, and why.
     ///
     /// Why: the board unclaimed, serving no `H.1` (§3c.1: no held text), or
-    /// away, its head unread; or the directory or its lock refused. Tried
-    /// again at a session's open and at the probe; the lines held meanwhile
-    /// are in memory, and join the directory's file the moment it is this
-    /// shell's, the board's own or the pending one ([`Holds::establish`]),
-    /// and at every probe after while the join is refused
-    /// ([`Holds::rejoin`]).
-    NotYet(String),
+    /// away, its head unread, of the class `other`; or the directory or its
+    /// lock refused, of the refusal's kind's class ([`Unwritable`]). Tried
+    /// again at a session's open and at the probe, each try's why the one the
+    /// lines held meanwhile answer; they are in memory, and join the
+    /// directory's file the moment it is this shell's, the board's own or the
+    /// pending one ([`Holds::establish`]), and at every probe after while the
+    /// join is refused ([`Holds::rejoin`]).
+    NotYet(Unwritable),
     /// Another shell's: the lock of the directory the board's head names is
     /// held by another shell over this data directory (§3c.3).
     ///
@@ -1089,15 +1182,17 @@ impl Directory {
     /// made and locked the same way; a board unclaimed (no `H.1`, no held
     /// text) or away (`unreachable`) is not yet this shell's, why said, its
     /// lines in memory as before. Either directory is not yet this shell's
-    /// where it or its lock is refused, and is another shell's
+    /// where it or its lock is refused, why the refusal, of its kind's class
+    /// — the lock's create refused on a read-only volume, or in a directory
+    /// this shell may not write, among them — and is another shell's
     /// ([`Directory::AnotherWindow`]) where another shell holds its lock.
     fn of(data_dir: &Path, origin: &Origin, head: &Result<Option<BoardTerm>, Refusal>) -> Directory {
         let (dir, why) = match head {
             Ok(Some(board_term)) => (HeldDir::new(data_dir, Chain::from_bytes(board_term.chain)), None),
-            Ok(None) => return Directory::NotYet("the board serves no H.1, whose chain names its held store's directory".to_string()),
+            Ok(None) => return Directory::NotYet(Unwritable::other("the board serves no H.1, whose chain names its held store's directory")),
             Err(Refusal::Halt { name: Name::HEAD_UNREADABLE, face }) => (HeldDir::pending(data_dir, origin), Some(face.cause.clone())),
-            Err(Refusal::Unreachable(e)) => return Directory::NotYet(format!("the board could not be reached to read its H.1: {e}")),
-            Err(refusal) => return Directory::NotYet(format!("the board's H.1 could not be read: {refusal}")),
+            Err(Refusal::Unreachable(e)) => return Directory::NotYet(Unwritable::other(format!("the board could not be reached to read its H.1: {e}"))),
+            Err(refusal) => return Directory::NotYet(Unwritable::other(format!("the board's H.1 could not be read: {refusal}"))),
         };
         match dir.ensure().and_then(|()| dir.try_lock()) {
             Ok(Some(lock)) => {
@@ -1108,7 +1203,7 @@ impl Directory {
                 }
             }
             Ok(None) => Directory::AnotherWindow,
-            Err(e) => Directory::NotYet(format!("the held store could not be made or locked: {e}")),
+            Err(e) => Directory::NotYet(Unwritable::of("the held store could not be made or locked", &e)),
         }
     }
 }
@@ -1143,27 +1238,29 @@ enum Custody {
     /// `done` of a line on disk — it and every copy owed after it wait in
     /// memory instead, written in `k` order by the retry (`HeldQueue::retry`,
     /// §3c.3), each answer for a line waiting for its first copy carrying the
-    /// refusal as `unwritable`.
+    /// refusal as `unwritable` and its kind's class beside it ([`Unwritable`]).
     File,
     /// In memory alone, the file out of this shell's reach.
     ///
-    /// Each answer carries why as `unwritable` — the board's directory not
-    /// yet this shell's ([`Directory::NotYet`]'s why: the board unclaimed or
-    /// away at the first touch, or the directory or its lock refused), or
-    /// another shell's, where a line held is one a write brought past the
-    /// door before that was found ([`ANOTHER_WINDOW_HOLDS`]), or the refusal
-    /// that keeps the lines from the file: its read refused at the door, or
-    /// the join refused — the file's read or a copy, the file's halt, or an
-    /// earlier run's pending file the lines wait behind ([`Holds::join`]).
-    /// The lines join the directory's file the moment it is this shell's,
-    /// the board's own or the pending one ([`Holds::establish`]'s join), and
-    /// at every probe after while the join is refused ([`Holds::rejoin`]):
-    /// each keeps its ordinal where the file's queue holds no line and its
-    /// next ordinal is at or below theirs, else they are renumbered from it
-    /// and `held` re-said for their documents — so no line waits for an
-    /// empty queue to reach disk. Where the directory stays out of reach, the
-    /// file is opened at the first touch that finds the queue empty.
-    Unwritable(String),
+    /// Each answer carries why as `unwritable`, and its class beside it
+    /// ([`Unwritable`]) — the board's directory not yet this shell's
+    /// ([`Directory::NotYet`]'s why as the latest try found it: the board
+    /// unclaimed or away at the first touch, or the directory or its lock
+    /// refused), or another shell's, where a line held is one a write brought
+    /// past the door before that was found ([`ANOTHER_WINDOW_HOLDS`]), or the
+    /// refusal that keeps the lines from the file: its read refused at the
+    /// door, or the join refused — the file's read or a copy, the file's
+    /// halt, or an earlier run's pending file the lines wait behind
+    /// ([`Holds::join`]). The lines join the directory's file the moment it
+    /// is this shell's, the board's own or the pending one
+    /// ([`Holds::establish`]'s join), and at every probe after while the join
+    /// is refused ([`Holds::rejoin`]): each keeps its ordinal where the file's
+    /// queue holds no line and its next ordinal is at or below theirs, else
+    /// they are renumbered from it and `held` re-said for their documents —
+    /// so no line waits for an empty queue to reach disk. Where the directory
+    /// stays out of reach, the file is opened at the first touch that finds
+    /// the queue empty.
+    Unwritable(Unwritable),
     /// Nowhere: P38's halt (§3c.3).
     ///
     /// No burst is sent and no line held for the principal at this board,
@@ -1466,6 +1563,32 @@ impl BoardHold {
             ph.stopped_in_pass.clear();
         }
     }
+
+    /// Gives each principal's lines kept in memory alone the why the board's
+    /// directory gives now, where it is not this shell's (§3c.3).
+    ///
+    /// It runs at each step [`Holds::establish`] takes to such a directory, so
+    /// every later answer for the lines carries the cause that stands, never
+    /// one an earlier read found: another shell's store, a line held there one
+    /// a write brought past the door before that was found
+    /// ([`ANOTHER_WINDOW_HOLDS`]); or the directory not yet this shell's,
+    /// [`Directory::NotYet`]'s why as this try found it — the board away at
+    /// the first touch, then the directory or its lock refused, of the
+    /// refusal's kind's class. Every memory custody there holds a why an
+    /// earlier try of the directory gave — no join and no file's read runs at
+    /// a directory not this shell's — so no other cause is lost.
+    fn refresh_memory_why(&mut self) {
+        let why = match &self.directory {
+            Directory::NotYet(why) => why.clone(),
+            Directory::AnotherWindow => Unwritable::other(ANOTHER_WINDOW_HOLDS),
+            Directory::Pending { .. } | Directory::ThisWindow { .. } => return,
+        };
+        for ph in self.principals.values_mut() {
+            if let Custody::Unwritable(held) = &mut ph.custody {
+                *held = why.clone();
+            }
+        }
+    }
 }
 
 /// One board of the holds: the board dialed, and its hold under its own lock.
@@ -1556,7 +1679,7 @@ impl Holds {
             .into_iter()
             .map(|entry| {
                 let hold = BoardHold {
-                    directory: Directory::NotYet("no session has opened at this board yet".to_string()),
+                    directory: Directory::NotYet(Unwritable::other("no session has opened at this board yet")),
                     acked: HashSet::new(),
                     writes_halted: false,
                     poisoned: false,
@@ -1728,7 +1851,9 @@ impl Holds {
     /// record says nothing that moves them — and stays so too where the
     /// board's own directory cannot be taken yet, another shell's lock on it
     /// among the causes. A join refused at the step is tried again at every
-    /// probe ([`Holds::rejoin`]).
+    /// probe ([`Holds::rejoin`]). A step to a directory not this shell's gives
+    /// the lines held in memory the why it finds
+    /// ([`BoardHold::refresh_memory_why`]).
     ///
     /// **Another shell's store** ([`Directory::AnotherWindow`], §3c.3) is found
     /// where the lock of the directory the head names is held, and stays so
@@ -1771,16 +1896,7 @@ impl Holds {
         match board_hold.directory {
             Directory::ThisWindow { .. } => self.join(board_reference, &mut board_hold, slot.board.dialed()),
             Directory::Pending { .. } => self.join_in_memory(board_reference, &mut board_hold),
-            // A line held in memory from here is one a write brought past the
-            // door before the state was found, and its answer says so.
-            Directory::AnotherWindow => {
-                for ph in board_hold.principals.values_mut() {
-                    if let Custody::Unwritable(why) = &mut ph.custody {
-                        *why = ANOTHER_WINDOW_HOLDS.to_string();
-                    }
-                }
-            }
-            Directory::NotYet(_) => {}
+            Directory::NotYet(_) | Directory::AnotherWindow => board_hold.refresh_memory_why(),
         }
     }
 
@@ -1985,12 +2101,12 @@ impl Holds {
                 }
                 Ok(Opened::Halted { path, why }) => {
                     let cause = format!("principal {principal}'s pending held file {} is halted ({}) and is not joined; it stands until a person moves it aside", path.display(), why.token());
-                    let unwritable = format!("the held lines wait behind a pending held file an earlier run left, which is halted ({})", why.token());
+                    let unwritable = Unwritable::other(format!("the held lines wait behind a pending held file an earlier run left, which is halted ({})", why.token()));
                     return self.refuse_join(board_hold, principal, live, Vec::new(), StoppedAt::HaltedEarlier, cause, unwritable);
                 }
                 Err(e) => {
                     let cause = format!("principal {principal}'s pending held file could not be read ({e}) and is not joined");
-                    let unwritable = format!("the held lines wait behind a pending held file an earlier run left, which could not be read: {e}");
+                    let unwritable = Unwritable::of("the held lines wait behind a pending held file an earlier run left, which could not be read", &e);
                     return self.refuse_join(board_hold, principal, live, Vec::new(), StoppedAt::Earlier, cause, unwritable);
                 }
             }
@@ -2003,11 +2119,12 @@ impl Holds {
             }
             Ok(Opened::Halted { path, why }) => {
                 let cause = format!("principal {principal}'s {} {} is halted ({})", file_word(dir), path.display(), why.token());
-                return self.refuse_join(board_hold, principal, live, earlier.into_iter().collect(), StoppedAt::Target, cause, format!("the held file is halted ({})", why.token()));
+                let unwritable = Unwritable::other(format!("the held file is halted ({})", why.token()));
+                return self.refuse_join(board_hold, principal, live, earlier.into_iter().collect(), StoppedAt::Target, cause, unwritable);
             }
             Err(e) => {
                 let cause = unread_cause(principal, dir, &e);
-                return self.refuse_join(board_hold, principal, live, earlier.into_iter().collect(), StoppedAt::Target, cause, format!("the held file could not be read: {e}"));
+                return self.refuse_join(board_hold, principal, live, earlier.into_iter().collect(), StoppedAt::Target, cause, Unwritable::of("the held file could not be read", &e));
             }
         };
         // The checks (§3c.1): a pending file names the board dialed, the
@@ -2021,13 +2138,13 @@ impl Holds {
                 None => format!("principal {principal}'s pending held file names a board, and no pending held store stands to check it against; nothing is joined"),
             };
             let opened = earlier.into_iter().chain([chain]).collect();
-            let why = "the held lines wait behind a pending held file that names another board than the one dialed".to_string();
+            let why = Unwritable::other("the held lines wait behind a pending held file that names another board than the one dialed");
             return self.refuse_join(board_hold, principal, live, opened, StoppedAt::Target, cause, why);
         }
         if chain.board().is_some_and(|board| board != dir.board()) {
             let cause = format!("principal {principal}'s {} names another board than its directory; nothing is joined", file_word(dir));
             let opened = earlier.into_iter().chain([chain]).collect();
-            return self.refuse_join(board_hold, principal, live, opened, StoppedAt::Target, cause, "the held file names another board than its directory".to_string());
+            return self.refuse_join(board_hold, principal, live, opened, StoppedAt::Target, cause, Unwritable::other("the held file names another board than its directory"));
         }
         // The join, an earlier run's lines first, each source's in `k`
         // order as one copy; a refused copy enters none of its source's
@@ -2045,7 +2162,7 @@ impl Holds {
                 }
                 Err(refused) => {
                     let cause = format!("principal {principal}'s pending held file of an earlier run could not join {} (line {}: {})", the_file(dir), refused.k, refused.error);
-                    let unwritable = format!("the held lines wait behind a pending held file an earlier run left, which could not join the held file: {}", refused.error);
+                    let unwritable = Unwritable::of("the held lines wait behind a pending held file an earlier run left, which could not join the held file", &refused.error);
                     return self.refuse_join(board_hold, principal, live, vec![earlier, chain], StoppedAt::Earlier, cause, unwritable);
                 }
             }
@@ -2060,7 +2177,7 @@ impl Holds {
             }
             Some(Err(refused)) => {
                 let cause = format!("principal {principal}'s held lines could not join {} (line {}: {})", the_file(dir), refused.k, refused.error);
-                return self.refuse_join(board_hold, principal, live, vec![chain], StoppedAt::Target, cause, refused.error.to_string());
+                return self.refuse_join(board_hold, principal, live, vec![chain], StoppedAt::Target, cause, Unwritable::from(&refused.error));
             }
         }
         // The commit: the pending file removed, the hold's queue the
@@ -2116,20 +2233,21 @@ impl Holds {
     ///
     /// `live` is this run's queue the join took out of `principal`'s hold,
     /// put back as it stood: a queue kept in memory takes `why` as its
-    /// custody's, what each answer for its lines carries as `unwritable`; a
-    /// pending file's keeps its custody, its lines on disk. `opened` are the
-    /// files the join opened — an earlier run's pending file, the file the
-    /// lines join — each kept where it holds the refused copy's bytes past its
-    /// whole lines, their cut-back refused too ([`BoardHold::unsettled`]), so
-    /// no later open in this run reads them as held lines; the rest agree
-    /// with their files and go. `cause` is said in the shell's own window with
-    /// where the lines stand — `stopped` the file the join stopped at
-    /// ([`left_standing`]), and the copy a kept file still holds — where it is
-    /// not the cause last said for the principal
+    /// custody's, what each answer for its lines carries as `unwritable` with
+    /// its class — an I/O refusal's kind's, or `other` for a halted or
+    /// misnamed file — beside it; a pending file's keeps its custody, its
+    /// lines on disk. `opened` are the files the join opened — an earlier
+    /// run's pending file, the file the lines join — each kept where it holds
+    /// the refused copy's bytes past its whole lines, their cut-back refused
+    /// too ([`BoardHold::unsettled`]), so no later open in this run reads them
+    /// as held lines; the rest agree with their files and go. `cause` is said
+    /// in the shell's own window with where the lines stand — `stopped` the
+    /// file the join stopped at ([`left_standing`]), and the copy a kept file
+    /// still holds — where it is not the cause last said for the principal
     /// ([`Holds::say_kept_from_file`]), so the retry at each probe says
     /// nothing until the cause changes.
     #[allow(clippy::too_many_arguments)]
-    fn refuse_join(&self, board_hold: &mut BoardHold, principal: u64, live: Option<HeldQueue>, opened: Vec<HeldQueue>, stopped: StoppedAt, cause: String, why: String) {
+    fn refuse_join(&self, board_hold: &mut BoardHold, principal: u64, live: Option<HeldQueue>, opened: Vec<HeldQueue>, stopped: StoppedAt, cause: String, why: Unwritable) {
         let mut left = left_standing(live.as_ref(), stopped);
         let tailed: Vec<HeldQueue> = opened.into_iter().filter(HeldQueue::tail_left).collect();
         if !tailed.is_empty() {
@@ -2247,12 +2365,12 @@ impl Holds {
     /// whose door lets no write through, the custody's why
     /// ([`ANOTHER_WINDOW_HOLDS`]) for a line a write brought past it before
     /// the state was found. A file whose read is refused leaves the custody
-    /// memory's, the refusal its why and said in the shell's own window once
-    /// per change of its cause ([`Holds::say_kept_from_file`]) — the lines
-    /// held meanwhile join the file at the first probe it reads
-    /// ([`Holds::rejoin`]) — and the file's next open says so where a refusal
-    /// was said. Under the session that stands, so the restart arm's re-open
-    /// is covered too.
+    /// memory's, the refusal its why, of its kind's class, and said in the
+    /// shell's own window once per change of its cause
+    /// ([`Holds::say_kept_from_file`]) — the lines held meanwhile join the
+    /// file at the first probe it reads ([`Holds::rejoin`]) — and the file's
+    /// next open says so where a refusal was said. Under the session that
+    /// stands, so the restart arm's re-open is covered too.
     ///
     /// # Errors
     ///
@@ -2283,11 +2401,11 @@ impl Holds {
                     Err(e) => {
                         let left = "the lines held for the principal wait in memory until it reads, tried again at each probe, and a close before then loses them";
                         self.say_kept_from_file(kept_said, principal, unread_cause(principal, &store.dir, &e), Some(left));
-                        ph.custody = Custody::Unwritable(format!("the held file could not be read: {e}"));
+                        ph.custody = Custody::Unwritable(Unwritable::of("the held file could not be read", &e));
                     }
                 },
                 Directory::NotYet(why) => ph.custody = Custody::Unwritable(why.clone()),
-                Directory::AnotherWindow => ph.custody = Custody::Unwritable(ANOTHER_WINDOW_HOLDS.to_string()),
+                Directory::AnotherWindow => ph.custody = Custody::Unwritable(Unwritable::other(ANOTHER_WINDOW_HOLDS)),
             }
         }
         if let Custody::Halted { why, .. } = &ph.custody {
@@ -2693,12 +2811,15 @@ impl Holds {
     /// a wait for the held file's copies that begins or ends at this hold is
     /// said in the shell's own window ([`Holds::note_waiting`]). The answer
     /// is `{resp: held, held: <k>, cause}`, and `unwritable` beside it — why
-    /// — where no copy of the line stands: the device refused its copy, or a
-    /// copy owed before it — an earlier line's, or a re-mark or a `done` of
-    /// one — which it waits behind (§3c.3; `HeldQueue::retry`), or the file
-    /// is out of reach: the board's directory not yet this shell's, or
-    /// another shell's, where the line is one a write brought past the door
-    /// before that was found ([`ANOTHER_WINDOW_HOLDS`]).
+    /// — with `unwritable_class`, its class ([`Unwritable`]), where no copy of
+    /// the line stands: the device refused its copy, or a copy owed before it
+    /// — an earlier line's, or a re-mark or a `done` of one — which it waits
+    /// behind, its refusal's kind and words carried unchanged (§3c.3;
+    /// `HeldQueue::retry`), or the file is out of reach — the custody's why:
+    /// the board's directory not yet this shell's, the file's read or the
+    /// join refused, or the store another shell's, where the line is one a
+    /// write brought past the door before that was found
+    /// ([`ANOTHER_WINDOW_HOLDS`]).
     ///
     /// # Errors
     ///
@@ -2720,11 +2841,11 @@ impl Holds {
         self.note_waiting(session.facts.principal, ph);
         let unwritable = match &ph.custody {
             Custody::Unwritable(why) => Some(why.clone()),
-            _ => entered.unwritten.map(|e| e.to_string()),
+            _ => entered.unwritten.as_ref().map(Unwritable::from),
         };
         let mut answer = json!({"resp": "held", "held": entered.k, "cause": cause});
         if let Some(why) = unwritable {
-            answer["unwritable"] = Value::from(why);
+            why.answer_in(&mut answer);
         }
         let held = ph.count(&doc);
         Ok(LineEntered { k: entered.k, answer, doc, held, state, cause })

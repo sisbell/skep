@@ -10,7 +10,9 @@
 //! five kinds are bursts and the eleven other
 //! `WRITE_KINDS` are not; the five held states are the declared ones, a
 //! line's its cause's whatever refusal stands beside it, and the two acts of
-//! `resolve` the declared words and no other spelling.
+//! `resolve` the declared words and no other spelling; and the class of why a
+//! line stands off disk is its refusal's kind's row, every kind of no row
+//! `other`, the three classes the declared words, set with the words.
 //!
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, and whether it names a claimant; its `/changes` rows and
@@ -230,6 +232,70 @@ fn the_held_states_are_the_declared_five() {
     let spelled: std::collections::BTreeSet<String> = states.iter().map(|s| format!("'{}'", s.as_str())).collect();
     let words: std::collections::BTreeSet<String> = declared.split(" | ").map(str::to_string).collect();
     assert_eq!((spelled.len(), spelled), (5, words), "{declared}");
+}
+
+/// Checks that an I/O refusal's class is its kind's row, `other` for no row.
+///
+/// It is the one table (`UnwritableClass::of`; skep #820), one cell per row:
+/// a full disk and a spent quota read `full`, a read-only volume and a write
+/// this shell has no right to make read `read_only`. A kind of no row reads
+/// `other` — the writer's own refusal of a line past the bound
+/// (`InvalidInput`), which no freed space ends, a name another file or a
+/// directory takes, a file not found, a file past the volume's size, a write
+/// that would block and the OS's `Other` (the mutant that reads
+/// `PermissionDenied` as `other` gives a locked data directory no act of its
+/// own; the one that reads a kind of no row as `full` tells the person to free
+/// space the copy does not want).
+#[test]
+fn the_unwritable_class_of_each_kind_is_its_row() {
+    use std::io::ErrorKind;
+    let rows = [
+        (ErrorKind::StorageFull, UnwritableClass::Full),
+        (ErrorKind::QuotaExceeded, UnwritableClass::Full),
+        (ErrorKind::ReadOnlyFilesystem, UnwritableClass::ReadOnly),
+        (ErrorKind::PermissionDenied, UnwritableClass::ReadOnly),
+    ];
+    for (kind, class) in rows {
+        assert_eq!(UnwritableClass::of(kind), class, "{kind:?}");
+    }
+    for kind in [ErrorKind::Other, ErrorKind::InvalidInput, ErrorKind::AlreadyExists, ErrorKind::IsADirectory, ErrorKind::NotFound, ErrorKind::FileTooLarge, ErrorKind::WouldBlock] {
+        assert_eq!(UnwritableClass::of(kind), UnwritableClass::Other, "{kind:?}: a kind of no row");
+    }
+}
+
+/// Checks that the three classes are the declared words, set beside the why.
+///
+/// They are the `HeldAnswer.unwritable_class` union's words, each spelled as
+/// the answer carries it; the answer's two members are set from one cause
+/// (`Unwritable`): an I/O refusal's words — alone, or after what was refused
+/// — with its kind's class, and a cause no device gave with `other`, each
+/// answer held to its declaration (the mutant that misspells a class says one
+/// no page keys an act by; the one that sets the words alone leaves the page
+/// no class to read).
+#[test]
+fn the_three_unwritable_classes_are_the_declared_words() {
+    let classes = [UnwritableClass::Full, UnwritableClass::ReadOnly, UnwritableClass::Other];
+    let declared = crate::shapes::shape("HeldAnswer").unwrap().fields.iter().find(|f| f.name == "unwritable_class").unwrap().ty;
+    let spelled: std::collections::BTreeSet<String> = classes.iter().map(|c| format!("'{}'", c.as_str())).collect();
+    let words: std::collections::BTreeSet<String> = declared.split(" | ").map(str::to_string).collect();
+    assert_eq!((spelled.len(), spelled), (3, words), "{declared}");
+    let refused = std::io::Error::new(std::io::ErrorKind::ReadOnlyFilesystem, "Read-only file system (os error 30)");
+    let cells = [
+        ("the refusal alone", Unwritable::from(&refused), "Read-only file system (os error 30)", "read_only"),
+        (
+            "the refusal after what was refused",
+            Unwritable::of("the held store could not be made or locked", &refused),
+            "the held store could not be made or locked: Read-only file system (os error 30)",
+            "read_only",
+        ),
+        ("a cause no device gave", Unwritable::other("the board serves no H.1"), "the board serves no H.1", "other"),
+    ];
+    for (cell, why, words, class) in cells {
+        let mut answer = json!({"resp": "held", "held": 1, "cause": "unreachable"});
+        why.answer_in(&mut answer);
+        crate::shapes::assert_declared("HeldAnswer", &answer);
+        assert_eq!((answer["unwritable"].as_str(), answer["unwritable_class"].as_str()), (Some(words), Some(class)), "{cell}: {answer}");
+    }
 }
 
 /// The two acts are the declared `Resolve.act` union's words, each naming

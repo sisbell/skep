@@ -2,8 +2,9 @@
 //! records, and THE READS AND THE ONE WRITE over the crate's fake board —
 //! the frames in order, the position pre-check that reads nothing at a
 //! position, the published document refused at the one read, the write
-//! byte-checked.
+//! byte-checked, and the session's end at each of them typed.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -14,7 +15,9 @@ use crate::address::parse_address;
 use crate::board::fake::{self, Fake};
 use crate::board::frames::{self, T_CORRESPONDENCE};
 use crate::board::Token;
-use crate::dial::Request;
+use crate::dial::{Request, Response};
+use crate::halt::Halt;
+use crate::merge::reads::OnEnd;
 use crate::merge::{Refusal, Run};
 use crate::publication::{ISpan, Record};
 
@@ -106,21 +109,31 @@ fn runs_no_record_names_pass_through_in_order() {
 /// twentieth on, a hit in another account's home, a hit of another type,
 /// and the write acknowledged at 21.
 fn scripted() -> Arc<Fake> {
-    Fake::new(|req: &Request| {
-        let f = fake::frame(req);
-        match (req.path.as_str(), f["op"].as_str().unwrap_or("?")) {
-            ("/op", "doc_metadata") => fake::json(200, metadata(false)),
-            ("/op-at", "retrieve_doc_v_span_set") => fake::json(200, json!({"resp": "span_set", "as_of": 12, "set": [{"start": "1.1", "width": "0.14"}]})),
-            ("/op-at", "image") => fake::json(200, json!({"resp": "runs", "as_of": 12, "runs": [{"i_start": format!("{S}.0.1.1"), "width": "11"}, {"i_start": format!("{S}.0.1.20"), "width": "3"}]})),
-            ("/op", "find_links_ftt") => fake::json(200, json!({"resp": "addrs", "as_of": 20, "addrs": [format!("{S}.0.2.1"), format!("{Z}.0.2.9"), format!("{S}.0.2.2")]})),
-            ("/op", "read_link") => {
-                let ty = if f["a"] == format!("{S}.0.2.1") { frames::unit_span(T_CORRESPONDENCE) } else { frames::unit_span("1.1.0.1.0.1.0.3.13") };
-                fake::json(200, json!({"resp": "link_value", "as_of": 20, "at": 15, "link": {"slots": [[frames::i_span(&format!("{S}.0.1.1"), 11)], [frames::i_span(&format!("{E}.0.1.20"), 11)], ty]}}))
-            }
-            ("/op", "set_arrangement") => fake::json(200, json!({"resp": "ack", "at": 21})),
-            other => panic!("the restore sent a frame the fake does not answer: {other:?}"),
+    Fake::new(answer)
+}
+
+/// The fake board of [`scripted`], the session dying before its `n`-th
+/// request is answered: that answer carries the death signal.
+fn dying_at(n: usize) -> Arc<Fake> {
+    let served = AtomicUsize::new(0);
+    Fake::new(move |req: &Request| if served.fetch_add(1, Ordering::SeqCst) + 1 == n { fake::closed() } else { answer(req) })
+}
+
+/// The answer of [`scripted`]'s board to one request.
+fn answer(req: &Request) -> Response {
+    let f = fake::frame(req);
+    match (req.path.as_str(), f["op"].as_str().unwrap_or("?")) {
+        ("/op", "doc_metadata") => fake::json(200, metadata(false)),
+        ("/op-at", "retrieve_doc_v_span_set") => fake::json(200, json!({"resp": "span_set", "as_of": 12, "set": [{"start": "1.1", "width": "0.14"}]})),
+        ("/op-at", "image") => fake::json(200, json!({"resp": "runs", "as_of": 12, "runs": [{"i_start": format!("{S}.0.1.1"), "width": "11"}, {"i_start": format!("{S}.0.1.20"), "width": "3"}]})),
+        ("/op", "find_links_ftt") => fake::json(200, json!({"resp": "addrs", "as_of": 20, "addrs": [format!("{S}.0.2.1"), format!("{Z}.0.2.9"), format!("{S}.0.2.2")]})),
+        ("/op", "read_link") => {
+            let ty = if f["a"] == format!("{S}.0.2.1") { frames::unit_span(T_CORRESPONDENCE) } else { frames::unit_span("1.1.0.1.0.1.0.3.13") };
+            fake::json(200, json!({"resp": "link_value", "as_of": 20, "at": 15, "link": {"slots": [[frames::i_span(&format!("{S}.0.1.1"), 11)], [frames::i_span(&format!("{E}.0.1.20"), 11)], ty]}}))
         }
-    })
+        ("/op", "set_arrangement") => fake::json(200, json!({"resp": "ack", "at": 21})),
+        other => panic!("the restore sent a frame the fake does not answer: {other:?}"),
+    }
 }
 
 /// The frames the fake served, each as the board read it: an `/op-at`
@@ -195,4 +208,29 @@ fn a_published_document_is_refused_at_the_one_read() {
     let board = fake::board(&fake);
     assert_eq!(past(&board, &token(), ACCOUNT, &a(S), 3), Err(Refusal::Published { doc: a(S) }));
     assert_eq!(fake.log(), ["POST /op doc_metadata"]);
+}
+
+/// THE SESSION'S END (skep #812): the death signal at each of the reads —
+/// the metadata at the head, the extent and the image at the position, the
+/// records' find and its two link reads — and at the one write is
+/// `Refusal::SessionEnded`, nothing asked past it, its face naming the
+/// session's end and saying to run this again: nothing was restored.
+#[test]
+fn a_death_at_any_read_or_at_the_write_is_the_typed_session_end() {
+    let ended = |answer: &Result<(), Refusal>| matches!(answer, Err(Refusal::SessionEnded(Halt::Halt(face))) if face.state.starts_with("the session ended while") && face.act == OnEnd::Rerun.act());
+    let reads = scripted();
+    past(&fake::board(&reads), &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    assert_eq!(reads.log().len(), 6, "the premise: six reads");
+    for n in 1..=6 {
+        let fake = dying_at(n);
+        let answer = past(&fake::board(&fake), &token(), ACCOUNT, &a(S), 12).map(drop);
+        assert!(ended(&answer), "the death at read {n}, {}: {answer:?}", fake.log()[n - 1]);
+        assert_eq!(fake.log().len(), n, "nothing asked past it");
+    }
+    let fake = dying_at(7);
+    let board = fake::board(&fake);
+    let p = past(&board, &token(), ACCOUNT, &a(S), 12).expect("the past read");
+    let answer = restore(&board, &token(), &p).map(drop);
+    assert!(ended(&answer), "the death at the write: {answer:?}");
+    assert_eq!(fake.log().last().map(String::as_str), Some("POST /op set_arrangement"));
 }

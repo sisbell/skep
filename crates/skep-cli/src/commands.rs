@@ -491,10 +491,13 @@ impl Step {
 /// merge again on the head it names. The two `withheld` refusals — a
 /// document the reader may not read, an origin a write's run windows —
 /// name the document alone, so their detail says beside it what `step`
-/// did and did not do ([`Step::outcome`]).
+/// did and did not do ([`Step::outcome`]). The session's end keeps its own
+/// face and code too, exit 3: the face names the step the death signal met
+/// and the way on, and `step`'s words, which say what was not done, would
+/// be false where a landing or a take-back's write stands.
 fn refused(r: Refusal, step: Step) -> Stop {
     let code = match &r {
-        Refusal::Halt(_) => "",
+        Refusal::Halt(_) | Refusal::SessionEnded(_) => "",
         Refusal::BaseUnknown(_) => "base_unknown",
         Refusal::BareSource { .. } => "bare_source",
         Refusal::ForkBaseNamed { .. } => "fork_base_named",
@@ -519,7 +522,7 @@ fn refused(r: Refusal, step: Step) -> Stop {
         Refusal::SupersedeRefused { .. } => "supersede_refused",
     };
     match r {
-        Refusal::Halt(h) => Stop::Halt(h),
+        Refusal::Halt(h) | Refusal::SessionEnded(h) => Stop::Halt(h),
         other => {
             let detail = match &other {
                 Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => {
@@ -601,6 +604,26 @@ mod tests {
         assert_eq!(finish(Ok(())), 0);
         assert_eq!(finish(Err(no_terminal(RETIRE).into())), 3);
         assert_eq!(finish(Err(record_refused(LabelError::Newline).into())), 3);
+    }
+
+    /// Checks that a merge's session's end keeps its own face and code.
+    ///
+    /// The library's `SessionEnded` comes to its face itself — the step the
+    /// death signal met, its cause, the way on — exit 3, at every step: never
+    /// the board's refusal, exit 1, and never with a step's words of what was
+    /// not done beside it, which a landing that stands makes false.
+    #[test]
+    fn a_merges_session_end_keeps_its_face_and_finishes_with_exit_three() {
+        let face = Halt::face(
+            "the session ended while linking the record",
+            "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
+            "open a session again and resume: every step of the landing resumes by reading",
+        );
+        for step in [Step::Compose, Step::Publish, Step::Draft, Step::Undo, Step::Withdraw, Step::Restore] {
+            let Stop::Halt(h) = refused(Refusal::SessionEnded(face.clone()), step) else { panic!("a halt") };
+            assert_eq!(h, face, "the face itself, nothing of {:?} beside it", step.outcome());
+        }
+        assert_eq!(finish(Err(refused(Refusal::SessionEnded(face), Step::Publish))), 3);
     }
 
     /// Checks that a person door's refusal is a halt naming its own moments.

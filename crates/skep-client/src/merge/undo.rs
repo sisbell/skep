@@ -116,18 +116,25 @@
 //! record's link is the landing's, sent once more, signed, under its own id
 //! where it went unsigned and a claim landed past the head's read
 //! (`Writer::write_record`).
+//!
+//! **The session's end.** The death signal under the merger's token is
+//! [`Refusal::SessionEnded`]: up to and at the one write the act is run
+//! again, nothing having changed; at the record, after the write, the act
+//! stands with its record unwritten, as an owed head leaves it there.
 
 use serde_json::Value;
 use skep_address::Address;
 
 use crate::address::parse_address;
 use crate::board::answers::Metadata;
-use crate::board::{acked_at, frames, Board, Rejection, Token};
+use crate::board::{acked_at, frames, Board, Rejection};
 use crate::halt::{Halt, Refused};
 
 use super::compose::Run;
 use super::land::{own_fault, own_fault_face, shape_face, Merger, Unwritten, Writer};
-use super::reads::{feed_rows, mapped, records_of, runs_of, NoUndo, Reader, Refusal, SHOT_RUN_CAP};
+use super::reads::{
+    feed_rows, mapped, records_of, runs_of, NoUndo, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
+};
 use super::record::{self, Record};
 
 /// What an undo answered.
@@ -189,7 +196,7 @@ pub struct Withdrawn {
 ///   position where `own_ack` is given, as [`Refusal::Halt`] with a face,
 ///   nothing sent;
 /// - [`Refusal::NothingToUndo`] with its reason, and [`Refusal::NoMerge`],
-///   each with nothing sent; the feed walk's halts;
+///   each with nothing sent; the feed walk's refusals;
 /// - the pre-landing read's: [`Refusal::HistoryReclaimed`] where the board
 ///   no longer answers the position before the landing, nothing sent; its
 ///   other refusals, a position past the board's head among them as the
@@ -215,6 +222,11 @@ pub struct Withdrawn {
 ///   out of the draft and the record is not written, nothing of the record
 ///   sent; then the record's writes' as `Writer::write_record` answers
 ///   them, the act standing.
+///
+/// The death signal under the merger's token, met at any step, is
+/// [`Refusal::SessionEnded`]: up to and at the one write its face says to
+/// run the undo again, nothing changed; at the record's, that the merge is
+/// out of the draft with its record unwritten, and nothing more is written.
 pub fn undo(
     board: &Board,
     merger: Merger<'_>,
@@ -223,7 +235,7 @@ pub fn undo(
     own_ack: Option<u64>,
     journal: Option<&Address>,
 ) -> Result<Undone, Refusal> {
-    let writer = Writer::new(board, merger);
+    let writer = Writer::new(board, merger, OnEnd::Rerun);
     let reader = &writer.reader;
     let (meta, read_at) = reader.metadata_read(draft, None)?;
     if meta.published {
@@ -272,7 +284,7 @@ pub fn undo(
         (Some(base), None) => {
             // Nothing to undo, never the feed (N4): the words alone are the
             // feed's.
-            let why = match latest_ending_row(board, merger.token, draft)? {
+            let why = match latest_ending_row(reader, draft)? {
                 Some(Ending::Publish) => NoUndo::Published {
                     version: parse_address(base).ok_or_else(|| {
                         own_fault_face(
@@ -287,7 +299,7 @@ pub fn undo(
             return Err(Refusal::NothingToUndo { draft: draft.clone(), why });
         }
         (None, _) => {
-            let Some(at) = latest_landing_row(board, merger.token, draft)? else {
+            let Some(at) = latest_landing_row(reader, draft)? else {
                 return Err(Refusal::NoMerge { draft: draft.clone() });
             };
             let runs = match before(reader, draft, at)? {
@@ -324,7 +336,7 @@ pub fn undo(
     );
     let act = Act::Undo { landing };
     let position = send(&writer, &frame, draft, as_of, act)?;
-    let record = replace_record(&writer, kind, draft, &stem, journal, act)?;
+    let record = replace_record(board, merger, kind, draft, &stem, journal, act)?;
     Ok(Undone { draft: draft.clone(), position, record, restored })
 }
 
@@ -351,6 +363,9 @@ pub fn undo(
 /// - the one write's, as [`undo`]'s, `arrangement_moved` saying the draft
 ///   changed since it was read;
 /// - the record's, as [`undo`]'s.
+///
+/// The death signal under the merger's token is [`Refusal::SessionEnded`],
+/// faced as [`undo`]'s.
 pub fn withdraw(
     board: &Board,
     merger: Merger<'_>,
@@ -358,7 +373,7 @@ pub fn withdraw(
     kind: &Address,
     journal: Option<&Address>,
 ) -> Result<Withdrawn, Refusal> {
-    let writer = Writer::new(board, merger);
+    let writer = Writer::new(board, merger, OnEnd::Rerun);
     let reader = &writer.reader;
     let (meta, as_of) = reader.metadata_read(draft, None)?;
     if meta.published {
@@ -391,7 +406,7 @@ pub fn withdraw(
         Some(&format!("{stem}.arrangement")),
     );
     let position = send(&writer, &frame, draft, as_of, Act::Withdraw)?;
-    let record = replace_record(&writer, kind, draft, &stem, journal, Act::Withdraw)?;
+    let record = replace_record(board, merger, kind, draft, &stem, journal, Act::Withdraw)?;
     Ok(Withdrawn { draft: draft.clone(), position, record })
 }
 
@@ -510,10 +525,10 @@ enum Ending {
 ///
 /// # Errors
 ///
-/// The feed's halts.
-fn latest_ending_row(board: &Board, token: &Token, draft: &Address) -> Result<Option<Ending>, Halt> {
+/// The feed walk's (`feed_rows`), through `reader`.
+fn latest_ending_row(reader: &Reader<'_>, draft: &Address) -> Result<Option<Ending>, Refusal> {
     let mut latest = None;
-    feed_rows(board, Some(token), &draft.to_string(), true, |row| match row["op"].as_str() {
+    feed_rows(reader, &draft.to_string(), true, |row| match row["op"].as_str() {
         Some("publish") => latest = Some(Ending::Publish),
         Some("set_arrangement") if row["base"].is_string() && row["merge"].is_null() => {
             latest = Some(Ending::TakenBack);
@@ -532,10 +547,10 @@ fn latest_ending_row(board: &Board, token: &Token, draft: &Address) -> Result<Op
 ///
 /// # Errors
 ///
-/// The feed's halts.
-fn latest_landing_row(board: &Board, token: &Token, draft: &Address) -> Result<Option<u64>, Halt> {
+/// The feed walk's (`feed_rows`), through `reader`.
+fn latest_landing_row(reader: &Reader<'_>, draft: &Address) -> Result<Option<u64>, Refusal> {
     let mut at = None;
-    feed_rows(board, Some(token), &draft.to_string(), true, |row| {
+    feed_rows(reader, &draft.to_string(), true, |row| {
         if row["op"].as_str() == Some("set_arrangement") && row["merge"].is_object() {
             if let Some(p) = row["at"].as_u64() {
                 at = Some(p);
@@ -662,20 +677,26 @@ pub(crate) fn judge(v: &Value, draft: &Address, as_of: u64, act: Act) -> Result<
 ///
 /// It is the module's doc's record: the current record naming the draft as
 /// landed in, with `landed` none and `replaces` its link, under the act's
-/// stem; `None` where no record stands, nothing written.
+/// stem; `None` where no record stands, nothing written. It reads and
+/// writes through a writer of its own over `board` as `merger`, built for
+/// the step after the act's one write: a session's end at any of its reads
+/// or writes leaves the act standing with its record unwritten
+/// ([`OnEnd::TakenOut`]).
 ///
 /// # Errors
 ///
 /// The record's read's refusals (`Writer::landed_record`), then its writes'
 /// (`Writer::write_record`).
 fn replace_record(
-    writer: &Writer<'_>,
+    board: &Board,
+    merger: Merger<'_>,
     kind: &Address,
     draft: &Address,
     stem: &str,
     journal: Option<&Address>,
     act: Act,
 ) -> Result<Option<Address>, Refusal> {
+    let writer = Writer::new(board, merger, OnEnd::TakenOut);
     let Some(current) = writer.landed_record(kind, draft)? else { return Ok(None) };
     let record = Record {
         landed: None,
@@ -689,7 +710,7 @@ fn replace_record(
         Halt::face(
             format!("the merge is out of {draft}, and the record of {} is not written: {}", act.name(), why.reason()),
             cause,
-            "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
+            OnEnd::TakenOut.act(),
         )
     };
     writer.write_record(kind, &record, draft, stem, journal, &owed).map(Some)

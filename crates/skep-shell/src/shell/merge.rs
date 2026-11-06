@@ -111,8 +111,9 @@
 //! `not_owner {addr}`, `no_merge`, `nothing_to_undo {draft, why}` — the
 //! rest under `merge_refused {arm, …}`; the board's verdicts verbatim,
 //! `arrangement_moved` with its `site.as_of` and `site.current` among them;
-//! the death signal met at a read or a write ends the session,
-//! `session_died`.
+//! the death signal met at a read or a write under the session's token —
+//! the library's `SessionEnded` arm — ends the session, `session_died`;
+//! every other halt crosses as itself.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -389,8 +390,8 @@ impl Shell {
     }
 
     /// Maps the merge library's refusal to the shell's (the module doc, **The
-    /// refusals**), the death ending the session.
-    fn merge_refusal(&self, session: &SessionEntry, r: lib::Refusal) -> Refusal {
+    /// refusals**), the session ended where the library answers its end.
+    pub(super) fn merge_refusal(&self, session: &SessionEntry, r: lib::Refusal) -> Refusal {
         use lib::Refusal as R;
         let s = |a: &Address| a.to_string();
         let other = |arm: &str, members: Value| {
@@ -443,13 +444,8 @@ impl Shell {
                 };
                 other("supersede_refused", json!({"index": index, "detail": cause.token(), "head": head}))
             }
-            // The library faces the death signal rather than typing it (its
-            // `closed` face names the signal); every other halt crosses as
-            // the board's verdict, a face or the unreachable board.
-            R::Halt(h) => match &h {
-                Halt::Halt(face) if face.cause.contains("Skepd-Session: closed") => self.died(session),
-                _ => Refusal::from(h),
-            },
+            R::SessionEnded(_) => self.died(session),
+            R::Halt(h) => Refusal::from(h),
         }
     }
 

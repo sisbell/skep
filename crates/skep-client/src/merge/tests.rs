@@ -1087,7 +1087,8 @@ mod scripted {
 
     use crate::address::parse_address;
     use crate::board::{
-        acked_addr, acked_at, frames, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1, T_SUPERSEDES,
+        acked_addr, acked_at, frames, guest_closed, Answer, AtAnswer, Board, Scope, HEAD_MEMBER_1,
+        T_SUPERSEDES,
     };
     use crate::ceremony::handshake::{handshake, Session, Site};
     use crate::dial::{
@@ -1095,7 +1096,7 @@ mod scripted {
     };
     use crate::halt::Halt;
     use crate::merge::land::Stem;
-    use crate::merge::reads::MAX_SIDES;
+    use crate::merge::reads::{session_ended, OnEnd, MAX_SIDES};
     use crate::merge::*;
     use crate::origin::Origin;
     use crate::sign::Signer;
@@ -1337,6 +1338,12 @@ mod scripted {
         refuse_signed: Option<Value>,
         /// The merger's enrolled key.
         key: Option<PublicKey>,
+        /// The session dies before the N-th frame the dialer serves is
+        /// answered: that answer carries the death signal (wire.md
+        /// §Sessions) whatever the request presented — a token-free one's
+        /// the board's or the transport's fault — and so does every later
+        /// one presenting a token, nothing of either applied.
+        die_at: Option<usize>,
     }
 
     impl World {
@@ -2234,9 +2241,21 @@ mod scripted {
     struct Scripted {
         world: Arc<Mutex<World>>,
         served: Mutex<Vec<(String, Value)>>,
+        /// Whether each request served presented a token, in the order
+        /// `served` keeps.
+        presented: Mutex<Vec<bool>>,
     }
 
     impl Scripted {
+        /// Every request served since the last clear, the handshake's
+        /// included: its line as `served` keeps it, beside whether it
+        /// presented a token.
+        fn requests(&self) -> Vec<(String, bool)> {
+            let served = self.served.lock().unwrap();
+            let presented = self.presented.lock().unwrap();
+            served.iter().map(|(line, _)| line.clone()).zip(presented.iter().copied()).collect()
+        }
+
         /// The ops served, in order — `op` for `/op`, `at:op` for `/op-at`,
         /// the path for anything else — the handshake's own lines dropped.
         fn ops(&self) -> Vec<String> {
@@ -2296,6 +2315,7 @@ mod scripted {
 
         fn clear(&self) {
             self.served.lock().unwrap().clear();
+            self.presented.lock().unwrap().clear();
         }
 
         /// The 1-based place of the first `op` among every request served
@@ -2327,12 +2347,19 @@ mod scripted {
                 }
                 p => (format!("{} {p}", req.method.as_str()), Value::Null),
             };
+            let presented =
+                req.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("Skepd-Session"));
             let served = {
                 let mut served = self.served.lock().unwrap();
                 served.push((line, body));
+                self.presented.lock().unwrap().push(presented);
                 served.len()
             };
             let mut w = self.world.lock().unwrap();
+            // The session dies before this frame is answered.
+            if w.die_at.is_some_and(|n| n == served || (n < served && presented)) {
+                return Ok(crate::board::fake::closed());
+            }
             // Another hand's edit lands before this frame is answered.
             if w.interleave.as_ref().is_some_and(|(n, _, _)| *n == served) {
                 let (_, doc, runs) = w.interleave.take().unwrap();
@@ -2421,6 +2448,7 @@ mod scripted {
         let dialer = Arc::new(Scripted {
             world: Arc::new(Mutex::new(world)),
             served: Mutex::new(Vec::new()),
+            presented: Mutex::new(Vec::new()),
         });
         let board = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), dialer.clone());
         (dialer, board, signer)
@@ -7177,6 +7205,408 @@ mod scripted {
             under.iter().filter(|u| u.ends_with(&format!("under={D}"))).count(),
             2,
             "{under:?}"
+        );
+    }
+
+    // ── the session's end ────────────────────────────────────────────────
+
+    /// The way on each death of an act's walk must name.
+    #[derive(Clone, Copy)]
+    enum Ends {
+        /// Every death under the token names this one.
+        Alike(OnEnd),
+        /// A take-back's: the act run again up to and at its one write,
+        /// `set_arrangement`, and the act standing with its record unwritten
+        /// after it.
+        TakeBack,
+    }
+
+    /// What the deaths staged over one act answered: how many ended the
+    /// session, and how many were a token-free read's, the board's fault.
+    struct Deaths {
+        ended: usize,
+        faulted: usize,
+    }
+
+    /// Stages the session's death at every request of an act (skep #812).
+    ///
+    /// The act is run once whole over a fresh `world`, its `setup` made
+    /// first, and its requests numbered; then once per request, over a
+    /// fresh world and setup, the session dying before that request is
+    /// answered, and nothing is asked past it. One presenting the token must
+    /// answer `Refusal::SessionEnded`, its face naming the session's end and
+    /// the way on `ends` names — never another refusal, an absence or an
+    /// answer; a token-free one, `H.1`'s read, the board's fault
+    /// (`guest_closed`), never a session's end. `/health` reads no header,
+    /// so no death is staged at it.
+    fn deaths_of<S>(
+        cell: &str,
+        world: fn() -> World,
+        setup: impl Fn(&Scripted, &Board, &Session<'_>, &HybridSigner) -> S,
+        act: impl Fn(&Board, &Session<'_>, &HybridSigner, &S) -> Result<(), Refusal>,
+        ends: Ends,
+    ) -> Deaths {
+        let run = |die_at: Option<usize>| {
+            let (dialer, board, signer) = open(world());
+            let session = sign_in(&board, &signer);
+            let made = setup(&dialer, &board, &session, &signer);
+            dialer.clear();
+            dialer.world().die_at = die_at;
+            let answer = act(&board, &session, &signer, &made);
+            (answer, dialer.requests())
+        };
+        let (whole, requests) = run(None);
+        assert_eq!(whole, Ok(()), "{cell}: the premise, the act whole");
+        let write = requests.iter().position(|(line, _)| line == "set_arrangement");
+        let mut deaths = Deaths { ended: 0, faulted: 0 };
+        for (k, (line, presented)) in requests.iter().enumerate() {
+            if line == "GET /health" {
+                continue;
+            }
+            let n = k + 1;
+            let (answer, asked) = run(Some(n));
+            assert_eq!(
+                asked.len(),
+                n,
+                "{cell}: nothing asked past the death signal at {line} (#{n}): {:?}",
+                &asked[n.min(asked.len())..]
+            );
+            if !presented {
+                assert_eq!(
+                    answer,
+                    Err(Refusal::Halt(guest_closed())),
+                    "{cell}: the signal at the token-free {line} (#{n}) is the board's fault"
+                );
+                deaths.faulted += 1;
+                continue;
+            }
+            let on_end = match ends {
+                Ends::Alike(on_end) => on_end,
+                Ends::TakeBack if write.is_some_and(|w| k > w) => OnEnd::TakenOut,
+                Ends::TakeBack => OnEnd::Rerun,
+            };
+            let Err(Refusal::SessionEnded(Halt::Halt(face))) = &answer else {
+                panic!("{cell}: the death signal at {line} (#{n}) answered {answer:?}");
+            };
+            assert!(
+                face.state.contains("the session ended while")
+                    && face.cause.contains("Skepd-Session: closed"),
+                "{cell}: at {line} (#{n}): {face:?}"
+            );
+            assert_eq!(face.act, on_end.act(), "{cell}: the way on at {line} (#{n})");
+            deaths.ended += 1;
+        }
+        assert!(deaths.ended + deaths.faulted > 0, "{cell}: the premise, a death staged");
+        deaths
+    }
+
+    fn nothing(_: &Scripted, _: &Board, _: &Session<'_>, _: &HybridSigner) {}
+
+    fn race_composed(
+        _: &Scripted,
+        board: &Board,
+        session: &Session<'_>,
+        _: &HybridSigner,
+    ) -> Merged {
+        compose(board, Some(session.token()), &race_inputs()).expect("composed")
+    }
+
+    fn draft_composed(
+        _: &Scripted,
+        board: &Board,
+        session: &Session<'_>,
+        _: &HybridSigner,
+    ) -> Merged {
+        compose(board, Some(session.token()), &draft_inputs()).expect("composed")
+    }
+
+    /// The race shape landed by a shot, its record written.
+    fn race_landed(
+        dialer: &Scripted,
+        board: &Board,
+        session: &Session<'_>,
+        signer: &HybridSigner,
+    ) -> Merged {
+        let merged = race_composed(dialer, board, session, signer);
+        land(board, &merged, shot(session, signer)).expect("landed");
+        merged
+    }
+
+    fn landed_in_draft(_: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner) {
+        landed_in_s(board, session, signer);
+    }
+
+    /// THE SESSION'S END, TYPED, AT EVERY REQUEST UNDER THE TOKEN (skep
+    /// #812): the death signal staged at each request of each act —
+    /// `compose`, with no record and with one standing for the key; the
+    /// shot, a draft landing named and a fresh one; `resume` after a lost
+    /// acknowledgment; `record_published`; the undo by its marker and by a
+    /// baseless draft's feed row; the withdrawal; `verify`; `current`;
+    /// `head_of`; `journal::of` minting and finding — answers
+    /// `Refusal::SessionEnded` with the act's way on: a landing resumed,
+    /// every other act run again, a take-back past its one write standing
+    /// with its record unwritten. A record lookup's read is no absence: a
+    /// composition the signal meets at its prior records' journal reads
+    /// ends, never composes with no record standing (SP-14). `H.1`'s
+    /// token-free read, and every read of a composition made as a guest,
+    /// meets the signal as the board's fault, never as a session's end.
+    #[test]
+    fn a_death_at_any_request_under_the_token_is_the_typed_session_end() {
+        let resume_on = Ends::Alike(OnEnd::Resume);
+        let rerun = Ends::Alike(OnEnd::Rerun);
+        let composing = deaths_of(
+            "compose",
+            World::race,
+            nothing,
+            |board, session, _, _| compose(board, Some(session.token()), &race_inputs()).map(drop),
+            rerun,
+        );
+        assert!(
+            composing.ended > 0 && composing.faulted == 0,
+            "compose: the premise, its reads under the token"
+        );
+        let prior = deaths_of(
+            "compose over a standing record",
+            World::race,
+            race_landed,
+            |board, session, _, _| {
+                compose(board, Some(session.token()), &race_inputs()).map(|m| assert!(m.prior.is_some(), "the record stands: a composition answering none read a failure as an absence"))
+            },
+            rerun,
+        );
+        assert!(
+            prior.ended > composing.ended,
+            "the prior records' journal read: {} deaths past compose's {}",
+            prior.ended,
+            composing.ended
+        );
+        let guest = deaths_of(
+            "compose as a guest",
+            World::race,
+            nothing,
+            |board, _, _, _| compose(board, None, &race_inputs()).map(drop),
+            rerun,
+        );
+        assert!(
+            guest.ended == 0 && guest.faulted > 0,
+            "a guest's every read is token-free: no session stood to end"
+        );
+        let shot_landing = deaths_of(
+            "the shot",
+            World::race,
+            race_composed,
+            |board, session, signer, merged| land(board, merged, shot(session, signer)).map(drop),
+            resume_on,
+        );
+        assert_eq!(shot_landing.faulted, 1, "the head's read, before the first write");
+        for (cell, into) in [("a draft landing named", Some(a(S))), ("a fresh draft landing", None)]
+        {
+            let landing = deaths_of(
+                cell,
+                draft_landing_world,
+                draft_composed,
+                |board, session, signer, merged| {
+                    land(board, merged, draft_landing(session, signer, into.clone())).map(drop)
+                },
+                resume_on,
+            );
+            assert!(
+                landing.ended > 0 && landing.faulted == 1,
+                "{cell}: the head read once, before the first write"
+            );
+        }
+        let lost =
+            |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                let merged = race_composed(dialer, board, session, signer);
+                dialer.world().drop_acks = 2;
+                assert!(
+                    matches!(
+                        land(board, &merged, shot(session, signer)),
+                        Err(Refusal::Halt(Halt::Dial(_)))
+                    ),
+                    "the premise: the ack lost"
+                );
+                merged
+            };
+        deaths_of(
+            "resume",
+            World::race,
+            lost,
+            |board, session, signer, merged| {
+                resume(board, merged, shot(session, signer)).map(|l| {
+                    assert!(
+                        matches!(l, Some(Landed::Member { .. })),
+                        "the premise: the member found"
+                    )
+                })
+            },
+            resume_on,
+        );
+        let published =
+            |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                let merged = race_composed(dialer, board, session, signer);
+                let mut w = dialer.world();
+                w.text(D, 16, "!");
+                w.member(
+                    &format!("{D}.3"),
+                    vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3), run(D, 16, 1)],
+                    Some(15),
+                );
+                w.trunk_head.insert(D.to_string(), format!("{D}.3"));
+                w.claims.push(ClaimRow {
+                    claim: format!("{D}.0.2.1"),
+                    home: D.into(),
+                    old: format!("{D}.1.1"),
+                    new: format!("{D}.3"),
+                });
+                (merged, a(&format!("{D}.3")), w.position)
+            };
+        let recording = deaths_of(
+            "record_published",
+            World::race,
+            published,
+            |board, session, signer, (merged, member, at)| {
+                record_published(board, merged, merger(session, signer), member, *at, None)
+                    .map(drop)
+            },
+            rerun,
+        );
+        assert_eq!(recording.faulted, 1, "the head's read, before the record's first write");
+        let undo_s = |board: &Board, session: &Session<'_>, signer: &HybridSigner, _: &()| {
+            undo(board, merger(session, signer), &a(S), &a(K), None, None).map(drop)
+        };
+        let undoing = deaths_of(
+            "the undo by its marker",
+            draft_landing_world,
+            landed_in_draft,
+            undo_s,
+            Ends::TakeBack,
+        );
+        assert!(undoing.ended > 0 && undoing.faulted == 0, "the head was read at the landing");
+        const PLAIN: &str = "1.0.1.0.5";
+        let baseless = || {
+            let mut w = draft_landing_world();
+            w.doc(PLAIN, false, ACCOUNT, vec![run(D, 1, 11)]);
+            w
+        };
+        let landed_plain =
+            |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                let merged = draft_composed(dialer, board, session, signer);
+                land(board, &merged, draft_landing(session, signer, Some(a(PLAIN))))
+                    .expect("landed");
+            };
+        deaths_of(
+            "the undo by a feed row",
+            baseless,
+            landed_plain,
+            |board, session, signer, _| {
+                undo(board, merger(session, signer), &a(PLAIN), &a(K), None, None).map(drop)
+            },
+            Ends::TakeBack,
+        );
+        deaths_of(
+            "the withdrawal",
+            draft_landing_world,
+            landed_in_draft,
+            |board, session, signer, _| {
+                withdraw(board, merger(session, signer), &a(S), &a(K), None).map(drop)
+            },
+            Ends::TakeBack,
+        );
+        let recorded =
+            |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                let merged = race_landed(dialer, board, session, signer);
+                current(board, Some(session.token()), &a(K), &merged.key)
+                    .expect("the lookup")
+                    .expect("the record")
+            };
+        deaths_of(
+            "verify",
+            World::race,
+            recorded,
+            |board, session, _, record| {
+                verify(board, Some(session.token()), record)
+                    .map(|v| assert_eq!(v, Verdict::Equal, "the premise"))
+            },
+            rerun,
+        );
+        deaths_of(
+            "current",
+            World::race,
+            race_landed,
+            |board, session, _, merged| {
+                current(board, Some(session.token()), &a(K), &merged.key).map(|r| {
+                    assert!(
+                        r.is_some(),
+                        "the record stands: a lookup answering none read a failure as an absence"
+                    )
+                })
+            },
+            rerun,
+        );
+        deaths_of(
+            "head_of",
+            World::race,
+            nothing,
+            |board, session, _, _| {
+                head_of(board, Some(session.token()), &a(D))
+                    .map(|h| assert_eq!(h, Some(a(&format!("{D}.2"))), "the premise"))
+            },
+            rerun,
+        );
+        deaths_of(
+            "journal::of minting",
+            World::race,
+            nothing,
+            |board, session, signer, _| {
+                journal::of(board, &merger(session, signer), &a(K), None).map(drop)
+            },
+            rerun,
+        );
+        let filed =
+            |dialer: &Scripted, board: &Board, session: &Session<'_>, signer: &HybridSigner| {
+                let record = race_composed(dialer, board, session, signer).record;
+                let mut w = dialer.world();
+                w.doc("1.0.1.0.6", false, ACCOUNT, Vec::new());
+                file(&mut w, DOC1, "1.0.1.0.6", &record, &[&format!("{D}.1.1")]);
+            };
+        let finding = deaths_of(
+            "journal::of finding",
+            World::race,
+            filed,
+            |board, session, signer, _| {
+                journal::of(board, &merger(session, signer), &a(K), None)
+                    .map(|j| assert_eq!(j, a("1.0.1.0.6"), "the premise"))
+            },
+            rerun,
+        );
+        assert_eq!(finding.ended, 2, "the find and the record's link");
+    }
+
+    /// The three ways on say what each act leaves: a landing resumed, every
+    /// other act run again reading first, a take-back's write standing with
+    /// nothing more written — the words a take-back's owed record says too.
+    #[test]
+    fn each_way_on_says_what_the_act_it_stopped_leaves() {
+        let [rerun, resume, taken_out] =
+            [OnEnd::Rerun, OnEnd::Resume, OnEnd::TakenOut].map(OnEnd::act);
+        assert!(rerun.contains("run this again") && !rerun.contains("resume"), "{rerun}");
+        assert!(resume.contains("resume"), "{resume}");
+        assert!(
+            taken_out.starts_with("nothing more is written")
+                && taken_out.contains("a re-run writes no record"),
+            "{taken_out}"
+        );
+        let Refusal::SessionEnded(Halt::Halt(face)) =
+            session_ended("linking the record", OnEnd::TakenOut)
+        else {
+            panic!("the arm")
+        };
+        assert_eq!(face.state, "the merge is out of the draft, and its record is not written: the session ended while linking the record");
+        assert_eq!(
+            Refusal::SessionEnded(Halt::Halt(face.clone())).to_string(),
+            face.to_string(),
+            "the arm says its face"
         );
     }
 }

@@ -164,8 +164,9 @@ use crate::sign::{sig_hex, Signer};
 use super::compose::Run;
 use super::journal;
 use super::reads::{
-    comps, daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of,
-    runs_of, values_for, version_components, Family, Merged, Reader, Refusal, Role, Side,
+    comps, daughter_of, first_difference, is_trunk_member, next_trunk_member, position_of, runs_of,
+    session_ended, values_for, version_components, Family, Merged, OnEnd, Reader, Refusal, Role,
+    Side,
 };
 use super::record::{read_record, records_of, Record, RecordLanding};
 
@@ -407,7 +408,9 @@ impl<'a> Landing<'a> {
 ///   signed re-send, a head the second read does not find faced the same.
 ///
 /// At any step the library's own faults, the board's other refusals
-/// verbatim, transport halts and the death signal are [`Refusal::Halt`].
+/// verbatim and transport halts are [`Refusal::Halt`]; the death signal
+/// under the merger's token is [`Refusal::SessionEnded`], its face naming
+/// the step it met and [`resume`] as the way on.
 ///
 /// # Panics
 ///
@@ -473,6 +476,10 @@ pub fn resume(
 /// reads on: the claims' and the record's reads' refusals, a journal this
 /// merger may not read or this board does not register faced as the
 /// landing standing with its record unwritten, and the record's writes'.
+/// The death signal under the merger's token is [`Refusal::SessionEnded`],
+/// its way on this call made again: it reads the record first and writes
+/// it once, where [`resume`] would read no landing in a member the person
+/// edited before publishing.
 pub fn record_published(
     board: &Board,
     merged: &Merged,
@@ -487,7 +494,7 @@ pub fn record_published(
             format!("{member} lies outside the chain of {}", merged.inputs.doc),
         ));
     }
-    let writer = Writer::new(board, merger);
+    let writer = Writer::new(board, merger, OnEnd::Rerun);
     let claims = writer.claims_standing(merged, member)?;
     let landed = RecordLanding::Member { member: member.clone(), position };
     let newest = writer.newest_record(merged)?;
@@ -526,7 +533,7 @@ fn walk(
         return Err(Refusal::OverCap { runs: m, cap });
     }
     let merger = landing.merger();
-    let writer = Writer::new(board, merger);
+    let writer = Writer::new(board, merger, OnEnd::Resume);
     match &landing {
         Landing::Shot { draft, .. } => {
             let (member, position) = match writer.standing_member(merged)? {
@@ -740,7 +747,8 @@ impl Newest {
 ///
 /// The undo and the withdrawal (the `undo` module) write through it too:
 /// the head's pre-check, the one write and the record are theirs as the
-/// landing's.
+/// landing's. Its reads and writes face a session's end alike, for the
+/// one act it was built for: its reader's [`OnEnd`].
 pub(super) struct Writer<'a> {
     pub(super) board: &'a Board,
     pub(super) merger: Merger<'a>,
@@ -749,9 +757,9 @@ pub(super) struct Writer<'a> {
 
 impl<'a> Writer<'a> {
     /// Returns a writer over `board` as `merger`, its reader under the
-    /// merger's token.
-    pub(super) fn new(board: &'a Board, merger: Merger<'a>) -> Writer<'a> {
-        Writer { board, merger, reader: Reader::new(board, Some(merger.token)) }
+    /// merger's token, for an act whose session's end leaves `on_end`.
+    pub(super) fn new(board: &'a Board, merger: Merger<'a>, on_end: OnEnd) -> Writer<'a> {
+        Writer { board, merger, reader: Reader::new(board, Some(merger.token), on_end) }
     }
 }
 
@@ -828,8 +836,7 @@ impl Writer<'_> {
         if first_difference(&expected, &actual, &merged.inputs.doc).is_some() {
             return Ok(Holds::Other);
         }
-        let at = position_of(self.board, Some(self.merger.token), member)?
-            .unwrap_or_else(|| self.reader.as_of());
+        let at = position_of(&self.reader, member)?.unwrap_or_else(|| self.reader.as_of());
         Ok(Holds::Merged(at))
     }
 
@@ -864,8 +871,9 @@ impl Writer<'_> {
     /// window of width 0, and the board's refusal of the frame's substance —
     /// the shot's own table, a place's or another deposit's token, which this
     /// frame never carries — as the library's own faults; an answer of a
-    /// shape this client does not know, faced; the death signal; a dial fault
-    /// after the one re-ask; the board's other refusals verbatim.
+    /// shape this client does not know, faced; the death signal,
+    /// [`Refusal::SessionEnded`]; a dial fault after the one re-ask; the
+    /// board's other refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
         let term = self.signing_term(&head_owed)?;
         let doc = &merged.inputs.doc;
@@ -1006,15 +1014,15 @@ impl Writer<'_> {
     ///
     /// # Errors
     ///
-    /// The death signal, faced; a dial fault after the one re-ask; the
-    /// frame's other halts.
+    /// The death signal, [`Refusal::SessionEnded`]; a dial fault after the
+    /// one re-ask; the frame's other halts.
     fn shoot(&self, frame: &Value) -> Result<Value, Refusal> {
         let answer = match self.board.op(Some(self.merger.token), frame) {
             Err(Halt::Dial(_)) => self.board.op(Some(self.merger.token), frame)?,
             other => other?,
         };
         match answer {
-            Answer::Closed => Err(closed("publishing the merge").into()),
+            Answer::Closed => Err(session_ended("publishing the merge", self.reader.on_end())),
             Answer::Document(v) => Ok(v),
         }
     }
@@ -1197,7 +1205,7 @@ impl Writer<'_> {
     /// # Errors
     ///
     /// The head's refusal and halts ([`Writer::signing_term`]), the act
-    /// standing and nothing of the record sent; the journal's halts
+    /// standing and nothing of the record sent; the journal's refusals
     /// ([`journal::of`]); a journal this merger may not read or this board
     /// does not register, faced by `owed` with nothing of the record sent;
     /// the extent read's other refusals; a journal that is published, full
@@ -1209,8 +1217,8 @@ impl Writer<'_> {
     /// read's halts, and a head it does not find faced as the head the board
     /// owes with the act standing, the link not sent again; an answer of a
     /// shape this client does not know, faced;
-    /// [`Refusal::NeedsSignedSession`] at the link; the death signal; the
-    /// board's other refusals verbatim.
+    /// [`Refusal::NeedsSignedSession`] at the link; the death signal,
+    /// [`Refusal::SessionEnded`]; the board's other refusals verbatim.
     pub(super) fn write_record(
         &self,
         kind: &Address,
@@ -1222,7 +1230,8 @@ impl Writer<'_> {
     ) -> Result<Address, Refusal> {
         let owed_head = |cause: String| owed(Unwritten::HeadOwed, cause);
         let term = self.signing_term(&owed_head)?;
-        let journal = journal::of(self.board, &self.merger, kind, journal.cloned())?;
+        let journal =
+            journal::found(self.board, &self.merger, kind, journal.cloned(), self.reader.on_end())?;
         let text = record.to_value().to_string();
         // The journal's first read, after the act it records: a journal the
         // act cannot write its record into leaves the act standing.
@@ -1395,8 +1404,8 @@ impl Writer<'_> {
     /// stage's source — the first never met at a version member, since every
     /// member of a published chain is published (wire.md §Arrangement,
     /// `version`); an answer of a shape this client does not know,
-    /// faced; the death signal; a dial fault; the board's other refusals
-    /// verbatim — `mint_home_first` among them.
+    /// faced; the death signal, [`Refusal::SessionEnded`]; a dial fault; the
+    /// board's other refusals verbatim — `mint_home_first` among them.
     fn stage(&self, merged: &Merged, newest: &Newest) -> Result<(Address, u64), Refusal> {
         self.signing_term(&head_owed)?;
         let head = &merged.inputs.head;
@@ -1457,8 +1466,9 @@ impl Writer<'_> {
     /// `base_extent_too_large`), a run's origin (`source_not_registered`,
     /// `bad_run`, `dangling_source`, `too_many_runs`), the draft's standing
     /// (`published_target`, `not_owner`) — as the library's own faults; an
-    /// answer of a shape this client does not know, faced; the death signal;
-    /// a dial fault; the board's other refusals verbatim.
+    /// answer of a shape this client does not know, faced; the death signal,
+    /// [`Refusal::SessionEnded`]; a dial fault; the board's other refusals
+    /// verbatim.
     fn land_into_draft(
         &self,
         merged: &Merged,
@@ -1601,11 +1611,12 @@ impl Writer<'_> {
     ///
     /// # Errors
     ///
-    /// The death signal under the token, faced; otherwise [`Board::op`]'s
-    /// errors.
+    /// The death signal under the token, [`Refusal::SessionEnded`] naming
+    /// the write `during` names, faced for the writer's act; otherwise
+    /// [`Board::op`]'s errors.
     pub(super) fn answered_write(&self, frame: &Value, during: &str) -> Result<Value, Refusal> {
         match self.board.op(Some(self.merger.token), frame)? {
-            Answer::Closed => Err(closed(during).into()),
+            Answer::Closed => Err(session_ended(during, self.reader.on_end())),
             Answer::Document(v) => Ok(v),
         }
     }
@@ -1667,15 +1678,6 @@ impl Writer<'_> {
         let bytes = entry_frame(&alg, term, &account, DocTerm::One(doc), body);
         Ok(Some(json!({"alg": alg, "sig": sig_hex(&self.merger.signer.sign(&bytes))})))
     }
-}
-
-/// Returns the death signal under the session, faced.
-pub(crate) fn closed(during: &str) -> Halt {
-    Halt::face(
-        format!("the session ended while {during}"),
-        "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
-        "open a session again and resume: every step of the landing resumes by reading",
-    )
 }
 
 /// Faces a claimed board whose head is owed, met before the landing's first

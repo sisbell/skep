@@ -194,10 +194,9 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
 ///
 /// # Errors
 ///
-/// Returns a halt where no head is named and none is on the feed, and the
-/// halt the feed's read comes to; a library refusal ([`refused`]) from the
-/// composition, the landing, the undo or the withdrawal; and the halt a
-/// write stdout refuses comes to.
+/// Returns a halt where no head is named and none is on the feed; a library
+/// refusal ([`refused`]) from the feed's read, the composition, the landing,
+/// the undo or the withdrawal; and the halt a write stdout refuses comes to.
 fn run(
     board: &Board,
     session: &Session<'_>,
@@ -229,7 +228,7 @@ fn run(
     };
     let head = match head {
         Some(h) => h.clone(),
-        None => head_of(board, Some(token), doc)?.ok_or_else(|| {
+        None => head_of(board, Some(token), doc).map_err(|r| refused(r, Step::Compose))?.ok_or_else(|| {
             Halt::face(
                 format!("no head version of {doc} is on the feed"),
                 "no publish row under the document names a trunk version: it has no version yet, or its rows lie below the feed's retention floor",

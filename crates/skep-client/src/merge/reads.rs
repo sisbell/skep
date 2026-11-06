@@ -67,6 +67,18 @@
 //! [`Board::op_at`] for every read at P, whose `history_busy` is retried a
 //! bounded number of times (§7, "What it reads through"); the feed walk
 //! goes through [`Board::changes`]. Nothing here writes.
+//!
+//! **The session's end.** Every read and write of the merge, the restore
+//! and the take-backs that meets the death signal under the caller's token
+//! answers [`Refusal::SessionEnded`] (wire.md §Sessions), carrying the face
+//! that names the step it met and the way on that the act it stopped
+//! leaves — a landing resumed, a take-back whose write stands left as it
+//! is, every other act run again — so an embedder ends its session on the
+//! arm, never on the words. The reader and the writer are each built for
+//! one act's way on (`OnEnd`), and the one constructor composes the face
+//! (`session_ended`). A read that presented no token cannot meet the
+//! signal: one that does is the board's or the transport's fault,
+//! [`Refusal::Halt`], as [`Board`] faces it.
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -79,7 +91,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use crate::address::{doc_1_of, parse_address};
 use crate::board::answers::{self, IRun, Metadata};
 use crate::board::{
-    frames, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Rejection, Token,
+    frames, guest_closed, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Rejection, Token,
 };
 use crate::halt::Halt;
 use crate::publication::enumerate::MAX_WIRE_LIST;
@@ -340,8 +352,9 @@ pub struct Merged {
 /// Every refusal the reads and the landing can meet.
 ///
 /// The merge record's §7 names them ("Its errors"), each that answers a
-/// wire code named for the code; the library's own faults and the board's
-/// other refusals ride [`Refusal::Halt`].
+/// wire code named for the code; the session's end under the caller's
+/// token is [`Refusal::SessionEnded`]; the library's own faults and the
+/// board's other refusals ride [`Refusal::Halt`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// A side whose base the library cannot read, refused before any `image`.
@@ -593,14 +606,28 @@ pub enum Refusal {
         /// The cause, the rejection's `detail`.
         cause: SupersedeCause,
     },
+    /// The death signal under the caller's token: the session ended
+    /// (wire.md §Sessions).
+    ///
+    /// It is met at any read or write of an act that presents the token,
+    /// and nothing is read or written past it; the write it met did not
+    /// land, the board running a dead token's frame as a guest's. The face
+    /// carried is the one the act owes its person: the step the signal met,
+    /// and the way on — at a landing [`resume`](super::resume), at a
+    /// take-back's record the act standing with its record unwritten, at
+    /// every other step the act run again, which reads what stands before
+    /// it writes. An embedder that holds the session ends it on this arm.
+    SessionEnded(Halt),
     /// The library's own fault named (A-288's own-bug class).
     ///
     /// The fault is a frame the board refused as malformed in substance, a
     /// shape it does not know; the board's other refusals ride here verbatim,
-    /// and every transport halt. Two of the publication's own refusals of the
-    /// shot ride here VERBATIM too, never as the library's fault —
-    /// `already_published` naming the member the draft's words were published
-    /// into, `publication_over_budget` with the daemon's detail — each a
+    /// every transport halt, and the death signal met by a read that
+    /// presented no token, a fault of the board or the transport, never a
+    /// session's end. Two of the publication's own refusals of the shot ride
+    /// here VERBATIM too, never as the library's fault — `already_published`
+    /// naming the member the draft's words were published into,
+    /// `publication_over_budget` with the daemon's detail — each a
     /// `Halt::Refused` whose `body` carries the `site`.
     Halt(Halt),
 }
@@ -707,7 +734,7 @@ impl fmt::Display for Refusal {
                 SupersedeCause::Base => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, base): the side is the member the shot appends to — nothing was published"),
                 SupersedeCause::Duplicate => write!(f, "the board refused the supersession claim at entry {index} (supersede_refused, duplicate): the side is named twice — nothing was published"),
             },
-            Refusal::Halt(h) => h.fmt(f),
+            Refusal::SessionEnded(h) | Refusal::Halt(h) => h.fmt(f),
         }
     }
 }
@@ -863,26 +890,34 @@ pub(crate) struct Imaged {
     pub(super) as_of: Option<u64>,
 }
 
-/// The door of the merge's frame reads, and the restore's: a board and the
-/// caller's token.
+/// The door of the merge's reads, and the restore's: a board, the caller's
+/// token and the way on its act leaves where the session ends.
 ///
-/// The highest `as_of` its answers carry is kept. The feed walk and the
-/// journal's reads ask the board directly.
+/// The highest `as_of` its frames' answers carry is kept. The feed walk
+/// goes through it too ([`feed_rows`]); the journal's reads ask the board
+/// directly.
 pub(crate) struct Reader<'a> {
     board: &'a Board,
     token: Option<&'a Token>,
     as_of: Cell<u64>,
+    on_end: OnEnd,
 }
 
 impl<'a> Reader<'a> {
-    /// Returns a reader at `board` as `token`'s principal, or as a guest.
-    pub(crate) fn new(board: &'a Board, token: Option<&'a Token>) -> Reader<'a> {
-        Reader { board, token, as_of: Cell::new(0) }
+    /// Returns a reader at `board` as `token`'s principal, or as a guest,
+    /// for an act whose session's end leaves `on_end`.
+    pub(crate) fn new(board: &'a Board, token: Option<&'a Token>, on_end: OnEnd) -> Reader<'a> {
+        Reader { board, token, as_of: Cell::new(0), on_end }
     }
 
     /// Returns the highest `as_of` answered so far.
     pub(super) fn as_of(&self) -> u64 {
         self.as_of.get()
+    }
+
+    /// Returns the way on this reader's act leaves where the session ends.
+    pub(super) fn on_end(&self) -> OnEnd {
+        self.on_end
     }
 
     fn note(&self, v: &Value) {
@@ -899,10 +934,12 @@ impl<'a> Reader<'a> {
     ///
     /// # Errors
     ///
-    /// The death signal under the token is the session's end, faced, and
-    /// with no token so is one at the head, where one at a position halts as
-    /// [`Board::op_at`] halts it; a position the board has reclaimed the
-    /// history at is [`Refusal::HistoryReclaimed`], one past its head
+    /// The death signal under the token is [`Refusal::SessionEnded`],
+    /// faced for this reader's act; with no token it is the board's or the
+    /// transport's fault, [`Refusal::Halt`] — at the head this reader's own
+    /// `guest_closed` face, at a position [`Board::op_at`]'s — for no session
+    /// stood to end; a position the board has reclaimed the history at is
+    /// [`Refusal::HistoryReclaimed`], one past its head
     /// [`Refusal::BeyondHead`] and one inside a commit
     /// [`Refusal::NotAPosition`], each the caller's position and never read
     /// at the head instead; [`Refusal::HistoryBusy`] past the retries;
@@ -910,7 +947,8 @@ impl<'a> Reader<'a> {
     pub(crate) fn read(&self, frame: &Value, at: Option<u64>) -> Result<Value, Refusal> {
         let Some(at) = at else {
             return match self.board.op(self.token, frame)? {
-                Answer::Closed => Err(closed("reading").into()),
+                Answer::Closed if self.token.is_none() => Err(guest_closed().into()),
+                Answer::Closed => Err(session_ended("reading", self.on_end)),
                 Answer::Document(v) => {
                     self.note(&v);
                     Ok(v)
@@ -923,7 +961,9 @@ impl<'a> Reader<'a> {
                     self.note(&v);
                     return Ok(v);
                 }
-                AtAnswer::Closed => return Err(closed("reading at a position").into()),
+                AtAnswer::Closed => {
+                    return Err(session_ended("reading at a position", self.on_end))
+                }
                 AtAnswer::Busy => {
                     if attempt < HISTORY_BUSY_RETRIES {
                         thread::sleep(Duration::from_millis(20 * u64::from(attempt + 1)));
@@ -1198,13 +1238,57 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Returns the death signal under the caller's token, faced.
-fn closed(during: &str) -> Halt {
-    Halt::face(
-        format!("the session ended while {during}"),
+/// What a session's end leaves of the act it stopped: the way on the face
+/// of [`Refusal::SessionEnded`] says.
+///
+/// No write the death signal met landed — the board runs a dead token's
+/// frame as a guest's (wire.md §Sessions) — so what stands is what the act
+/// wrote before it, and the act's kind says what takes it up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnEnd {
+    /// The act is run again: a composition, a verification or a lookup,
+    /// the restore, a take-back up to and at its one write, the record of a
+    /// publication — each reads what stands before it writes.
+    Rerun,
+    /// A landing, landed in part or not at all: `resume` finds what of it
+    /// landed and completes the rest, writing nothing twice.
+    Resume,
+    /// A take-back's record, its one write standing: nothing more is
+    /// written, a re-run finding no merge to take out and writing none.
+    TakenOut,
+}
+
+impl OnEnd {
+    /// Returns the face's state for a session that ended `during` a step.
+    fn state(self, during: &str) -> String {
+        match self {
+            OnEnd::Rerun | OnEnd::Resume => format!("the session ended while {during}"),
+            OnEnd::TakenOut => format!(
+                "the merge is out of the draft, and its record is not written: the session ended while {during}"
+            ),
+        }
+    }
+
+    /// Returns the face's act: the one way on.
+    pub(crate) fn act(self) -> &'static str {
+        match self {
+            OnEnd::Rerun => "open a session again and run this again: it reads what stands before it writes",
+            OnEnd::Resume => "open a session again and resume: every step of the landing resumes by reading",
+            OnEnd::TakenOut => "nothing more is written: the draft stands as the act left it, and a re-run writes no record, finding no merge to take out; the landing's record stands alone in the journal",
+        }
+    }
+}
+
+/// Returns the death signal under the caller's token met `during` a step of
+/// an act that leaves `on_end`, as [`Refusal::SessionEnded`].
+///
+/// It is the one composer of the arm's face (the module's doc).
+pub(crate) fn session_ended(during: &str, on_end: OnEnd) -> Refusal {
+    Refusal::SessionEnded(Halt::face(
+        on_end.state(during),
         "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
-        "open a session again and run the merge again: every step resumes by reading",
-    )
+        on_end.act(),
+    ))
 }
 
 /// Faces an answer without the shape the frame's `resp` promises.
@@ -1945,8 +2029,8 @@ fn compare_parts(
 /// A base named beside a fork side, [`Refusal::ForkBaseNamed`], before any
 /// read — a fork's base is the board's to serve (the fork-source design
 /// record, decision 8); then `read_shape`'s — more than 255 sides besides
-/// the head among them, faced before any read — then a halt reading the
-/// prior records.
+/// the head among them, faced before any read — then the prior records'
+/// reads' refusals, which `record::current` answers.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
     if let Some(base) = &inputs.base {
         if let Some(fork) = inputs.sides.iter().find_map(|s| match s {
@@ -1956,7 +2040,7 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
             return Err(Refusal::ForkBaseNamed { fork: fork.clone(), base: base.clone() });
         }
     }
-    let reader = Reader::new(board, token);
+    let reader = Reader::new(board, token, OnEnd::Rerun);
     let readings = read_shape(
         &reader,
         &inputs.doc,
@@ -2032,14 +2116,16 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
 ///
 /// # Errors
 ///
-/// The feed's halts: a transport fault, the death signal under the token.
+/// The feed walk's: a transport fault, [`Refusal::Halt`]; the death signal
+/// under the token, [`Refusal::SessionEnded`], the walk run again on a new
+/// session.
 pub fn head_of(
     board: &Board,
     token: Option<&Token>,
     doc: &Address,
-) -> Result<Option<Address>, Halt> {
+) -> Result<Option<Address>, Refusal> {
     let mut head: Option<Address> = None;
-    feed_rows(board, token, &doc.to_string(), false, |row| {
+    feed_rows(&Reader::new(board, token, OnEnd::Rerun), &doc.to_string(), false, |row| {
         if row["op"].as_str() != Some("publish") {
             return;
         }
@@ -2059,20 +2145,16 @@ pub fn head_of(
 
 /// Returns the commit position of the `publish` row that minted `member`.
 ///
-/// It is read off the member's own rows of the feed; `None` where the feed
-/// no longer holds it.
+/// It is read off the member's own rows of the feed, through `reader`;
+/// `None` where the feed no longer holds it.
 ///
 /// # Errors
 ///
-/// The feed's halts: a transport fault, the death signal under the token.
-pub(super) fn position_of(
-    board: &Board,
-    token: Option<&Token>,
-    member: &Address,
-) -> Result<Option<u64>, Halt> {
+/// [`feed_rows`]'s.
+pub(super) fn position_of(reader: &Reader<'_>, member: &Address) -> Result<Option<u64>, Refusal> {
     let mut at = None;
     let text = member.to_string();
-    feed_rows(board, token, &text, false, |row| {
+    feed_rows(reader, &text, false, |row| {
         if at.is_none()
             && row["op"].as_str() == Some("publish")
             && row["docs"].as_array().and_then(|d| d.first()).and_then(Value::as_str)
@@ -2092,23 +2174,26 @@ pub(super) fn position_of(
 /// `drafts=true` — the rows naming a draft the token's class may read, which
 /// is where a draft's own `set_arrangement` rows are (wire.md §The change
 /// feed, Narrowings); without it the published stream's, the member rows a
-/// head or a mint position is read off.
+/// head or a mint position is read off. The pages are read through
+/// `reader`'s board under its token.
 ///
 /// # Errors
 ///
-/// The feed's halts: a transport fault, the death signal under the token.
+/// The feed's halts, [`Refusal::Halt`]: a transport fault, and the death
+/// signal on a walk that presents no token, the board's fault; the death
+/// signal under the token, [`Refusal::SessionEnded`], faced for `reader`'s
+/// act.
 pub(super) fn feed_rows(
-    board: &Board,
-    token: Option<&Token>,
+    reader: &Reader<'_>,
     under: &str,
     drafts: bool,
     mut each: impl FnMut(&Value),
-) -> Result<(), Halt> {
+) -> Result<(), Refusal> {
     let mut since = 0u64;
     let mut limit = None;
     loop {
         let query = ChangesQuery { since, under: Some(under), drafts, limit };
-        match board.changes(token, &query)? {
+        match reader.board.changes(reader.token, &query)? {
             ChangesAnswer::Page(page) => {
                 for row in &page.changes {
                     each(row);
@@ -2128,7 +2213,9 @@ pub(super) fn feed_rows(
                 since = next;
             }
             ChangesAnswer::TooLarge { fits } => limit = Some(fits),
-            ChangesAnswer::Closed => return Err(closed("walking the change feed")),
+            ChangesAnswer::Closed => {
+                return Err(session_ended("walking the change feed", reader.on_end))
+            }
         }
     }
 }

@@ -69,8 +69,9 @@ use skep_address::Address;
 use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Token};
 use crate::halt::Halt;
-use crate::merge::land::closed;
-use crate::merge::reads::{records_of, runs_of, Reader, Refusal, SHOT_RUN_CAP};
+use crate::merge::reads::{
+    records_of, runs_of, session_ended, OnEnd, Reader, Refusal, SHOT_RUN_CAP,
+};
 use crate::merge::undo::{frame_runs, judge, Act};
 use crate::merge::Run;
 use crate::publication::Record;
@@ -145,9 +146,11 @@ pub struct Restored {
 /// - the records' reads' refusals at the head;
 /// - [`Refusal::OverCap`] where the mapped state is in more pieces than one
 ///   write may name;
-/// - the death signal under the token, faced, and the dialer's halts.
+/// - the death signal under the token at any read,
+///   [`Refusal::SessionEnded`], its face saying to run this again; the
+///   dialer's halts.
 pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u64) -> Result<Past, Refusal> {
-    let reader = Reader::new(board, Some(token));
+    let reader = Reader::new(board, Some(token), OnEnd::Rerun);
     let (meta, as_of) = reader.metadata_read(draft, None)?;
     if meta.published {
         return Err(Refusal::Published { doc: draft.clone() });
@@ -182,9 +185,10 @@ pub fn past(board: &Board, token: &Token, account: &str, draft: &Address, at: u6
 /// person may not read; [`Refusal::NeedsSignedSession`];
 /// [`Refusal::NoSuchDocument`]; the refusals of the runs as this library's
 /// own fault, since it sends what the board itself held; the board's other
-/// refusals verbatim; the death signal under the token, faced; a lost
-/// acknowledgment as the dialer's halt, with no re-ask — the embedder reads
-/// first on a re-run.
+/// refusals verbatim; the death signal under the token,
+/// [`Refusal::SessionEnded`], nothing restored and its face saying to run
+/// this again; a lost acknowledgment as the dialer's halt, with no re-ask —
+/// the embedder reads first on a re-run.
 pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Refusal> {
     let Past { draft, at, as_of, sent, .. } = past;
     let frame = frames::set_arrangement(
@@ -197,7 +201,7 @@ pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Re
         Some(&format!("restore:{draft}:{at}:{as_of}.arrangement")),
     );
     let v = match board.op(Some(token), &frame)? {
-        Answer::Closed => return Err(closed("restoring the draft").into()),
+        Answer::Closed => return Err(session_ended("restoring the draft", OnEnd::Rerun)),
         Answer::Document(v) => v,
     };
     let position = judge(&v, draft, *as_of, Act::Restore)?;

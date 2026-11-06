@@ -45,7 +45,7 @@ use super::compose::{
     Choice, Gap, GapId, GapKind, Options, Placement, Resolution, ResolvedBy, Run, RunCounts,
     SideIx, ValueLog,
 };
-use super::reads::{self, last_component, origin_of, Reader, Refusal, Role, Side};
+use super::reads::{self, last_component, origin_of, OnEnd, Reader, Refusal, Role, Side};
 
 /// The kind's `type` member, `merge`.
 ///
@@ -556,7 +556,12 @@ fn side_ix(v: &Value) -> Option<SideIx> {
 /// its journal's arrangement — `image` then `retrieve_v`, never
 /// `retrieve_i` — and its key checked. A record whose journal the reader
 /// may not read is no candidate: its link's type, ends and position stay
-/// visible, its body does not. `None` where no readable record names the
+/// visible, its body does not. Nor is one whose journal is not registered
+/// or is in more pieces than `image` answers, whose atom is not arranged,
+/// or whose bytes are no record of the kind (`read_record`); and the
+/// trunk's owner is unknown only where the trunk is withheld or not
+/// registered. Every other refusal of a read is answered as itself, never
+/// as no record standing (SP-14). `None` where no readable record names the
 /// key.
 ///
 /// Newest: within one home the link minted last, by its ordinal; across
@@ -564,19 +569,21 @@ fn side_ix(v: &Value) -> Option<SideIx> {
 ///
 /// # Errors
 ///
-/// A transport halt, the death signal under the token, a board answer of a
-/// shape this client does not know.
+/// A transport halt, the board's other refusals of a read and a board
+/// answer of a shape this client does not know, [`Refusal::Halt`]; the
+/// death signal under the token, [`Refusal::SessionEnded`], the lookup made
+/// again on a new session.
 pub fn current(
     board: &Board,
     token: Option<&Token>,
     kind: &Address,
     key: &RecordKey,
-) -> Result<Option<Record>, Halt> {
-    let reader = Reader::new(board, token);
+) -> Result<Option<Record>, Refusal> {
+    let reader = Reader::new(board, token, OnEnd::Rerun);
     let owner_home = match reader.metadata(&key.doc, None) {
         Ok(meta) => Some(doc_1_of(&meta.owner)),
-        Err(Refusal::Halt(h)) => return Err(h),
-        Err(_) => None,
+        Err(Refusal::Unreadable(_) | Refusal::NoSuchDocument(_)) => None,
+        Err(e) => return Err(e),
     };
     current_among(&reader, kind, key, owner_home.as_deref())
 }
@@ -585,13 +592,13 @@ pub fn current(
 ///
 /// # Errors
 ///
-/// As [`current`]'s.
+/// As [`current`]'s, the death signal faced for `reader`'s act.
 pub(super) fn current_among(
     reader: &Reader<'_>,
     kind: &Address,
     key: &RecordKey,
     owner_home: Option<&str>,
-) -> Result<Option<Record>, Halt> {
+) -> Result<Option<Record>, Refusal> {
     let found = records_of(reader, kind, key)?;
     let home_of = |link: &Address| document_of(&link.to_string());
     let owned: Vec<&(Address, Record)> =
@@ -614,18 +621,16 @@ pub(super) fn current_among(
 ///
 /// # Errors
 ///
-/// As [`current`]'s.
+/// As [`current_among`]'s.
 pub(super) fn records_of(
     reader: &Reader<'_>,
     kind: &Address,
     key: &RecordKey,
-) -> Result<Vec<(Address, Record)>, Halt> {
+) -> Result<Vec<(Address, Record)>, Refusal> {
     let mut seen: Vec<String> = Vec::new();
     let mut found: Vec<(Address, Record)> = Vec::new();
     for side in &key.sides {
-        let v = reader
-            .read(&frames::find_links_ftt(&kind.to_string(), &side.to_string()), None)
-            .map_err(into_halt)?;
+        let v = reader.read(&frames::find_links_ftt(&kind.to_string(), &side.to_string()), None)?;
         for link in answers::addrs(&v) {
             if seen.iter().any(|s| s == link) {
                 continue;
@@ -646,20 +651,25 @@ pub(super) fn records_of(
 ///
 /// It is the atom its `from` slot starts at, read through the journal's
 /// arrangement; `None` where the journal or its atom is not readable to
-/// this reader, where the atom is not arranged, or where its bytes are no
-/// record of the kind.
+/// this reader, where the journal is not registered or is in more pieces
+/// than `image` answers, where the atom is not arranged, or where its bytes
+/// are no record of the kind.
 ///
 /// # Errors
 ///
-/// A halt reading the link, the journal or the atom: a transport fault, the
-/// death signal under the token.
-pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<Record>, Halt> {
-    let lv = reader.read(&frames::read_link(&link.to_string()), None).map_err(into_halt)?;
+/// A refusal reading the link, the journal or the atom but those absences,
+/// as itself: a transport fault and the board's other refusals,
+/// [`Refusal::Halt`]; the death signal under the token,
+/// [`Refusal::SessionEnded`].
+pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<Record>, Refusal> {
+    let lv = reader.read(&frames::read_link(&link.to_string()), None)?;
     let Some(atom) = answers::link_from(&lv) else { return Ok(None) };
     let Some(journal) = document_of(atom).and_then(|j| parse_address(&j)) else { return Ok(None) };
     let unreadable = |e: Refusal| match e {
-        Refusal::Halt(h) => Err(h),
-        _ => Ok(None),
+        Refusal::Unreadable(_) | Refusal::NoSuchDocument(_) | Refusal::TooFragmented { .. } => {
+            Ok(None)
+        }
+        e => Err(e),
     };
     let extent = match reader.extent(&journal, None) {
         Ok(e) => e,
@@ -687,21 +697,6 @@ pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<
         r.link = Some(link.clone());
         r
     }))
-}
-
-/// Returns a read refusal as a halt, where the reads are a lookup's.
-///
-/// A halt surfaces; a refusal of the document read is the lookup's own
-/// answer and never reaches here.
-fn into_halt(e: Refusal) -> Halt {
-    match e {
-        Refusal::Halt(h) => h,
-        other => Halt::face(
-            "a record lookup met a refusal it cannot act on",
-            other.to_string(),
-            "this is this client's fault; nothing was written",
-        ),
-    }
 }
 
 // ── verify ────────────────────────────────────────────────────────────────
@@ -780,9 +775,10 @@ pub enum Verdict {
 /// `placed` term is faced; the landed document's reads' refusals but
 /// `withheld`, `doc_not_registered` and a reclaimed landing position, which
 /// answer [`Verdict::Unreadable`]; an `image` run that is no content
-/// I-address.
+/// I-address. The death signal under the token at any read is
+/// [`Refusal::SessionEnded`], the verification made again on a new session.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
-    let reader = Reader::new(board, token);
+    let reader = Reader::new(board, token, OnEnd::Rerun);
     let head = record.head().ok_or_else(|| {
         Halt::face(
             "the record names no head side",

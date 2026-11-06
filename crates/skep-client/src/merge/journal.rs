@@ -16,6 +16,7 @@ use crate::board::{acked_addr, answers, frames, Answer, Board, Rejection};
 use crate::halt::Halt;
 
 use super::land::Merger;
+use super::reads::{session_ended, OnEnd, Refusal};
 
 /// Returns the journal a merge record goes to (decision 7).
 ///
@@ -26,16 +27,34 @@ use super::land::Merger;
 ///
 /// # Errors
 ///
-/// A transport halt; the death signal under the merger's token; a board
-/// refusal of the find, of a link's read or of the mint, verbatim; a mint's
-/// acknowledgment with no address this client can parse, or an answer of a
-/// shape this client does not know, faced.
+/// A transport halt, a board refusal of the find, of a link's read or of the
+/// mint, verbatim, and a mint's acknowledgment with no address this client
+/// can parse or an answer of a shape this client does not know, faced — each
+/// [`Refusal::Halt`]; the death signal under the merger's token,
+/// [`Refusal::SessionEnded`], the call made again on a new session.
 pub fn of(
     board: &Board,
     merger: &Merger<'_>,
     kind: &Address,
     journal: Option<Address>,
-) -> Result<Address, Halt> {
+) -> Result<Address, Refusal> {
+    found(board, merger, kind, journal, OnEnd::Rerun)
+}
+
+/// Returns the journal a merge record goes to, as [`of`] does, for an act
+/// whose session's end leaves `on_end` — the record step of the act it
+/// writes the record of.
+///
+/// # Errors
+///
+/// As [`of`]'s, the death signal faced for that act.
+pub(super) fn found(
+    board: &Board,
+    merger: &Merger<'_>,
+    kind: &Address,
+    journal: Option<Address>,
+    on_end: OnEnd,
+) -> Result<Address, Refusal> {
     if let Some(journal) = journal {
         return Ok(journal);
     }
@@ -44,6 +63,7 @@ pub fn of(
     let v = read(
         board.op(Some(merger.token), &frames::find_links_ftt_home(&kind.to_string(), &home))?,
         "finding the merge journal",
+        on_end,
     )?;
     let mut links: Vec<Address> =
         answers::addrs(&v).iter().filter_map(|a| parse_address(a)).collect();
@@ -52,6 +72,7 @@ pub fn of(
         let lv = read(
             board.op(Some(merger.token), &frames::read_link(&link.to_string()))?,
             "reading a record's link",
+            on_end,
         )?;
         if let Some(journal) =
             answers::link_from(&lv).and_then(document_of).and_then(|j| parse_address(&j))
@@ -63,13 +84,14 @@ pub fn of(
     let v = document(
         board.op(Some(merger.token), &frames::create_document(account, false, Some(&id)))?,
         "minting the merge journal",
+        on_end,
     )?;
     if let Some(addr) = acked_addr(&v) {
-        return parse_address(addr).ok_or_else(|| shape("the mint answered no address", &v));
+        return parse_address(addr).ok_or_else(|| shape("the mint answered no address", &v).into());
     }
     match Rejection::of(&v) {
-        Some(r) => Err(r.refused(&v)),
-        None => Err(shape("the mint answered a shape this client does not know", &v)),
+        Some(r) => Err(r.refused(&v).into()),
+        None => Err(shape("the mint answered a shape this client does not know", &v).into()),
     }
 }
 
@@ -77,14 +99,11 @@ pub fn of(
 ///
 /// # Errors
 ///
-/// The death signal, faced.
-fn document(answer: Answer, during: &str) -> Result<Value, Halt> {
+/// The death signal, [`Refusal::SessionEnded`] naming the step `during`
+/// names, faced for `on_end`.
+fn document(answer: Answer, during: &str, on_end: OnEnd) -> Result<Value, Refusal> {
     match answer {
-        Answer::Closed => Err(Halt::face(
-            format!("the session ended while {during}"),
-            "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
-            "open a session again and run the merge again: every step resumes by reading",
-        )),
+        Answer::Closed => Err(session_ended(during, on_end)),
         Answer::Document(v) => Ok(v),
     }
 }
@@ -93,11 +112,11 @@ fn document(answer: Answer, during: &str) -> Result<Value, Halt> {
 ///
 /// # Errors
 ///
-/// The death signal, faced; a rejection, the board's refusal.
-fn read(answer: Answer, during: &str) -> Result<Value, Halt> {
-    let v = document(answer, during)?;
+/// The death signal, as [`document`]'s; a rejection, the board's refusal.
+fn read(answer: Answer, during: &str, on_end: OnEnd) -> Result<Value, Refusal> {
+    let v = document(answer, during, on_end)?;
     match Rejection::of(&v) {
-        Some(r) => Err(r.refused(&v)),
+        Some(r) => Err(r.refused(&v).into()),
         None => Ok(v),
     }
 }

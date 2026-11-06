@@ -2,7 +2,8 @@
 //!
 //! The suite checks the rules the shell alone keeps, with no daemon behind
 //! it — the rows' own members read before the session, `land` and `undo`
-//! with nothing composed `no_merge`, a bare session refused — and, against
+//! with nothing composed `no_merge`, a bare session refused, the library's
+//! typed session's end alone ending the session — and, against
 //! the real daemon, the family end to end: a daughter composed and landed
 //! into a fresh draft staged from the head and into a named one, each by
 //! one write; the undo and the withdrawal each one write, the undo typed at
@@ -17,6 +18,9 @@
 //! claim, its re-open reading the side as merged; the merged arm naming the
 //! member and writing a missing record once; the `head_moved` race typed,
 //! nothing re-sent; and the composition dying with its session.
+
+use skep_client::halt::Halt;
+use skep_client::merge::Refusal as Library;
 
 use super::publication::{ground, register, second_device, signed_facts, Ground};
 use super::*;
@@ -129,6 +133,43 @@ fn the_rows_read_their_members_first_and_answer_no_merge_with_nothing_composed()
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("merge.compose")), "{keyless}");
     let keyless = shell.call("merge.withdraw", &json!({"session": bare, "draft": "1.0.1.0.4"})).unwrap_err();
     assert_eq!((keyless.name(), keyless.to_value()["call"].as_str()), ("write_in_bare_session", Some("merge.withdraw")), "{keyless}");
+}
+
+/// Checks that only the library's typed session's end ends the session,
+/// with no daemon behind the shell.
+///
+/// The library's `SessionEnded` ends the session it met — `session_died`
+/// naming it, and a later call on the reference answered the end — and
+/// every halt crosses as itself: the board's fault a token-free read meets
+/// at the death signal, its words naming the signal, is `halt`, the session
+/// standing, so a later `merge.land` on it answers `no_merge` (the mutant
+/// that reads the face's words ends a live session on the board's fault;
+/// the one that crosses the typed end as a halt keeps a dead session's
+/// reference standing).
+#[test]
+fn only_the_librarys_typed_session_end_ends_the_session() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&super::door::nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let standing = register(&shell, "8e", signed_facts(2));
+    let ending = register(&shell, "7d", signed_facts(3));
+    let board_fault = Halt::face(
+        "a token-free read met the death signal",
+        "the board answered `Skepd-Session: closed` to a request that presented no token",
+        "this is a fault in the board or the transport, not in your keys; nothing was written",
+    );
+    let crossed = shell.merge_refusal(&shell.sessions.get(&standing).unwrap(), Library::Halt(board_fault));
+    assert_eq!(crossed.name(), "halt", "{}", crossed.to_value());
+    assert_eq!(shell.call("merge.land", &json!({"session": standing})).unwrap_err().name(), "no_merge", "the session stands");
+    let end = Halt::face(
+        "the session ended while reading",
+        "the board answered `Skepd-Session: closed` (wire.md §Sessions)",
+        "open a session again and run this again: it reads what stands before it writes",
+    );
+    let died = shell.merge_refusal(&shell.sessions.get(&ending).unwrap(), Library::SessionEnded(end));
+    let v = died.to_value();
+    assert_eq!((died.name(), v["session"].as_str()), ("session_died", Some(ending.as_str())), "{v}");
+    assert_eq!(shell.call("merge.land", &json!({"session": ending})).unwrap_err().name(), "session_died", "a later call on the reference is answered the end");
+    shell.shutdown();
 }
 
 /// Checks a daughter composed and landed, and taken back, against the

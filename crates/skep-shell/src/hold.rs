@@ -107,13 +107,19 @@
 //! alone at the board — no file of it opened, every write refused at the
 //! door, the lines held in memory before the state was found sent as the
 //! board takes them — and tries the lock again at each session's open, and
-//! at a probe while such lines stand. A line whose copy the device
-//! refuses waits in memory with every line held after it, none copied ahead
-//! of it, until the retry copies them in `k` order (`HeldQueue::retry`,
-//! §3c.3; skep #813) — before the queue's next copy, and at every probe
-//! whatever the board's state — each answer for a waiting line carrying the
-//! device's refusal as `unwritable`, and the wait said in the shell's own
-//! window once as it begins and once as it ends ([`Holds::note_waiting`]).
+//! at a probe while such lines stand. A copy the device refuses — a line's
+//! first, or a re-mark's, a raise's, a shift's or a `done`'s of a line on
+//! disk — is owed, and waits in memory with every copy owed after it, none
+//! written ahead of it, until the retry writes them in `k` order
+//! (`HeldQueue::retry`, §3c.3; skep #813, #821) — before the queue's next
+//! copy, and at every probe whatever the board's state — each answer for a
+//! line waiting for its first copy carrying the device's refusal as
+//! `unwritable`, and the wait said in the shell's own window once as it
+//! begins and once as it ends ([`Holds::note_waiting`]); a close while a copy
+//! is owed loses it, and a relaunch reads each line as the file last held
+//! it. A join refused mid-way keeps the queue whose file owes the `done`s of
+//! the lines its undo dropped ([`BoardHold::unsettled`]) until they land,
+//! so no open in the run reads those lines standing.
 //! The queue is opened only under a session as its principal (P39) — at the
 //! session's open, or at the first touch after it — by the principal's door,
 //! [`Holds::principal_hold`],
@@ -156,7 +162,7 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Anchors, Done, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
+use crate::held::{Anchors, Done, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Owed, Reason, Torn, Unheld, MAX_HELD_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind, Sessions};
@@ -169,10 +175,12 @@ mod resend;
 ///
 /// The probe reads it while a burst is held at a board; the value is open
 /// to tuning. It is the retry's clock too (§3c.3), whatever the board's
-/// state, so space freed while no one types is enough: a line whose copy the
-/// device refused is copied again at every probe while it waits, and lines
-/// kept in memory alone are joined to the directory's file at every probe
-/// while the join is refused ([`Holds::rejoin`]).
+/// state, so space freed while no one types is enough: a copy the device
+/// refused — a line's, a re-mark's or a `done`'s — is written again at every
+/// probe while it is owed, a refused join's undo among them
+/// ([`Holds::retry_unsettled`]), and lines kept in memory alone are joined to
+/// the directory's file at every probe while the join is refused
+/// ([`Holds::rejoin`]).
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
 
 /// A held line's wall-clock deadline: two minutes from its first failed send.
@@ -1098,10 +1106,11 @@ enum Custody {
     Unopened,
     /// In `principal-<n>.held`, each line synced before its answer.
     ///
-    /// Where the device refused a line's copy, that line and every line held
-    /// after it wait in memory instead, copied in `k` order by the retry
-    /// (`HeldQueue::retry`, §3c.3), each answer carrying the refusal as
-    /// `unwritable`.
+    /// Where the device refused a copy — a line's first, or a re-mark or a
+    /// `done` of a line on disk — it and every copy owed after it wait in
+    /// memory instead, written in `k` order by the retry (`HeldQueue::retry`,
+    /// §3c.3), each answer for a line waiting for its first copy carrying the
+    /// refusal as `unwritable`.
     File,
     /// In memory alone, the file out of this shell's reach.
     ///
@@ -1156,8 +1165,8 @@ impl Custody {
 /// failed send and its last failure's token, kept across its probes
 /// ([`Reissues`]), the position each line's moved document was
 /// acknowledged through by the person's `send`
-/// ([`PrincipalHold::seen_through`]), and whether its lines' wait for their
-/// copy was said ([`PrincipalHold::waiting_said`]). An ack touches no
+/// ([`PrincipalHold::seen_through`]), and whether the wait for the copies
+/// its file owes was said ([`PrincipalHold::waiting_said`]). An ack touches no
 /// standing line's
 /// base: a line held keeps the base it was held at, raised only behind a
 /// line kept on its document (`HeldQueue::done`) and by the person's `send`
@@ -1206,7 +1215,7 @@ struct PrincipalHold {
     /// first face after one names the acknowledged hands again, while the
     /// raised `base` persists.
     seen_through: HashMap<u64, u64>,
-    /// Whether the shell's own window was told the queue's lines wait.
+    /// Whether the shell's own window was told the queue's file owes copies.
     ///
     /// It is set as the wait is said to begin, and cleared as its end is
     /// ([`Holds::note_waiting`]).
@@ -1343,6 +1352,20 @@ struct BoardHold {
     /// another process holding its lock, the lock or its listing refused —
     /// said once per change, and gone once a join lists the directory.
     pending_said: Option<String>,
+    /// The queues a refused join left owing copies to their files, each
+    /// beside its principal (§3c.3; skep #821).
+    ///
+    /// A join refused mid-way undoes the lines it entered by `done … dropped`
+    /// lines (`HeldQueue::join`); where the device refuses those too, the
+    /// file it wrote holds standing copies of lines that stand elsewhere — in
+    /// memory, or in the pending file — until the `done`s land. The queue
+    /// that owes them is kept here, never dropped, and every later open of
+    /// its file in this run takes it in place of a read that would find the
+    /// copies standing ([`open_held`]): the join's next try, its read of an
+    /// earlier run's pending file, and the principal's door. The probe
+    /// retries each and lets go of one that owes nothing
+    /// ([`Holds::retry_unsettled`]).
+    unsettled: Vec<(u64, HeldQueue)>,
     principals: HashMap<u64, PrincipalHold>,
 }
 
@@ -1470,6 +1493,7 @@ impl Holds {
                     head: HeadState::Unknown,
                     kept_said: HashMap::new(),
                     pending_said: None,
+                    unsettled: Vec::new(),
                     principals: HashMap::new(),
                 };
                 (entry.reference.clone(), BoardSlot { board: Arc::clone(&entry.board), hold: Mutex::new(hold), draining: AtomicBool::new(false) })
@@ -1711,6 +1735,29 @@ impl Holds {
         }
     }
 
+    /// Writes the copies each queue a refused join left owes its file, at a
+    /// probe (§3c.3; skep #821), and lets go of each that owes none.
+    ///
+    /// It runs under the board's lock at every probe whatever the board's
+    /// state, as the join's retry does ([`Holds::rejoin`]), each queue's
+    /// retry writing the `done`s of the lines its join's undo dropped
+    /// (`HeldQueue::retry`). A queue that owes nothing more agrees with its
+    /// file, which the next open reads so: it goes from
+    /// [`BoardHold::unsettled`], and that the file holds those lines no more
+    /// is said once — the edge that ends what the refused join said of them
+    /// (SP-11).
+    fn retry_unsettled(&self, board_hold: &mut BoardHold) {
+        for (principal, mut queue) in std::mem::take(&mut board_hold.unsettled) {
+            queue.retry();
+            if queue.waiting().is_some() {
+                board_hold.unsettled.push((principal, queue));
+            } else {
+                let file = if queue.is_pending() { "pending held file" } else { "held file" };
+                self.say(format_args!("principal {principal}'s {file} holds the copies a refused join made no more: their `done`s are written"));
+            }
+        }
+    }
+
     /// Joins each principal's lines kept in memory alone into the pending
     /// directory's file (§3c.1; §3c.3 (i): a line at a board whose `H.1` will
     /// not read goes to the pending file, never to memory alone).
@@ -1778,9 +1825,11 @@ impl Holds {
     /// principal joined: the count, and whether renumbered. A join refused —
     /// a copy the device refuses, a file's read or its halt — is undone by the
     /// queue, the principal's lines standing where they were for the next
-    /// join, and said once per change of its cause ([`Holds::refuse_join`]);
-    /// a pending directory the join cannot take is said so too. The pending
-    /// directory's lock is let go once no principal's queue is its file's.
+    /// join, the file it wrote kept while it owes the undo's `done`s
+    /// ([`BoardHold::unsettled`]), and said once per change of its cause
+    /// ([`Holds::refuse_join`]); a pending directory the join cannot take is
+    /// said so too. The pending directory's lock is let go once no queue is
+    /// its file's: no principal's, and none a refused join keeps.
     fn join(&self, board_reference: &str, board_hold: &mut BoardHold, origin: &Origin) {
         let (dir, carried) = match &board_hold.directory {
             Directory::ThisWindow { store, pending } => (store.dir.clone(), pending.as_ref().map(|locked| locked.dir.clone())),
@@ -1816,8 +1865,9 @@ impl Holds {
             self.join_principal(board_reference, board_hold, &dir, pending.as_ref(), principal);
         }
         // The pending directory stays under its lock while a queue is its
-        // file's, and no longer.
-        let pending_stands = board_hold.principals.values().any(|ph| ph.queue.is_pending());
+        // file's — a principal's, or one a refused join keeps owing copies to
+        // it — and no longer.
+        let pending_stands = board_hold.principals.values().any(|ph| ph.queue.is_pending()) || board_hold.unsettled.iter().any(|(_, queue)| queue.is_pending());
         if let Directory::ThisWindow { pending, .. } = &mut board_hold.directory {
             if !pending_stands {
                 *pending = None;
@@ -1845,13 +1895,16 @@ impl Holds {
     /// join and put back where it is refused ([`Holds::refuse_join`]); an
     /// earlier run's pending file is opened where the live queue is not it.
     /// The directory's file is opened under the account the hold names, else
-    /// the one the earlier run's header does.
+    /// the one the earlier run's header does. Each file is opened by
+    /// [`open_held`], so a queue a refused join left owing copies to it is
+    /// taken in place of its read, and a refused join keeps each queue it
+    /// opened that owes copies ([`BoardHold::unsettled`]).
     fn join_principal(&self, board_reference: &str, board_hold: &mut BoardHold, dir: &HeldDir, pending: Option<&HeldDir>, principal: u64) {
         let live = board_hold.principals.get_mut(&principal).filter(|ph| ph.joins()).map(|ph| std::mem::replace(&mut ph.queue, HeldQueue::in_memory()));
         // An earlier run's pending file, where this run's queue is not it.
         let mut earlier = None;
         if let Some(pending) = pending.filter(|_| !live.as_ref().is_some_and(HeldQueue::is_pending)) {
-            match pending.open_file(principal, "") {
+            match open_held(&mut board_hold.unsettled, pending, principal, "") {
                 Ok(Opened::Live { queue, aside }) => {
                     self.note_aside(principal, aside.as_deref());
                     earlier = Some(queue);
@@ -1859,26 +1912,29 @@ impl Holds {
                 Ok(Opened::Halted { path, why }) => {
                     let cause = format!("principal {principal}'s pending held file {} is halted ({}) and is not joined; it stands until a person moves it aside", path.display(), why.token());
                     let unwritable = format!("the held lines wait behind a pending held file an earlier run left, which is halted ({})", why.token());
-                    return self.refuse_join(board_hold, principal, live, StoppedAt::HaltedEarlier, cause, unwritable);
+                    return self.refuse_join(board_hold, principal, live, Vec::new(), StoppedAt::HaltedEarlier, cause, unwritable);
                 }
                 Err(e) => {
                     let cause = format!("principal {principal}'s pending held file could not be read ({e}) and is not joined");
                     let unwritable = format!("the held lines wait behind a pending held file an earlier run left, which could not be read: {e}");
-                    return self.refuse_join(board_hold, principal, live, StoppedAt::Earlier, cause, unwritable);
+                    return self.refuse_join(board_hold, principal, live, Vec::new(), StoppedAt::Earlier, cause, unwritable);
                 }
             }
         }
         let account = board_hold.principals.get(&principal).map(|ph| ph.account.clone()).or_else(|| earlier.as_ref().and_then(|q| q.account().map(str::to_string))).unwrap_or_default();
-        let mut chain = match dir.open_file(principal, &account) {
+        let mut chain = match open_held(&mut board_hold.unsettled, dir, principal, &account) {
             Ok(Opened::Live { queue, aside }) => {
                 self.note_aside(principal, aside.as_deref());
                 queue
             }
             Ok(Opened::Halted { path, why }) => {
                 let cause = format!("principal {principal}'s {} {} is halted ({})", file_word(dir), path.display(), why.token());
-                return self.refuse_join(board_hold, principal, live, StoppedAt::Target, cause, format!("the held file is halted ({})", why.token()));
+                return self.refuse_join(board_hold, principal, live, earlier.into_iter().collect(), StoppedAt::Target, cause, format!("the held file is halted ({})", why.token()));
             }
-            Err(e) => return self.refuse_join(board_hold, principal, live, StoppedAt::Target, unread_cause(principal, dir, &e), format!("the held file could not be read: {e}")),
+            Err(e) => {
+                let cause = unread_cause(principal, dir, &e);
+                return self.refuse_join(board_hold, principal, live, earlier.into_iter().collect(), StoppedAt::Target, cause, format!("the held file could not be read: {e}"));
+            }
         };
         // The checks (§3c.1): a pending file names the board dialed, the
         // board's file its chain — else the pending file is set aside, said,
@@ -1890,11 +1946,14 @@ impl Holds {
                 Some(Err(e)) => format!("principal {principal}'s pending held file named another board than the one dialed, and could not be set aside ({e})"),
                 None => format!("principal {principal}'s pending held file names a board, and no pending held store stands to check it against; nothing is joined"),
             };
-            return self.refuse_join(board_hold, principal, live, StoppedAt::Target, cause, "the held lines wait behind a pending held file that names another board than the one dialed".to_string());
+            let opened = earlier.into_iter().chain([chain]).collect();
+            let why = "the held lines wait behind a pending held file that names another board than the one dialed".to_string();
+            return self.refuse_join(board_hold, principal, live, opened, StoppedAt::Target, cause, why);
         }
         if chain.board().is_some_and(|board| board != dir.board()) {
             let cause = format!("principal {principal}'s {} names another board than its directory; nothing is joined", file_word(dir));
-            return self.refuse_join(board_hold, principal, live, StoppedAt::Target, cause, "the held file names another board than its directory".to_string());
+            let opened = earlier.into_iter().chain([chain]).collect();
+            return self.refuse_join(board_hold, principal, live, opened, StoppedAt::Target, cause, "the held file names another board than its directory".to_string());
         }
         // The join, an earlier run's lines first, each source's in `k`
         // order; a refused copy undoes its source's and leaves the lines
@@ -1913,7 +1972,7 @@ impl Holds {
                 Err(refused) => {
                     let cause = format!("principal {principal}'s pending held file of an earlier run could not join {} (line {}: {})", the_file(dir), refused.k, refused.error);
                     let unwritable = format!("the held lines wait behind a pending held file an earlier run left, which could not join the held file: {}", refused.error);
-                    return self.refuse_join(board_hold, principal, live, StoppedAt::Earlier, cause, unwritable);
+                    return self.refuse_join(board_hold, principal, live, vec![earlier, chain], StoppedAt::Earlier, cause, unwritable);
                 }
             }
         }
@@ -1927,7 +1986,7 @@ impl Holds {
             }
             Some(Err(refused)) => {
                 let cause = format!("principal {principal}'s held lines could not join {} (line {}: {})", the_file(dir), refused.k, refused.error);
-                return self.refuse_join(board_hold, principal, live, StoppedAt::Target, cause, refused.error.to_string());
+                return self.refuse_join(board_hold, principal, live, vec![chain], StoppedAt::Target, cause, refused.error.to_string());
             }
         }
         // The commit: the pending file removed, the hold's queue the
@@ -1984,13 +2043,25 @@ impl Holds {
     /// `live` is this run's queue the join took out of `principal`'s hold,
     /// put back as it stood: a queue kept in memory takes `why` as its
     /// custody's, what each answer for its lines carries as `unwritable`; a
-    /// pending file's keeps its custody, its lines on disk. `cause` is said
-    /// in the shell's own window with where the lines stand — `stopped` the
-    /// file the join stopped at ([`left_standing`]) — where it is not the
-    /// cause last said for the principal ([`Holds::say_kept_from_file`]), so
-    /// the retry at each probe says nothing until the cause changes.
-    fn refuse_join(&self, board_hold: &mut BoardHold, principal: u64, live: Option<HeldQueue>, stopped: StoppedAt, cause: String, why: String) {
-        let left = left_standing(live.as_ref(), stopped);
+    /// pending file's keeps its custody, its lines on disk. `opened` are the
+    /// files the join opened — an earlier run's pending file, the file the
+    /// lines join — each kept where it owes copies, the `done`s of the lines
+    /// its undo dropped ([`BoardHold::unsettled`]), so no later open in this
+    /// run reads those lines standing; the rest agree with their files and go.
+    /// `cause` is said in the shell's own window with where the lines stand —
+    /// `stopped` the file the join stopped at ([`left_standing`]), and the
+    /// copies a kept file still holds standing — where it is not the cause
+    /// last said for the principal ([`Holds::say_kept_from_file`]), so the
+    /// retry at each probe says nothing until the cause changes.
+    #[allow(clippy::too_many_arguments)]
+    fn refuse_join(&self, board_hold: &mut BoardHold, principal: u64, live: Option<HeldQueue>, opened: Vec<HeldQueue>, stopped: StoppedAt, cause: String, why: String) {
+        let mut left = left_standing(live.as_ref(), stopped);
+        let owing: Vec<HeldQueue> = opened.into_iter().filter(|queue| queue.waiting().is_some()).collect();
+        if !owing.is_empty() {
+            let copies = "the copies a join made before its refusal stand in the file until their `done`s are written, tried again at each probe, and a close before then leaves them read as held lines at the next launch";
+            left = Some(left.map_or_else(|| copies.to_string(), |left| format!("{left}; {copies}")));
+            board_hold.unsettled.extend(owing.into_iter().map(|queue| (principal, queue)));
+        }
         if let (Some(ph), Some(queue)) = (board_hold.principals.get_mut(&principal), live) {
             if !queue.is_pending() {
                 ph.custody = Custody::Unwritable(why);
@@ -2095,16 +2166,18 @@ impl Holds {
     /// takes: a session's open, a burst, a hold, `held` and `resolve`. A
     /// principal whose custody is not settled, and whose queue holds no line,
     /// is opened here under `session`'s account: its file where the board's
-    /// directory is this shell's, memory alone otherwise — no file opened
-    /// where another shell holds the board's store, whose door lets no write
-    /// through, the custody's why ([`ANOTHER_WINDOW_HOLDS`]) for a line a
-    /// write brought past it before the state was found. A file whose read
-    /// is refused leaves the custody memory's, the refusal its why and said
-    /// in the shell's own window once per change of its cause
-    /// ([`Holds::say_kept_from_file`]) — the lines held meanwhile join the
-    /// file at the first probe it reads ([`Holds::rejoin`]) — and the file's
-    /// next open says so where a refusal was said. Under the session that
-    /// stands, so the restart arm's re-open is covered too.
+    /// directory is this shell's — the queue a refused join left owing
+    /// copies to it taken in place of its read ([`open_held`]) — memory alone
+    /// otherwise, no file opened where another shell holds the board's store,
+    /// whose door lets no write through, the custody's why
+    /// ([`ANOTHER_WINDOW_HOLDS`]) for a line a write brought past it before
+    /// the state was found. A file whose read is refused leaves the custody
+    /// memory's, the refusal its why and said in the shell's own window once
+    /// per change of its cause ([`Holds::say_kept_from_file`]) — the lines
+    /// held meanwhile join the file at the first probe it reads
+    /// ([`Holds::rejoin`]) — and the file's next open says so where a refusal
+    /// was said. Under the session that stands, so the restart arm's re-open
+    /// is covered too.
     ///
     /// # Errors
     ///
@@ -2112,7 +2185,7 @@ impl Holds {
     /// every act's refusal, answered at the principal's door, so no act
     /// reaches a halted principal's queue.
     fn principal_hold<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry) -> Result<&'b mut PrincipalHold, Refusal> {
-        let BoardHold { directory, principals, kept_said, .. } = board_hold;
+        let BoardHold { directory, principals, kept_said, unsettled, .. } = board_hold;
         let principal = session.facts.principal;
         let account = session.facts.account.as_deref().unwrap_or("");
         let ph = principals.entry(principal).or_insert_with(|| PrincipalHold::new(account));
@@ -2122,12 +2195,16 @@ impl Holds {
                 // will not read (§3c.1): each line synced before its answer
                 // either way, and the pending file's lines joined into the
                 // board's own once the record reads (`Holds::establish`).
-                Directory::ThisWindow { store, .. } | Directory::Pending { store, .. } => match store.dir.open_file(principal, account) {
+                Directory::ThisWindow { store, .. } | Directory::Pending { store, .. } => match open_held(unsettled, &store.dir, principal, account) {
                     Ok(Opened::Live { queue, aside }) => {
                         self.note_opened(principal, &queue, aside.as_deref());
                         if kept_said.remove(&principal).is_some() {
                             self.say(format_args!("principal {principal}'s {} opens: the lines held for the principal go to it", file_word(&store.dir)));
                         }
+                        // A queue a refused join left owing copies brings
+                        // their wait, said as it began with the join's
+                        // refusal: its end is said as the copies land.
+                        ph.waiting_said = queue.waiting().is_some();
                         ph.queue = queue;
                         ph.custody = Custody::File;
                     }
@@ -2359,7 +2436,7 @@ impl Holds {
         // dial holds a burst, said now, since the line was said to no one
         // while it was the shift's.
         let at_death = |sent: bool, mut answer: Value| {
-            self.with_principal(board_reference, principal, |ph| self.remark_line(ph, k, Reason::of(cause::SESSION_DIED, sent)));
+            self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason::of(cause::SESSION_DIED, sent)));
             answer["cause"] = Value::from(cause::SESSION_DIED);
             self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::SESSION_DIED), &[]);
             OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
@@ -2388,7 +2465,7 @@ impl Holds {
             match shifted.dialed {
                 Dialed::Acked(ack) => {
                     self.note_ack(session, &shifted.frame, &ack);
-                    self.with_principal(board_reference, principal, |ph| self.done_line(ph, k, Done::Kept { at: acked_at(&ack) }));
+                    self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, Done::Kept { at: acked_at(&ack) }));
                     return OpAnswer::Answered(Ok(ack));
                 }
                 Dialed::Held { reason, .. } if reason.cause == cause::MOVED => {
@@ -2397,13 +2474,13 @@ impl Holds {
                 Dialed::Held { reason, .. } => {
                     let state = line_state(&reason);
                     let said = reason.cause.clone();
-                    self.with_principal(board_reference, principal, |ph| self.remark_line(ph, k, Reason { sent: reason.sent || sent, ..reason }));
+                    self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, k, Reason { sent: reason.sent || sent, ..reason }));
                     answer["cause"] = Value::from(said.as_str());
                     self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), state, Some(&said), &[]);
                     return OpAnswer::Answered(Ok(answer));
                 }
                 Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => {
-                    self.with_principal(board_reference, principal, |ph| self.done_line(ph, k, Done::Dropped));
+                    self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, Done::Dropped));
                     return OpAnswer::Answered(Err(refusal));
                 }
                 Dialed::Died => return at_death(sent, answer),
@@ -2545,12 +2622,12 @@ impl Holds {
     /// a wait for the held file's copies that begins or ends at this hold is
     /// said in the shell's own window ([`Holds::note_waiting`]). The answer
     /// is `{resp: held, held: <k>, cause}`, and `unwritable` beside it — why
-    /// — where no copy of the line stands: the device refused its copy, or
-    /// the copy of a line held before it, which it waits behind (§3c.3;
-    /// `HeldQueue::retry`), or the file is out of reach: the board's
-    /// directory not yet this shell's, or another shell's, where the line is
-    /// one a write brought past the door before that was found
-    /// ([`ANOTHER_WINDOW_HOLDS`]).
+    /// — where no copy of the line stands: the device refused its copy, or a
+    /// copy owed before it — an earlier line's, or a re-mark or a `done` of
+    /// one — which it waits behind (§3c.3; `HeldQueue::retry`), or the file
+    /// is out of reach: the board's directory not yet this shell's, or
+    /// another shell's, where the line is one a write brought past the door
+    /// before that was found ([`ANOTHER_WINDOW_HOLDS`]).
     ///
     /// # Errors
     ///
@@ -2590,15 +2667,15 @@ impl Holds {
     /// it as its refusal, its cause and its `sent` kept, while it stands as
     /// the death held it — `session_died`, no refusal beside it: a line the
     /// probe resent since, under the session that stands, is the resend's to
-    /// settle and is left alone. A copy refused is said on `Talk`, as every
-    /// re-mark's is ([`Holds::remark_line`]). The answer is the `held` answer
-    /// the hold made of the burst.
+    /// settle and is left alone. A copy refused is owed, or said on `Talk`,
+    /// as every re-mark's is ([`Holds::remark_line`]). The answer is the
+    /// `held` answer the hold made of the burst.
     pub fn note_death(&self, session: &SessionEntry, held: DeathHeld, died: &Refusal) -> Value {
         let DeathHeld { k, answer } = held;
         self.with_principal(&session.board_reference, session.facts.principal, |ph| {
             let standing = ph.queue.lines().iter().find(|l| l.k == k && l.reason.cause == cause::SESSION_DIED && l.reason.refusal.is_none()).map(|l| l.reason.sent);
             if let Some(sent) = standing {
-                self.remark_line(ph, k, Reason { cause: cause::SESSION_DIED.to_string(), refusal: Some(died.to_value()), sent });
+                self.remark_line(session.facts.principal, ph, k, Reason { cause: cause::SESSION_DIED.to_string(), refusal: Some(died.to_value()), sent });
             }
         });
         answer
@@ -2748,7 +2825,7 @@ impl Holds {
     /// read through — the `site.current` of its `arrangement_moved`, kept on
     /// the line it refused — a base already past it standing, the raise
     /// written to the held file with the line's re-mark
-    /// (`HeldQueue::remark_raised`), a copy the device refuses said as every
+    /// (`HeldQueue::remark_raised`), a copy the device refuses owed as every
     /// re-mark's is. The act is the person's acknowledgment of the rows that
     /// moved the document: each line's read for its own landing starts past
     /// them, and a document held moved again names only the hands since
@@ -2805,7 +2882,7 @@ impl Holds {
         let doc = line.doc.clone();
         match act {
             ResolveAct::Drop => {
-                let (count, state) = self.drop_run(ph, k, &doc);
+                let (count, state) = self.drop_run(session.facts.principal, ph, k, &doc);
                 // `emit_held` touches the bus alone, so it is safe under the
                 // board's lock.
                 self.emit_held(session, &doc, count, state, None, &[]);
@@ -2833,11 +2910,11 @@ impl Holds {
                     let behind = Reason::of(cause::BEHIND, sent);
                     match through {
                         Some(at) => {
-                            self.remark_raised_line(ph, k, behind, at);
+                            self.remark_raised_line(session.facts.principal, ph, k, behind, at);
                             let seen = ph.seen_through.entry(k).or_insert(at);
                             *seen = (*seen).max(at);
                         }
-                        None => self.remark_line(ph, k, behind),
+                        None => self.remark_line(session.facts.principal, ph, k, behind),
                     }
                     if let Some(given) = ph.reissues.get_mut(&k) {
                         given.first_failed = None;
@@ -2858,10 +2935,10 @@ impl Holds {
     /// and the state of the one that stands first now — a moved line held
     /// before the dropped one keeps the document `moved` — `kept` only where
     /// no line stands.
-    fn drop_run(&self, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
+    fn drop_run(&self, principal: u64, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
         let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && l.k >= from).map(|l| l.k).collect();
         for k in ks {
-            self.done_line(ph, k, Done::Dropped);
+            self.done_line(principal, ph, k, Done::Dropped);
         }
         let head = ph.queue.lines().iter().find(|l| l.doc == doc);
         (ph.count(doc), head.map_or(HeldState::Kept, |l| line_state(&l.reason)))
@@ -2935,72 +3012,85 @@ impl Holds {
         dialed
     }
 
-    /// Re-marks one line in place, its ordinal kept.
+    /// Re-marks one line of `principal`'s in place, its ordinal kept.
     ///
     /// It serves a hold that recurs, a refused run, a moved re-facing and the
-    /// mark a resend writes before its dial; a copy refused, by the device or
-    /// past the file's re-mark budget, is said on `Talk`, the queue taking the
-    /// reason all the same.
-    fn remark_line(&self, ph: &mut PrincipalHold, k: u64, reason: Reason) {
+    /// mark a resend writes before its dial; the queue takes the reason
+    /// whatever the disk did. A copy the device refuses is owed, and the wait
+    /// it begins is said at its edges ([`Holds::note_waiting`]); a copy the
+    /// writer refuses, past the file's re-mark budget or its line bound, is
+    /// owed never, and said on `Talk` as it is refused.
+    fn remark_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, reason: Reason) {
         if let Err(e) = ph.queue.remark(k, reason) {
             self.say(format_args!("line {k}'s re-mark could not be written ({e}); a reopen reads its earlier one"));
         }
+        self.note_waiting(principal, ph);
     }
 
-    /// Re-marks one line in place and raises its `base` to `at`, its
-    /// ordinal kept.
+    /// Re-marks one line of `principal`'s in place and raises its `base` to
+    /// `at`, its ordinal kept.
     ///
     /// It serves the person's `send` on a moved document
-    /// ([`Holds::resolve`]); a copy refused, by the device or past the file's
-    /// re-mark budget, is said on `Talk` as [`Holds::remark_line`] says one,
-    /// the queue taking the reason and the raised base all the same.
-    fn remark_raised_line(&self, ph: &mut PrincipalHold, k: u64, reason: Reason, at: u64) {
+    /// ([`Holds::resolve`]); the queue takes the reason and the raised base
+    /// whatever the disk did, and a refused copy is owed or said as
+    /// [`Holds::remark_line`] has it.
+    fn remark_raised_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, reason: Reason, at: u64) {
         if let Err(e) = ph.queue.remark_raised(k, reason, at) {
             self.say(format_args!("line {k}'s re-mark could not be written ({e}); a reopen reads its earlier one"));
         }
+        self.note_waiting(principal, ph);
     }
 
-    /// Takes one line out of the queue, whatever the disk did.
+    /// Takes one line of `principal`'s out of the queue, whatever the disk
+    /// did.
     ///
-    /// A `done` the device refused is said on `Talk`, and so is a held
-    /// file the volume would not remove once every line in it was done —
-    /// the store appends on to it. The line's reissues and the position
-    /// its moved document was acknowledged through go with it.
-    fn done_line(&self, ph: &mut PrincipalHold, k: u64, done: Done) {
+    /// A `done` the device refuses is owed, and the wait it begins is said at
+    /// its edges ([`Holds::note_waiting`]); a held file the volume would not
+    /// remove once every line in it was settled is said on `Talk` — the store
+    /// appends on to it. The line's reissues and the position its moved
+    /// document was acknowledged through go with it.
+    fn done_line(&self, principal: u64, ph: &mut PrincipalHold, k: u64, done: Done) {
         if let Ok(settled) = ph.queue.done(k, done) {
-            if let Some(e) = settled.unwritten {
-                self.say(format_args!("line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
-            }
             if let Some((path, e)) = settled.unremoved {
                 self.say(format_args!("every held line is done, and the held file {} could not be removed ({e}); it stands, and the next line is appended to it", path.display()));
             }
         }
         ph.reissues.remove(&k);
         ph.seen_through.remove(&k);
+        self.note_waiting(principal, ph);
     }
 
     /// Says the edges of a principal's wait for its held file's copies.
     ///
-    /// The wait (§3c.3) is the queue's line whose copy was refused and every
-    /// line held after it, each in memory alone until the retry copies it
-    /// (`HeldQueue::retry`). It is said in the shell's own window, as SP-11
-    /// and SP-12 have it: once as it begins — the first line that waits, the
-    /// refusal, and that a close before the retry lands loses the waiting
-    /// lines — and once as no line waits, whether the retry copied them or
-    /// they left the queue; never at each refused retry. The page reads the
-    /// same refusal in every waiting line's `unwritable`.
+    /// The wait (§3c.3; skep #813, #821) is the copies the queue's file owes:
+    /// a line's first copy, refused, and every line held after it, each in
+    /// memory alone; and a re-mark, a raise, a shift or a `done` the device
+    /// refused for a line on disk, which the file holds as it last copied it —
+    /// all written in `k` order by the retry (`HeldQueue::retry`). It is said
+    /// in the shell's own window, as SP-11 and SP-12 have it: once as it
+    /// begins — the copy the retry stopped at, its refusal, that a close
+    /// before the retry lands loses every copy owed, and that a relaunch reads
+    /// each line as the file last held it — and once as nothing is owed,
+    /// whether the retry wrote the copies or their lines left the queue; never
+    /// at each refused retry. The page reads the same refusal in every waiting
+    /// line's `unwritable`.
     fn note_waiting(&self, principal: u64, ph: &mut PrincipalHold) {
         match (ph.queue.waiting(), ph.waiting_said) {
             (Some(waiting), false) => {
+                let k = waiting.first();
+                let copy = match waiting.owed() {
+                    Owed::Line => format!("held line {k}"),
+                    Owed::Mark => format!("held line {k}'s re-mark"),
+                    Owed::Done => format!("held line {k}'s `done`"),
+                };
                 self.say(format_args!(
-                    "principal {principal}'s held line {} could not be copied to its held file ({}); it and every line held after it wait in memory, copied in order as soon as the device takes them, and a close before then loses them",
-                    waiting.first(),
+                    "principal {principal}'s {copy} could not be copied to its held file ({}); it and every copy owed after it wait in memory, written in order as soon as the device takes them, and a close before then loses them: a relaunch reads each line as the file last held it",
                     waiting.refusal()
                 ));
                 ph.waiting_said = true;
             }
             (None, true) => {
-                self.say(format_args!("principal {principal}'s held lines wait in memory no more: every line standing is in its held file"));
+                self.say(format_args!("principal {principal}'s held lines wait in memory no more: its held file holds every line as the queue does"));
                 ph.waiting_said = false;
             }
             (Some(_), true) | (None, false) => {}
@@ -3215,6 +3305,24 @@ fn the_file(dir: &HeldDir) -> &'static str {
         "the pending held file"
     } else {
         "the board's held file"
+    }
+}
+
+/// Opens `principal`'s file in `dir` as the join and the door open it.
+///
+/// The queue a refused join left owing copies to that file is taken where
+/// one stands ([`BoardHold::unsettled`]): the file holds standing the lines
+/// its owed `done`s drop, and a read of it would take them for held lines.
+/// Else the file is read ([`HeldDir::open_file`]).
+///
+/// # Errors
+///
+/// Returns what [`HeldDir::open_file`] returns.
+fn open_held(unsettled: &mut Vec<(u64, HeldQueue)>, dir: &HeldDir, principal: u64, account: &str) -> io::Result<Opened> {
+    let board = dir.board();
+    match unsettled.iter().position(|(owner, queue)| *owner == principal && queue.board().as_deref() == Some(board.as_str())) {
+        Some(at) => Ok(Opened::Live { queue: unsettled.swap_remove(at).1, aside: None }),
+        None => dir.open_file(principal, account),
     }
 }
 

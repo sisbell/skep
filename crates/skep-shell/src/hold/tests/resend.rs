@@ -37,7 +37,9 @@
 //! holding in memory and joining its file once it returns, and joining it —
 //! the board's own, or the pending one — at a later probe where the device
 //! refused the join, the refusal said once and every answer meanwhile
-//! carrying it (skep #823); every
+//! carrying it (skep #823), and a copy a refused join's undo left standing
+//! in the file never read back once its burst is sent from memory (skep
+//! #821); every
 //! principal's lines resent by one probe, a bare session's line resent by
 //! none until a session
 //! of its principal's that may write stands, and a probe with no line
@@ -52,8 +54,10 @@
 //! one image read, the shifted frame on the line before the shifted dial,
 //! and kept; and the shifts and the lost answers meeting the one deadline,
 //! the person's send starting the clock afresh; a resend marking its line
-//! `sent` on disk before it dials, and a line acked whose `done` the device
-//! refused relaunching so and kept by the read; the own node stopped,
+//! `sent` on disk before it dials, a line acked whose `done` the device
+//! refused relaunching so and kept by the read, and a mark the device refused
+//! written at the probe and read `sent` by a relaunch (skep #821); the own
+//! node stopped,
 //! `writes.halted` and a third `durability` holding a burst over time, a
 //! reused ordinal's reissues counted afresh; every line's read starting past
 //! the person's own write — a line held behind a landing or an ack read from
@@ -1993,11 +1997,13 @@ fn a_resend_marks_its_line_sent_on_disk_before_it_dials() {
 ///
 /// A resend's ack comes and its `done` is refused by the device — the held
 /// file moved aside under the dial and a directory left at its name — so the
-/// line stands on disk as held; the relaunch over the same store reads it
-/// `sent: true`, the mark its resend wrote before the dial, and the read
-/// finds the line's own landing and keeps it, never faced `moved` and never
-/// sent twice (the mutant that marks no line before its dial relaunches it
-/// `sent: false`, and the read faces the person's own text `moved`).
+/// `done` is owed, the wait said in the shell's own window, and the line
+/// stands on disk as held; the relaunch over the same store, before any retry
+/// writes the `done`, reads it `sent: true`, the mark its resend wrote before
+/// the dial, and the read finds the line's own landing and keeps it, never
+/// faced `moved` and never sent twice (the mutant that marks no line before
+/// its dial relaunches it `sent: false`, and the read faces the person's own
+/// text `moved`).
 #[test]
 fn a_line_acked_whose_done_was_refused_relaunches_sent_and_is_kept() {
     let g = ground();
@@ -2014,7 +2020,7 @@ fn a_line_acked_whose_done_was_refused_relaunches_sent_and_is_kept() {
     *g.fake.at_send.lock().unwrap() = None;
     assert!(g.lines().is_empty() && g.fake.sends() == 1, "the line is resent and acked");
     let said = g.said.lock().unwrap().clone();
-    assert!(said.iter().any(|line| line.starts_with("held: line 1 is settled, and its `done` could not be written")), "the refused `done` is said: {said:?}");
+    assert!(said.iter().any(|line| line.starts_with("held: principal 1's held line 1's `done` could not be copied to its held file")), "the owed `done` is said: {said:?}");
     // The relaunch: this run's holds gone, the file standing as the refused
     // `done` left it, the board serving the line's own landing at its ack.
     let Ground { holds, fake, session, store, .. } = g;
@@ -2030,6 +2036,46 @@ fn a_line_acked_whose_done_was_refused_relaunches_sent_and_is_kept() {
     let states = g.states();
     assert_eq!(g.fake.sends(), 1, "never sent twice");
     assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// Checks that a resend's mark of `sent` the device refused is written at the
+/// probe, and a relaunch reads the line `sent` (§3c.3; skep #821).
+///
+/// A burst held unsent; its held file moved aside and a directory left at its
+/// name, the probe's resend marks it `sent` before its dial — the mark's copy
+/// refused and owed, the wait said once — and the dial is answered a first
+/// `durability`, the line standing. The file put back and the node stopped,
+/// the next probe — which dials nothing — writes the mark and says the wait's
+/// end once, and a relaunch over the same store reads the line `sent`, as one
+/// whose dial may have landed (the mutant that writes a refused mark once and
+/// never again relaunches it unsent, and its resend goes out with no read for
+/// its landing).
+#[test]
+fn a_resends_sent_mark_the_device_refused_is_written_at_the_probe_and_a_relaunch_reads_it_sent() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
+    let file = held_file(&g);
+    let aside = file.with_extension("aside");
+    std::fs::rename(&file, &aside).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    g.fake.op_rejected.next(1, retry("durability"));
+    g.holds.probe("b-1");
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), lines.len(), lines[0]["sent"].as_bool()), (1, 1, Some(true)), "dialed once, the line standing marked in the queue");
+    let begun = said_containing(&g, "held line 1's re-mark could not be copied to its held file");
+    assert_eq!(begun.len(), 1, "the owed mark said once: {:?}", g.said.lock().unwrap());
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::rename(&aside, &file).unwrap();
+    g.holds.set_node_stopped("b-1", true);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "nothing dialed while the node is stopped");
+    assert_eq!(said_containing(&g, "wait in memory no more").len(), 1, "the mark written, said once: {:?}", g.said.lock().unwrap());
+    // The relaunch: this run's holds gone, the file as the retry left it.
+    let Ground { holds, fake, session, store, .. } = g;
+    drop(holds);
+    let g = ground_over(fake, store, session.facts.clone(), 0);
+    let lines = g.lines();
+    assert_eq!((lines.len(), lines[0]["sent"].as_bool()), (1, Some(true)), "the relaunch reads the line as one whose dial may have landed: {lines:?}");
 }
 
 /// Checks that a `sent` head whose own row stands and whose site confirms
@@ -2552,6 +2598,68 @@ fn a_pending_join_the_device_refused_is_joined_at_a_later_probe() {
     let landed = said_containing(&g, "joined the board's held file");
     assert!(landed.len() == 1 && landed[0].contains("1 held line joined"), "{landed:?}");
     assert!(pending_store.try_lock().unwrap().is_some(), "the pending directory's lock is let go");
+}
+
+/// Checks that a line a refused join's undo left standing in the file is
+/// never read back once it is sent from memory (§3c.3; skep #821).
+///
+/// The board's file holds a line an earlier run left, and the board is away
+/// at the session's open, so two bursts are held in memory. The board
+/// returns: the join into its file copies the first and the device refuses
+/// every copy after it, the undo's `done` among them, so the join is refused,
+/// said once naming the copy it left standing, and the two bursts are sent
+/// from memory and kept. The device takes copies again, and either the
+/// principal's door — `held(session)` — comes first, listing the earlier
+/// run's line alone, the queue the join wrote taken in place of a read of its
+/// file; or a probe comes first, writing the undo's `done` from the queue it
+/// keeps and saying so once, so the file reads the earlier run's line alone.
+/// Either way the next probe sends that line, so each burst is dialed once
+/// (the mutant that drops the join's queue reads the copy at the door as a
+/// held line and sends the person's text a second time; the one whose door
+/// reads the file in the queue's place reads it so too; the one whose probe
+/// never retries the kept queue leaves the copy standing in the file for a
+/// close to relaunch).
+#[test]
+fn a_line_a_refused_joins_undo_left_standing_is_never_read_back_once_it_is_sent_from_memory() {
+    for door_first in [true, false] {
+        let store = TempDir::new().unwrap();
+        let ours = Chain::parse(&"ab".repeat(32)).unwrap();
+        let dir = HeldDir::new(store.path(), ours);
+        dir.ensure().unwrap();
+        let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+        assert!(queue.hold(OTHER, None, 0, insert(OTHER, json!(["earlier"]), 0), None, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+        drop(queue);
+        let fake = Fake::new();
+        fake.head_unreachable.store(true, Ordering::SeqCst);
+        let facts = writer_facts(&store);
+        let g = ground_over(fake, store, facts, 0);
+        for value in ["a", "b"] {
+            let answer = g.hold(&insert(DOC, json!([value]), g.fake.head()), "unreachable", false);
+            assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "door first {door_first}: held in memory, the board away: {answer}");
+        }
+        g.fake.head_unreachable.store(false, Ordering::SeqCst);
+        crate::held::tests::refuse_copies_after(1);
+        g.holds.probe("b-1");
+        crate::held::tests::take_copies();
+        let standing = file_lines(&std::fs::read_to_string(held_file(&g)).unwrap());
+        assert!(standing.iter().any(|line| line["frame"]["values"] == json!(["a"])), "door first {door_first}: premise: the join's copy of the first burst stands in the file: {standing:?}");
+        let said = said_containing(&g, "could not join");
+        assert!(said.len() == 1 && said[0].contains("the copies a join made before its refusal stand in the file"), "door first {door_first}: said once, naming the copy left standing: {said:?}");
+        let sent = |g: &Ground| g.fake.sends.lock().unwrap().iter().map(|frame| frame["values"][0].as_str().unwrap_or("?").to_string()).collect::<Vec<_>>();
+        assert_eq!(sent(&g), ["a", "b"], "door first {door_first}: both sent from memory and kept");
+        if !door_first {
+            g.holds.probe("b-1");
+            let Opened::Live { queue, .. } = HeldDir::new(g.store.path(), ours).open_file(1, "1.0.1").unwrap() else { panic!("the file reads live") };
+            let read: Vec<Value> = queue.lines().iter().map(|line| line.frame["values"].clone()).collect();
+            assert_eq!(read, [json!(["earlier"])], "the probe wrote the undo's `done`: the file reads the earlier run's line alone");
+            assert_eq!(said_containing(&g, "holds the copies a refused join made no more").len(), 1, "said once: {:?}", g.said.lock().unwrap());
+        }
+        let listed: Vec<Value> = g.lines().iter().map(|line| line["frame"]["values"].clone()).collect();
+        assert_eq!(listed, [json!(["earlier"])], "door first {door_first}: the door lists the earlier run's line alone, never the copy the join undid");
+        g.holds.probe("b-1");
+        assert_eq!(sent(&g), ["a", "b", "earlier"], "door first {door_first}: each burst dialed once");
+        assert!(g.lines().is_empty() && !held_file(&g).exists(), "door first {door_first}: every line kept, the file compacted");
+    }
 }
 
 // ── THE BUDGETS, TIMED (§3c.3) ──────────────────────────────────────────────

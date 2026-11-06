@@ -6,10 +6,12 @@
 //! there too at its daemon-running tick and at the hand-overs of
 //! `resolve(send)` and `set_node_state(Running)`, because `Cmd::Tick` is
 //! driven by committed writes and a poisoned, halted, stopped or
-//! unreachable board commits nothing. Each probe first joins the lines kept
-//! out of the directory's file to it (§3c.1; skep #823) and copies the lines
-//! whose held file's copy the device refused, whatever the board's state —
-//! the retry's clock (§3c.3; skep #813). The resend it lets run is automatic
+//! unreachable board commits nothing. Each probe first writes the `done`s a
+//! refused join's undo owes the file it wrote (skep #821), joins the lines
+//! kept out of the directory's file to it (§3c.1; skep #823) and writes the
+//! copies each held file owes its queue — a line's, a re-mark's or a
+//! `done`'s the device refused — whatever the board's state: the retry's
+//! clock (§3c.3; skep #813, #821). The resend it lets run is automatic
 //! at the hold's end and at reopen, under a standing session of the
 //! principal's that may write — never a bare one, the keyless session that
 //! reads alone (foundations §3.3 state 3), whose principal's lines stay held
@@ -65,7 +67,9 @@
 //! A resend marks its line as one that may have landed before it dials, synced,
 //! and the line stays so through every resend short of its ack and through a
 //! move, so its next read takes a landing it finds as the line's own — after a
-//! crash or a refused write between a dial and its answer too (§3c.2's `sent`).
+//! crash or a refused write between a dial and its answer too (§3c.2's `sent`);
+//! a mark the device refuses is owed and written by the retry, and a close
+//! while it is owed relaunches the line as one never sent.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -482,13 +486,15 @@ impl Holds {
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
     /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
     /// First, whatever the board's state — its node stopped, the board away
-    /// — the lines kept out of the directory's file, in memory alone or on
-    /// the pending file a refused join left, are joined to it where the
-    /// device and the file take them ([`Holds::rejoin`], §3c.1, §3c.3; skep
-    /// #823); and each principal's lines waiting for their held file's copy
-    /// are copied where the device takes them (`HeldQueue::retry`, §3c.3;
-    /// skep #813), and a wait that ends is said ([`Holds::note_waiting`]):
-    /// neither needs a dial. Then, while a line stands at a board whose own
+    /// — the `done`s a refused join's undo owes the file it wrote are written
+    /// ([`Holds::retry_unsettled`]); the lines kept out of the directory's
+    /// file, in memory alone or on the pending file a refused join left, are
+    /// joined to it where the device and the file take them
+    /// ([`Holds::rejoin`], §3c.1, §3c.3; skep #823); and the copies each
+    /// principal's held file owes — a line's, a re-mark's or a `done`'s — are
+    /// written where the device takes them (`HeldQueue::retry`, §3c.3; skep
+    /// #813, #821), and a wait that ends is said ([`Holds::note_waiting`]):
+    /// none needs a dial. Then, while a line stands at a board whose own
     /// node is not stopped, `/health` is read; where the board answers and
     /// takes writes, each principal with lines resends them under a standing
     /// session of its own that may write (`SessionEntry::may_write`) — under
@@ -499,6 +505,7 @@ impl Holds {
         let slot = self.slot(board_reference);
         let due = {
             let mut board_hold = slot.lock();
+            self.retry_unsettled(&mut board_hold);
             self.rejoin(board_reference, &mut board_hold, slot.board.dialed());
             for (principal, ph) in &mut board_hold.principals {
                 ph.queue.retry();
@@ -618,7 +625,7 @@ impl Holds {
                             ph.note_position(doc, at);
                             ph.note_arranged(doc, at);
                         }
-                        self.done_line(ph, head.k, Done::Kept { at });
+                        self.done_line(principal, ph, head.k, Done::Kept { at });
                     }
                 }
                 match self.count(board_reference, principal, doc) {
@@ -838,13 +845,14 @@ impl Holds {
         // between the dial and its answer never leaves a write that may have
         // landed read as one never sent; a line marked so already writes
         // nothing. The mark stands whatever the dial answers, a connection
-        // never made among them, and a copy the device refuses is said and
-        // the dial made all the same. An attest that could not be composed
-        // dials nothing and marks nothing: the line keeps its own `sent`, and
-        // nothing left (`left` false).
+        // never made among them, and a copy the device refuses is owed,
+        // written by the retry, and the dial made all the same — a close
+        // while it is owed relaunches the line as one never sent. An attest
+        // that could not be composed dials nothing and marks nothing: the
+        // line keeps its own `sent`, and nothing left (`left` false).
         let (mut dialed, mut sent, mut left) = match self.attest_where_owed(session, &line.frame) {
             Ok(frame) => {
-                self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, Reason { sent: true, ..line.reason.clone() }));
+                self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, Reason { sent: true, ..line.reason.clone() }));
                 (self.dial(session, &frame, &given()), true, true)
             }
             Err(why) => (Dialed::from(why), line.reason.sent, false),
@@ -905,7 +913,7 @@ impl Holds {
                     // refused, says nothing of an earlier dial's write. The
                     // read decides at the next probe whether it landed.
                     let reason = Reason { sent: reason.sent || sent, ..reason };
-                    self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
+                    self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, reason));
                     // A failure the line stands through for the next probe is
                     // said once per change; a refused run's face is its
                     // `held` event, and a dial that never left is the
@@ -936,7 +944,7 @@ impl Holds {
                 Dialed::Faced(Refusal::Board(r)) if left => {
                     let token = r.token();
                     let reason = Reason { sent, ..Reason::refused(&token, r.body.clone()) };
-                    self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
+                    self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, line.k, reason));
                     self.say(format_args!("line {} on {} was not taken ({r}), a code the shell holds no row for; it is handed to the person, who may send it again or drop it", line.k, line.doc));
                     self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Refused, Some(&token), &[]);
                     return ControlFlow::Break(());
@@ -982,10 +990,11 @@ impl Holds {
     /// (§3c.4), never as a moved document. Then the frame is attested (an
     /// attest that cannot be composed dials nothing and writes nothing: the
     /// dial that never left, `left` false, the line as it was), written to the
-    /// line before it is dialed — `HeldQueue::rewrite`, synced, a copy refused
-    /// said on `Talk` — and the line marked as one that may have landed where
-    /// it is not so marked yet, so a relaunch after the shifted answer is lost
-    /// reads the landed test at the shifted positions; then dialed by `dial`.
+    /// line before it is dialed — `HeldQueue::rewrite`, synced, a copy the
+    /// device refuses owed and one the writer refuses said on `Talk` — and the
+    /// line marked as one that may have landed where it is not so marked yet,
+    /// so a relaunch after the shifted answer is lost reads the landed test at
+    /// the shifted positions; then dialed by `dial`.
     pub(super) fn shift_and_send(&self, session: &SessionEntry, k: u64, verdict: &Value, dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed) -> Result<Shifted, Unshiftable> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
@@ -1017,7 +1026,7 @@ impl Holds {
             if let Err(e) = ph.queue.rewrite(k, shifted.clone()) {
                 self.say(format_args!("line {k}'s shifted frame could not be written ({e}); a reopen reads the frame copied last, which the board judges as it judges every send"));
             }
-            self.remark_line(ph, k, Reason { sent: true, ..line.reason.clone() });
+            self.remark_line(principal, ph, k, Reason { sent: true, ..line.reason.clone() });
         });
         let dialed = dial(&attested);
         Ok(Shifted { dialed, frame: shifted, left: true })
@@ -1041,7 +1050,7 @@ impl Holds {
         // line resent before its deadline may have landed and is read before
         // the person's `send` dials it again.
         let reason = Reason { sent: head.reason.sent, ..Reason::refused(Name::ANSWERS_LOST.as_str(), refusal) };
-        self.with_principal(board_reference, principal, |ph| self.remark_line(ph, head.k, reason));
+        self.with_principal(board_reference, principal, |ph| self.remark_line(principal, ph, head.k, reason));
         self.say(format_args!(
             "line {} on {}: no landing {} s after its first failed send (last: {last}); it is handed to the person, who may send it again or drop it",
             head.k,
@@ -1083,7 +1092,7 @@ impl Holds {
             let marks: Vec<(u64, bool)> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| (l.k, l.reason.sent)).collect();
             for (k, sent) in marks {
                 let refusal = judged.as_ref().filter(|(judged, _)| *judged == k).map(|(_, verdict)| verdict.clone());
-                self.remark_line(ph, k, Reason { refusal, ..Reason::of(cause::MOVED, sent) });
+                self.remark_line(principal, ph, k, Reason { refusal, ..Reason::of(cause::MOVED, sent) });
             }
         });
     }
@@ -1092,7 +1101,7 @@ impl Holds {
     ///
     /// The `done` is [`Done::Kept`] or [`Done::Dropped`].
     fn done(&self, board_reference: &str, principal: u64, k: u64, done: Done) {
-        self.with_principal(board_reference, principal, |ph| self.done_line(ph, k, done));
+        self.with_principal(board_reference, principal, |ph| self.done_line(principal, ph, k, done));
     }
 
     /// Returns the document's head: its first standing line in `k` order.

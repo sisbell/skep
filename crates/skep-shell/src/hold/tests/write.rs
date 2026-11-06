@@ -75,7 +75,9 @@
 //! unsigned, its line in the pending file under the origin's hash (skep
 //! #725), skipped at each probe and sent attested once the record reads; a
 //! garbled head answer held so, never `unreachable` (skep #728); the drop
-//! admitted on such a line and `send` refused (skep #726); a write the hold
+//! admitted on such a line and `send` refused (skep #726), the drop's `done`s
+//! the device refused written at the probe and a relaunch sending none of
+//! what was dropped (skep #821); a write the hold
 //! never holds refused so; the head read halting, or its answer lost, holding
 //! the burst unsent; and an unclaimed board serving no record the one board a
 //! signed write goes out unsigned at.
@@ -1990,6 +1992,60 @@ fn a_line_held_head_unreadable_is_dropped_by_resolve_drop_and_refused_resolve_se
     let text = std::fs::read_to_string(pending_file(&g)).unwrap();
     assert_eq!(text.matches("\"as\":\"dropped\"").count(), 2, "both drops on the pending file: {text}");
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
+}
+
+/// Checks that a dropped line's `done` the device refused is written at the
+/// probe, and a relaunch sends none of what was dropped (§3c.3; skep #821).
+///
+/// Three bursts are held over a head record that cannot be read — two on one
+/// document, one on another — in the pending file. The file moved aside and a
+/// directory left at its name, the person drops the first: it and the line
+/// behind it leave the queue, their `done`s owed, and the wait is said once in
+/// the shell's own window, naming the first `done` and what a relaunch reads.
+/// The file put back, the next probe — which dials nothing while the head
+/// cannot be read — writes both `done`s and says the wait's end once. A
+/// relaunch over the same store, the head record readable, sends the other
+/// document's line alone (the mutant that writes a refused `done` once and
+/// never again relaunches both dropped lines as held, and sends the writes
+/// the person threw away, the second composed against the first).
+#[test]
+fn a_dropped_lines_done_the_device_refused_is_written_at_the_probe_and_a_relaunch_sends_none_of_it() {
+    let fake = Fake::new();
+    fake.head_garbled.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let OpAnswer::Answered(Ok(head)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]), g.fake.head()), None) else { panic!("held, nothing sent") };
+    let k = head["held"].as_u64().unwrap();
+    for frame in [insert(DOC, json!(["b"]), g.fake.head()), insert(OTHER, json!(["c"]), g.fake.head())] {
+        let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, frame, None) else { panic!("held behind") };
+        assert_eq!(behind["cause"], "behind", "{behind}");
+    }
+    let pending = pending_file(&g);
+    let aside = pending.with_extension("aside");
+    std::fs::rename(&pending, &aside).unwrap();
+    std::fs::create_dir(&pending).unwrap();
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Drop).unwrap(), Resolved::Dropped);
+    let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap().to_string()).collect();
+    assert_eq!(docs, [OTHER], "the line and the one behind it have left the queue");
+    let begun = said_containing(&g, "could not be copied to its held file");
+    assert_eq!(begun.len(), 1, "the wait said once as it begins: {:?}", g.said.lock().unwrap());
+    assert!(begun[0].contains(&format!("held line {k}'s `done`")) && begun[0].contains("a relaunch reads each line as the file last held it"), "{begun:?}");
+    std::fs::remove_dir(&pending).unwrap();
+    std::fs::rename(&aside, &pending).unwrap();
+    g.holds.probe("b-1");
+    let text = std::fs::read_to_string(&pending).unwrap();
+    assert_eq!(text.matches("\"as\":\"dropped\"").count(), 2, "both `done`s written at the probe: {text}");
+    assert_eq!(said_containing(&g, "wait in memory no more").len(), 1, "the wait's end said once: {:?}", g.said.lock().unwrap());
+    assert_eq!(g.fake.sends(), 0, "nothing dialed while the head cannot be read");
+    // The relaunch: this run's holds gone, the head record readable.
+    let Ground { holds, fake, session, store, .. } = g;
+    drop(holds);
+    fake.head_garbled.store(false, Ordering::SeqCst);
+    let g = ground_over(fake, store, session.facts.clone(), 0);
+    g.holds.probe("b-1");
+    let sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|frame| frame["values"][0].as_str().unwrap_or("?").to_string()).collect();
+    assert_eq!(sent, ["c"], "the other document's line alone is sent");
 }
 
 /// Checks that a write the hold never holds is refused over an unreadable head

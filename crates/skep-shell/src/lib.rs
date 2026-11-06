@@ -90,7 +90,9 @@
 //!   held where the board cannot take it, and the six non-burst writes a
 //!   standing hold refuses at once with its cause; the per-(board,
 //!   principal) queue over `held`'s file, each board's under its own lock,
-//!   one shell per data directory; its child `resend` holds the walk the
+//!   one shell per data directory — a board whose store another shell holds
+//!   read alone, no file of it opened (`Holds::another_window`, the shell's
+//!   write door's question); its child `resend` holds the walk the
 //!   feed thread's probe drains: one read per document, with §3c.5's three
 //!   outcomes — a moved document's hands named — the lines then sent in `k`
 //!   order across the documents.
@@ -109,9 +111,11 @@
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode (bare
 //!   as the run's principal, which reads alone — every write in it refused
 //!   before any dial — or signed with a dev key; the `session` answer says
-//!   which, `writes`), and one private method per §4b.1 row, per `places`
-//!   and per `changes`, behind [`Shell::call`], whose dispatch the compiler
-//!   holds to one arm per call — the ten ceremonial rows in its child
+//!   which, `writes`), every write at a board whose held store another shell
+//!   holds refused `another_window` before any dial (§3c.3) at the write
+//!   door the bare refusal shares, and one private method per §4b.1 row, per
+//!   `places` and per `changes`, behind [`Shell::call`], whose dispatch the
+//!   compiler holds to one arm per call — the ten ceremonial rows in its child
 //!   `ceremony`, the four `publication` rows and the panels they stand on in
 //!   its child `publication`, the four `merge` rows and the compositions
 //!   they stand on in its child `merge` — each row taking and answering

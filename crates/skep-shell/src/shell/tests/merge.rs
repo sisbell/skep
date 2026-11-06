@@ -16,7 +16,7 @@
 //! member and writing a missing record once; the `head_moved` race typed,
 //! nothing re-sent; and the composition dying with its session.
 
-use super::publication::{ground, open_ground, register, signed_facts, Ground};
+use super::publication::{ground, register, second_device, signed_facts, Ground};
 use super::*;
 use crate::sessions::Facts;
 
@@ -401,7 +401,7 @@ fn the_head_moved_race_is_typed_nothing_re_sent_and_a_composition_dies_with_its_
     let panel = g.call("publication.open", json!({"session": g.session, "draft": l, "doc": f.edition, "readable_drafts": [l], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((panel["count"]["supersede"].clone(), panel["standing"].as_str()), (json!([f.e11]), Some("at_head")), "{panel}");
     // The second device moves the head.
-    let second = open_ground(&dir, &sd);
+    let second = second_device(&dir, &sd);
     let t = second.addr(skep_client::board::frames::stage(&f.e2, None));
     second.op(json!({"op": "insert", "doc": t, "at": {"subspace": "1", "ordinal": "14"}, "values": ["!"], "as_of": second.position()}));
     second.call("publication.open", json!({"session": second.session, "draft": t, "doc": f.edition, "readable_drafts": [t], "published": [f.edition]})).unwrap_or_else(|r| panic!("{r}"));

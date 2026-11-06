@@ -27,8 +27,14 @@
 //! the read; a line that may have landed
 //! staying so through resends that never left, over a head record that
 //! cannot be read or a connection never made, its landing kept by the read;
-//! a second window's burst resent from memory; every principal's lines
-//! resent by one probe, a bare session's line resent by none until a session
+//! another shell's lock on the board's store (skep #789): the store found
+//! another's at the session's open and said once, no file opened and nothing
+//! listed, a line held before the state was found counted, resent from
+//! memory and kept, nothing written under the lock, the state left only as a
+//! later session's open takes the lock; a board away at the first touch
+//! holding in memory and joining its file once it returns; every
+//! principal's lines resent by one probe, a bare session's line resent by
+//! none until a session
 //! of its principal's that may write stands, and a probe with no line
 //! standing dialing nothing; one drain per board at a time, and a drain that
 //! unwinds leaving the board free to drain again; the board's refusal of a
@@ -420,46 +426,143 @@ fn a_refusal_the_table_holds_nowhere_hands_a_resent_line_over_at_once() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
-/// Checks that another process's lock leaves the directory not yet this
-/// shell's (§3c.3: one shell per data directory).
-///
-/// With the board's `held/<chain>/lock` held by another process, a burst is
-/// held under its own cause — never a second shell's — its answer
-/// `unwritable` saying another process holds the store, nothing written
-/// under the directory, the line standing in memory and resent like any
-/// line once the board answers; and once that process lets the lock go, the
-/// next probe takes the directory, so the next line is copied to the
-/// board's file (the mutants that keep a second shell's custody with a cause
-/// of its own, that write under a lock another process holds, or that never
-/// try the lock again).
-#[test]
-fn another_processs_lock_leaves_the_directory_not_yet_this_shells() {
-    let store = TempDir::new().unwrap();
-    let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+/// The `Talk` line that says another shell's store as its state begins.
+const ANOTHER_SHELLS_STORE: &str = "held: another shell holds this board's held store — one shell per data directory: this shell reads alone at the board, every write refused `another_window` before any dial and nothing held, and tries the store again at each session's open";
+
+/// The `Talk` line that says the board's store is this shell's again.
+const THIS_SHELLS_STORE: &str = "held: this shell holds this board's held store now: writes at the board go out again";
+
+/// The board's held directory under `store`, at the fake's chain, locked as
+/// another shell over the same data directory holds it (§3c.3).
+fn another_shell_holds(store: &Path) -> File {
+    let dir = HeldDir::new(store, Chain::parse(&"ab".repeat(32)).unwrap());
     dir.ensure().unwrap();
-    let other_process = dir.try_lock().unwrap().expect("the other process holds the lock");
+    dir.try_lock().unwrap().expect("the other shell holds the lock")
+}
+
+/// Checks that another shell's lock makes the board's store that shell's,
+/// and this one reads alone there (§3c.3: one shell per data directory;
+/// skep #789).
+///
+/// With the board's `held/<chain>/lock` held by another shell as the session
+/// opens, the store is found another's ([`Holds::another_window`], the
+/// question the shell's write door asks before any dial) and said once on
+/// `Talk`; no file is opened, `held(session)` lists nothing, and a probe with
+/// no line standing dials nothing and says nothing more. A line a write
+/// brought past the door before the state was found stands in memory alone,
+/// its answer `unwritable` naming the other shell, nothing written under its
+/// lock, and is resent and kept once the board takes it. Once the other
+/// shell lets go, a probe with no line standing leaves the state as it was,
+/// and the next session's open takes the lock and says so once: the next
+/// line is copied to the board's file (the mutants that keep a second
+/// shell's bursts in memory as its own custody, that write under another
+/// shell's lock, that leave the state at a read that takes no lock, and that
+/// never try the lock again).
+#[test]
+fn another_shells_lock_makes_the_store_its_own_and_this_shell_reads_alone() {
+    let store = TempDir::new().unwrap();
+    let other_shell = another_shell_holds(store.path());
     let held_dir = store.path().join("held").join("ab".repeat(32));
     let facts = writer_facts(&store);
     let g = ground_in(store, facts, 0);
+    assert!(g.holds.another_window("b-1"), "the session's open finds the store another shell's");
+    assert_eq!(said_containing(&g, "another shell holds this board's held store"), [ANOTHER_SHELLS_STORE], "said once as it begins");
+    assert!(g.lines().is_empty() && !held_dir.join("principal-1.held").exists(), "no file is opened, nothing listed");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 0, "a probe with no line standing dials nothing");
+    // A line a write brought past the door before the state was found: in
+    // memory alone, saying why, and sent as the board takes it.
     let answer = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
-    assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("unreachable")), "the hold's own cause, no second shell's: {answer}");
     let why = answer["unwritable"].as_str().unwrap_or_else(|| panic!("the answer says why: {answer}"));
-    assert!(why.contains("another process holds this board's held store") && why.contains("one shell per data directory"), "{why}");
-    assert!(!held_dir.join("principal-1.held").exists(), "nothing is written under a lock another process holds");
-    assert_eq!(g.lines().len(), 1, "the line stands in memory");
+    assert!(why.contains("another shell holds this board's held store") && why.contains("kept in memory alone"), "{why}");
+    assert!(!held_dir.join("principal-1.held").exists(), "nothing is written under another shell's lock");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sends(), 1, "the line is resent");
+    assert_eq!(g.fake.sends(), 1, "the line is resent from memory");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
-    // The other process lets go: the lock is tried again at the next probe,
-    // the directory taken, and the next line copied to the board's file.
-    drop(other_process);
-    let still = g.hold(&insert(DOC, json!(["b"]), g.fake.head()), "unreachable", false);
-    assert!(still["unwritable"].is_string(), "until a probe or a session's open tries the lock again: {still}");
+    assert!(g.holds.another_window("b-1") && !held_dir.join("principal-1.held").exists(), "the store stays the other shell's");
+    // The other shell lets go: a probe with no line standing leaves the
+    // state, and the next session's open takes the lock.
+    drop(other_shell);
     g.holds.probe("b-1");
-    assert!(g.lines().is_empty(), "resent and kept");
+    assert!(g.holds.another_window("b-1"), "a probe with no line standing tries no lock");
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 };
+    let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
+    let next_session = g.holds.sessions.register(&board, open, &mut NoSupplements);
+    g.holds.open_session(&next_session);
+    assert!(!g.holds.another_window("b-1"), "the next session's open takes the lock");
+    assert_eq!(said_containing(&g, "held store now"), [THIS_SHELLS_STORE], "said once as it ends");
+    assert_eq!(said_containing(&g, "another shell holds this board's held store"), [ANOTHER_SHELLS_STORE], "the beginning said no second time");
     let next = g.hold(&insert(DOC, json!(["c"]), g.fake.head()), "unreachable", false);
-    assert!(next.get("unwritable").is_none(), "the directory is this shell's now: {next}");
+    assert!(next.get("unwritable").is_none(), "the store is this shell's now: {next}");
     assert!(std::fs::read_to_string(held_dir.join("principal-1.held")).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
+}
+
+/// Checks that lines held in memory before another shell's store is found
+/// are counted as it is said, and resent from memory (§3c.3; skep #789).
+///
+/// The board away at the session's open — its head unread, the store not
+/// yet this shell's — a burst is held in memory alone, its answer naming the
+/// board away. Another shell then takes the store's lock and the board
+/// returns: the probe's one head read finds the store another's and says
+/// so once, naming the one line kept in memory and that a close before it
+/// is sent loses it; the line is resent and kept, nothing written under the
+/// other shell's lock (the mutant that gates the resend on the state loses
+/// the line at the close; the one that counts no line leaves the operator
+/// unwarned).
+#[test]
+fn lines_held_before_another_shells_store_is_found_are_counted_and_resent_from_memory() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    assert!(!g.holds.another_window("b-1"), "premise: the board away at the open, no lock tried");
+    let answer = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
+    assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {answer}");
+    let other_shell = another_shell_holds(g.store.path());
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert!(g.holds.another_window("b-1"), "the probe's head read finds the store another shell's");
+    let counted = format!("{ANOTHER_SHELLS_STORE}; the 1 held line kept in memory before then is sent as the board takes it, and a close before then loses it");
+    assert_eq!(said_containing(&g, "another shell holds this board's held store"), [counted], "said once, the line counted");
+    assert_eq!(g.fake.sends(), 1, "the line is resent from memory");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and kept");
+    assert!(!held_file(&g).exists(), "nothing is written under the other shell's lock");
+    drop(other_shell);
+}
+
+/// Checks that a board away at the first touch still holds its lines in
+/// memory and joins them to its file once it returns (§3c.3).
+///
+/// The other causes of a store not yet this shell's keep the memory custody
+/// another shell's lock has none of: the board away at the session's open, a
+/// burst is held in memory, its answer naming the board away; the board
+/// returns, refusing the resend `write_busy` so the line stands, and the
+/// probe's head read takes the directory — no other shell holds it — and
+/// joins the line to the board's file, said once, the store never another
+/// shell's (the mutant that reads any store not yet this shell's as another
+/// shell's refuses the person's writes at every outage).
+#[test]
+fn a_board_away_at_the_first_touch_holds_in_memory_and_joins_its_file_later() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
+    let answer = g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
+    assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("could not be reached")), "held in memory, the board away: {answer}");
+    assert!(!g.store.path().join("held").exists(), "nothing written while the board is away");
+    g.fake.head_unreachable.store(false, Ordering::SeqCst);
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    g.holds.probe("b-1");
+    assert!(!g.holds.another_window("b-1"), "no other shell holds the store");
+    assert!(std::fs::read_to_string(held_file(&g)).unwrap().contains("\"values\":[\"a\"]"), "the standing line joined the board's file");
+    let joined = said_containing(&g, "joined the board's held file");
+    assert!(joined.len() == 1 && joined[0].contains("1 held line joined"), "{joined:?}");
+    assert!(said_containing(&g, "another shell").is_empty(), "never said another shell's");
+    g.fake.op_refused.clear();
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "resent and kept");
 }
 
 /// Returns the hands a moved document's `held` event names, over `rows` —

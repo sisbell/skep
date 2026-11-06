@@ -88,6 +88,16 @@ impl Name {
     /// session for reading alone (foundations §3.3 state 3: "the shell
     /// refuses every write in it"); the detail names the `op`, or the `act`.
     pub const WRITE_IN_BARE_SESSION: Name = Name("write_in_bare_session");
+    /// A write while another shell holds the board's held store (§3c.3).
+    ///
+    /// ONE SHELL PER DATA DIRECTORY: until a second launch hands its address
+    /// to the running client and exits, a shell finding the lock of a board's
+    /// held store held by another shell over its data directory reads alone
+    /// at that board — every write frame through `op`, `/op-at`'s too, and
+    /// every row of the publication and merge families refused without a
+    /// dial, nothing held and nothing sent, the writes the other window's to
+    /// make. The detail names the `op`, or the `call`.
+    pub const ANOTHER_WINDOW: Name = Name("another_window");
     /// A `publish` frame through `op` under a session, refused without a dial.
     ///
     /// A publication crosses as `publication.confirm` (`client.md` §4b.1's

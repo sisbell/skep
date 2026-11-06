@@ -463,8 +463,8 @@ impl Shell {
     ///    `alternative or draft` where neither is given and `draft` where
     ///    both are;
     /// 2. `malformed_args` naming `session`, then `session_ended`;
-    ///    `write_in_bare_session` naming the call; `store_unreadable`,
-    ///    `no_account`;
+    ///    `write_in_bare_session`, then `another_window`, naming the call;
+    ///    `store_unreadable`, `no_account`;
     /// 3. at a daughter, the `in_claims` read's: `unreadable`,
     ///    `no_such_document`, the board's verdicts, `unreachable`,
     ///    `session_died`; then the merged arm's composition and record, as
@@ -665,8 +665,8 @@ impl Shell {
     /// stands under its board and principal; `malformed_args` naming
     /// `resolutions` where a gap id names no gap of the composition or a
     /// choice is none the gap admits; `write_in_bare_session`,
-    /// `store_unreadable`, `no_account`; the panel's open's where the shell
-    /// opens one (`publication.open`'s steps 4 to 6); then
+    /// `another_window`, `store_unreadable`, `no_account`; the panel's open's
+    /// where the shell opens one (`publication.open`'s steps 4 to 6); then
     /// `publication.confirm`'s from `write_in_bare_session` on — a hold
     /// standing at the board among them, `stopped`, `poisoned`, `halted`,
     /// nothing composed. The record's refusal after an acknowledgment is no
@@ -707,7 +707,7 @@ impl Shell {
         }
         match self.confirm_standing(&session, &key, &state, switches, answers, "merge.land")? {
             Confirmation::Acknowledged { session: current, ack } => {
-                let signed = self.signed(&current, "merge.land")?;
+                let signed = self.signed_within_call(&current, "merge.land")?;
                 let merger = lib::Merger { token: &current.token, account: &signed.account, signer: &*signed.signer };
                 let recorded = lib::record_published(&current.board, &composition.merged, merger, &ack.member, ack.at, None);
                 self.merges.take(&key);
@@ -754,8 +754,9 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `session`, then
     /// `session_ended`; `no_merge` naming the session where no composition
-    /// stands; `write_in_bare_session`, `store_unreadable`, `no_account`;
-    /// the library's (`skep_client::merge::undo`): `unreadable`,
+    /// stands; `write_in_bare_session`, `another_window`,
+    /// `store_unreadable`, `no_account`; the library's
+    /// (`skep_client::merge::undo`): `unreadable`,
     /// `no_such_document`, `not_owner`, `nothing_to_undo` with its reason,
     /// `no_merge` naming the draft, `merge_refused` with `history_reclaimed`,
     /// the board's `arrangement_moved` verbatim, a halt's face, and
@@ -786,7 +787,7 @@ impl Shell {
     ///
     /// In this order: `malformed_args` naming `draft`; `malformed_args`
     /// naming `session`, then `session_ended`; `write_in_bare_session`,
-    /// `store_unreadable`, `no_account`; the library's
+    /// `another_window`, `store_unreadable`, `no_account`; the library's
     /// (`skep_client::merge::withdraw`): `unreadable`, `no_such_document`,
     /// `not_owner`, `no_merge` naming the draft, the board's
     /// `arrangement_moved` verbatim, a halt's face, and `session_died`.

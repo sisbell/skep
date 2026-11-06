@@ -190,18 +190,34 @@ pub(super) struct Ground {
 }
 
 pub(super) fn ground(dir: &TempDir, sd: &Skepd) -> Ground {
-    claim_board(&format!("http://127.0.0.1:{}", sd.port()), &dir.path().join("store"));
-    open_ground(dir, sd)
+    let store = dir.path().join("store");
+    claim_board(&format!("http://127.0.0.1:{}", sd.port()), &store);
+    open_ground(sd, &store)
 }
 
-/// A fresh signed shell over the board `ground` claimed, its key store the
-/// same: a second device's shell, holding no index and no panel of the
-/// first's.
-pub(super) fn open_ground(dir: &TempDir, sd: &Skepd) -> Ground {
+/// A SECOND DEVICE's ground over the board `ground` claimed: a fresh signed
+/// shell over a data directory of its own, holding the claim's key and its
+/// binding and no index, held store or panel of the first's.
+///
+/// One shell per data directory (§3c.3): a second shell over the first's
+/// own directory reads alone at a board whose held store the first holds.
+pub(super) fn second_device(dir: &TempDir, sd: &Skepd) -> Ground {
+    let (store, device) = (dir.path().join("store"), dir.path().join("second-device"));
+    std::fs::create_dir_all(device.join("keys")).unwrap();
+    for key in std::fs::read_dir(store.join("keys")).unwrap() {
+        let key = key.unwrap().path();
+        std::fs::copy(&key, device.join("keys").join(key.file_name().unwrap())).unwrap();
+    }
+    std::fs::copy(store.join("bindings"), device.join("bindings")).unwrap();
+    open_ground(sd, &device)
+}
+
+/// A fresh signed shell over the board `ground` claimed, over the data
+/// directory `store`, its own node the board.
+fn open_ground(sd: &Skepd, store: &Path) -> Ground {
     let origin = format!("http://127.0.0.1:{}", sd.port());
-    let store = dir.path().join("store");
     let (talk, _) = talk();
-    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store, SessionMode::Signed { principal: 1 }, talk);
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.to_path_buf(), SessionMode::Signed { principal: 1 }, talk);
     opts.own_node = Some(Origin::parse(&origin).unwrap());
     let shell = Shell::open(opts);
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -546,10 +562,11 @@ fn the_family_publishes_another_drafts_words_as_the_documents_own_and_a_draft_be
     let d_image = g.op(skep_client::board::frames::image(&d, 20, 6));
     let d_runs: Vec<(String, String)> = d_image["runs"].as_array().expect("runs").iter().map(|r| (r["i_start"].as_str().unwrap().to_string(), r["width"].as_str().unwrap().to_string())).collect();
     assert_eq!(d_runs, vec![(format!("{edition}.0.1.20"), "6".to_string())], "D re-windowed onto E.2's words, no private copy left: {d_image}");
-    // A SECOND DEVICE: a fresh shell over the same board and store, D behind
+    // A SECOND DEVICE: a fresh shell over the same board, on a data
+    // directory of its own holding the same key (`second_device`), D behind
     // the head, the page's `base` read by nothing — the daughter landing.
     g.shell.shutdown();
-    let g = open_ground(&dir, &sd);
+    let g = second_device(&dir, &sd);
     let behind = g.call("publication.open", json!({"session": g.session, "draft": d, "doc": edition, "base": e2, "readable_drafts": [d], "published": [edition]})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((behind["windows"].clone(), behind["inherited"].clone()), (json!([]), json!([])), "{behind}");
     assert_eq!((&behind["standing"], &behind["left_behind"]), (&json!("behind"), &json!([])), "told, never refused; a daughter leaves no draft behind: {behind}");
@@ -817,7 +834,8 @@ fn a_first_drafts_standing_is_typed_and_once_version_one_stands_it_publishes_bes
 ///
 /// B and D are staged from the memberless edition. B's panel opens
 /// `standing: first`; while it stands a SECOND DEVICE's shell — a fresh
-/// shell over the same board and store — publishes D as E.1. B's confirm
+/// shell over the same board and key, on its own data directory
+/// (`second_device`) — publishes D as E.1. B's confirm
 /// reads the base again and answers `restated` with `standing:
 /// superseded_first` and every other difference empty, its event
 /// `restated`, nothing sent — the board's position unmoved; B's next
@@ -834,7 +852,7 @@ fn version_one_landing_between_a_first_drafts_open_and_its_confirm_is_restated_a
     let d = g.staged(&edition, "the quick brown fox");
     assert_eq!(open(&g, &b)["standing"], "first", "the bare document's chain is empty");
     // The second device publishes D as version 1 while B's panel stands here.
-    let second = open_ground(&dir, &sd);
+    let second = second_device(&dir, &sd);
     open(&second, &d);
     let e1 = format!("{edition}.1");
     let sibling = second.call("publication.confirm", json!({"session": second.session})).unwrap_or_else(|r| panic!("{r}"));
@@ -861,7 +879,8 @@ fn version_one_landing_between_a_first_drafts_open_and_its_confirm_is_restated_a
 ///
 /// D publishes E.1; S and T are staged from it. S's panel opens `standing:
 /// at_head`; while it stands a SECOND DEVICE's shell — a fresh shell over
-/// the same board and store — publishes T as E.2. S's confirm reads the base
+/// the same board and key, on its own data directory (`second_device`) —
+/// publishes T as E.2. S's confirm reads the base
 /// again and answers `restated` with `standing: behind` and every other
 /// difference empty, its event `restated`, nothing sent — the board's
 /// position unmoved; S's next confirm lands the daughter E.1.1: `behind` is
@@ -881,7 +900,7 @@ fn a_siblings_shot_between_the_open_and_the_confirm_is_restated_and_nothing_land
     let t = g.staged(&e1, "another sibling ");
     assert_eq!(open(&g, &s)["standing"], "at_head", "S's base E.1 heads the chain");
     // The second device publishes T while S's panel stands here.
-    let second = open_ground(&dir, &sd);
+    let second = second_device(&dir, &sd);
     open(&second, &t);
     let sibling = second.call("publication.confirm", json!({"session": second.session})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(sibling["member"].as_str(), Some(format!("{edition}.2").as_str()), "{sibling}");
@@ -977,7 +996,7 @@ fn the_open_on_a_marked_draft_carries_the_claim_only_where_the_markers_head_is_t
     let l2 = g.addr(skep_client::board::frames::stage(&e3, None));
     let landed = g.call("merge.compose", json!({"session": g.session, "doc": edition, "alternative": e21, "into": l2})).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(landed["outcome"].as_str(), Some("landed"), "{landed}");
-    let second = open_ground(&dir, &sd);
+    let second = second_device(&dir, &sd);
     let t = second.addr(skep_client::board::frames::stage(&e3, None));
     second.op(json!({"op": "insert", "doc": t, "at": {"subspace": "1", "ordinal": "20"}, "values": ["!"], "as_of": second.position()}));
     open(&second, &t);

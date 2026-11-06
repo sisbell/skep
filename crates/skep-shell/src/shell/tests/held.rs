@@ -1250,3 +1250,68 @@ fn a_burst_held_while_the_head_will_not_read_survives_a_relaunch_and_is_sent_onc
     shell.shutdown();
     sd.shutdown();
 }
+
+/// Checks that a second shell over the data directory reads alone at a
+/// board whose held store the first holds (§3c.3; skep #789).
+///
+/// ONE SHELL PER DATA DIRECTORY, until a second launch hands its address to
+/// the running client: a second signed shell over the first's store opens a
+/// session at the board, finds the store the first's and says so once on
+/// `Talk`; every write it is asked for — a burst, a burst through `/op-at`,
+/// a mint, a link, a publication's open, a merge's withdrawal — is refused
+/// `another_window` naming its `op` or its `call`, nothing sent (the board's
+/// position unmoved) and nothing held (`held` lists nothing, no held file
+/// stands); a read and the change feed still answer. The first shell gone,
+/// the second's next session takes the store, says so once, and its burst
+/// is acked (the mutant that keeps a second shell's bursts in memory loses
+/// them at its close; the one that refuses at the hold alone dials the
+/// non-burst writes; the one that never tries the lock again leaves the
+/// window reading alone for its life).
+#[test]
+fn a_second_shell_over_the_data_directory_refuses_every_write_and_holds_nothing() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    let HeldGround { shell, draft, at, .. } = held_ground(&dir, &sd);
+    let (second, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let board = second.board_references().remove(0);
+    let session = second.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let said = |text: &str| lines.lock().unwrap().iter().filter(|line| line.contains(text)).count();
+    assert_eq!(said("another shell holds this board's held store"), 1, "said once at the session's open: {:?}", lines.lock().unwrap());
+    let position = || second.call("health", &json!({"board": board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let before = position();
+    let burst = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"], "as_of": at});
+    let writes = [
+        burst.clone(),
+        json!({"at": before, "frame": burst.clone()}),
+        json!({"op": "create_new_document", "account": "1.0.1"}),
+        json!({"op": "make_link", "home": draft, "from": {"addrs": [draft]}, "to": {"addrs": [draft]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}),
+    ];
+    for frame in writes {
+        let refused = second.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
+        let v = refused.to_value();
+        let op = frame["op"].as_str().or(frame["frame"]["op"].as_str());
+        assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("another_window", Some("shell"), op), "{frame}: {v}");
+    }
+    for (call, args) in [("publication.open", json!({"session": session, "draft": draft, "doc": "1.0.1.0.1"})), ("merge.withdraw", json!({"session": session, "draft": draft}))] {
+        let refused = second.call(call, &args).unwrap_err();
+        assert_eq!((refused.name(), refused.to_value()["call"].as_str()), ("another_window", Some(call)), "{refused}");
+    }
+    assert_eq!(position(), before, "nothing is sent");
+    assert!(second.call("held", &json!({"session": session})).unwrap().as_array().unwrap().is_empty(), "nothing is held");
+    assert!(held_path(&store).is_none(), "no held file stands");
+    let read = second.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 1)})).unwrap();
+    assert_eq!(text_of(&read), "a", "a read answers: {read}");
+    second.call("changes", &json!({"session": session, "since": 0})).unwrap();
+    // The first shell gone, the next session takes the store.
+    shell.shutdown();
+    drop(shell);
+    let next = second.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    assert_eq!(said("this shell holds this board's held store now"), 1, "said once as it ends: {:?}", lines.lock().unwrap());
+    let acked = second.call("op", &json!({"session": next, "frame": burst})).unwrap();
+    assert!(acked["at"].as_u64().is_some() && acked["resp"] != "held", "the burst goes out and is acked: {acked}");
+    assert_eq!(said("another shell holds this board's held store"), 1, "the beginning said no second time");
+    second.shutdown();
+    sd.shutdown();
+}

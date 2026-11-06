@@ -1220,8 +1220,8 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
 ///
 /// A line stands in memory ("Persist first") where no directory can be named
 /// or written: at an UNCLAIMED board with no `H.1` to name its directory —
-/// which holds no held text (§3c.1) — the burst is held under its own cause
-/// — never `other_window`, another window's lock alone — its answer
+/// which holds no held text (§3c.1) — the burst is held under its own cause,
+/// the store never another shell's (`Holds::another_window`), its answer
 /// `unwritable` naming the missing term, nothing written; at a file the
 /// device refuses (a directory where the file would be), the device's
 /// refusal rides the answer. Either line stands in the queue, and the next
@@ -1242,6 +1242,7 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
     let answer = g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", false);
     assert_eq!(answer["cause"], "unreachable", "{answer}");
     assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("H.1")), "the answer says why: {answer}");
+    assert!(!g.holds.another_window("b-1"), "an unclaimed board's store is no other shell's");
     assert!(!g.store.path().join("held").exists(), "nothing is written");
     assert_eq!(g.lines().len(), 1, "the line stands");
     g.holds.probe("b-1");

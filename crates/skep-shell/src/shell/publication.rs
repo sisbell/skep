@@ -41,7 +41,10 @@
 //!
 //! **Before any frame.** A bare session is refused `write_in_bare_session`
 //! at `open` and at `confirm`, since a publication is a write and the
-//! keyless session reads alone; a hold standing at the board — the own node
+//! keyless session reads alone, and a session at a board whose held store
+//! another shell holds `another_window` at both, the second window reading
+//! alone there (§3c.3) — the write door's two refusals, met through
+//! `Shell::signed`; a hold standing at the board — the own node
 //! stopped, the write path poisoned, the writes halted — refuses `confirm`
 //! at once with the hold's cause, never composing (§3c.4;
 //! `Holds::unholdable_refusal`); the price's verdict refuses `over_cap`,
@@ -370,15 +373,35 @@ fn extent_of(v: &Value) -> Option<u64> {
 }
 
 impl Shell {
-    /// Returns the hand a session publishes with.
+    /// Returns the hand a session publishes with, at the family's door.
+    ///
+    /// Every row of the publication and merge families takes it before any
+    /// read or frame, so each meets the write door (`Shell::write_door`).
+    ///
+    /// # Errors
+    ///
+    /// In this order: the write door's, naming `call` —
+    /// `write_in_bare_session` where the session holds no key, the keyless
+    /// session reading alone and a publication being a write, then
+    /// `another_window` where another shell holds the held store of the
+    /// session's board (§3c.3); then [`Shell::signed_within_call`]'s.
+    pub(super) fn signed(&self, session: &SessionEntry, call: &str) -> Result<Signed, Refusal> {
+        self.write_door(session, json!({"call": call}))?;
+        self.signed_within_call(session, call)
+    }
+
+    /// Returns the hand of a session a call stands under past its door.
+    ///
+    /// It is the session the door admitted ([`Shell::signed`]), or the
+    /// restart arm's re-open of it: a write that met the door is followed to
+    /// its end — its landed test, its record — and not refused at it again.
     ///
     /// # Errors
     ///
     /// Returns `write_in_bare_session` naming `call` where the session holds
-    /// no key — the keyless session reads alone, and a publication is a
-    /// write; `store_unreadable` where its key file cannot be read; and
+    /// no key; `store_unreadable` where its key file cannot be read; and
     /// `no_account` where the board answered the session no account.
-    pub(super) fn signed(&self, session: &SessionEntry, call: &str) -> Result<Signed, Refusal> {
+    pub(super) fn signed_within_call(&self, session: &SessionEntry, call: &str) -> Result<Signed, Refusal> {
         let SessionKind::Signed { fingerprint, .. } = &session.facts.kind else {
             return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"call": call})));
         };
@@ -632,8 +655,8 @@ impl Shell {
     ///    entry or the `draft` among them, then `doc or mint` where neither is
     ///    given and `mint` where both are;
     /// 2. `malformed_args` naming `session`, then `session_ended`;
-    ///    `write_in_bare_session` naming the call; `store_unreadable`,
-    ///    `no_account`;
+    ///    `write_in_bare_session`, then `another_window`, naming the call;
+    ///    `store_unreadable`, `no_account`;
     /// 3. a held or standing panel re-opened: at the document form its base
     ///    read and its standing typed again, refused as at step 4; then its
     ///    windows read's faults, as the reads' below;
@@ -906,10 +929,10 @@ impl Shell {
     /// In this order: the arguments' form (`confirmed_form`);
     /// `malformed_args` naming `session`, then `session_ended`; `no_panel`;
     /// the arguments against the panel (`confirmed_args`);
-    /// `write_in_bare_session`; `stopped`, `poisoned` or `halted` where a
-    /// hold stands at the board; `store_unreadable`, `no_account`; at the
-    /// document form the base's re-read and the standing's, refused as
-    /// `publication.open`'s step 4 — `base_unrecorded` with the
+    /// `write_in_bare_session`, then `another_window`; `store_unreadable`,
+    /// `no_account`; `stopped`, `poisoned` or `halted` where a hold stands at
+    /// the board; at the document form the base's re-read and the standing's,
+    /// refused as `publication.open`'s step 4 — `base_unrecorded` with the
     /// `publication` event's `refused` naming it (a standing moved since the
     /// panel, `first` → `superseded_first` among them, is the re-statement,
     /// never a refusal); then the reads'
@@ -1063,7 +1086,7 @@ impl Shell {
                         return Ok(Confirmation::Answered(refused_json("session_ended", json!({"reason": died["reason"]}))));
                     };
                     current = next;
-                    signed = self.signed(&current, call)?;
+                    signed = self.signed_within_call(&current, call)?;
                     let p = signed.publisher(&current);
                     // The records base where any run is a named draft's —
                     // the rendering draft's or an `also` draft's — the

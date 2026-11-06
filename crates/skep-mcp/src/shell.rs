@@ -198,11 +198,10 @@ fn carried_line(lines: &Value) -> Option<String> {
 /// principal's queue. A line its held file holds is read whole and counted at
 /// the next start (`carried_line`); a line the shell kept in memory alone —
 /// answered `unwritable` when it was held, the reason beside it: its copy
-/// refused, or its file out of reach, another process's lock on the board's
-/// held store among the causes (client.md §3c.3) — goes with the process. The
-/// row does not tell the two apart, so the line says both. It counts the
-/// bursts, and those `sent` and so perhaps landed (client.md §3c.2). `None`
-/// where none stands.
+/// refused, or its file out of reach (client.md §3c.3) — goes with the
+/// process. The row does not tell the two apart, so the line says both. It
+/// counts the bursts, and those `sent` and so perhaps landed (client.md
+/// §3c.2). `None` where none stands.
 fn left_held(lines: &Value) -> Option<String> {
     let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
     let sent = lines.iter().filter(|line| line["sent"] == true).count();
@@ -253,7 +252,7 @@ fn index_line(state: &Value, index_dir: &str) -> Option<(&'static str, String)> 
         "busy" => Some((
             "busy",
             format!(
-                "the search index at {index_dir} answers busy: another process holds this directory — a dev provider over this --dir, whose shell locks the index and not the store — so search and places answer no hit for this process's life, and where the other holds the held store too, a burst this process holds is kept in memory alone and lost at its end: stop the other and start this one again (a busy the next commit clears was the board's history, busy at the index's resume)"
+                "the search index at {index_dir} answers busy: another process holds this directory — a dev provider over this --dir, whose shell locks the index and not the store — so search and places answer no hit for this process's life, and where the other holds the board's held store too, every write this process makes at the board is refused `another_window`, nothing sent and nothing held: stop the other and start this one again (a busy the next commit clears was the board's history, busy at the index's resume)"
             ),
         )),
         "newer_skep" => {

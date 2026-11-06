@@ -48,11 +48,17 @@
 //! dial is made); a write frame under a bare session, and its
 //! `resolve(send)` — the keyless session reads alone (foundations §3.3
 //! state 3), so no `bare` write of this shell's is ever committed
-//! (`write_in_bare_session`, `SessionEntry::may_write`); a `publish` frame
-//! under a session (`publish_is_a_call`: a publication crosses as
-//! `publication.confirm`, the shell composing the one request from the
-//! panel it holds, since the page composes no write — §4b.1's `op` row,
-//! decision 1 (b)); and a call's
+//! (`write_in_bare_session`, `SessionEntry::may_write`); a write frame at a
+//! board whose held store another shell holds, and every row of the
+//! publication and merge families there — ONE SHELL PER DATA DIRECTORY
+//! (§3c.3): until a second launch hands its address to the running client
+//! and exits, the second window reads alone at the board, nothing held and
+//! nothing sent (`another_window`, `Holds::another_window`), each write met
+//! at the one door the two refusals share ([`Shell::write_door`]); a
+//! `publish` frame under a session (`publish_is_a_call`: a publication
+//! crosses as `publication.confirm`, the shell composing the one request
+//! from the panel it holds, since the page composes no write — §4b.1's `op`
+//! row, decision 1 (b)); and a call's
 //! arguments not of its row's form (`shapes`' declarations): a required
 //! member absent or of another form (`accept`'s `address`, absent, answers
 //! `no_address`), and an optional member present in another form, refused
@@ -246,8 +252,9 @@ pub enum NodeState {
 
 /// The write kinds of the wire (`docs/wire.md` §Operations).
 ///
-/// A frame of one of these in the guest form, or under a bare session, is
-/// refused by the shell without a dial.
+/// A frame of one of these in the guest form, under a bare session, or at a
+/// board whose held store another shell holds (§3c.3), is refused by the
+/// shell without a dial.
 pub const WRITE_KINDS: [&str; 18] = [
     "delegate",
     "register_node",
@@ -975,14 +982,18 @@ impl Shell {
     /// Answers `session(board, principal)`: the mode's opening as `principal`.
     ///
     /// It answers `{session, principal, account, writes, opened_at}`: the
-    /// reference issued in the token's place; `writes` — whether a write may
-    /// go out under it ([`SessionEntry::may_write`]): the signed mode's
+    /// reference issued in the token's place; `writes` — whether the session
+    /// itself may write ([`SessionEntry::may_write`]): the signed mode's
     /// session writes, the bare mode's keyless one reads alone and has every
     /// write refused `write_in_bare_session`, which the page learns here,
-    /// before it offers one; and `opened_at`, the board's position read
-    /// before the session opened ([`SessionEntry::opened_at`]), where the
-    /// session's drafts feed starts — the position a page's drafts-only
-    /// `changes` read starts from after the session's end (skep #740).
+    /// before it offers one; the board's own state can refuse a write beside
+    /// it, which this answer does not report — the own node stopped, its
+    /// writes halted or its write path poisoned (§3c.4), or another shell
+    /// holding its held store (`another_window`, §3c.3); and `opened_at`, the
+    /// board's position read before the session opened
+    /// ([`SessionEntry::opened_at`]), where the session's drafts feed starts
+    /// — the position a page's drafts-only `changes` read starts from after
+    /// the session's end (skep #740).
     ///
     /// # Errors
     ///
@@ -1151,7 +1162,8 @@ impl Shell {
     /// token-free at guest class, the board or origin named read first. Under
     /// a bare session — the keyless session, which reads alone (foundations
     /// §3.3 state 3) — a write is refused without a dial, the `/op-at` form's
-    /// too ([`SessionEntry::may_write`]). An `/op-at` refusal is the board's
+    /// too ([`SessionEntry::may_write`]), and so is one at a board whose held
+    /// store another shell holds (§3c.3). An `/op-at` refusal is the board's
     /// verdict, as every other is; a death signal met at the dial or at a
     /// read the attest needed ends the session.
     ///
@@ -1168,7 +1180,9 @@ impl Shell {
     /// `width` a natural of 1 or more in its decimal string, the whole within
     /// the board's frame cap as compact JSON (`held::MAX_ANCHOR_BYTES`) —
     /// never read as absent, then naming `session`, then `session_ended`; a
-    /// write under a bare session refused `write_in_bare_session`; a `publish`
+    /// write refused at the write door ([`Shell::write_door`]) —
+    /// `write_in_bare_session` under a bare session, then `another_window` at
+    /// a board whose held store another shell holds; a `publish`
     /// frame refused `publish_is_a_call` without a dial — a publication crosses
     /// as `publication.confirm`, composed by the shell from the panel it holds,
     /// never as a frame the page composed (§4b.1's `op` row, decision 1 (b));
@@ -1203,8 +1217,8 @@ impl Shell {
         }
         let anchors = optional(args, "anchors", Anchors::of)?;
         let session = self.session(&args["session"])?;
-        if WRITE_KINDS.contains(&op) && !session.may_write() {
-            return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"op": op})));
+        if WRITE_KINDS.contains(&op) {
+            self.write_door(&session, json!({"op": op}))?;
         }
         if op == "publish" {
             return Err(Refusal::shell(Name::PUBLISH_IS_A_CALL, json!({"op": op})));
@@ -1230,6 +1244,32 @@ impl Shell {
             AtAnswer::Closed => Err(self.died(&session)),
             other => Err(at_refusal(other)),
         }
+    }
+
+    /// Admits a write under `session` at the write door, before any dial.
+    ///
+    /// It is the one door every write the shell sends under a session meets
+    /// first: a write frame through `op` — `/op-at`'s too — and every row of
+    /// the publication and merge families, through `Shell::signed`. `named`
+    /// is the refusal's detail, the `op` or the `call`. A write that met the
+    /// door is followed to its end, never refused at it again mid-way.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `write_in_bare_session` where the session holds no key,
+    /// the keyless session reading alone (foundations §3.3 state 3); then
+    /// `another_window` where another shell holds the held store of the
+    /// session's board ([`Holds::another_window`]) — ONE SHELL PER DATA
+    /// DIRECTORY (§3c.3), the second window reading alone there, nothing held
+    /// and nothing sent.
+    fn write_door(&self, session: &SessionEntry, named: Value) -> Result<(), Refusal> {
+        if !session.may_write() {
+            return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, named));
+        }
+        if self.holds.another_window(&session.board_reference) {
+            return Err(Refusal::shell(Name::ANOTHER_WINDOW, named));
+        }
+        Ok(())
     }
 
     /// Answers `upload(session, target)`: not reached at this pin.
@@ -1433,7 +1473,10 @@ impl Shell {
     /// it is handed to the board's feed thread (`Feed::probe`). Under a bare
     /// session, which reads alone ([`SessionEntry::may_write`]), `"drop"`
     /// stands, since it commits nothing to the board, and `"send"` does not,
-    /// since no resend sends under it.
+    /// since no resend sends under it. At a board whose held store another
+    /// shell holds (§3c.3) both stand: the write door refuses every new write
+    /// there, and the lines `"send"` hands back were held before that state
+    /// was found, sent from memory as the board takes them.
     ///
     /// # Errors
     ///

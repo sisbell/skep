@@ -39,11 +39,11 @@
 //! [`HeldQueue`] is its held lines in `k` order, and every line enters it
 //! under a fresh ordinal whatever the disk did. Where the file is on disk
 //! each line is copied to it as it enters; where the store keeps the queue
-//! in memory alone ([`HeldQueue::in_memory`]: a directory out of reach —
-//! another process's lock on it among the causes, §3c.3) no copy is made,
-//! and a close loses the lines. A line whose copy is refused stands in the
-//! queue all the same, and waits (below). A re-mark that changes nothing is
-//! no line at all. A line kept at a position raises to it the `base` of
+//! in memory alone ([`HeldQueue::in_memory`]: a directory out of reach,
+//! §3c.3) no copy is made, and a close loses the lines. A line whose copy is
+//! refused stands in the queue all the same, and waits (below). A re-mark
+//! that changes nothing is no line at all. A line kept at a position raises
+//! to it the `base` of
 //! every line held after it on its document
 //! ([`HeldQueue::done`]), in the queue as the `done` is written and again at
 //! a reopen from that `done` line, so no line is rewritten to carry it
@@ -160,9 +160,9 @@
 //! from `search::directory::BoardDir::try_lock` — the index directory's type
 //! is the index's) is held for the shell's life: ONE SHELL PER DATA
 //! DIRECTORY (§3c.3), the lock the holder's guard for the instant a second
-//! launch's hand-off has not yet closed — a process finding it held holds
-//! nothing on disk and keeps nothing as a second shell's, and tries again at
-//! its next session's open and probe.
+//! launch's hand-off has not yet closed — a shell finding it held opens no
+//! file there and reads alone at the board, every write refused at its door
+//! (`another_window`), and tries again at its next session's open.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

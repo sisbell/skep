@@ -38,12 +38,14 @@
 //! [`undo`](fn@undo) and [`withdraw`], the two ways a merge landed
 //! in a draft is taken back out, each one `set_arrangement` — the undo
 //! putting the draft back as it stood before the landing, its base
-//! restored, typed against the landing's position; the withdrawal taking
-//! the merge out and keeping the words, the base re-sent unmoved — with a
-//! replacing record of the kind (the `undo` module's doc); [`verify`], the
-//! record's testimony recomputed; the record kind and the journal under
-//! [`record`] and [`journal`]; and [`Refusal`], every refusal the reads,
-//! the landing, the undo and the withdrawal can meet. Absent, by name:
+//! restored and its words mapped through the publication's correspondence
+//! records, typed against the landing's position or the caller's own last
+//! acknowledgment past it; the withdrawal taking the merge out and keeping
+//! the words, the base re-sent unmoved — with a replacing record of the
+//! kind (the `undo` module's doc); [`verify`], the record's testimony
+//! recomputed; the record kind and the journal under [`record`] and
+//! [`journal`]; and [`Refusal`], every refusal the reads, the landing, the
+//! undo and the withdrawal can meet. Absent, by name:
 //! every surface — the `skep merge` command, which skep-cli builds over
 //! this module, the attendant's call, skep-mcp's compose-and-report tool,
 //! the editor's scene and its copy.

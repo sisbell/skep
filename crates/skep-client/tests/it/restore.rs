@@ -27,37 +27,19 @@
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_client::board::{acked_addr, acked_at, frames, AtAnswer, Token};
-use skep_client::ceremony::handshake::Session;
 use skep_client::halt::Halt;
 use skep_client::history::{past, restore, Restored};
 use skep_client::merge::{compose, land, Inputs, Landed, Landing, Refusal, Run, Side};
-use skep_identity::{entry_body_publish, ShotSegmentPiece};
 
 use crate::common::{insert_text, mint};
-use crate::merge::{acked, addr, as_image, attest, image, m_of, merger, published_document, read, shot, Rig, Staged};
+use crate::merge::{acked, addr, as_image, image, m_of, mark, merger, publish_with_place, published_document, read, shot, text_of, Rig, Staged};
 
 /// The claimant's account on a notebook.
 const ACCOUNT: &str = "1.0.1";
-/// A formatting type a mark takes: `3.23.2` strong.
-const T_STRONG: &str = "1.1.0.1.0.1.0.3.23.2";
 
 /// A private draft of the claimant's, minted from the bare session.
 fn draft(rig: &Rig) -> Address {
     addr(&mint(&rig.board, &rig.bare, ACCOUNT, false))
-}
-
-/// A mark in `home`'s own set over its V-positions `from ..`, `width` of
-/// them, from the bare session: the stored end is the identity the
-/// positions resolve to.
-fn mark(rig: &Rig, home: &Address, from: u64, width: u64) -> String {
-    let frame = json!({"op": "make_link", "home": home.to_string(), "from": [{"source": home.to_string(), "span": {"start": format!("1.{from}"), "width": format!("0.{width}")}}], "to": {"addrs": []}, "ty": {"addrs": [T_STRONG]}});
-    acked_addr(&acked(rig.board.op(Some(&rig.bare), &frame))).expect("the mark").to_string()
-}
-
-/// The bytes at content ordinals `1 ..= width` of `doc`.
-fn text_of(rig: &Rig, token: &Token, doc: &Address, width: u64) -> String {
-    let v = read(&rig.board, Some(token), &frames::retrieve_v(&doc.to_string(), 1, width));
-    v["items"].as_array().expect("items").iter().filter_map(|i| i["content"].as_str()).collect()
 }
 
 /// The draft's `base` and `merge` members off `doc_metadata`, as they stand.
@@ -243,21 +225,6 @@ fn a_restore_on_a_marked_draft_leaves_the_base_and_the_marker_standing() {
     let row = rows.iter().rev().find(|r| r["op"] == "set_arrangement").expect("the restore's row");
     assert_eq!((row["at"].as_u64(), row["base"].is_null(), row["merge"].is_null()), (Some(restored.position), true, true), "{row}");
     session.close().expect("close");
-}
-
-/// THE SHOT WITH A KEPT PLACE: `d`'s whole text, `text` at its first
-/// positions, published as `e`'s own words with the place the run holds in
-/// `d` beside it, so the commit re-windows `d` through the record it homes
-/// there (wire.md §The publish shot and head-float, the kept places).
-fn publish_with_place(rig: &Rig, session: &Session<'_>, e: &Address, d: &Address, text: &str) -> Address {
-    let (e_s, d_s) = (e.to_string(), d.to_string());
-    let runs = [frames::shot_run(&d_s, &format!("{d}.0.1.1"), text.len() as u64)];
-    let places = [frames::place(1)];
-    let pieces: Vec<[u8; 1]> = text.bytes().map(|b| [b]).collect();
-    let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), None);
-    let mut frame = frames::publication(&frames::PublishFrame { doc: Some(&e_s), draft: Some(&d_s), runs: &runs, places: &places, ..frames::PublishFrame::default() });
-    frame["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), e, &body);
-    addr(acked_addr(&acked(session.op(&frame))).expect("the member"))
 }
 
 /// ACROSS A PUBLICATION: `d`'s "hello world" published into `e` with its

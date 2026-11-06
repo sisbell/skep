@@ -3,8 +3,10 @@
 //!
 //! The module stands behind the `merge` feature, riding the merge's reader
 //! and the one write the take-backs send (the `merge::undo` module): a
-//! restore is the same read at a position and the same `set_arrangement`,
-//! with no base and no `merge`, at any position the board still answers.
+//! restore is the same read at a position, the same records' read and
+//! mapping the undo sends its state through, and the same
+//! `set_arrangement`, with no base and no `merge`, at any position the
+//! board still answers.
 //! Two calls, the reads apart from the write, so an embedder says what the
 //! draft will hold before anything is written:
 //!
@@ -62,19 +64,18 @@
 //! and to name the withdrawal (`merge::withdraw`) beside it. The restore
 //! itself never takes a merge out.
 
-use serde_json::Value;
 use skep_address::Address;
 
-use crate::address::parse_address;
-use crate::board::answers::{self, MergeMarker};
+use crate::board::answers::MergeMarker;
 use crate::board::{frames, Answer, Board, Token};
 use crate::halt::Halt;
 use crate::merge::land::closed;
-use crate::merge::reads::{runs_of, shape, Reader, Refusal, SHOT_RUN_CAP};
+use crate::merge::reads::{records_of, runs_of, Reader, Refusal, SHOT_RUN_CAP};
 use crate::merge::undo::{frame_runs, judge, Act};
 use crate::merge::Run;
-use crate::publication::enumerate::MAX_WIRE_LIST;
-use crate::publication::{home_of_link, owned_by, Record};
+use crate::publication::Record;
+
+pub use crate::merge::reads::mapped;
 
 /// A draft's past state, read and mapped, before the write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,96 +202,6 @@ pub fn restore(board: &Board, token: &Token, past: &Past) -> Result<Restored, Re
     };
     let position = judge(&v, draft, *as_of, Act::Restore)?;
     Ok(Restored { draft: draft.clone(), at: *at, position })
-}
-
-/// Reads the correspondence records of `account`'s own origins among
-/// `state`'s runs, at the head.
-///
-/// One four-set read per chunk of each distinct owned origin's spans, in
-/// run order; each hit judged off its address, read once and kept by
-/// `Record::of`.
-///
-/// # Errors
-///
-/// The reads' refusals: `withheld` on an origin as [`Refusal::Unreadable`],
-/// `doc_not_registered` as [`Refusal::NoSuchDocument`], an answer of
-/// another shape faced, the reader's other errors.
-fn records_of(reader: &Reader<'_>, account: &str, state: &[Run]) -> Result<Vec<Record>, Refusal> {
-    let subtype = frames::unit_span(frames::T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
-    let mut origins: Vec<&Address> = Vec::new();
-    for run in state {
-        if !origins.contains(&&run.origin) && owned_by(&run.origin.to_string(), account) {
-            origins.push(&run.origin);
-        }
-    }
-    let mut records: Vec<Record> = Vec::new();
-    for origin in origins {
-        let text = origin.to_string();
-        let home = frames::unit_span(&text).as_array().cloned().unwrap_or_default();
-        let spans: Vec<Value> = state
-            .iter()
-            .filter(|r| r.origin == *origin)
-            .map(|r| frames::i_span(&format!("{text}.0.1.{}", r.i_start), r.width))
-            .collect();
-        for chunk in spans.chunks(MAX_WIRE_LIST) {
-            let query = frames::find_links_four(frames::Slot::Spans(&home), frames::Slot::Spans(chunk), frames::Slot::Any, frames::Slot::Spans(&subtype));
-            let v = reader.answered(origin, &query, None)?;
-            if v["resp"].as_str() != Some("addrs") {
-                return Err(shape("find_links_ftt", &v).into());
-            }
-            let hits: Vec<String> = answers::addrs(&v).into_iter().map(str::to_string).collect();
-            for hit in hits {
-                if records.iter().any(|r| r.link.to_string() == hit) {
-                    continue;
-                }
-                if !home_of_link(&hit).is_some_and(|h| owned_by(h, account)) {
-                    continue;
-                }
-                let lv = reader.answered(origin, &frames::read_link(&hit), None)?;
-                let Some(value) = answers::link_value(&lv).ok_or_else(|| shape("read_link", &lv))? else { continue };
-                if let Some(record) = Record::of(&hit, &value, account) {
-                    records.push(record);
-                }
-            }
-        }
-    }
-    Ok(records)
-}
-
-/// Maps `state` through `records`: the runs the write sends.
-///
-/// Each run is walked from its first ordinal; the piece a record covers —
-/// the first record covering the ordinal — is mapped by `Record::map` onto
-/// the published span it became, its origin the document the record's `to`
-/// lies in; the piece no record covers is kept as read; I-adjacent pieces
-/// of one origin are merged. The order is the state's. A run of an origin
-/// no record names passes through unchanged, as does a piece whose mapped
-/// span this client cannot spell.
-pub fn mapped(state: &[Run], records: &[Record]) -> Vec<Run> {
-    let mut out: Vec<Run> = Vec::new();
-    let mut push = |run: Run| match out.last_mut() {
-        Some(last) if last.origin == run.origin && last.reach() == run.i_start => last.width += run.width,
-        _ => out.push(run),
-    };
-    for run in state {
-        let chain = format!("{}.0.1", run.origin);
-        let mut cursor = run.i_start;
-        while cursor < run.reach() {
-            let covering = records.iter().find(|r| r.from.overlap(&chain, cursor, cursor + 1).is_some());
-            let end = match covering {
-                Some(r) => r.from.reach().min(run.reach()),
-                None => records.iter().filter_map(|r| (r.from.chain == chain && r.from.first > cursor).then_some(r.from.first)).min().unwrap_or(run.reach()).min(run.reach()),
-            };
-            let width = end - cursor;
-            let piece = covering
-                .and_then(|r| r.map(&chain, cursor, end))
-                .and_then(|to| Some(Run::new(parse_address(&to.document()?)?, to.first, width)))
-                .unwrap_or_else(|| Run::new(run.origin.clone(), cursor, width));
-            push(piece);
-            cursor = end;
-        }
-    }
-    out
 }
 
 /// Returns how many positions of `state` the records cover.

@@ -709,16 +709,18 @@ each ceremony:
 - Under `merge` (default off) — MERGING VERSIONS, the editor's act on a
   daughter: `merge.rs` the module and the one rule; `merge/compose.rs` the
   PURE CORE, `compose_runs` over three run lists, `base_of` and `script`;
-  `merge/reads.rs` the READS over a board, writing nothing;
-  `merge/land.rs` the LANDING and `resume`; `merge/record.rs` the `merge`
-  record kind, its currency and `verify`; `merge/journal.rs` the merge
-  journal — its unit suite in `merge/tests.rs` over the record's vectors
-  and a scripted board, its daemon walk in `tests/it/merge.rs`. Beside it
-  under the same feature, `history.rs` THE RESTORE — a draft's past state
-  made current over the merge's reader and the take-backs' one
-  `set_arrangement`, the state mapped through the publication's
-  correspondence records — its unit suite in `history/tests.rs` over the
-  fake board, its daemon walk in `tests/it/restore.rs`. Of the
+  `merge/reads.rs` the READS over a board, writing nothing, the read of
+  the publication's correspondence records and the mapping of a past
+  state through them among them; `merge/land.rs` the LANDING and
+  `resume`; `merge/record.rs` the `merge` record kind, its currency and
+  `verify`; `merge/journal.rs` the merge journal — its unit suite in
+  `merge/tests.rs` over the record's vectors and a scripted board, its
+  daemon walk in `tests/it/merge.rs`. Beside it under the same feature,
+  `history.rs` THE RESTORE — a draft's past state made current over the
+  merge's reader, the state mapped through the publication's
+  correspondence records by the reads' mapping, and the take-backs' one
+  `set_arrangement` — its unit suite in `history/tests.rs` over the fake
+  board, its daemon walk in `tests/it/restore.rs`. Of the
   SURFACES the `skep merge` and `skep restore` commands are built —
   `skep-cli`'s `commands/merge.rs` and `commands/restore.rs`, the one
   embedder that turns the feature on (§The command) — and no agent surface

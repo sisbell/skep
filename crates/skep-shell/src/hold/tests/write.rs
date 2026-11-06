@@ -3,7 +3,10 @@
 //! The suite checks a `halted` hold before any dial `sent: false`; a burst
 //! held under the first hold that stands, over all eight cells of the
 //! three; the `base` a hold takes from every kind of ack, an ack read after
-//! a later one lowering it never; the refused run's `resolve(drop)`
+//! a later one lowering it never; the position of the principal's latest
+//! arrangement write, a burst's or a `set_arrangement`'s alone, never a
+//! link's or a mint's, and a landing the resend's read found; the refused
+//! run's `resolve(drop)`
 //! dropping it and every line held behind it on its own document alone,
 //! and a drop's `held` event saying the state of the line that stands
 //! first after it; a burst the board refuses as typed against an older
@@ -230,6 +233,46 @@ fn an_ack_read_after_a_later_one_never_lowers_the_base() {
         assert_eq!(g.fake.sends(), 1, "in commit order {in_commit_order}: the line is sent");
         assert!(g.lines().is_empty() && states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "in commit order {in_commit_order}: {states:?}");
     }
+}
+
+/// Checks the position of the principal's latest arrangement write (P3).
+///
+/// It is the editor's own last ack `merge.undo` types its undo against:
+/// noted for a burst's ack on its `doc` and a `set_arrangement`'s, never for
+/// a link homed in the document nor a mint, each of which raises the hold's
+/// base all the same; an earlier arrangement ack read after a later one
+/// never lowers it; a held line notes nothing until the resend's read finds
+/// its landing, whose position it then is (the mutant that notes it for
+/// every document `written_docs` names gives the link's position, and an
+/// undo typed there replaces another hand's change; the one that skips the
+/// resend's landing types the undo below the person's own burst).
+#[test]
+fn the_arrangement_position_is_an_arrangement_writes_alone_never_a_links_or_a_mints() {
+    let g = writer_at(60);
+    let noted = |frame: Value, ack: Value| g.holds.note_ack(&g.session, &frame, &ack);
+    let arranged = |doc: &str| g.holds.last_arranged(&g.session, doc);
+    let draft = "1.0.1.0.4";
+    noted(insert(DOC, json!(["x"]), 60), json!({"resp": "ack_addr", "addr": i(1), "at": 70}));
+    noted(json!({"op": "set_arrangement", "doc": draft, "runs": [], "as_of": 60}), json!({"resp": "ack", "at": 71}));
+    noted(json!({"op": "make_link", "home": DOC, "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}}), json!({"resp": "ack_addr", "addr": "1.0.1.0.1.0.2.1", "at": 72}));
+    noted(json!({"op": "create_new_document", "account": "1.0.1"}), json!({"resp": "ack_addr", "addr": "1.0.1.0.7", "at": 73}));
+    noted(json!({"op": "stage", "from": DOC}), json!({"resp": "ack_addr", "addr": "1.0.1.0.8", "at": 74}));
+    assert_eq!((arranged(DOC), arranged(draft)), (Some(70), Some(71)), "a burst's and a set_arrangement's, each on its `doc`");
+    assert_eq!(g.base_of(DOC), 72, "the link raises the base");
+    assert_eq!((arranged("1.0.1.0.7"), arranged("1.0.1.0.8")), (None, None), "a mint is no arrangement write");
+    noted(delete(DOC, 50), json!({"resp": "ack", "at": 65}));
+    assert_eq!(arranged(DOC), Some(70), "an earlier ack read after a later one lowers it never");
+    assert_eq!(arranged(OTHER), None, "no write on the document, none");
+
+    // A held burst whose landing the resend's read finds: its position.
+    let g = ground();
+    *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
+    g.hold(&insert(DOC, json!(["hello"]), g.fake.head()), "unreachable", true);
+    assert_eq!(g.holds.last_arranged(&g.session, DOC), None, "a held line is no acknowledged write");
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty() && g.fake.sends() == 0, "the premise: the landing found and kept, nothing re-sent");
+    assert_eq!(g.holds.last_arranged(&g.session, DOC), Some(77), "the landing the read found");
 }
 
 /// Checks that a refused run's drop drops its `behind` lines.

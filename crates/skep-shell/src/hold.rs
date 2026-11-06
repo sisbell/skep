@@ -10,9 +10,12 @@
 //! dialed, and each answer read once through the classification table
 //! ([`classify`]: §3c.4's hold(cause) / reissue / neither) — an ack carried
 //! and its `at` noted for the `base` of the next hold on every document it
-//! names (§3c.2), a later position never lowered by an earlier one read
-//! after it, and entered in the board's acked positions, which the resend's
-//! read never takes for a line's lost landing ([`BoardHold::acked`]); a
+//! names (§3c.2), and an arrangement write's as the principal's latest one
+//! on its document, the editor's own last ack a merge's undo is typed
+//! against ([`Holds::last_arranged`]; P3), a later position never lowered
+//! by an earlier one read after it, and entered in the board's acked
+//! positions, which the resend's read never takes for a line's lost landing
+//! ([`BoardHold::acked`]); a
 //! reissue-class answer reissued within the call, a
 //! `write_busy` once after [`WRITE_BUSY_WAIT`], a first and second
 //! `durability` as-is, so the page meets the ack or the next refusal
@@ -1066,6 +1069,8 @@ impl Custody {
 /// takes ([`PrincipalHold::base_of`], §3c.2), the position the resend's
 /// read of the line starts from, read before the burst's dial so an ack
 /// read during the dial never lifts it past the line's own landing — the
+/// position of its latest ARRANGEMENT write per document, the one a merge's
+/// undo is typed against ([`PrincipalHold::last_arranged`]), the
 /// reissues each line's resend has been given and its clock, its first
 /// failed send and its last failure's token, kept across its probes
 /// ([`Reissues`]), the position each line's moved document was
@@ -1088,6 +1093,19 @@ struct PrincipalHold {
     account: String,
     queue: HeldQueue,
     last_acked: HashMap<String, u64>,
+    /// The position of the principal's latest arrangement write per
+    /// document that the shell knows (`merge.undo`; P3).
+    ///
+    /// It is the greatest of the acks of the writes that change a
+    /// document's arrangement — the five bursts and `set_arrangement`, each
+    /// on its `doc` (wire.md §Arrangement, the typed state) — and of the
+    /// landings the resend's read found, each a burst's, noted by
+    /// [`PrincipalHold::note_arranged`] and never lowered: the position the
+    /// editor's undo of a merge landed in the document is typed against
+    /// ([`Holds::last_arranged`]). A link write homed in the document and a
+    /// mint change no arrangement and note nothing here, though each raises
+    /// `last_acked`, the hold's base. In memory, for the shell's life.
+    last_arranged: HashMap<String, u64>,
     reissues: HashMap<u64, Reissues>,
     /// The position the person's `send` acknowledged each line's moved
     /// document through, by the line's ordinal (§3c.4; skep #757).
@@ -1116,7 +1134,7 @@ struct PrincipalHold {
 impl PrincipalHold {
     /// Returns a hold not yet opened, its file's header to name `account`.
     fn new(account: &str) -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, account: account.to_string(), queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new(), seen_through: HashMap::new(), waiting_said: false }
+        PrincipalHold { custody: Custody::Unopened, account: account.to_string(), queue: HeldQueue::in_memory(), last_acked: HashMap::new(), last_arranged: HashMap::new(), reissues: HashMap::new(), seen_through: HashMap::new(), waiting_said: false }
     }
 
     /// Returns whether the hold's lines were held before the board's
@@ -1145,6 +1163,17 @@ impl PrincipalHold {
     fn note_position(&mut self, doc: &str, at: u64) {
         let base = self.last_acked.entry(doc.to_string()).or_insert(at);
         *base = (*base).max(at);
+    }
+
+    /// Notes `at`, the position of an arrangement write of the principal's
+    /// on `doc` ([`PrincipalHold::last_arranged`]).
+    ///
+    /// It stands from here where it is past the position noted there, as
+    /// [`PrincipalHold::note_position`]'s does: an earlier write read after
+    /// a later one never lowers it.
+    fn note_arranged(&mut self, doc: &str, at: u64) {
+        let last = self.last_arranged.entry(doc.to_string()).or_insert(at);
+        *last = (*last).max(at);
     }
 
     /// Returns the `base` a line held on `doc` takes now (§3c.2).
@@ -2296,9 +2325,13 @@ impl Holds {
     /// hold on every document its row names where it is past the position
     /// noted there, which stands otherwise ([`PrincipalHold::note_position`])
     /// — whatever its kind, a burst's, a mint's or a link's, the first dial's
-    /// and the resend's alike, each noted where its answer is read. No
-    /// standing line is touched: a line held keeps the base it was held at.
-    /// A read, or a refusal, notes nothing.
+    /// and the resend's alike, each noted where its answer is read. An
+    /// arrangement write's — a burst's or a `set_arrangement`'s — is the
+    /// position of the principal's latest arrangement write on its `doc`
+    /// too, where it is past the one noted there
+    /// ([`PrincipalHold::note_arranged`]). No standing line is touched: a
+    /// line held keeps the base it was held at. A read, or a refusal, notes
+    /// nothing.
     fn note_ack(&self, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
         let mut board_hold = self.lock(&session.board_reference);
@@ -2311,6 +2344,27 @@ impl Holds {
         for doc in docs {
             ph.note_position(doc, at);
         }
+        if let Some(doc) = arranged_doc(frame) {
+            ph.note_arranged(doc, at);
+        }
+    }
+
+    /// Returns the position of the principal's latest arrangement write on
+    /// `doc` at the session's board, where the shell knows one (P3).
+    ///
+    /// It is [`PrincipalHold::last_arranged`]'s, read under the board's lock,
+    /// no hold opened: the position `merge.undo` hands the library's undo as
+    /// the editor's own last acknowledgment on the draft
+    /// (`skep_client::merge::undo`). `None` where no arrangement write of the
+    /// principal's on `doc` was acknowledged through this shell, or found
+    /// landed by its resend.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the session's board is none the holds were opened over
+    /// (the type's precondition).
+    pub fn last_arranged(&self, session: &SessionEntry, doc: &str) -> Option<u64> {
+        self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.last_arranged.get(doc).copied()).flatten()
     }
 
     /// Returns whether this shell acked a write at `at` on the board.
@@ -2831,6 +2885,14 @@ fn line_json(l: &HeldLine) -> Value {
         line["refusal"] = r.clone();
     }
     line
+}
+
+/// Returns the document an arrangement write re-arranges: the `doc` of one
+/// of the five bursts or of a `set_arrangement` (wire.md §Arrangement, the
+/// typed state); `None` for any other write.
+fn arranged_doc(frame: &Value) -> Option<&str> {
+    let op = frame["op"].as_str()?;
+    (BURST_KINDS.contains(&op) || op == "set_arrangement").then(|| frame["doc"].as_str()).flatten()
 }
 
 /// Returns the documents an acked write's `/changes` row names.

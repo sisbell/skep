@@ -566,8 +566,9 @@ impl Holds {
     /// Resumes one document by its read (resume-by-read, §3c.5).
     ///
     /// It runs the read and its outcome — a landed head kept, its position
-    /// made the document's base (§3c.2) and entered in the board's acked
-    /// positions — and answers whether the document's lines go out now: a
+    /// made the document's base (§3c.2) and the principal's latest
+    /// arrangement write on it, and entered in the board's acked positions
+    /// — and answers whether the document's lines go out now: a
     /// document the read sends from the head, or whose landed head leaves
     /// lines behind it; never one whose head awaits the person's act, which
     /// is read never, nor one the read left undecided, nor one whose head it
@@ -595,7 +596,8 @@ impl Holds {
                 // The landing is noted as the session's ack is (§3c.2, §3c.5):
                 // a line held on the document from here reads past it, and no
                 // read takes its row for another line's landing; a later write
-                // noted since the read stands.
+                // noted since the read stands. A held line is a burst, so its
+                // landing is an arrangement write on the document too.
                 {
                     let mut board_hold = self.lock(board_reference);
                     if let Some(at) = at {
@@ -604,6 +606,7 @@ impl Holds {
                     if let Some(ph) = board_hold.principals.get_mut(&principal) {
                         if let Some(at) = at {
                             ph.note_position(doc, at);
+                            ph.note_arranged(doc, at);
                         }
                         self.done_line(ph, head.k, Done::Kept { at });
                     }

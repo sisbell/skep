@@ -83,9 +83,15 @@
 //!
 //! **`merge.undo`** takes the standing composition's landing back out of
 //! the draft by the library's `undo`, one `set_arrangement` typed against
-//! the landing's position (R6 with P3's command rule: a write to the draft
-//! since the landing refuses it `arrangement_moved`, nothing wiped), while
-//! the session that landed it stands; **`merge.withdraw`** — `{draft}` —
+//! THE EDITOR's OWN LAST ACK on the draft, as every burst is typed (R6 with
+//! P3's editor rule): the position of the principal's latest arrangement
+//! write on it that this shell acknowledged, a burst's or a
+//! `set_arrangement`'s, never a link's (`Holds::last_arranged`), or the
+//! landing's position where that is later — so the person's own later
+//! changes, taken back first on the editor's stack, never leave it
+//! refused, and a change since by another hand refuses it
+//! `arrangement_moved`, nothing wiped — while the session that landed it
+//! stands; **`merge.withdraw`** — `{draft}` —
 //! takes the merge out of any marked draft and keeps its words, in any
 //! session, by the library's `withdraw`. Each replaces the landing's
 //! record where one stands.
@@ -751,6 +757,10 @@ impl Shell {
     /// Answers `merge.undo(session)` with `{draft, position, record,
     /// restored}` (the module doc; `shapes`' `Undone`).
     ///
+    /// The undo is typed against the principal's latest arrangement write on
+    /// the draft the hold noted, or the landing's position where that is
+    /// later, the library taking the later of the two.
+    ///
     /// # Errors
     ///
     /// In this order: `malformed_args` naming `session`, then
@@ -760,8 +770,9 @@ impl Shell {
     /// (`skep_client::merge::undo`): `unreadable`,
     /// `no_such_document`, `not_owner`, `nothing_to_undo` with its reason,
     /// `no_merge` naming the draft, `merge_refused` with `history_reclaimed`,
-    /// the board's `arrangement_moved` verbatim, a halt's face, and
-    /// `session_died`.
+    /// `over_cap` where the state before the landing, mapped through the
+    /// records, is in more runs than one write may name, the board's
+    /// `arrangement_moved` verbatim, a halt's face, and `session_died`.
     pub(super) fn merge_undo(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
         let key = Self::family_key(&session);
@@ -771,7 +782,9 @@ impl Shell {
         let signed = self.signed(&session, "merge.undo")?;
         let merger = lib::Merger { token: &session.token, account: &signed.account, signer: &*signed.signer };
         let kind = merge_kind(&signed.account).ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
-        let undone = lib::undo(&session.board, merger, &composition.into, &kind, None).map_err(|r| self.merge_refusal(&session, r))?;
+        // THE EDITOR's OWN LAST ACK on the draft (P3).
+        let own_ack = self.holds.last_arranged(&session, &composition.into.to_string());
+        let undone = lib::undo(&session.board, merger, &composition.into, &kind, own_ack, None).map_err(|r| self.merge_refusal(&session, r))?;
         self.merges.take(&key);
         Ok(json!({
             "draft": undone.draft.to_string(),

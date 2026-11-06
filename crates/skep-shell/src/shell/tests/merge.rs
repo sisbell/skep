@@ -5,8 +5,10 @@
 //! with nothing composed `no_merge`, a bare session refused — and, against
 //! the real daemon, the family end to end: a daughter composed and landed
 //! into a fresh draft staged from the head and into a named one, each by
-//! one write; the undo and the withdrawal each one write, the undo refused
-//! `arrangement_moved` where the draft moved since, nothing wiped; the
+//! one write; the undo and the withdrawal each one write, the undo typed at
+//! the editor's own last arrangement write on the draft — landing once the
+//! person's later edits are taken back, refused `arrangement_moved` past
+//! another hand's write and never typed at a link's ack, nothing wiped; the
 //! re-open landing nothing, reading the side at the marker's position and
 //! settling a gap the draft no longer arranges; `resolutions` refused where
 //! they name no gap or no choice the gap admits, nothing landed; the
@@ -141,13 +143,16 @@ fn the_rows_read_their_members_first_and_answer_no_merge_with_nothing_composed()
 /// its extent, its marker gone, one arrangement row under the draft naming
 /// a base and no merge — and the composition is gone. With `into` a level
 /// draft L staged from E.2, the landing goes into L, `fresh` false. A burst
-/// to L after the landing makes `merge.undo` the board's `arrangement_moved`
-/// — its `site.as_of` the landing's position — nothing wiped, the
-/// composition standing; `merge.withdraw` then takes the merge out of L by
-/// ONE `set_arrangement`, its words kept, its marker gone, the landing's
-/// record replaced, and the composition gone (the mutants that land by a
-/// second write, stage where a draft is named, drop the marker, or keep a
-/// taken-back composition standing).
+/// to L after the landing and its taking back, each typed at the editor's
+/// own last ack, leave L holding M, its arrangement moved past the landing;
+/// `merge.undo`, typed at the editor's own last ack, takes the landing back
+/// by ONE `set_arrangement`, L's text E.2's again and its base restored.
+/// Landed into L again, `merge.withdraw` takes the merge out of L by ONE
+/// `set_arrangement`, its words kept, its marker gone, the landing's record
+/// replaced, and the composition gone (the mutants that land by a second
+/// write, stage where a draft is named, drop the marker, keep a taken-back
+/// composition standing, or type the undo at the landing past the editor's
+/// own later acks).
 #[test]
 fn the_family_lands_a_daughter_into_a_fresh_draft_and_into_a_named_one_and_takes_each_back_by_one_write() {
     use skep_client::board::frames::doc_metadata;
@@ -183,27 +188,87 @@ fn the_family_lands_a_daughter_into_a_fresh_draft_and_into_a_named_one_and_takes
     assert_eq!(g.call("merge.undo", json!({"session": g.session})).unwrap_err().name(), "no_merge", "the composition went with the undo");
     // A named level draft: landed into, nothing staged.
     let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
-    let report = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let compose_into_l = || g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let report = compose_into_l();
     assert_eq!((report["outcome"].as_str(), report["into"].as_str(), report["fresh"].as_bool()), (Some("landed"), Some(l.as_str()), Some(false)), "{report}");
     let landed_at = report["position"].as_u64().unwrap();
     assert_eq!(g.op(doc_metadata(&l))["merge"]["sides"], json!([f.e11]));
-    // A burst after the landing: the undo refused, nothing wiped.
-    g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "20"}, "values": ["!"], "as_of": g.position()}));
-    let moved = g.call("merge.undo", json!({"session": g.session})).unwrap_err();
-    let v = moved.to_value();
-    assert_eq!((moved.name(), v["kind"].as_str(), v["site"]["as_of"].as_u64()), ("arrangement_moved", Some("refused"), Some(landed_at)), "{v}");
-    assert!(v["site"]["current"].is_u64(), "{v}");
-    assert_eq!(g.text(&l, 20).len(), 20, "nothing wiped");
-    // The withdrawal: one write, the words kept, the marker gone.
+    // A burst after the landing and its taking back, each typed at the
+    // editor's own last ack: L holds M again, its arrangement past the
+    // landing, and the undo typed at the editor's own last ack lands.
+    let burst = g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "20"}, "values": ["!"], "as_of": g.position()}));
+    let taken = g.op(json!({"op": "delete", "doc": l, "p": {"subspace": "1", "ordinal": "20"}, "width": "1", "as_of": burst["at"]}));
+    assert!(taken["at"].as_u64().is_some_and(|at| at > landed_at) && g.text(&l, 20).len() == 19, "the premise: M again, its arrangement past the landing: {taken}");
+    let since = g.position();
+    let undone = g.call("merge.undo", json!({"session": g.session})).unwrap_or_else(|r| panic!("{r}"));
+    crate::shapes::assert_declared("Undone", &undone);
+    assert_eq!((undone["draft"].as_str(), undone["restored"].clone()), (Some(l.as_str()), json!({"base": f.e2, "extent": 13})), "{undone}");
+    assert_eq!(g.text(&l, 13), "the fox jumps", "L as it stood before the landing");
+    assert!(g.op(doc_metadata(&l))["merge"].is_null(), "the marker gone");
+    assert_eq!(arrangement_rows(&g, &l, since), [(true, false)], "one arrangement row, a base and no merge");
+    // Landed into L again, and withdrawn: one write, the words kept, the
+    // marker gone.
+    let report = compose_into_l();
+    assert_eq!((report["outcome"].as_str(), report["into"].as_str()), (Some("landed"), Some(l.as_str())), "{report}");
     let since = g.position();
     let withdrawn = g.call("merge.withdraw", json!({"session": g.session, "draft": l})).unwrap_or_else(|r| panic!("{r}"));
     crate::shapes::assert_declared("Withdrawn", &withdrawn);
     assert_eq!((withdrawn["draft"].as_str(), withdrawn["record"].is_string()), (Some(l.as_str()), true), "{withdrawn}");
-    assert_eq!(g.text(&l, 20).len(), 20, "the words kept");
+    assert_eq!(g.text(&l, 20).len(), 19, "the words kept");
     assert!(g.op(doc_metadata(&l))["merge"].is_null(), "the marker gone");
     assert_eq!(arrangement_rows(&g, &l, since), [(true, false)], "one arrangement row");
     assert_eq!(g.call("merge.land", json!({"session": g.session})).unwrap_err().name(), "no_merge", "the composition went with the withdrawal");
     assert_eq!(g.call("merge.withdraw", json!({"session": g.session, "draft": l})).unwrap_err().name(), "no_merge", "no merge to take out");
+    g.shell.shutdown();
+    sd.shutdown();
+}
+
+/// Checks `merge.undo`'s typing against the daemon (P3; skep #811).
+///
+/// L takes the merge of E.2 with E.1.1, the editor's burst lands on it, and
+/// a SECOND DEVICE's write lands after it — another hand's: `merge.undo`,
+/// typed at the editor's own last ack, the burst's, is the board's
+/// `arrangement_moved`, `site.as_of` the burst's position and `site.current`
+/// the second device's, both writes kept, the marker standing and the
+/// composition with it. The editor's own link homed in L then lands — a link
+/// write changes no arrangement — and the undo is refused again at the
+/// burst's position, never the link's (the mutants that type the undo at
+/// the landing, or at the hold's last ack on L, which the link raises and
+/// which would replace the other hand's write).
+#[test]
+fn merge_undo_is_typed_at_the_editors_own_last_arrangement_write_and_refused_past_another_hands() {
+    use skep_client::board::frames::doc_metadata;
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let g = ground(&dir, &sd);
+    let f = family(&g);
+    let l = g.addr(skep_client::board::frames::stage(&f.e2, None));
+    let landed = g.call("merge.compose", json!({"session": g.session, "doc": f.edition, "alternative": f.e11, "into": l})).unwrap_or_else(|r| panic!("{r}"));
+    let landed_at = landed["position"].as_u64().expect("the landing's position");
+    // The editor's burst on L, then a second device's write after it.
+    let burst = g.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "20"}, "values": ["!"], "as_of": g.position()}));
+    let burst_at = burst["at"].as_u64().expect("the burst's position");
+    let second = second_device(&dir, &sd);
+    let theirs = second.op(json!({"op": "insert", "doc": l, "at": {"subspace": "1", "ordinal": "1"}, "values": ["#"], "as_of": second.position()}));
+    let theirs_at = theirs["at"].as_u64().expect("the other hand's position");
+    second.shell.shutdown();
+    assert!(landed_at < burst_at && burst_at < theirs_at, "the premise: the landing, the burst, the other hand's write");
+    let refused = |when: &str| {
+        let moved = g.call("merge.undo", json!({"session": g.session})).unwrap_err();
+        let v = moved.to_value();
+        assert_eq!(
+            (moved.name(), v["kind"].as_str(), v["site"]["as_of"].as_u64(), v["site"]["current"].as_u64()),
+            ("arrangement_moved", Some("refused"), Some(burst_at), Some(theirs_at)),
+            "{when}: typed at the burst's position: {v}"
+        );
+        assert_eq!(g.text(&l, 21), "#the fox jumps today!", "{when}: both writes kept");
+        assert_eq!(g.op(doc_metadata(&l))["merge"]["at"].as_u64(), Some(landed_at), "{when}: the marker stands");
+    };
+    refused("after the other hand's write");
+    // The editor's own link homed in L: a write, and no arrangement write.
+    let link = g.op(json!({"op": "make_link", "home": l, "from": [{"source": l, "span": {"start": "1.2", "width": "0.3"}}], "to": {"addrs": []}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}}));
+    assert!(link["at"].as_u64().is_some_and(|at| at > theirs_at), "the premise: the link lands past the other hand's write: {link}");
+    refused("after the editor's own link, the composition standing");
     g.shell.shutdown();
     sd.shutdown();
 }

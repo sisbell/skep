@@ -38,7 +38,10 @@
 //! record current, and the merge landed again after it, in the same session
 //! and in a fresh one, a write and a record of its own; a landing withdrawn
 //! — the words kept, the marker cleared; an undo after an edit refused with
-//! the edit kept. And THE TWO
+//! the edit kept; an undo typed at the editor's own last ack landing once
+//! its later edits are taken back, and refused past another hand's change
+//! (skep #811); and words published since the landing brought back by the
+//! undo as the published words they became. And THE TWO
 //! LANDINGS THE FAKE ALONE CHECKED (skep #775's note): into a free-standing
 //! draft, admitted with no base and no marker — its feed row carrying the
 //! request's merge beside a null base, by which the undo finds the landing
@@ -965,7 +968,7 @@ fn a_draft_landing_is_one_write_refused_whole_where_the_draft_changed_and_tells_
     // record — a draft and a write of their own, never the board's memo of
     // the first landing — the record replacing the undo's; `again` then
     // answers that landing, nothing written.
-    let undone = undo(&board, merger, &fresh, &kind, None).expect("the fresh landing undone");
+    let undone = undo(&board, merger, &fresh, &kind, None, None).expect("the fresh landing undone");
     let replacing = undone.record.clone().expect("the landing's record stood, so one replaces it");
     assert_eq!(resume(&board, &again, fresh_landing()).expect("resumed"), None, "nothing stands for the key");
     let relanded = land(&board, &merged_fresh, fresh_landing()).expect("landed fresh again");
@@ -1082,6 +1085,38 @@ pub(crate) fn m_of(merged: &skep_client::merge::Merged) -> Vec<Run> {
     merged.composed.runs.iter().map(|p| p.run.clone()).collect()
 }
 
+/// A formatting type a mark takes: `3.23.2` strong.
+const T_STRONG: &str = "1.1.0.1.0.1.0.3.23.2";
+
+/// A mark in `home`'s own set over its V-positions `from ..`, `width` of
+/// them, from the bare session: the stored end is the identity the
+/// positions resolve to.
+pub(crate) fn mark(rig: &Rig, home: &Address, from: u64, width: u64) -> String {
+    let frame = json!({"op": "make_link", "home": home.to_string(), "from": [{"source": home.to_string(), "span": {"start": format!("1.{from}"), "width": format!("0.{width}")}}], "to": {"addrs": []}, "ty": {"addrs": [T_STRONG]}});
+    acked_addr(&acked(rig.board.op(Some(&rig.bare), &frame))).expect("the mark").to_string()
+}
+
+/// The bytes at content ordinals `1 ..= width` of `doc`.
+pub(crate) fn text_of(rig: &Rig, token: &Token, doc: &Address, width: u64) -> String {
+    let v = read(&rig.board, Some(token), &frames::retrieve_v(&doc.to_string(), 1, width));
+    v["items"].as_array().expect("items").iter().filter_map(|i| i["content"].as_str()).collect()
+}
+
+/// THE SHOT WITH A KEPT PLACE: `d`'s whole text, `text` at its first
+/// positions, published as `e`'s own words with the place the run holds in
+/// `d` beside it, so the commit re-windows `d` through the record it homes
+/// there (wire.md §The publish shot and head-float, the kept places).
+pub(crate) fn publish_with_place(rig: &Rig, session: &Session<'_>, e: &Address, d: &Address, text: &str) -> Address {
+    let (e_s, d_s) = (e.to_string(), d.to_string());
+    let runs = [frames::shot_run(&d_s, &format!("{d}.0.1.1"), text.len() as u64)];
+    let places = [frames::place(1)];
+    let pieces: Vec<[u8; 1]> = text.bytes().map(|b| [b]).collect();
+    let body = entry_body_publish(pieces.iter().map(|b| ShotSegmentPiece::Value(b)), None);
+    let mut frame = frames::publication(&frames::PublishFrame { doc: Some(&e_s), draft: Some(&d_s), runs: &runs, places: &places, ..frames::PublishFrame::default() });
+    frame["attest"] = attest(&rig.board, &rig.device, &addr(ACCOUNT), e, &body);
+    addr(acked_addr(&acked(session.op(&frame))).expect("the member"))
+}
+
 /// THE UNDO ON THE REAL DAEMON (skep #783): the staged draft `S` off `D.1`
 /// with "!!!" typed, merged with `D.2` and landed in one write. The premise
 /// of the pre-landing read: `/op-at` at the landing's `at − 1` answers
@@ -1120,7 +1155,7 @@ fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_cle
     };
     assert_eq!(nearest, Some(before), "nearest is the position before the landing");
     // THE UNDO: one write.
-    let undone = undo(&rig.board, merger, &draft, &kind, None).expect("undone");
+    let undone = undo(&rig.board, merger, &draft, &kind, None, None).expect("undone");
     assert_eq!(undone.draft, draft);
     assert_eq!(undone.restored, Some((base.clone(), 11)), "the base read before the landing, address and extent");
     assert!(undone.position > at, "{undone:?}");
@@ -1138,7 +1173,7 @@ fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_cle
     assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link.clone()), Some(replacing.clone())));
     // A re-run: nothing to undo, nothing written.
     let standing = rig.position();
-    assert_eq!(undo(&rig.board, merger, &draft, &kind, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
+    assert_eq!(undo(&rig.board, merger, &draft, &kind, None, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
     assert_eq!(rig.position(), standing, "nothing written");
     // Composed again — the undo restored the base, so the key is the first
     // landing's — and landed again in this session: a write of its own, the
@@ -1201,7 +1236,7 @@ fn a_landed_merge_is_withdrawn_keeping_the_words_and_clearing_the_marker() {
     assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link), Some(replacing)));
     let standing = rig.position();
     assert_eq!(withdraw(&rig.board, merger, &draft, &kind, None), Err(Refusal::NoMerge { draft: draft.clone() }));
-    assert_eq!(undo(&rig.board, merger, &draft, &kind, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
+    assert_eq!(undo(&rig.board, merger, &draft, &kind, None, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
     assert_eq!(rig.position(), standing, "nothing written");
     session.close().expect("close");
 }
@@ -1227,7 +1262,7 @@ fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
     let edited = image(&rig.board, &token, &draft, 19);
     assert_eq!(edited.len(), 5, "?the big cat sat!!!: {edited:?}");
     let standing = rig.position();
-    let err = undo(&rig.board, merger, &draft, &kind, None).expect_err("the draft changed since the merge landed");
+    let err = undo(&rig.board, merger, &draft, &kind, None, None).expect_err("the draft changed since the merge landed");
     let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
     assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
     let detail = refused.detail.as_deref().expect("the person's words");
@@ -1237,6 +1272,109 @@ fn an_undo_after_an_edit_since_the_landing_is_refused_with_the_edit_kept() {
     let meta = rig.metadata(&token, &draft);
     assert_eq!((meta["base"].as_str(), meta["merge"]["at"].as_u64()), (Some(head.to_string().as_str()), Some(at)), "the base and the marker as they stood: {meta}");
     assert_eq!(rig.position(), standing, "nothing written");
+    session.close().expect("close");
+}
+
+/// THE EDITOR's TYPING (P3; skep #811): after the landing the editor types
+/// "?" at the start of the draft and deletes it, each typed at its own last
+/// ack — the draft holding M again, its arrangement moved past the landing,
+/// so the undo typed at the landing is refused. Another hand's "#" then
+/// lands, and the undo typed at the editor's own last ack is refused
+/// `arrangement_moved` naming both positions, the insert kept, the marker
+/// standing, nothing written. Once the editor takes the "#" out in turn, the
+/// undo typed at that ack lands: C again, the base `D.1` at eleven, the
+/// marker gone, the undo's row naming the base and no merge, and the
+/// replacing record current for the key.
+#[test]
+fn an_undo_typed_at_the_editors_own_last_ack_lands_once_its_later_edits_are_taken_back_and_refuses_another_hands() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let draft = rig.staged(&base, 12, "!!!");
+    let s = draft.to_string();
+    let c = image(&rig.board, &token, &draft, 14);
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind: kind.clone() };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    let landed = land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
+    let Landed::Draft { position: at, record: link, .. } = landed else { panic!("{landed:?}") };
+    let m = as_image(&m_of(&merged));
+    // The editor's own edit and its taking back, each typed at its last ack.
+    let typed = insert_text(&rig.board, &token, &s, 1, "?");
+    let r = acked_at(&acked(rig.board.op(Some(&token), &frames::delete(&s, 1, 1, typed, None)))).expect("the delete's position");
+    assert_eq!(image(&rig.board, &token, &draft, 18), m, "the premise: M again");
+    let Err(Refusal::Halt(Halt::Refused(moved))) = undo(&rig.board, merger, &draft, &kind, None, None) else { panic!("the landing's typing lands past the editor's own edits") };
+    assert_eq!(moved.code, "arrangement_moved", "the premise: typed at the landing, refused: {moved:?}");
+    // Another hand's insert past the editor's last ack: refused.
+    let theirs = insert_text(&rig.board, &rig.bare, &s, 1, "#");
+    let edited = image(&rig.board, &token, &draft, 19);
+    let standing = rig.position();
+    let err = undo(&rig.board, merger, &draft, &kind, Some(r), None).expect_err("another hand's change since the editor's last ack");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!((refused.code.as_str(), refused.body["site"]["as_of"].as_u64(), refused.body["site"]["current"].as_u64()), ("arrangement_moved", Some(r), Some(theirs)), "{refused:?}");
+    let detail = refused.detail.as_deref().expect("the person's words");
+    assert!(detail.contains("since your last write") && detail.contains(&format!("position {r}")) && detail.contains(&format!("the merge landed at position {at}")), "{detail}");
+    assert_eq!(image(&rig.board, &token, &draft, 19), edited, "the other hand's insert kept");
+    assert_eq!(rig.metadata(&token, &draft)["merge"]["at"].as_u64(), Some(at), "the marker stands");
+    assert_eq!(rig.position(), standing, "nothing written");
+    // The editor takes the "#" out: its own last ack, and the undo lands.
+    let r2 = acked_at(&acked(rig.board.op(Some(&token), &frames::delete(&s, 1, 1, theirs, None)))).expect("the delete's position");
+    let undone = undo(&rig.board, merger, &draft, &kind, Some(r2), None).expect("undone at the editor's own last ack");
+    assert_eq!(undone.restored, Some((base.clone(), 11)), "the base read before the landing");
+    assert_eq!(image(&rig.board, &token, &draft, 14), c, "C again");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["merge"].is_null()), (Some(base.to_string().as_str()), Some("11"), true), "the base restored, the marker gone: {meta}");
+    let rows = rig.rows_under(&token, &draft);
+    let row = rows.iter().rev().find(|row| row["op"] == "set_arrangement").expect("the undo's row");
+    assert_eq!((row["at"].as_u64(), row["base"].as_str(), row["merge"].is_null()), (Some(undone.position), Some(base.to_string().as_str()), true), "{row}");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key).expect("the lookup").expect("a current record");
+    assert_eq!((record.landed, record.replaces, record.link), (None, Some(link), undone.record.clone()), "the replacing record, current");
+    session.close().expect("close");
+}
+
+/// WORDS PUBLISHED SINCE THE LANDING (B3-S11; skep #811): `S` staged off
+/// `D.1` with "!!!" typed and the words of `X`, a draft of the claimant's,
+/// copied in after them by identity — C — merged with `D.2` and landed; then
+/// `X` is published into `E` with its kept place, so the board re-windows
+/// `X` and homes a correspondence record in it naming `E`'s identity, and a
+/// mark is made on the published words. The undo reads C before the landing
+/// and the records at the head: `S` holds `E`'s identity where `X`'s words
+/// stood and the base's and its own words as they were, the bytes C's text,
+/// the base `D.1` at eleven, the marker gone, and the mark on the published
+/// words found at the restored place.
+#[test]
+fn an_undo_brings_back_words_published_since_the_landing_as_the_published_words_they_became() {
+    let rig = Rig::new();
+    let session = rig.session();
+    let token = session.token().clone();
+    let (d, base, head) = rig.race(&session);
+    let draft = rig.staged(&base, 12, "!!!");
+    let s = draft.to_string();
+    let x = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    insert_text(&rig.board, &rig.bare, &x.to_string(), 1, "hello");
+    let copy = json!({"op": "copy", "doc": s, "at": {"subspace": "1", "ordinal": "15"}, "specs": [{"source": x.to_string(), "span": {"start": "1.1", "width": "0.5"}}], "as_of": crate::common::typed_at(&rig.board, &rig.bare, &s)});
+    acked(rig.board.op(Some(&rig.bare), &copy));
+    assert_eq!(image(&rig.board, &token, &draft, 19), vec![(format!("{d}.0.1.1"), 11), (format!("{draft}.0.1.1"), 3), (format!("{x}.0.1.1"), 5)], "the premise: C holds X's words by identity");
+    let kind = addr(&mint(&rig.board, &rig.bare, ACCOUNT, false));
+    let merger = merger(&rig, &session);
+    let inputs = Inputs { doc: d.clone(), head: head.clone(), base: None, sides: vec![Side::Draft { at: draft.clone(), position: None }], options: Default::default(), kind };
+    let merged = compose(&rig.board, Some(&token), &inputs).expect("composed");
+    land(&rig.board, &merged, Landing::Draft { merger, into: Some(draft.clone()), journal: None }).expect("landed");
+    // X's words published since the landing.
+    let e = published_document(&rig.board, &session, &rig.device);
+    publish_with_place(&rig, &session, &e, &x, "hello");
+    assert_eq!(image(&rig.board, &token, &x, 5), vec![(format!("{e}.0.1.1"), 5)], "the premise: X re-windowed at its kept place");
+    let link = mark(&rig, &x, 1, 5);
+    let undone = undo(&rig.board, merger, &draft, &inputs.kind, None, None).expect("undone");
+    assert_eq!(undone.restored, Some((base.clone(), 11)));
+    assert_eq!(image(&rig.board, &token, &draft, 19), vec![(format!("{d}.0.1.1"), 11), (format!("{draft}.0.1.1"), 3), (format!("{e}.0.1.1"), 5)], "the published words' identity where X's stood, the rest as read");
+    assert_eq!(text_of(&rig, &token, &draft, 19), "the cat sat!!!hello", "C's text");
+    let meta = rig.metadata(&token, &draft);
+    assert_eq!((meta["base"].as_str(), meta["base_copied"].as_str(), meta["merge"].is_null()), (Some(base.to_string().as_str()), Some("11"), true), "the base restored, the marker gone: {meta}");
+    let found = read(&rig.board, Some(&token), &frames::find_links_v(&s, &[(15, 5)]));
+    assert!(found["addrs"].as_array().is_some_and(|a| a.contains(&json!(link))), "the mark on the published words is found at the restored place: {found}");
     session.close().expect("close");
 }
 
@@ -1292,7 +1430,7 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_un
     assert!(row["base"].is_null(), "no base named: {row}");
     assert_eq!(row["merge"], json!({"head": head.to_string(), "sides": [daughter.to_string()]}), "the request's merge beside no base: {row}");
     // THE UNDO, by the row: one write.
-    let undone = undo(&rig.board, merger, &plain, &kind, None).expect("undone");
+    let undone = undo(&rig.board, merger, &plain, &kind, None, None).expect("undone");
     assert_eq!(undone.draft, plain);
     assert_eq!(undone.restored, None, "no base to restore");
     assert!(undone.position > at, "{undone:?}");
@@ -1308,13 +1446,13 @@ fn a_landing_into_a_free_standing_draft_is_admitted_with_nothing_recorded_and_un
     assert_eq!((record.landed.clone(), record.replaces.clone(), record.link.clone()), (None, Some(link.clone()), Some(replacing.clone())));
     // A re-run: the same undo in this session, nothing written twice.
     let standing = rig.position();
-    assert_eq!(undo(&rig.board, merger, &plain, &kind, None), Ok(undone.clone()), "the board answers the undo's ids again");
+    assert_eq!(undo(&rig.board, merger, &plain, &kind, None, None), Ok(undone.clone()), "the board answers the undo's ids again");
     assert_eq!(rig.position(), standing, "nothing written twice");
     session.close().expect("close");
     // In a fresh session: refused, the arrangement moved at the undo.
     let fresh = rig.session();
     let again = Merger { token: fresh.token(), account: fresh.account(), signer: &rig.device };
-    let err = undo(&rig.board, again, &plain, &kind, None).expect_err("the undo moved the arrangement");
+    let err = undo(&rig.board, again, &plain, &kind, None, None).expect_err("the undo moved the arrangement");
     let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
     assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
     assert_eq!(rig.position(), standing, "nothing written");

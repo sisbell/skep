@@ -210,7 +210,7 @@ fn run(
         let report = match &asked.act {
             Act::Undo(draft) => {
                 talk(format!("taking the merge back out of {draft} at {}", board.dialed()));
-                let undone = undo(board, merger, draft, &asked.kind, asked.journal.as_ref())
+                let undone = undo(board, merger, draft, &asked.kind, None, asked.journal.as_ref())
                     .map_err(|r| refused_taking_out(draft, r, Step::Undo))?;
                 say_undone(&undone);
                 undone_value(&undone)

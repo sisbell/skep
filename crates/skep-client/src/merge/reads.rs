@@ -4,8 +4,12 @@
 //! the base and every side as run lists, composes them through the core and
 //! writes nothing; the conversion of an `image` answer's runs to the core's,
 //! each origin the bare document ([`origin_of`]); [`head_of`], the
-//! feed-walk fallback for a bare document's head member; and [`Refusal`],
-//! every refusal a read or a landing can meet.
+//! feed-walk fallback for a bare document's head member; the read of the
+//! correspondence records of the person's own origins among a past state's
+//! runs, and [`mapped`], the state mapped through them — what the restore
+//! and the undo send, so words a publication made public since come back as
+//! the published words they became; and [`Refusal`], every refusal a read
+//! or a landing can meet.
 //!
 //! The reads, in the record's order (§1.3): the document's metadata and the
 //! head's extent; the base — named by the caller, or derived by `base_of`
@@ -78,7 +82,8 @@ use crate::board::{
     frames, Answer, AtAnswer, Board, ChangesAnswer, ChangesQuery, Rejection, Token,
 };
 use crate::halt::Halt;
-use crate::publication::SupersedeCause;
+use crate::publication::enumerate::MAX_WIRE_LIST;
+use crate::publication::{self, home_of_link, owned_by, SupersedeCause};
 
 use super::compose::{base_of, compose_runs, Composed, Item, Options, Run, SideIx};
 use super::record::{self, Record, RecordKey, SideAt};
@@ -1209,6 +1214,127 @@ pub(crate) fn shape(op: &str, v: &Value) -> Halt {
         crate::halt::clipped(&v.to_string(), 200).to_string(),
         "this board is not speaking the wire this client expects; nothing was written",
     )
+}
+
+// ── the correspondence records ────────────────────────────────────────────
+
+/// Reads the correspondence records of `account`'s own origins among
+/// `state`'s runs, at the head.
+///
+/// It is the read a write of a past state makes before it is sent — the
+/// restore's (the `history` module) and the undo's (the `undo` module):
+/// one four-set read per chunk of each distinct owned origin's spans, in
+/// run order — `{home: [the origin], from: [the spans], ty: [the
+/// correspondence class]}`, the twin fence's own read — each hit judged
+/// off its address, read once and kept by `Record::of`. The reads are made
+/// at the head and never at the state's position, since a record minted
+/// after the state must be seen.
+///
+/// # Errors
+///
+/// The reads' refusals: `withheld` on an origin as [`Refusal::Unreadable`],
+/// `doc_not_registered` as [`Refusal::NoSuchDocument`], an answer of
+/// another shape faced, the reader's other errors.
+pub(crate) fn records_of(
+    reader: &Reader<'_>,
+    account: &str,
+    state: &[Run],
+) -> Result<Vec<publication::Record>, Refusal> {
+    let subtype =
+        frames::unit_span(frames::T_CORRESPONDENCE).as_array().cloned().unwrap_or_default();
+    let mut origins: Vec<&Address> = Vec::new();
+    for run in state {
+        if !origins.contains(&&run.origin) && owned_by(&run.origin.to_string(), account) {
+            origins.push(&run.origin);
+        }
+    }
+    let mut records: Vec<publication::Record> = Vec::new();
+    for origin in origins {
+        let text = origin.to_string();
+        let home = frames::unit_span(&text).as_array().cloned().unwrap_or_default();
+        let spans: Vec<Value> = state
+            .iter()
+            .filter(|r| r.origin == *origin)
+            .map(|r| frames::i_span(&format!("{text}.0.1.{}", r.i_start), r.width))
+            .collect();
+        for chunk in spans.chunks(MAX_WIRE_LIST) {
+            let query = frames::find_links_four(
+                frames::Slot::Spans(&home),
+                frames::Slot::Spans(chunk),
+                frames::Slot::Any,
+                frames::Slot::Spans(&subtype),
+            );
+            let v = reader.answered(origin, &query, None)?;
+            if v["resp"].as_str() != Some("addrs") {
+                return Err(shape("find_links_ftt", &v).into());
+            }
+            let hits: Vec<String> = answers::addrs(&v).into_iter().map(str::to_string).collect();
+            for hit in hits {
+                if records.iter().any(|r| r.link.to_string() == hit) {
+                    continue;
+                }
+                if !home_of_link(&hit).is_some_and(|h| owned_by(h, account)) {
+                    continue;
+                }
+                let lv = reader.answered(origin, &frames::read_link(&hit), None)?;
+                let Some(value) =
+                    answers::link_value(&lv).ok_or_else(|| shape("read_link", &lv))?
+                else {
+                    continue;
+                };
+                if let Some(record) = publication::Record::of(&hit, &value, account) {
+                    records.push(record);
+                }
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// Maps `state` through `records`: the runs a write of it sends.
+///
+/// Each run is walked from its first ordinal; the piece a record covers —
+/// the first record covering the ordinal — is mapped by `Record::map` onto
+/// the published span it became, its origin the document the record's `to`
+/// lies in; the piece no record covers is kept as read; I-adjacent pieces
+/// of one origin are merged. The order is the state's. A run of an origin
+/// no record names passes through unchanged, as does a piece whose mapped
+/// span this client cannot spell.
+pub fn mapped(state: &[Run], records: &[publication::Record]) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::new();
+    let mut push = |run: Run| match out.last_mut() {
+        Some(last) if last.origin == run.origin && last.reach() == run.i_start => {
+            last.width += run.width
+        }
+        _ => out.push(run),
+    };
+    for run in state {
+        let chain = format!("{}.0.1", run.origin);
+        let mut cursor = run.i_start;
+        while cursor < run.reach() {
+            let covering =
+                records.iter().find(|r| r.from.overlap(&chain, cursor, cursor + 1).is_some());
+            let end = match covering {
+                Some(r) => r.from.reach().min(run.reach()),
+                None => records
+                    .iter()
+                    .filter_map(|r| {
+                        (r.from.chain == chain && r.from.first > cursor).then_some(r.from.first)
+                    })
+                    .min()
+                    .unwrap_or(run.reach())
+                    .min(run.reach()),
+            };
+            let width = end - cursor;
+            let piece = covering
+                .and_then(|r| r.map(&chain, cursor, end))
+                .and_then(|to| Some(Run::new(parse_address(&to.document()?)?, to.first, width)))
+                .unwrap_or_else(|| Run::new(run.origin.clone(), cursor, width));
+            push(piece);
+            cursor = end;
+        }
+    }
+    out
 }
 
 // ── the value mapping (the fragment model) ────────────────────────────────

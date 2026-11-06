@@ -30,14 +30,17 @@
 //! and sent again within the call where the span they bound holds the
 //! burst's own units still (`resend`'s shift, skep #442, #751), else held
 //! as a moved document, the board's verdict kept on its line. The death
-//! signal on the session's token, met at the dial or at a read the attest's
-//! composer made, ends the session, the caller's to run
-//! ([`OpAnswer::Died`]): it is neither held nor faced (§3c.4), save that a
-//! burst which met it is held first, `session_died`, `sent: false` — the
-//! board refuses a dead token's write before it runs the frame — so its
-//! line, and every later burst of the principal's behind it, stands through
-//! the end's reads and goes out under the session that stands next, after
-//! its read; the line takes the death's reason once the end derives it
+//! signal on the session's token, met at the dial, at a read the attest's
+//! composer made, or — for a burst refused as typed against an older state —
+//! at the shift's read or the moved hold's read of the hands, ends the
+//! session, the caller's to run ([`OpAnswer::Died`]): it is neither held nor
+//! faced (§3c.4), and never a moved document's verdict, save that a burst
+//! which met it is held first, `session_died`, `sent: false` where no dial
+//! of it may have landed (the board refuses a dead token's write before it
+//! runs the frame, and a stale one before its bounds), so its line, and
+//! every later burst of the principal's behind it, stands through the end's
+//! reads and goes out under the session that stands next, after its read;
+//! the line takes the death's reason once the end derives it
 //! ([`Holds::note_death`]). A write the
 //! hold never holds is faced where a burst's would be held (§3c.4: "a
 //! non-burst write that fails … is faced at its act") — and the eight of
@@ -253,14 +256,17 @@ mod cause {
     pub const HEAD_UNREADABLE: &str = "head_unreadable";
     /// A burst held at the death signal on its session's token (§3c.4).
     ///
-    /// The signal was met at the burst's first dial, or at a read its
-    /// attest's composer made. The line holds `sent: false` until a session
-    /// of the principal's that may write stands — the restart arm's re-open
-    /// among them — which resends it after its read. Once the session's end
-    /// derives the death, the line's refusal is the `session_died` refusal
-    /// with the death's reason beside it (§4b.2's arms, the retired arm's
-    /// `own` among its members), so the page faces a line that no re-open of
-    /// this device's key will send.
+    /// The signal was met at the burst's first dial, at a read its attest's
+    /// composer made, or — the board having refused the burst as typed
+    /// against an older state — at the shift's read, the shifted dial, or the
+    /// moved hold's read of the hands. The line holds, `sent: false` where no
+    /// dial of it may have landed and the shift's mark kept where a shifted
+    /// dial left, until a session of the principal's that may write stands —
+    /// the restart arm's re-open among them — which resends it after its
+    /// read. Once the session's end derives the death, the line's refusal is
+    /// the `session_died` refusal with the death's reason beside it (§4b.2's
+    /// arms, the retired arm's `own` among its members), so the page faces a
+    /// line that no re-open of this device's key will send.
     pub const SESSION_DIED: &str = "session_died";
 }
 
@@ -297,6 +303,22 @@ impl Hand {
         }
         v
     }
+}
+
+/// What the moved hold's read of the hands answered (§3c.5).
+///
+/// It is the hands, or the death signal on the session's token, whose end is
+/// the caller's to run (§3c.4) — no verdict on the document, so the burst is
+/// held at the death and never faced moved
+/// ([`Holds::hands_since_typed_state`]).
+#[derive(Debug)]
+enum HandsRead {
+    /// The hands whose rows moved the document, each once.
+    ///
+    /// They are none where the read answered no page, or no read was owed.
+    Named(Vec<Hand>),
+    /// The death signal on the session's token.
+    Died,
 }
 
 /// What a write's dial answered that [`classify`] reads (§3c.4).
@@ -564,6 +586,23 @@ pub enum OpAnswer {
     Died(AtDeath),
 }
 
+#[cfg(test)]
+impl OpAnswer {
+    /// Returns the answer of a send that met no death signal.
+    ///
+    /// It is the suites' seam where a burst is held and no death armed.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the send met the death signal.
+    pub(crate) fn answered(self) -> Result<Value, Refusal> {
+        match self {
+            OpAnswer::Answered(answer) => answer,
+            OpAnswer::Died(at_death) => panic!("the send met the death signal: {at_death:?}"),
+        }
+    }
+}
+
 /// What the hold made of a frame whose send met the death signal (§3c.4).
 ///
 /// The caller ends the session first, so the death's reason is derived,
@@ -573,8 +612,9 @@ pub enum AtDeath {
     /// A frame that is no burst — a read, or a write the hold never holds:
     /// nothing is held, and the call answers `session_died`.
     NotABurst,
-    /// A burst held `session_died`, `sent: false`: the call answers `held`
-    /// once the line takes the death's reason ([`Holds::note_death`]).
+    /// A burst held `session_died`, `sent: false` unless a shifted dial of
+    /// it left: the call answers `held` once the line takes the death's
+    /// reason ([`Holds::note_death`]).
     Held(DeathHeld),
     /// A burst the hold could not hold: the refusal the call answers,
     /// `held_full` or `store_halted`.
@@ -1987,19 +2027,22 @@ impl Holds {
     /// document and answered `held`, its line carrying the board's verdict
     /// and the `held` event naming the hands whose rows moved the document —
     /// one more read the call waits on ([`Holds::hands_since_typed_state`]);
-    /// the death signal held `session_died`, `sent: false`, before the
-    /// caller ends the session ([`AtDeath`]), so the line stands through the
-    /// end's reads with every later burst of the principal's behind it;
-    /// anything else faced at the act.
+    /// the death signal — at the dial, or at that read of the hands — held
+    /// `session_died`, `sent: false`, before the caller ends the session
+    /// ([`Holds::hold_at_death`]; [`AtDeath`]), so the line stands through
+    /// the end's reads with every later burst of the principal's behind it,
+    /// its clock started where the dial was a failed send; anything else
+    /// faced at the act.
     ///
     /// The `base` a held line takes — the position the resend's read of it
     /// starts from (§3c.2) — is read under the board's lock BEFORE the dial,
     /// with the standing hold, and handed to the hold either path takes
-    /// ([`Holds::hold_line`] at once, [`Holds::hold`] after the dial): an ack
-    /// of another write of the principal's read while the dial is out — a
-    /// sibling session's, or the person's on another connection — raises the
-    /// base of the next hold alone, never this line's, so the read of a line
-    /// whose answer was lost starts below its own landing (skep #737).
+    /// ([`Holds::hold_line`] at once, [`Holds::hold`] or
+    /// [`Holds::hold_at_death`] after the dial): an ack of another write of
+    /// the principal's read while the dial is out — a sibling session's, or
+    /// the person's on another connection — raises the base of the next hold
+    /// alone, never this line's, so the read of a line whose answer was lost
+    /// starts below its own landing (skep #737).
     fn send_burst(&self, session: &SessionEntry, frame: Value, anchors: Option<Anchors>) -> OpAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst.with_anchors(anchors),
@@ -2041,19 +2084,13 @@ impl Holds {
             }
             Dialed::Held { reason, refusal } => {
                 let failed = held_failure(&reason, &refusal);
-                OpAnswer::Answered(self.hold(session, burst, reason, failed, base))
+                self.hold(session, burst, reason, failed, base)
             }
             Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => OpAnswer::Answered(Err(refusal)),
             // The death is neither (§3c.4): the burst is held before the
             // caller ends the session, a dead token's write having committed
-            // nothing.
-            Dialed::Died => {
-                let held = self.hold_line(&mut self.lock(&session.board_reference), session, burst, Reason::of(cause::SESSION_DIED, false), base);
-                OpAnswer::Died(match held {
-                    Ok(entered) => AtDeath::Held(DeathHeld { k: entered.k, answer: entered.answer }),
-                    Err(refusal) => AtDeath::Refused(refusal),
-                })
-            }
+            // nothing and its dial no failed send.
+            Dialed::Died => self.hold_at_death(session, burst, None, base),
         }
     }
 
@@ -2081,16 +2118,19 @@ impl Holds {
     /// ([`HAND_OVER_DEADLINE`]); a hold-class answer or a refused run — a
     /// second `write_busy` among them — re-marks it, `sent` kept, and answers
     /// `held` under that cause; an answer a first dial faces drops the line,
-    /// entered for the shift alone, and faces it; the death signal re-marks
+    /// entered for the shift alone, and faces it; the death signal — at the
+    /// shifted dial, or at the shift's read, which dials nothing — re-marks
     /// it `session_died`, `sent` kept, and says it `holding`, the line
     /// standing for the session that stands next and the caller ending this
-    /// one ([`AtDeath::Held`]). Where the
-    /// shift is not exact — a delete or a rearrange without its span, an
-    /// anchor lost or at two places, the span between them cut or refilled,
-    /// the read refused, the deadline passed — the line is the moved hold as a
-    /// burst without anchors meets it: the newest verdict on the line, the
-    /// hands read once ([`Holds::hands_since_typed_state`]), the `held`
-    /// event `moved`, the call answered `held`.
+    /// one ([`AtDeath::Held`]). Where the shift is not exact — a delete or a
+    /// rearrange without its span, an anchor lost or at two places, the span
+    /// between them cut or refilled, the read refused, the deadline passed —
+    /// the line is the moved hold as a burst without anchors meets it: the
+    /// hands read once ([`Holds::hands_since_typed_state`]) before anything is
+    /// marked, then the newest verdict on the line, the `held` event `moved`,
+    /// the call answered `held`; a death at that read re-marks the line as
+    /// the death at a shifted dial does, and leaves a burst held behind it
+    /// unmarked.
     fn shift_at_first_dial(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> OpAnswer {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let doc = burst.doc.clone();
@@ -2106,14 +2146,27 @@ impl Holds {
         // Whether a shifted dial left, the mark made before it: the line
         // keeps it through every later answer, as a resend's line does.
         let mut sent = false;
+        // The death — at a shifted dial, at the shift's read, or at the moved
+        // hold's read of the hands — holds the line as the death at a first
+        // dial holds a burst, said now, since the line was said to no one
+        // while it was the shift's.
+        let at_death = |sent: bool, mut answer: Value| {
+            self.with_principal(board_reference, principal, |ph| self.remark_line(ph, k, Reason::of(cause::SESSION_DIED, sent)));
+            answer["cause"] = Value::from(cause::SESSION_DIED);
+            self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::SESSION_DIED), &[]);
+            OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }))
+        };
         loop {
             let shifted = match self.shift_and_send(session, k, &verdict, |frame| self.dial_reissuing(session, frame)) {
                 Ok(shifted) => shifted,
                 Err(why) => {
+                    // The hands are read before anything is marked, so the
+                    // death at the read leaves a burst held behind the line
+                    // as it stood.
+                    let moved = Reason { cause: cause::MOVED.to_string(), refusal: Some(verdict.clone()), sent };
+                    let HandsRead::Named(hands) = self.hands_since_typed_state(session, &doc, Some(k), &moved) else { return at_death(sent, answer) };
                     self.say(format_args!("line {k} on {doc} was not shifted ({why}); the document is held as moved"));
-                    self.mark_moved(board_reference, principal, &doc, Some((k, verdict.clone())));
-                    let moved = Reason { cause: cause::MOVED.to_string(), refusal: Some(verdict), sent };
-                    let hands = self.hands_since_typed_state(session, &doc, Some(k), &moved);
+                    self.mark_moved(board_reference, principal, &doc, Some((k, verdict)));
                     self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Moved, None, &hands);
                     return OpAnswer::Answered(Ok(answer));
                 }
@@ -2145,15 +2198,7 @@ impl Holds {
                     self.with_principal(board_reference, principal, |ph| self.done_line(ph, k, Done::Dropped));
                     return OpAnswer::Answered(Err(refusal));
                 }
-                // The death at the shifted dial holds the line as the death
-                // at a first dial holds a burst, said now, since the line was
-                // said to no one while it was the shift's.
-                Dialed::Died => {
-                    self.with_principal(board_reference, principal, |ph| self.remark_line(ph, k, Reason::of(cause::SESSION_DIED, sent)));
-                    answer["cause"] = Value::from(cause::SESSION_DIED);
-                    self.emit_held(session, &doc, self.count_of(board_reference, principal, &doc), HeldState::Holding, Some(cause::SESSION_DIED), &[]);
-                    return OpAnswer::Died(AtDeath::Held(DeathHeld { k, answer }));
-                }
+                Dialed::Died => return at_death(sent, answer),
             }
         }
     }
@@ -2196,32 +2241,57 @@ impl Holds {
     /// Holds an admitted burst for `reason`, as a dial's answer held it.
     ///
     /// The burst is taken, its frame the held line's own: the answer is the
-    /// `held` answer ([`Holds::enter_line`]), and the `held` event is
-    /// emitted under the board's lock ([`Holds::say_entered`]). `failed` is
-    /// the failed send the dial was, which starts the line's clock
-    /// ([`held_failure`]; [`HAND_OVER_DEADLINE`]), none where the dial
-    /// failed no send. `base` is the position the line's resend read starts
-    /// from (§3c.2), the caller's to have read before its dial
-    /// ([`Holds::send_burst`]; [`PrincipalHold::base_of`]) — a hold made with
-    /// no dial between reads it the same way, now. A burst the board refused
-    /// as typed against an older state is held `moved`, its event naming the
-    /// hands whose rows moved the document
-    /// ([`Holds::hands_since_typed_state`]), read before the board's lock is
-    /// taken, as every dial is made outside it.
-    ///
-    /// # Errors
-    ///
-    /// Returns `store_halted` where P38 halted the file, and `held_full`
-    /// where the principal's queue is full ([`Holds::enter_line`]).
-    pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> Result<Value, Refusal> {
-        let hands = self.hands_since_typed_state(session, &burst.doc, None, &reason);
+    /// `held` answer ([`Holds::enter_line`]), or the hold's refusal, nothing
+    /// held — `store_halted` where P38 halted the file, `held_full` where the
+    /// principal's queue is full — and the `held` event is emitted under the
+    /// board's lock ([`Holds::say_entered`]). `failed` is the failed send the
+    /// dial was, which starts the line's clock ([`held_failure`];
+    /// [`HAND_OVER_DEADLINE`]), none where the dial failed no send. `base` is
+    /// the position the line's resend read starts from (§3c.2), the caller's
+    /// to have read before its dial ([`Holds::send_burst`];
+    /// [`PrincipalHold::base_of`]) — a hold made with no dial between reads
+    /// it the same way, now. A burst the board refused as typed against an
+    /// older state is held `moved`, its event naming the hands whose rows
+    /// moved the document ([`Holds::hands_since_typed_state`]), read before
+    /// the board's lock is taken, as every dial is made outside it; where
+    /// that read meets the death signal, the burst is held at the death
+    /// instead, its clock started by `failed` ([`Holds::hold_at_death`]), and
+    /// the answer is [`OpAnswer::Died`] for the caller to end the session
+    /// (§3c.4).
+    pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason, failed: Option<String>, base: u64) -> OpAnswer {
+        let HandsRead::Named(hands) = self.hands_since_typed_state(session, &burst.doc, None, &reason) else {
+            return self.hold_at_death(session, burst, failed, base);
+        };
         let mut board_hold = self.lock(&session.board_reference);
-        let entered = self.enter_line(&mut board_hold, session, burst, reason, failed, base)?;
-        self.say_entered(session, &entered, &hands);
-        Ok(entered.answer)
+        OpAnswer::Answered(self.enter_line(&mut board_hold, session, burst, reason, failed, base).map(|entered| {
+            self.say_entered(session, &entered, &hands);
+            entered.answer
+        }))
     }
 
-    /// Holds one line before any dial or at the death signal, and says so.
+    /// Holds an admitted burst at the death signal on its session's token.
+    ///
+    /// The signal was met at the burst's first dial, or at the moved hold's
+    /// read of the hands after it (§3c.4): the line is entered `session_died`,
+    /// `sent: false` — a dead token's write, and a stale one, landed nothing
+    /// — its clock started where `failed` names the failed send the dial was
+    /// ([`HAND_OVER_DEADLINE`]), and the `held` event says it `holding`
+    /// ([`Holds::say_entered`]). The answer is [`OpAnswer::Died`] for the
+    /// caller to end the session: the line's [`AtDeath::Held`], or
+    /// [`AtDeath::Refused`] with what [`Holds::enter_line`] refused, nothing
+    /// held.
+    fn hold_at_death(&self, session: &SessionEntry, burst: Burst, failed: Option<String>, base: u64) -> OpAnswer {
+        let mut board_hold = self.lock(&session.board_reference);
+        OpAnswer::Died(match self.enter_line(&mut board_hold, session, burst, Reason::of(cause::SESSION_DIED, false), failed, base) {
+            Ok(entered) => {
+                self.say_entered(session, &entered, &[]);
+                AtDeath::Held(DeathHeld { k: entered.k, answer: entered.answer })
+            }
+            Err(refusal) => AtDeath::Refused(refusal),
+        })
+    }
+
+    /// Holds one line before any dial, and says so.
     ///
     /// Its birth is no failed send, so its clock is not started:
     /// `board_hold` is the session's board's hold, the line is entered
@@ -2798,21 +2868,26 @@ impl Holds {
     /// forgets it, and the first face after one names the acknowledged hands
     /// again, the line's raised `base` persisting. A page whose `more` stands
     /// names the hands of the page it holds, the rows past it unread; a read
-    /// the board answers with no page — a refusal, the death signal, no
-    /// answer — names none, the document faced moved all the same. Any other
-    /// reason reads nothing and names none.
-    fn hands_since_typed_state(&self, session: &SessionEntry, doc: &str, k: Option<u64>, reason: &Reason) -> Vec<Hand> {
+    /// the board answers with no page — a refusal, no answer — names none,
+    /// the document faced moved all the same. The death signal on the
+    /// session's token is no such answer: it is [`HandsRead::Died`], the
+    /// session's death and no verdict on the document, which each caller
+    /// meets as the death at its dial — the burst held for the session that
+    /// stands next, and nothing faced moved (§3c.4). Any other reason reads
+    /// nothing and names none.
+    fn hands_since_typed_state(&self, session: &SessionEntry, doc: &str, k: Option<u64>, reason: &Reason) -> HandsRead {
         let typed = match &reason.refusal {
             Some(verdict) if reason.cause == cause::MOVED => verdict["site"]["as_of"].as_u64(),
             _ => None,
         };
-        let Some(typed) = typed else { return Vec::new() };
+        let Some(typed) = typed else { return HandsRead::Named(Vec::new()) };
         // The rows the person's `send` acknowledged are named no more.
         let seen = k.and_then(|k| self.with_principal(&session.board_reference, session.facts.principal, |ph| ph.seen_through.get(&k).copied()).flatten());
         let since = seen.map_or(typed, |seen| seen.max(typed));
         match session.board.changes(Some(&session.token), &ChangesQuery { since, under: Some(doc), drafts: true, limit: None }) {
-            Ok(ChangesAnswer::Page(page)) => self.hands_of(session, &page.changes),
-            _ => Vec::new(),
+            Ok(ChangesAnswer::Page(page)) => HandsRead::Named(self.hands_of(session, &page.changes)),
+            Ok(ChangesAnswer::Closed) => HandsRead::Died,
+            _ => HandsRead::Named(Vec::new()),
         }
     }
 

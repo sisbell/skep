@@ -15,17 +15,18 @@
 //! The ground is a fake board (`Fake`) — its `H.1`, or an answer armed in the
 //! record's place, and whether it names a claimant; its `/changes` rows and
 //! the reads of them counted, a draft's text, its content image and the
-//! reads of it counted, the position its arrangement last changed at as a
-//! cell sets it — a burst typed below it refused `arrangement_moved`, the
-//! fake's own acks moving nothing, so every frame typed at the fake's head
-//! meets no refusal — the frames POSTed to `/op`
-//! recorded, a look taken as each is recorded, and a refusal or the death
-//! signal armed for a send — the holds over it with a session opened as the
-//! shell opens one and every line the hold says on `Talk` recorded (`Ground`),
-//! the clock a line's deadline reads moved forward by a cell where it waits
-//! past one (`Holds::advance`), a burst held through the hold's own door at
-//! the base a hold takes now, and each `held` event, `held` row and `held`
-//! answer held to its declaration.
+//! reads of it counted, a look taken as each image read reaches the board,
+//! the death signal at either read where a cell arms it, the position its
+//! arrangement last changed at as a cell sets it — a burst typed below it
+//! refused `arrangement_moved`, the fake's own acks moving nothing, so every
+//! frame typed at the fake's head meets no refusal — the frames POSTed to
+//! `/op` recorded, a look taken as each is recorded, and a refusal or the
+//! death signal armed for a send — the holds over it with a session opened
+//! as the shell opens one and every line the hold says on `Talk` recorded
+//! (`Ground`), the clock a line's deadline reads moved forward by a cell
+//! where it waits past one (`Holds::advance`), a burst held through the
+//! hold's own door at the base a hold takes now, and each `held` event,
+//! `held` row and `held` answer held to its declaration.
 //! The ground's session is a writer's — signed, under a key its store
 //! generates, since a bare session reads alone and no probe resends under it —
 //! save where a cell asks for a bare one (`bare_ground`) or for a key no store
@@ -300,14 +301,15 @@ impl<T: Clone> Armed<T> {
 /// whether `/health` names a claimant, as it does unless armed unclaimed. It holds the
 /// `/changes` rows the read sees, each served only past the query's `since`
 /// and at or under its `under`, or a refusal armed in the page's place — the
-/// page budget's for the next few reads among them — and the reads of them
-/// counted; the draft's text, of which a `retrieve_v`
-/// answers the positions it names — or
+/// page budget's for the next few reads among them — or the death signal
+/// where every read is armed closed, and the reads of them counted; the
+/// draft's text, of which a `retrieve_v` answers the positions it names — or
 /// no answer, the death signal, or one position more than it names, where the
 /// site is armed so; the draft's content image, of which an `image` answers
 /// the runs its region covers, clipped as the board clips them — or no
-/// answer where the read is armed unanswered — the reads of it counted and
-/// each answered at the board's position; the position each document's
+/// answer, or the death signal, where the read is armed so — the reads of it
+/// counted, a look the cell takes as each reaches the board, and each
+/// answered at the board's position; the position each document's
 /// arrangement last changed at, as a cell sets it, a burst typed below it
 /// refused `arrangement_moved` naming both; the frames POSTed to `/op`
 /// recorded, a look the cell takes as each is recorded, the n-th one's
@@ -342,6 +344,8 @@ struct Fake {
     /// malformed_changes` naming the `fits` armed, the page then served at
     /// the limit re-asked.
     changes_too_large: Armed<u64>,
+    /// Every `/changes` read answers the death signal.
+    changes_closed: AtomicBool,
     /// The `/changes` reads made, a page or a refusal answered alike.
     changes_reads: AtomicUsize,
     text: Mutex<String>,
@@ -353,6 +357,11 @@ struct Fake {
     image: Mutex<Vec<Value>>,
     /// Every `image` read fails at the connect: no image is read.
     image_unread: AtomicBool,
+    /// Every `image` read answers the death signal.
+    image_closed: AtomicBool,
+    /// A look the cell takes as an `image` read reaches the board, before it
+    /// answers: a burst sent while the shift reads.
+    at_image: Mutex<Option<Box<dyn Fn() + Send>>>,
     /// The `image` reads made.
     image_reads: AtomicUsize,
     /// The position each document's arrangement last changed at, as a cell
@@ -407,6 +416,7 @@ impl Fake {
             rows: Mutex::new(Vec::new()),
             changes_refused: Mutex::new(None),
             changes_too_large: Armed::none(),
+            changes_closed: AtomicBool::new(false),
             changes_reads: AtomicUsize::new(0),
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
@@ -414,6 +424,8 @@ impl Fake {
             over_deliver: AtomicBool::new(false),
             image: Mutex::new(Vec::new()),
             image_unread: AtomicBool::new(false),
+            image_closed: AtomicBool::new(false),
+            at_image: Mutex::new(None),
             image_reads: AtomicUsize::new(0),
             arrangement: Mutex::new(HashMap::new()),
             sends: Mutex::new(Vec::new()),
@@ -547,6 +559,9 @@ impl Dialer for Fake {
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
             self.changes_reads.fetch_add(1, Ordering::SeqCst);
+            if self.changes_closed.load(Ordering::SeqCst) {
+                return Ok(closed());
+            }
             if let Some((status, body)) = self.changes_refused.lock().unwrap().clone() {
                 return Ok(respond(status, body));
             }
@@ -565,8 +580,14 @@ impl Dialer for Fake {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             if body["op"].as_str() == Some("image") {
                 self.image_reads.fetch_add(1, Ordering::SeqCst);
+                if let Some(look) = self.at_image.lock().unwrap().as_ref() {
+                    look();
+                }
                 if self.image_unread.load(Ordering::SeqCst) {
                     return Err(DialError::Connect("the image read is not answered".into()));
+                }
+                if self.image_closed.load(Ordering::SeqCst) {
+                    return Ok(closed());
                 }
                 let region = &body["region"][0];
                 let from = region["start"].as_str().and_then(|s| s.strip_prefix("1.")).and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -728,12 +749,12 @@ impl Ground {
     /// A burst held for `reason` through the hold's own door, at the base a
     /// hold on its document takes now — as a dial's answer holds it, no dial
     /// between, the failed send the reason says (`failed_send`) its clock's
-    /// start: the `held` answer, or the hold's refusal.
+    /// start: the `held` answer, or the hold's refusal, no death armed.
     fn hold_for(&self, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
         let burst = self.burst(frame);
         let base = self.base_of(&burst.doc);
         let failed = failed_send(&reason).map(str::to_owned);
-        self.holds.hold(&self.session, burst, reason, failed, base)
+        self.holds.hold(&self.session, burst, reason, failed, base).answered()
     }
 
     /// A burst carrying `anchors` held for `cause`, `sent` as a lost answer's
@@ -744,7 +765,7 @@ impl Ground {
         let base = self.base_of(&burst.doc);
         let reason = Reason::of(cause, sent);
         let failed = failed_send(&reason).map(str::to_owned);
-        let answer = self.holds.hold(&self.session, burst, reason, failed, base).unwrap();
+        let answer = self.holds.hold(&self.session, burst, reason, failed, base).answered().unwrap();
         crate::shapes::assert_declared("HeldAnswer", &answer);
         answer
     }

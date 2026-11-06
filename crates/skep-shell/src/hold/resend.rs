@@ -43,7 +43,10 @@
 //! read refused, the deadline passed — the document is
 //! faced `moved`, never rebased inexactly, the verdict kept on the line and the
 //! hands read once since the line's typed state, or since the person's last
-//! `send` on the document where that is later. A rearrange that landed where
+//! `send` on the document where that is later. The death signal met at the
+//! shift's read, or at the read of the hands, is no verdict on the document:
+//! it is met as the death at the line's dial is, nothing faced `moved`
+//! (§3c.4). A rearrange that landed where
 //! the read cannot see it — its row's testimony lost, or the feed's history
 //! reclaimed — leaves the span's own units between its anchors in another
 //! order, so its resend, refused by the board, is held moved and never applied
@@ -73,7 +76,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
-use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HeldState, Holds, HAND_OVER_DEADLINE};
+use super::{awaits_act, cause, line_state, millis, AttestedWhereOwed, BoardSlot, Dialed, HandsRead, HeldState, Holds, HAND_OVER_DEADLINE};
 use crate::held::{i_address, Anchors, Done, HeldLine, Reason, SpanRun};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{board_head, SessionEntry, SessionKind};
@@ -103,8 +106,8 @@ pub(super) enum Unshiftable {
     ///
     /// `elapsed_ms` is the time since it ([`HAND_OVER_DEADLINE`]).
     PastTheDeadline { elapsed_ms: u64 },
-    /// The image read answered no image: refused, the death signal, no
-    /// answer, or runs that are no I-extents.
+    /// The image read answered no image: refused, no answer, or runs that
+    /// are no I-extents.
     Unread(String),
     /// The burst is a delete or a rearrange whose anchors name no span.
     ///
@@ -146,16 +149,18 @@ impl fmt::Display for Unshiftable {
     }
 }
 
-/// A line shifted and dialed ([`Holds::shift_and_send`]).
+/// A shift's send ([`Holds::shift_and_send`]): the line shifted and dialed,
+/// or no dial left.
 #[derive(Debug)]
 pub(super) struct Shifted {
-    /// What the dial answered.
+    /// What the dial answered, or why no dial left.
     pub(super) dialed: Dialed,
-    /// The frame as shifted: the one on the line, and the one dialed.
+    /// The frame on the line: shifted and dialed where the dial left, as it
+    /// stood otherwise.
     pub(super) frame: Value,
     /// Whether the dial left — its attest composed, the mark made before
-    /// it; false where the attest could not be composed, nothing dialed and
-    /// the line left as it was.
+    /// it; false where the shift's read met the death signal or the attest
+    /// could not be composed, nothing dialed and the line left as it was.
     pub(super) left: bool,
 }
 
@@ -805,13 +810,15 @@ impl Holds {
     /// since it cannot resolve (§3c.4; skep #720); a refusal of the shell's
     /// own — a request refused before any connection, or an attest that
     /// could not be composed — left standing for the next probe, never
-    /// `done`; the death signal left to the caller that ends the session —
-    /// the session that stands resends after its read. Every failed send of
-    /// the line ([`Dialed::failure`]) is noted on its clock
-    /// ([`HAND_OVER_DEADLINE`]), and a line standing for the next probe says
-    /// "sent again" where its failure's token differs from the last
-    /// failure's, so once per change. `Continue` where the line is settled
-    /// and sending goes on, `Break` where the line's document stops at it.
+    /// `done`; the death signal — at the dial, at the shift's read, or at the
+    /// read of the hands, before anything is marked — left to the caller that
+    /// ends the session, the line standing as its dial left it: the session
+    /// that stands resends it after its read. Every failed send of the line
+    /// ([`Dialed::failure`]) is noted on its clock ([`HAND_OVER_DEADLINE`]),
+    /// and a line standing for the next probe says "sent again" where its
+    /// failure's token differs from the last failure's, so once per change.
+    /// `Continue` where the line is settled and sending goes on, `Break`
+    /// where the line's document stops at it.
     ///
     /// THE LANDED TEST COMES FIRST: this runs for a line
     /// [`Holds::resume_doc`] let go alone — a `sent` head read for its own
@@ -873,8 +880,11 @@ impl Holds {
                             dialed = shifted.dialed;
                         }
                         Err(why) => {
+                            // The hands are read before anything is marked:
+                            // the death at the read leaves the line standing,
+                            // as the death at its dial does.
+                            let HandsRead::Named(hands) = self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason) else { return ControlFlow::Break(()) };
                             self.say(format_args!("line {} on {} was not shifted ({why}); the document is held as moved", line.k, line.doc));
-                            let hands = self.hands_since_typed_state(session, &line.doc, Some(line.k), &reason);
                             self.mark_moved(board_reference, principal, &line.doc, reason.refusal.map(|verdict| (line.k, verdict)));
                             self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), HeldState::Moved, None, &hands);
                             return ControlFlow::Break(());
@@ -952,21 +962,24 @@ impl Holds {
     /// refusal that brings a line here is a failed send of it, noted by the
     /// caller before it calls, so a document another writer keeps moving stops
     /// the shell at the line's deadline, the clock alone bounding the shifts —
-    /// and one live read is made, `image` over
-    /// the whole content window ([`IMAGE_WINDOW`]) under the session, the one
-    /// read of the shift (no `/changes`, no history: the anchors are found at
-    /// any age); the anchors found in it at one place each and the span between
-    /// them whole — the units it held when the burst was typed, in their order
-    /// — every position the frame names moved by the one displacement
-    /// ([`shifted_frame`]), the frame typed against the read's own `as_of`, the
-    /// state its positions are true of, never below the verdict's
-    /// `site.current`. Then the frame is attested (an attest that cannot be
-    /// composed dials nothing and writes nothing: the dial that never left,
-    /// `left` false, the line as it was), written to the line before it is
-    /// dialed — `HeldQueue::rewrite`, synced, a copy refused said on `Talk` —
-    /// and the line marked as one that may have landed where it is not so
-    /// marked yet, so a relaunch after the shifted answer is lost reads the
-    /// landed test at the shifted positions; then dialed by `dial`.
+    /// and one live read is made, `image` over the whole content window
+    /// ([`IMAGE_WINDOW`]) under the session, the one read of the shift (no
+    /// `/changes`, no history: the anchors are found at any age); the anchors
+    /// found in it at one place each and the span between them whole — the
+    /// units it held when the burst was typed, in their order — every position
+    /// the frame names moved by the one displacement ([`shifted_frame`]), the
+    /// frame typed against the read's own `as_of`, the state its positions are
+    /// true of, never below the verdict's `site.current`. The death signal the
+    /// read meets is no reason the shift was not made: it is answered as a
+    /// dial that never left and met the death ([`Dialed::Died`], `left` false,
+    /// the line as it was), so each caller meets it as the death at its dial
+    /// (§3c.4), never as a moved document. Then the frame is attested (an
+    /// attest that cannot be composed dials nothing and writes nothing: the
+    /// dial that never left, `left` false, the line as it was), written to the
+    /// line before it is dialed — `HeldQueue::rewrite`, synced, a copy refused
+    /// said on `Talk` — and the line marked as one that may have landed where
+    /// it is not so marked yet, so a relaunch after the shifted answer is lost
+    /// reads the landed test at the shifted positions; then dialed by `dial`.
     pub(super) fn shift_and_send(&self, session: &SessionEntry, k: u64, verdict: &Value, dial: impl FnOnce(&AttestedWhereOwed<'_>) -> Dialed) -> Result<Shifted, Unshiftable> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let line = self.line_of(board_reference, principal, k).ok_or(Unshiftable::NoLine)?;
@@ -983,7 +996,9 @@ impl Holds {
                 None => v,
                 Some(r) => return Err(Unshiftable::Unread(format!("the image read was refused {}", r.token()))),
             },
-            Ok(Answer::Closed) => return Err(Unshiftable::Unread("the image read met the death signal".into())),
+            // The session's death, and no verdict on the document: no dial
+            // leaves, and the caller meets the death as at its dial.
+            Ok(Answer::Closed) => return Ok(Shifted { dialed: Dialed::Died, frame: line.frame, left: false }),
             Err(h) => return Err(Unshiftable::Unread(h.to_string())),
         };
         let as_of = image["as_of"].as_u64().unwrap_or(0).max(verdict["site"]["current"].as_u64().unwrap_or(0));
@@ -1037,8 +1052,11 @@ impl Holds {
     /// of its document that the shift could not move through the change exactly
     /// ([`Holds::shift_and_send`]: no anchors, a delete or a rearrange without
     /// its span, an anchor lost or at two places, the span between them cut or
-    /// refilled, the read refused, the line's deadline passed) — never from the
-    /// read, which judges no move. A moved document is one the shift could not
+    /// refilled, the read refused, the line's deadline passed), once the read
+    /// of the hands has answered: the death signal there marks nothing, being
+    /// the session's death and no verdict on the document
+    /// ([`Holds::hands_since_typed_state`]) — never from the resend's read,
+    /// which judges no move. A moved document is one the shift could not
     /// move through exactly: the exact rebase by identity is the shift, made
     /// where the page's anchors stand at one place each with the span's own
     /// units between them, and a burst it cannot carry so is held here, since a

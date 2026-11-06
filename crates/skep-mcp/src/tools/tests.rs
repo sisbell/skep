@@ -562,20 +562,25 @@ fn the_publication_cards_state_the_shells_shapes() {
 /// and the members of its refusal — a refused run under a code the shell
 /// holds no row for, and `head_unreadable`, the write the shell cannot sign
 /// while the board's head record will not read, kept on disk and skipped at
-/// each probe (skep #725, #727); the `resolve` card says what `send` and
+/// each probe (skep #725, #727), and `session_died` met at the burst's dial
+/// or at the shell's read just after the board refused it
+/// `arrangement_moved` (skep #826); the `resolve` card says what `send` and
 /// `drop` do with such a line, that `send` on a moved document records the
 /// changes that moved it as seen, so a document moved again names only the
 /// changes since (skep #757), and that `drop` alone is admitted on a line
 /// held `head_unreadable`, the write given up for good (skep #726); HELD
 /// BURSTS says a burst answered `unwritable` is lost with the process (skep
-/// #733, #700) and names the head's hold; and REJECTIONS ARE DATA names
-/// `head_unreadable` among the halts with a garbled answer from the board's
-/// head record among its causes (skep #728). A card that names neither leaves
-/// an agent to guess whether a line handed back may have landed, and free to
-/// stop a process that holds a write in memory alone; one silent on the
-/// moved document's `send` leaves an agent to read a second moved face as
-/// the first one again; one silent on the head's hold leaves an agent to
-/// wait for a repair that may never come, with no act it knows of.
+/// #733, #700) and names the head's hold and the death's, at either of its
+/// two points; and REJECTIONS ARE DATA names `head_unreadable` among the
+/// halts with a garbled answer from the board's head record among its
+/// causes (skep #728). A card that names neither leaves an agent to guess
+/// whether a line handed back may have landed, and free to stop a process
+/// that holds a write in memory alone; one silent on the moved document's
+/// `send` leaves an agent to read a second moved face as the first one
+/// again; one silent on the head's hold leaves an agent to wait for a repair
+/// that may never come, with no act it knows of; one that names the death at
+/// the dial alone leaves an agent to guess why a burst the board refused
+/// stale is held for the next session.
 #[test]
 fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
@@ -589,6 +594,11 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
     assert!(
         held.contains(&format!("{unreadable} (the board's head record cannot be read — it stands damaged, was served garbled, or a claimed board serves none — so the shell cannot sign the write: held on disk and skipped at each probe until the record reads, or dropped)")),
         "the held card names the head's hold: {held}"
+    );
+    let died_at = "at the burst's dial, or at the shell's read just after the board refused it arrangement_moved";
+    assert!(
+        held.contains(&format!("session_died (this adapter's session ended {died_at} — a board restart among the causes — so the write ran nothing")),
+        "the held card names the death at either point: {held}"
     );
     let resolve = card("resolve");
     assert!(resolve.contains(&format!("that the shell handed back to you ({lost})")), "the resolve card names the line: {resolve}");
@@ -609,6 +619,7 @@ fn the_held_cards_name_the_shells_hand_over_and_a_burst_kept_in_memory_alone() {
         held_bursts.contains(&format!("its head record unreadable (cause {unreadable}: the shell cannot sign the write until the record reads, keeps the line on disk meanwhile, skips it at each probe, and admits your \"drop\" on it)")),
         "HELD BURSTS names the head's hold: {held_bursts}"
     );
+    assert!(held_bursts.contains(&format!("the end of this adapter's session {died_at} (cause session_died: the write ran nothing")), "HELD BURSTS names the death at either point: {held_bursts}");
     let rejections = paragraph("REJECTIONS ARE DATA. ");
     assert!(
         rejections.contains(&format!("{unreadable} where the board's head record (H.1), which the attest of a write it signs names, stands and cannot be read — a garbled answer from the board's head record among its causes — or a claimed board serves none")),

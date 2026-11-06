@@ -30,8 +30,10 @@
 //! reason derived on the call's thread, the swap and the `session-died` run
 //! on the board's feed thread — and the call answers `session_died` with the
 //! reason that sequence derived, save a burst's `op`: the hold holds the
-//! burst `session_died` before the end, and the call answers `held` once the
-//! line carries that reason (`Holds::note_death`, §3c.4); a later call on
+//! burst `session_died` before the end — the signal met at its dial, or at
+//! the read its shift or its moved hold makes after the board refused it as
+//! typed against an older state — and the call answers `held` once the line
+//! carries that reason (`Holds::note_death`, §3c.4); a later call on
 //! the ended reference, or on one of an earlier run of the shell, is
 //! answered `session_died` too, with the reason kept or the restart arm
 //! ([`Shell::session`]).
@@ -1212,8 +1214,9 @@ impl Shell {
     /// §3.3 state 3) — a write is refused without a dial, the `/op-at` form's
     /// too ([`SessionEntry::may_write`]), and so is one at a board whose held
     /// store another shell holds (§3c.3). An `/op-at` refusal is the board's
-    /// verdict, as every other is; a death signal met at the dial or at a
-    /// read the attest needed ends the session.
+    /// verdict, as every other is; a death signal met at the dial, at a read
+    /// the attest needed, or at a read a stale burst's shift or moved hold
+    /// makes ends the session.
     ///
     /// # Errors
     ///
@@ -1244,9 +1247,11 @@ impl Shell {
     /// — or for an `/op-at` frame the board's verdict or `unreachable`; and
     /// `session_died` where a death signal met at the dial or at a read the
     /// attest needed ends the session — save for a burst, which the hold
-    /// holds `session_died` before the end (§3c.4), the call answering `held`
-    /// once its line carries the death's reason, or the hold's own refusal
-    /// (`held_full`, `store_halted`) where it could not hold it.
+    /// holds `session_died` before the end (§3c.4), the signal met at its
+    /// dial or at the read its shift or its moved hold makes, the call
+    /// answering `held` once its line carries the death's reason, or the
+    /// hold's own refusal (`held_full`, `store_halted`) where it could not
+    /// hold it.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
         let op = frame["op"].as_str().unwrap_or("");

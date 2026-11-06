@@ -22,7 +22,9 @@
 //! landing kept with no position sent, never `moved`; the order, the lines
 //! sent in `k` order across the documents; the own hand on a read; a refusal
 //! the table holds nowhere handing a resent line to the person at once, and
-//! the death signal leaving one standing; a resend answered `500
+//! the death signal leaving one standing — at its dial, or at its shift's
+//! image read or its read of the hands, never then faced moved (skep #826);
+//! a resend answered `500
 //! internal_panic` marking its line `sent: true`, its landing then kept by
 //! the read; a line that may have landed
 //! staying so through resends that never left, over a head record that
@@ -158,6 +160,67 @@ fn a_death_signal_at_a_resend_leaves_its_line_standing() {
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
+/// Checks that a death at a resend's shift, or at its read of the hands,
+/// leaves its line standing (§3c.4; skep #826).
+///
+/// A held line the board refuses as typed against an older state is shifted
+/// by one image read where it carries anchors, and held moved after one read
+/// of the hands where it carries none. Either read meeting the death signal
+/// is the session's death and no verdict on the document: the line stands as
+/// the resend's dial left it — its cause kept, marked `sent`, no refusal
+/// beside it — nothing faced moved and nothing said of a move; the next
+/// probe, the token answering again, shifts and keeps the anchored line, and
+/// holds the other moved under the board's verdict, naming the hand that
+/// moved the document (the mutant that reads the death as a read unanswered
+/// faces the person a move no read found, on a line the session that stands
+/// would have placed).
+#[test]
+fn a_death_at_a_resends_shift_or_its_read_of_the_hands_leaves_its_line_standing() {
+    let ff = "ff".repeat(32);
+    for (cell, anchored) in [("the shift's image read", true), ("the read of the hands", false)] {
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": ff, "docs": [DOC]})];
+        *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+        let frame = insert_at(DOC, 2, json!(["x"]), typed);
+        if anchored {
+            g.hold_anchored(&frame, anchors(Some(&i(1)), Some(&i(2))), "unreachable", false);
+        } else {
+            g.hold(&frame, "unreachable", false);
+        }
+        g.fake.move_arrangement(DOC, 77);
+        let closed = if anchored { &g.fake.image_closed } else { &g.fake.changes_closed };
+        closed.store(true, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        let lines = g.lines();
+        assert_eq!(g.fake.sends(), 1, "{cell}: the line was dialed, and refused stale");
+        assert_eq!(
+            (lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0].get("refusal")),
+            (Some("unreachable"), Some(true), None),
+            "{cell}: the line stands as its dial left it: {lines:?}"
+        );
+        assert_eq!(g.states(), ["holding", "sending"], "{cell}: never faced moved");
+        assert!(said_containing(&g, "held as moved").is_empty(), "{cell}: nothing said of a move: {:?}", g.said.lock().unwrap());
+        closed.store(false, Ordering::SeqCst);
+        g.holds.probe("b-1");
+        let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+        said.iter().for_each(assert_held_event_declared);
+        let sent = g.fake.sends.lock().unwrap().clone();
+        if anchored {
+            assert_eq!((sent.len(), sent[2]["at"]["ordinal"].as_str(), sent[2]["as_of"].as_u64()), (3, Some("4"), Some(77)), "{cell}: refused once more, shifted and sent: {sent:?}");
+            assert!(g.lines().is_empty() && said.len() == 1 && said[0]["state"] == "kept", "{cell}: kept: {said:?}");
+        } else {
+            let lines = g.lines();
+            assert_eq!(
+                (sent.len(), lines[0]["cause"].as_str(), &lines[0]["refusal"]),
+                (2, Some("moved"), &arrangement_moved_on("insert", typed, 77)),
+                "{cell}: held moved under the verdict: {lines:?}"
+            );
+            assert_eq!((said.len(), &said[0]["state"], &said[0]["hands"]), (1, &json!("moved"), &json!([{"key": "other", "fingerprint": ff}])), "{cell}: the hand named: {said:?}");
+        }
+    }
+}
+
 /// Checks that a resend answered `internal_panic` reads before it resends.
 ///
 /// A resend answered `500 internal_panic` marks its line as one that may
@@ -200,7 +263,7 @@ fn a_probe_resends_every_principals_lines() {
     let second = g.holds.sessions.register(&board, open, &mut NoSupplements);
     g.holds.open_session(&second);
     g.hold(&insert(DOC, json!(["a"]), g.fake.head()), "unreachable", false);
-    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"]), g.fake.head()), &second).unwrap(), Reason::of("unreachable", false), None, second.opened_at).unwrap();
+    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"]), g.fake.head()), &second).unwrap(), Reason::of("unreachable", false), None, second.opened_at).answered().unwrap();
     g.holds.probe("b-1");
     let mut sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| f["doc"].as_str().unwrap_or("?").to_string()).collect();
     sent.sort();

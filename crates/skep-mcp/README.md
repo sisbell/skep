@@ -44,20 +44,21 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   shell refused itself, nothing sent — or `fetch` declined a file.
 - **The session's life.** A board restart is met by the shell's silent
   re-open, and a call that met it is reissued under the re-opened session,
-  so the agent sees nothing of it — save a burst whose own dial met it,
-  which the shell holds (`held`, cause `session_died`, as data) and sends
-  under that session itself. A death the shell does not re-open —
-  the key retired, the prefix blocked, the account seeded, a re-open the
-  board refused — stops the process with one plain line on stderr, as does
-  the board's refusal of the session the adapter opens once a board that
-  stopped answering answers again: the person stops an agent by retiring
-  its key, and the adapter's end is what the agent's client sees. A sign-in
-  the board did not accept at either open (`busy`: the board busy, or a
-  third party evicting its nonces, transient either way) lapses the session
-  instead, and a later call opens one. A board that stops answering once
-  the adapter serves refuses each call `unreachable`, and the adapter stays
-  up; one not answering at its start stops it, exit 1: start it again once
-  the board answers.
+  so the agent sees nothing of it — save a burst that met it at its own
+  dial, or at the shell's read after the board refused it
+  `arrangement_moved`, which the shell holds (`held`, cause `session_died`,
+  as data) and sends under that session itself. A death the shell does not
+  re-open — the key retired, the prefix blocked, the account seeded, a
+  re-open the board refused — stops the process with one plain line on
+  stderr, as does the board's refusal of the session the adapter opens
+  once a board that stopped answering answers again: the person stops an
+  agent by retiring its key, and the adapter's end is what the agent's
+  client sees. A sign-in the board did not accept at either open (`busy`:
+  the board busy, or a third party evicting its nonces, transient either
+  way) lapses the session instead, and a later call opens one. A board that
+  stops answering once the adapter serves refuses each call `unreachable`,
+  and the adapter stays up; one not answering at its start stops it, exit
+  1: start it again once the board answers.
 - **No person at the seam.** The shell is opened with the refusing arm:
   every SECRET and CONSENT moment would be refused `person_required`, and
   no ceremony tool is offered (no `keygen`, `fingerprint`, `claim`,

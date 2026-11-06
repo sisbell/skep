@@ -39,9 +39,12 @@
 //! a burst's dial, or at its shifted dial, holding it `session_died` and at
 //! any other write's holding nothing, the line taking the death's reason
 //! unless the resend re-marked it first, and kept by the probe with no clock
-//! run on it; over the real dialer, a refused connection held `unreachable`
-//! unsent and a request the dialer cannot make faced; `resolve(send)`
-//! answering once the lines are handed
+//! run on it; the death at a stale burst's shift's image read, or at its
+//! moved hold's read of the hands, holding it so, never faced moved, the
+//! burst held behind it left as it stood, and the line's clock run from its
+//! refused first dial (skep #826); over the real dialer, a refused
+//! connection held `unreachable` unsent and a request the dialer cannot make
+//! faced; `resolve(send)` answering once the lines are handed
 //! back, before any dial; a board the holds were not opened over stopped as
 //! the caller's bug; the stored frame without its attest; P38's halted file
 //! refusing every act at the principal's door, `resolve` among them, with
@@ -1205,6 +1208,153 @@ fn a_death_at_a_shifted_dial_holds_the_line_and_says_it() {
     assert!(g.lines().is_empty() && g.states() == ["sending", "kept"], "kept");
 }
 
+/// Checks that the death at the shift's image read holds the burst for the
+/// next session (§3c.4; skep #826).
+///
+/// A stale burst carrying its anchors is refused at its first dial, and the
+/// shift's one image read meets the death signal: the session's death and no
+/// verdict on the document, so no dial leaves and nothing is faced moved. The
+/// burst is held as the death at a first dial holds one — `session_died`,
+/// `sent: false`, the page's frame on its line and no refusal beside it — the
+/// call answered `OpAnswer::Died` for its caller to end the session, the
+/// `held` event said `holding`, and nothing said of a move; the line takes
+/// the death's reason, and once the board takes the session's writes the
+/// probe sends it, the board refuses it stale again, and the shift, its read
+/// answered, moves it through the change and keeps it (the mutant that reads
+/// the death as an unread image faces the person a document no read found
+/// moved, the session left standing dead at the call).
+#[test]
+fn a_death_at_the_shifts_image_read_holds_the_burst_for_the_next_session() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(10), 2), run(&i(1), 3)];
+    g.fake.move_arrangement(DOC, 77);
+    g.fake.image_closed.store(true, Ordering::SeqCst);
+    let page = insert_at(DOC, 2, json!(["x"]), typed);
+    let answer = g.holds.send_burst(&g.session, page.clone(), Some(anchors(Some(&i(1)), Some(&i(2)))));
+    let OpAnswer::Died(AtDeath::Held(held)) = answer else { panic!("the shift's read meets the death, and the burst is held") };
+    let lines = g.lines();
+    assert_eq!((g.fake.sends(), g.fake.image_reads.load(Ordering::SeqCst), lines.len()), (1, 1, 1), "one dial, one image read, one line: {lines:?}");
+    assert_eq!(
+        (lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0].get("refusal"), &lines[0]["frame"]),
+        (Some("session_died"), Some(false), None, &page),
+        "held at the death, the page's frame on it: {lines:?}"
+    );
+    assert_eq!(g.states(), ["holding"], "said once the death holds it, never `moved`");
+    assert!(said_containing(&g, "held as moved").is_empty() && said_containing(&g, "was not shifted").is_empty(), "nothing said of a move: {:?}", g.said.lock().unwrap());
+    let answer = g.holds.note_death(&g.session, held, &died(&g));
+    assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("session_died")), "{answer}");
+    g.fake.image_closed.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!((sent.len(), sent[2]["at"]["ordinal"].as_str(), sent[2]["as_of"].as_u64()), (3, Some("4"), Some(77)), "sent, refused stale again, shifted and sent: {sent:?}");
+    assert!(g.lines().is_empty() && g.states() == ["sending", "kept"], "kept");
+}
+
+/// Checks that the death at the moved hold's read of the hands holds the
+/// burst for the next session (§3c.4; skep #826).
+///
+/// A stale burst the shift cannot carry — one without anchors, an agent's,
+/// or one whose span another writer cut — is refused at its first dial, and
+/// the moved hold's one read of the hands meets the death signal: no verdict
+/// on the document, so the burst is held as the death at a first dial holds
+/// one — `session_died`, `sent: false`, the page's frame on its line and no
+/// refusal beside it — the call answered `OpAnswer::Died`, the `held` event
+/// `holding`, and nothing said of a move. Once the board takes the session's
+/// writes the probe sends it, the board refuses it stale again, and the
+/// moved hold, its read answered, holds it moved under the newest verdict,
+/// naming the hand that moved the document. The first dial was a failed
+/// send, so the line's clock runs from it: past the deadline the probe hands
+/// the line to the person, `answers_lost` naming `moved`, dialing nothing
+/// (the mutant that reads the death as a read with no page faces the person
+/// a move with no hand, the session left standing dead at the call; the one
+/// that says the move before the read says one the death never made; the one
+/// that starts no clock at the death resends the line past its deadline).
+#[test]
+fn a_death_at_the_moved_holds_read_of_the_hands_holds_the_burst_for_the_next_session() {
+    let foreign = || vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    // The burst refused stale at its first dial, the read of the hands
+    // meeting the death.
+    let held_at_the_death = |cell: &str, anchors: Option<Anchors>| -> (Ground, u64, Value) {
+        let g = ground();
+        let typed = g.fake.head();
+        *g.fake.rows.lock().unwrap() = foreign();
+        *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)];
+        g.fake.move_arrangement(DOC, 77);
+        g.fake.changes_closed.store(true, Ordering::SeqCst);
+        let page = insert_at(DOC, 2, json!(["x"]), typed);
+        let OpAnswer::Died(AtDeath::Held(held)) = g.holds.send_burst(&g.session, page.clone(), anchors) else { panic!("{cell}: the read of the hands meets the death, and the burst is held") };
+        let lines = g.lines();
+        assert_eq!((g.fake.sends(), g.fake.changes_reads.load(Ordering::SeqCst), lines.len()), (1, 1, 1), "{cell}: one dial, one read of the hands, one line: {lines:?}");
+        assert_eq!(
+            (lines[0]["cause"].as_str(), lines[0]["sent"].as_bool(), lines[0].get("refusal"), &lines[0]["frame"]),
+            (Some("session_died"), Some(false), None, &page),
+            "{cell}: held at the death, the page's frame on it: {lines:?}"
+        );
+        assert_eq!(g.states(), ["holding"], "{cell}: said once the death holds it, never `moved`");
+        assert!(said_containing(&g, "held as moved").is_empty() && said_containing(&g, "was not shifted").is_empty(), "{cell}: nothing said of a move: {:?}", g.said.lock().unwrap());
+        let answer = g.holds.note_death(&g.session, held, &died(&g));
+        assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("session_died")), "{cell}: {answer}");
+        g.fake.changes_closed.store(false, Ordering::SeqCst);
+        (g, typed, page)
+    };
+    for (cell, anchors) in [("no anchors", None), ("a cut span", Some(anchors(Some(&i(1)), Some(&i(2)))))] {
+        let (g, typed, page) = held_at_the_death(cell, anchors.clone());
+        g.holds.probe("b-1");
+        let lines = g.lines();
+        assert_eq!(g.fake.sends(), 2, "{cell}: sent once more, refused stale again");
+        assert_eq!(
+            (lines[0]["cause"].as_str(), &lines[0]["refusal"], &lines[0]["frame"]),
+            (Some("moved"), &arrangement_moved_on("insert", typed, 77), &page),
+            "{cell}: held moved under the newest verdict: {lines:?}"
+        );
+        let said: Vec<Value> = g.rx.try_iter().filter(|e| e.name == EventName::Held).map(|e| e.data).collect();
+        said.iter().for_each(assert_held_event_declared);
+        let states: Vec<&str> = said.iter().filter_map(|e| e["state"].as_str()).collect();
+        assert_eq!(states, ["sending", "moved"], "{cell}: {said:?}");
+        assert_eq!(said[1]["hands"], json!([{"key": "other", "fingerprint": "ff".repeat(32)}]), "{cell}: the hand the read names under the session that stands: {said:?}");
+        let (g, _, _) = held_at_the_death(cell, anchors);
+        g.holds.advance(HAND_OVER_DEADLINE);
+        g.holds.probe("b-1");
+        let lines = g.lines();
+        assert_eq!(g.fake.sends(), 1, "{cell}: handed over, undialed");
+        assert_eq!((lines[0]["cause"].as_str(), lines[0]["refusal"]["last"].as_str()), (Some("answers_lost"), Some("moved")), "{cell}: the first dial started the clock: {lines:?}");
+    }
+}
+
+/// Checks that the death at the read of the hands leaves a burst held behind
+/// the line as it stood (§3c.4; skep #826).
+///
+/// A stale burst whose span another writer cut is refused at its first dial,
+/// its line entered for the shift; as the shift's image read reaches the
+/// board, the person's next burst on the document is held `behind` it. The
+/// moved hold's read of the hands meets the death signal: the line is held
+/// `session_died`, and the burst behind it stands `behind`, no refusal
+/// beside it, awaiting no act — so the session that stands next sends both
+/// (the mutant that marks the document before the read leaves the later
+/// burst `moved` with no verdict, awaiting an act on a burst no board
+/// judged).
+#[test]
+fn a_death_at_the_read_of_the_hands_leaves_a_burst_held_behind_the_line_as_it_stood() {
+    let g = ground();
+    let typed = g.fake.head();
+    *g.fake.image.lock().unwrap() = vec![run(&i(1), 1), run(&i(10), 1), run(&i(2), 2)];
+    g.fake.move_arrangement(DOC, 77);
+    g.fake.changes_closed.store(true, Ordering::SeqCst);
+    let (holds, session) = (Arc::downgrade(&g.holds), Arc::clone(&g.session));
+    *g.fake.at_image.lock().unwrap() = Some(Box::new(move || {
+        if let Some(holds) = holds.upgrade() {
+            let behind = holds.send_burst(&session, insert_at(DOC, 3, json!(["y"]), typed), None);
+            assert!(matches!(&behind, OpAnswer::Answered(Ok(held)) if held["cause"] == "behind"), "held behind the line: {behind:?}");
+        }
+    }));
+    let answer = g.holds.send_burst(&g.session, insert_at(DOC, 2, json!(["x"]), typed), Some(anchors(Some(&i(1)), Some(&i(2)))));
+    *g.fake.at_image.lock().unwrap() = None;
+    let OpAnswer::Died(AtDeath::Held(_)) = answer else { panic!("the read of the hands meets the death, and the line is held") };
+    let marks: Vec<(String, bool)> = g.lines().iter().map(|l| (l["cause"].as_str().unwrap_or("?").to_string(), l.get("refusal").is_some())).collect();
+    assert_eq!(marks, [("session_died".to_string(), false), ("behind".to_string(), false)], "the burst behind the line as it stood: {:?}", g.lines());
+}
+
 /// Checks that `resolve(send)` answers once the lines are handed back.
 ///
 /// It hands the document back to the automatic machine and answers at once
@@ -1998,7 +2148,8 @@ fn a_burst_at_one_board_waits_on_no_other_boards_hold() {
 #[test]
 fn a_sessions_held_line_is_kept_at_the_board_it_stands_at() {
     let TwoBoards { holds, sessions, store, fakes } = two_boards();
-    let held = holds.hold(&sessions[1], Burst::admit(insert(DOC, json!(["z"]), fakes[1].head()), &sessions[1]).unwrap(), Reason::of("unreachable", false), None, sessions[1].opened_at).unwrap();
+    let held =
+        holds.hold(&sessions[1], Burst::admit(insert(DOC, json!(["z"]), fakes[1].head()), &sessions[1]).unwrap(), Reason::of("unreachable", false), None, sessions[1].opened_at).answered().unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     let file = |chain: &str| store.path().join("held").join(chain).join("principal-1.held");
     assert!(file(&"cd".repeat(32)).is_file() && !file(&"ab".repeat(32)).exists(), "the line is kept in b-2's directory alone");

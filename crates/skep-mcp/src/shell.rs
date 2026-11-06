@@ -22,7 +22,8 @@
 //! signed session silently under a fresh reference (AUTH-5.31), named in the
 //! death's reason. That reason is emitted once, as `session-died`, and
 //! [`Backend::drain`] alone settles the session's state by it. A burst whose
-//! own dial met the death is no call to reissue: the shell holds it,
+//! own dial met the death — or the shell's read after the board refused it
+//! `arrangement_moved` — is no call to reissue: the shell holds it,
 //! `session_died`, answers `held`, and sends its line itself under the session
 //! that stands next (client.md §3c.4). A call the shell
 //! answers `session_died` or `session_ended` waits for the drain to settle it

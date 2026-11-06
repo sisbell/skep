@@ -93,8 +93,9 @@ impl RecordKey {
     ///
     /// The text is `merge:<doc>:<base>:<side>+<side>…`, as long as its
     /// sides make it. It is the text naming the shot's writes, and it opens
-    /// the draft landing's, which names the draft and the position too, and
-    /// the stage's, which names the position and, where one stands, the
+    /// the draft landing's, which names the draft and the position too and,
+    /// for a draft named, the record the landing follows where one stands,
+    /// and the stage's, which names the position and, where one stands, the
     /// record the landing will replace. A write's per-session ids are
     /// spelled over the SHA-256 of its text, a fixed width whatever the
     /// sides (the `land` module's doc).

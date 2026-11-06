@@ -3945,18 +3945,20 @@ mod scripted {
     }
 
     /// THE DRAFT LANDING IS ONE WRITE (the landing lane's rulings R1, R4,
-    /// R5; skep #764): one `set_arrangement` of M into the draft — its
-    /// runs, `as_of` the ONE position the merge was composed at, `head` the
-    /// head and its extent as read, `base` the same pair since the board
-    /// records a base for the draft, `merge` the sides but the draft itself
-    /// (none: the draft was the side), the id `<stem>.draft`, its stem over
-    /// `<key>:<draft>@<P>` — the key, the draft and the position typed
-    /// against — no `delete`, no `reinstate`, no `publish`, no claim read;
+    /// R5; skep #764): the merger's newest record for the key read first,
+    /// then the draft's base at the composition's position, then one
+    /// `set_arrangement` of M into the draft — its runs, `as_of` the ONE
+    /// position the merge was composed at, `head` the head and its extent as
+    /// read, `base` the same pair since the board records a base for the
+    /// draft, `merge` the sides but the draft itself (none: the draft was
+    /// the side), the id `<stem>.draft`, its stem over `<key>:<draft>@<P>` —
+    /// the key, the draft and the position typed against, no record standing
+    /// to follow — no `delete`, no `reinstate`, no `publish`, no claim read;
     /// the draft holds M, its base re-recorded on the head and the marker
     /// beside it at the write's position; the record with `landed` the draft
     /// and THE WRITE's position. A second landing over the same `merged` in
-    /// the session is answered by the board's memo for the id: the same
-    /// landing, nothing written twice.
+    /// the session follows the record the first one followed, so the board's
+    /// memo answers its id: the same landing, nothing written twice.
     #[test]
     fn the_draft_landing_is_one_set_arrangement_typed_at_the_composition_and_writes_the_record() {
         let (dialer, board, signer) = open(draft_landing_world());
@@ -3984,7 +3986,11 @@ mod scripted {
             !ops.iter().any(|o| ["publish", "in_claims", "delete", "reinstate", "stage"].contains(&o.as_str())),
             "{ops:?}"
         );
-        assert_eq!(ops[0], "at:doc_metadata", "the draft's base, read at the composition's position: {ops:?}");
+        assert_eq!(
+            ops[..3],
+            ["find_links_ftt", "find_links_ftt", "at:doc_metadata"],
+            "the merger's newest record for the key — the links of the kind to its two sides, none standing — then the draft's base, read at the composition's position: {ops:?}"
+        );
         assert_eq!(dialer.positions("doc_metadata"), [p]);
         // The draft holds M; the base re-recorded on the head at the extent
         // read; the marker beside it, at the write's position.
@@ -4856,10 +4862,11 @@ mod scripted {
     /// A DRAFT THE MERGER MAY NOT READ is refused before any write, naming
     /// it: `X`, another account's private draft, withheld. A landing into
     /// `X` meets `withheld` at its one read of `X`'s metadata at the
-    /// composition's position, the undo and the withdrawal of `X` at theirs
-    /// at the head — each [`Refusal::Unreadable`] naming `X`, with no
-    /// `stage`, `set_arrangement`, journal mint, `insert` or `make_link`
-    /// sent and no commit made.
+    /// composition's position, after the merger's newest record for the
+    /// key, the undo and the withdrawal of `X` at theirs at the head — each
+    /// [`Refusal::Unreadable`] naming `X`, with no `stage`,
+    /// `set_arrangement`, journal mint, `insert` or `make_link` sent and no
+    /// commit made.
     #[test]
     fn a_draft_the_merger_may_not_read_is_refused_unreadable_before_any_write() {
         let x = "1.0.2.0.8";
@@ -4882,7 +4889,11 @@ mod scripted {
             land(&board, &merged, draft_landing(&session, &signer, Some(a(x)))),
             Err(Refusal::Unreadable(a(x)))
         );
-        assert_eq!(dialer.ops(), ["at:doc_metadata"], "the one read of X, at the composition's position");
+        assert_eq!(
+            dialer.ops(),
+            ["find_links_ftt", "find_links_ftt", "at:doc_metadata"],
+            "the merger's newest record for the key, then the one read of X, at the composition's position"
+        );
         nothing_sent("a landing into X");
         dialer.clear();
         assert_eq!(undo(&board, m, &a(x), &a(K), None, None), Err(Refusal::Unreadable(a(x))));
@@ -6180,19 +6191,23 @@ mod scripted {
     }
 
     /// A LANDING AFTER A TAKE-BACK IN ONE SESSION IS A WRITE OF ITS OWN:
-    /// the draft landing's ids are spelled over the key, the draft and the
-    /// position its write is typed against, so a merge composed again after
-    /// an undo — the same key at a later position — is never answered by the
-    /// board's memo with the first landing's acknowledgment. The write
-    /// commits, `S` holds M again with the marker at the new position, and
-    /// the record's two writes carry ids of the same stem.
+    /// the draft landing's ids are spelled over the key, the draft, the
+    /// position its write is typed against and the record it follows — the
+    /// undo's — so a merge composed again after an undo, the same key at a
+    /// later position, is never answered by the board's memo with the first
+    /// landing's acknowledgment. The write commits, `S` holds M again with
+    /// the marker at the new position, and the record's two writes carry ids
+    /// of the same stem.
     #[test]
     fn a_landing_after_a_take_back_in_one_session_is_a_write_of_its_own() {
         let (dialer, board, signer) = open(draft_landing_world());
         let session = sign_in(&board, &signer);
         let (merged, landed) = landed_in_s(&board, &session, &signer);
         let (first_at, _) = landing_of(&landed);
-        undo(&board, merger(&session, &signer), &a(S), &a(K), None, None).expect("undone");
+        let undone = undo(&board, merger(&session, &signer), &a(S), &a(K), None, None)
+            .expect("undone")
+            .record
+            .expect("the undo's record");
         let again = compose(&board, Some(session.token()), &draft_inputs()).expect("composed again");
         assert_eq!(again.key, merged.key, "the premise: the same key");
         assert!(again.as_of > merged.as_of, "the premise: a later position");
@@ -6201,7 +6216,7 @@ mod scripted {
         let relanded = land(&board, &again, draft_landing(&session, &signer, Some(a(S)))).expect("landed again");
         let (at, _) = landing_of(&relanded);
         assert!(at > first_at, "a commit of its own, never the first landing's acknowledgment: {relanded:?}");
-        let stem = Stem::of(&format!("{}:{S}@{}", again.key.text(), again.as_of));
+        let stem = Stem::of(&format!("{}:{S}@{}~{undone}", again.key.text(), again.as_of));
         assert_eq!(dialer.frames("set_arrangement")[0]["id"].as_str(), Some(stem.id("draft").as_str()));
         assert_eq!(dialer.frames("insert")[0]["id"].as_str(), Some(stem.id("record").as_str()));
         assert_eq!(dialer.frames("make_link")[0]["id"].as_str(), Some(stem.id("link").as_str()));
@@ -6209,6 +6224,124 @@ mod scripted {
         assert!(w.rows.len() > rows, "committed");
         assert_eq!(w.docs.get(S).unwrap().runs, draft_m(), "S holds M again");
         assert_eq!(w.standing(S).1.map(|m| m.at), Some(at), "the marker at the new landing");
+    }
+
+    /// THE SAME COMPOSITION LANDED AGAIN INTO ITS DRAFT AFTER A TAKE-BACK IS
+    /// JUDGED BY THE BOARD: the landing's ids name the record it follows, so
+    /// the composition that landed in `S`, kept across an undo or a
+    /// withdrawal of that landing, each recorded, and landed into `S` again
+    /// in the same session is never answered by the board's memo with the
+    /// landing taken back. Its one write, under ids naming the take-back's
+    /// record and typed against the composition's position, is refused
+    /// `arrangement_moved` — the landing moved `S` past that position —
+    /// nothing written, `S` as the take-back left it with no marker, and the
+    /// take-back's record current; the memo cleared, the same refusal. A
+    /// retry over a lost acknowledgment, no record yet written, spells its
+    /// first call's ids: the board answers the one write, and the record is
+    /// written once.
+    #[test]
+    fn the_same_composition_landed_again_into_its_draft_after_a_take_back_is_judged_by_the_board() {
+        for act in ["undo", "withdraw"] {
+            let (dialer, board, signer) = open(draft_landing_world());
+            let session = sign_in(&board, &signer);
+            let m = merger(&session, &signer);
+            let (merged, _) = landed_in_s(&board, &session, &signer);
+            let (taken_back, left) = match act {
+                "undo" => {
+                    (undo(&board, m, &a(S), &a(K), None, None).expect("undone").record, draft_c())
+                }
+                _ => {
+                    (withdraw(&board, m, &a(S), &a(K), None).expect("withdrawn").record, draft_m())
+                }
+            };
+            let taken_back = taken_back.expect("the take-back's record");
+            let id = landing_id(
+                &format!("{}:{S}@{}~{taken_back}", merged.key.text(), merged.as_of),
+                "draft",
+            );
+            assert_eq!(
+                dialer.world().docs.get(S).unwrap().runs,
+                left,
+                "{act}: the premise, S as the take-back left it"
+            );
+            assert_eq!(dialer.world().standing(S).1, None, "{act}: the premise, no marker");
+            let rows = dialer.world().rows.len();
+            for memo in ["kept", "cleared"] {
+                if memo == "cleared" {
+                    dialer.world().memo.clear();
+                }
+                let cell = format!("{act}, the memo {memo}");
+                dialer.clear();
+                let err = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))))
+                    .expect_err("the landing was taken back");
+                let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{cell}: {err:?}") };
+                assert_eq!(refused.code, "arrangement_moved", "{cell}: {refused:?}");
+                let frames = dialer.frames("set_arrangement");
+                assert_eq!(frames.len(), 1, "{cell}: one write sent: {:?}", dialer.ops());
+                assert_eq!(
+                    frames[0]["as_of"].as_u64(),
+                    Some(merged.as_of),
+                    "{cell}: typed against the composition's position"
+                );
+                assert_eq!(
+                    frames[0]["id"].as_str(),
+                    Some(id.as_str()),
+                    "{cell}: the ids name the take-back's record"
+                );
+                assert!(
+                    dialer.frames("insert").is_empty() && dialer.frames("make_link").is_empty(),
+                    "{cell}: no record: {:?}",
+                    dialer.ops()
+                );
+                let w = dialer.world();
+                assert_eq!(w.rows.len(), rows, "{cell}: nothing written");
+                assert_eq!(w.docs.get(S).unwrap().runs, left, "{cell}: S as the take-back left it");
+                assert_eq!(w.standing(S).1, None, "{cell}: no marker");
+                drop(w);
+                let found = current(&board, Some(session.token()), &a(K), &merged.key)
+                    .expect("the lookup")
+                    .expect("a record");
+                assert_eq!(
+                    found.link,
+                    Some(taken_back.clone()),
+                    "{cell}: the take-back's record current"
+                );
+            }
+        }
+        // A retry over a lost acknowledgment, no record written yet: no
+        // record to follow, the same ids, the one write answered again.
+        let (dialer, board, signer) = open(draft_landing_world());
+        let session = sign_in(&board, &signer);
+        let merged = compose(&board, Some(session.token()), &draft_inputs()).expect("composed");
+        let rows = dialer.world().rows.len();
+        dialer.clear();
+        dialer.world().drop_acks = 1;
+        let lost = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))));
+        assert!(
+            matches!(lost, Err(Refusal::Halt(Halt::Dial(_)))),
+            "the premise: the write's acknowledgment lost: {lost:?}"
+        );
+        let landed = land(&board, &merged, draft_landing(&session, &signer, Some(a(S))))
+            .expect("landed on the retry");
+        let Landed::Draft { into, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(*into, a(S));
+        let frames = dialer.frames("set_arrangement");
+        assert_eq!(frames.len(), 2, "the write and its retry: {:?}", dialer.ops());
+        let id = landing_id(&format!("{}:{S}@{}", merged.key.text(), merged.as_of), "draft");
+        assert_eq!(frames[0]["id"].as_str(), Some(id.as_str()), "no record to follow");
+        assert_eq!(frames[1]["id"], frames[0]["id"], "the retry's id is its first call's");
+        let w = dialer.world();
+        assert_eq!(
+            w.rows.iter().skip(rows).filter(|r| r.op == "set_arrangement").count(),
+            1,
+            "one write committed"
+        );
+        drop(w);
+        assert_eq!(
+            (dialer.frames("insert").len(), dialer.frames("make_link").len()),
+            (1, 1),
+            "the record written once"
+        );
     }
 
     /// THE STANDING RECORD IS THE MERGER's OWN NEWEST FOR THE KEY. A newer

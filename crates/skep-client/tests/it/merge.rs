@@ -35,8 +35,10 @@
 //! state read at `/op-at`'s `nearest` for `at − 1`, which the daemon
 //! answers `not_a_position` inside the landing's commit — the draft's text
 //! and base restored and the marker cleared in one write, the replacing
-//! record current, and the merge landed again after it, in the same session
-//! and in a fresh one, a write and a record of its own; a landing withdrawn
+//! record current, the composition kept across it and landed again in the
+//! same session refused `arrangement_moved`, and the merge composed again
+//! and landed after it, in the same session and in a fresh one, a write and
+//! a record of its own; a landing withdrawn
 //! — the words kept, the marker cleared; an undo after an edit refused with
 //! the edit kept; an undo typed at the editor's own last ack landing once
 //! its later edits are taken back, and refused past another hand's change
@@ -1126,8 +1128,11 @@ pub(crate) fn publish_with_place(rig: &Rig, session: &Session<'_>, e: &Address, 
 /// names the base restored and no merge, and the replacing record —
 /// `landed` none, `replaces` the landing's link — is current for the key.
 /// A second undo has nothing to undo, the merge already taken back, and
-/// writes nothing. The merge composed again and landed in the same session
-/// is a write of its own, whose record replaces the undo's.
+/// writes nothing. The composition kept across the undo and landed again in
+/// the same session is refused `arrangement_moved` with nothing written —
+/// its ids name the undo's record, so the board judges it, never answering
+/// the landing taken back. The merge composed again and landed in the same
+/// session is a write of its own, whose record replaces the undo's.
 #[test]
 fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_clearing_the_marker() {
     let rig = Rig::new();
@@ -1175,6 +1180,21 @@ fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_cle
     let standing = rig.position();
     assert_eq!(undo(&rig.board, merger, &draft, &kind, None, None), Err(Refusal::NothingToUndo { draft: draft.clone(), why: NoUndo::TakenBack }));
     assert_eq!(rig.position(), standing, "nothing written");
+    // The composition kept and landed again in this session: its ids name
+    // the undo's record, so the board judges the write — typed against the
+    // position the merge was composed at, which the landing moved the draft
+    // past — and refuses it `arrangement_moved`, nothing written, never
+    // answering the landing the undo took back.
+    let into = || Landing::Draft { merger, into: Some(draft.clone()), journal: None };
+    let err = land(&rig.board, &merged, into()).expect_err("the landing was taken back");
+    let Refusal::Halt(Halt::Refused(refused)) = &err else { panic!("{err:?}") };
+    assert_eq!(refused.code, "arrangement_moved", "{refused:?}");
+    assert_eq!(rig.position(), standing, "nothing written");
+    assert_eq!(image(&rig.board, &token, &draft, 14), c, "C stands");
+    let record = current(&rig.board, Some(&token), &kind, &merged.key)
+        .expect("the lookup")
+        .expect("a current record");
+    assert_eq!(record.link, Some(replacing.clone()), "the undo's record current");
     // Composed again — the undo restored the base, so the key is the first
     // landing's — and landed again in this session: a write of its own, the
     // draft holding M with the marker at the new position, and a record of
@@ -1182,7 +1202,6 @@ fn a_landed_merge_is_undone_in_one_write_restoring_the_text_and_the_base_and_cle
     // answered by the board's ids, nothing written twice.
     let again = compose(&rig.board, Some(&token), &inputs).expect("composed again");
     assert_eq!(again.key, merged.key, "the premise: the first landing's key");
-    let into = || Landing::Draft { merger, into: Some(draft.clone()), journal: None };
     let relanded = land(&rig.board, &again, into()).expect("landed again");
     let Landed::Draft { position: again_at, record: again_link, .. } = relanded.clone() else { panic!("{relanded:?}") };
     assert!(again_at > undone.position, "{relanded:?}");
